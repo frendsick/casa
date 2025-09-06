@@ -1,6 +1,6 @@
 from typing import assert_never
 
-from casa.common import Op, OpKind
+from casa.common import GLOBAL_IDENTIFIERS, Function, Op, OpKind
 
 type Type = str
 
@@ -9,12 +9,15 @@ type Type = str
 LITERAL_OP_KINDS = [OpKind.PUSH_INT]
 
 
-def type_check_ops(ops: list[Op]):
-    assert len(OpKind) == 11, "Exhaustive handling for `OpKind`"
+def type_check_ops(ops: list[Op], stack: list[Type] | None = None):
+    assert len(OpKind) == 13, "Exhaustive handling for `OpKind`"
 
-    stack: list[Type] = []
+    if not stack:
+        stack = []
     for op in ops:
         match op.kind:
+            case OpKind.CALL_FN:
+                pass
             case OpKind.ADD:
                 expect_type(stack, "int")
                 add_type = stack_pop(stack)
@@ -25,6 +28,17 @@ def type_check_ops(ops: list[Op]):
                 a = stack_pop(stack)
                 stack_push(stack, a)
                 stack_push(stack, a)
+            case OpKind.IDENTIFIER:
+                assert isinstance(op.value, str), "Expected identifier name"
+                identifier = op.value
+                identifier_target = GLOBAL_IDENTIFIERS.get(identifier)
+                assert identifier_target, "Expected valid identifier"
+
+                match identifier_target:
+                    case Function() as f:
+                        type_check_ops(f.ops, stack)
+                    case None:
+                        raise ValueError
             case OpKind.LOAD:
                 expect_type(stack, "ptr")
                 stack_push(stack, "any")
@@ -104,6 +118,8 @@ def stack_peek(stack: list[Type]) -> Type | None:
 
 
 def stack_pop(stack: list[Type]) -> Type:
+    if not stack:
+        raise IndexError("Stack underflow")
     return stack.pop()
 
 

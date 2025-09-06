@@ -1,6 +1,16 @@
+import builtins
 from typing import assert_never
 
-from casa.common import Bytecode, Cursor, Instruction, InstructionKind, Op, OpKind
+from casa.common import (
+    GLOBAL_IDENTIFIERS,
+    Bytecode,
+    Cursor,
+    Function,
+    Instruction,
+    InstructionKind,
+    Op,
+    OpKind,
+)
 
 
 def compile_bytecode(ops: list[Op]) -> Bytecode:
@@ -12,16 +22,32 @@ def compile_bytecode(ops: list[Op]) -> Bytecode:
 
 
 def compile_op(op: Op) -> Bytecode:
-    assert len(InstructionKind) == 11, "Exhaustive handling for `InstructionKind"
-    assert len(OpKind) == 11, "Exhaustive handling for `OpKind`"
+    assert len(InstructionKind) == 12, "Exhaustive handling for `InstructionKind"
+    assert len(OpKind) == 13, "Exhaustive handling for `OpKind`"
 
     match op.kind:
         case OpKind.ADD:
             return [Instruction(InstructionKind.ADD)]
+        case OpKind.CALL_FN:
+            return [Instruction(InstructionKind.CALL_FN, arguments=[op.value])]
         case OpKind.DROP:
             return [Instruction(InstructionKind.DROP)]
         case OpKind.DUP:
             return [Instruction(InstructionKind.DUP)]
+        case OpKind.IDENTIFIER:
+            identifier_name = op.value
+            identifier_target = GLOBAL_IDENTIFIERS.get(identifier_name)
+            assert identifier_target, "Expected valid identifier"
+
+            match identifier_target:
+                case Function() as f:
+                    return [Instruction(InstructionKind.CALL_FN, arguments=[f.name])]
+                case None:
+                    raise ValueError
+            if not identifier_target:
+                raise NameError(f"Identifier `{identifier_name}` is not defined")
+            return compile_op(identifier_target)
+
         case OpKind.LOAD:
             return [Instruction(InstructionKind.LOAD)]
         case OpKind.OVER:

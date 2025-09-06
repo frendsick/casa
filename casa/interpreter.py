@@ -1,23 +1,47 @@
 from typing import assert_never
 
-from casa.compiler import Instruction, InstructionKind
+from casa.common import (
+    GLOBAL_IDENTIFIERS,
+    Bytecode,
+    Function,
+    Instruction,
+    InstructionKind,
+)
+from casa.compiler import compile_bytecode
 
 
-def interpret_bytecode(instructions: list[Instruction]):
+def interpret_bytecode(bytecode: Bytecode, stack: list[int] | None = None):
+    identifiers = {}
     heap: list[int] = []
-    stack: list[int] = []
-    for instruction in instructions:
-        interpret_instruction(instruction, stack, heap)
+    if not stack:
+        stack = []
+
+    for instruction in bytecode:
+        interpret_instruction(instruction, stack, heap, identifiers)
 
 
-def interpret_instruction(instruction: Instruction, stack: list[int], heap: list[int]):
-    assert len(InstructionKind) == 11, "Exhaustive handling for `InstructionKind`"
+def interpret_instruction(
+    instruction: Instruction,
+    stack: list[int],
+    heap: list[int],
+    identifiers: dict,
+):
+    assert len(InstructionKind) == 12, "Exhaustive handling for `InstructionKind`"
 
     match instruction.kind:
         case InstructionKind.ADD:
             a = stack_pop(stack)
             b = stack_pop(stack)
             stack_push(stack, a + b)
+        case InstructionKind.CALL_FN:
+            assert len(instruction.arguments) == 1, "Function name"
+            function_name = instruction.arguments[0]
+            function = GLOBAL_IDENTIFIERS.get(function_name)
+            assert isinstance(function, Function), "Expected function"
+
+            # TODO: Precompile the function when used
+            bytecode = compile_bytecode(function.ops)
+            interpret_bytecode(bytecode, stack)
         case InstructionKind.DROP:
             stack_pop(stack)
         case InstructionKind.DUP:
@@ -83,6 +107,8 @@ def stack_push(stack: list[int], value: int):
 
 
 def stack_pop(stack: list[int]) -> int:
+    if not stack:
+        raise IndexError("Stack underflow")
     return stack.pop()
 
 
