@@ -17,9 +17,19 @@ class TokenKind(Enum):
 
 
 class Intrinsic(Enum):
+    # Stack
+    DROP = auto()
+    DUP = auto()
+    OVER = auto()
+    ROT = auto()
+    SWAP = auto()
+
+    # Memory
     LOAD = auto()
-    PRINT = auto()
     STORE = auto()
+
+    # IO
+    PRINT = auto()
 
     @classmethod
     def from_lowercase(cls, value: str) -> Self | None:
@@ -69,6 +79,11 @@ class Token:
 
 class OpKind(Enum):
     # Intrinsics
+    DROP = auto()
+    DUP = auto()
+    OVER = auto()
+    ROT = auto()
+    SWAP = auto()
     LOAD = auto()
     PRINT = auto()
     STORE = auto()
@@ -88,7 +103,7 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 6, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 11, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires `int`
@@ -100,7 +115,16 @@ class Op:
                 if not isinstance(self.value, list):
                     raise TypeError(f"`{self.kind}` requires value of type `list`")
             # Requires `Intrinsic`
-            case OpKind.LOAD | OpKind.PRINT | OpKind.STORE:
+            case (
+                OpKind.DROP
+                | OpKind.DUP
+                | OpKind.OVER
+                | OpKind.ROT
+                | OpKind.SWAP
+                | OpKind.LOAD
+                | OpKind.PRINT
+                | OpKind.STORE
+            ):
                 if not isinstance(self.value, Intrinsic):
                     raise TypeError(f"`{self.kind}` requires value of type `Intrinsic`")
             # Requires `Operator`
@@ -113,7 +137,12 @@ class Op:
 
 class InstructionKind(Enum):
     # Stack
+    DROP = auto()
+    DUP = auto()
+    OVER = auto()
     PUSH = auto()
+    ROT = auto()
+    SWAP = auto()
 
     # Intrinsics
     LOAD = auto()
@@ -133,15 +162,21 @@ class Instruction:
     arguments: list = field(default_factory=list)
 
     def __post_init__(self):
-        assert len(InstructionKind) == 6, "Exhaustive handling for `InstructionKind`"
+        assert len(InstructionKind) == 11, "Exhaustive handling for `InstructionKind`"
+
         match self.kind:
             # Should not have a parameter
             case (
                 InstructionKind.ADD
+                | InstructionKind.DROP
+                | InstructionKind.DUP
                 | InstructionKind.LIST_NEW
                 | InstructionKind.LOAD
+                | InstructionKind.OVER
                 | InstructionKind.PRINT
+                | InstructionKind.ROT
                 | InstructionKind.STORE
+                | InstructionKind.SWAP
             ):
                 if self.arguments:
                     raise TypeError(

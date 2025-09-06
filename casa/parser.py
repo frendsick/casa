@@ -12,9 +12,14 @@ from casa.common import (
 )
 
 INTRINSIC_TO_OPKIND = {
+    Intrinsic.DROP: OpKind.DROP,
+    Intrinsic.DUP: OpKind.DUP,
+    Intrinsic.OVER: OpKind.OVER,
+    Intrinsic.ROT: OpKind.ROT,
+    Intrinsic.SWAP: OpKind.SWAP,
     Intrinsic.LOAD: OpKind.LOAD,
-    Intrinsic.PRINT: OpKind.PRINT,
     Intrinsic.STORE: OpKind.STORE,
+    Intrinsic.PRINT: OpKind.PRINT,
 }
 
 

@@ -11,13 +11,19 @@ def interpret_bytecode(instructions: list[Instruction]):
 
 
 def interpret_instruction(instruction: Instruction, stack: list[int], heap: list[int]):
-    assert len(InstructionKind) == 6, "Exhaustive handling for `OpKind`"
+    assert len(InstructionKind) == 11, "Exhaustive handling for `InstructionKind`"
 
     match instruction.kind:
         case InstructionKind.ADD:
             a = stack_pop(stack)
             b = stack_pop(stack)
             stack_push(stack, a + b)
+        case InstructionKind.DROP:
+            stack_pop(stack)
+        case InstructionKind.DUP:
+            a = stack_pop(stack)
+            stack_push(stack, a)
+            stack_push(stack, a)
         case InstructionKind.LIST_NEW:
             list_len = stack_pop(stack)
 
@@ -37,11 +43,24 @@ def interpret_instruction(instruction: Instruction, stack: list[int], heap: list
                     f"Address `{ptr}` is not valid within the heap of size `{len(heap)}`"
                 )
             stack_push(stack, heap[ptr])
+        case InstructionKind.OVER:
+            a = stack_pop(stack)
+            b = stack_pop(stack)
+            stack_push(stack, b)
+            stack_push(stack, a)
+            stack_push(stack, b)
         case InstructionKind.PRINT:
             a = stack_pop(stack)
             print(a)
         case InstructionKind.PUSH:
             stack_push(stack, instruction.arguments[0])
+        case InstructionKind.ROT:
+            a = stack_pop(stack)
+            b = stack_pop(stack)
+            c = stack_pop(stack)
+            stack_push(stack, c)
+            stack_push(stack, a)
+            stack_push(stack, b)
         case InstructionKind.STORE:
             ptr = stack_pop(stack)
             if not is_valid_address(heap, ptr):
@@ -50,6 +69,11 @@ def interpret_instruction(instruction: Instruction, stack: list[int], heap: list
                 )
             value = stack_pop(stack)
             heap[ptr] = value
+        case InstructionKind.SWAP:
+            a = stack_pop(stack)
+            b = stack_pop(stack)
+            stack_push(stack, a)
+            stack_push(stack, b)
         case _:
             assert_never(instruction.kind)
 

@@ -12,14 +12,20 @@ def compile_bytecode(ops: list[Op]) -> Bytecode:
 
 
 def compile_op(op: Op) -> Bytecode:
-    assert len(InstructionKind) == 6, "Exhaustive handling for `InstructionKind"
-    assert len(OpKind) == 6, "Exhaustive handling for `OpKind`"
+    assert len(InstructionKind) == 11, "Exhaustive handling for `InstructionKind"
+    assert len(OpKind) == 11, "Exhaustive handling for `OpKind`"
 
     match op.kind:
         case OpKind.ADD:
             return [Instruction(InstructionKind.ADD)]
+        case OpKind.DROP:
+            return [Instruction(InstructionKind.DROP)]
+        case OpKind.DUP:
+            return [Instruction(InstructionKind.DUP)]
         case OpKind.LOAD:
             return [Instruction(InstructionKind.LOAD)]
+        case OpKind.OVER:
+            return [Instruction(InstructionKind.OVER)]
         case OpKind.PRINT:
             return [Instruction(InstructionKind.PRINT)]
         case OpKind.PUSH_INT:
@@ -37,7 +43,11 @@ def compile_op(op: Op) -> Bytecode:
             push_list = Instruction(InstructionKind.LIST_NEW)
             bytecode.append(push_list)
             return bytecode
+        case OpKind.ROT:
+            return [Instruction(InstructionKind.ROT)]
         case OpKind.STORE:
             return [Instruction(InstructionKind.STORE)]
+        case OpKind.SWAP:
+            return [Instruction(InstructionKind.SWAP)]
         case _:
             assert_never(op.kind)
