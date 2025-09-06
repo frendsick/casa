@@ -11,6 +11,8 @@ def interpret_bytecode(instructions: list[Instruction]):
 
 
 def interpret_instruction(instruction: Instruction, stack: list[int], heap: list[int]):
+    assert len(InstructionKind) == 6, "Exhaustive handling for `OpKind`"
+
     match instruction.kind:
         case InstructionKind.ADD:
             a = stack_pop(stack)
@@ -28,11 +30,26 @@ def interpret_instruction(instruction: Instruction, stack: list[int], heap: list
                 item = stack_pop(stack)
                 heap[ptr + i] = item
             stack_push(stack, ptr)
+        case InstructionKind.LOAD:
+            ptr = stack_pop(stack)
+            if not is_valid_address(heap, ptr):
+                raise IndexError(
+                    f"Address `{ptr}` is not valid within the heap of size `{len(heap)}`"
+                )
+            stack_push(stack, heap[ptr])
         case InstructionKind.PRINT:
             a = stack_pop(stack)
             print(a)
         case InstructionKind.PUSH:
             stack_push(stack, instruction.arguments[0])
+        case InstructionKind.STORE:
+            ptr = stack_pop(stack)
+            if not is_valid_address(heap, ptr):
+                raise IndexError(
+                    f"Address `{ptr}` is not valid within the heap of size `{len(heap)}`"
+                )
+            value = stack_pop(stack)
+            heap[ptr] = value
         case _:
             assert_never(instruction.kind)
 
@@ -50,3 +67,7 @@ def heap_alloc(heap: list[int], size: int) -> int:
     for _ in range(size):
         heap.append(0)
     return ptr
+
+
+def is_valid_address(heap: list[int], ptr: int) -> bool:
+    return ptr < len(heap) and ptr >= 0

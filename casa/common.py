@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
 from typing import Any, Generic, Self, Sequence, TypeVar, assert_never
@@ -17,7 +17,9 @@ class TokenKind(Enum):
 
 
 class Intrinsic(Enum):
+    LOAD = auto()
     PRINT = auto()
+    STORE = auto()
 
     @classmethod
     def from_lowercase(cls, value: str) -> Self | None:
@@ -66,10 +68,17 @@ class Token:
 
 
 class OpKind(Enum):
-    ADD = auto()
+    # Intrinsics
+    LOAD = auto()
+    PRINT = auto()
+    STORE = auto()
+
+    # Literals
     PUSH_INT = auto()
     PUSH_LIST = auto()
-    PRINT = auto()
+
+    # Operators
+    ADD = auto()
 
 
 @dataclass
@@ -79,18 +88,19 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 4, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 6, "Exhaustive handling for `OpKind`"
+
         match self.kind:
             # Requires `int`
             case OpKind.PUSH_INT:
                 if not isinstance(self.value, int):
                     raise TypeError(f"`{self.kind}` requires value of type `int`")
-            # Requires `int`
+            # Requires `list`
             case OpKind.PUSH_LIST:
                 if not isinstance(self.value, list):
                     raise TypeError(f"`{self.kind}` requires value of type `list`")
             # Requires `Intrinsic`
-            case OpKind.PRINT:
+            case OpKind.LOAD | OpKind.PRINT | OpKind.STORE:
                 if not isinstance(self.value, Intrinsic):
                     raise TypeError(f"`{self.kind}` requires value of type `Intrinsic`")
             # Requires `Operator`
@@ -99,6 +109,53 @@ class Op:
                     raise TypeError(f"`{self.kind}` requires value of type `Operator`")
             case _:
                 assert_never(self.kind)
+
+
+class InstructionKind(Enum):
+    # Stack
+    PUSH = auto()
+
+    # Intrinsics
+    LOAD = auto()
+    PRINT = auto()
+    STORE = auto()
+
+    # Lists
+    LIST_NEW = auto()
+
+    # Operators
+    ADD = auto()
+
+
+@dataclass
+class Instruction:
+    kind: InstructionKind
+    arguments: list = field(default_factory=list)
+
+    def __post_init__(self):
+        assert len(InstructionKind) == 6, "Exhaustive handling for `InstructionKind`"
+        match self.kind:
+            # Should not have a parameter
+            case (
+                InstructionKind.ADD
+                | InstructionKind.LIST_NEW
+                | InstructionKind.LOAD
+                | InstructionKind.PRINT
+                | InstructionKind.STORE
+            ):
+                if self.arguments:
+                    raise TypeError(
+                        f"`{self.kind}` should not have any parameters\nArguments: {self.arguments}"
+                    )
+            # One parameter of type `int`
+            case InstructionKind.PUSH:
+                if len(self.arguments) != 1 or not isinstance(self.arguments[0], int):
+                    raise TypeError(
+                        f"`{self.kind}` requires one parameter of type `int`\nArguments: {self.arguments}"
+                    )
+
+
+type Bytecode = list[Instruction]
 
 
 @dataclass
