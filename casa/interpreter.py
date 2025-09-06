@@ -4,21 +4,34 @@ from casa.compiler import Instruction, InstructionKind
 
 
 def interpret_bytecode(instructions: list[Instruction]):
+    heap: list[int] = []
     stack: list[int] = []
     for instruction in instructions:
-        interpret_instruction(stack, instruction)
+        interpret_instruction(instruction, stack, heap)
 
 
-def interpret_instruction(stack: list[int], instruction: Instruction):
+def interpret_instruction(instruction: Instruction, stack: list[int], heap: list[int]):
     match instruction.kind:
         case InstructionKind.ADD:
             a = stack_pop(stack)
             b = stack_pop(stack)
             stack_push(stack, a + b)
+        case InstructionKind.LIST_NEW:
+            list_len = stack_pop(stack)
+
+            # Store the list len in the zeroth index
+            ptr = heap_alloc(heap, list_len + 1)
+            heap[ptr] = list_len
+
+            # Store the list values
+            for i in range(1, list_len + 1):
+                item = stack_pop(stack)
+                heap[ptr + i] = item
+            stack_push(stack, ptr)
         case InstructionKind.PRINT:
             a = stack_pop(stack)
             print(a)
-        case InstructionKind.PUSH_INT:
+        case InstructionKind.PUSH:
             stack_push(stack, instruction.arguments[0])
         case _:
             assert_never(instruction.kind)
@@ -30,3 +43,10 @@ def stack_push(stack: list[int], value: int):
 
 def stack_pop(stack: list[int]) -> int:
     return stack.pop()
+
+
+def heap_alloc(heap: list[int], size: int) -> int:
+    ptr = len(heap)
+    for _ in range(size):
+        heap.append(0)
+    return ptr

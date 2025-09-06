@@ -7,7 +7,7 @@ T = TypeVar("T")
 
 
 class TokenKind(Enum):
-    # DELIMITER = auto()
+    DELIMITER = auto()
     EOF = auto()
     # IDENTIFIER = auto()
     INTRINSIC = auto()
@@ -24,6 +24,22 @@ class Intrinsic(Enum):
         if not value.islower():
             return None
         return cls.__members__.get(value.upper())
+
+
+class Delimiter(Enum):
+    COMMA = auto()
+    OPEN_BRACKET = auto()
+    CLOSE_BRACKET = auto()
+
+    @classmethod
+    def from_str(cls, value: str) -> Self | None:
+        mapping = {
+            ",": cls.COMMA,
+            "[": cls.OPEN_BRACKET,
+            "]": cls.CLOSE_BRACKET,
+        }
+        assert len(mapping) == len(Delimiter), "Exhaustive handling for `Delimiter`"
+        return mapping.get(value)  # type: ignore
 
 
 class Operator(Enum):
@@ -52,6 +68,7 @@ class Token:
 class OpKind(Enum):
     ADD = auto()
     PUSH_INT = auto()
+    PUSH_LIST = auto()
     PRINT = auto()
 
 
@@ -62,12 +79,16 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 3, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 4, "Exhaustive handling for `OpKind`"
         match self.kind:
             # Requires `int`
             case OpKind.PUSH_INT:
                 if not isinstance(self.value, int):
                     raise TypeError(f"`{self.kind}` requires value of type `int`")
+            # Requires `int`
+            case OpKind.PUSH_LIST:
+                if not isinstance(self.value, list):
+                    raise TypeError(f"`{self.kind}` requires value of type `list`")
             # Requires `Intrinsic`
             case OpKind.PRINT:
                 if not isinstance(self.value, Intrinsic):
