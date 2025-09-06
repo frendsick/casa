@@ -11,18 +11,17 @@ CASA_SOURCE_CODE = "test.casa"
 
 def main():
     code_file = COMPILER_FOLDER / CASA_SOURCE_CODE
+
+    print(f"Lexing {CASA_SOURCE_CODE}")
     tokens = lex_file(code_file)
-    for token in tokens:
-        print(token)
 
+    print("Parsing ops")
     ops = parse_ops(tokens)
-    for op in ops:
-        print(op)
 
+    print("Compiling bytecode")
     instructions = compile_bytecode(ops)
-    for instruction in instructions:
-        print(instruction)
 
+    print("Interpreting bytecode")
     interpret_bytecode(instructions)
 
 
