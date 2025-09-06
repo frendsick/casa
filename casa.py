@@ -1,6 +1,7 @@
 import pathlib
 
 from casa.compiler import compile_bytecode
+from casa.interpreter import interpret_bytecode
 from casa.lexer import lex_file
 from casa.parser import parse_ops
 
@@ -21,6 +22,8 @@ def main():
     instructions = compile_bytecode(ops)
     for instruction in instructions:
         print(instruction)
+
+    interpret_bytecode(instructions)
 
 
 if __name__ == "__main__":
