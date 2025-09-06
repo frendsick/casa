@@ -83,6 +83,5 @@ class Lexer:
 def lex_file(file: Path) -> list[Token]:
     with open(file, "r") as code_file:
         code = code_file.read()
-
-    lexer = Lexer(file=file, cursor=Cursor(sequence=code, position=0))
+    lexer = Lexer(file=file, cursor=Cursor(sequence=code))
     return lexer.lex()
