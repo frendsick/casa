@@ -9,9 +9,9 @@ T = TypeVar("T")
 class TokenKind(Enum):
     DELIMITER = auto()
     EOF = auto()
-    # IDENTIFIER = auto()
+    IDENTIFIER = auto()
     INTRINSIC = auto()
-    # KEYWORD = auto()
+    KEYWORD = auto()
     LITERAL = auto()
     OPERATOR = auto()
 
@@ -38,8 +38,20 @@ class Intrinsic(Enum):
         return cls.__members__.get(value.upper())
 
 
+class Keyword(Enum):
+    FN = auto()
+
+    @classmethod
+    def from_lowercase(cls, value: str) -> Self | None:
+        if not value.islower():
+            return None
+        return cls.__members__.get(value.upper())
+
+
 class Delimiter(Enum):
     COMMA = auto()
+    OPEN_BRACE = auto()
+    CLOSE_BRACE = auto()
     OPEN_BRACKET = auto()
     CLOSE_BRACKET = auto()
 
@@ -47,6 +59,8 @@ class Delimiter(Enum):
     def from_str(cls, value: str) -> Self | None:
         mapping = {
             ",": cls.COMMA,
+            "{": cls.OPEN_BRACE,
+            "}": cls.CLOSE_BRACE,
             "[": cls.OPEN_BRACKET,
             "]": cls.CLOSE_BRACKET,
         }
@@ -95,6 +109,12 @@ class OpKind(Enum):
     # Operators
     ADD = auto()
 
+    # Functions
+    CALL_FN = auto()
+
+    # Identifiers
+    IDENTIFIER = auto()
+
 
 @dataclass
 class Op:
@@ -103,13 +123,17 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 11, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 13, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires `int`
             case OpKind.PUSH_INT:
                 if not isinstance(self.value, int):
                     raise TypeError(f"`{self.kind}` requires value of type `int`")
+            # Requires `str`
+            case OpKind.IDENTIFIER | OpKind.CALL_FN:
+                if not isinstance(self.value, str):
+                    raise TypeError(f"`{self.kind}` requires value of type `str`")
             # Requires `list`
             case OpKind.PUSH_LIST:
                 if not isinstance(self.value, list):
@@ -155,6 +179,9 @@ class InstructionKind(Enum):
     # Operators
     ADD = auto()
 
+    # Functions
+    CALL_FN = auto()
+
 
 @dataclass
 class Instruction:
@@ -162,7 +189,7 @@ class Instruction:
     arguments: list = field(default_factory=list)
 
     def __post_init__(self):
-        assert len(InstructionKind) == 11, "Exhaustive handling for `InstructionKind`"
+        assert len(InstructionKind) == 12, "Exhaustive handling for `InstructionKind`"
 
         match self.kind:
             # Should not have a parameter
@@ -188,6 +215,22 @@ class Instruction:
                     raise TypeError(
                         f"`{self.kind}` requires one parameter of type `int`\nArguments: {self.arguments}"
                     )
+            # One parameter of type `str`
+            case InstructionKind.CALL_FN:
+                if len(self.arguments) != 1 or not isinstance(self.arguments[0], str):
+                    raise TypeError(
+                        f"`{self.kind}` requires one parameter of type `str`\nArguments: {self.arguments}"
+                    )
+
+
+@dataclass
+class Function:
+    name: str
+    ops: list[Op]
+    location: Location
+
+
+GLOBAL_IDENTIFIERS: dict[str, Function] = {}
 
 
 type Bytecode = list[Instruction]

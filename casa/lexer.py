@@ -2,7 +2,17 @@ import itertools
 from dataclasses import dataclass
 from pathlib import Path
 
-from casa.common import Cursor, Delimiter, Intrinsic, Location, Span, Token, TokenKind
+from casa.common import (
+    Cursor,
+    Delimiter,
+    Intrinsic,
+    Keyword,
+    Location,
+    Operator,
+    Span,
+    Token,
+    TokenKind,
+)
 
 
 @dataclass(slots=True)
@@ -48,7 +58,7 @@ class Lexer:
         return Token(digits, TokenKind.LITERAL, location)
 
     def parse_token(self) -> Token | None:
-        assert len(TokenKind) == 5, "Exhaustive handling for `TokenKind`"
+        assert len(Operator) == 1, "Exhaustive handling for `Operator`"
 
         self.skip_whitespace()
         match c := self.cursor.peek():
@@ -79,7 +89,9 @@ class Lexer:
 
         if Intrinsic.from_lowercase(value):
             return Token(value, TokenKind.INTRINSIC, location)
-        raise NotImplementedError(value)
+        if Keyword.from_lowercase(value):
+            return Token(value, TokenKind.KEYWORD, location)
+        return Token(value, TokenKind.IDENTIFIER, location)
 
 
 def lex_file(file: Path) -> list[Token]:
