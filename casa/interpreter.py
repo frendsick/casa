@@ -4,7 +4,7 @@ from casa.compiler import Instruction, InstructionKind
 
 
 def interpret_bytecode(instructions: list[Instruction]):
-    stack = []
+    stack: list[int] = []
     for instruction in instructions:
         interpret_instruction(stack, instruction)
 
