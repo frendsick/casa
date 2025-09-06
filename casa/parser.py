@@ -12,7 +12,9 @@ from casa.common import (
 )
 
 INTRINSIC_TO_OPKIND = {
+    Intrinsic.LOAD: OpKind.LOAD,
     Intrinsic.PRINT: OpKind.PRINT,
+    Intrinsic.STORE: OpKind.STORE,
 }
 
 
@@ -77,8 +79,9 @@ def get_op_list(cursor: Cursor[Token]) -> Op:
     if not open_bracket or open_bracket.value != "[":
         raise SyntaxError("Expected `[` but got nothing")
 
+    # Empty list
     list_items = []
-    while True:
+    while not expect_delimiter(cursor, Delimiter.CLOSE_BRACKET):
         value_token = cursor.pop()
         if not value_token:
             raise SyntaxError("Expected list value but got nothing")
@@ -90,19 +93,17 @@ def get_op_list(cursor: Cursor[Token]) -> Op:
         op = token_to_op(value_token, cursor)
         list_items.append(op)
 
-        if expect_delimiter(cursor, Delimiter.CLOSE_BRACKET):
-            break
-
-        if not expect_delimiter(cursor, Delimiter.COMMA):
-            raise SyntaxError(f"Expected `,` or `]` but got `{cursor.pop().value}`")  # type: ignore
+        if expect_delimiter(cursor, Delimiter.COMMA):
+            continue
 
     return Op(list_items, OpKind.PUSH_LIST, open_bracket.location)
 
 
 def get_op_intrinsic(token: Token) -> Op:
+    assert len(INTRINSIC_TO_OPKIND) == len(Intrinsic), "Exhaustive handling for `Intrinsic`"  # fmt: skip
+
     intrinsic = Intrinsic.from_lowercase(token.value)
-    if not intrinsic:
-        raise ValueError(f"Token `{token.value}` is not an intrinsic")
+    assert intrinsic, f"Token `{token.value}` is not an intrinsic"
     return Op(intrinsic, INTRINSIC_TO_OPKIND[intrinsic], token.location)
 
 

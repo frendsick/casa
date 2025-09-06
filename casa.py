@@ -19,10 +19,10 @@ def main():
     ops = parse_ops(tokens)
 
     print("Compiling bytecode")
-    instructions = compile_bytecode(ops)
+    bytecode = compile_bytecode(ops)
 
     print("Interpreting bytecode")
-    interpret_bytecode(instructions)
+    interpret_bytecode(bytecode)
 
 
 if __name__ == "__main__":
