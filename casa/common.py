@@ -1,7 +1,9 @@
 from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
-from typing import Any, Self, assert_never
+from typing import Any, Generic, Self, Sequence, TypeVar, assert_never
+
+T = TypeVar("T")
 
 
 class TokenKind(Enum):
@@ -76,3 +78,23 @@ class Op:
                     raise TypeError(f"`{self.kind}` requires value of type `Operator`")
             case _:
                 assert_never(self.kind)
+
+
+@dataclass
+class Cursor(Generic[T]):
+    sequence: Sequence[T]
+    position: int = 0
+
+    def is_finished(self) -> bool:
+        return self.position >= len(self.sequence)
+
+    def peek(self) -> T | None:
+        if self.is_finished():
+            return None
+        return self.sequence[self.position]
+
+    def pop(self) -> T | None:
+        x = self.peek()
+        if x is not None:
+            self.position += 1
+        return x

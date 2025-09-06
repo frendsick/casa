@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import assert_never
 
-from casa.common import Op, OpKind
+from casa.common import Cursor, Op, OpKind
 
 
 class InstructionKind(Enum):
@@ -33,43 +33,22 @@ class Instruction:
                     )
 
 
-@dataclass
-class BytecodeCompiler:
-    cursor: int
-    ops: list[Op]
-
-    def compile(self) -> list[Instruction]:
-        instructions = []
-        while instruction := self.parse_instruction():
-            instructions.append(instruction)
-        return instructions
-
-    def is_finished(self) -> bool:
-        return self.cursor >= len(self.ops)
-
-    def peek_instruction(self) -> Instruction | None:
-        assert len(InstructionKind) == 3, "Exhaustive handling for `InstructionKind"
-
-        if self.is_finished():
-            return None
-
-        op = self.ops[self.cursor]
-        match op.kind:
-            case OpKind.ADD:
-                return Instruction(InstructionKind.ADD)
-            case OpKind.PRINT:
-                return Instruction(InstructionKind.PRINT)
-            case OpKind.PUSH_INT:
-                return Instruction(InstructionKind.PUSH_INT, arguments=[op.value])
-            case _:
-                assert_never(op.kind)
-
-    def parse_instruction(self) -> Instruction | None:
-        if instruction := self.peek_instruction():
-            self.cursor += 1
-            return instruction
-
-
 def compile_bytecode(ops: list[Op]) -> list[Instruction]:
-    compiler = BytecodeCompiler(cursor=0, ops=ops)
-    return compiler.compile()
+    cursor = Cursor(sequence=ops)
+    instructions = []
+    while op := cursor.pop():
+        instructions += compile_op(op)
+    return instructions
+
+
+def compile_op(op: Op) -> list[Instruction]:
+    assert len(InstructionKind) == 3, "Exhaustive handling for `InstructionKind"
+    match op.kind:
+        case OpKind.ADD:
+            return [Instruction(InstructionKind.ADD)]
+        case OpKind.PRINT:
+            return [Instruction(InstructionKind.PRINT)]
+        case OpKind.PUSH_INT:
+            return [Instruction(InstructionKind.PUSH_INT, arguments=[op.value])]
+        case _:
+            assert_never(op.kind)

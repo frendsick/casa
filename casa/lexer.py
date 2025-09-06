@@ -2,55 +2,56 @@ import itertools
 from dataclasses import dataclass
 from pathlib import Path
 
-from .common import Intrinsic, Location, Span, Token, TokenKind
+from casa.common import Cursor, Intrinsic, Location, Span, Token, TokenKind
 
 
-@dataclass
+@dataclass(slots=True)
 class Lexer:
-    cursor: int
-    code: str
+    cursor: Cursor[str]
     file: Path
 
     def lex(self) -> list[Token]:
-        tokens = []
-        while token := self.parse_token():
-            tokens.append(token)
-        assert self.is_finished(), "Lexer did not finish parsing"
+        tokens: list[Token] = []
+        while (tok := self.parse_token()) is not None:
+            tokens.append(tok)
 
-        tokens.append(Token("", TokenKind.EOF, self.get_location(0)))
+        tokens.append(Token("", TokenKind.EOF, self.current_location(0)))
         return tokens
 
     def rest(self) -> str:
-        return self.code[self.cursor :]
+        return self.cursor.sequence[self.cursor.position :]  # type: ignore
 
-    def is_finished(self) -> bool:
-        return self.cursor >= len(self.code)
+    def current_location(self, span_length: int) -> Location:
+        return Location(self.file, Span(self.cursor.position, span_length))
 
-    def is_whitespace(self) -> bool:
-        if char := self.peek_char():
-            return char.isspace()
-        return False
+    def peek_word(self) -> str | None:
+        if self.cursor.is_finished():
+            return None
+        return self.rest().split(maxsplit=1)[0]
 
     def skip_whitespace(self):
         rest = self.rest()
-        self.cursor += len(rest) - len(rest.lstrip())
+        self.cursor.position += len(rest) - len(rest.lstrip())
 
-    def peek_char(self) -> str | None:
-        try:
-            return self.code[self.cursor]
-        except IndexError:
-            return None
+    def is_whitespace(self) -> bool:
+        if char := self.cursor.peek():
+            return char.isspace()
+        return False
 
-    def peek_word(self) -> str | None:
-        if self.is_finished() or self.is_whitespace():
-            return None
-        return self.rest().split(maxsplit=1)[0]
+    def lex_integer_literal(self) -> Token:
+        digits = "".join(itertools.takewhile(str.isdigit, self.rest()))
+        assert digits, "Could not parse integer literal"
+
+        digit_count = len(digits)
+        location = Location(self.file, Span(self.cursor.position, digit_count))
+        self.cursor.position += digit_count
+        return Token(digits, TokenKind.LITERAL, location)
 
     def parse_token(self) -> Token | None:
         assert len(TokenKind) == 4, "Exhaustive handling for `TokenKind`"
 
         self.skip_whitespace()
-        match c := self.peek_char():
+        match c := self.cursor.peek():
             case None:
                 return None
             case "+":
@@ -60,12 +61,9 @@ class Lexer:
             case _:
                 return self.lex_multichar_token()
 
-    def get_location(self, span_length: int) -> Location:
-        return Location(self.file, Span(self.cursor, span_length))
-
     def lex_token(self, char: str, token_kind: TokenKind) -> Token:
-        token = Token(char, token_kind, self.get_location(1))
-        self.cursor += 1
+        token = Token(char, token_kind, self.current_location(1))
+        self.cursor.position += 1
         return token
 
     def lex_multichar_token(self) -> Token | None:
@@ -74,25 +72,17 @@ class Lexer:
             return None
 
         value_len = len(value)
-        location = self.get_location(value_len)
-        self.cursor += value_len
+        location = self.current_location(value_len)
+        self.cursor.position += value_len
 
         if Intrinsic.from_lowercase(value):
             return Token(value, TokenKind.INTRINSIC, location)
         raise NotImplementedError(value)
 
-    def lex_integer_literal(self) -> Token:
-        digits = "".join(itertools.takewhile(str.isdigit, self.rest()))
-        assert digits, "Could not parse integer literal"
-
-        digit_count = len(digits)
-        location = Location(self.file, Span(self.cursor, digit_count))
-        self.cursor += digit_count
-        return Token(digits, TokenKind.LITERAL, location)
-
 
 def lex_file(file: Path) -> list[Token]:
     with open(file, "r") as code_file:
         code = code_file.read()
-    lexer = Lexer(code=code, cursor=0, file=file)
+
+    lexer = Lexer(file=file, cursor=Cursor(sequence=code, position=0))
     return lexer.lex()
