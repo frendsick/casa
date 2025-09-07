@@ -2,6 +2,7 @@ from typing import assert_never
 
 from casa.common import (
     GLOBAL_IDENTIFIERS,
+    GLOBAL_SCOPE_LABEL,
     Cursor,
     Delimiter,
     Function,
@@ -23,6 +24,7 @@ INTRINSIC_TO_OPKIND = {
     Intrinsic.LOAD: OpKind.LOAD,
     Intrinsic.STORE: OpKind.STORE,
     Intrinsic.PRINT: OpKind.PRINT,
+    Intrinsic.EXEC: OpKind.EXEC_FN,
 }
 
 
@@ -54,12 +56,16 @@ def resolve_identifiers(ops: list[Op]):
                 raise NameError(f"Identifier `{identifier_name}` is not defined")
 
 
-def token_to_op(token: Token, cursor: Cursor[Token]) -> Op | None:
+def token_to_op(
+    token: Token,
+    cursor: Cursor[Token],
+    function_name: str = GLOBAL_SCOPE_LABEL,
+) -> Op | None:
     assert len(TokenKind) == 7, "Exhaustive handling for `TokenKind`"
 
     match token.kind:
         case TokenKind.DELIMITER:
-            return get_op_delimiter(token, cursor)
+            return get_op_delimiter(token, cursor, function_name)
         case TokenKind.EOF:
             return None
         case TokenKind.IDENTIFIER:
@@ -76,7 +82,7 @@ def token_to_op(token: Token, cursor: Cursor[Token]) -> Op | None:
             assert_never(token.kind)
 
 
-def get_op_delimiter(token: Token, cursor: Cursor[Token]) -> Op | None:
+def get_op_delimiter(token: Token, cursor: Cursor[Token], function_name) -> Op | None:
     assert len(Delimiter) == 5, "Exhaustive handling for `Delimiter`"
 
     delimiter = Delimiter.from_str(token.value)
@@ -85,8 +91,14 @@ def get_op_delimiter(token: Token, cursor: Cursor[Token]) -> Op | None:
             return None
         case Delimiter.COMMA:
             return None
+        # Lambda function
         case Delimiter.OPEN_BRACE:
-            return None
+            cursor.position -= 1
+            ops = parse_block_ops(cursor, function_name)
+            lambda_name = f"lambda__{function_name}_o{token.location.span.offset}"
+            lambda_function = Function(lambda_name, ops, token.location)
+            GLOBAL_IDENTIFIERS[lambda_name] = lambda_function
+            return Op(lambda_name, OpKind.PUSH_FN, token.location)
         case Delimiter.CLOSE_BRACE:
             return None
         case Delimiter.OPEN_BRACKET:
@@ -111,7 +123,7 @@ def expect_delimiter(cursor: Cursor[Token], expected: Delimiter) -> Delimiter | 
     return delimiter
 
 
-def parse_block_ops(cursor: Cursor[Token]) -> list[Op]:
+def parse_block_ops(cursor: Cursor[Token], function_name: str) -> list[Op]:
     open_brace = cursor.pop()
     if not open_brace or open_brace.value != "{":
         raise SyntaxError("Expected `{` but got nothing")
@@ -120,7 +132,7 @@ def parse_block_ops(cursor: Cursor[Token]) -> list[Op]:
     while token := cursor.pop():
         if token.value == "}":
             return ops
-        if op := token_to_op(token, cursor):
+        if op := token_to_op(token, cursor, function_name):
             ops.append(op)
     raise SyntaxError("Unclosed block")
 
@@ -187,16 +199,8 @@ def parse_function(cursor: Cursor[Token]) -> Function:
 
     # TODO: Function signature
 
-    open_bracket = cursor.pop()
-    if not open_bracket or open_bracket.value != "{":
-        raise SyntaxError(f"Expected `{{` but got `{open_bracket.value}`")  # type: ignore
-
-    ops = []
-    while token := cursor.pop():
-        if token.value == "}":
-            return Function(name.value, ops, name.location)
-        ops.append(token_to_op(token, cursor))
-    raise SyntaxError(f"Expected `}}` but got nothing")
+    ops = parse_block_ops(cursor, name.value)
+    return Function(name.value, ops, name.location)
 
 
 def get_op_literal(token: Token) -> Op:

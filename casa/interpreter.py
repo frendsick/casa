@@ -7,26 +7,23 @@ from casa.common import (
     Instruction,
     InstructionKind,
 )
-from casa.compiler import compile_bytecode
 
 
 def interpret_bytecode(bytecode: Bytecode, stack: list[int] | None = None):
-    identifiers = {}
     heap: list[int] = []
     if not stack:
         stack = []
 
     for instruction in bytecode:
-        interpret_instruction(instruction, stack, heap, identifiers)
+        interpret_instruction(instruction, stack, heap)
 
 
 def interpret_instruction(
     instruction: Instruction,
     stack: list[int],
     heap: list[int],
-    identifiers: dict,
 ):
-    assert len(InstructionKind) == 12, "Exhaustive handling for `InstructionKind`"
+    assert len(InstructionKind) == 13, "Exhaustive handling for `InstructionKind`"
 
     match instruction.kind:
         case InstructionKind.ADD:
@@ -48,6 +45,15 @@ def interpret_instruction(
             a = stack_pop(stack)
             stack_push(stack, a)
             stack_push(stack, a)
+        case InstructionKind.EXEC_FN:
+            fn_ptr = stack_pop(stack)
+            assert fn_ptr < len(GLOBAL_IDENTIFIERS), "Valid function pointer"
+
+            function = list(GLOBAL_IDENTIFIERS.values())[fn_ptr]
+            assert isinstance(function, Function), "Expected function"
+            assert isinstance(function.bytecode, list), "Function is compiled"
+
+            interpret_bytecode(function.bytecode, stack)
         case InstructionKind.LIST_NEW:
             list_len = stack_pop(stack)
 

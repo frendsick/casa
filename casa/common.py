@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
-from typing import Any, Generic, Self, Sequence, TypeVar, assert_never
+from typing import Any, Generic, OrderedDict, Self, Sequence, TypeVar, assert_never
 
 T = TypeVar("T")
 
@@ -30,6 +30,9 @@ class Intrinsic(Enum):
 
     # IO
     PRINT = auto()
+
+    # Functions
+    EXEC = auto()
 
     @classmethod
     def from_lowercase(cls, value: str) -> Self | None:
@@ -111,6 +114,8 @@ class OpKind(Enum):
 
     # Functions
     CALL_FN = auto()
+    EXEC_FN = auto()
+    PUSH_FN = auto()
 
     # Identifiers should be resolved by the parser
     IDENTIFIER = auto()
@@ -123,7 +128,7 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 13, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 15, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires `int`
@@ -131,7 +136,7 @@ class Op:
                 if not isinstance(self.value, int):
                     raise TypeError(f"`{self.kind}` requires value of type `int`")
             # Requires `str`
-            case OpKind.IDENTIFIER | OpKind.CALL_FN:
+            case OpKind.IDENTIFIER | OpKind.CALL_FN | OpKind.PUSH_FN:
                 if not isinstance(self.value, str):
                     raise TypeError(f"`{self.kind}` requires value of type `str`")
             # Requires `list`
@@ -148,6 +153,7 @@ class Op:
                 | OpKind.LOAD
                 | OpKind.PRINT
                 | OpKind.STORE
+                | OpKind.EXEC_FN
             ):
                 if not isinstance(self.value, Intrinsic):
                     raise TypeError(f"`{self.kind}` requires value of type `Intrinsic`")
@@ -181,6 +187,7 @@ class InstructionKind(Enum):
 
     # Functions
     CALL_FN = auto()
+    EXEC_FN = auto()
 
 
 @dataclass
@@ -189,7 +196,7 @@ class Instruction:
     arguments: list = field(default_factory=list)
 
     def __post_init__(self):
-        assert len(InstructionKind) == 12, "Exhaustive handling for `InstructionKind`"
+        assert len(InstructionKind) == 13, "Exhaustive handling for `InstructionKind`"
 
         match self.kind:
             # Should not have a parameter
@@ -197,6 +204,7 @@ class Instruction:
                 InstructionKind.ADD
                 | InstructionKind.DROP
                 | InstructionKind.DUP
+                | InstructionKind.EXEC_FN
                 | InstructionKind.LIST_NEW
                 | InstructionKind.LOAD
                 | InstructionKind.OVER
@@ -235,7 +243,8 @@ class Function:
     bytecode: Bytecode | None = None  # Will be compiled if used
 
 
-GLOBAL_IDENTIFIERS: dict[str, Function] = {}
+GLOBAL_IDENTIFIERS: OrderedDict[str, Function] = OrderedDict()
+GLOBAL_SCOPE_LABEL = "_start"
 
 
 @dataclass
