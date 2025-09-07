@@ -29,7 +29,14 @@ def compile_op(op: Op) -> Bytecode:
         case OpKind.ADD:
             return [Instruction(InstructionKind.ADD)]
         case OpKind.CALL_FN:
-            return [Instruction(InstructionKind.CALL_FN, arguments=[op.value])]
+            function_name = op.value
+            function = GLOBAL_IDENTIFIERS.get(function_name)
+            assert isinstance(function, Function), "Expected function"
+
+            # Compile the function if it is not compiled already
+            if function.bytecode is None:
+                function.bytecode = compile_bytecode(function.ops)
+            return [Instruction(InstructionKind.CALL_FN, arguments=[function_name])]
         case OpKind.DROP:
             return [Instruction(InstructionKind.DROP)]
         case OpKind.DUP:
@@ -44,10 +51,6 @@ def compile_op(op: Op) -> Bytecode:
                     return [Instruction(InstructionKind.CALL_FN, arguments=[f.name])]
                 case None:
                     raise ValueError
-            if not identifier_target:
-                raise NameError(f"Identifier `{identifier_name}` is not defined")
-            return compile_op(identifier_target)
-
         case OpKind.LOAD:
             return [Instruction(InstructionKind.LOAD)]
         case OpKind.OVER:

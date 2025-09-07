@@ -100,7 +100,6 @@ def parse_block_ops(cursor: Cursor[Token]) -> list[Op]:
     ops: list[Op] = []
     while token := cursor.pop():
         if token.value == "}":
-            print(ops)
             return ops
         if op := token_to_op(token, cursor):
             ops.append(op)

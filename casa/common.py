@@ -223,17 +223,18 @@ class Instruction:
                     )
 
 
+type Bytecode = list[Instruction]
+
+
 @dataclass
 class Function:
     name: str
     ops: list[Op]
     location: Location
+    bytecode: Bytecode | None = None  # Will be compiled if used
 
 
 GLOBAL_IDENTIFIERS: dict[str, Function] = {}
-
-
-type Bytecode = list[Instruction]
 
 
 @dataclass
