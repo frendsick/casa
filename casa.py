@@ -3,7 +3,7 @@ import pathlib
 from casa.compiler import compile_bytecode
 from casa.interpreter import interpret_bytecode
 from casa.lexer import lex_file
-from casa.parser import parse_ops
+from casa.parser import parse_ops, resolve_identifiers
 from casa.typechecker import type_check_ops
 
 COMPILER_FOLDER = pathlib.Path(__file__).resolve().parent
@@ -18,6 +18,9 @@ def main():
 
     print("Parsing ops")
     ops = parse_ops(tokens)
+
+    print("Resolving identifiers")
+    resolve_identifiers(ops)
 
     print("Type checking ops")
     type_check_ops(ops)

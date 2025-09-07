@@ -112,7 +112,7 @@ class OpKind(Enum):
     # Functions
     CALL_FN = auto()
 
-    # Identifiers
+    # Identifiers should be resolved by the parser
     IDENTIFIER = auto()
 
 
@@ -231,6 +231,7 @@ class Function:
     name: str
     ops: list[Op]
     location: Location
+    is_used: bool = False
     bytecode: Bytecode | None = None  # Will be compiled if used
 
 
