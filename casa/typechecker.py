@@ -36,6 +36,7 @@ def type_check_ops(ops: list[Op], stack: list[Type] | None = None):
 
                 match identifier_target:
                     case Function() as f:
+                        op.kind = OpKind.CALL_FN
                         type_check_ops(f.ops, stack)
                     case None:
                         raise ValueError

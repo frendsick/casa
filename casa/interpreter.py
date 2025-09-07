@@ -37,11 +37,11 @@ def interpret_instruction(
             assert len(instruction.arguments) == 1, "Function name"
             function_name = instruction.arguments[0]
             function = GLOBAL_IDENTIFIERS.get(function_name)
-            assert isinstance(function, Function), "Expected function"
 
-            # TODO: Precompile the function when used
-            bytecode = compile_bytecode(function.ops)
-            interpret_bytecode(bytecode, stack)
+            assert isinstance(function, Function), "Expected function"
+            assert isinstance(function.bytecode, list), "Function is compiled"
+
+            interpret_bytecode(function.bytecode, stack)
         case InstructionKind.DROP:
             stack_pop(stack)
         case InstructionKind.DUP:
