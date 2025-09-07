@@ -98,7 +98,6 @@ def get_op_delimiter(token: Token, cursor: Cursor[Token], function_name) -> Op |
             cursor.position -= 1
             ops = parse_block_ops(cursor, function_name)
             lambda_name = f"lambda__{function_name}_o{token.location.span.offset}"
-            # TODO: Signature inference
             lambda_function = Function(lambda_name, ops, token.location)
             GLOBAL_IDENTIFIERS[lambda_name] = lambda_function
             return Op(lambda_name, OpKind.PUSH_FN, token.location)

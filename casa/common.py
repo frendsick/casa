@@ -231,13 +231,50 @@ class Instruction:
                     )
 
 
+@dataclass(frozen=True, slots=True)
+class GenericType:
+    name: str
+
+
 type Bytecode = list[Instruction]
-type Type = str
+type Type = str | GenericType
+
 
 @dataclass
 class Signature:
     parameters: list[Type]
     return_types: list[Type]
+
+    @classmethod
+    def from_str(cls, repr: str):
+        def parse_type_list(part: str):
+            if part.strip() == "None":
+                return []
+            types = []
+            for token in part.split():
+                if token.startswith("<") and token.endswith(">"):
+                    types.append(GenericType(token[1:-1]))
+                else:
+                    types.append(token)
+            return types
+
+        if "->" not in repr:
+            raise ValueError(f"Invalid signature: {repr}")
+
+        param_part, return_part = repr.split("->", 1)
+        parameters = parse_type_list(param_part)
+        return_types = parse_type_list(return_part)
+
+        return cls(parameters=parameters, return_types=return_types)
+
+
+    def __repr__(self):
+        def fmt(types):
+            if not types:
+                return "None"
+            return " ".join(f"<{t.name}>" if isinstance(t, GenericType) else str(t) for t in types)
+
+        return f"{fmt(self.parameters)} -> {fmt(self.return_types)}"
 
 
 @dataclass
