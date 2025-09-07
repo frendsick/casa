@@ -37,7 +37,16 @@ class Lexer:
     def peek_word(self) -> str | None:
         if self.cursor.is_finished():
             return None
-        return self.rest().split(maxsplit=1)[0]
+
+        word = []
+        for char in self.rest():
+            if Delimiter.from_str(char):
+                break
+            if char.isspace():
+                break
+            word.append(char)
+
+        return "".join(word) if word else None
 
     def skip_whitespace(self):
         rest = self.rest()
