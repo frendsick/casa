@@ -42,15 +42,9 @@ def compile_op(op: Op) -> Bytecode:
         case OpKind.DUP:
             return [Instruction(InstructionKind.DUP)]
         case OpKind.IDENTIFIER:
-            identifier_name = op.value
-            identifier_target = GLOBAL_IDENTIFIERS.get(identifier_name)
-            assert identifier_target, "Expected valid identifier"
-
-            match identifier_target:
-                case Function() as f:
-                    return [Instruction(InstructionKind.CALL_FN, arguments=[f.name])]
-                case None:
-                    raise ValueError
+            raise AssertionError(
+                f"Identifier `{op.value}` should be resolved by the parser"
+            )
         case OpKind.LOAD:
             return [Instruction(InstructionKind.LOAD)]
         case OpKind.OVER:

@@ -35,6 +35,25 @@ def parse_ops(tokens: list[Token]) -> list[Op]:
     return ops
 
 
+def resolve_identifiers(ops: list[Op]):
+    for op in ops:
+        if op.kind != OpKind.IDENTIFIER:
+            continue
+
+        assert isinstance(op.value, str), "Expected identifier name"
+        identifier_name = op.value
+        identifier = GLOBAL_IDENTIFIERS.get(identifier_name)
+
+        match identifier:
+            case Function() as f:
+                op.kind = OpKind.CALL_FN
+                if not f.is_used:
+                    f.is_used = True
+                    resolve_identifiers(f.ops)
+            case None:
+                raise NameError(f"Identifier `{identifier_name}` is not defined")
+
+
 def token_to_op(token: Token, cursor: Cursor[Token]) -> Op | None:
     assert len(TokenKind) == 7, "Exhaustive handling for `TokenKind`"
 

@@ -29,17 +29,9 @@ def type_check_ops(ops: list[Op], stack: list[Type] | None = None):
                 stack_push(stack, a)
                 stack_push(stack, a)
             case OpKind.IDENTIFIER:
-                assert isinstance(op.value, str), "Expected identifier name"
-                identifier = op.value
-                identifier_target = GLOBAL_IDENTIFIERS.get(identifier)
-                assert identifier_target, "Expected valid identifier"
-
-                match identifier_target:
-                    case Function() as f:
-                        op.kind = OpKind.CALL_FN
-                        type_check_ops(f.ops, stack)
-                    case None:
-                        raise ValueError
+                raise AssertionError(
+                    f"Identifier `{op.value}` should be resolved by the parser"
+                )
             case OpKind.LOAD:
                 expect_type(stack, "ptr")
                 stack_push(stack, "any")
