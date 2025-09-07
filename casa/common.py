@@ -232,6 +232,12 @@ class Instruction:
 
 
 type Bytecode = list[Instruction]
+type Type = str
+
+@dataclass
+class Signature:
+    parameters: list[Type]
+    return_types: list[Type]
 
 
 @dataclass
@@ -239,8 +245,11 @@ class Function:
     name: str
     ops: list[Op]
     location: Location
+    # Missing signature will be inferred during type checking
+    signature: Signature | None = None
+    # Bytecode will be compiled if the function is used
+    bytecode: Bytecode | None = None
     is_used: bool = False
-    bytecode: Bytecode | None = None  # Will be compiled if used
 
 
 GLOBAL_IDENTIFIERS: OrderedDict[str, Function] = OrderedDict()

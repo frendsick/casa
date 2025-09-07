@@ -11,8 +11,10 @@ from casa.common import (
     Op,
     Operator,
     OpKind,
+    Signature,
     Token,
     TokenKind,
+    Type,
 )
 
 INTRINSIC_TO_OPKIND = {
@@ -96,6 +98,7 @@ def get_op_delimiter(token: Token, cursor: Cursor[Token], function_name) -> Op |
             cursor.position -= 1
             ops = parse_block_ops(cursor, function_name)
             lambda_name = f"lambda__{function_name}_o{token.location.span.offset}"
+            # TODO: Signature inference
             lambda_function = Function(lambda_name, ops, token.location)
             GLOBAL_IDENTIFIERS[lambda_name] = lambda_function
             return Op(lambda_name, OpKind.PUSH_FN, token.location)
@@ -197,10 +200,45 @@ def parse_function(cursor: Cursor[Token]) -> Function:
     if not name:
         raise SyntaxError("Expected function name but got nothing")
 
-    # TODO: Function signature
+    signature = parse_signature(cursor)
 
     ops = parse_block_ops(cursor, name.value)
-    return Function(name.value, ops, name.location)
+    return Function(name.value, ops, name.location, signature)
+
+
+def parse_signature(cursor: Cursor[Token]) -> Signature:
+    parameters = parse_parameters(cursor)
+    return_types = []
+
+    next_token = cursor.pop()
+    if not next_token:
+        raise SyntaxError("Expected `->` or `{` but got nothing")
+
+    if next_token.value == "->":
+        return_types = parse_return_types(cursor)
+
+    return Signature(parameters, return_types)
+
+
+def parse_parameters(cursor: Cursor[Token]) -> list[Type]:
+    parameters = []
+    while parameter := cursor.pop():
+        if parameter.value in ("->", "{"):
+            cursor.position -= 1
+            return parameters
+        parameters.append(parameter.value)
+    raise SyntaxError("Expected `->` or block but got nothing")
+
+
+def parse_return_types(cursor: Cursor[Token]) -> list[Type]:
+    return_types = []
+    while return_type := cursor.pop():
+        if return_type.value == "{":
+            cursor.position -= 1
+            return return_types
+        return_types.append(return_type.value)
+    raise SyntaxError("Expected block but got nothing")
+
 
 
 def get_op_literal(token: Token) -> Op:

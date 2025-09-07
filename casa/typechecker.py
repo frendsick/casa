@@ -1,9 +1,6 @@
 from typing import assert_never
 
-from casa.common import GLOBAL_IDENTIFIERS, Function, Op, OpKind
-
-type Type = str
-
+from casa.common import GLOBAL_IDENTIFIERS, Function, Op, OpKind, Type
 
 # TODO: Support list literals
 LITERAL_OP_KINDS = [OpKind.PUSH_INT]
@@ -17,8 +14,19 @@ def type_check_ops(ops: list[Op], stack: list[Type] | None = None):
     for op in ops:
         match op.kind:
             case OpKind.CALL_FN:
-                # TODO: Type check function calls
-                pass
+                assert isinstance(op.value, str), "Expected identifier name"
+                function_name = op.value
+                function = GLOBAL_IDENTIFIERS.get(function_name)
+                assert isinstance(function, Function), "Expected function"
+                signature = function.signature
+                assert isinstance(signature, Signature), "Signature should be parsed"
+
+                for parameter_type in signature.parameters:
+                    print(parameter_type)
+                    expect_type(stack, parameter_type)
+                for return_type in signature.return_types:
+                    print(return_type)
+                    stack_push(stack, return_type)
             case OpKind.ADD:
                 expect_type(stack, "int")
                 add_type = stack_pop(stack)
