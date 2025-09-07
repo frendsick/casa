@@ -22,8 +22,8 @@ def compile_bytecode(ops: list[Op]) -> Bytecode:
 
 
 def compile_op(op: Op) -> Bytecode:
-    assert len(InstructionKind) == 12, "Exhaustive handling for `InstructionKind"
-    assert len(OpKind) == 13, "Exhaustive handling for `OpKind`"
+    assert len(InstructionKind) == 13, "Exhaustive handling for `InstructionKind"
+    assert len(OpKind) == 15, "Exhaustive handling for `OpKind`"
 
     match op.kind:
         case OpKind.ADD:
@@ -41,6 +41,8 @@ def compile_op(op: Op) -> Bytecode:
             return [Instruction(InstructionKind.DROP)]
         case OpKind.DUP:
             return [Instruction(InstructionKind.DUP)]
+        case OpKind.EXEC_FN:
+            return [Instruction(InstructionKind.EXEC_FN)]
         case OpKind.IDENTIFIER:
             raise AssertionError(
                 f"Identifier `{op.value}` should be resolved by the parser"
@@ -53,6 +55,13 @@ def compile_op(op: Op) -> Bytecode:
             return [Instruction(InstructionKind.PRINT)]
         case OpKind.PUSH_INT:
             return [Instruction(InstructionKind.PUSH, arguments=[op.value])]
+        case OpKind.PUSH_FN:
+            for i, (name, function) in enumerate(GLOBAL_IDENTIFIERS.items()):
+                if name == op.value:
+                    assert isinstance(function, Function), "Expected lambda function"
+                    function.bytecode = compile_bytecode(function.ops)
+                    return [Instruction(InstructionKind.PUSH, arguments=[i])]
+            raise NameError(f"Function `{op.value}` is not defined")
         case OpKind.PUSH_LIST:
             assert isinstance(op.value, list), "Expected `list`"
 

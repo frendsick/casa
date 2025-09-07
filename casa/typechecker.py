@@ -10,13 +10,14 @@ LITERAL_OP_KINDS = [OpKind.PUSH_INT]
 
 
 def type_check_ops(ops: list[Op], stack: list[Type] | None = None):
-    assert len(OpKind) == 13, "Exhaustive handling for `OpKind`"
+    assert len(OpKind) == 15, "Exhaustive handling for `OpKind`"
 
     if not stack:
         stack = []
     for op in ops:
         match op.kind:
             case OpKind.CALL_FN:
+                # TODO: Type check function calls
                 pass
             case OpKind.ADD:
                 expect_type(stack, "int")
@@ -32,6 +33,9 @@ def type_check_ops(ops: list[Op], stack: list[Type] | None = None):
                 raise AssertionError(
                     f"Identifier `{op.value}` should be resolved by the parser"
                 )
+            case OpKind.EXEC_FN:
+                # TODO: Type check function signature
+                expect_type(stack, "fn")
             case OpKind.LOAD:
                 expect_type(stack, "ptr")
                 stack_push(stack, "any")
@@ -79,6 +83,9 @@ def type_check_ops(ops: list[Op], stack: list[Type] | None = None):
 
             case OpKind.PRINT:
                 stack_pop(stack)
+            case OpKind.PUSH_FN:
+                # TODO: Type check function signature
+                stack_push(stack, "fn")
             case OpKind.PUSH_INT:
                 stack_push(stack, "int")
             case OpKind.ROT:
