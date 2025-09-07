@@ -8,7 +8,7 @@ def apply_signature_check(
     stack: list[Type],
     generics: dict[GenericType, Type],
 ):
-    for expected in reversed(signature.parameters):
+    for expected in signature.parameters:
         typ = stack_peek(stack)
         if typ is None:
             raise IndexError("Stack underflow")
@@ -29,7 +29,7 @@ def apply_signature_infer(
     generics: dict[GenericType, Type],
     parameters: list[Type],
 ):
-    for expected in reversed(signature.parameters):
+    for expected in signature.parameters:
         if stack:
             typ = stack_pop(stack)
             if isinstance(expected, GenericType):
@@ -45,7 +45,7 @@ def apply_signature_infer(
 
 
 def get_signature_from_op(op: Op, stack: list[Type]) -> Signature:
-    assert len(OpKind) == 16, "Exhaustive handling for `OpKind`"
+    assert len(OpKind) == 15, "Exhaustive handling for `OpKind`"
 
     match op.kind:
         case OpKind.ADD:
@@ -132,66 +132,6 @@ def infer_signature(ops: list[Op]) -> Signature:
     return Signature(parameters, stack)
 
 
-def get_op_stack_effect(op: Op) -> Signature:
-    assert len(OpKind) == 15, "Exhaustive handling for `OpKind`"
-
-    match op.kind:
-        case OpKind.ADD:
-            return Signature(parameters=["int", "int"], return_types=["int"])
-        case OpKind.CALL_FN:
-            assert isinstance(op.value, str), "Expected identifier name"
-            function_name = op.value
-            function = GLOBAL_IDENTIFIERS.get(function_name)
-
-            assert isinstance(function, Function), "Expected function"
-            assert isinstance(function.signature, Signature), "Expected function signature"
-
-            return function.signature
-        case OpKind.DROP:
-            return Signature(parameters=["any"], return_types=[])
-        case OpKind.DUP:
-            t1 = GenericType("T1")
-            return Signature(parameters=[t1], return_types=[t1, t1])
-        case OpKind.EXEC_FN:
-            return Signature(parameters=["fn"], return_types=[])
-        case OpKind.LOAD:
-            return Signature(parameters=["ptr"], return_types=["any"])
-        case OpKind.OVER:
-            t1 = GenericType("T1")
-            t2 = GenericType("T2")
-            return Signature(parameters=[t1, t2], return_types=[t2, t1, t2])
-        case OpKind.PUSH_LIST:
-            # TODO: Better typing for lists
-            return Signature(parameters=[], return_types=["ptr"])
-        case OpKind.PRINT:
-            return Signature(parameters=["any"], return_types=[])
-        case OpKind.PUSH_FN:
-            assert isinstance(op.value, str), "Expected identifier name"
-            function_name = op.value
-            function = GLOBAL_IDENTIFIERS.get(function_name)
-            assert isinstance(function, Function), "Expected function"
-
-            signature = infer_signature(function.ops)
-            return Signature(parameters=[], return_types=[f"fn[{str(signature)}]"])
-        case OpKind.PUSH_INT:
-            return Signature(parameters=[], return_types=["int"])
-        case OpKind.ROT:
-            t1 = GenericType("T1")
-            t2 = GenericType("T2")
-            t3 = GenericType("T3")
-            return Signature(parameters=[t1, t2, t3], return_types=[t2, t1, t3])
-        case OpKind.STORE:
-            return Signature(parameters=["ptr", "any"], return_types=[])
-        case OpKind.SWAP:
-            t1 = GenericType("T1")
-            t2 = GenericType("T2")
-            return Signature(parameters=[t1, t2], return_types=[t1, t2])
-        case OpKind.IDENTIFIER:
-            raise AssertionError("Identifiers should be resolved by the parser")
-        case _:
-            assert_never(op.kind)
-
-
 def stack_push(stack: list[Type], typ: Type):
     stack.append(typ)
 
@@ -215,3 +155,26 @@ def expect_type(stack: list[Type], expected: Type) -> Type:
     if typ != expected:
         raise TypeError(f"Expected `{expected}` but got `{typ}`")
     return typ
+
+
+def get_literal_type(op: Op) -> Type | None:
+    match op.kind:
+        case OpKind.PUSH_INT:
+            return "int"
+        case OpKind.PUSH_LIST:
+            return "list"
+        case _:
+            return None
+
+
+def get_list_literal_type(op: Op) -> Type:
+    list_items = op.value
+    assert isinstance(list_items, list), "Expected list"
+
+    if not list_items:
+        return "list"
+
+    item_type = get_literal_type(list_items[0])
+    assert isinstance(item_type, str), "Expected non-generic type"
+
+    return f"list[{item_type}]"
