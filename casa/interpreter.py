@@ -23,7 +23,7 @@ def interpret_instruction(
     stack: list[int],
     heap: list[int],
 ):
-    assert len(InstructionKind) == 13, "Exhaustive handling for `InstructionKind`"
+    assert len(InstructionKind) == 19, "Exhaustive handling for `InstructionKind`"
 
     match instruction.kind:
         case InstructionKind.ADD:
@@ -45,6 +45,10 @@ def interpret_instruction(
             a = stack_pop(stack)
             stack_push(stack, a)
             stack_push(stack, a)
+        case InstructionKind.EQ:
+            a = stack_pop(stack)
+            b = stack_pop(stack)
+            stack_push(stack, int(a == b))
         case InstructionKind.EXEC_FN:
             fn_ptr = stack_pop(stack)
             assert fn_ptr < len(GLOBAL_IDENTIFIERS), "Valid function pointer"
@@ -54,6 +58,18 @@ def interpret_instruction(
             assert isinstance(function.bytecode, list), "Function is compiled"
 
             interpret_bytecode(function.bytecode, stack)
+        case InstructionKind.GE:
+            a = stack_pop(stack)
+            b = stack_pop(stack)
+            stack_push(stack, int(a >= b))
+        case InstructionKind.GT:
+            a = stack_pop(stack)
+            b = stack_pop(stack)
+            stack_push(stack, int(a > b))
+        case InstructionKind.LE:
+            a = stack_pop(stack)
+            b = stack_pop(stack)
+            stack_push(stack, int(a <= b))
         case InstructionKind.LIST_NEW:
             list_len = stack_pop(stack)
 
@@ -73,6 +89,14 @@ def interpret_instruction(
                     f"Address `{ptr}` is not valid within the heap of size `{len(heap)}`"
                 )
             stack_push(stack, heap[ptr])
+        case InstructionKind.LT:
+            a = stack_pop(stack)
+            b = stack_pop(stack)
+            stack_push(stack, int(a < b))
+        case InstructionKind.NE:
+            a = stack_pop(stack)
+            b = stack_pop(stack)
+            stack_push(stack, int(a != b))
         case InstructionKind.OVER:
             a = stack_pop(stack)
             b = stack_pop(stack)

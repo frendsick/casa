@@ -45,7 +45,7 @@ def apply_signature_infer(
 
 
 def get_signature_from_op(op: Op, stack: list[Type]) -> Signature:
-    assert len(OpKind) == 15, "Exhaustive handling for `OpKind`"
+    assert len(OpKind) == 21, "Exhaustive handling for `OpKind`"
 
     match op.kind:
         case OpKind.ADD:
@@ -64,6 +64,9 @@ def get_signature_from_op(op: Op, stack: list[Type]) -> Signature:
         case OpKind.DUP:
             t1 = GenericType("T1")
             return Signature(parameters=[t1], return_types=[t1, t1])
+        case OpKind.EQ | OpKind.GE | OpKind.GT | OpKind.LE | OpKind.LT | OpKind.NE:
+            t1 = GenericType("T1")
+            return Signature(parameters=[t1, t1], return_types=["bool"])
         case OpKind.EXEC_FN:
             if not stack:
                 raise IndexError("Stack underflow")

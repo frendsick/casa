@@ -247,9 +247,23 @@ def get_op_literal(token: Token) -> Op:
 
 
 def get_op_operator(token: Token) -> Op:
-    assert len(Operator) == 1, "Exhaustive handling for `Operator`"
-    match token.value:
-        case "+":
-            return Op(Operator.PLUS, OpKind.ADD, token.location)
-        case _:
-            raise NotImplementedError(token.value)
+    assert len(Operator) == 7, "Exhaustive handling for `Operator`"
+
+    operator = Operator.from_str(token.value)
+    match operator:
+        case Operator.EQ:
+            return Op(operator, OpKind.EQ, token.location)
+        case Operator.GE:
+            return Op(operator, OpKind.GE, token.location)
+        case Operator.GT:
+            return Op(operator, OpKind.GT, token.location)
+        case Operator.LE:
+            return Op(operator, OpKind.LE, token.location)
+        case Operator.LT:
+            return Op(operator, OpKind.LT, token.location)
+        case Operator.NE:
+            return Op(operator, OpKind.NE, token.location)
+        case Operator.PLUS:
+            return Op(operator, OpKind.ADD, token.location)
+        case None:
+            raise ValueError(f"`{token.value}` is not an operator")
