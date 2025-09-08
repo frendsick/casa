@@ -48,7 +48,9 @@ class Compiler:
                     # Compile the function if it is not compiled already
                     if function.bytecode is None:
                         function.bytecode = compile_bytecode(function.ops)
-                    bytecode.append(Instruction(InstructionKind.CALL_FN, arguments=[function_name]))
+                    bytecode.append(
+                        Instruction(InstructionKind.CALL_FN, arguments=[function_name])
+                    )
                 case OpKind.DROP:
                     bytecode.append(Instruction(InstructionKind.DROP))
                 case OpKind.DUP:
@@ -78,13 +80,19 @@ class Compiler:
                 case OpKind.PRINT:
                     bytecode.append(Instruction(InstructionKind.PRINT))
                 case OpKind.PUSH_INT:
-                    bytecode.append(Instruction(InstructionKind.PUSH, arguments=[op.value]))
+                    bytecode.append(
+                        Instruction(InstructionKind.PUSH, arguments=[op.value])
+                    )
                 case OpKind.PUSH_FN:
                     for i, (name, function) in enumerate(GLOBAL_IDENTIFIERS.items()):
                         if name == op.value:
-                            assert isinstance(function, Function), "Expected lambda function"
+                            assert isinstance(
+                                function, Function
+                            ), "Expected lambda function"
                             function.bytecode = compile_bytecode(function.ops)
-                            bytecode.append(Instruction(InstructionKind.PUSH, arguments=[i]))
+                            bytecode.append(
+                                Instruction(InstructionKind.PUSH, arguments=[i])
+                            )
                     raise NameError(f"Function `{op.value}` is not defined")
                 case OpKind.PUSH_LIST:
                     assert isinstance(op.value, list), "Expected `list`"
@@ -94,7 +102,9 @@ class Compiler:
                     list_bytecode = compile_bytecode(reversed_items)
 
                     # First item of the list is its length
-                    push_len = Instruction(InstructionKind.PUSH, arguments=[len(op.value)])
+                    push_len = Instruction(
+                        InstructionKind.PUSH, arguments=[len(op.value)]
+                    )
                     list_bytecode.append(push_len)
 
                     # Create the list
@@ -115,7 +125,9 @@ class Compiler:
                         start_kind=OpKind.WHILE_START,
                         end_kind=OpKind.WHILE_END,
                     )
-                    bytecode.append(Instruction(InstructionKind.JUMP_IF, arguments=[end_label]))
+                    bytecode.append(
+                        Instruction(InstructionKind.JUMP_IF, arguments=[end_label])
+                    )
                 case OpKind.WHILE_END:
                     # Add label
                     label = op_to_label(op)
@@ -128,11 +140,17 @@ class Compiler:
                         end_kind=OpKind.WHILE_END,
                         reverse=True,
                     )
-                    bytecode.append(Instruction(InstructionKind.JUMP, arguments=[start_label]))
-                    bytecode.append(Instruction(InstructionKind.LABEL, arguments=[label]))
+                    bytecode.append(
+                        Instruction(InstructionKind.JUMP, arguments=[start_label])
+                    )
+                    bytecode.append(
+                        Instruction(InstructionKind.LABEL, arguments=[label])
+                    )
                 case OpKind.WHILE_START:
                     label = op_to_label(op)
-                    bytecode.append(Instruction(InstructionKind.LABEL, arguments=[label]))
+                    bytecode.append(
+                        Instruction(InstructionKind.LABEL, arguments=[label])
+                    )
                 case _:
                     assert_never(op.kind)
 
@@ -155,7 +173,7 @@ class Compiler:
     ) -> LabelId:
         op_index = self.ops.index(op)
         iterable: Iterable[Op] = (
-            reversed(self.ops[:op_index]) if reverse else self.ops[op_index+1:]
+            reversed(self.ops[:op_index]) if reverse else self.ops[op_index + 1 :]
         )
 
         depth = 1

@@ -195,11 +195,7 @@ class Op:
                 if not isinstance(self.value, Intrinsic):
                     raise TypeError(f"`{self.kind}` requires value of type `Intrinsic`")
             # Requires `Keyword`
-            case (
-                OpKind.WHILE_CONDITION
-                | OpKind.WHILE_END
-                | OpKind.WHILE_START
-            ):
+            case OpKind.WHILE_CONDITION | OpKind.WHILE_END | OpKind.WHILE_START:
                 if not isinstance(self.value, Keyword):
                     raise TypeError(f"`{self.kind}` requires value of type `Keyword`")
             # Requires `Operator`
@@ -343,12 +339,13 @@ class Signature:
 
         return cls(parameters=parameters, return_types=return_types)
 
-
     def __repr__(self):
         def fmt(types):
             if not types:
                 return "None"
-            return " ".join(f"<{t.name}>" if isinstance(t, GenericType) else str(t) for t in types)
+            return " ".join(
+                f"<{t.name}>" if isinstance(t, GenericType) else str(t) for t in types
+            )
 
         return f"{fmt(self.parameters)} -> {fmt(self.return_types)}"
 
