@@ -42,7 +42,13 @@ class Intrinsic(Enum):
 
 
 class Keyword(Enum):
+    # Functions
     FN = auto()
+
+    # Loops
+    WHILE = auto()
+    DO = auto()
+    DONE = auto()
 
     @classmethod
     def from_lowercase(cls, value: str) -> Self | None:
@@ -143,6 +149,11 @@ class OpKind(Enum):
     EXEC_FN = auto()
     PUSH_FN = auto()
 
+    # Loops
+    WHILE_START = auto()
+    WHILE_CONDITION = auto()
+    WHILE_END = auto()
+
     # Identifiers should be resolved by the parser
     IDENTIFIER = auto()
 
@@ -154,7 +165,7 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 21, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 24, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires `int`
@@ -183,6 +194,14 @@ class Op:
             ):
                 if not isinstance(self.value, Intrinsic):
                     raise TypeError(f"`{self.kind}` requires value of type `Intrinsic`")
+            # Requires `Keyword`
+            case (
+                OpKind.WHILE_CONDITION
+                | OpKind.WHILE_END
+                | OpKind.WHILE_START
+            ):
+                if not isinstance(self.value, Keyword):
+                    raise TypeError(f"`{self.kind}` requires value of type `Keyword`")
             # Requires `Operator`
             case (
                 OpKind.ADD
@@ -229,6 +248,11 @@ class InstructionKind(Enum):
     CALL_FN = auto()
     EXEC_FN = auto()
 
+    # Jumps
+    LABEL = auto()
+    JUMP = auto()
+    JUMP_IF = auto()
+
 
 @dataclass
 class Instruction:
@@ -236,7 +260,7 @@ class Instruction:
     arguments: list = field(default_factory=list)
 
     def __post_init__(self):
-        assert len(InstructionKind) == 19, "Exhaustive handling for `InstructionKind`"
+        assert len(InstructionKind) == 22, "Exhaustive handling for `InstructionKind`"
 
         match self.kind:
             # Should not have a parameter
@@ -264,7 +288,12 @@ class Instruction:
                         f"`{self.kind}` should not have any parameters\nArguments: {self.arguments}"
                     )
             # One parameter of type `int`
-            case InstructionKind.PUSH:
+            case (
+                InstructionKind.JUMP
+                | InstructionKind.JUMP_IF
+                | InstructionKind.LABEL
+                | InstructionKind.PUSH
+            ):
                 if len(self.arguments) != 1 or not isinstance(self.arguments[0], int):
                     raise TypeError(
                         f"`{self.kind}` requires one parameter of type `int`\nArguments: {self.arguments}"
@@ -282,8 +311,9 @@ class GenericType:
     name: str
 
 
-type Bytecode = list[Instruction]
-type Type = str | GenericType
+Bytecode = list[Instruction]
+LabelId = int
+Type = str | GenericType
 
 
 @dataclass
