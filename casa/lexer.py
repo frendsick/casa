@@ -67,14 +67,12 @@ class Lexer:
         return Token(digits, TokenKind.LITERAL, location)
 
     def parse_token(self) -> Token | None:
-        assert len(Operator) == 1, "Exhaustive handling for `Operator`"
+        assert len(Operator) == 7, "Exhaustive handling for `Operator`"
 
         self.skip_whitespace()
         match c := self.cursor.peek():
             case None:
                 return None
-            case "+":
-                return self.lex_token(c, TokenKind.OPERATOR)
             case c if Delimiter.from_str(c):
                 return self.lex_token(c, TokenKind.DELIMITER)
             case c if c.isdigit():
@@ -100,6 +98,8 @@ class Lexer:
             return Token(value, TokenKind.INTRINSIC, location)
         if Keyword.from_lowercase(value):
             return Token(value, TokenKind.KEYWORD, location)
+        if Operator.from_str(value):
+            return Token(value, TokenKind.OPERATOR, location)
         return Token(value, TokenKind.IDENTIFIER, location)
 
 

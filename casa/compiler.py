@@ -22,8 +22,8 @@ def compile_bytecode(ops: list[Op]) -> Bytecode:
 
 
 def compile_op(op: Op) -> Bytecode:
-    assert len(InstructionKind) == 13, "Exhaustive handling for `InstructionKind"
-    assert len(OpKind) == 15, "Exhaustive handling for `OpKind`"
+    assert len(InstructionKind) == 19, "Exhaustive handling for `InstructionKind"
+    assert len(OpKind) == 21, "Exhaustive handling for `OpKind`"
 
     match op.kind:
         case OpKind.ADD:
@@ -41,14 +41,26 @@ def compile_op(op: Op) -> Bytecode:
             return [Instruction(InstructionKind.DROP)]
         case OpKind.DUP:
             return [Instruction(InstructionKind.DUP)]
+        case OpKind.EQ:
+            return [Instruction(InstructionKind.EQ)]
         case OpKind.EXEC_FN:
             return [Instruction(InstructionKind.EXEC_FN)]
+        case OpKind.GE:
+            return [Instruction(InstructionKind.GE)]
+        case OpKind.GT:
+            return [Instruction(InstructionKind.GT)]
         case OpKind.IDENTIFIER:
             raise AssertionError(
                 f"Identifier `{op.value}` should be resolved by the parser"
             )
+        case OpKind.LE:
+            return [Instruction(InstructionKind.LE)]
         case OpKind.LOAD:
             return [Instruction(InstructionKind.LOAD)]
+        case OpKind.LT:
+            return [Instruction(InstructionKind.LT)]
+        case OpKind.NE:
+            return [Instruction(InstructionKind.NE)]
         case OpKind.OVER:
             return [Instruction(InstructionKind.OVER)]
         case OpKind.PRINT:

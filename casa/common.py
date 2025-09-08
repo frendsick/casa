@@ -72,7 +72,27 @@ class Delimiter(Enum):
 
 
 class Operator(Enum):
+    EQ = auto()
+    GE = auto()
+    GT = auto()
+    LE = auto()
+    LT = auto()
+    NE = auto()
     PLUS = auto()
+
+    @classmethod
+    def from_str(cls, value: str) -> Self | None:
+        mapping = {
+            "==": cls.EQ,
+            ">=": cls.GE,
+            ">": cls.GT,
+            "<=": cls.LE,
+            "<": cls.LT,
+            "!=": cls.NE,
+            "+": cls.PLUS,
+        }
+        assert len(mapping) == len(Operator), "Exhaustive handling for `Operator`"
+        return mapping.get(value)  # type: ignore
 
 
 @dataclass
@@ -111,6 +131,12 @@ class OpKind(Enum):
 
     # Operators
     ADD = auto()
+    EQ = auto()
+    GE = auto()
+    GT = auto()
+    LE = auto()
+    LT = auto()
+    NE = auto()
 
     # Functions
     CALL_FN = auto()
@@ -128,7 +154,7 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 15, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 21, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires `int`
@@ -158,7 +184,15 @@ class Op:
                 if not isinstance(self.value, Intrinsic):
                     raise TypeError(f"`{self.kind}` requires value of type `Intrinsic`")
             # Requires `Operator`
-            case OpKind.ADD:
+            case (
+                OpKind.ADD
+                | OpKind.EQ
+                | OpKind.GE
+                | OpKind.GT
+                | OpKind.LE
+                | OpKind.LT
+                | OpKind.NE
+            ):
                 if not isinstance(self.value, Operator):
                     raise TypeError(f"`{self.kind}` requires value of type `Operator`")
             case _:
@@ -184,6 +218,12 @@ class InstructionKind(Enum):
 
     # Operators
     ADD = auto()
+    EQ = auto()
+    GE = auto()
+    GT = auto()
+    LE = auto()
+    LT = auto()
+    NE = auto()
 
     # Functions
     CALL_FN = auto()
@@ -196,7 +236,7 @@ class Instruction:
     arguments: list = field(default_factory=list)
 
     def __post_init__(self):
-        assert len(InstructionKind) == 13, "Exhaustive handling for `InstructionKind`"
+        assert len(InstructionKind) == 19, "Exhaustive handling for `InstructionKind`"
 
         match self.kind:
             # Should not have a parameter
@@ -204,9 +244,15 @@ class Instruction:
                 InstructionKind.ADD
                 | InstructionKind.DROP
                 | InstructionKind.DUP
+                | InstructionKind.EQ
                 | InstructionKind.EXEC_FN
+                | InstructionKind.GE
+                | InstructionKind.GT
+                | InstructionKind.LE
                 | InstructionKind.LIST_NEW
                 | InstructionKind.LOAD
+                | InstructionKind.LT
+                | InstructionKind.NE
                 | InstructionKind.OVER
                 | InstructionKind.PRINT
                 | InstructionKind.ROT
