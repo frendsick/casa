@@ -45,7 +45,7 @@ def apply_signature_infer(
 
 
 def get_signature_from_op(op: Op, stack: list[Type]) -> Signature:
-    assert len(OpKind) == 21, "Exhaustive handling for `OpKind`"
+    assert len(OpKind) == 24, "Exhaustive handling for `OpKind`"
 
     match op.kind:
         case OpKind.ADD:
@@ -75,6 +75,8 @@ def get_signature_from_op(op: Op, stack: list[Type]) -> Signature:
             start = fn_ptr.index("[") + 1
             end = fn_ptr.index("]", start)
             return Signature.from_str(fn_ptr[start:end])
+        case OpKind.IDENTIFIER:
+            raise AssertionError("Identifiers should be resolved by the parser")
         case OpKind.LOAD:
             return Signature(parameters=["ptr"], return_types=["any"])
         case OpKind.OVER:
@@ -107,8 +109,12 @@ def get_signature_from_op(op: Op, stack: list[Type]) -> Signature:
             t1 = GenericType("T1")
             t2 = GenericType("T2")
             return Signature(parameters=[t1, t2], return_types=[t1, t2])
-        case OpKind.IDENTIFIER:
-            raise AssertionError("Identifiers should be resolved by the parser")
+        case OpKind.WHILE_CONDITION:
+            return Signature(parameters=["bool"], return_types=[])
+        case OpKind.WHILE_END:
+            return Signature(parameters=[], return_types=[])
+        case OpKind.WHILE_START:
+            return Signature(parameters=[], return_types=[])
         case _:
             assert_never(op.kind)
 

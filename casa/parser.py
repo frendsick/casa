@@ -173,12 +173,16 @@ def get_op_intrinsic(token: Token) -> Op:
 
 
 def get_op_keyword(token: Token, cursor: Cursor[Token]) -> Op | None:
-    assert len(Keyword) == 1, "Exhaustive handling for `Keyword"
+    assert len(Keyword) == 4, "Exhaustive handling for `Keyword"
 
     keyword = Keyword.from_lowercase(token.value)
     assert keyword, f"Token `{token.value}` is not a keyword"
 
     match keyword:
+        case Keyword.DO:
+            return Op(keyword, OpKind.WHILE_CONDITION, token.location)
+        case Keyword.DONE:
+            return Op(keyword, OpKind.WHILE_END, token.location)
         case Keyword.FN:
             cursor.position -= 1
             function = parse_function(cursor)
@@ -186,6 +190,8 @@ def get_op_keyword(token: Token, cursor: Cursor[Token]) -> Op | None:
                 raise NameError(f"Identifier `{function.name}` is already defined")
             GLOBAL_IDENTIFIERS[function.name] = function
             return None
+        case Keyword.WHILE:
+            return Op(keyword, OpKind.WHILE_START, token.location)
         case _:
             assert_never(keyword)
 
