@@ -245,7 +245,6 @@ def parse_return_types(cursor: Cursor[Token]) -> list[Type]:
     raise SyntaxError("Expected block but got nothing")
 
 
-
 def get_op_literal(token: Token) -> Op:
     if token.value.isdigit():
         return Op(int(token.value), OpKind.PUSH_INT, token.location)

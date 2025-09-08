@@ -1,6 +1,14 @@
 from typing import assert_never
 
-from casa.common import GLOBAL_IDENTIFIERS, Function, GenericType, Op, OpKind, Signature, Type
+from casa.common import (
+    GLOBAL_IDENTIFIERS,
+    Function,
+    GenericType,
+    Op,
+    OpKind,
+    Signature,
+    Type,
+)
 
 
 def apply_signature_check(
@@ -56,7 +64,9 @@ def get_signature_from_op(op: Op, stack: list[Type]) -> Signature:
             function = GLOBAL_IDENTIFIERS.get(function_name)
 
             assert isinstance(function, Function), "Expected function"
-            assert isinstance(function.signature, Signature), "Expected function signature"
+            assert isinstance(
+                function.signature, Signature
+            ), "Expected function signature"
 
             return function.signature
         case OpKind.DROP:
