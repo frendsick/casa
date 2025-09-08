@@ -78,13 +78,19 @@ class Delimiter(Enum):
 
 
 class Operator(Enum):
+    # Comparison
     EQ = auto()
     GE = auto()
     GT = auto()
     LE = auto()
     LT = auto()
     NE = auto()
+
+    # Arithmetic
     PLUS = auto()
+
+    # Assignment
+    ASSIGN = auto()
 
     @classmethod
     def from_str(cls, value: str) -> Self | None:
@@ -96,6 +102,7 @@ class Operator(Enum):
             "<": cls.LT,
             "!=": cls.NE,
             "+": cls.PLUS,
+            "=": cls.ASSIGN,
         }
         assert len(mapping) == len(Operator), "Exhaustive handling for `Operator`"
         return mapping.get(value)  # type: ignore
@@ -134,6 +141,7 @@ class OpKind(Enum):
     # Literals
     PUSH_INT = auto()
     PUSH_LIST = auto()
+    PUSH_VARIABLE = auto()
 
     # Operators
     ADD = auto()
@@ -154,6 +162,9 @@ class OpKind(Enum):
     WHILE_CONDITION = auto()
     WHILE_END = auto()
 
+    # Variables
+    BIND_VARIABLE = auto()
+
     # Identifiers should be resolved by the parser
     IDENTIFIER = auto()
 
@@ -165,7 +176,7 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 24, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 26, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires `int`
@@ -173,7 +184,13 @@ class Op:
                 if not isinstance(self.value, int):
                     raise TypeError(f"`{self.kind}` requires value of type `int`")
             # Requires `str`
-            case OpKind.IDENTIFIER | OpKind.CALL_FN | OpKind.PUSH_FN:
+            case (
+                OpKind.IDENTIFIER
+                | OpKind.CALL_FN
+                | OpKind.PUSH_FN
+                | OpKind.PUSH_VARIABLE
+                | OpKind.BIND_VARIABLE
+            ):
                 if not isinstance(self.value, str):
                     raise TypeError(f"`{self.kind}` requires value of type `str`")
             # Requires `list`
@@ -249,6 +266,10 @@ class InstructionKind(Enum):
     JUMP = auto()
     JUMP_IF = auto()
 
+    # Locals
+    LOCAL_GET = auto()
+    LOCAL_SET = auto()
+
 
 @dataclass
 class Instruction:
@@ -256,7 +277,7 @@ class Instruction:
     arguments: list = field(default_factory=list)
 
     def __post_init__(self):
-        assert len(InstructionKind) == 22, "Exhaustive handling for `InstructionKind`"
+        assert len(InstructionKind) == 24, "Exhaustive handling for `InstructionKind`"
 
         match self.kind:
             # Should not have a parameter
@@ -288,6 +309,8 @@ class Instruction:
                 InstructionKind.JUMP
                 | InstructionKind.JUMP_IF
                 | InstructionKind.LABEL
+                | InstructionKind.LOCAL_GET
+                | InstructionKind.LOCAL_SET
                 | InstructionKind.PUSH
             ):
                 if len(self.arguments) != 1 or not isinstance(self.arguments[0], int):
@@ -351,6 +374,22 @@ class Signature:
 
 
 @dataclass
+class Variable:
+    name: str
+    typ: Type | None = None  # Resolved during type checking
+
+    def __hash__(self) -> int:
+        return hash(self.name)
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, Variable):
+            return self.name == other.name
+        if isinstance(other, str):
+            return self.name == other
+        return False
+
+
+@dataclass
 class Function:
     name: str
     ops: list[Op]
@@ -360,6 +399,8 @@ class Function:
     # Bytecode will be compiled if the function is used
     bytecode: Bytecode | None = None
     is_used: bool = False
+    is_typechecked: bool = False
+    variables: list[Variable] = field(default_factory=list)
 
 
 GLOBAL_IDENTIFIERS: OrderedDict[str, Function] = OrderedDict()

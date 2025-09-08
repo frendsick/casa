@@ -29,10 +29,11 @@ def op_to_label(op: Op) -> LabelId:
 class Compiler:
     ops: list[Op]
     labels: set[LabelId] = field(default_factory=set)
+    locals: list[str] = field(default_factory=list)
 
     def compile(self) -> Bytecode:
-        assert len(InstructionKind) == 22, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 24, "Exhaustive handling for `OpKind`"
+        assert len(InstructionKind) == 24, "Exhaustive handling for `InstructionKind"
+        assert len(OpKind) == 26, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
         bytecode = []
@@ -40,6 +41,16 @@ class Compiler:
             match op.kind:
                 case OpKind.ADD:
                     bytecode.append(Instruction(InstructionKind.ADD))
+                case OpKind.BIND_VARIABLE:
+                    variable_name = op.value
+                    assert isinstance(variable_name, str), "Valid variable name"
+
+                    if variable_name not in self.locals:
+                        self.locals.append(variable_name)
+                    index = self.locals.index(variable_name)
+                    bytecode.append(
+                        Instruction(InstructionKind.LOCAL_SET, arguments=[index])
+                    )
                 case OpKind.CALL_FN:
                     function_name = op.value
                     function = GLOBAL_IDENTIFIERS.get(function_name)
@@ -112,6 +123,16 @@ class Compiler:
                     list_bytecode.append(push_list)
 
                     bytecode += list_bytecode
+                case OpKind.PUSH_VARIABLE:
+                    variable_name = op.value
+                    assert isinstance(variable_name, str), "Valid variable name"
+                    if variable_name not in self.locals:
+                        raise NameError(f"Variable `{variable_name}` does not exist")
+
+                    index = self.locals.index(variable_name)
+                    bytecode.append(
+                        Instruction(InstructionKind.LOCAL_GET, arguments=[index])
+                    )
                 case OpKind.ROT:
                     bytecode.append(Instruction(InstructionKind.ROT))
                 case OpKind.STORE:

@@ -12,11 +12,12 @@ InstrAddr = int
 
 
 def interpret_bytecode(bytecode: Bytecode, stack: list[int] | None = None):
-    assert len(InstructionKind) == 22, "Exhaustive handling for `InstructionKind`"
+    assert len(InstructionKind) == 24, "Exhaustive handling for `InstructionKind`"
 
     # Containers for emulating a computer
     heap: list[int] = []
     labels: dict[LabelId, InstrAddr] = {}
+    locals: list[int] = []
     if not stack:
         stack = []
 
@@ -111,6 +112,26 @@ def interpret_bytecode(bytecode: Bytecode, stack: list[int] | None = None):
                 a = stack_pop(stack)
                 b = stack_pop(stack)
                 stack_push(stack, int(a < b))
+            case InstructionKind.LOCAL_GET:
+                assert len(instruction.arguments) == 1, "Local index"
+                index = instruction.arguments[0]
+                assert isinstance(index, int), "Valid index"
+                assert index < len(locals), "Local should be set"
+
+                value = locals[index]
+                stack_push(stack, value)
+            case InstructionKind.LOCAL_SET:
+                assert len(instruction.arguments) == 1, "Local index"
+                index = instruction.arguments[0]
+                assert isinstance(index, int), "Valid index"
+
+                a = stack_pop(stack)
+
+                # Extend locals if needed
+                if index >= len(locals):
+                    zeroes = [0] * (index - len(locals) + 1)
+                    locals.extend(zeroes)
+                locals[index] = a
             case InstructionKind.NE:
                 a = stack_pop(stack)
                 b = stack_pop(stack)
