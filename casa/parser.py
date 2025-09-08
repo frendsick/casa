@@ -128,7 +128,7 @@ def expect_delimiter(cursor: Cursor[Token], expected: Delimiter) -> Delimiter | 
 def parse_block_ops(cursor: Cursor[Token], function_name: str) -> list[Op]:
     open_brace = cursor.pop()
     if not open_brace or open_brace.value != "{":
-        raise SyntaxError("Expected `{` but got nothing")
+        raise SyntaxError(f"Expected `{{` but got `{open_brace.value}`")
 
     ops: list[Op] = []
     while token := cursor.pop():
@@ -215,11 +215,12 @@ def parse_signature(cursor: Cursor[Token]) -> Signature:
     parameters = parse_parameters(cursor)
     return_types = []
 
-    next_token = cursor.pop()
+    next_token = cursor.peek()
     if not next_token:
         raise SyntaxError("Expected `->` or `{` but got nothing")
 
     if next_token.value == "->":
+        cursor.position += 1
         return_types = parse_return_types(cursor)
 
     return Signature(parameters, return_types)
