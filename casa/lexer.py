@@ -67,8 +67,6 @@ class Lexer:
         return Token(digits, TokenKind.LITERAL, location)
 
     def parse_token(self) -> Token | None:
-        assert len(Operator) == 7, "Exhaustive handling for `Operator`"
-
         self.skip_whitespace()
         match c := self.cursor.peek():
             case None:

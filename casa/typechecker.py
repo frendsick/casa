@@ -52,23 +52,49 @@ def apply_signature_infer(
         stack_push(stack, typ)
 
 
-def get_signature_from_op(op: Op, stack: list[Type]) -> Signature:
-    assert len(OpKind) == 24, "Exhaustive handling for `OpKind`"
+def get_signature_from_op(
+    op: Op,
+    stack: list[Type],
+    function: Function | None = None,
+) -> Signature:
+    assert len(OpKind) == 26, "Exhaustive handling for `OpKind`"
 
     match op.kind:
         case OpKind.ADD:
             return Signature(parameters=["int", "int"], return_types=["int"])
+        case OpKind.BIND_VARIABLE:
+            variable_name = op.value
+            assert isinstance(variable_name, str), "Expected variable name"
+            assert function, "Variables are not supported within the global scope"
+
+            stack_type = stack_peek(stack)
+            if not stack_type:
+                raise IndexError("Stack underflow")
+
+            for variable in function.variables:
+                if variable.name == variable_name:
+                    if variable.typ and variable.typ != stack_type:
+                        raise ValueError(
+                            f"Cannot override variable of type `{variable.typ}` with other type `{stack_type}`"
+                        )
+                    variable.typ = stack_type
+                    return Signature(parameters=[stack_type], return_types=[])
+
+            raise AssertionError(f"Function `{function.name}` does not have variable `{variable_name}`")
         case OpKind.CALL_FN:
             assert isinstance(op.value, str), "Expected identifier name"
             function_name = op.value
-            function = GLOBAL_IDENTIFIERS.get(function_name)
+            called_function = GLOBAL_IDENTIFIERS.get(function_name)
 
-            assert isinstance(function, Function), "Expected function"
+            assert isinstance(called_function, Function), "Expected function"
             assert isinstance(
-                function.signature, Signature
+                called_function.signature, Signature
             ), "Expected function signature"
 
-            return function.signature
+            if not called_function.is_typechecked:
+                called_function.is_typechecked = True
+                type_check_ops(called_function.ops, called_function)
+            return called_function.signature
         case OpKind.DROP:
             return Signature(parameters=["any"], return_types=[])
         case OpKind.DUP:
@@ -101,13 +127,28 @@ def get_signature_from_op(op: Op, stack: list[Type]) -> Signature:
         case OpKind.PUSH_FN:
             assert isinstance(op.value, str), "Expected identifier name"
             function_name = op.value
-            function = GLOBAL_IDENTIFIERS.get(function_name)
-            assert isinstance(function, Function), "Expected function"
+            called_function = GLOBAL_IDENTIFIERS.get(function_name)
+            assert isinstance(called_function, Function), "Expected function"
 
-            signature = infer_signature(function.ops)
+            signature = infer_signature(called_function.ops)
             return Signature(parameters=[], return_types=[f"fn[{str(signature)}]"])
         case OpKind.PUSH_INT:
             return Signature(parameters=[], return_types=["int"])
+        case OpKind.PUSH_VARIABLE:
+            variable_name = op.value
+            assert isinstance(op.value, str), "Expected variable name"
+            assert isinstance(function, Function), "Expected function"
+
+            for variable in function.variables:
+                if variable == variable_name:
+                    if not variable.typ:
+                        raise AssertionError(
+                            f"Variable `{variable.name}` has not been type checked before its usage"
+                        )
+                    return Signature(parameters=[], return_types=[variable.typ])
+            raise NameError(
+                f"Function `{function.name}` does not have variable `{variable_name}`"
+            )
         case OpKind.ROT:
             t1 = GenericType("T1")
             t2 = GenericType("T2")
@@ -129,13 +170,12 @@ def get_signature_from_op(op: Op, stack: list[Type]) -> Signature:
             assert_never(op.kind)
 
 
-def type_check_ops(ops: list[Op], stack: list[Type] | None = None):
-    if not stack:
-        stack = []
+def type_check_ops(ops: list[Op], function: Function | None = None):
+    stack = []
     generics: dict[GenericType, Type] = {}
 
     for op in ops:
-        signature = get_signature_from_op(op, stack)
+        signature = get_signature_from_op(op, stack, function)
         apply_signature_check(signature, stack, generics)
 
 

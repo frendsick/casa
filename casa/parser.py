@@ -15,6 +15,7 @@ from casa.common import (
     Token,
     TokenKind,
     Type,
+    Variable,
 )
 
 INTRINSIC_TO_OPKIND = {
@@ -39,23 +40,41 @@ def parse_ops(tokens: list[Token]) -> list[Op]:
     return ops
 
 
-def resolve_identifiers(ops: list[Op]):
+def resolve_identifiers(ops: list[Op], function: Function | None = None):
     for op in ops:
-        if op.kind != OpKind.IDENTIFIER:
-            continue
+        match op.kind:
+            case OpKind.BIND_VARIABLE:
+                if not function:
+                    raise SyntaxError("Variables are not supported within the global scope")
 
-        assert isinstance(op.value, str), "Expected identifier name"
-        identifier_name = op.value
-        identifier = GLOBAL_IDENTIFIERS.get(identifier_name)
+                variable_name = op.value
+                assert isinstance(variable_name, str), "Expected variable name"
+                variable = Variable(variable_name)
 
-        match identifier:
-            case Function() as f:
-                op.kind = OpKind.CALL_FN
-                if not f.is_used:
-                    f.is_used = True
-                    resolve_identifiers(f.ops)
-            case None:
-                raise NameError(f"Identifier `{identifier_name}` is not defined")
+                if variable not in function.variables:
+                    function.variables.append(variable)
+            case OpKind.IDENTIFIER:
+                identifier = op.value
+                assert isinstance(identifier, str), "Expected identifier name"
+                global_identifier = GLOBAL_IDENTIFIERS.get(identifier)
+
+                # Check global identifiers
+                if isinstance(global_identifier, Function):
+                    function = global_identifier
+                    op.kind = OpKind.CALL_FN
+                    if not function.is_used:
+                        function.is_used = True
+                        resolve_identifiers(function.ops, function)
+                    continue
+                if global_identifier is not None:
+                    assert_never(global_identifier)
+
+                # Check local identifiers
+                if function and identifier in function.variables:
+                    op.kind = OpKind.PUSH_VARIABLE
+                    continue
+
+                raise NameError(f"Identifier `{identifier}` is not defined")
 
 
 def token_to_op(
@@ -79,7 +98,7 @@ def token_to_op(
         case TokenKind.KEYWORD:
             return get_op_keyword(token, cursor)
         case TokenKind.OPERATOR:
-            return get_op_operator(token)
+            return get_op_operator(token, cursor, function_name)
         case _:
             assert_never(token.kind)
 
@@ -128,7 +147,7 @@ def expect_delimiter(cursor: Cursor[Token], expected: Delimiter) -> Delimiter | 
 def parse_block_ops(cursor: Cursor[Token], function_name: str) -> list[Op]:
     open_brace = cursor.pop()
     if not open_brace or open_brace.value != "{":
-        raise SyntaxError(f"Expected `{{` but got `{open_brace.value}`")
+        raise SyntaxError(f"Expected `{{` but got `{open_brace.value}`")  # type: ignore
 
     ops: list[Op] = []
     while token := cursor.pop():
@@ -252,13 +271,25 @@ def get_op_literal(token: Token) -> Op:
     raise ValueError(f"Token `{token.value}` is not a literal")
 
 
-def get_op_operator(token: Token) -> Op:
-    assert len(Operator) == 7, "Exhaustive handling for `Operator`"
+def get_op_operator(token: Token, cursor: Cursor[Token], function_name: str) -> Op:
+    assert len(Operator) == 8, "Exhaustive handling for `Operator`"
 
     operator = Operator.from_str(token.value)
     assert operator, f"Token `{token.value}` is not an operator"
 
     match operator:
+        case Operator.ASSIGN:
+            next_token = cursor.pop()
+            if not next_token:
+                raise SyntaxError("Expected variable name but got nothing")
+
+            identifier = token_to_op(next_token, cursor, function_name)
+            if not identifier or identifier.kind != OpKind.IDENTIFIER:
+                raise SyntaxError(f"Expected identifier but got `{next_token.kind}`")  # type: ignore
+            variable_name = identifier.value
+            assert isinstance(variable_name, str), "Expected variable name"
+
+            return Op(variable_name, OpKind.BIND_VARIABLE, identifier.location)
         case Operator.EQ:
             return Op(operator, OpKind.EQ, token.location)
         case Operator.GE:
