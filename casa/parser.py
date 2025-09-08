@@ -176,7 +176,7 @@ def get_op_keyword(token: Token, cursor: Cursor[Token]) -> Op | None:
     assert len(Keyword) == 1, "Exhaustive handling for `Keyword"
 
     keyword = Keyword.from_lowercase(token.value)
-    assert keyword, "Expected valid keyword"
+    assert keyword, f"Token `{token.value}` is not a keyword"
 
     match keyword:
         case Keyword.FN:
@@ -243,13 +243,15 @@ def parse_return_types(cursor: Cursor[Token]) -> list[Type]:
 def get_op_literal(token: Token) -> Op:
     if token.value.isdigit():
         return Op(int(token.value), OpKind.PUSH_INT, token.location)
-    raise NotImplementedError(token.value)
+    raise ValueError(f"Token `{token.value}` is not a literal")
 
 
 def get_op_operator(token: Token) -> Op:
     assert len(Operator) == 7, "Exhaustive handling for `Operator`"
 
     operator = Operator.from_str(token.value)
+    assert operator, f"Token `{token.value}` is not an operator"
+
     match operator:
         case Operator.EQ:
             return Op(operator, OpKind.EQ, token.location)
