@@ -1,13 +1,15 @@
 from typing import assert_never
 
 from casa.common import (
-    GLOBAL_IDENTIFIERS,
+    GLOBAL_FUNCTIONS,
+    GLOBAL_VARIABLES,
     Function,
     GenericType,
     Op,
     OpKind,
     Signature,
     Type,
+    Variable,
 )
 
 
@@ -69,36 +71,50 @@ def get_signature_from_op(
         case OpKind.ASSIGN_VARIABLE:
             variable_name = op.value
             assert isinstance(variable_name, str), "Expected variable name"
-            assert function, "Variables are not supported within the global scope"
 
             stack_type = stack_peek(stack)
             if not stack_type:
                 raise IndexError("Stack underflow")
 
+            # Global variable
+            global_variable = GLOBAL_VARIABLES.get(variable_name)
+            if global_variable:
+                assert isinstance(global_variable, Variable), "Valid global variable"
+                if global_variable.typ and global_variable.typ != stack_type:
+                    raise ValueError(
+                        f"Cannot override global variable of type `{global_variable.typ}` with other type `{stack_type}`"
+                    )
+                global_variable.typ = stack_type
+                return Signature(parameters=[stack_type], return_types=[])
+
+            # Local variable
+            assert isinstance(function, Function), "Expected function"
             for variable in function.variables:
                 if variable.name == variable_name:
                     if variable.typ and variable.typ != stack_type:
                         raise ValueError(
-                            f"Cannot override variable of type `{variable.typ}` with other type `{stack_type}`"
+                            f"Cannot override local variable of type `{variable.typ}` with other type `{stack_type}`"
                         )
                     variable.typ = stack_type
                     return Signature(parameters=[stack_type], return_types=[])
 
-            raise AssertionError(f"Function `{function.name}` does not have variable `{variable_name}`")
+            raise AssertionError(
+                f"Function `{function.name}` does not have variable `{variable_name}`"
+            )
         case OpKind.CALL_FN:
             assert isinstance(op.value, str), "Expected identifier name"
             function_name = op.value
-            called_function = GLOBAL_IDENTIFIERS.get(function_name)
+            function = GLOBAL_FUNCTIONS.get(function_name)
 
-            assert isinstance(called_function, Function), "Expected function"
+            assert isinstance(function, Function), "Expected function"
             assert isinstance(
-                called_function.signature, Signature
+                function.signature, Signature
             ), "Expected function signature"
 
-            if not called_function.is_typechecked:
-                called_function.is_typechecked = True
-                type_check_ops(called_function.ops, called_function)
-            return called_function.signature
+            if not function.is_typechecked:
+                function.is_typechecked = True
+                type_check_ops(function.ops, function)
+            return function.signature
         case OpKind.DROP:
             return Signature(parameters=["any"], return_types=[])
         case OpKind.DUP:
@@ -131,23 +147,31 @@ def get_signature_from_op(
         case OpKind.PUSH_FN:
             assert isinstance(op.value, str), "Expected identifier name"
             function_name = op.value
-            called_function = GLOBAL_IDENTIFIERS.get(function_name)
-            assert isinstance(called_function, Function), "Expected function"
+            assert isinstance(function_name, str), "Expected function name"
+            function = GLOBAL_FUNCTIONS.get(function_name)
+            assert isinstance(function, Function), "Expected function"
 
-            signature = infer_signature(called_function.ops)
+            signature = infer_signature(function.ops)
             return Signature(parameters=[], return_types=[f"fn[{str(signature)}]"])
         case OpKind.PUSH_INT:
             return Signature(parameters=[], return_types=["int"])
         case OpKind.PUSH_VARIABLE:
             variable_name = op.value
             assert isinstance(op.value, str), "Expected variable name"
-            assert isinstance(function, Function), "Expected function"
 
+            # Global variable
+            global_variable = GLOBAL_VARIABLES.get(variable_name)
+            if global_variable:
+                assert global_variable.typ, "Global variable type should be defined"
+                return Signature(parameters=[], return_types=[global_variable.typ])
+
+            # Local variable
+            assert isinstance(function, Function), "Expected function"
             for variable in function.variables:
                 if variable == variable_name:
                     if not variable.typ:
                         raise AssertionError(
-                            f"Variable `{variable.name}` has not been type checked before its usage"
+                            f"Variable `{function.name}` has not been type checked before its usage"
                         )
                     return Signature(parameters=[], return_types=[variable.typ])
             raise NameError(
@@ -186,10 +210,12 @@ def type_check_ops(ops: list[Op], function: Function | None = None):
         apply_signature_check(signature, stack, generics)
 
     if function and function.signature and stack != function.signature.return_types:
-        raise TypeError(f"""Invalid function signature for function: {function.name}
+        raise TypeError(
+            f"""Invalid function signature for function: {function.name}
 
 Signature: {function.signature}
-Expected:  {Signature(function.signature.parameters, stack)}""")
+Expected:  {Signature(function.signature.parameters, stack)}"""
+        )
 
 
 def infer_signature(ops: list[Op]) -> Signature:

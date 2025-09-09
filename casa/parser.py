@@ -1,8 +1,9 @@
 from typing import assert_never
 
 from casa.common import (
-    GLOBAL_IDENTIFIERS,
+    GLOBAL_FUNCTIONS,
     GLOBAL_SCOPE_LABEL,
+    GLOBAL_VARIABLES,
     Cursor,
     Delimiter,
     Function,
@@ -44,32 +45,34 @@ def resolve_identifiers(ops: list[Op], function: Function | None = None):
     for op in ops:
         match op.kind:
             case OpKind.ASSIGN_VARIABLE:
-                if not function:
-                    raise SyntaxError("Variables are not supported within the global scope")
-
                 variable_name = op.value
                 assert isinstance(variable_name, str), "Expected variable name"
                 variable = Variable(variable_name)
 
+                # Global scope
+                if not function:
+                    GLOBAL_VARIABLES[variable_name] = variable
+                    continue
+
+                # Function scope
+                if GLOBAL_VARIABLES.get(variable_name):
+                    continue
                 if variable not in function.variables:
                     function.variables.append(variable)
             case OpKind.IDENTIFIER:
                 identifier = op.value
                 assert isinstance(identifier, str), "Expected identifier name"
-                global_identifier = GLOBAL_IDENTIFIERS.get(identifier)
 
-                # Check global identifiers
-                if isinstance(global_identifier, Function):
-                    function = global_identifier
+                # Check different identifiers
+                if global_function := GLOBAL_FUNCTIONS.get(identifier):
                     op.kind = OpKind.CALL_FN
-                    if not function.is_used:
-                        function.is_used = True
-                        resolve_identifiers(function.ops, function)
+                    if not global_function.is_used:
+                        global_function.is_used = True
+                        resolve_identifiers(global_function.ops, global_function)
                     continue
-                if global_identifier is not None:
-                    assert_never(global_identifier)
-
-                # Check local identifiers
+                if GLOBAL_VARIABLES.get(identifier):
+                    op.kind = OpKind.PUSH_VARIABLE
+                    continue
                 if function and identifier in function.variables:
                     op.kind = OpKind.PUSH_VARIABLE
                     continue
@@ -118,7 +121,7 @@ def get_op_delimiter(token: Token, cursor: Cursor[Token], function_name) -> Op |
             ops = parse_block_ops(cursor, function_name)
             lambda_name = f"lambda__{function_name}_o{token.location.span.offset}"
             lambda_function = Function(lambda_name, ops, token.location)
-            GLOBAL_IDENTIFIERS[lambda_name] = lambda_function
+            GLOBAL_FUNCTIONS[lambda_name] = lambda_function
             return Op(lambda_name, OpKind.PUSH_FN, token.location)
         case Delimiter.CLOSE_BRACE:
             return None
@@ -205,9 +208,10 @@ def get_op_keyword(token: Token, cursor: Cursor[Token]) -> Op | None:
         case Keyword.FN:
             cursor.position -= 1
             function = parse_function(cursor)
-            if GLOBAL_IDENTIFIERS.get(function.name):
+            if GLOBAL_FUNCTIONS.get(function.name):
                 raise NameError(f"Identifier `{function.name}` is already defined")
-            GLOBAL_IDENTIFIERS[function.name] = function
+
+            GLOBAL_FUNCTIONS[function.name] = function
             return None
         case Keyword.WHILE:
             return Op(keyword, OpKind.WHILE_START, token.location)
