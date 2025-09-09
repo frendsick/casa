@@ -12,6 +12,7 @@ from casa.common import (
     Op,
     Operator,
     OpKind,
+    Parameter,
     Signature,
     Token,
     TokenKind,
@@ -107,11 +108,13 @@ def token_to_op(
 
 
 def get_op_delimiter(token: Token, cursor: Cursor[Token], function_name: str) -> Op | None:
-    assert len(Delimiter) == 5, "Exhaustive handling for `Delimiter`"
+    assert len(Delimiter) == 6, "Exhaustive handling for `Delimiter`"
 
     delimiter = Delimiter.from_str(token.value)
     match delimiter:
         case None:
+            return None
+        case Delimiter.COLON:
             return None
         case Delimiter.COMMA:
             return None
@@ -240,8 +243,16 @@ def parse_function(cursor: Cursor[Token]) -> Function:
 
     signature = parse_signature(cursor)
 
-    ops = parse_block_ops(cursor, name.value)
-    return Function(name.value, ops, name.location, signature)
+    ops: list[Op] = []
+    variables: list[Variable] = []
+    for param in signature.parameters:
+        if param.name:
+            variables.append(Variable(param.name, param.typ))
+            ops.append(Op(param.name, OpKind.ASSIGN_VARIABLE, name.location))
+
+    ops += parse_block_ops(cursor, name.value)
+    function = Function(name.value, ops, name.location, signature, variables=variables)
+    return function
 
 
 def parse_signature(cursor: Cursor[Token]) -> Signature:
@@ -259,13 +270,25 @@ def parse_signature(cursor: Cursor[Token]) -> Signature:
     return Signature(parameters, return_types)
 
 
-def parse_parameters(cursor: Cursor[Token]) -> list[Type]:
-    parameters: list[Type] = []
-    while parameter := cursor.pop():
-        if parameter.value in ("->", "{"):
+def parse_parameters(cursor: Cursor[Token]) -> list[Parameter]:
+    parameters: list[Parameter] = []
+    while name_or_type := cursor.pop():
+        if name_or_type.value in ("->", "{"):
             cursor.position -= 1
             return parameters
-        parameters.append(parameter.value)
+        if name_or_type.kind != TokenKind.IDENTIFIER:
+            raise SyntaxError(f"Expected identifier but got `{name_or_type.kind}`")
+
+        # Parse typed parameter
+        next_token = cursor.peek()
+        if next_token and next_token.value == ":":
+            cursor.position += 1
+            typ = cursor.pop()
+            if not typ or typ.kind != TokenKind.IDENTIFIER:
+                raise SyntaxError(f"Expected parameter type identifier but got `{typ.kind}`")
+            parameters.append(Parameter(typ.value, name_or_type.value))
+        else:
+            parameters.append(Parameter(name_or_type.value))
     raise SyntaxError("Expected `->` or block but got nothing")
 
 

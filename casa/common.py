@@ -66,6 +66,7 @@ class Keyword(Enum):
 
 class Delimiter(Enum):
     COMMA = auto()
+    COLON = auto()
     OPEN_BRACE = auto()
     CLOSE_BRACE = auto()
     OPEN_BRACKET = auto()
@@ -75,6 +76,7 @@ class Delimiter(Enum):
     def from_str(cls, value: str) -> Self | None:
         mapping = {
             ",": cls.COMMA,
+            ":": cls.COLON,
             "{": cls.OPEN_BRACE,
             "}": cls.CLOSE_BRACE,
             "[": cls.OPEN_BRACKET,
@@ -436,17 +438,34 @@ LabelId = int
 Type = str | GenericType
 
 
+def type_repr(typ: Type) -> str:
+    return f"<{typ.name}>" if isinstance(typ, GenericType) else typ
+
+
+@dataclass
+class Parameter:
+    typ: Type
+    name: str | None = None
+
+    def __repr__(self) -> str:
+        typ = type_repr(self.typ)
+        if self.name:
+            return f"{self.name}:{typ}"
+        return typ
+
+
 @dataclass
 class Signature:
-    parameters: list[Type]
+    parameters: list[Parameter]
     return_types: list[Type]
 
     @classmethod
-    def from_str(cls, repr: str):
-        def parse_type_list(part: str):
+    def from_str(cls, repr: str) -> Self:
+        def parse_type_list(part: str) -> list[Type]:
             if part.strip() == "None":
                 return []
-            types = []
+
+            types: list[Type] = []
             for token in part.split():
                 if token.startswith("<") and token.endswith(">"):
                     types.append(GenericType(token[1:-1]))
@@ -460,18 +479,17 @@ class Signature:
         param_part, return_part = repr.split("->", 1)
         parameters = parse_type_list(param_part)
         return_types = parse_type_list(return_part)
+        return cls.from_types(parameters, return_types)
 
-        return cls(parameters=parameters, return_types=return_types)
+    @classmethod
+    def from_types(cls, parameter_types: list[Type], return_types: list[Type]) -> Self:
+        parameters = [Parameter(t) for t in parameter_types]
+        return cls(parameters, return_types)
 
     def __repr__(self):
-        def fmt(types):
-            if not types:
-                return "None"
-            return " ".join(
-                f"<{t.name}>" if isinstance(t, GenericType) else str(t) for t in types
-            )
-
-        return f"{fmt(self.parameters)} -> {fmt(self.return_types)}"
+        parameters = " ".join(map(repr, self.parameters)) or "None"
+        return_types = " ".join(type_repr(t) for t in self.return_types) or "None"
+        return f"{parameters} -> {return_types}"
 
 
 @dataclass
