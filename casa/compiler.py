@@ -258,11 +258,11 @@ class Compiler:
                         continue
 
                     # Local variable
-                    if variable_name in self.locals:
-                        index = self.locals.index(variable_name)
-                        bytecode.append(Inst(InstKind.LOCAL_GET, arguments=[index]))
+                    if variable_name not in self.locals:
+                        raise NameError(f"Local variable `{variable_name}` does not exist")
 
-                    raise NameError(f"Local variable `{variable_name}` does not exist")
+                    index = self.locals.index(variable_name)
+                    bytecode.append(Inst(InstKind.LOCAL_GET, arguments=[index]))
                 case OpKind.ROT:
                     bytecode.append(Inst(InstKind.ROT))
                 case OpKind.STORE:

@@ -106,7 +106,7 @@ def token_to_op(
             assert_never(token.kind)
 
 
-def get_op_delimiter(token: Token, cursor: Cursor[Token], function_name) -> Op | None:
+def get_op_delimiter(token: Token, cursor: Cursor[Token], function_name: str) -> Op | None:
     assert len(Delimiter) == 5, "Exhaustive handling for `Delimiter`"
 
     delimiter = Delimiter.from_str(token.value)
