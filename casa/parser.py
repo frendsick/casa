@@ -195,7 +195,7 @@ def get_op_intrinsic(token: Token) -> Op:
 
 
 def get_op_keyword(token: Token, cursor: Cursor[Token]) -> Op | None:
-    assert len(Keyword) == 4, "Exhaustive handling for `Keyword"
+    assert len(Keyword) == 7, "Exhaustive handling for `Keyword"
 
     keyword = Keyword.from_lowercase(token.value)
     assert keyword, f"Token `{token.value}` is not a keyword"
@@ -213,6 +213,12 @@ def get_op_keyword(token: Token, cursor: Cursor[Token]) -> Op | None:
 
             GLOBAL_FUNCTIONS[function.name] = function
             return None
+        case Keyword.IF:
+            return Op(keyword, OpKind.IF_START, token.location)
+        case Keyword.FI:
+            return Op(keyword, OpKind.IF_END, token.location)
+        case Keyword.THEN:
+            return Op(keyword, OpKind.IF_CONDITION, token.location)
         case Keyword.WHILE:
             return Op(keyword, OpKind.WHILE_START, token.location)
         case _:

@@ -40,7 +40,7 @@ class Compiler:
 
     def compile(self) -> Bytecode:
         assert len(InstKind) == 28, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 29, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 32, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
         bytecode = []
@@ -136,6 +136,18 @@ class Compiler:
                     raise AssertionError(
                         f"Identifier `{op.value}` should be resolved by the parser"
                     )
+                case OpKind.IF_CONDITION:
+                    end_label = self.find_matching_label(
+                        op=op,
+                        start_kind=OpKind.IF_START,
+                        end_kind=OpKind.IF_END,
+                    )
+                    bytecode.append(Inst(InstKind.JUMP_NE, arguments=[end_label]))
+                case OpKind.IF_END:
+                    label = op_to_label(op)
+                    bytecode.append(Inst(InstKind.LABEL, arguments=[label]))
+                case OpKind.IF_START:
+                    pass
                 case OpKind.LE:
                     bytecode.append(Inst(InstKind.LE))
                 case OpKind.LOAD:
@@ -201,7 +213,7 @@ class Compiler:
                         start_kind=OpKind.WHILE_START,
                         end_kind=OpKind.WHILE_END,
                     )
-                    bytecode.append(Inst(InstKind.JUMP_IF, arguments=[end_label]))
+                    bytecode.append(Inst(InstKind.JUMP_NE, arguments=[end_label]))
                 case OpKind.WHILE_END:
                     # Add label
                     label = op_to_label(op)

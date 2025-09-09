@@ -59,7 +59,7 @@ def get_signature_from_op(
     stack: list[Type],
     function: Function | None = None,
 ) -> Signature:
-    assert len(OpKind) == 29, "Exhaustive handling for `OpKind`"
+    assert len(OpKind) == 32, "Exhaustive handling for `OpKind`"
 
     match op.kind:
         case OpKind.ADD | OpKind.SUB:
@@ -133,6 +133,12 @@ def get_signature_from_op(
             return Signature.from_str(fn_ptr[start:end])
         case OpKind.IDENTIFIER:
             raise AssertionError("Identifiers should be resolved by the parser")
+        case OpKind.IF_CONDITION:
+            return Signature(parameters=["bool"], return_types=[])
+        case OpKind.IF_END:
+            return Signature(parameters=[], return_types=[])
+        case OpKind.IF_START:
+            return Signature(parameters=[], return_types=[])
         case OpKind.LOAD:
             return Signature(parameters=["ptr"], return_types=["any"])
         case OpKind.OVER:
