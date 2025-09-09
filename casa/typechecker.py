@@ -59,9 +59,11 @@ def get_signature_from_op(
     stack: list[Type],
     function: Function | None = None,
 ) -> Signature:
-    assert len(OpKind) == 38, "Exhaustive handling for `OpKind`"
+    assert len(OpKind) == 41, "Exhaustive handling for `OpKind`"
 
     match op.kind:
+        case OpKind.AND | OpKind.OR:
+            return Signature(parameters=["any", "any"], return_types=["bool"])
         case OpKind.ADD | OpKind.DIV | OpKind.MOD | OpKind.MUL | OpKind.SUB:
             return Signature(parameters=["int", "int"], return_types=["int"])
         case OpKind.ASSIGN_DECREMENT:
@@ -145,6 +147,8 @@ def get_signature_from_op(
             return Signature(parameters=[], return_types=[])
         case OpKind.LOAD:
             return Signature(parameters=["ptr"], return_types=["any"])
+        case OpKind.NOT:
+            return Signature(parameters=["any"], return_types=["bool"])
         case OpKind.OVER:
             t1 = GenericType("T1")
             t2 = GenericType("T2")
