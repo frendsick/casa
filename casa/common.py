@@ -78,6 +78,10 @@ class Delimiter(Enum):
 
 
 class Operator(Enum):
+    # Arithmetic
+    PLUS = auto()
+    MINUS = auto()
+
     # Comparison
     EQ = auto()
     GE = auto()
@@ -86,12 +90,10 @@ class Operator(Enum):
     LT = auto()
     NE = auto()
 
-    # Arithmetic
-    PLUS = auto()
-    MINUS = auto()
-
     # Assignment
     ASSIGN = auto()
+    ASSIGN_DECREMENT = auto()
+    ASSIGN_INCREMENT = auto()
 
     @classmethod
     def from_str(cls, value: str) -> Self | None:
@@ -105,6 +107,8 @@ class Operator(Enum):
             "+": cls.PLUS,
             "-": cls.MINUS,
             "=": cls.ASSIGN,
+            "-=": cls.ASSIGN_DECREMENT,
+            "+=": cls.ASSIGN_INCREMENT,
         }
         assert len(mapping) == len(Operator), "Exhaustive handling for `Operator`"
         return mapping.get(value)  # type: ignore
@@ -145,9 +149,11 @@ class OpKind(Enum):
     PUSH_LIST = auto()
     PUSH_VARIABLE = auto()
 
-    # Operators
+    # Arithmetic
     ADD = auto()
-    DEC = auto()
+    SUB = auto()
+
+    # Comparison
     EQ = auto()
     GE = auto()
     GT = auto()
@@ -166,7 +172,9 @@ class OpKind(Enum):
     WHILE_END = auto()
 
     # Variables
-    BIND_VARIABLE = auto()
+    ASSIGN_DECREMENT = auto()
+    ASSIGN_INCREMENT = auto()
+    ASSIGN_VARIABLE = auto()
 
     # Identifiers should be resolved by the parser
     IDENTIFIER = auto()
@@ -179,7 +187,7 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 27, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 29, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires `int`
@@ -192,7 +200,9 @@ class Op:
                 | OpKind.CALL_FN
                 | OpKind.PUSH_FN
                 | OpKind.PUSH_VARIABLE
-                | OpKind.BIND_VARIABLE
+                | OpKind.ASSIGN_DECREMENT
+                | OpKind.ASSIGN_INCREMENT
+                | OpKind.ASSIGN_VARIABLE
             ):
                 if not isinstance(self.value, str):
                     raise TypeError(f"`{self.kind}` requires value of type `str`")
@@ -221,7 +231,7 @@ class Op:
             # Requires `Operator`
             case (
                 OpKind.ADD
-                | OpKind.DEC
+                | OpKind.SUB
                 | OpKind.EQ
                 | OpKind.GE
                 | OpKind.GT
@@ -252,9 +262,11 @@ class InstructionKind(Enum):
     # Lists
     LIST_NEW = auto()
 
-    # Operators
+    # Arithmetic
     ADD = auto()
-    DEC = auto()
+    SUB = auto()
+
+    # Comparison
     EQ = auto()
     GE = auto()
     GT = auto()
@@ -288,7 +300,7 @@ class Instruction:
             # Should not have a parameter
             case (
                 InstructionKind.ADD
-                | InstructionKind.DEC
+                | InstructionKind.SUB
                 | InstructionKind.DROP
                 | InstructionKind.DUP
                 | InstructionKind.EQ
@@ -409,7 +421,7 @@ class Function:
     variables: list[Variable] = field(default_factory=list)
 
 
-GLOBAL_IDENTIFIERS: OrderedDict[str, Function] = OrderedDict()
+GLOBAL_IDENTIFIERS: OrderedDict[str, Function | Variable] = OrderedDict()
 GLOBAL_SCOPE_LABEL = "_start"
 
 
