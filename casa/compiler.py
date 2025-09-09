@@ -32,8 +32,8 @@ class Compiler:
     locals: list[str] = field(default_factory=list)
 
     def compile(self) -> Bytecode:
-        assert len(InstructionKind) == 24, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 26, "Exhaustive handling for `OpKind`"
+        assert len(InstructionKind) == 25, "Exhaustive handling for `InstructionKind"
+        assert len(OpKind) == 27, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
         bytecode = []
@@ -62,6 +62,8 @@ class Compiler:
                     bytecode.append(
                         Instruction(InstructionKind.CALL_FN, arguments=[function_name])
                     )
+                case OpKind.DEC:
+                    bytecode.append(Instruction(InstructionKind.DEC))
                 case OpKind.DROP:
                     bytecode.append(Instruction(InstructionKind.DROP))
                 case OpKind.DUP:

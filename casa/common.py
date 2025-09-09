@@ -88,6 +88,7 @@ class Operator(Enum):
 
     # Arithmetic
     PLUS = auto()
+    MINUS = auto()
 
     # Assignment
     ASSIGN = auto()
@@ -102,6 +103,7 @@ class Operator(Enum):
             "<": cls.LT,
             "!=": cls.NE,
             "+": cls.PLUS,
+            "-": cls.MINUS,
             "=": cls.ASSIGN,
         }
         assert len(mapping) == len(Operator), "Exhaustive handling for `Operator`"
@@ -145,6 +147,7 @@ class OpKind(Enum):
 
     # Operators
     ADD = auto()
+    DEC = auto()
     EQ = auto()
     GE = auto()
     GT = auto()
@@ -176,7 +179,7 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 26, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 27, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires `int`
@@ -218,6 +221,7 @@ class Op:
             # Requires `Operator`
             case (
                 OpKind.ADD
+                | OpKind.DEC
                 | OpKind.EQ
                 | OpKind.GE
                 | OpKind.GT
@@ -250,6 +254,7 @@ class InstructionKind(Enum):
 
     # Operators
     ADD = auto()
+    DEC = auto()
     EQ = auto()
     GE = auto()
     GT = auto()
@@ -277,12 +282,13 @@ class Instruction:
     arguments: list = field(default_factory=list)
 
     def __post_init__(self):
-        assert len(InstructionKind) == 24, "Exhaustive handling for `InstructionKind`"
+        assert len(InstructionKind) == 25, "Exhaustive handling for `InstructionKind`"
 
         match self.kind:
             # Should not have a parameter
             case (
                 InstructionKind.ADD
+                | InstructionKind.DEC
                 | InstructionKind.DROP
                 | InstructionKind.DUP
                 | InstructionKind.EQ
