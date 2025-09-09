@@ -8,8 +8,8 @@ from casa.common import (
     Bytecode,
     Cursor,
     Function,
-    Instruction,
-    InstructionKind,
+    Inst,
+    InstKind,
     LabelId,
     Op,
     OpKind,
@@ -32,7 +32,7 @@ class Compiler:
     locals: list[str] = field(default_factory=list)
 
     def compile(self) -> Bytecode:
-        assert len(InstructionKind) == 25, "Exhaustive handling for `InstructionKind"
+        assert len(InstKind) == 25, "Exhaustive handling for `InstructionKind"
         assert len(OpKind) == 29, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
@@ -40,26 +40,26 @@ class Compiler:
         while op := cursor.pop():
             match op.kind:
                 case OpKind.ADD:
-                    bytecode.append(Instruction(InstructionKind.ADD))
+                    bytecode.append(Inst(InstKind.ADD))
                 case OpKind.ASSIGN_DECREMENT:
                     variable_name = op.value
                     assert isinstance(variable_name, str), "Valid variable name"
                     assert variable_name in self.locals, "Variable is defined"
 
                     index = self.locals.index(variable_name)
-                    bytecode.append(Instruction(InstructionKind.LOCAL_GET, arguments=[index]))
-                    bytecode.append(Instruction(InstructionKind.SWAP))
-                    bytecode.append(Instruction(InstructionKind.SUB))
-                    bytecode.append(Instruction(InstructionKind.LOCAL_SET, arguments=[index]))
+                    bytecode.append(Inst(InstKind.LOCAL_GET, arguments=[index]))
+                    bytecode.append(Inst(InstKind.SWAP))
+                    bytecode.append(Inst(InstKind.SUB))
+                    bytecode.append(Inst(InstKind.LOCAL_SET, arguments=[index]))
                 case OpKind.ASSIGN_INCREMENT:
                     variable_name = op.value
                     assert isinstance(variable_name, str), "Valid variable name"
                     assert variable_name in self.locals, "Variable is defined"
 
                     index = self.locals.index(variable_name)
-                    bytecode.append(Instruction(InstructionKind.LOCAL_GET, arguments=[index]))
-                    bytecode.append(Instruction(InstructionKind.ADD))
-                    bytecode.append(Instruction(InstructionKind.LOCAL_SET, arguments=[index]))
+                    bytecode.append(Inst(InstKind.LOCAL_GET, arguments=[index]))
+                    bytecode.append(Inst(InstKind.ADD))
+                    bytecode.append(Inst(InstKind.LOCAL_SET, arguments=[index]))
                 case OpKind.ASSIGN_VARIABLE:
                     variable_name = op.value
                     assert isinstance(variable_name, str), "Valid variable name"
@@ -67,9 +67,7 @@ class Compiler:
                     if variable_name not in self.locals:
                         self.locals.append(variable_name)
                     index = self.locals.index(variable_name)
-                    bytecode.append(
-                        Instruction(InstructionKind.LOCAL_SET, arguments=[index])
-                    )
+                    bytecode.append(Inst(InstKind.LOCAL_SET, arguments=[index]))
                 case OpKind.CALL_FN:
                     function_name = op.value
                     function = GLOBAL_IDENTIFIERS.get(function_name)
@@ -78,43 +76,39 @@ class Compiler:
                     # Compile the function if it is not compiled already
                     if function.bytecode is None:
                         function.bytecode = compile_bytecode(function.ops)
-                    bytecode.append(
-                        Instruction(InstructionKind.CALL_FN, arguments=[function_name])
-                    )
+                    bytecode.append(Inst(InstKind.CALL_FN, arguments=[function_name]))
                 case OpKind.SUB:
-                    bytecode.append(Instruction(InstructionKind.SUB))
+                    bytecode.append(Inst(InstKind.SUB))
                 case OpKind.DROP:
-                    bytecode.append(Instruction(InstructionKind.DROP))
+                    bytecode.append(Inst(InstKind.DROP))
                 case OpKind.DUP:
-                    bytecode.append(Instruction(InstructionKind.DUP))
+                    bytecode.append(Inst(InstKind.DUP))
                 case OpKind.EQ:
-                    bytecode.append(Instruction(InstructionKind.EQ))
+                    bytecode.append(Inst(InstKind.EQ))
                 case OpKind.EXEC_FN:
-                    bytecode.append(Instruction(InstructionKind.EXEC_FN))
+                    bytecode.append(Inst(InstKind.EXEC_FN))
                 case OpKind.GE:
-                    bytecode.append(Instruction(InstructionKind.GE))
+                    bytecode.append(Inst(InstKind.GE))
                 case OpKind.GT:
-                    bytecode.append(Instruction(InstructionKind.GT))
+                    bytecode.append(Inst(InstKind.GT))
                 case OpKind.IDENTIFIER:
                     raise AssertionError(
                         f"Identifier `{op.value}` should be resolved by the parser"
                     )
                 case OpKind.LE:
-                    bytecode.append(Instruction(InstructionKind.LE))
+                    bytecode.append(Inst(InstKind.LE))
                 case OpKind.LOAD:
-                    bytecode.append(Instruction(InstructionKind.LOAD))
+                    bytecode.append(Inst(InstKind.LOAD))
                 case OpKind.LT:
-                    bytecode.append(Instruction(InstructionKind.LT))
+                    bytecode.append(Inst(InstKind.LT))
                 case OpKind.NE:
-                    bytecode.append(Instruction(InstructionKind.NE))
+                    bytecode.append(Inst(InstKind.NE))
                 case OpKind.OVER:
-                    bytecode.append(Instruction(InstructionKind.OVER))
+                    bytecode.append(Inst(InstKind.OVER))
                 case OpKind.PRINT:
-                    bytecode.append(Instruction(InstructionKind.PRINT))
+                    bytecode.append(Inst(InstKind.PRINT))
                 case OpKind.PUSH_INT:
-                    bytecode.append(
-                        Instruction(InstructionKind.PUSH, arguments=[op.value])
-                    )
+                    bytecode.append(Inst(InstKind.PUSH, arguments=[op.value]))
                 case OpKind.PUSH_FN:
                     for i, (name, function) in enumerate(GLOBAL_IDENTIFIERS.items()):
                         if name == op.value:
@@ -122,9 +116,7 @@ class Compiler:
                                 function, Function
                             ), "Expected lambda function"
                             function.bytecode = compile_bytecode(function.ops)
-                            bytecode.append(
-                                Instruction(InstructionKind.PUSH, arguments=[i])
-                            )
+                            bytecode.append(Inst(InstKind.PUSH, arguments=[i]))
                     raise NameError(f"Function `{op.value}` is not defined")
                 case OpKind.PUSH_LIST:
                     assert isinstance(op.value, list), "Expected `list`"
@@ -134,13 +126,11 @@ class Compiler:
                     list_bytecode = compile_bytecode(reversed_items)
 
                     # First item of the list is its length
-                    push_len = Instruction(
-                        InstructionKind.PUSH, arguments=[len(op.value)]
-                    )
+                    push_len = Inst(InstKind.PUSH, arguments=[len(op.value)])
                     list_bytecode.append(push_len)
 
                     # Create the list
-                    push_list = Instruction(InstructionKind.LIST_NEW)
+                    push_list = Inst(InstKind.LIST_NEW)
                     list_bytecode.append(push_list)
 
                     bytecode += list_bytecode
@@ -151,15 +141,13 @@ class Compiler:
                         raise NameError(f"Variable `{variable_name}` does not exist")
 
                     index = self.locals.index(variable_name)
-                    bytecode.append(
-                        Instruction(InstructionKind.LOCAL_GET, arguments=[index])
-                    )
+                    bytecode.append(Inst(InstKind.LOCAL_GET, arguments=[index]))
                 case OpKind.ROT:
-                    bytecode.append(Instruction(InstructionKind.ROT))
+                    bytecode.append(Inst(InstKind.ROT))
                 case OpKind.STORE:
-                    bytecode.append(Instruction(InstructionKind.STORE))
+                    bytecode.append(Inst(InstKind.STORE))
                 case OpKind.SWAP:
-                    bytecode.append(Instruction(InstructionKind.SWAP))
+                    bytecode.append(Inst(InstKind.SWAP))
                 case OpKind.WHILE_CONDITION:
                     # Find matching `WHILE_END`
                     end_label = self.find_matching_label(
@@ -167,9 +155,7 @@ class Compiler:
                         start_kind=OpKind.WHILE_START,
                         end_kind=OpKind.WHILE_END,
                     )
-                    bytecode.append(
-                        Instruction(InstructionKind.JUMP_IF, arguments=[end_label])
-                    )
+                    bytecode.append(Inst(InstKind.JUMP_IF, arguments=[end_label]))
                 case OpKind.WHILE_END:
                     # Add label
                     label = op_to_label(op)
@@ -182,17 +168,11 @@ class Compiler:
                         end_kind=OpKind.WHILE_END,
                         reverse=True,
                     )
-                    bytecode.append(
-                        Instruction(InstructionKind.JUMP, arguments=[start_label])
-                    )
-                    bytecode.append(
-                        Instruction(InstructionKind.LABEL, arguments=[label])
-                    )
+                    bytecode.append(Inst(InstKind.JUMP, arguments=[start_label]))
+                    bytecode.append(Inst(InstKind.LABEL, arguments=[label]))
                 case OpKind.WHILE_START:
                     label = op_to_label(op)
-                    bytecode.append(
-                        Instruction(InstructionKind.LABEL, arguments=[label])
-                    )
+                    bytecode.append(Inst(InstKind.LABEL, arguments=[label]))
                 case _:
                     assert_never(op.kind)
 

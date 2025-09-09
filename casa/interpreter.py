@@ -4,7 +4,7 @@ from casa.common import (
     GLOBAL_IDENTIFIERS,
     Bytecode,
     Function,
-    InstructionKind,
+    InstKind,
     LabelId,
 )
 
@@ -12,7 +12,7 @@ InstrAddr = int
 
 
 def interpret_bytecode(bytecode: Bytecode, stack: list[int] | None = None):
-    assert len(InstructionKind) == 25, "Exhaustive handling for `InstructionKind`"
+    assert len(InstKind) == 25, "Exhaustive handling for `InstructionKind`"
 
     # Containers for emulating a computer
     heap: list[int] = []
@@ -23,7 +23,7 @@ def interpret_bytecode(bytecode: Bytecode, stack: list[int] | None = None):
 
     # Set up the program
     for instr_addr, instruction in enumerate(bytecode):
-        if instruction.kind == InstructionKind.LABEL:
+        if instruction.kind == InstKind.LABEL:
             assert len(instruction.arguments) == 1, "Label ID"
             label_id = instruction.arguments[0]
             assert isinstance(label_id, LabelId), ""
@@ -34,11 +34,11 @@ def interpret_bytecode(bytecode: Bytecode, stack: list[int] | None = None):
     while (pc := pc + 1) < len(bytecode):
         instruction = bytecode[pc]
         match instruction.kind:
-            case InstructionKind.ADD:
+            case InstKind.ADD:
                 a = stack_pop(stack)
                 b = stack_pop(stack)
                 stack_push(stack, b + a)
-            case InstructionKind.CALL_FN:
+            case InstKind.CALL_FN:
                 assert len(instruction.arguments) == 1, "Function name"
                 function_name = instruction.arguments[0]
                 function = GLOBAL_IDENTIFIERS.get(function_name)
@@ -47,21 +47,21 @@ def interpret_bytecode(bytecode: Bytecode, stack: list[int] | None = None):
                 assert isinstance(function.bytecode, list), "Function is compiled"
 
                 interpret_bytecode(function.bytecode, stack)
-            case InstructionKind.SUB:
+            case InstKind.SUB:
                 a = stack_pop(stack)
                 b = stack_pop(stack)
                 stack_push(stack, b - a)
-            case InstructionKind.DROP:
+            case InstKind.DROP:
                 stack_pop(stack)
-            case InstructionKind.DUP:
+            case InstKind.DUP:
                 a = stack_pop(stack)
                 stack_push(stack, a)
                 stack_push(stack, a)
-            case InstructionKind.EQ:
+            case InstKind.EQ:
                 a = stack_pop(stack)
                 b = stack_pop(stack)
                 stack_push(stack, int(a == b))
-            case InstructionKind.EXEC_FN:
+            case InstKind.EXEC_FN:
                 fn_ptr = stack_pop(stack)
                 assert fn_ptr < len(GLOBAL_IDENTIFIERS), "Valid function pointer"
 
@@ -70,30 +70,30 @@ def interpret_bytecode(bytecode: Bytecode, stack: list[int] | None = None):
                 assert isinstance(function.bytecode, list), "Function is compiled"
 
                 interpret_bytecode(function.bytecode, stack)
-            case InstructionKind.GE:
+            case InstKind.GE:
                 a = stack_pop(stack)
                 b = stack_pop(stack)
                 stack_push(stack, int(a >= b))
-            case InstructionKind.GT:
+            case InstKind.GT:
                 a = stack_pop(stack)
                 b = stack_pop(stack)
                 stack_push(stack, int(a > b))
-            case InstructionKind.JUMP:
+            case InstKind.JUMP:
                 label = instruction.arguments[0]
                 pc = labels[label]
-            case InstructionKind.JUMP_IF:
+            case InstKind.JUMP_IF:
                 condition = stack_pop(stack)
                 if condition == int(False):
                     label: LabelId = instruction.arguments[0]
                     pc = labels[label]
-            case InstructionKind.LABEL:
+            case InstKind.LABEL:
                 label: LabelId = instruction.arguments[0]
                 assert label in labels, f"Label `{label}` does not exist"
-            case InstructionKind.LE:
+            case InstKind.LE:
                 a = stack_pop(stack)
                 b = stack_pop(stack)
                 stack_push(stack, int(a <= b))
-            case InstructionKind.LIST_NEW:
+            case InstKind.LIST_NEW:
                 list_len = stack_pop(stack)
 
                 # Store the list len in the zeroth index
@@ -105,18 +105,18 @@ def interpret_bytecode(bytecode: Bytecode, stack: list[int] | None = None):
                     item = stack_pop(stack)
                     heap[ptr + i] = item
                 stack_push(stack, ptr)
-            case InstructionKind.LOAD:
+            case InstKind.LOAD:
                 ptr = stack_pop(stack)
                 if not is_valid_address(heap, ptr):
                     raise IndexError(
                         f"Address `{ptr}` is not valid within the heap of size `{len(heap)}`"
                     )
                 stack_push(stack, heap[ptr])
-            case InstructionKind.LT:
+            case InstKind.LT:
                 a = stack_pop(stack)
                 b = stack_pop(stack)
                 stack_push(stack, int(a < b))
-            case InstructionKind.LOCAL_GET:
+            case InstKind.LOCAL_GET:
                 assert len(instruction.arguments) == 1, "Local index"
                 index = instruction.arguments[0]
                 assert isinstance(index, int), "Valid index"
@@ -124,7 +124,7 @@ def interpret_bytecode(bytecode: Bytecode, stack: list[int] | None = None):
 
                 value = locals[index]
                 stack_push(stack, value)
-            case InstructionKind.LOCAL_SET:
+            case InstKind.LOCAL_SET:
                 assert len(instruction.arguments) == 1, "Local index"
                 index = instruction.arguments[0]
                 assert isinstance(index, int), "Valid index"
@@ -136,29 +136,29 @@ def interpret_bytecode(bytecode: Bytecode, stack: list[int] | None = None):
                     zeroes = [0] * (index - len(locals) + 1)
                     locals.extend(zeroes)
                 locals[index] = a
-            case InstructionKind.NE:
+            case InstKind.NE:
                 a = stack_pop(stack)
                 b = stack_pop(stack)
                 stack_push(stack, int(a != b))
-            case InstructionKind.OVER:
+            case InstKind.OVER:
                 a = stack_pop(stack)
                 b = stack_pop(stack)
                 stack_push(stack, b)
                 stack_push(stack, a)
                 stack_push(stack, b)
-            case InstructionKind.PRINT:
+            case InstKind.PRINT:
                 a = stack_pop(stack)
                 print(a)
-            case InstructionKind.PUSH:
+            case InstKind.PUSH:
                 stack_push(stack, instruction.arguments[0])
-            case InstructionKind.ROT:
+            case InstKind.ROT:
                 a = stack_pop(stack)
                 b = stack_pop(stack)
                 c = stack_pop(stack)
                 stack_push(stack, c)
                 stack_push(stack, a)
                 stack_push(stack, b)
-            case InstructionKind.STORE:
+            case InstKind.STORE:
                 ptr = stack_pop(stack)
                 if not is_valid_address(heap, ptr):
                     raise IndexError(
@@ -166,7 +166,7 @@ def interpret_bytecode(bytecode: Bytecode, stack: list[int] | None = None):
                     )
                 value = stack_pop(stack)
                 heap[ptr] = value
-            case InstructionKind.SWAP:
+            case InstKind.SWAP:
                 a = stack_pop(stack)
                 b = stack_pop(stack)
                 stack_push(stack, a)
