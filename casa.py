@@ -8,22 +8,18 @@ from casa.lexer import lex_file
 from casa.parser import parse_ops, resolve_identifiers
 from casa.typechecker import type_check_ops
 
-COMPILER_FOLDER = pathlib.Path(__file__).resolve().parent
-CASA_SOURCE_CODE = "test.casa"
-
 logger = logging.getLogger(__name__)
 
 
 def main():
-    code_file = COMPILER_FOLDER / CASA_SOURCE_CODE
-
     args = parse_args()
 
     log_level = logging.INFO if args.verbose else logging.WARNING
     logging.basicConfig(level=log_level, format=f"[%(levelname)s] %(message)s")
 
-    logger.info(f"Lexing {CASA_SOURCE_CODE}")
-    tokens = lex_file(code_file)
+    input_file = pathlib.Path(args.input)
+    logger.info(f"Lexing {input_file}")
+    tokens = lex_file(input_file.resolve())
 
     logger.info("Parsing ops")
     ops = parse_ops(tokens)
