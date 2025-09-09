@@ -1,6 +1,5 @@
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-import random
 from typing import assert_never
 
 from casa.common import (
