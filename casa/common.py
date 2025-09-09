@@ -50,6 +50,11 @@ class Keyword(Enum):
     DO = auto()
     DONE = auto()
 
+    # Conditionals
+    IF = auto()
+    THEN = auto()
+    FI = auto()
+
     @classmethod
     def from_lowercase(cls, value: str) -> Self | None:
         if not value.islower():
@@ -170,6 +175,11 @@ class OpKind(Enum):
     WHILE_CONDITION = auto()
     WHILE_END = auto()
 
+    # Conditionals
+    IF_START = auto()
+    IF_CONDITION = auto()
+    IF_END = auto()
+
     # Variables
     ASSIGN_DECREMENT = auto()
     ASSIGN_INCREMENT = auto()
@@ -187,7 +197,7 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 29, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 32, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires `int`
@@ -225,7 +235,14 @@ class Op:
                 if not isinstance(self.value, Intrinsic):
                     raise TypeError(f"`{self.kind}` requires value of type `Intrinsic`")
             # Requires `Keyword`
-            case OpKind.WHILE_CONDITION | OpKind.WHILE_END | OpKind.WHILE_START:
+            case (
+                OpKind.IF_START
+                | OpKind.IF_CONDITION
+                | OpKind.IF_END
+                | OpKind.WHILE_START
+                | OpKind.WHILE_CONDITION
+                | OpKind.WHILE_END
+            ):
                 if not isinstance(self.value, Keyword):
                     raise TypeError(f"`{self.kind}` requires value of type `Keyword`")
             # Requires `Operator`
@@ -281,7 +298,7 @@ class InstKind(Enum):
     # Jumps
     LABEL = auto()
     JUMP = auto()
-    JUMP_IF = auto()
+    JUMP_NE = auto()
 
     # Locals
     LOCAL_GET = auto()
@@ -333,7 +350,7 @@ class Inst:
                 | InstKind.GLOBAL_SET
                 | InstKind.GLOBALS_INIT
                 | InstKind.JUMP
-                | InstKind.JUMP_IF
+                | InstKind.JUMP_NE
                 | InstKind.LABEL
                 | InstKind.LOCAL_GET
                 | InstKind.LOCAL_SET

@@ -104,10 +104,11 @@ def interpret_bytecode(
             case InstKind.JUMP:
                 label = instruction.arguments[0]
                 pc = labels[label]
-            case InstKind.JUMP_IF:
+            case InstKind.JUMP_NE:
                 condition = stack_pop(stack)
                 if condition == int(False):
-                    label: LabelId = instruction.arguments[0]
+                    label = instruction.arguments[0]
+                    assert isinstance(label, LabelId), "Valid label ID"
                     pc = labels[label]
             case InstKind.LABEL:
                 label: LabelId = instruction.arguments[0]
