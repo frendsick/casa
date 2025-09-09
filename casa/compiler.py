@@ -222,11 +222,15 @@ class Compiler:
                 case OpKind.PUSH_INT:
                     bytecode.append(Inst(InstKind.PUSH, arguments=[op.value]))
                 case OpKind.PUSH_FN:
+                    function_name = op.value
+                    if function_name not in GLOBAL_FUNCTIONS:
+                        raise NameError(f"Function `{function_name}` is not defined")
+
                     for i, (name, function) in enumerate(GLOBAL_FUNCTIONS.items()):
-                        if name == op.value:
+                        if name == function_name:
                             function.bytecode = compile_bytecode(function.ops)
                             bytecode.append(Inst(InstKind.PUSH, arguments=[i]))
-                    raise NameError(f"Function `{op.value}` is not defined")
+                            break
                 case OpKind.PUSH_LIST:
                     assert isinstance(op.value, list), "Expected `list`"
 
