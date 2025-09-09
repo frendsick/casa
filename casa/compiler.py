@@ -34,12 +34,11 @@ def op_to_label(op: Op) -> LabelId:
 @dataclass
 class Compiler:
     ops: list[Op]
-    labels: set[LabelId] = field(default_factory=set)
     locals: list[str] = field(default_factory=list)
 
     def compile(self) -> Bytecode:
-        assert len(InstKind) == 31, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 37, "Exhaustive handling for `OpKind`"
+        assert len(InstKind) == 32, "Exhaustive handling for `InstructionKind"
+        assert len(OpKind) == 38, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
         bytecode = []
@@ -221,6 +220,8 @@ class Compiler:
                     bytecode.append(Inst(InstKind.PRINT))
                 case OpKind.PUSH_INT:
                     bytecode.append(Inst(InstKind.PUSH, arguments=[op.value]))
+                case OpKind.PUSH_STR:
+                    bytecode.append(Inst(InstKind.PUSH_STR, arguments=[op.value]))
                 case OpKind.PUSH_FN:
                     function_name = op.value
                     if function_name not in GLOBAL_FUNCTIONS:

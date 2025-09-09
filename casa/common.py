@@ -165,6 +165,7 @@ class OpKind(Enum):
     # Literals
     PUSH_INT = auto()
     PUSH_LIST = auto()
+    PUSH_STR = auto()
 
     # Arithmetic
     ADD = auto()
@@ -215,7 +216,7 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 37, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 38, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires `int`
@@ -227,6 +228,7 @@ class Op:
                 OpKind.IDENTIFIER
                 | OpKind.CALL_FN
                 | OpKind.PUSH_FN
+                | OpKind.PUSH_STR
                 | OpKind.PUSH_VARIABLE
                 | OpKind.ASSIGN_DECREMENT
                 | OpKind.ASSIGN_INCREMENT
@@ -291,6 +293,7 @@ class InstKind(Enum):
     DUP = auto()
     OVER = auto()
     PUSH = auto()
+    PUSH_STR = auto()  # TODO: Implement with `PUSH`
     ROT = auto()
     SWAP = auto()
 
@@ -342,7 +345,7 @@ class Inst:
     arguments: list = field(default_factory=list)
 
     def __post_init__(self):
-        assert len(InstKind) == 31, "Exhaustive handling for `InstructionKind`"
+        assert len(InstKind) == 32, "Exhaustive handling for `InstructionKind`"
 
         match self.kind:
             # Should not have a parameter
@@ -390,7 +393,7 @@ class Inst:
                         f"`{self.kind}` requires one parameter of type `int`\nArguments: {self.arguments}"
                     )
             # One parameter of type `str`
-            case InstKind.CALL_FN:
+            case InstKind.CALL_FN | InstKind.PUSH_STR:
                 if len(self.arguments) != 1 or not isinstance(self.arguments[0], str):
                     raise TypeError(
                         f"`{self.kind}` requires one parameter of type `str`\nArguments: {self.arguments}"
