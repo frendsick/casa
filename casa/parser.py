@@ -43,7 +43,7 @@ def parse_ops(tokens: list[Token]) -> list[Op]:
 def resolve_identifiers(ops: list[Op], function: Function | None = None):
     for op in ops:
         match op.kind:
-            case OpKind.BIND_VARIABLE:
+            case OpKind.ASSIGN_VARIABLE:
                 if not function:
                     raise SyntaxError("Variables are not supported within the global scope")
 
@@ -246,7 +246,7 @@ def parse_signature(cursor: Cursor[Token]) -> Signature:
 
 
 def parse_parameters(cursor: Cursor[Token]) -> list[Type]:
-    parameters = []
+    parameters: list[Type] = []
     while parameter := cursor.pop():
         if parameter.value in ("->", "{"):
             cursor.position -= 1
@@ -256,7 +256,7 @@ def parse_parameters(cursor: Cursor[Token]) -> list[Type]:
 
 
 def parse_return_types(cursor: Cursor[Token]) -> list[Type]:
-    return_types = []
+    return_types: list[Type] = []
     while return_type := cursor.pop():
         if return_type.value == "{":
             cursor.position -= 1
@@ -272,7 +272,7 @@ def get_op_literal(token: Token) -> Op:
 
 
 def get_op_operator(token: Token, cursor: Cursor[Token], function_name: str) -> Op:
-    assert len(Operator) == 9, "Exhaustive handling for `Operator`"
+    assert len(Operator) == 11, "Exhaustive handling for `Operator`"
 
     operator = Operator.from_str(token.value)
     assert operator, f"Token `{token.value}` is not an operator"
@@ -289,7 +289,31 @@ def get_op_operator(token: Token, cursor: Cursor[Token], function_name: str) -> 
             variable_name = identifier.value
             assert isinstance(variable_name, str), "Expected variable name"
 
-            return Op(variable_name, OpKind.BIND_VARIABLE, identifier.location)
+            return Op(variable_name, OpKind.ASSIGN_VARIABLE, identifier.location)
+        case Operator.ASSIGN_DECREMENT:
+            next_token = cursor.pop()
+            if not next_token:
+                raise SyntaxError("Expected variable name but got nothing")
+
+            identifier = token_to_op(next_token, cursor, function_name)
+            if not identifier or identifier.kind != OpKind.IDENTIFIER:
+                raise SyntaxError(f"Expected identifier but got `{next_token.kind}`")  # type: ignore
+            variable_name = identifier.value
+            assert isinstance(variable_name, str), "Expected variable name"
+
+            return Op(variable_name, OpKind.ASSIGN_DECREMENT, token.location)
+        case Operator.ASSIGN_INCREMENT:
+            next_token = cursor.pop()
+            if not next_token:
+                raise SyntaxError("Expected variable name but got nothing")
+
+            identifier = token_to_op(next_token, cursor, function_name)
+            if not identifier or identifier.kind != OpKind.IDENTIFIER:
+                raise SyntaxError(f"Expected identifier but got `{next_token.kind}`")  # type: ignore
+            variable_name = identifier.value
+            assert isinstance(variable_name, str), "Expected variable name"
+
+            return Op(variable_name, OpKind.ASSIGN_INCREMENT, identifier.location)
         case Operator.EQ:
             return Op(operator, OpKind.EQ, token.location)
         case Operator.GE:
@@ -301,7 +325,7 @@ def get_op_operator(token: Token, cursor: Cursor[Token], function_name: str) -> 
         case Operator.LT:
             return Op(operator, OpKind.LT, token.location)
         case Operator.MINUS:
-            return Op(operator, OpKind.DEC, token.location)
+            return Op(operator, OpKind.SUB, token.location)
         case Operator.NE:
             return Op(operator, OpKind.NE, token.location)
         case Operator.PLUS:

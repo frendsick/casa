@@ -33,7 +33,7 @@ class Compiler:
 
     def compile(self) -> Bytecode:
         assert len(InstructionKind) == 25, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 27, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 29, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
         bytecode = []
@@ -41,7 +41,26 @@ class Compiler:
             match op.kind:
                 case OpKind.ADD:
                     bytecode.append(Instruction(InstructionKind.ADD))
-                case OpKind.BIND_VARIABLE:
+                case OpKind.ASSIGN_DECREMENT:
+                    variable_name = op.value
+                    assert isinstance(variable_name, str), "Valid variable name"
+                    assert variable_name in self.locals, "Variable is defined"
+
+                    index = self.locals.index(variable_name)
+                    bytecode.append(Instruction(InstructionKind.LOCAL_GET, arguments=[index]))
+                    bytecode.append(Instruction(InstructionKind.SWAP))
+                    bytecode.append(Instruction(InstructionKind.SUB))
+                    bytecode.append(Instruction(InstructionKind.LOCAL_SET, arguments=[index]))
+                case OpKind.ASSIGN_INCREMENT:
+                    variable_name = op.value
+                    assert isinstance(variable_name, str), "Valid variable name"
+                    assert variable_name in self.locals, "Variable is defined"
+
+                    index = self.locals.index(variable_name)
+                    bytecode.append(Instruction(InstructionKind.LOCAL_GET, arguments=[index]))
+                    bytecode.append(Instruction(InstructionKind.ADD))
+                    bytecode.append(Instruction(InstructionKind.LOCAL_SET, arguments=[index]))
+                case OpKind.ASSIGN_VARIABLE:
                     variable_name = op.value
                     assert isinstance(variable_name, str), "Valid variable name"
 
@@ -62,8 +81,8 @@ class Compiler:
                     bytecode.append(
                         Instruction(InstructionKind.CALL_FN, arguments=[function_name])
                     )
-                case OpKind.DEC:
-                    bytecode.append(Instruction(InstructionKind.DEC))
+                case OpKind.SUB:
+                    bytecode.append(Instruction(InstructionKind.SUB))
                 case OpKind.DROP:
                     bytecode.append(Instruction(InstructionKind.DROP))
                 case OpKind.DUP:

@@ -57,12 +57,16 @@ def get_signature_from_op(
     stack: list[Type],
     function: Function | None = None,
 ) -> Signature:
-    assert len(OpKind) == 27, "Exhaustive handling for `OpKind`"
+    assert len(OpKind) == 29, "Exhaustive handling for `OpKind`"
 
     match op.kind:
-        case OpKind.ADD | OpKind.DEC:
+        case OpKind.ADD | OpKind.SUB:
             return Signature(parameters=["int", "int"], return_types=["int"])
-        case OpKind.BIND_VARIABLE:
+        case OpKind.ASSIGN_DECREMENT:
+            return Signature(parameters=["int"], return_types=[])
+        case OpKind.ASSIGN_INCREMENT:
+            return Signature(parameters=["int"], return_types=[])
+        case OpKind.ASSIGN_VARIABLE:
             variable_name = op.value
             assert isinstance(variable_name, str), "Expected variable name"
             assert function, "Variables are not supported within the global scope"

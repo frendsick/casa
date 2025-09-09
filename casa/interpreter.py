@@ -47,7 +47,7 @@ def interpret_bytecode(bytecode: Bytecode, stack: list[int] | None = None):
                 assert isinstance(function.bytecode, list), "Function is compiled"
 
                 interpret_bytecode(function.bytecode, stack)
-            case InstructionKind.DEC:
+            case InstructionKind.SUB:
                 a = stack_pop(stack)
                 b = stack_pop(stack)
                 stack_push(stack, b - a)
@@ -79,7 +79,7 @@ def interpret_bytecode(bytecode: Bytecode, stack: list[int] | None = None):
                 b = stack_pop(stack)
                 stack_push(stack, int(a > b))
             case InstructionKind.JUMP:
-                label: LabelId = instruction.arguments[0]
+                label = instruction.arguments[0]
                 pc = labels[label]
             case InstructionKind.JUMP_IF:
                 condition = stack_pop(stack)
