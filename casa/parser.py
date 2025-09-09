@@ -12,11 +12,8 @@ from casa.common import (
     Op,
     Operator,
     OpKind,
-    Parameter,
-    Signature,
     Token,
     TokenKind,
-    Type,
     Variable,
 )
 
@@ -107,7 +104,11 @@ def token_to_op(
             assert_never(token.kind)
 
 
-def get_op_delimiter(token: Token, cursor: Cursor[Token], function_name: str) -> Op | None:
+def get_op_delimiter(
+    token: Token,
+    cursor: Cursor[Token],
+    function_name: str,
+) -> Op | None:
     assert len(Delimiter) == 6, "Exhaustive handling for `Delimiter`"
 
     delimiter = Delimiter.from_str(token.value)
@@ -241,65 +242,9 @@ def parse_function(cursor: Cursor[Token]) -> Function:
     if not name:
         raise SyntaxError("Expected function name but got nothing")
 
-    signature = parse_signature(cursor)
-
-    ops: list[Op] = []
-    variables: list[Variable] = []
-    for param in signature.parameters:
-        if param.name:
-            variables.append(Variable(param.name, param.typ))
-            ops.append(Op(param.name, OpKind.ASSIGN_VARIABLE, name.location))
-
-    ops += parse_block_ops(cursor, name.value)
-    function = Function(name.value, ops, name.location, signature, variables=variables)
+    ops = parse_block_ops(cursor, name.value)
+    function = Function(name.value, ops, name.location)
     return function
-
-
-def parse_signature(cursor: Cursor[Token]) -> Signature:
-    parameters = parse_parameters(cursor)
-    return_types = []
-
-    next_token = cursor.peek()
-    if not next_token:
-        raise SyntaxError("Expected `->` or `{` but got nothing")
-
-    if next_token.value == "->":
-        cursor.position += 1
-        return_types = parse_return_types(cursor)
-
-    return Signature(parameters, return_types)
-
-
-def parse_parameters(cursor: Cursor[Token]) -> list[Parameter]:
-    parameters: list[Parameter] = []
-    while name_or_type := cursor.pop():
-        if name_or_type.value in ("->", "{"):
-            cursor.position -= 1
-            return parameters
-        if name_or_type.kind != TokenKind.IDENTIFIER:
-            raise SyntaxError(f"Expected identifier but got `{name_or_type.kind}`")
-
-        # Parse typed parameter
-        next_token = cursor.peek()
-        if next_token and next_token.value == ":":
-            cursor.position += 1
-            typ = cursor.pop()
-            if not typ or typ.kind != TokenKind.IDENTIFIER:
-                raise SyntaxError(f"Expected parameter type identifier but got `{typ.kind}`")
-            parameters.append(Parameter(typ.value, name_or_type.value))
-        else:
-            parameters.append(Parameter(name_or_type.value))
-    raise SyntaxError("Expected `->` or block but got nothing")
-
-
-def parse_return_types(cursor: Cursor[Token]) -> list[Type]:
-    return_types: list[Type] = []
-    while return_type := cursor.pop():
-        if return_type.value == "{":
-            cursor.position -= 1
-            return return_types
-        return_types.append(return_type.value)
-    raise SyntaxError("Expected block but got nothing")
 
 
 def get_op_literal(token: Token) -> Op:

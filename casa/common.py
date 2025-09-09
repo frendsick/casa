@@ -121,12 +121,10 @@ class Operator(Enum):
             "*": cls.MULTIPLICATION,
             "/": cls.DIVISION,
             "%": cls.MODULO,
-
             # Boolean
             "&&": cls.AND,
             "||": cls.OR,
             "!": cls.NOT,
-
             # Comparison
             "==": cls.EQ,
             ">=": cls.GE,
@@ -134,7 +132,6 @@ class Operator(Enum):
             "<=": cls.LE,
             "<": cls.LT,
             "!=": cls.NE,
-
             # Assignment
             "=": cls.ASSIGN,
             "-=": cls.ASSIGN_DECREMENT,
@@ -428,35 +425,14 @@ class Inst:
                     )
 
 
-@dataclass(frozen=True, slots=True)
-class GenericType:
-    name: str
-
-
 Bytecode = list[Inst]
 LabelId = int
-Type = str | GenericType
-
-
-def type_repr(typ: Type) -> str:
-    return f"<{typ.name}>" if isinstance(typ, GenericType) else typ
-
-
-@dataclass
-class Parameter:
-    typ: Type
-    name: str | None = None
-
-    def __repr__(self) -> str:
-        typ = type_repr(self.typ)
-        if self.name:
-            return f"{self.name}:{typ}"
-        return typ
+Type = str
 
 
 @dataclass
 class Signature:
-    parameters: list[Parameter]
+    parameters: list[Type]
     return_types: list[Type]
 
     @classmethod
@@ -467,10 +443,7 @@ class Signature:
 
             types: list[Type] = []
             for token in part.split():
-                if token.startswith("<") and token.endswith(">"):
-                    types.append(GenericType(token[1:-1]))
-                else:
-                    types.append(token)
+                types.append(token)
             return types
 
         if "->" not in repr:
@@ -479,16 +452,11 @@ class Signature:
         param_part, return_part = repr.split("->", 1)
         parameters = parse_type_list(param_part)
         return_types = parse_type_list(return_part)
-        return cls.from_types(parameters, return_types)
-
-    @classmethod
-    def from_types(cls, parameter_types: list[Type], return_types: list[Type]) -> Self:
-        parameters = [Parameter(t) for t in parameter_types]
         return cls(parameters, return_types)
 
     def __repr__(self):
-        parameters = " ".join(map(repr, self.parameters)) or "None"
-        return_types = " ".join(type_repr(t) for t in self.return_types) or "None"
+        parameters = " ".join(t for t in self.parameters) or "None"
+        return_types = " ".join(t for t in self.return_types) or "None"
         return f"{parameters} -> {return_types}"
 
 
@@ -518,7 +486,6 @@ class Function:
     # Bytecode will be compiled if the function is used
     bytecode: Bytecode | None = None
     is_used: bool = False
-    is_typechecked: bool = False
     variables: list[Variable] = field(default_factory=list)
 
 
