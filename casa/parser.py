@@ -280,8 +280,11 @@ def parse_return_types(cursor: Cursor[Token]) -> list[Type]:
 
 
 def get_op_literal(token: Token) -> Op:
-    if token.value.isdigit():
-        return Op(int(token.value), OpKind.PUSH_INT, token.location)
+    value = token.value
+    if value.isdigit():
+        return Op(int(value), OpKind.PUSH_INT, token.location)
+    if value.startswith('"') and value.endswith('"'):
+        return Op(value[1:-1], OpKind.PUSH_STR, token.location)
     raise ValueError(f"Token `{token.value}` is not a literal")
 
 

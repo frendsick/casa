@@ -34,6 +34,9 @@ class Lexer:
     def current_location(self, span_length: int) -> Location:
         return Location(self.file, Span(self.cursor.position, span_length))
 
+    def expect_char(self, char: str) -> bool:
+        return char == self.cursor.pop()
+
     def peek_word(self) -> str | None:
         if self.cursor.is_finished():
             return None
@@ -47,6 +50,9 @@ class Lexer:
             word.append(char)
 
         return "".join(word) if word else None
+
+    def startswith(self, prefix: str) -> bool:
+        return self.rest().startswith(prefix)
 
     def skip_whitespace(self):
         rest = self.rest()
@@ -84,6 +90,12 @@ class Lexer:
         return token
 
     def lex_multichar_token(self) -> Token | None:
+        original_position = self.cursor.position
+        if self.startswith('"'):
+            string_literal = self.parse_string_literal()
+            loc = Location(self.file, Span(original_position, len(string_literal)))
+            return Token(string_literal, TokenKind.LITERAL, loc)
+
         value = self.peek_word()
         if not value:
             return None
@@ -99,6 +111,20 @@ class Lexer:
         if Operator.from_str(value):
             return Token(value, TokenKind.OPERATOR, location)
         return Token(value, TokenKind.IDENTIFIER, location)
+
+    def parse_string_literal(self) -> str:
+        if not self.expect_char('"'):
+            raise SyntaxError('String literal starts with `"`')
+
+        string_literal = '"'
+        while char := self.cursor.pop():
+            string_literal += char
+            if char == '"':
+                break
+        else:
+            raise SyntaxError('Expected `"` but got nothing')
+
+        return string_literal
 
 
 def lex_file(file: Path) -> list[Token]:

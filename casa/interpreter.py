@@ -16,12 +16,13 @@ def interpret_bytecode(
     stack: list[int] | None = None,
     globals: list[int] | None = None,
 ):
-    assert len(InstKind) == 31, "Exhaustive handling for `InstructionKind`"
+    assert len(InstKind) == 32, "Exhaustive handling for `InstructionKind`"
 
     # Containers for emulating a computer
     heap: list[int] = []
-    labels: dict[LabelId, InstrAddr] = {}
     locals: list[int] = []
+    labels: dict[LabelId, InstrAddr] = {}
+    strings: dict[LabelId, str] = {}
     if not stack:
         stack = []
     if not globals:
@@ -188,9 +189,20 @@ def interpret_bytecode(
                 stack_push(stack, b)
             case InstKind.PRINT:
                 a = stack_pop(stack)
-                print(a)
+                if string := strings.get(a):
+                    print(string)
+                else:
+                    print(a)
             case InstKind.PUSH:
                 stack_push(stack, instruction.arguments[0])
+            case InstKind.PUSH_STR:
+                assert len(instruction.arguments) == 1, "String literal"
+                string = instruction.arguments[0]
+                assert isinstance(string, str), "Valid string literal"
+
+                label = id(string)
+                strings[label] = string
+                stack_push(stack, label)
             case InstKind.ROT:
                 a = stack_pop(stack)
                 b = stack_pop(stack)

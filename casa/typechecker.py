@@ -59,7 +59,7 @@ def get_signature_from_op(
     stack: list[Type],
     function: Function | None = None,
 ) -> Signature:
-    assert len(OpKind) == 37, "Exhaustive handling for `OpKind`"
+    assert len(OpKind) == 38, "Exhaustive handling for `OpKind`"
 
     match op.kind:
         case OpKind.ADD | OpKind.DIV | OpKind.MOD | OpKind.MUL | OpKind.SUB:
@@ -165,6 +165,8 @@ def get_signature_from_op(
             return Signature(parameters=[], return_types=[f"fn[{str(signature)}]"])
         case OpKind.PUSH_INT:
             return Signature(parameters=[], return_types=["int"])
+        case OpKind.PUSH_STR:
+            return Signature(parameters=[], return_types=["str"])
         case OpKind.PUSH_VARIABLE:
             variable_name = op.value
             assert isinstance(op.value, str), "Expected variable name"
