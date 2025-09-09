@@ -1,7 +1,7 @@
 from typing import assert_never
 
 from casa.common import (
-    GLOBAL_IDENTIFIERS,
+    GLOBAL_FUNCTIONS,
     Bytecode,
     Function,
     InstKind,
@@ -11,8 +11,12 @@ from casa.common import (
 InstrAddr = int
 
 
-def interpret_bytecode(bytecode: Bytecode, stack: list[int] | None = None):
-    assert len(InstKind) == 25, "Exhaustive handling for `InstructionKind`"
+def interpret_bytecode(
+    bytecode: Bytecode,
+    stack: list[int] | None = None,
+    globals: list[int] | None = None,
+):
+    assert len(InstKind) == 28, "Exhaustive handling for `InstructionKind`"
 
     # Containers for emulating a computer
     heap: list[int] = []
@@ -20,6 +24,8 @@ def interpret_bytecode(bytecode: Bytecode, stack: list[int] | None = None):
     locals: list[int] = []
     if not stack:
         stack = []
+    if not globals:
+        globals = []
 
     # Set up the program
     for instr_addr, instruction in enumerate(bytecode):
@@ -41,16 +47,12 @@ def interpret_bytecode(bytecode: Bytecode, stack: list[int] | None = None):
             case InstKind.CALL_FN:
                 assert len(instruction.arguments) == 1, "Function name"
                 function_name = instruction.arguments[0]
-                function = GLOBAL_IDENTIFIERS.get(function_name)
+                function = GLOBAL_FUNCTIONS.get(function_name)
 
                 assert isinstance(function, Function), "Expected function"
                 assert isinstance(function.bytecode, list), "Function is compiled"
 
-                interpret_bytecode(function.bytecode, stack)
-            case InstKind.SUB:
-                a = stack_pop(stack)
-                b = stack_pop(stack)
-                stack_push(stack, b - a)
+                interpret_bytecode(function.bytecode, stack, globals)
             case InstKind.DROP:
                 stack_pop(stack)
             case InstKind.DUP:
@@ -63,17 +65,38 @@ def interpret_bytecode(bytecode: Bytecode, stack: list[int] | None = None):
                 stack_push(stack, int(a == b))
             case InstKind.EXEC_FN:
                 fn_ptr = stack_pop(stack)
-                assert fn_ptr < len(GLOBAL_IDENTIFIERS), "Valid function pointer"
+                assert fn_ptr < len(GLOBAL_FUNCTIONS), "Valid function pointer"
 
-                function = list(GLOBAL_IDENTIFIERS.values())[fn_ptr]
-                assert isinstance(function, Function), "Expected function"
+                function = list(GLOBAL_FUNCTIONS.values())[fn_ptr]
                 assert isinstance(function.bytecode, list), "Function is compiled"
 
-                interpret_bytecode(function.bytecode, stack)
+                interpret_bytecode(function.bytecode, stack, globals)
             case InstKind.GE:
                 a = stack_pop(stack)
                 b = stack_pop(stack)
                 stack_push(stack, int(a >= b))
+            case InstKind.GLOBAL_GET:
+                assert len(instruction.arguments) == 1, "Global index"
+                index = instruction.arguments[0]
+                assert isinstance(index, int), "Valid index"
+                assert index < len(globals), "Global should be set"
+
+                value = globals[index]
+                stack_push(stack, value)
+            case InstKind.GLOBAL_SET:
+                assert len(instruction.arguments) == 1, "Global index"
+                index = instruction.arguments[0]
+                assert isinstance(index, int), "Valid index"
+
+                a = stack_pop(stack)
+                assert index < len(globals), "Valid global index"
+
+                globals[index] = a
+            case InstKind.GLOBALS_INIT:
+                assert len(instruction.arguments) == 1, "Globals count"
+                globals_count = instruction.arguments[0]
+                assert isinstance(globals_count, int), "Valid globals count"
+                globals = [0] * globals_count
             case InstKind.GT:
                 a = stack_pop(stack)
                 b = stack_pop(stack)
@@ -166,6 +189,10 @@ def interpret_bytecode(bytecode: Bytecode, stack: list[int] | None = None):
                     )
                 value = stack_pop(stack)
                 heap[ptr] = value
+            case InstKind.SUB:
+                a = stack_pop(stack)
+                b = stack_pop(stack)
+                stack_push(stack, b - a)
             case InstKind.SWAP:
                 a = stack_pop(stack)
                 b = stack_pop(stack)

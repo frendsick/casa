@@ -147,7 +147,6 @@ class OpKind(Enum):
     # Literals
     PUSH_INT = auto()
     PUSH_LIST = auto()
-    PUSH_VARIABLE = auto()
 
     # Arithmetic
     ADD = auto()
@@ -175,6 +174,7 @@ class OpKind(Enum):
     ASSIGN_DECREMENT = auto()
     ASSIGN_INCREMENT = auto()
     ASSIGN_VARIABLE = auto()
+    PUSH_VARIABLE = auto()
 
     # Identifiers should be resolved by the parser
     IDENTIFIER = auto()
@@ -287,6 +287,11 @@ class InstKind(Enum):
     LOCAL_GET = auto()
     LOCAL_SET = auto()
 
+    # Globals
+    GLOBALS_INIT = auto()
+    GLOBAL_GET = auto()
+    GLOBAL_SET = auto()
+
 
 @dataclass
 class Inst:
@@ -294,7 +299,7 @@ class Inst:
     arguments: list = field(default_factory=list)
 
     def __post_init__(self):
-        assert len(InstKind) == 25, "Exhaustive handling for `InstructionKind`"
+        assert len(InstKind) == 28, "Exhaustive handling for `InstructionKind`"
 
         match self.kind:
             # Should not have a parameter
@@ -324,7 +329,10 @@ class Inst:
                     )
             # One parameter of type `int`
             case (
-                InstKind.JUMP
+                InstKind.GLOBAL_GET
+                | InstKind.GLOBAL_SET
+                | InstKind.GLOBALS_INIT
+                | InstKind.JUMP
                 | InstKind.JUMP_IF
                 | InstKind.LABEL
                 | InstKind.LOCAL_GET
@@ -421,7 +429,8 @@ class Function:
     variables: list[Variable] = field(default_factory=list)
 
 
-GLOBAL_IDENTIFIERS: OrderedDict[str, Function | Variable] = OrderedDict()
+GLOBAL_FUNCTIONS: OrderedDict[str, Function] = OrderedDict()
+GLOBAL_VARIABLES: OrderedDict[str, Variable] = OrderedDict()
 GLOBAL_SCOPE_LABEL = "_start"
 
 

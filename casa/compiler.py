@@ -4,7 +4,8 @@ import random
 from typing import assert_never
 
 from casa.common import (
-    GLOBAL_IDENTIFIERS,
+    GLOBAL_FUNCTIONS,
+    GLOBAL_VARIABLES,
     Bytecode,
     Cursor,
     Function,
@@ -16,9 +17,15 @@ from casa.common import (
 )
 
 
-def compile_bytecode(ops: list[Op]) -> Bytecode:
+def compile_bytecode(ops: list[Op], initialize_globals: bool = False) -> Bytecode:
+    bytecode: Bytecode = []
     compiler = Compiler(ops)
-    return compiler.compile()
+
+    if initialize_globals and (globals_count := len(GLOBAL_VARIABLES)):
+        bytecode.append(Inst(InstKind.GLOBALS_INIT, arguments=[globals_count]))
+
+    bytecode += compiler.compile()
+    return bytecode
 
 
 def op_to_label(op: Op) -> LabelId:
@@ -32,7 +39,7 @@ class Compiler:
     locals: list[str] = field(default_factory=list)
 
     def compile(self) -> Bytecode:
-        assert len(InstKind) == 25, "Exhaustive handling for `InstructionKind"
+        assert len(InstKind) == 28, "Exhaustive handling for `InstructionKind"
         assert len(OpKind) == 29, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
@@ -44,38 +51,72 @@ class Compiler:
                 case OpKind.ASSIGN_DECREMENT:
                     variable_name = op.value
                     assert isinstance(variable_name, str), "Valid variable name"
-                    assert variable_name in self.locals, "Variable is defined"
 
-                    index = self.locals.index(variable_name)
-                    bytecode.append(Inst(InstKind.LOCAL_GET, arguments=[index]))
-                    bytecode.append(Inst(InstKind.SWAP))
-                    bytecode.append(Inst(InstKind.SUB))
-                    bytecode.append(Inst(InstKind.LOCAL_SET, arguments=[index]))
+                    if variable_name in GLOBAL_VARIABLES:
+                        index = list(GLOBAL_VARIABLES.keys()).index(variable_name)
+                        bytecode.append(Inst(InstKind.GLOBAL_GET, arguments=[index]))
+                        bytecode.append(Inst(InstKind.SWAP))
+                        bytecode.append(Inst(InstKind.ADD))
+                        bytecode.append(Inst(InstKind.GLOBAL_SET, arguments=[index]))
+                    elif variable_name in self.locals:
+                        index = self.locals.index(variable_name)
+                        bytecode.append(Inst(InstKind.LOCAL_GET, arguments=[index]))
+                        bytecode.append(Inst(InstKind.SWAP))
+                        bytecode.append(Inst(InstKind.ADD))
+                        bytecode.append(Inst(InstKind.LOCAL_SET, arguments=[index]))
+                    else:
+                        raise AssertionError(
+                            f"Variable `{variable_name}` is not defined"
+                        )
                 case OpKind.ASSIGN_INCREMENT:
                     variable_name = op.value
                     assert isinstance(variable_name, str), "Valid variable name"
-                    assert variable_name in self.locals, "Variable is defined"
 
-                    index = self.locals.index(variable_name)
-                    bytecode.append(Inst(InstKind.LOCAL_GET, arguments=[index]))
-                    bytecode.append(Inst(InstKind.ADD))
-                    bytecode.append(Inst(InstKind.LOCAL_SET, arguments=[index]))
+                    if variable_name in GLOBAL_VARIABLES:
+                        index = list(GLOBAL_VARIABLES.keys()).index(variable_name)
+                        bytecode.append(Inst(InstKind.GLOBAL_GET, arguments=[index]))
+                        bytecode.append(Inst(InstKind.ADD))
+                        bytecode.append(Inst(InstKind.GLOBAL_SET, arguments=[index]))
+                    elif variable_name in self.locals:
+                        index = self.locals.index(variable_name)
+                        bytecode.append(Inst(InstKind.LOCAL_GET, arguments=[index]))
+                        bytecode.append(Inst(InstKind.ADD))
+                        bytecode.append(Inst(InstKind.LOCAL_SET, arguments=[index]))
+                    else:
+                        raise AssertionError(
+                            f"Variable `{variable_name}` is not defined"
+                        )
                 case OpKind.ASSIGN_VARIABLE:
                     variable_name = op.value
                     assert isinstance(variable_name, str), "Valid variable name"
 
+                    # Global variable
+                    if variable_name in GLOBAL_VARIABLES:
+                        index = list(GLOBAL_VARIABLES.keys()).index(variable_name)
+                        bytecode.append(Inst(InstKind.GLOBAL_SET, arguments=[index]))
+                        continue
+
+                    # Local variable
                     if variable_name not in self.locals:
                         self.locals.append(variable_name)
                     index = self.locals.index(variable_name)
                     bytecode.append(Inst(InstKind.LOCAL_SET, arguments=[index]))
                 case OpKind.CALL_FN:
                     function_name = op.value
-                    function = GLOBAL_IDENTIFIERS.get(function_name)
+                    function = GLOBAL_FUNCTIONS.get(function_name)
                     assert isinstance(function, Function), "Expected function"
 
                     # Compile the function if it is not compiled already
                     if function.bytecode is None:
+                        # Check if the function shadowed a global variable
+                        for var in function.variables:
+                            if var in GLOBAL_VARIABLES:
+                                raise NameError(
+                                    f"Function `{function.name}` assigns a global variable `{var.name}` before it is initialized within the global scope"
+                                )
+
                         function.bytecode = compile_bytecode(function.ops)
+
                     bytecode.append(Inst(InstKind.CALL_FN, arguments=[function_name]))
                 case OpKind.SUB:
                     bytecode.append(Inst(InstKind.SUB))
@@ -110,11 +151,8 @@ class Compiler:
                 case OpKind.PUSH_INT:
                     bytecode.append(Inst(InstKind.PUSH, arguments=[op.value]))
                 case OpKind.PUSH_FN:
-                    for i, (name, function) in enumerate(GLOBAL_IDENTIFIERS.items()):
+                    for i, (name, function) in enumerate(GLOBAL_FUNCTIONS.items()):
                         if name == op.value:
-                            assert isinstance(
-                                function, Function
-                            ), "Expected lambda function"
                             function.bytecode = compile_bytecode(function.ops)
                             bytecode.append(Inst(InstKind.PUSH, arguments=[i]))
                     raise NameError(f"Function `{op.value}` is not defined")
@@ -137,11 +175,19 @@ class Compiler:
                 case OpKind.PUSH_VARIABLE:
                     variable_name = op.value
                     assert isinstance(variable_name, str), "Valid variable name"
-                    if variable_name not in self.locals:
-                        raise NameError(f"Variable `{variable_name}` does not exist")
 
-                    index = self.locals.index(variable_name)
-                    bytecode.append(Inst(InstKind.LOCAL_GET, arguments=[index]))
+                    # Global variable
+                    if variable_name in GLOBAL_VARIABLES:
+                        index = list(GLOBAL_VARIABLES.keys()).index(variable_name)
+                        bytecode.append(Inst(InstKind.GLOBAL_GET, arguments=[index]))
+                        continue
+
+                    # Local variable
+                    if variable_name in self.locals:
+                        index = self.locals.index(variable_name)
+                        bytecode.append(Inst(InstKind.LOCAL_GET, arguments=[index]))
+
+                    raise NameError(f"Local variable `{variable_name}` does not exist")
                 case OpKind.ROT:
                     bytecode.append(Inst(InstKind.ROT))
                 case OpKind.STORE:

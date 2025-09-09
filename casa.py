@@ -26,7 +26,7 @@ def main():
     type_check_ops(ops)
 
     print("Compiling bytecode")
-    bytecode = compile_bytecode(ops)
+    bytecode = compile_bytecode(ops, initialize_globals=True)
 
     print("Interpreting bytecode")
     interpret_bytecode(bytecode)
