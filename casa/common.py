@@ -245,7 +245,7 @@ class Op:
                 assert_never(self.kind)
 
 
-class InstructionKind(Enum):
+class InstKind(Enum):
     # Stack
     DROP = auto()
     DUP = auto()
@@ -289,34 +289,34 @@ class InstructionKind(Enum):
 
 
 @dataclass
-class Instruction:
-    kind: InstructionKind
+class Inst:
+    kind: InstKind
     arguments: list = field(default_factory=list)
 
     def __post_init__(self):
-        assert len(InstructionKind) == 25, "Exhaustive handling for `InstructionKind`"
+        assert len(InstKind) == 25, "Exhaustive handling for `InstructionKind`"
 
         match self.kind:
             # Should not have a parameter
             case (
-                InstructionKind.ADD
-                | InstructionKind.SUB
-                | InstructionKind.DROP
-                | InstructionKind.DUP
-                | InstructionKind.EQ
-                | InstructionKind.EXEC_FN
-                | InstructionKind.GE
-                | InstructionKind.GT
-                | InstructionKind.LE
-                | InstructionKind.LIST_NEW
-                | InstructionKind.LOAD
-                | InstructionKind.LT
-                | InstructionKind.NE
-                | InstructionKind.OVER
-                | InstructionKind.PRINT
-                | InstructionKind.ROT
-                | InstructionKind.STORE
-                | InstructionKind.SWAP
+                InstKind.ADD
+                | InstKind.SUB
+                | InstKind.DROP
+                | InstKind.DUP
+                | InstKind.EQ
+                | InstKind.EXEC_FN
+                | InstKind.GE
+                | InstKind.GT
+                | InstKind.LE
+                | InstKind.LIST_NEW
+                | InstKind.LOAD
+                | InstKind.LT
+                | InstKind.NE
+                | InstKind.OVER
+                | InstKind.PRINT
+                | InstKind.ROT
+                | InstKind.STORE
+                | InstKind.SWAP
             ):
                 if self.arguments:
                     raise TypeError(
@@ -324,19 +324,19 @@ class Instruction:
                     )
             # One parameter of type `int`
             case (
-                InstructionKind.JUMP
-                | InstructionKind.JUMP_IF
-                | InstructionKind.LABEL
-                | InstructionKind.LOCAL_GET
-                | InstructionKind.LOCAL_SET
-                | InstructionKind.PUSH
+                InstKind.JUMP
+                | InstKind.JUMP_IF
+                | InstKind.LABEL
+                | InstKind.LOCAL_GET
+                | InstKind.LOCAL_SET
+                | InstKind.PUSH
             ):
                 if len(self.arguments) != 1 or not isinstance(self.arguments[0], int):
                     raise TypeError(
                         f"`{self.kind}` requires one parameter of type `int`\nArguments: {self.arguments}"
                     )
             # One parameter of type `str`
-            case InstructionKind.CALL_FN:
+            case InstKind.CALL_FN:
                 if len(self.arguments) != 1 or not isinstance(self.arguments[0], str):
                     raise TypeError(
                         f"`{self.kind}` requires one parameter of type `str`\nArguments: {self.arguments}"
@@ -348,7 +348,7 @@ class GenericType:
     name: str
 
 
-Bytecode = list[Instruction]
+Bytecode = list[Inst]
 LabelId = int
 Type = str | GenericType
 
