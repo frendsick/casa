@@ -40,7 +40,7 @@ class Compiler:
 
     def compile(self) -> Bytecode:
         assert len(InstKind) == 31, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 36, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 37, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
         bytecode = []
@@ -141,18 +141,52 @@ class Compiler:
                         op=op,
                         start_kind=OpKind.IF_START,
                         end_kind=OpKind.IF_END,
-                        target_kinds=[OpKind.IF_ELSE, OpKind.IF_END]
+                        target_kinds=[OpKind.IF_ELIF, OpKind.IF_ELSE, OpKind.IF_END]
                     )
+                    if not end_label:
+                        raise SyntaxError("`if` without matching `fi`")
 
                     bytecode.append(Inst(InstKind.JUMP_NE, arguments=[end_label]))
-                case OpKind.IF_ELSE:
-                    # Else must be inside if block
-                    self.find_matching_label(
+                case OpKind.IF_ELIF:
+                    # Elif must be inside if block
+                    if not self.find_matching_label(
                         op=op,
                         start_kind=OpKind.IF_START,
                         end_kind=OpKind.IF_END,
                         reverse=True,
+                    ):
+                        raise SyntaxError(f"`elif` without parent `if`")
+
+                    # Elif should not be after an else
+                    if self.find_matching_label(
+                        op=op,
+                        start_kind=OpKind.IF_START,
+                        end_kind=OpKind.IF_END,
+                        target_kinds=[OpKind.IF_ELSE],
+                        reverse=True,
+                    ):
+                        raise SyntaxError(f"`elif` after `else`")
+
+                    elif_label = op_to_label(op)
+                    end_label = self.find_matching_label(
+                        op=op,
+                        start_kind=OpKind.IF_START,
+                        end_kind=OpKind.IF_END,
                     )
+                    if not end_label:
+                        raise SyntaxError("`elif` without matching `fi`")
+
+                    bytecode.append(Inst(InstKind.JUMP, arguments=[end_label]))
+                    bytecode.append(Inst(InstKind.LABEL, arguments=[elif_label]))
+                case OpKind.IF_ELSE:
+                    # Else must be inside if block
+                    if not self.find_matching_label(
+                        op=op,
+                        start_kind=OpKind.IF_START,
+                        end_kind=OpKind.IF_END,
+                        reverse=True,
+                    ):
+                        raise SyntaxError(f"`else` without parent `if`")
 
                     else_label = op_to_label(op)
                     end_label = self.find_matching_label(
@@ -160,6 +194,8 @@ class Compiler:
                         start_kind=OpKind.IF_START,
                         end_kind=OpKind.IF_END,
                     )
+                    if not end_label:
+                        raise SyntaxError("`else` without matching `fi`")
 
                     bytecode.append(Inst(InstKind.JUMP, arguments=[end_label]))
                     bytecode.append(Inst(InstKind.LABEL, arguments=[else_label]))
@@ -233,27 +269,36 @@ class Compiler:
                 case OpKind.SWAP:
                     bytecode.append(Inst(InstKind.SWAP))
                 case OpKind.WHILE_CONDITION:
-                    # Find matching `WHILE_END`
+                    if not self.find_matching_label(
+                        op=op,
+                        start_kind=OpKind.WHILE_START,
+                        end_kind=OpKind.WHILE_END,
+                        reverse=True,
+                    ):
+                        raise SyntaxError("`do` without parent `while`")
+
                     end_label = self.find_matching_label(
                         op=op,
                         start_kind=OpKind.WHILE_START,
                         end_kind=OpKind.WHILE_END,
                     )
+                    if not end_label:
+                        raise SyntaxError("`do` without matching `done`")
+
                     bytecode.append(Inst(InstKind.JUMP_NE, arguments=[end_label]))
                 case OpKind.WHILE_END:
-                    # Add label
-                    label = op_to_label(op)
-                    self.add_label(label)
-
-                    # Find matching `WHILE_START`
+                    while_label = op_to_label(op)
                     start_label = self.find_matching_label(
                         op=op,
                         start_kind=OpKind.WHILE_START,
                         end_kind=OpKind.WHILE_END,
                         reverse=True,
                     )
+                    if not start_label:
+                        raise SyntaxError("`done` without parent `while`")
+
                     bytecode.append(Inst(InstKind.JUMP, arguments=[start_label]))
-                    bytecode.append(Inst(InstKind.LABEL, arguments=[label]))
+                    bytecode.append(Inst(InstKind.LABEL, arguments=[while_label]))
                 case OpKind.WHILE_START:
                     label = op_to_label(op)
                     bytecode.append(Inst(InstKind.LABEL, arguments=[label]))
@@ -262,14 +307,6 @@ class Compiler:
 
         return bytecode
 
-    def add_label(self, label_id: LabelId | None) -> LabelId:
-        if not label_id:
-            label_id = random.getrandbits(128)
-
-        assert label_id not in self.labels, "Expected unique label"
-        self.labels.add(label_id)
-        return label_id
-
     def find_matching_label(
         self,
         op: Op,
@@ -277,7 +314,7 @@ class Compiler:
         end_kind: OpKind,
         target_kinds: list[OpKind] | None = None,
         reverse: bool = False,
-    ) -> LabelId:
+    ) -> LabelId | None:
         if not target_kinds:
             target_kinds = [start_kind] if reverse else [end_kind]
 
@@ -298,5 +335,4 @@ class Compiler:
             elif other_op.kind == end_kind:
                 depth -= direction
 
-
-        raise ValueError(f"Matching label was not found: {target_kinds}")
+        return None
