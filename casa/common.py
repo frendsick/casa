@@ -92,6 +92,11 @@ class Operator(Enum):
     DIVISION = auto()
     MODULO = auto()
 
+    # Boolean
+    AND = auto()
+    OR = auto()
+    NOT = auto()
+
     # Comparison
     EQ = auto()
     GE = auto()
@@ -114,6 +119,11 @@ class Operator(Enum):
             "*": cls.MULTIPLICATION,
             "/": cls.DIVISION,
             "%": cls.MODULO,
+
+            # Boolean
+            "&&": cls.AND,
+            "||": cls.OR,
+            "!": cls.NOT,
 
             # Comparison
             "==": cls.EQ,
@@ -174,6 +184,11 @@ class OpKind(Enum):
     DIV = auto()
     MOD = auto()
 
+    # Boolean
+    AND = auto()
+    OR = auto()
+    NOT = auto()
+
     # Comparison
     EQ = auto()
     GE = auto()
@@ -216,7 +231,7 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 38, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 41, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires `int`
@@ -270,6 +285,7 @@ class Op:
             # Requires `Operator`
             case (
                 OpKind.ADD
+                | OpKind.AND
                 | OpKind.DIV
                 | OpKind.MOD
                 | OpKind.MUL
@@ -280,6 +296,8 @@ class Op:
                 | OpKind.LE
                 | OpKind.LT
                 | OpKind.NE
+                | OpKind.NOT
+                | OpKind.OR
             ):
                 if not isinstance(self.value, Operator):
                     raise TypeError(f"`{self.kind}` requires value of type `Operator`")
@@ -311,6 +329,11 @@ class InstKind(Enum):
     MOD = auto()
     MUL = auto()
     SUB = auto()
+
+    # Boolean
+    AND = auto()
+    OR = auto()
+    NOT = auto()
 
     # Comparison
     EQ = auto()
@@ -345,12 +368,13 @@ class Inst:
     arguments: list = field(default_factory=list)
 
     def __post_init__(self):
-        assert len(InstKind) == 32, "Exhaustive handling for `InstructionKind`"
+        assert len(InstKind) == 35, "Exhaustive handling for `InstructionKind`"
 
         match self.kind:
             # Should not have a parameter
             case (
                 InstKind.ADD
+                | InstKind.AND
                 | InstKind.DIV
                 | InstKind.MOD
                 | InstKind.MUL
@@ -366,6 +390,8 @@ class Inst:
                 | InstKind.LOAD
                 | InstKind.LT
                 | InstKind.NE
+                | InstKind.NOT
+                | InstKind.OR
                 | InstKind.OVER
                 | InstKind.PRINT
                 | InstKind.ROT

@@ -37,8 +37,8 @@ class Compiler:
     locals: list[str] = field(default_factory=list)
 
     def compile(self) -> Bytecode:
-        assert len(InstKind) == 32, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 38, "Exhaustive handling for `OpKind`"
+        assert len(InstKind) == 35, "Exhaustive handling for `InstructionKind"
+        assert len(OpKind) == 41, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
         bytecode = []
@@ -46,6 +46,8 @@ class Compiler:
             match op.kind:
                 case OpKind.ADD:
                     bytecode.append(Inst(InstKind.ADD))
+                case OpKind.AND:
+                    bytecode.append(Inst(InstKind.AND))
                 case OpKind.ASSIGN_DECREMENT:
                     variable_name = op.value
                     assert isinstance(variable_name, str), "Valid variable name"
@@ -214,6 +216,10 @@ class Compiler:
                     bytecode.append(Inst(InstKind.MUL))
                 case OpKind.NE:
                     bytecode.append(Inst(InstKind.NE))
+                case OpKind.NOT:
+                    bytecode.append(Inst(InstKind.NOT))
+                case OpKind.OR:
+                    bytecode.append(Inst(InstKind.OR))
                 case OpKind.OVER:
                     bytecode.append(Inst(InstKind.OVER))
                 case OpKind.PRINT:

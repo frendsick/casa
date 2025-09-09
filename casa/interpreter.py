@@ -16,7 +16,7 @@ def interpret_bytecode(
     stack: list[int] | None = None,
     globals: list[int] | None = None,
 ):
-    assert len(InstKind) == 32, "Exhaustive handling for `InstructionKind`"
+    assert len(InstKind) == 35, "Exhaustive handling for `InstructionKind`"
 
     # Containers for emulating a computer
     heap: list[int] = []
@@ -45,6 +45,10 @@ def interpret_bytecode(
                 a = stack_pop(stack)
                 b = stack_pop(stack)
                 stack_push(stack, b + a)
+            case InstKind.AND:
+                a = stack_pop(stack)
+                b = stack_pop(stack)
+                stack_push(stack, int(bool(a and b)))
             case InstKind.CALL_FN:
                 assert len(instruction.arguments) == 1, "Function name"
                 function_name = instruction.arguments[0]
@@ -181,6 +185,13 @@ def interpret_bytecode(
                 a = stack_pop(stack)
                 b = stack_pop(stack)
                 stack_push(stack, int(a != b))
+            case InstKind.NOT:
+                a = stack_pop(stack)
+                stack_push(stack, int(bool(not a)))
+            case InstKind.OR:
+                a = stack_pop(stack)
+                b = stack_pop(stack)
+                stack_push(stack, int(bool(a or b)))
             case InstKind.OVER:
                 a = stack_pop(stack)
                 b = stack_pop(stack)
