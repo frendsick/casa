@@ -12,7 +12,7 @@ InstrAddr = int
 
 
 def interpret_bytecode(bytecode: Bytecode, stack: list[int] | None = None):
-    assert len(InstructionKind) == 24, "Exhaustive handling for `InstructionKind`"
+    assert len(InstructionKind) == 25, "Exhaustive handling for `InstructionKind`"
 
     # Containers for emulating a computer
     heap: list[int] = []
@@ -37,7 +37,7 @@ def interpret_bytecode(bytecode: Bytecode, stack: list[int] | None = None):
             case InstructionKind.ADD:
                 a = stack_pop(stack)
                 b = stack_pop(stack)
-                stack_push(stack, a + b)
+                stack_push(stack, b + a)
             case InstructionKind.CALL_FN:
                 assert len(instruction.arguments) == 1, "Function name"
                 function_name = instruction.arguments[0]
@@ -47,6 +47,10 @@ def interpret_bytecode(bytecode: Bytecode, stack: list[int] | None = None):
                 assert isinstance(function.bytecode, list), "Function is compiled"
 
                 interpret_bytecode(function.bytecode, stack)
+            case InstructionKind.DEC:
+                a = stack_pop(stack)
+                b = stack_pop(stack)
+                stack_push(stack, b - a)
             case InstructionKind.DROP:
                 stack_pop(stack)
             case InstructionKind.DUP:
