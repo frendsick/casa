@@ -86,6 +86,9 @@ class Operator(Enum):
     # Arithmetic
     PLUS = auto()
     MINUS = auto()
+    MULTIPLICATION = auto()
+    DIVISION = auto()
+    MODULO = auto()
 
     # Comparison
     EQ = auto()
@@ -103,14 +106,22 @@ class Operator(Enum):
     @classmethod
     def from_str(cls, value: str) -> Self | None:
         mapping = {
+            # Arithmetic
+            "+": cls.PLUS,
+            "-": cls.MINUS,
+            "*": cls.MULTIPLICATION,
+            "/": cls.DIVISION,
+            "%": cls.MODULO,
+
+            # Comparison
             "==": cls.EQ,
             ">=": cls.GE,
             ">": cls.GT,
             "<=": cls.LE,
             "<": cls.LT,
             "!=": cls.NE,
-            "+": cls.PLUS,
-            "-": cls.MINUS,
+
+            # Assignment
             "=": cls.ASSIGN,
             "-=": cls.ASSIGN_DECREMENT,
             "+=": cls.ASSIGN_INCREMENT,
@@ -156,6 +167,9 @@ class OpKind(Enum):
     # Arithmetic
     ADD = auto()
     SUB = auto()
+    MUL = auto()
+    DIV = auto()
+    MOD = auto()
 
     # Comparison
     EQ = auto()
@@ -197,7 +211,7 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 32, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 35, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires `int`
@@ -248,6 +262,9 @@ class Op:
             # Requires `Operator`
             case (
                 OpKind.ADD
+                | OpKind.DIV
+                | OpKind.MOD
+                | OpKind.MUL
                 | OpKind.SUB
                 | OpKind.EQ
                 | OpKind.GE
@@ -281,6 +298,9 @@ class InstKind(Enum):
 
     # Arithmetic
     ADD = auto()
+    DIV = auto()
+    MOD = auto()
+    MUL = auto()
     SUB = auto()
 
     # Comparison
@@ -316,12 +336,15 @@ class Inst:
     arguments: list = field(default_factory=list)
 
     def __post_init__(self):
-        assert len(InstKind) == 28, "Exhaustive handling for `InstructionKind`"
+        assert len(InstKind) == 31, "Exhaustive handling for `InstructionKind`"
 
         match self.kind:
             # Should not have a parameter
             case (
                 InstKind.ADD
+                | InstKind.DIV
+                | InstKind.MOD
+                | InstKind.MUL
                 | InstKind.SUB
                 | InstKind.DROP
                 | InstKind.DUP

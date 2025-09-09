@@ -16,7 +16,7 @@ def interpret_bytecode(
     stack: list[int] | None = None,
     globals: list[int] | None = None,
 ):
-    assert len(InstKind) == 28, "Exhaustive handling for `InstructionKind`"
+    assert len(InstKind) == 31, "Exhaustive handling for `InstructionKind`"
 
     # Containers for emulating a computer
     heap: list[int] = []
@@ -53,6 +53,12 @@ def interpret_bytecode(
                 assert isinstance(function.bytecode, list), "Function is compiled"
 
                 interpret_bytecode(function.bytecode, stack, globals)
+            case InstKind.DIV:
+                a = stack_pop(stack)
+                b = stack_pop(stack)
+                if a == 0:
+                    ZeroDivisionError("Cannot divide by zero")
+                stack_push(stack, b // a)
             case InstKind.DROP:
                 stack_pop(stack)
             case InstKind.DUP:
@@ -160,6 +166,16 @@ def interpret_bytecode(
                     zeroes = [0] * (index - len(locals) + 1)
                     locals.extend(zeroes)
                 locals[index] = a
+            case InstKind.MOD:
+                a = stack_pop(stack)
+                b = stack_pop(stack)
+                if a == 0:
+                    ZeroDivisionError("Cannot modulo by zero")
+                stack_push(stack, b % a)
+            case InstKind.MUL:
+                a = stack_pop(stack)
+                b = stack_pop(stack)
+                stack_push(stack, b * a)
             case InstKind.NE:
                 a = stack_pop(stack)
                 b = stack_pop(stack)

@@ -39,8 +39,8 @@ class Compiler:
     locals: list[str] = field(default_factory=list)
 
     def compile(self) -> Bytecode:
-        assert len(InstKind) == 28, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 32, "Exhaustive handling for `OpKind`"
+        assert len(InstKind) == 31, "Exhaustive handling for `InstructionKind"
+        assert len(OpKind) == 35, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
         bytecode = []
@@ -118,8 +118,8 @@ class Compiler:
                         function.bytecode = compile_bytecode(function.ops)
 
                     bytecode.append(Inst(InstKind.CALL_FN, arguments=[function_name]))
-                case OpKind.SUB:
-                    bytecode.append(Inst(InstKind.SUB))
+                case OpKind.DIV:
+                    bytecode.append(Inst(InstKind.DIV))
                 case OpKind.DROP:
                     bytecode.append(Inst(InstKind.DROP))
                 case OpKind.DUP:
@@ -154,6 +154,10 @@ class Compiler:
                     bytecode.append(Inst(InstKind.LOAD))
                 case OpKind.LT:
                     bytecode.append(Inst(InstKind.LT))
+                case OpKind.MOD:
+                    bytecode.append(Inst(InstKind.MOD))
+                case OpKind.MUL:
+                    bytecode.append(Inst(InstKind.MUL))
                 case OpKind.NE:
                     bytecode.append(Inst(InstKind.NE))
                 case OpKind.OVER:
@@ -204,6 +208,8 @@ class Compiler:
                     bytecode.append(Inst(InstKind.ROT))
                 case OpKind.STORE:
                     bytecode.append(Inst(InstKind.STORE))
+                case OpKind.SUB:
+                    bytecode.append(Inst(InstKind.SUB))
                 case OpKind.SWAP:
                     bytecode.append(Inst(InstKind.SWAP))
                 case OpKind.WHILE_CONDITION:
