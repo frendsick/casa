@@ -23,11 +23,11 @@ def apply_signature_check(
         if typ is None:
             raise IndexError("Stack underflow")
 
-        if isinstance(expected, GenericType):
-            generics.setdefault(expected, typ)
+        if isinstance(expected.typ, GenericType):
+            generics.setdefault(expected.typ, typ)
             expect_type(stack, typ)
         else:
-            expect_type(stack, expected)
+            expect_type(stack, expected.typ)
 
     for typ in signature.return_types:
         stack_push(stack, generics[typ] if isinstance(typ, GenericType) else typ)
@@ -42,13 +42,13 @@ def apply_signature_infer(
     for expected in signature.parameters:
         if stack:
             typ = stack_pop(stack)
-            if isinstance(expected, GenericType):
-                generics.setdefault(expected, typ)
+            if isinstance(expected.typ, GenericType):
+                generics.setdefault(expected.typ, typ)
             else:
                 if isinstance(typ, GenericType):
-                    generics.setdefault(typ, expected)
+                    generics.setdefault(typ, expected.typ)
         else:
-            parameters.insert(0, expected)
+            parameters.insert(0, expected.typ)
 
     for typ in signature.return_types:
         stack_push(stack, typ)
@@ -63,13 +63,13 @@ def get_signature_from_op(
 
     match op.kind:
         case OpKind.AND | OpKind.OR:
-            return Signature(parameters=["any", "any"], return_types=["bool"])
+            return Signature.from_types(["any", "any"], ["bool"])
         case OpKind.ADD | OpKind.DIV | OpKind.MOD | OpKind.MUL | OpKind.SUB:
-            return Signature(parameters=["int", "int"], return_types=["int"])
+            return Signature.from_types(["int", "int"], ["int"])
         case OpKind.ASSIGN_DECREMENT:
-            return Signature(parameters=["int"], return_types=[])
+            return Signature.from_types(["int"], [])
         case OpKind.ASSIGN_INCREMENT:
-            return Signature(parameters=["int"], return_types=[])
+            return Signature.from_types(["int"], [])
         case OpKind.ASSIGN_VARIABLE:
             variable_name = op.value
             assert isinstance(variable_name, str), "Expected variable name"
@@ -87,7 +87,7 @@ def get_signature_from_op(
                         f"Cannot override global variable of type `{global_variable.typ}` with other type `{stack_type}`"
                     )
                 global_variable.typ = stack_type
-                return Signature(parameters=[stack_type], return_types=[])
+                return Signature.from_types([stack_type], [])
 
             # Local variable
             assert isinstance(function, Function), "Expected function"
@@ -98,7 +98,7 @@ def get_signature_from_op(
                             f"Cannot override local variable of type `{variable.typ}` with other type `{stack_type}`"
                         )
                     variable.typ = stack_type
-                    return Signature(parameters=[stack_type], return_types=[])
+                    return Signature.from_types([stack_type], [])
 
             raise AssertionError(
                 f"Function `{function.name}` does not have variable `{variable_name}`"
@@ -118,13 +118,13 @@ def get_signature_from_op(
                 type_check_ops(function.ops, function)
             return function.signature
         case OpKind.DROP:
-            return Signature(parameters=["any"], return_types=[])
+            return Signature.from_types(["any"], [])
         case OpKind.DUP:
             t1 = GenericType("T1")
-            return Signature(parameters=[t1], return_types=[t1, t1])
+            return Signature.from_types([t1], [t1, t1])
         case OpKind.EQ | OpKind.GE | OpKind.GT | OpKind.LE | OpKind.LT | OpKind.NE:
             t1 = GenericType("T1")
-            return Signature(parameters=[t1, t1], return_types=["bool"])
+            return Signature.from_types([t1, t1], ["bool"])
         case OpKind.EXEC_FN:
             if not stack:
                 raise IndexError("Stack underflow")
@@ -136,28 +136,28 @@ def get_signature_from_op(
         case OpKind.IDENTIFIER:
             raise AssertionError("Identifiers should be resolved by the parser")
         case OpKind.IF_CONDITION:
-            return Signature(parameters=["bool"], return_types=[])
+            return Signature.from_types(["bool"], [])
         case OpKind.IF_ELIF:
-            return Signature(parameters=[], return_types=[])
+            return Signature.from_types([], [])
         case OpKind.IF_ELSE:
-            return Signature(parameters=[], return_types=[])
+            return Signature.from_types([], [])
         case OpKind.IF_END:
-            return Signature(parameters=[], return_types=[])
+            return Signature.from_types([], [])
         case OpKind.IF_START:
-            return Signature(parameters=[], return_types=[])
+            return Signature.from_types([], [])
         case OpKind.LOAD:
-            return Signature(parameters=["ptr"], return_types=["any"])
+            return Signature.from_types(["ptr"], ["any"])
         case OpKind.NOT:
-            return Signature(parameters=["any"], return_types=["bool"])
+            return Signature.from_types(["any"], ["bool"])
         case OpKind.OVER:
             t1 = GenericType("T1")
             t2 = GenericType("T2")
-            return Signature(parameters=[t1, t2], return_types=[t2, t1, t2])
+            return Signature.from_types([t1, t2], [t2, t1, t2])
         case OpKind.PUSH_LIST:
             list_type = get_list_literal_type(op)
-            return Signature(parameters=[], return_types=[list_type])
+            return Signature.from_types([], [list_type])
         case OpKind.PRINT:
-            return Signature(parameters=["any"], return_types=[])
+            return Signature.from_types(["any"], [])
         case OpKind.PUSH_FN:
             assert isinstance(op.value, str), "Expected identifier name"
             function_name = op.value
@@ -166,11 +166,11 @@ def get_signature_from_op(
             assert isinstance(function, Function), "Expected function"
 
             signature = infer_signature(function.ops)
-            return Signature(parameters=[], return_types=[f"fn[{str(signature)}]"])
+            return Signature.from_types([], [f"fn[{str(signature)}]"])
         case OpKind.PUSH_INT:
-            return Signature(parameters=[], return_types=["int"])
+            return Signature.from_types([], ["int"])
         case OpKind.PUSH_STR:
-            return Signature(parameters=[], return_types=["str"])
+            return Signature.from_types([], ["str"])
         case OpKind.PUSH_VARIABLE:
             variable_name = op.value
             assert isinstance(op.value, str), "Expected variable name"
@@ -179,7 +179,7 @@ def get_signature_from_op(
             global_variable = GLOBAL_VARIABLES.get(variable_name)
             if global_variable:
                 assert global_variable.typ, "Global variable type should be defined"
-                return Signature(parameters=[], return_types=[global_variable.typ])
+                return Signature.from_types([], [global_variable.typ])
 
             # Local variable
             assert isinstance(function, Function), "Expected function"
@@ -189,7 +189,7 @@ def get_signature_from_op(
                         raise AssertionError(
                             f"Variable `{variable.name}` has not been type checked before its usage"
                         )
-                    return Signature(parameters=[], return_types=[variable.typ])
+                    return Signature.from_types([], [variable.typ])
             raise NameError(
                 f"Function `{function.name}` does not have variable `{variable_name}`"
             )
@@ -197,29 +197,29 @@ def get_signature_from_op(
             t1 = GenericType("T1")
             t2 = GenericType("T2")
             t3 = GenericType("T3")
-            return Signature(parameters=[t1, t2, t3], return_types=[t2, t1, t3])
+            return Signature.from_types([t1, t2, t3], [t2, t1, t3])
         case OpKind.STORE:
-            return Signature(parameters=["ptr", "any"], return_types=[])
+            return Signature.from_types(["ptr", "any"], [])
         case OpKind.SWAP:
             t1 = GenericType("T1")
             t2 = GenericType("T2")
-            return Signature(parameters=[t1, t2], return_types=[t1, t2])
+            return Signature.from_types([t1, t2], [t1, t2])
         case OpKind.WHILE_CONDITION:
-            return Signature(parameters=["bool"], return_types=[])
+            return Signature.from_types(["bool"], [])
         case OpKind.WHILE_END:
-            return Signature(parameters=[], return_types=[])
+            return Signature.from_types([], [])
         case OpKind.WHILE_START:
-            return Signature(parameters=[], return_types=[])
+            return Signature.from_types([], [])
         case _:
             assert_never(op.kind)
 
 
 def type_check_ops(ops: list[Op], function: Function | None = None):
     generics: dict[GenericType, Type] = {}
-    stack = []
+    stack: list[Type] = []
     if function and function.signature:
         for param in reversed(function.signature.parameters):
-            stack.append(param)
+            stack.append(param.typ)
 
     for op in ops:
         signature = get_signature_from_op(op, stack, function)
@@ -243,7 +243,7 @@ def infer_signature(ops: list[Op]) -> Signature:
         signature = get_signature_from_op(op, stack)
         apply_signature_infer(signature, stack, generics, parameters)
 
-    return Signature(parameters, stack)
+    return Signature.from_types(parameters, stack)
 
 
 def stack_push(stack: list[Type], typ: Type):
