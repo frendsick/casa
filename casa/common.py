@@ -53,6 +53,7 @@ class Keyword(Enum):
     # Conditionals
     IF = auto()
     THEN = auto()
+    ELIF = auto()
     ELSE = auto()
     FI = auto()
 
@@ -193,6 +194,7 @@ class OpKind(Enum):
     # Conditionals
     IF_START = auto()
     IF_CONDITION = auto()
+    IF_ELIF = auto()
     IF_ELSE = auto()
     IF_END = auto()
 
@@ -213,7 +215,7 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 36, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 37, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires `int`
@@ -254,6 +256,7 @@ class Op:
             case (
                 OpKind.IF_START
                 | OpKind.IF_CONDITION
+                | OpKind.IF_ELIF
                 | OpKind.IF_ELSE
                 | OpKind.IF_END
                 | OpKind.WHILE_START
