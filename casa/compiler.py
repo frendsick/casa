@@ -40,7 +40,7 @@ class Compiler:
 
     def compile(self) -> Bytecode:
         assert len(InstKind) == 31, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 35, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 36, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
         bytecode = []
@@ -141,8 +141,28 @@ class Compiler:
                         op=op,
                         start_kind=OpKind.IF_START,
                         end_kind=OpKind.IF_END,
+                        target_kinds=[OpKind.IF_ELSE, OpKind.IF_END]
                     )
+
                     bytecode.append(Inst(InstKind.JUMP_NE, arguments=[end_label]))
+                case OpKind.IF_ELSE:
+                    # Else must be inside if block
+                    self.find_matching_label(
+                        op=op,
+                        start_kind=OpKind.IF_START,
+                        end_kind=OpKind.IF_END,
+                        reverse=True,
+                    )
+
+                    else_label = op_to_label(op)
+                    end_label = self.find_matching_label(
+                        op=op,
+                        start_kind=OpKind.IF_START,
+                        end_kind=OpKind.IF_END,
+                    )
+
+                    bytecode.append(Inst(InstKind.JUMP, arguments=[end_label]))
+                    bytecode.append(Inst(InstKind.LABEL, arguments=[else_label]))
                 case OpKind.IF_END:
                     label = op_to_label(op)
                     bytecode.append(Inst(InstKind.LABEL, arguments=[label]))
@@ -255,22 +275,28 @@ class Compiler:
         op: Op,
         start_kind: OpKind,
         end_kind: OpKind,
+        target_kinds: list[OpKind] | None = None,
         reverse: bool = False,
     ) -> LabelId:
+        if not target_kinds:
+            target_kinds = [start_kind] if reverse else [end_kind]
+
         op_index = self.ops.index(op)
         iterable: Iterable[Op] = (
             reversed(self.ops[:op_index]) if reverse else self.ops[op_index + 1 :]
         )
 
-        depth = 1
+        START_DEPTH = 1
+        depth = START_DEPTH
         direction = -1 if reverse else 1
         for other_op in iterable:
+            if depth == START_DEPTH and other_op.kind in target_kinds:
+                return op_to_label(other_op)
+
             if other_op.kind == start_kind:
                 depth += direction
             elif other_op.kind == end_kind:
                 depth -= direction
 
-            if depth == 0:
-                return op_to_label(other_op)
 
-        raise ValueError(f"Matching {start_kind if reverse else end_kind} not found")
+        raise ValueError(f"Matching label was not found: {target_kinds}")
