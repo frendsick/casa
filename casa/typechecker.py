@@ -171,12 +171,21 @@ def get_signature_from_op(
 
 
 def type_check_ops(ops: list[Op], function: Function | None = None):
-    stack = []
     generics: dict[GenericType, Type] = {}
+    stack = []
+    if function and function.signature:
+        for param in reversed(function.signature.parameters):
+            stack.append(param)
 
     for op in ops:
         signature = get_signature_from_op(op, stack, function)
         apply_signature_check(signature, stack, generics)
+
+    if function and function.signature and stack != function.signature.return_types:
+        raise TypeError(f"""Invalid function signature for function: {function.name}
+
+Signature: {function.signature}
+Expected:  {Signature(function.signature.parameters, stack)}""")
 
 
 def infer_signature(ops: list[Op]) -> Signature:
