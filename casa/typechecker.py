@@ -171,7 +171,7 @@ def get_signature_from_op(
                 if variable == variable_name:
                     if not variable.typ:
                         raise AssertionError(
-                            f"Variable `{function.name}` has not been type checked before its usage"
+                            f"Variable `{variable.name}` has not been type checked before its usage"
                         )
                     return Signature(parameters=[], return_types=[variable.typ])
             raise NameError(
