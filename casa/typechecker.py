@@ -59,10 +59,10 @@ def get_signature_from_op(
     stack: list[Type],
     function: Function | None = None,
 ) -> Signature:
-    assert len(OpKind) == 32, "Exhaustive handling for `OpKind`"
+    assert len(OpKind) == 35, "Exhaustive handling for `OpKind`"
 
     match op.kind:
-        case OpKind.ADD | OpKind.SUB:
+        case OpKind.ADD | OpKind.DIV | OpKind.MOD | OpKind.MUL | OpKind.SUB:
             return Signature(parameters=["int", "int"], return_types=["int"])
         case OpKind.ASSIGN_DECREMENT:
             return Signature(parameters=["int"], return_types=[])

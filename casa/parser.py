@@ -282,7 +282,7 @@ def get_op_literal(token: Token) -> Op:
 
 
 def get_op_operator(token: Token, cursor: Cursor[Token], function_name: str) -> Op:
-    assert len(Operator) == 11, "Exhaustive handling for `Operator`"
+    assert len(Operator) == 14, "Exhaustive handling for `Operator`"
 
     operator = Operator.from_str(token.value)
     assert operator, f"Token `{token.value}` is not an operator"
@@ -324,6 +324,8 @@ def get_op_operator(token: Token, cursor: Cursor[Token], function_name: str) -> 
             assert isinstance(variable_name, str), "Expected variable name"
 
             return Op(variable_name, OpKind.ASSIGN_INCREMENT, identifier.location)
+        case Operator.DIVISION:
+            return Op(operator, OpKind.DIV, token.location)
         case Operator.EQ:
             return Op(operator, OpKind.EQ, token.location)
         case Operator.GE:
@@ -336,6 +338,10 @@ def get_op_operator(token: Token, cursor: Cursor[Token], function_name: str) -> 
             return Op(operator, OpKind.LT, token.location)
         case Operator.MINUS:
             return Op(operator, OpKind.SUB, token.location)
+        case Operator.MODULO:
+            return Op(operator, OpKind.MOD, token.location)
+        case Operator.MULTIPLICATION:
+            return Op(operator, OpKind.MUL, token.location)
         case Operator.NE:
             return Op(operator, OpKind.NE, token.location)
         case Operator.PLUS:
