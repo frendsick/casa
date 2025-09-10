@@ -16,11 +16,26 @@ ANY_TYPE = "any"
 
 
 @dataclass
+class BranchedStack:
+    before: list[Type]
+    after: list[Type]
+    default_present: bool
+
+    def __init__(self, before: list[Type], after: list[Type] | None = None):
+        self.before = before.copy()
+        self.after = after.copy() if after else before.copy()
+        self.default_present = False
+
+
+@dataclass
 class TypeChecker:
     ops: list[Op]
     stack: list[Type] = field(default_factory=list)
     parameters: list[Type] = field(default_factory=list)
-    return_types: list[Type] | None = None  # Saved on `return`
+    # Saved on `return`
+    return_types: list[Type] | None = None
+    # Store stack states before each conditional and loop block
+    branched_stacks: list[BranchedStack] = field(default_factory=list)
 
     def stack_push(self, typ: Type):
         self.stack.append(typ)
@@ -212,14 +227,41 @@ Stack:    {tc.stack}
                 raise AssertionError("Identifiers should be resolved by the parser")
             case OpKind.IF_CONDITION:
                 tc.expect_type("bool")
-            case OpKind.IF_ELIF:
-                pass
-            case OpKind.IF_ELSE:
-                pass
+
+                assert len(tc.branched_stacks) > 0, "If block stack state is saved"
+                branched = tc.branched_stacks[-1]
+
+                if tc.stack != branched.before:
+                    raise TypeError(f"Stack state changed: {branched} --> {tc.stack}")
+            case OpKind.IF_ELIF | OpKind.IF_ELSE:
+                assert tc.branched_stacks, "If block stack state is saved"
+                branched = tc.branched_stacks[-1]
+                before, after = branched.before, branched.after
+
+                if op.kind is OpKind.IF_ELSE:
+                    branched.default_present = True
+
+                if tc.stack == before == after:
+                    continue
+                if tc.stack == after and before != after:
+                    tc.stack = before.copy()
+                    continue
+                if before == after:
+                    branched.after = tc.stack.copy()
+                    tc.stack = before.copy()
+                    continue
+                raise TypeError(f"Stack state changed: {branched} --> {tc.stack}")
             case OpKind.IF_END:
-                pass
+                branched = tc.branched_stacks.pop()
+                if (
+                    tc.stack == branched.before == branched.after
+                    or (tc.stack == branched.after and branched.default_present)
+                    or (tc.stack == branched.before and not branched.default_present)
+                ):
+                    continue
+                raise TypeError(f"Stack state changed: {branched} --> {tc.stack}")
             case OpKind.IF_START:
-                pass
+                tc.branched_stacks.append(BranchedStack(tc.stack))
             case OpKind.LE:
                 tc.stack_pop()
                 tc.stack_pop()
@@ -312,9 +354,13 @@ Stack:    {tc.stack}
             case OpKind.WHILE_CONDITION:
                 tc.expect_type("bool")
             case OpKind.WHILE_END:
-                pass
+                branched = tc.branched_stacks.pop()
+                if branched.after != tc.stack:
+                    raise TypeError(
+                        f"Stack state changed: {branched} --> {tc.stack}"
+                    )
             case OpKind.WHILE_START:
-                pass
+                tc.branched_stacks.append(BranchedStack(tc.stack))
             case _:
                 assert_never(op.kind)
 
