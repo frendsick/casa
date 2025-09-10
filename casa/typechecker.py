@@ -63,6 +63,13 @@ class TypeChecker:
             return expected
         if typ == expected:
             return typ
+        if expected == "fn" and typ.startswith("fn"):
+            start = typ.index("[") + 1
+            end = typ.index("]", start)
+            signature = Signature.from_str(typ[start:end])
+            if signature.parameters != signature.return_types:
+                raise TypeError("Expected symmetrical function type")
+            return typ
         raise TypeError(f"Expected `{expected}` but got `{typ}`")
 
     def apply_signature(self, signature: Signature):
@@ -187,8 +194,18 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     )
                 tc.apply_signature(global_function.signature)
             case OpKind.FN_EXEC:
-                fn_ptr = tc.stack_pop()
+                # Lambdas from other functions are typed as `any`
+                fn_symmetrical = "fn"
+                fn_ptr = tc.stack_peek()
+                if fn_ptr == ANY_TYPE:
+                    fn_ptr = "fn"
+
+                fn_ptr = tc.expect_type(fn_ptr)
                 assert isinstance(fn_ptr, str), "Function pointer type"
+
+                if fn_ptr == fn_symmetrical:
+                    continue
+
                 start = fn_ptr.index("[") + 1
                 end = fn_ptr.index("]", start)
                 tc.apply_signature(Signature.from_str(fn_ptr[start:end]))
