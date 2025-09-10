@@ -87,6 +87,8 @@ def get_list_literal_type(op: Op) -> Type:
 
 def get_literal_type(op: Op) -> Type | None:
     match op.kind:
+        case OpKind.PUSH_BOOL:
+            return "bool"
         case OpKind.PUSH_INT:
             return "int"
         case OpKind.PUSH_LIST:
@@ -300,6 +302,8 @@ Stack:    {tc.stack}
                 tc.stack_push(t2)
             case OpKind.PRINT:
                 tc.stack_pop()
+            case OpKind.PUSH_BOOL:
+                tc.stack_push("bool")
             case OpKind.PUSH_INT:
                 tc.stack_push("int")
             case OpKind.PUSH_LIST:

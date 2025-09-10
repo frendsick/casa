@@ -175,6 +175,7 @@ class OpKind(Enum):
     STORE = auto()
 
     # Literals
+    PUSH_BOOL = auto()
     PUSH_INT = auto()
     PUSH_LIST = auto()
     PUSH_STR = auto()
@@ -236,9 +237,13 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 44, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 45, "Exhaustive handling for `OpKind`"
 
         match self.kind:
+            # Requires `bool`
+            case OpKind.PUSH_BOOL:
+                if not isinstance(self.value, bool):
+                    raise TypeError(f"`{self.kind}` requires value of type `bool`")
             # Requires `int`
             case OpKind.PUSH_INT:
                 if not isinstance(self.value, int):

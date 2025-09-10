@@ -255,6 +255,10 @@ def parse_function(cursor: Cursor[Token]) -> Function:
 
 def get_op_literal(token: Token) -> Op:
     value = token.value
+    if value == "true":
+        return Op(True, OpKind.PUSH_BOOL, token.location)
+    if value == "false":
+        return Op(False, OpKind.PUSH_BOOL, token.location)
     if value.isdigit():
         return Op(int(value), OpKind.PUSH_INT, token.location)
     if value.startswith('"') and value.endswith('"'):
