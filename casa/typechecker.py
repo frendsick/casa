@@ -12,6 +12,9 @@ from casa.common import (
 )
 
 
+ANY_TYPE = "any"
+
+
 @dataclass
 class TypeChecker:
     ops: list[Op]
@@ -23,13 +26,13 @@ class TypeChecker:
 
     def stack_peek(self) -> Type:
         if not self.stack:
-            return "any"
+            return ANY_TYPE
         return self.stack[-1]
 
     def stack_pop(self) -> Type:
         if not self.stack:
-            self.parameters.append("any")
-            return "any"
+            self.parameters.append(ANY_TYPE)
+            return ANY_TYPE
         return self.stack.pop()
 
     def expect_type(self, expected: Type) -> Type:
@@ -38,9 +41,9 @@ class TypeChecker:
             return expected
 
         typ = self.stack.pop()
-        if expected == "any":
+        if expected == ANY_TYPE:
             return typ
-        if typ == "any":
+        if typ == ANY_TYPE:
             return expected
         if typ == expected:
             return typ
@@ -109,11 +112,15 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     assert isinstance(
                         global_variable, Variable
                     ), "Valid global variable"
-                    if global_variable.typ and global_variable.typ != stack_type:
+
+                    if not global_variable.typ or global_variable.typ == ANY_TYPE and stack_type != ANY_TYPE:
+                        global_variable.typ = stack_type
+
+                    if global_variable.typ not in (stack_type, ANY_TYPE):
                         raise ValueError(
-                            f"Cannot override global variable of type `{global_variable.typ}` with other type `{stack_type}`"
+                            f"Cannot override global variable `{global_variable.name}` of type `{global_variable.typ}` with other type `{stack_type}`"
                         )
-                    global_variable.typ = stack_type
+
                     tc.expect_type(stack_type)
                     continue
 
@@ -121,11 +128,14 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 assert isinstance(function, Function), "Expected function"
                 for variable in function.variables:
                     if variable.name == variable_name:
-                        if variable.typ and variable.typ != stack_type:
+                        if not variable.typ or variable.typ == ANY_TYPE and stack_type != ANY_TYPE:
+                            variable.typ = stack_type
+
+                        if variable.typ not in (stack_type, ANY_TYPE):
                             raise ValueError(
-                                f"Cannot override local variable of type `{variable.typ}` with other type `{stack_type}`"
+                                f"Cannot override local variable `{variable.name}` of type `{variable.typ}` with other type `{stack_type}`"
                             )
-                        variable.typ = stack_type
+
                         tc.expect_type(stack_type)
                         break
                 else:
@@ -186,7 +196,7 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 tc.stack_push("bool")
             case OpKind.LOAD:
                 tc.expect_type("ptr")
-                tc.stack_push("any")
+                tc.stack_push(ANY_TYPE)
             case OpKind.LT:
                 tc.stack_pop()
                 tc.stack_pop()
