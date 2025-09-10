@@ -37,7 +37,7 @@ class Compiler:
 
     def compile(self) -> Bytecode:
         assert len(InstKind) == 38, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 42, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 44, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
         bytecode: list[Inst] = []
@@ -291,6 +291,24 @@ class Compiler:
                     bytecode.append(Inst(InstKind.SUB))
                 case OpKind.SWAP:
                     bytecode.append(Inst(InstKind.SWAP))
+                case OpKind.WHILE_BREAK:
+                    if not self.find_matching_label(
+                        op=op,
+                        start_kind=OpKind.WHILE_START,
+                        end_kind=OpKind.WHILE_END,
+                        reverse=True,
+                    ):
+                        raise SyntaxError("`break` without parent `while`")
+
+                    end_label = self.find_matching_label(
+                        op=op,
+                        start_kind=OpKind.WHILE_START,
+                        end_kind=OpKind.WHILE_END,
+                    )
+                    if not end_label:
+                        raise SyntaxError("`break` without matching `done`")
+
+                    bytecode.append(Inst(InstKind.JUMP, arguments=[end_label]))
                 case OpKind.WHILE_CONDITION:
                     if not self.find_matching_label(
                         op=op,
@@ -309,6 +327,17 @@ class Compiler:
                         raise SyntaxError("`do` without matching `done`")
 
                     bytecode.append(Inst(InstKind.JUMP_NE, arguments=[end_label]))
+                case OpKind.WHILE_CONTINUE:
+                    start_label = self.find_matching_label(
+                        op=op,
+                        start_kind=OpKind.WHILE_START,
+                        end_kind=OpKind.WHILE_END,
+                        reverse=True,
+                    )
+                    if not start_label:
+                        raise SyntaxError("`continue` without parent `while`")
+
+                    bytecode.append(Inst(InstKind.JUMP, arguments=[start_label]))
                 case OpKind.WHILE_END:
                     while_label = op_to_label(op)
                     start_label = self.find_matching_label(

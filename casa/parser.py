@@ -199,12 +199,16 @@ def get_op_intrinsic(token: Token) -> Op:
 
 
 def get_op_keyword(token: Token, cursor: Cursor[Token]) -> Op | None:
-    assert len(Keyword) == 10, "Exhaustive handling for `Keyword"
+    assert len(Keyword) == 12, "Exhaustive handling for `Keyword"
 
     keyword = Keyword.from_lowercase(token.value)
     assert keyword, f"Token `{token.value}` is not a keyword"
 
     match keyword:
+        case Keyword.BREAK:
+            return Op(keyword, OpKind.WHILE_BREAK, token.location)
+        case Keyword.CONTINUE:
+            return Op(keyword, OpKind.WHILE_CONTINUE, token.location)
         case Keyword.DO:
             return Op(keyword, OpKind.WHILE_CONDITION, token.location)
         case Keyword.DONE:

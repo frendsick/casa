@@ -49,6 +49,8 @@ class Keyword(Enum):
     # Loops
     WHILE = auto()
     DO = auto()
+    BREAK = auto()
+    CONTINUE = auto()
     DONE = auto()
 
     # Conditionals
@@ -206,6 +208,8 @@ class OpKind(Enum):
     # Loops
     WHILE_START = auto()
     WHILE_CONDITION = auto()
+    WHILE_BREAK = auto()
+    WHILE_CONTINUE = auto()
     WHILE_END = auto()
 
     # Conditionals
@@ -232,7 +236,7 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 42, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 44, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires `int`
@@ -280,6 +284,8 @@ class Op:
                 | OpKind.IF_END
                 | OpKind.WHILE_START
                 | OpKind.WHILE_CONDITION
+                | OpKind.WHILE_BREAK
+                | OpKind.WHILE_CONTINUE
                 | OpKind.WHILE_END
             ):
                 if not isinstance(self.value, Keyword):
