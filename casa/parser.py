@@ -26,7 +26,7 @@ INTRINSIC_TO_OPKIND = {
     Intrinsic.LOAD: OpKind.LOAD,
     Intrinsic.STORE: OpKind.STORE,
     Intrinsic.PRINT: OpKind.PRINT,
-    Intrinsic.EXEC: OpKind.EXEC_FN,
+    Intrinsic.EXEC: OpKind.FN_EXEC,
 }
 
 
@@ -63,7 +63,7 @@ def resolve_identifiers(ops: list[Op], function: Function | None = None):
 
                 # Check different identifiers
                 if global_function := GLOBAL_FUNCTIONS.get(identifier):
-                    op.kind = OpKind.CALL_FN
+                    op.kind = OpKind.FN_CALL
                     if not global_function.is_used:
                         global_function.is_used = True
                         resolve_identifiers(global_function.ops, global_function)
@@ -126,7 +126,7 @@ def get_op_delimiter(
             lambda_name = f"lambda__{function_name}_o{token.location.span.offset}"
             lambda_function = Function(lambda_name, ops, token.location)
             GLOBAL_FUNCTIONS[lambda_name] = lambda_function
-            return Op(lambda_name, OpKind.PUSH_FN, token.location)
+            return Op(lambda_name, OpKind.FN_PUSH, token.location)
         case Delimiter.CLOSE_BRACE:
             return None
         case Delimiter.OPEN_BRACKET:
@@ -199,7 +199,7 @@ def get_op_intrinsic(token: Token) -> Op:
 
 
 def get_op_keyword(token: Token, cursor: Cursor[Token]) -> Op | None:
-    assert len(Keyword) == 9, "Exhaustive handling for `Keyword"
+    assert len(Keyword) == 10, "Exhaustive handling for `Keyword"
 
     keyword = Keyword.from_lowercase(token.value)
     assert keyword, f"Token `{token.value}` is not a keyword"
@@ -225,6 +225,8 @@ def get_op_keyword(token: Token, cursor: Cursor[Token]) -> Op | None:
             return Op(keyword, OpKind.IF_START, token.location)
         case Keyword.FI:
             return Op(keyword, OpKind.IF_END, token.location)
+        case Keyword.RETURN:
+            return Op(keyword, OpKind.FN_RETURN, token.location)
         case Keyword.THEN:
             return Op(keyword, OpKind.IF_CONDITION, token.location)
         case Keyword.WHILE:
