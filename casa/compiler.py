@@ -13,16 +13,15 @@ from casa.common import (
     LabelId,
     Op,
     OpKind,
+    Variable,
 )
 
 
-def compile_bytecode(ops: list[Op], initialize_globals: bool = False) -> Bytecode:
+def compile_bytecode(ops: list[Op]) -> Bytecode:
     bytecode: Bytecode = []
     compiler = Compiler(ops)
 
-    if initialize_globals and (globals_count := len(GLOBAL_VARIABLES)):
-        bytecode.append(Inst(InstKind.GLOBALS_INIT, arguments=[globals_count]))
-
+    bytecode.append(Inst(InstKind.GLOBALS_INIT, arguments=[len(GLOBAL_VARIABLES)]))
     bytecode += compiler.compile()
     return bytecode
 
@@ -34,14 +33,23 @@ def op_to_label(op: Op) -> LabelId:
 @dataclass
 class Compiler:
     ops: list[Op]
-    locals: list[str] = field(default_factory=list)
+    variables: list[Variable] = field(default_factory=list)
 
     def compile(self) -> Bytecode:
-        assert len(InstKind) == 35, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 41, "Exhaustive handling for `OpKind`"
+        assert len(InstKind) == 38, "Exhaustive handling for `InstructionKind"
+        assert len(OpKind) == 42, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
-        bytecode = []
+        bytecode: list[Inst] = []
+
+        # Function label
+        fn_label = id(self.ops)
+        bytecode.append(Inst(InstKind.LABEL, arguments=[fn_label]))
+
+        # Allocate variables
+        if self.variables:
+            bytecode.append(Inst(InstKind.LOCALS_INIT, arguments=[len(self.variables)]))
+
         while op := cursor.pop():
             match op.kind:
                 case OpKind.ADD:
@@ -58,8 +66,8 @@ class Compiler:
                         bytecode.append(Inst(InstKind.SWAP))
                         bytecode.append(Inst(InstKind.ADD))
                         bytecode.append(Inst(InstKind.GLOBAL_SET, arguments=[index]))
-                    elif variable_name in self.locals:
-                        index = self.locals.index(variable_name)
+                    elif variable_name in self.variables:
+                        index = self.variables.index(variable_name)
                         bytecode.append(Inst(InstKind.LOCAL_GET, arguments=[index]))
                         bytecode.append(Inst(InstKind.SWAP))
                         bytecode.append(Inst(InstKind.ADD))
@@ -77,8 +85,8 @@ class Compiler:
                         bytecode.append(Inst(InstKind.GLOBAL_GET, arguments=[index]))
                         bytecode.append(Inst(InstKind.ADD))
                         bytecode.append(Inst(InstKind.GLOBAL_SET, arguments=[index]))
-                    elif variable_name in self.locals:
-                        index = self.locals.index(variable_name)
+                    elif variable_name in self.variables:
+                        index = self.variables.index(variable_name)
                         bytecode.append(Inst(InstKind.LOCAL_GET, arguments=[index]))
                         bytecode.append(Inst(InstKind.ADD))
                         bytecode.append(Inst(InstKind.LOCAL_SET, arguments=[index]))
@@ -97,11 +105,10 @@ class Compiler:
                         continue
 
                     # Local variable
-                    if variable_name not in self.locals:
-                        self.locals.append(variable_name)
-                    index = self.locals.index(variable_name)
+                    assert variable_name in self.variables, "Variable exists"
+                    index = self.variables.index(variable_name)
                     bytecode.append(Inst(InstKind.LOCAL_SET, arguments=[index]))
-                case OpKind.CALL_FN:
+                case OpKind.FN_CALL:
                     function_name = op.value
                     function = GLOBAL_FUNCTIONS.get(function_name)
                     assert isinstance(function, Function), "Expected function"
@@ -115,9 +122,10 @@ class Compiler:
                                     f"Function `{function.name}` assigns a global variable `{var.name}` before it is initialized within the global scope"
                                 )
 
-                        function.bytecode = compile_bytecode(function.ops)
+                        fn_compiler = Compiler(function.ops, function.variables)
+                        function.bytecode = fn_compiler.compile()
 
-                    bytecode.append(Inst(InstKind.CALL_FN, arguments=[function_name]))
+                    bytecode.append(Inst(InstKind.FN_CALL, arguments=[function_name]))
                 case OpKind.DIV:
                     bytecode.append(Inst(InstKind.DIV))
                 case OpKind.DROP:
@@ -126,8 +134,21 @@ class Compiler:
                     bytecode.append(Inst(InstKind.DUP))
                 case OpKind.EQ:
                     bytecode.append(Inst(InstKind.EQ))
-                case OpKind.EXEC_FN:
-                    bytecode.append(Inst(InstKind.EXEC_FN))
+                case OpKind.FN_EXEC:
+                    bytecode.append(Inst(InstKind.FN_EXEC))
+                case OpKind.FN_PUSH:
+                    function_name = op.value
+                    if function_name not in GLOBAL_FUNCTIONS:
+                        raise NameError(f"Function `{function_name}` is not defined")
+
+                    for i, (name, function) in enumerate(GLOBAL_FUNCTIONS.items()):
+                        if name == function_name:
+                            fn_compiler = Compiler(function.ops, function.variables)
+                            function.bytecode = fn_compiler.compile()
+                            bytecode.append(Inst(InstKind.PUSH, arguments=[i]))
+                            break
+                case OpKind.FN_RETURN:
+                    bytecode.append(Inst(InstKind.FN_RETURN))
                 case OpKind.GE:
                     bytecode.append(Inst(InstKind.GE))
                 case OpKind.GT:
@@ -141,7 +162,7 @@ class Compiler:
                         op=op,
                         start_kind=OpKind.IF_START,
                         end_kind=OpKind.IF_END,
-                        target_kinds=[OpKind.IF_ELIF, OpKind.IF_ELSE, OpKind.IF_END]
+                        target_kinds=[OpKind.IF_ELIF, OpKind.IF_ELSE, OpKind.IF_END],
                     )
                     if not end_label:
                         raise SyntaxError("`if` without matching `fi`")
@@ -228,22 +249,12 @@ class Compiler:
                     bytecode.append(Inst(InstKind.PUSH, arguments=[op.value]))
                 case OpKind.PUSH_STR:
                     bytecode.append(Inst(InstKind.PUSH_STR, arguments=[op.value]))
-                case OpKind.PUSH_FN:
-                    function_name = op.value
-                    if function_name not in GLOBAL_FUNCTIONS:
-                        raise NameError(f"Function `{function_name}` is not defined")
-
-                    for i, (name, function) in enumerate(GLOBAL_FUNCTIONS.items()):
-                        if name == function_name:
-                            function.bytecode = compile_bytecode(function.ops)
-                            bytecode.append(Inst(InstKind.PUSH, arguments=[i]))
-                            break
                 case OpKind.PUSH_LIST:
                     assert isinstance(op.value, list), "Expected `list`"
 
                     # Push list items in the reverse order
                     reversed_items: list[Op] = list(reversed(op.value))
-                    list_bytecode = compile_bytecode(reversed_items)
+                    list_bytecode = Compiler(reversed_items).compile()
 
                     # First item of the list is its length
                     push_len = Inst(InstKind.PUSH, arguments=[len(op.value)])
@@ -265,10 +276,12 @@ class Compiler:
                         continue
 
                     # Local variable
-                    if variable_name not in self.locals:
-                        raise NameError(f"Local variable `{variable_name}` does not exist")
+                    if variable_name not in self.variables:
+                        raise NameError(
+                            f"Local variable `{variable_name}` does not exist"
+                        )
 
-                    index = self.locals.index(variable_name)
+                    index = self.variables.index(variable_name)
                     bytecode.append(Inst(InstKind.LOCAL_GET, arguments=[index]))
                 case OpKind.ROT:
                     bytecode.append(Inst(InstKind.ROT))
@@ -315,6 +328,12 @@ class Compiler:
                 case _:
                     assert_never(op.kind)
 
+        if self.variables:
+            bytecode.append(
+                Inst(InstKind.LOCALS_UNINIT, arguments=[len(self.variables)])
+            )
+
+        bytecode.append(Inst(InstKind.FN_RETURN))
         return bytecode
 
     def find_matching_label(

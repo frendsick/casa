@@ -31,7 +31,7 @@ def main():
     type_check_ops(ops)
 
     logger.info("Compiling bytecode")
-    bytecode = compile_bytecode(ops, initialize_globals=True)
+    bytecode = compile_bytecode(ops)
 
     logger.info("Interpreting bytecode")
     interpret_bytecode(bytecode)

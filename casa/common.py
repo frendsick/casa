@@ -44,6 +44,7 @@ class Intrinsic(Enum):
 class Keyword(Enum):
     # Functions
     FN = auto()
+    RETURN = auto()
 
     # Loops
     WHILE = auto()
@@ -197,9 +198,10 @@ class OpKind(Enum):
     NE = auto()
 
     # Functions
-    CALL_FN = auto()
-    EXEC_FN = auto()
-    PUSH_FN = auto()
+    FN_CALL = auto()
+    FN_EXEC = auto()
+    FN_PUSH = auto()
+    FN_RETURN = auto()
 
     # Loops
     WHILE_START = auto()
@@ -230,7 +232,7 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 41, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 42, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires `int`
@@ -240,8 +242,8 @@ class Op:
             # Requires `str`
             case (
                 OpKind.IDENTIFIER
-                | OpKind.CALL_FN
-                | OpKind.PUSH_FN
+                | OpKind.FN_CALL
+                | OpKind.FN_PUSH
                 | OpKind.PUSH_STR
                 | OpKind.PUSH_VARIABLE
                 | OpKind.ASSIGN_DECREMENT
@@ -264,13 +266,14 @@ class Op:
                 | OpKind.LOAD
                 | OpKind.PRINT
                 | OpKind.STORE
-                | OpKind.EXEC_FN
+                | OpKind.FN_EXEC
             ):
                 if not isinstance(self.value, Intrinsic):
                     raise TypeError(f"`{self.kind}` requires value of type `Intrinsic`")
             # Requires `Keyword`
             case (
-                OpKind.IF_START
+                OpKind.FN_RETURN
+                | OpKind.IF_START
                 | OpKind.IF_CONDITION
                 | OpKind.IF_ELIF
                 | OpKind.IF_ELSE
@@ -343,8 +346,9 @@ class InstKind(Enum):
     NE = auto()
 
     # Functions
-    CALL_FN = auto()
-    EXEC_FN = auto()
+    FN_CALL = auto()
+    FN_EXEC = auto()
+    FN_RETURN = auto()
 
     # Jumps
     LABEL = auto()
@@ -352,6 +356,8 @@ class InstKind(Enum):
     JUMP_NE = auto()
 
     # Locals
+    LOCALS_INIT = auto()
+    LOCALS_UNINIT = auto()
     LOCAL_GET = auto()
     LOCAL_SET = auto()
 
@@ -367,7 +373,7 @@ class Inst:
     arguments: list = field(default_factory=list)
 
     def __post_init__(self):
-        assert len(InstKind) == 35, "Exhaustive handling for `InstructionKind`"
+        assert len(InstKind) == 38, "Exhaustive handling for `InstructionKind`"
 
         match self.kind:
             # Should not have a parameter
@@ -375,19 +381,19 @@ class Inst:
                 InstKind.ADD
                 | InstKind.AND
                 | InstKind.DIV
-                | InstKind.MOD
-                | InstKind.MUL
-                | InstKind.SUB
                 | InstKind.DROP
                 | InstKind.DUP
                 | InstKind.EQ
-                | InstKind.EXEC_FN
+                | InstKind.FN_EXEC
+                | InstKind.FN_RETURN
                 | InstKind.GE
                 | InstKind.GT
                 | InstKind.LE
                 | InstKind.LIST_NEW
                 | InstKind.LOAD
                 | InstKind.LT
+                | InstKind.MOD
+                | InstKind.MUL
                 | InstKind.NE
                 | InstKind.NOT
                 | InstKind.OR
@@ -395,6 +401,7 @@ class Inst:
                 | InstKind.PRINT
                 | InstKind.ROT
                 | InstKind.STORE
+                | InstKind.SUB
                 | InstKind.SWAP
             ):
                 if self.arguments:
@@ -409,6 +416,8 @@ class Inst:
                 | InstKind.JUMP
                 | InstKind.JUMP_NE
                 | InstKind.LABEL
+                | InstKind.LOCALS_INIT
+                | InstKind.LOCALS_UNINIT
                 | InstKind.LOCAL_GET
                 | InstKind.LOCAL_SET
                 | InstKind.PUSH
@@ -418,7 +427,7 @@ class Inst:
                         f"`{self.kind}` requires one parameter of type `int`\nArguments: {self.arguments}"
                     )
             # One parameter of type `str`
-            case InstKind.CALL_FN | InstKind.PUSH_STR:
+            case InstKind.FN_CALL | InstKind.PUSH_STR:
                 if len(self.arguments) != 1 or not isinstance(self.arguments[0], str):
                     raise TypeError(
                         f"`{self.kind}` requires one parameter of type `str`\nArguments: {self.arguments}"

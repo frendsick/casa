@@ -20,6 +20,7 @@ class TypeChecker:
     ops: list[Op]
     stack: list[Type] = field(default_factory=list)
     parameters: list[Type] = field(default_factory=list)
+    return_types: list[Type] | None = None  # Saved on `return`
 
     def stack_push(self, typ: Type):
         self.stack.append(typ)
@@ -113,7 +114,9 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                         global_variable, Variable
                     ), "Valid global variable"
 
-                    if not global_variable.typ or global_variable.typ == ANY_TYPE and stack_type != ANY_TYPE:
+                    if not global_variable.typ or (
+                        global_variable.typ == ANY_TYPE and stack_type != ANY_TYPE
+                    ):
                         global_variable.typ = stack_type
 
                     if global_variable.typ not in (stack_type, ANY_TYPE):
@@ -128,7 +131,9 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 assert isinstance(function, Function), "Expected function"
                 for variable in function.variables:
                     if variable.name == variable_name:
-                        if not variable.typ or variable.typ == ANY_TYPE and stack_type != ANY_TYPE:
+                        if not variable.typ or (
+                            variable.typ == ANY_TYPE and stack_type != ANY_TYPE
+                        ):
                             variable.typ = stack_type
 
                         if variable.typ not in (stack_type, ANY_TYPE):
@@ -142,7 +147,17 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     raise AssertionError(
                         f"Function `{function.name}` does not have variable `{variable_name}`"
                     )
-            case OpKind.CALL_FN:
+            case OpKind.DROP:
+                tc.stack_pop()
+            case OpKind.DUP:
+                t1 = tc.stack_pop()
+                tc.stack_push(t1)
+                tc.stack_push(t1)
+            case OpKind.EQ:
+                tc.stack_pop()
+                tc.stack_pop()
+                tc.stack_push("bool")
+            case OpKind.FN_CALL:
                 function_name = op.value
                 assert isinstance(function_name, str), "Expected function name"
                 function_name = function_name
@@ -154,22 +169,37 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                         global_function.ops, global_function
                     )
                 tc.apply_signature(global_function.signature)
-            case OpKind.DROP:
-                tc.stack_pop()
-            case OpKind.DUP:
-                t1 = tc.stack_pop()
-                tc.stack_push(t1)
-                tc.stack_push(t1)
-            case OpKind.EQ:
-                tc.stack_pop()
-                tc.stack_pop()
-                tc.stack_push("bool")
-            case OpKind.EXEC_FN:
+            case OpKind.FN_EXEC:
                 fn_ptr = tc.stack_pop()
                 assert isinstance(fn_ptr, str), "Function pointer type"
                 start = fn_ptr.index("[") + 1
                 end = fn_ptr.index("]", start)
                 tc.apply_signature(Signature.from_str(fn_ptr[start:end]))
+            case OpKind.FN_RETURN:
+                if tc.return_types is None:
+                    tc.return_types = tc.stack.copy()
+                    continue
+
+                if tc.return_types != tc.stack:
+                    raise TypeError(
+                        f"""Invalid return types
+
+Expected: {tc.return_types}
+Stack:    {tc.stack}
+"""
+                    )
+            case OpKind.FN_PUSH:
+                assert isinstance(op.value, str), "Expected identifier name"
+                function_name = op.value
+                assert isinstance(function_name, str), "Expected function name"
+                global_function = GLOBAL_FUNCTIONS.get(function_name)
+                assert isinstance(global_function, Function), "Expected function"
+
+                if not global_function.signature:
+                    global_function.signature = type_check_ops(
+                        global_function.ops, global_function
+                    )
+                tc.stack_push(f"fn[{global_function.signature}]")
             case OpKind.GE:
                 tc.stack_pop()
                 tc.stack_pop()
@@ -228,18 +258,6 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 tc.stack_push(t2)
             case OpKind.PRINT:
                 tc.stack_pop()
-            case OpKind.PUSH_FN:
-                assert isinstance(op.value, str), "Expected identifier name"
-                function_name = op.value
-                assert isinstance(function_name, str), "Expected function name"
-                global_function = GLOBAL_FUNCTIONS.get(function_name)
-                assert isinstance(global_function, Function), "Expected function"
-
-                if not global_function.signature:
-                    global_function.signature = type_check_ops(
-                        global_function.ops, global_function
-                    )
-                tc.stack_push(f"fn[{global_function.signature}]")
             case OpKind.PUSH_INT:
                 tc.stack_push("int")
             case OpKind.PUSH_LIST:
@@ -299,5 +317,14 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 pass
             case _:
                 assert_never(op.kind)
+
+    if tc.return_types and tc.return_types != tc.stack:
+        raise TypeError(
+            f"""Invalid return types
+
+Expected: {tc.return_types}
+Stack:    {tc.stack}
+"""
+        )
 
     return Signature(tc.parameters, tc.stack)  # type_check_ops
