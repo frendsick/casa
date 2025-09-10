@@ -37,7 +37,7 @@ class Compiler:
 
     def compile(self) -> Bytecode:
         assert len(InstKind) == 38, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 44, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 45, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
         bytecode: list[Inst] = []
@@ -245,6 +245,8 @@ class Compiler:
                     bytecode.append(Inst(InstKind.OVER))
                 case OpKind.PRINT:
                     bytecode.append(Inst(InstKind.PRINT))
+                case OpKind.PUSH_BOOL:
+                    bytecode.append(Inst(InstKind.PUSH, arguments=[int(op.value)]))
                 case OpKind.PUSH_INT:
                     bytecode.append(Inst(InstKind.PUSH, arguments=[op.value]))
                 case OpKind.PUSH_STR:

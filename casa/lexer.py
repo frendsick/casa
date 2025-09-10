@@ -104,6 +104,8 @@ class Lexer:
         location = self.current_location(value_len)
         self.cursor.position += value_len
 
+        if value in ("true", "false"):
+            return Token(value, TokenKind.LITERAL, location)
         if Intrinsic.from_lowercase(value):
             return Token(value, TokenKind.INTRINSIC, location)
         if Keyword.from_lowercase(value):
