@@ -21,7 +21,9 @@ def compile_bytecode(ops: list[Op]) -> Bytecode:
     bytecode: Bytecode = []
     compiler = Compiler(ops)
 
-    bytecode.append(Inst(InstKind.GLOBALS_INIT, arguments=[len(GLOBAL_VARIABLES)]))
+    if len(GLOBAL_VARIABLES) > 0:
+        bytecode.append(Inst(InstKind.GLOBALS_INIT, arguments=[len(GLOBAL_VARIABLES)]))
+
     bytecode += compiler.compile()
     return bytecode
 
