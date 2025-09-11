@@ -21,13 +21,13 @@ def interpret_bytecode(
     labels: dict[LabelId, InstrAddr] = {}
     locals: list[int] = []
     strings: dict[LabelId, str] = {}
-    if not call_stack:
+    if call_stack is None:
         call_stack = []
-    if not data_stack:
+    if data_stack is None:
         data_stack = []
-    if not globals:
+    if globals is None:
         globals = []
-    if not captures:
+    if captures is None:
         captures = {}
 
     # Set up the program
