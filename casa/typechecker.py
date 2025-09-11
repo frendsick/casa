@@ -322,22 +322,31 @@ Stack:    {tc.stack}
             case OpKind.PUSH_BOOL:
                 tc.stack_push("bool")
             case OpKind.PUSH_CAPTURE:
-                variable_name = op.value
+                capture_name = op.value
                 assert isinstance(op.value, str), "Expected variable name"
                 assert isinstance(function, Function), "Expected function"
 
-                for capture in function.captures:
-                    if capture == variable_name:
-                        if not capture.typ:
-                            raise AssertionError(
-                                f"Capture `{capture.name}` has not been type checked before its usage"
-                            )
-                        tc.stack_push(capture.typ)
-                        break
-                else:
+                if capture_name not in function.captures:
                     raise NameError(
-                        f"Function `{function.name}` does not have variable `{variable_name}`"
+                        f"Function `{function.name}` does not have capture `{capture_name}`"
                     )
+
+                index = function.captures.index(capture_name)
+                capture = function.captures[index]
+
+                if capture.typ:
+                    tc.stack_push(capture.typ)
+                    continue
+
+                if global_variable := GLOBAL_VARIABLES.get(capture.name):
+                    assert global_variable.typ, "Variable type"
+                    capture.typ = global_variable.typ
+                    tc.stack_push(global_variable.typ)
+                    continue
+
+                raise AssertionError(
+                    f"Capture `{capture.name}` has not been type checked before its usage"
+                )
             case OpKind.PUSH_INT:
                 tc.stack_push("int")
             case OpKind.PUSH_LIST:
