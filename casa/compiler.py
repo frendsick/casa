@@ -69,7 +69,7 @@ class Compiler:
                         bytecode.append(Inst(InstKind.ADD))
                         bytecode.append(Inst(InstKind.GLOBAL_SET, arguments=[index]))
                     elif variable_name in self.variables:
-                        index = self.variables.index(variable_name)
+                        index = self.variables.index(Variable(variable_name))
                         bytecode.append(Inst(InstKind.LOCAL_GET, arguments=[index]))
                         bytecode.append(Inst(InstKind.SWAP))
                         bytecode.append(Inst(InstKind.ADD))
@@ -88,7 +88,7 @@ class Compiler:
                         bytecode.append(Inst(InstKind.ADD))
                         bytecode.append(Inst(InstKind.GLOBAL_SET, arguments=[index]))
                     elif variable_name in self.variables:
-                        index = self.variables.index(variable_name)
+                        index = self.variables.index(Variable(variable_name))
                         bytecode.append(Inst(InstKind.LOCAL_GET, arguments=[index]))
                         bytecode.append(Inst(InstKind.ADD))
                         bytecode.append(Inst(InstKind.LOCAL_SET, arguments=[index]))
@@ -108,7 +108,7 @@ class Compiler:
 
                     # Local variable
                     assert variable_name in self.variables, "Variable exists"
-                    index = self.variables.index(variable_name)
+                    index = self.variables.index(Variable(variable_name))
                     bytecode.append(Inst(InstKind.LOCAL_SET, arguments=[index]))
                 case OpKind.FN_CALL:
                     function_name = op.value
@@ -305,7 +305,7 @@ class Compiler:
                             f"Local variable `{variable_name}` does not exist"
                         )
 
-                    index = self.variables.index(variable_name)
+                    index = self.variables.index(Variable(variable_name))
                     bytecode.append(Inst(InstKind.LOCAL_GET, arguments=[index]))
                 case OpKind.ROT:
                     bytecode.append(Inst(InstKind.ROT))
