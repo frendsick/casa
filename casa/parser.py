@@ -83,14 +83,14 @@ def resolve_identifiers(
                         global_function.is_used = True
                         resolve_identifiers(global_function.ops, global_function)
                     continue
+                if function and identifier in function.captures:
+                    op.kind = OpKind.PUSH_CAPTURE
+                    continue
                 if GLOBAL_VARIABLES.get(identifier):
                     op.kind = OpKind.PUSH_VARIABLE
                     continue
                 if function and identifier in function.variables:
                     op.kind = OpKind.PUSH_VARIABLE
-                    continue
-                if function and identifier in function.captures:
-                    op.kind = OpKind.PUSH_CAPTURE
                     continue
 
                 raise NameError(f"Identifier `{identifier}` is not defined")
