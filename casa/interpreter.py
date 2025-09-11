@@ -1,12 +1,6 @@
 from typing import assert_never
 
-from casa.common import (
-    GLOBAL_FUNCTIONS,
-    Bytecode,
-    Function,
-    InstKind,
-    LabelId,
-)
+from casa.common import GLOBAL_FUNCTIONS, Bytecode, Function, InstKind, LabelId
 
 InstrAddr = int
 
@@ -16,15 +10,16 @@ def interpret_bytecode(
     call_stack: list[int] | None = None,
     data_stack: list[int] | None = None,
     globals: list[int] | None = None,
+    captures: dict[str, int] | None = None,
 ):
-    assert len(InstKind) == 38, "Exhaustive handling for `InstructionKind`"
+    assert len(InstKind) == 40, "Exhaustive handling for `InstructionKind`"
 
     is_global_scope = not call_stack
 
     # Containers for emulating a computer
     heap: list[int] = []
-    locals: list[int] = []
     labels: dict[LabelId, InstrAddr] = {}
+    locals: list[int] = []
     strings: dict[LabelId, str] = {}
     if not call_stack:
         call_stack = []
@@ -32,6 +27,8 @@ def interpret_bytecode(
         data_stack = []
     if not globals:
         globals = []
+    if not captures:
+        captures = {}
 
     # Set up the program
     for instr_addr, instruction in enumerate(bytecode):
@@ -54,6 +51,26 @@ def interpret_bytecode(
                 a = stack_pop(data_stack)
                 b = stack_pop(data_stack)
                 stack_push(data_stack, int(bool(a and b)))
+            case InstKind.CAPTURE_LOAD:
+                assert len(instruction.arguments) == 2
+
+                lambda_name = instruction.arguments[0]
+                capture_name = instruction.arguments[1]
+                capture_label = f"{lambda_name}_{capture_name}"
+
+                value = captures.get(capture_label)
+                if not value:
+                    raise AssertionError("Capture should be stored")
+                stack_push(data_stack, value)
+            case InstKind.CAPTURE_STORE:
+                assert len(instruction.arguments) == 2
+
+                lambda_name = instruction.arguments[0]
+                capture_name = instruction.arguments[1]
+                capture_label = f"{lambda_name}_{capture_name}"
+
+                a = stack_pop(data_stack)
+                captures[capture_label] = a
             case InstKind.DIV:
                 a = stack_pop(data_stack)
                 b = stack_pop(data_stack)
@@ -79,7 +96,9 @@ def interpret_bytecode(
                 assert isinstance(function.bytecode, list), "Function is compiled"
 
                 call_stack.append(pc)
-                interpret_bytecode(function.bytecode, call_stack, data_stack, globals)
+                interpret_bytecode(
+                    function.bytecode, call_stack, data_stack, globals, captures
+                )
             case InstKind.FN_EXEC:
                 fn_ptr = stack_pop(data_stack)
                 assert fn_ptr < len(GLOBAL_FUNCTIONS), "Valid function pointer"
@@ -88,7 +107,9 @@ def interpret_bytecode(
                 assert isinstance(function.bytecode, list), "Function is compiled"
 
                 call_stack.append(pc)
-                interpret_bytecode(function.bytecode, call_stack, data_stack, globals)
+                interpret_bytecode(
+                    function.bytecode, call_stack, data_stack, globals, captures
+                )
             case InstKind.FN_RETURN:
                 if is_global_scope:
                     return
