@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from typing import assert_never
+
 from casa.common import (
     GLOBAL_FUNCTIONS,
     GLOBAL_VARIABLES,
@@ -10,7 +11,6 @@ from casa.common import (
     Type,
     Variable,
 )
-
 
 ANY_TYPE = "any"
 
@@ -321,6 +321,23 @@ Stack:    {tc.stack}
                 tc.stack_pop()
             case OpKind.PUSH_BOOL:
                 tc.stack_push("bool")
+            case OpKind.PUSH_CAPTURE:
+                variable_name = op.value
+                assert isinstance(op.value, str), "Expected variable name"
+                assert isinstance(function, Function), "Expected function"
+
+                for capture in function.captures:
+                    if capture == variable_name:
+                        if not capture.typ:
+                            raise AssertionError(
+                                f"Capture `{capture.name}` has not been type checked before its usage"
+                            )
+                        tc.stack_push(capture.typ)
+                        break
+                else:
+                    raise NameError(
+                        f"Function `{function.name}` does not have variable `{variable_name}`"
+                    )
             case OpKind.PUSH_INT:
                 tc.stack_push("int")
             case OpKind.PUSH_LIST:
@@ -377,25 +394,19 @@ Stack:    {tc.stack}
                 branched = tc.branched_stacks[-1]
 
                 if tc.stack != branched.after:
-                    raise TypeError(
-                        f"Stack state changed: {branched} --> {tc.stack}"
-                    )
+                    raise TypeError(f"Stack state changed: {branched} --> {tc.stack}")
             case OpKind.WHILE_CONDITION:
                 tc.expect_type("bool")
             case OpKind.WHILE_END:
                 branched = tc.branched_stacks.pop()
                 if branched.after != tc.stack:
-                    raise TypeError(
-                        f"Stack state changed: {branched} --> {tc.stack}"
-                    )
+                    raise TypeError(f"Stack state changed: {branched} --> {tc.stack}")
             case OpKind.WHILE_CONTINUE:
                 assert len(tc.branched_stacks) > 0, "While block stack state is saved"
                 branched = tc.branched_stacks[-1]
 
                 if tc.stack != branched.after:
-                    raise TypeError(
-                        f"Stack state changed: {branched} --> {tc.stack}"
-                    )
+                    raise TypeError(f"Stack state changed: {branched} --> {tc.stack}")
             case OpKind.WHILE_START:
                 tc.branched_stacks.append(BranchedStack(tc.stack))
             case _:

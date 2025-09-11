@@ -224,6 +224,7 @@ class OpKind(Enum):
     ASSIGN_DECREMENT = auto()
     ASSIGN_INCREMENT = auto()
     ASSIGN_VARIABLE = auto()
+    PUSH_CAPTURE = auto()
     PUSH_VARIABLE = auto()
 
     # Identifiers should be resolved by the parser
@@ -237,7 +238,7 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 45, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 46, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires `bool`
@@ -254,6 +255,7 @@ class Op:
                 | OpKind.FN_CALL
                 | OpKind.FN_PUSH
                 | OpKind.PUSH_STR
+                | OpKind.PUSH_CAPTURE
                 | OpKind.PUSH_VARIABLE
                 | OpKind.ASSIGN_DECREMENT
                 | OpKind.ASSIGN_INCREMENT
@@ -377,6 +379,10 @@ class InstKind(Enum):
     GLOBAL_GET = auto()
     GLOBAL_SET = auto()
 
+    # Captures
+    CAPTURE_LOAD = auto()
+    CAPTURE_STORE = auto()
+
 
 @dataclass
 class Inst:
@@ -384,7 +390,7 @@ class Inst:
     arguments: list = field(default_factory=list)
 
     def __post_init__(self):
-        assert len(InstKind) == 38, "Exhaustive handling for `InstructionKind`"
+        assert len(InstKind) == 40, "Exhaustive handling for `InstructionKind`"
 
         match self.kind:
             # Should not have a parameter
@@ -421,9 +427,9 @@ class Inst:
                     )
             # One parameter of type `int`
             case (
-                InstKind.GLOBAL_GET
+                InstKind.GLOBALS_INIT
+                | InstKind.GLOBAL_GET
                 | InstKind.GLOBAL_SET
-                | InstKind.GLOBALS_INIT
                 | InstKind.JUMP
                 | InstKind.JUMP_NE
                 | InstKind.LABEL
@@ -442,6 +448,16 @@ class Inst:
                 if len(self.arguments) != 1 or not isinstance(self.arguments[0], str):
                     raise TypeError(
                         f"`{self.kind}` requires one parameter of type `str`\nArguments: {self.arguments}"
+                    )
+            # Two parameters of type `str`
+            case InstKind.CAPTURE_LOAD | InstKind.CAPTURE_STORE:
+                if (
+                    len(self.arguments) != 2
+                    or not isinstance(self.arguments[0], str)
+                    or not isinstance(self.arguments[1], str)
+                ):
+                    raise TypeError(
+                        f"`{self.kind}` requires two parameters of type `str`\nArguments: {self.arguments}"
                     )
 
 
@@ -507,6 +523,7 @@ class Function:
     bytecode: Bytecode | None = None
     is_used: bool = False
     variables: list[Variable] = field(default_factory=list)
+    captures: list[Variable] = field(default_factory=list)
 
 
 GLOBAL_FUNCTIONS: OrderedDict[str, Function] = OrderedDict()

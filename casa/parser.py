@@ -39,7 +39,10 @@ def parse_ops(tokens: list[Token]) -> list[Op]:
     return ops
 
 
-def resolve_identifiers(ops: list[Op], function: Function | None = None):
+def resolve_identifiers(
+    ops: list[Op],
+    function: Function | None = None,
+):
     for op in ops:
         match op.kind:
             case OpKind.ASSIGN_VARIABLE:
@@ -57,6 +60,15 @@ def resolve_identifiers(ops: list[Op], function: Function | None = None):
                     continue
                 if variable not in function.variables:
                     function.variables.append(variable)
+            case OpKind.FN_PUSH:
+                function_name = op.value
+                lambda_function = GLOBAL_FUNCTIONS.get(function_name)
+                if not lambda_function:
+                    raise NameError(f"Lambda function `{function_name}` is not defined")
+
+                captures = function.variables.copy() if function else []
+                lambda_function.captures = captures
+                resolve_identifiers(lambda_function.ops, lambda_function)
             case OpKind.IDENTIFIER:
                 identifier = op.value
                 assert isinstance(identifier, str), "Expected identifier name"
@@ -73,6 +85,9 @@ def resolve_identifiers(ops: list[Op], function: Function | None = None):
                     continue
                 if function and identifier in function.variables:
                     op.kind = OpKind.PUSH_VARIABLE
+                    continue
+                if function and identifier in function.captures:
+                    op.kind = OpKind.PUSH_CAPTURE
                     continue
 
                 raise NameError(f"Identifier `{identifier}` is not defined")

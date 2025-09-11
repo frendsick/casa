@@ -1,5 +1,5 @@
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import assert_never
 
 from casa.common import (
@@ -35,11 +35,11 @@ def op_to_label(op: Op) -> LabelId:
 @dataclass
 class Compiler:
     ops: list[Op]
-    variables: list[Variable] = field(default_factory=list)
+    function: Function | None = None
 
     def compile(self) -> Bytecode:
-        assert len(InstKind) == 38, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 45, "Exhaustive handling for `OpKind`"
+        assert len(InstKind) == 40, "Exhaustive handling for `InstructionKind"
+        assert len(OpKind) == 46, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
         bytecode: list[Inst] = []
@@ -48,9 +48,13 @@ class Compiler:
         fn_label = id(self.ops)
         bytecode.append(Inst(InstKind.LABEL, arguments=[fn_label]))
 
-        # Allocate variables
-        if self.variables:
-            bytecode.append(Inst(InstKind.LOCALS_INIT, arguments=[len(self.variables)]))
+        if self.function and self.function.variables:
+            bytecode.append(
+                Inst(
+                    InstKind.LOCALS_INIT,
+                    arguments=[len(self.function.variables)],
+                )
+            )
 
         while op := cursor.pop():
             match op.kind:
@@ -68,8 +72,8 @@ class Compiler:
                         bytecode.append(Inst(InstKind.SWAP))
                         bytecode.append(Inst(InstKind.ADD))
                         bytecode.append(Inst(InstKind.GLOBAL_SET, arguments=[index]))
-                    elif variable_name in self.variables:
-                        index = self.variables.index(Variable(variable_name))
+                    elif self.function and variable_name in self.function.variables:
+                        index = self.function.variables.index(Variable(variable_name))
                         bytecode.append(Inst(InstKind.LOCAL_GET, arguments=[index]))
                         bytecode.append(Inst(InstKind.SWAP))
                         bytecode.append(Inst(InstKind.ADD))
@@ -87,8 +91,8 @@ class Compiler:
                         bytecode.append(Inst(InstKind.GLOBAL_GET, arguments=[index]))
                         bytecode.append(Inst(InstKind.ADD))
                         bytecode.append(Inst(InstKind.GLOBAL_SET, arguments=[index]))
-                    elif variable_name in self.variables:
-                        index = self.variables.index(Variable(variable_name))
+                    elif self.function and variable_name in self.function.variables:
+                        index = self.function.variables.index(Variable(variable_name))
                         bytecode.append(Inst(InstKind.LOCAL_GET, arguments=[index]))
                         bytecode.append(Inst(InstKind.ADD))
                         bytecode.append(Inst(InstKind.LOCAL_SET, arguments=[index]))
@@ -107,8 +111,9 @@ class Compiler:
                         continue
 
                     # Local variable
-                    assert variable_name in self.variables, "Variable exists"
-                    index = self.variables.index(Variable(variable_name))
+                    assert self.function, "Function exists"
+                    assert variable_name in self.function.variables, "Variable exists"
+                    index = self.function.variables.index(Variable(variable_name))
                     bytecode.append(Inst(InstKind.LOCAL_SET, arguments=[index]))
                 case OpKind.FN_CALL:
                     function_name = op.value
@@ -124,7 +129,7 @@ class Compiler:
                                     f"Function `{function.name}` assigns a global variable `{var.name}` before it is initialized within the global scope"
                                 )
 
-                        fn_compiler = Compiler(function.ops, function.variables)
+                        fn_compiler = Compiler(function.ops, function)
                         function.bytecode = fn_compiler.compile()
 
                     bytecode.append(Inst(InstKind.FN_CALL, arguments=[function_name]))
@@ -140,15 +145,29 @@ class Compiler:
                     bytecode.append(Inst(InstKind.FN_EXEC))
                 case OpKind.FN_PUSH:
                     function_name = op.value
-                    if function_name not in GLOBAL_FUNCTIONS:
+                    lambda_function = GLOBAL_FUNCTIONS.get(function_name)
+                    if not lambda_function:
                         raise NameError(f"Function `{function_name}` is not defined")
 
-                    for i, (name, function) in enumerate(GLOBAL_FUNCTIONS.items()):
-                        if name == function_name:
-                            fn_compiler = Compiler(function.ops, function.variables)
-                            function.bytecode = fn_compiler.compile()
-                            bytecode.append(Inst(InstKind.PUSH, arguments=[i]))
-                            break
+                    # Compile the lambda function
+                    fn_compiler = Compiler(lambda_function.ops, lambda_function)
+                    lambda_function.bytecode = fn_compiler.compile()
+
+                    # Setup captures
+                    for index, capture in enumerate(lambda_function.captures):
+                        assert self.function, "Parent function exists"
+                        bytecode.append(Inst(InstKind.LOCAL_GET, arguments=[index]))
+                        bytecode.append(
+                            Inst(
+                                InstKind.CAPTURE_STORE,
+                                arguments=[lambda_function.name, capture.name],
+                            )
+                        )
+
+                    # Push function pointer
+                    index = list(GLOBAL_FUNCTIONS).index(function_name)
+                    bytecode.append(Inst(InstKind.PUSH, arguments=[index]))
+
                 case OpKind.FN_RETURN:
                     bytecode.append(Inst(InstKind.FN_RETURN))
                 case OpKind.GE:
@@ -269,6 +288,19 @@ class Compiler:
                     bytecode.append(Inst(InstKind.PRINT))
                 case OpKind.PUSH_BOOL:
                     bytecode.append(Inst(InstKind.PUSH, arguments=[int(op.value)]))
+                case OpKind.PUSH_CAPTURE:
+                    capture_name = op.value
+                    assert isinstance(capture_name, str), "Valid capture name"
+                    assert self.function, "Expected function"
+
+                    assert capture_name in self.function.captures, "Capture exists"
+
+                    bytecode.append(
+                        Inst(
+                            InstKind.CAPTURE_LOAD,
+                            arguments=[self.function.name, capture_name],
+                        )
+                    )
                 case OpKind.PUSH_INT:
                     bytecode.append(Inst(InstKind.PUSH, arguments=[op.value]))
                 case OpKind.PUSH_STR:
@@ -300,12 +332,13 @@ class Compiler:
                         continue
 
                     # Local variable
-                    if variable_name not in self.variables:
+                    assert self.function, "Expected function"
+                    if variable_name not in self.function.variables:
                         raise NameError(
                             f"Local variable `{variable_name}` does not exist"
                         )
 
-                    index = self.variables.index(Variable(variable_name))
+                    index = self.function.variables.index(Variable(variable_name))
                     bytecode.append(Inst(InstKind.LOCAL_GET, arguments=[index]))
                 case OpKind.ROT:
                     bytecode.append(Inst(InstKind.ROT))
@@ -381,9 +414,9 @@ class Compiler:
                 case _:
                     assert_never(op.kind)
 
-        if self.variables:
+        if self.function and self.function.variables:
             bytecode.append(
-                Inst(InstKind.LOCALS_UNINIT, arguments=[len(self.variables)])
+                Inst(InstKind.LOCALS_UNINIT, arguments=[len(self.function.variables)])
             )
 
         bytecode.append(Inst(InstKind.FN_RETURN))
