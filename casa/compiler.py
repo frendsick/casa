@@ -160,6 +160,14 @@ class Compiler:
                         f"Identifier `{op.value}` should be resolved by the parser"
                     )
                 case OpKind.IF_CONDITION:
+                    if not self.find_matching_label(
+                        op=op,
+                        start_kind=OpKind.IF_START,
+                        end_kind=OpKind.IF_END,
+                        reverse=True,
+                    ):
+                        raise SyntaxError("`then` without matching `if`")
+
                     end_label = self.find_matching_label(
                         op=op,
                         start_kind=OpKind.IF_START,
@@ -167,7 +175,7 @@ class Compiler:
                         target_kinds=[OpKind.IF_ELIF, OpKind.IF_ELSE, OpKind.IF_END],
                     )
                     if not end_label:
-                        raise SyntaxError("`if` without matching `fi`")
+                        raise SyntaxError("`then` without matching `fi`")
 
                     bytecode.append(Inst(InstKind.JUMP_NE, arguments=[end_label]))
                 case OpKind.IF_ELIF:
@@ -223,10 +231,22 @@ class Compiler:
                     bytecode.append(Inst(InstKind.JUMP, arguments=[end_label]))
                     bytecode.append(Inst(InstKind.LABEL, arguments=[else_label]))
                 case OpKind.IF_END:
+                    if not self.find_matching_label(
+                        op=op,
+                        start_kind=OpKind.IF_START,
+                        end_kind=OpKind.IF_END,
+                        reverse=True,
+                    ):
+                        raise SyntaxError("`fi` without parent `if`")
                     label = op_to_label(op)
                     bytecode.append(Inst(InstKind.LABEL, arguments=[label]))
                 case OpKind.IF_START:
-                    pass
+                    if not self.find_matching_label(
+                        op=op,
+                        start_kind=OpKind.IF_START,
+                        end_kind=OpKind.IF_END,
+                    ):
+                        raise SyntaxError("`if` without matching `fi`")
                 case OpKind.LE:
                     bytecode.append(Inst(InstKind.LE))
                 case OpKind.LOAD:
@@ -377,6 +397,11 @@ class Compiler:
         target_kinds: list[OpKind] | None = None,
         reverse: bool = False,
     ) -> LabelId | None:
+        START_KINDS = [OpKind.IF_START, OpKind.WHILE_START]
+        END_KINDS = [OpKind.IF_END, OpKind.WHILE_END]
+        assert start_kind in START_KINDS, f"Invalid start for block: {start_kind}"
+        assert end_kind in END_KINDS, f"Invalid end for block: {end_kind}"
+
         if not target_kinds:
             target_kinds = [start_kind] if reverse else [end_kind]
 
@@ -392,9 +417,12 @@ class Compiler:
             if depth == START_DEPTH and other_op.kind in target_kinds:
                 return op_to_label(other_op)
 
-            if other_op.kind == start_kind:
+            if other_op.kind in START_KINDS:
                 depth += direction
-            elif other_op.kind == end_kind:
+            elif other_op.kind in END_KINDS:
                 depth -= direction
+
+            if depth < START_DEPTH:
+                return None
 
         return None
