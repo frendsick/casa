@@ -66,8 +66,11 @@ def resolve_identifiers(
                 if not lambda_function:
                     raise NameError(f"Lambda function `{function_name}` is not defined")
 
-                captures = function.variables.copy() if function else []
+                captures = list(GLOBAL_VARIABLES.values())
+                if function:
+                    captures += function.variables.copy()
                 lambda_function.captures = captures
+
                 resolve_identifiers(lambda_function.ops, lambda_function)
             case OpKind.IDENTIFIER:
                 identifier = op.value
