@@ -4,6 +4,7 @@ from typing import assert_never
 
 from casa.common import (
     GLOBAL_FUNCTIONS,
+    GLOBAL_SCOPE_LABEL,
     GLOBAL_VARIABLES,
     Bytecode,
     Cursor,
@@ -155,8 +156,17 @@ class Compiler:
 
                     # Setup captures
                     for index, capture in enumerate(lambda_function.captures):
-                        assert self.function, "Parent function exists"
-                        bytecode.append(Inst(InstKind.LOCAL_GET, arguments=[index]))
+                        if capture in GLOBAL_VARIABLES:
+                            index = list(GLOBAL_VARIABLES.values()).index(capture)
+                            bytecode.append(
+                                Inst(InstKind.GLOBAL_GET, arguments=[index])
+                            )
+                        elif self.function and capture in self.function.variables:
+                            index = self.function.variables.index(capture)
+                            bytecode.append(Inst(InstKind.LOCAL_GET, arguments=[index]))
+                        else:
+                            raise AssertionError("Captured variable should exist")
+
                         bytecode.append(
                             Inst(
                                 InstKind.CAPTURE_STORE,
@@ -291,14 +301,14 @@ class Compiler:
                 case OpKind.PUSH_CAPTURE:
                     capture_name = op.value
                     assert isinstance(capture_name, str), "Valid capture name"
-                    assert self.function, "Expected function"
 
-                    assert capture_name in self.function.captures, "Capture exists"
-
+                    function_name = (
+                        self.function.name if self.function else GLOBAL_SCOPE_LABEL
+                    )
                     bytecode.append(
                         Inst(
                             InstKind.CAPTURE_LOAD,
-                            arguments=[self.function.name, capture_name],
+                            arguments=[function_name, capture_name],
                         )
                     )
                 case OpKind.PUSH_INT:

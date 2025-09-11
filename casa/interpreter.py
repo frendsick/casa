@@ -52,22 +52,20 @@ def interpret_bytecode(
                 b = stack_pop(data_stack)
                 stack_push(data_stack, int(bool(a and b)))
             case InstKind.CAPTURE_LOAD:
-                assert len(instruction.arguments) == 2
-
-                lambda_name = instruction.arguments[0]
-                capture_name = instruction.arguments[1]
-                capture_label = f"{lambda_name}_{capture_name}"
+                assert len(instruction.arguments) == 2, "Capture name and function"
+                capture_name: str = instruction.arguments[0]
+                function_name: str = instruction.arguments[1]
+                capture_label = f"{function_name}_{capture_name}"
 
                 value = captures.get(capture_label)
                 if not value:
                     raise AssertionError("Capture should be stored")
                 stack_push(data_stack, value)
             case InstKind.CAPTURE_STORE:
-                assert len(instruction.arguments) == 2
-
-                lambda_name = instruction.arguments[0]
-                capture_name = instruction.arguments[1]
-                capture_label = f"{lambda_name}_{capture_name}"
+                assert len(instruction.arguments) == 2, "Capture name and function"
+                capture_name: str = instruction.arguments[0]
+                function_name: str = instruction.arguments[1]
+                capture_label = f"{function_name}_{capture_name}"
 
                 a = stack_pop(data_stack)
                 captures[capture_label] = a
