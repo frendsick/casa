@@ -396,7 +396,7 @@ class InstKind(Enum):
 @dataclass
 class Inst:
     kind: InstKind
-    arguments: list = field(default_factory=list)
+    args: list = field(default_factory=list)
 
     def __post_init__(self):
         assert len(InstKind) == 40, "Exhaustive handling for `InstructionKind`"
@@ -429,9 +429,9 @@ class Inst:
                 | InstKind.SUB
                 | InstKind.SWAP
             ):
-                if self.arguments:
+                if self.args:
                     raise TypeError(
-                        f"`{self.kind}` should not have any parameters\nArguments: {self.arguments}"
+                        f"`{self.kind}` should not have any parameters\nArguments: {self.args}"
                     )
             # One parameter of type `int`
             case (
@@ -448,9 +448,9 @@ class Inst:
                 | InstKind.LOCAL_SET
                 | InstKind.PUSH
             ):
-                if len(self.arguments) != 1 or not isinstance(self.arguments[0], int):
+                if len(self.args) != 1 or not isinstance(self.args[0], int):
                     raise TypeError(
-                        f"`{self.kind}` requires one parameter of type `int`\nArguments: {self.arguments}"
+                        f"`{self.kind}` requires one parameter of type `int`\nArguments: {self.args}"
                     )
             # One parameter of type `str`
             case (
@@ -459,9 +459,9 @@ class Inst:
                 | InstKind.FN_CALL
                 | InstKind.PUSH_STR
             ):
-                if len(self.arguments) != 1 or not isinstance(self.arguments[0], str):
+                if len(self.args) != 1 or not isinstance(self.args[0], str):
                     raise TypeError(
-                        f"`{self.kind}` requires one parameter of type `str`\nArguments: {self.arguments}"
+                        f"`{self.kind}` requires one parameter of type `str`\nArguments: {self.args}"
                     )
 
 
