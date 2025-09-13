@@ -3,15 +3,18 @@ from typing import assert_never
 from casa.common import (
     GLOBAL_FUNCTIONS,
     GLOBAL_SCOPE_LABEL,
+    GLOBAL_STRUCTS,
     GLOBAL_VARIABLES,
     Cursor,
     Delimiter,
     Function,
     Intrinsic,
     Keyword,
+    Member,
     Op,
     Operator,
     OpKind,
+    Struct,
     Token,
     TokenKind,
     Variable,
@@ -96,6 +99,10 @@ def resolve_identifiers(
                 if GLOBAL_VARIABLES.get(identifier):
                     op.kind = OpKind.PUSH_VARIABLE
                     continue
+                if struct := GLOBAL_STRUCTS.get(identifier):
+                    op.kind = OpKind.STRUCT_NEW
+                    op.value = struct
+                    continue
                 if function and identifier in function.variables:
                     op.kind = OpKind.PUSH_VARIABLE
                     continue
@@ -122,7 +129,7 @@ def token_to_op(
         case TokenKind.INTRINSIC:
             return get_op_intrinsic(token)
         case TokenKind.KEYWORD:
-            return get_op_keyword(token, cursor)
+            return get_op_keyword(token, cursor, function_name)
         case TokenKind.OPERATOR:
             return get_op_operator(token, cursor, function_name)
         case _:
@@ -223,8 +230,12 @@ def get_op_intrinsic(token: Token) -> Op:
     return Op(intrinsic, INTRINSIC_TO_OPKIND[intrinsic], token.location)
 
 
-def get_op_keyword(token: Token, cursor: Cursor[Token]) -> Op | None:
-    assert len(Keyword) == 12, "Exhaustive handling for `Keyword"
+def get_op_keyword(
+    token: Token,
+    cursor: Cursor[Token],
+    function_name: str,
+) -> Op | None:
+    assert len(Keyword) == 13, "Exhaustive handling for `Keyword"
 
     keyword = Keyword.from_lowercase(token.value)
     assert keyword, f"Token `{token.value}` is not a keyword"
@@ -243,6 +254,9 @@ def get_op_keyword(token: Token, cursor: Cursor[Token]) -> Op | None:
         case Keyword.ELSE:
             return Op(keyword, OpKind.IF_ELSE, token.location)
         case Keyword.FN:
+            if function_name != GLOBAL_SCOPE_LABEL:
+                raise SyntaxError("Functions should be defined in the global scope")
+
             cursor.position -= 1
             function = parse_function(cursor)
             if GLOBAL_FUNCTIONS.get(function.name):
@@ -256,12 +270,89 @@ def get_op_keyword(token: Token, cursor: Cursor[Token]) -> Op | None:
             return Op(keyword, OpKind.IF_END, token.location)
         case Keyword.RETURN:
             return Op(keyword, OpKind.FN_RETURN, token.location)
+        case Keyword.STRUCT:
+            if function_name != GLOBAL_SCOPE_LABEL:
+                raise SyntaxError("Structs should be defined in the global scope")
+
+            cursor.position -= 1
+
+            struct = parse_struct(cursor)
+            GLOBAL_STRUCTS[struct.name] = struct
+
+            for member in struct.members:
+                if member.name in GLOBAL_FUNCTIONS:
+                    raise NameError(f"Function `{member.name}` already exists")
+            return None
         case Keyword.THEN:
             return Op(keyword, OpKind.IF_CONDITION, token.location)
         case Keyword.WHILE:
             return Op(keyword, OpKind.WHILE_START, token.location)
         case _:
             assert_never(keyword)
+
+
+def parse_struct(cursor: Cursor[Token]) -> Struct:
+    struct_kw = cursor.pop()
+    if not struct_kw:
+        raise SyntaxError("Expected `struct` but got nothing")
+
+    struct_name = cursor.pop()
+    if not struct_name:
+        raise SyntaxError("Expected struct name but got nothing")
+
+    open_brace = cursor.pop()
+    if not open_brace or open_brace.value != "{":
+        raise SyntaxError(f"Expected `{{` but got `{open_brace.value}`")  # type: ignore
+
+    members: list[Member] = []
+    while True:
+        member_name = cursor.pop()
+        if not member_name:
+            raise SyntaxError("Expected identifier but got nothing")
+        if member_name.value == "}":
+            break
+        if member_name.kind != TokenKind.IDENTIFIER:
+            raise SyntaxError(f"Expected identifier but got `{member_name.kind}`")
+
+        colon = cursor.pop()
+        if not colon:
+            raise SyntaxError("Expected `:` but got nothing")
+        if colon.value != ":":
+            raise SyntaxError(f"Expected `:` but got `{colon.value}`")  # type: ignore
+
+        member_type = cursor.pop()
+        if not member_type:
+            raise SyntaxError("Expected identifier but got nothing")
+        if member_type.kind != TokenKind.IDENTIFIER:
+            raise SyntaxError(f"Expected identifier but got {member_type.kind}")
+
+        # Getter
+        getter_name = f"{struct_name.value}.{member_name.value}"
+        if getter_name in GLOBAL_FUNCTIONS:
+            raise NameError(f"Function `{getter_name}` is already defined")
+        member_location = member_name.location
+        getter_ops: list[Op] = []
+        getter_ops.append(Op(len(members), OpKind.PUSH_INT, member_location))
+        getter_ops.append(Op(Operator.PLUS, OpKind.ADD, member_location))
+        getter_ops.append(Op(Intrinsic.LOAD, OpKind.LOAD, member_location))
+        getter = Function(getter_name, getter_ops, member_location)
+        GLOBAL_FUNCTIONS[getter_name] = getter
+
+        # Setter
+        setter_name = f"{struct_name.value}->{member_name.value}"
+        if setter_name in GLOBAL_FUNCTIONS:
+            raise NameError(f"Function `{setter_name}` is already defined")
+        setter_ops: list[Op] = []
+        setter_ops.append(Op(len(members), OpKind.PUSH_INT, member_location))
+        setter_ops.append(Op(Operator.PLUS, OpKind.ADD, member_location))
+        setter_ops.append(Op(Intrinsic.STORE, OpKind.STORE, member_location))
+        setter = Function(setter_name, setter_ops, member_location)
+        GLOBAL_FUNCTIONS[setter_name] = setter
+
+        # Add to members list
+        members.append(Member(member_name.value, member_type.value))
+
+    return Struct(struct_name.value, members, struct_name.location)
 
 
 def parse_function(cursor: Cursor[Token]) -> Function:

@@ -8,6 +8,7 @@ from casa.common import (
     Op,
     OpKind,
     Signature,
+    Struct,
     Type,
     Variable,
 )
@@ -357,7 +358,7 @@ Stack:    {tc.stack}
                 tc.stack_push("str")
             case OpKind.PUSH_VARIABLE:
                 variable_name = op.value
-                assert isinstance(op.value, str), "Expected variable name"
+                assert isinstance(variable_name, str), "Expected variable name"
 
                 # Global variable
                 global_variable = GLOBAL_VARIABLES.get(variable_name)
@@ -391,6 +392,13 @@ Stack:    {tc.stack}
                 # TODO: Expect pointer types
                 tc.stack_pop()
                 tc.stack_pop()
+            case OpKind.STRUCT_NEW:
+                struct = op.value
+                assert isinstance(struct, Struct), "Expected struct"
+
+                for member in struct.members:
+                    tc.expect_type(member.typ)
+                tc.stack_push(struct.name)
             case OpKind.SUB:
                 tc.expect_type("int")
                 t1 = tc.stack_pop()

@@ -60,6 +60,9 @@ class Keyword(Enum):
     ELSE = auto()
     FI = auto()
 
+    # Data types
+    STRUCT = auto()
+
     @classmethod
     def from_lowercase(cls, value: str) -> Self | None:
         if not value.islower():
@@ -227,6 +230,9 @@ class OpKind(Enum):
     PUSH_CAPTURE = auto()
     PUSH_VARIABLE = auto()
 
+    # Structs
+    STRUCT_NEW = auto()
+
     # Identifiers should be resolved by the parser
     IDENTIFIER = auto()
 
@@ -238,7 +244,7 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 46, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 47, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires `bool`
@@ -316,6 +322,9 @@ class Op:
             ):
                 if not isinstance(self.value, Operator):
                     raise TypeError(f"`{self.kind}` requires value of type `Operator`")
+            case OpKind.STRUCT_NEW:
+                if not isinstance(self.value, Struct):
+                    raise TypeError(f"`{self.kind}` requires value of type `Struct`")
             case _:
                 assert_never(self.kind)
 
@@ -337,7 +346,6 @@ class InstKind(Enum):
     HEAP_ALLOC = auto()
     LOAD = auto()
     STORE = auto()
-
 
     # Arithmetic
     ADD = auto()
@@ -509,6 +517,29 @@ class Variable:
 
 
 @dataclass
+class Member:
+    name: str
+    typ: Type
+
+    def __hash__(self) -> int:
+        return hash(self.name)
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, Variable):
+            return self.name == other.name
+        if isinstance(other, str):
+            return self.name == other
+        return False
+
+
+@dataclass
+class Struct:
+    name: str
+    members: list[Member]
+    location: Location
+
+
+@dataclass
 class Function:
     name: str
     ops: list[Op]
@@ -523,6 +554,7 @@ class Function:
 
 
 GLOBAL_FUNCTIONS: OrderedDict[str, Function] = OrderedDict()
+GLOBAL_STRUCTS: OrderedDict[str, Struct] = OrderedDict()
 GLOBAL_VARIABLES: OrderedDict[str, Variable] = OrderedDict()
 GLOBAL_SCOPE_LABEL = "_start"
 
