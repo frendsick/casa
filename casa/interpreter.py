@@ -47,8 +47,8 @@ def interpret_bytecode(
     # Set up the program
     for instr_addr, instruction in enumerate(bytecode):
         if instruction.kind == InstKind.LABEL:
-            assert len(instruction.arguments) == 1, "Label ID"
-            label_id = instruction.arguments[0]
+            assert len(instruction.args) == 1, "Label ID"
+            label_id = instruction.args[0]
             assert isinstance(label_id, LabelId), ""
             labels[label_id] = instr_addr
 
@@ -66,16 +66,16 @@ def interpret_bytecode(
                 b = stack_pop(vm.data_stack)
                 stack_push(vm.data_stack, int(bool(a and b)))
             case InstKind.CONSTANT_LOAD:
-                assert len(instruction.arguments) == 1, "Constant label"
-                constant_label: str = instruction.arguments[0]
+                assert len(instruction.args) == 1, "Constant label"
+                constant_label: str = instruction.args[0]
 
                 value = vm.constants.get(constant_label)
                 if not value:
                     raise AssertionError("Constant should be stored")
                 stack_push(vm.data_stack, value)
             case InstKind.CONSTANT_STORE:
-                assert len(instruction.arguments) == 1, "Constant label"
-                constant_label: str = instruction.arguments[0]
+                assert len(instruction.args) == 1, "Constant label"
+                constant_label: str = instruction.args[0]
 
                 a = stack_pop(vm.data_stack)
                 vm.constants[constant_label] = a
@@ -96,8 +96,8 @@ def interpret_bytecode(
                 b = stack_pop(vm.data_stack)
                 stack_push(vm.data_stack, int(a == b))
             case InstKind.FN_CALL:
-                assert len(instruction.arguments) == 1, "Function name"
-                function_name = instruction.arguments[0]
+                assert len(instruction.args) == 1, "Function name"
+                function_name = instruction.args[0]
                 function = GLOBAL_FUNCTIONS.get(function_name)
 
                 assert isinstance(function, Function), "Expected function"
@@ -124,16 +124,16 @@ def interpret_bytecode(
                 b = stack_pop(vm.data_stack)
                 stack_push(vm.data_stack, int(a >= b))
             case InstKind.GLOBAL_GET:
-                assert len(instruction.arguments) == 1, "Global index"
-                index = instruction.arguments[0]
+                assert len(instruction.args) == 1, "Global index"
+                index = instruction.args[0]
                 assert isinstance(index, int), "Valid index"
                 assert index < len(vm.globals), "Global should be set"
 
                 value = vm.globals[index]
                 stack_push(vm.data_stack, value)
             case InstKind.GLOBAL_SET:
-                assert len(instruction.arguments) == 1, "Global index"
-                index = instruction.arguments[0]
+                assert len(instruction.args) == 1, "Global index"
+                index = instruction.args[0]
                 assert isinstance(index, int), "Valid index"
 
                 a = stack_pop(vm.data_stack)
@@ -141,8 +141,8 @@ def interpret_bytecode(
 
                 vm.globals[index] = a
             case InstKind.GLOBALS_INIT:
-                assert len(instruction.arguments) == 1, "Globals count"
-                globals_count = instruction.arguments[0]
+                assert len(instruction.args) == 1, "Globals count"
+                globals_count = instruction.args[0]
                 assert isinstance(globals_count, int), "Valid globals count"
                 vm.globals = [0] * globals_count
             case InstKind.GT:
@@ -150,21 +150,21 @@ def interpret_bytecode(
                 b = stack_pop(vm.data_stack)
                 stack_push(vm.data_stack, int(a > b))
             case InstKind.HEAP_ALLOC:
-                assert len(instruction.arguments) == 1, "Allocated bytes"
-                allocated_bytes = instruction.arguments[0]
+                assert len(instruction.args) == 1, "Allocated bytes"
+                allocated_bytes = instruction.args[0]
                 ptr = vm.heap_alloc(allocated_bytes)
                 stack_push(vm.data_stack, ptr)
             case InstKind.JUMP:
-                label = instruction.arguments[0]
+                label = instruction.args[0]
                 pc = labels[label]
             case InstKind.JUMP_NE:
                 condition = stack_pop(vm.data_stack)
                 if condition == int(False):
-                    label = instruction.arguments[0]
+                    label = instruction.args[0]
                     assert isinstance(label, LabelId), "Valid label ID"
                     pc = labels[label]
             case InstKind.LABEL:
-                label: LabelId = instruction.arguments[0]
+                label: LabelId = instruction.args[0]
                 assert label in labels, f"Label `{label}` does not exist"
             case InstKind.LE:
                 a = stack_pop(vm.data_stack)
@@ -178,30 +178,30 @@ def interpret_bytecode(
                     )
                 stack_push(vm.data_stack, vm.heap[ptr])
             case InstKind.LOCALS_INIT:
-                assert len(instruction.arguments) == 1, "Locals count"
-                locals_count = instruction.arguments[0]
+                assert len(instruction.args) == 1, "Locals count"
+                locals_count = instruction.args[0]
                 assert isinstance(locals_count, int), "Valid local count"
 
                 for _ in range(locals_count):
                     stack_push(vm.call_stack, 0)
             case InstKind.LOCALS_UNINIT:
-                assert len(instruction.arguments) == 1, "Locals count"
-                locals_count = instruction.arguments[0]
+                assert len(instruction.args) == 1, "Locals count"
+                locals_count = instruction.args[0]
                 assert isinstance(locals_count, int), "Valid local count"
 
                 for _ in range(locals_count):
                     stack_pop(vm.call_stack)
             case InstKind.LOCAL_GET:
-                assert len(instruction.arguments) == 1, "Local index"
-                index = instruction.arguments[0]
+                assert len(instruction.args) == 1, "Local index"
+                index = instruction.args[0]
                 assert isinstance(index, int), "Valid index"
                 assert index < len(locals), "Local should be set"
 
                 value = locals[index]
                 stack_push(vm.data_stack, value)
             case InstKind.LOCAL_SET:
-                assert len(instruction.arguments) == 1, "Local index"
-                index = instruction.arguments[0]
+                assert len(instruction.args) == 1, "Local index"
+                index = instruction.args[0]
                 assert isinstance(index, int), "Valid index"
 
                 a = stack_pop(vm.data_stack)
@@ -249,10 +249,10 @@ def interpret_bytecode(
                 else:
                     print(a)
             case InstKind.PUSH:
-                stack_push(vm.data_stack, instruction.arguments[0])
+                stack_push(vm.data_stack, instruction.args[0])
             case InstKind.PUSH_STR:
-                assert len(instruction.arguments) == 1, "String literal"
-                string = instruction.arguments[0]
+                assert len(instruction.args) == 1, "String literal"
+                string = instruction.args[0]
                 assert isinstance(string, str), "Valid string literal"
 
                 label = id(string)
