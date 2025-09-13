@@ -169,8 +169,8 @@ class Compiler:
 
                         bytecode.append(
                             Inst(
-                                InstKind.CAPTURE_STORE,
-                                arguments=[lambda_function.name, capture.name],
+                                InstKind.CONSTANT_STORE,
+                                arguments=[f"{lambda_function.name}_{capture.name}"],
                             )
                         )
 
@@ -307,8 +307,8 @@ class Compiler:
                     )
                     bytecode.append(
                         Inst(
-                            InstKind.CAPTURE_LOAD,
-                            arguments=[function_name, capture_name],
+                            InstKind.CONSTANT_LOAD,
+                            arguments=[f"{function_name}_{capture_name}"],
                         )
                     )
                 case OpKind.PUSH_INT:
