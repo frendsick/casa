@@ -330,13 +330,14 @@ class InstKind(Enum):
     ROT = auto()
     SWAP = auto()
 
-    # Intrinsics
-    LOAD = auto()
+    # IO
     PRINT = auto()
+
+    # Memory
+    HEAP_ALLOC = auto()
+    LOAD = auto()
     STORE = auto()
 
-    # Lists
-    LIST_NEW = auto()
 
     # Arithmetic
     ADD = auto()
@@ -406,7 +407,6 @@ class Inst:
                 | InstKind.GE
                 | InstKind.GT
                 | InstKind.LE
-                | InstKind.LIST_NEW
                 | InstKind.LOAD
                 | InstKind.LT
                 | InstKind.MOD
@@ -430,6 +430,7 @@ class Inst:
                 InstKind.GLOBALS_INIT
                 | InstKind.GLOBAL_GET
                 | InstKind.GLOBAL_SET
+                | InstKind.HEAP_ALLOC
                 | InstKind.JUMP
                 | InstKind.JUMP_NE
                 | InstKind.LABEL

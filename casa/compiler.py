@@ -313,24 +313,33 @@ class Compiler:
                     )
                 case OpKind.PUSH_INT:
                     bytecode.append(Inst(InstKind.PUSH, arguments=[op.value]))
-                case OpKind.PUSH_STR:
-                    bytecode.append(Inst(InstKind.PUSH_STR, arguments=[op.value]))
                 case OpKind.PUSH_LIST:
                     assert isinstance(op.value, list), "Expected `list`"
+                    item_count = len(op.value)
 
                     # Push list items in the reverse order
                     reversed_items: list[Op] = list(reversed(op.value))
                     list_bytecode = Compiler(reversed_items).compile()
+                    bytecode += list_bytecode
 
                     # First item of the list is its length
-                    push_len = Inst(InstKind.PUSH, arguments=[len(op.value)])
-                    list_bytecode.append(push_len)
+                    push_len = Inst(InstKind.PUSH, arguments=[item_count])
+                    bytecode.append(push_len)
+
+                    # Allocate memory for the list
+                    heap_alloc = Inst(InstKind.HEAP_ALLOC, arguments=[item_count + 1])
+                    bytecode.append(heap_alloc)
 
                     # Create the list
-                    push_list = Inst(InstKind.LIST_NEW)
-                    list_bytecode.append(push_list)
-
-                    bytecode += list_bytecode
+                    for i in range(item_count + 1):
+                        bytecode.append(Inst(InstKind.SWAP))
+                        bytecode.append(Inst(InstKind.OVER))
+                        if i > 0:
+                            bytecode.append(Inst(InstKind.PUSH, arguments=[i]))
+                            bytecode.append(Inst(InstKind.ADD))
+                        bytecode.append(Inst(InstKind.STORE))
+                case OpKind.PUSH_STR:
+                    bytecode.append(Inst(InstKind.PUSH_STR, arguments=[op.value]))
                 case OpKind.PUSH_VARIABLE:
                     variable_name = op.value
                     assert isinstance(variable_name, str), "Valid variable name"
@@ -429,7 +438,8 @@ class Compiler:
                 Inst(InstKind.LOCALS_UNINIT, arguments=[len(self.function.variables)])
             )
 
-        bytecode.append(Inst(InstKind.FN_RETURN))
+        if self.function:
+            bytecode.append(Inst(InstKind.FN_RETURN))
         return bytecode
 
     def find_matching_label(

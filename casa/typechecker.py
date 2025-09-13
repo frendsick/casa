@@ -286,7 +286,8 @@ Stack:    {tc.stack}
                 tc.stack_pop()
                 tc.stack_push("bool")
             case OpKind.LOAD:
-                tc.expect_type("ptr")
+                # TODO: Expect pointer types
+                tc.stack_pop()
                 tc.stack_push(ANY_TYPE)
             case OpKind.LT:
                 tc.stack_pop()
@@ -387,7 +388,8 @@ Stack:    {tc.stack}
                 tc.stack_push(t1)
                 tc.stack_push(t3)
             case OpKind.STORE:
-                tc.expect_type("ptr")
+                # TODO: Expect pointer types
+                tc.stack_pop()
                 tc.stack_pop()
             case OpKind.SUB:
                 tc.expect_type("int")

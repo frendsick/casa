@@ -149,6 +149,11 @@ def interpret_bytecode(
                 a = stack_pop(vm.data_stack)
                 b = stack_pop(vm.data_stack)
                 stack_push(vm.data_stack, int(a > b))
+            case InstKind.HEAP_ALLOC:
+                assert len(instruction.arguments) == 1, "Allocated bytes"
+                allocated_bytes = instruction.arguments[0]
+                ptr = vm.heap_alloc(allocated_bytes)
+                stack_push(vm.data_stack, ptr)
             case InstKind.JUMP:
                 label = instruction.arguments[0]
                 pc = labels[label]
@@ -165,18 +170,6 @@ def interpret_bytecode(
                 a = stack_pop(vm.data_stack)
                 b = stack_pop(vm.data_stack)
                 stack_push(vm.data_stack, int(a <= b))
-            case InstKind.LIST_NEW:
-                list_len = stack_pop(vm.data_stack)
-
-                # Store the list len in the zeroth index
-                ptr = vm.heap_alloc(list_len + 1)
-                vm.heap[ptr] = list_len
-
-                # Store the list values
-                for i in range(1, list_len + 1):
-                    item = stack_pop(vm.data_stack)
-                    vm.heap[ptr + i] = item
-                stack_push(vm.data_stack, ptr)
             case InstKind.LOAD:
                 ptr = stack_pop(vm.data_stack)
                 if not is_valid_address(vm.heap, ptr):
