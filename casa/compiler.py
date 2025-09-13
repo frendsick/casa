@@ -14,6 +14,7 @@ from casa.common import (
     LabelId,
     Op,
     OpKind,
+    Struct,
     Variable,
 )
 
@@ -40,7 +41,7 @@ class Compiler:
 
     def compile(self) -> Bytecode:
         assert len(InstKind) == 40, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 46, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 47, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
         bytecode: list[Inst] = []
@@ -363,6 +364,23 @@ class Compiler:
                     bytecode.append(Inst(InstKind.ROT))
                 case OpKind.STORE:
                     bytecode.append(Inst(InstKind.STORE))
+                case OpKind.STRUCT_NEW:
+                    struct = op.value
+                    assert isinstance(struct, Struct), "Expected struct"
+
+                    # Allocate memory for the struct
+                    member_count = len(struct.members)
+                    heap_alloc = Inst(InstKind.HEAP_ALLOC, arguments=[member_count])
+                    bytecode.append(heap_alloc)
+
+                    # Create the list
+                    for i in range(member_count):
+                        bytecode.append(Inst(InstKind.SWAP))
+                        bytecode.append(Inst(InstKind.OVER))
+                        if i > 0:
+                            bytecode.append(Inst(InstKind.PUSH, arguments=[i]))
+                            bytecode.append(Inst(InstKind.ADD))
+                        bytecode.append(Inst(InstKind.STORE))
                 case OpKind.SUB:
                     bytecode.append(Inst(InstKind.SUB))
                 case OpKind.SWAP:
