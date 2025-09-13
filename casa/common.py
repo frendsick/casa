@@ -379,9 +379,9 @@ class InstKind(Enum):
     GLOBAL_GET = auto()
     GLOBAL_SET = auto()
 
-    # Captures
-    CAPTURE_LOAD = auto()
-    CAPTURE_STORE = auto()
+    # Constants
+    CONSTANT_LOAD = auto()
+    CONSTANT_STORE = auto()
 
 
 @dataclass
@@ -444,20 +444,15 @@ class Inst:
                         f"`{self.kind}` requires one parameter of type `int`\nArguments: {self.arguments}"
                     )
             # One parameter of type `str`
-            case InstKind.FN_CALL | InstKind.PUSH_STR:
+            case (
+                InstKind.CONSTANT_LOAD
+                | InstKind.CONSTANT_STORE
+                | InstKind.FN_CALL
+                | InstKind.PUSH_STR
+            ):
                 if len(self.arguments) != 1 or not isinstance(self.arguments[0], str):
                     raise TypeError(
                         f"`{self.kind}` requires one parameter of type `str`\nArguments: {self.arguments}"
-                    )
-            # Two parameters of type `str`
-            case InstKind.CAPTURE_LOAD | InstKind.CAPTURE_STORE:
-                if (
-                    len(self.arguments) != 2
-                    or not isinstance(self.arguments[0], str)
-                    or not isinstance(self.arguments[1], str)
-                ):
-                    raise TypeError(
-                        f"`{self.kind}` requires two parameters of type `str`\nArguments: {self.arguments}"
                     )
 
 

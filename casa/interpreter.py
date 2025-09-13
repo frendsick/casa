@@ -10,7 +10,7 @@ def interpret_bytecode(
     call_stack: list[int] | None = None,
     data_stack: list[int] | None = None,
     globals: list[int] | None = None,
-    captures: dict[str, int] | None = None,
+    constants: dict[str, int] | None = None,
 ):
     assert len(InstKind) == 40, "Exhaustive handling for `InstructionKind`"
 
@@ -27,8 +27,8 @@ def interpret_bytecode(
         data_stack = []
     if globals is None:
         globals = []
-    if captures is None:
-        captures = {}
+    if constants is None:
+        constants = {}
 
     # Set up the program
     for instr_addr, instruction in enumerate(bytecode):
@@ -51,24 +51,20 @@ def interpret_bytecode(
                 a = stack_pop(data_stack)
                 b = stack_pop(data_stack)
                 stack_push(data_stack, int(bool(a and b)))
-            case InstKind.CAPTURE_LOAD:
-                assert len(instruction.arguments) == 2, "Capture name and function"
-                capture_name: str = instruction.arguments[0]
-                function_name: str = instruction.arguments[1]
-                capture_label = f"{function_name}_{capture_name}"
+            case InstKind.CONSTANT_LOAD:
+                assert len(instruction.arguments) == 1, "Constant label"
+                constant_label: str = instruction.arguments[0]
 
-                value = captures.get(capture_label)
+                value = constants.get(constant_label)
                 if not value:
-                    raise AssertionError("Capture should be stored")
+                    raise AssertionError("Constant should be stored")
                 stack_push(data_stack, value)
-            case InstKind.CAPTURE_STORE:
-                assert len(instruction.arguments) == 2, "Capture name and function"
-                capture_name: str = instruction.arguments[0]
-                function_name: str = instruction.arguments[1]
-                capture_label = f"{function_name}_{capture_name}"
+            case InstKind.CONSTANT_STORE:
+                assert len(instruction.arguments) == 1, "Constant label"
+                constant_label: str = instruction.arguments[0]
 
                 a = stack_pop(data_stack)
-                captures[capture_label] = a
+                constants[constant_label] = a
             case InstKind.DIV:
                 a = stack_pop(data_stack)
                 b = stack_pop(data_stack)
@@ -95,7 +91,7 @@ def interpret_bytecode(
 
                 call_stack.append(pc)
                 interpret_bytecode(
-                    function.bytecode, call_stack, data_stack, globals, captures
+                    function.bytecode, call_stack, data_stack, globals, constants
                 )
             case InstKind.FN_EXEC:
                 fn_ptr = stack_pop(data_stack)
@@ -106,7 +102,7 @@ def interpret_bytecode(
 
                 call_stack.append(pc)
                 interpret_bytecode(
-                    function.bytecode, call_stack, data_stack, globals, captures
+                    function.bytecode, call_stack, data_stack, globals, constants
                 )
             case InstKind.FN_RETURN:
                 if is_global_scope:
