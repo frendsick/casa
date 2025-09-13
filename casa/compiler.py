@@ -1,5 +1,7 @@
 from collections.abc import Iterable
 from dataclasses import dataclass
+import random
+import sys
 from typing import assert_never
 
 from casa.common import (
@@ -30,6 +32,10 @@ def compile_bytecode(ops: list[Op]) -> Bytecode:
     return bytecode
 
 
+def new_label() -> LabelId:
+    return random.randint(0, sys.maxsize)
+
+
 def op_to_label(op: Op) -> LabelId:
     return id(op)
 
@@ -38,6 +44,7 @@ def op_to_label(op: Op) -> LabelId:
 class Compiler:
     ops: list[Op]
     function: Function | None = None
+    locals_count: int = 0
 
     def compile(self) -> Bytecode:
         assert len(InstKind) == 40, "Exhaustive handling for `InstructionKind"
@@ -45,18 +52,12 @@ class Compiler:
 
         cursor = Cursor(sequence=self.ops)
         bytecode: list[Inst] = []
+        if self.function:
+            self.locals_count = len(self.function.variables)
 
         # Function label
         fn_label = id(self.ops)
         bytecode.append(Inst(InstKind.LABEL, arguments=[fn_label]))
-
-        if self.function and self.function.variables:
-            bytecode.append(
-                Inst(
-                    InstKind.LOCALS_INIT,
-                    arguments=[len(self.function.variables)],
-                )
-            )
 
         while op := cursor.pop():
             match op.kind:
@@ -451,13 +452,15 @@ class Compiler:
                 case _:
                     assert_never(op.kind)
 
-        if self.function and self.function.variables:
-            bytecode.append(
-                Inst(InstKind.LOCALS_UNINIT, arguments=[len(self.function.variables)])
+        if self.locals_count > 0:
+            bytecode.insert(
+                0, Inst(InstKind.LOCALS_INIT, arguments=[self.locals_count])
             )
+            bytecode.append(Inst(InstKind.LOCALS_UNINIT, arguments=[self.locals_count]))
 
         if self.function:
             bytecode.append(Inst(InstKind.FN_RETURN))
+
         return bytecode
 
     def find_matching_label(
