@@ -44,6 +44,7 @@ class Intrinsic(Enum):
 class Keyword(Enum):
     # Functions
     FN = auto()
+    IMPL = auto()
     RETURN = auto()
 
     # Loops

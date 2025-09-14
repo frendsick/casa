@@ -239,7 +239,7 @@ def get_op_keyword(
     cursor: Cursor[Token],
     function_name: str,
 ) -> Op | None:
-    assert len(Keyword) == 13, "Exhaustive handling for `Keyword"
+    assert len(Keyword) == 14, "Exhaustive handling for `Keyword"
 
     keyword = Keyword.from_lowercase(token.value)
     assert keyword, f"Token `{token.value}` is not a keyword"
@@ -270,6 +270,15 @@ def get_op_keyword(
             return None
         case Keyword.IF:
             return Op(keyword, OpKind.IF_START, token.location)
+        case Keyword.IMPL:
+            if function_name != GLOBAL_SCOPE_LABEL:
+                raise SyntaxError(
+                    "Implementation blocks should be defined in the global scope"
+                )
+
+            cursor.position -= 1
+            parse_impl_block(cursor)
+            return None
         case Keyword.FI:
             return Op(keyword, OpKind.IF_END, token.location)
         case Keyword.RETURN:
@@ -293,6 +302,21 @@ def get_op_keyword(
             return Op(keyword, OpKind.WHILE_START, token.location)
         case _:
             assert_never(keyword)
+
+
+def parse_impl_block(cursor: Cursor[Token]):
+    expect_token(cursor, value="impl")
+    impl_type = expect_token(cursor, kind=TokenKind.IDENTIFIER)
+
+    expect_token(cursor, value="{")
+    while (fn := cursor.peek()) and fn.value == "fn":
+        function = parse_function(cursor)
+        function.name = f"{impl_type.value}::{function.name}"
+        if GLOBAL_FUNCTIONS.get(function.name):
+            raise NameError(f"Identifier `{function.name}` is already defined")
+
+        GLOBAL_FUNCTIONS[function.name] = function
+    expect_token(cursor, value="}")
 
 
 def parse_struct(cursor: Cursor[Token]) -> Struct:
