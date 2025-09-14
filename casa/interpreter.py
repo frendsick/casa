@@ -42,7 +42,6 @@ def interpret_bytecode(
 
     # Containers for emulating a computer
     labels: dict[LabelId, InstrAddr] = {}
-    locals: list[int] = []
 
     # Set up the program
     for instr_addr, instruction in enumerate(bytecode):
@@ -195,9 +194,8 @@ def interpret_bytecode(
                 assert len(instruction.args) == 1, "Local index"
                 index = instruction.args[0]
                 assert isinstance(index, int), "Valid index"
-                assert index < len(locals), "Local should be set"
 
-                value = locals[index]
+                value = vm.call_stack[-index - 1]
                 stack_push(vm.data_stack, value)
             case InstKind.LOCAL_SET:
                 assert len(instruction.args) == 1, "Local index"
@@ -205,12 +203,7 @@ def interpret_bytecode(
                 assert isinstance(index, int), "Valid index"
 
                 a = stack_pop(vm.data_stack)
-
-                # Extend locals if needed
-                if index >= len(locals):
-                    zeroes = [0] * (index - len(locals) + 1)
-                    locals.extend(zeroes)
-                locals[index] = a
+                vm.call_stack[-index - 1] = a
             case InstKind.LT:
                 a = stack_pop(vm.data_stack)
                 b = stack_pop(vm.data_stack)
