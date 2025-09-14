@@ -518,7 +518,7 @@ class Compiler:
         depth = START_DEPTH
         direction = -1 if reverse else 1
         for other_op in iterable:
-            if depth == START_DEPTH and other_op.kind in target_kinds:
+            if depth <= START_DEPTH and other_op.kind in target_kinds:
                 return op_to_label(other_op)
 
             if other_op.kind in START_KINDS:
@@ -526,7 +526,10 @@ class Compiler:
             elif other_op.kind in END_KINDS:
                 depth -= direction
 
-            if depth < START_DEPTH:
+            if depth < START_DEPTH and (
+                (op.kind in START_KINDS and not reverse)
+                or (op.kind in END_KINDS and reverse)
+            ):
                 return None
 
         return None
