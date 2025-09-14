@@ -144,7 +144,7 @@ def get_op_delimiter(
     cursor: Cursor[Token],
     function_name: str,
 ) -> Op | None:
-    assert len(Delimiter) == 7, "Exhaustive handling for `Delimiter`"
+    assert len(Delimiter) == 8, "Exhaustive handling for `Delimiter`"
 
     delimiter = Delimiter.from_str(token.value)
     match delimiter:
@@ -154,6 +154,9 @@ def get_op_delimiter(
             return None
         case Delimiter.COMMA:
             return None
+        case Delimiter.DOT:
+            method_name = expect_token(cursor, kind=TokenKind.IDENTIFIER)
+            return Op(method_name.value, OpKind.METHOD_CALL, method_name.location)
         case Delimiter.HASHTAG:
             return None
         # Lambda function
@@ -307,7 +310,7 @@ def parse_struct(cursor: Cursor[Token]) -> Struct:
         member_type = expect_token(cursor, kind=TokenKind.IDENTIFIER)
 
         # Getter
-        getter_name = f"{struct_name.value}.{member_name.value}"
+        getter_name = f"{struct_name.value}::{member_name.value}"
         if getter_name in GLOBAL_FUNCTIONS:
             raise NameError(f"Function `{getter_name}` is already defined")
         member_location = member_name.location

@@ -186,6 +186,7 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
             case OpKind.FN_CALL:
                 function_name = op.value
                 assert isinstance(function_name, str), "Expected function name"
+
                 function_name = function_name
                 global_function = GLOBAL_FUNCTIONS.get(function_name)
                 assert global_function, "Expected function"
@@ -295,6 +296,25 @@ Stack:    {tc.stack}
                 tc.stack_pop()
                 tc.stack_pop()
                 tc.stack_push("bool")
+            case OpKind.METHOD_CALL:
+                method_name = op.value
+                assert isinstance(method_name, str), "Expected method name"
+
+                receiver = tc.stack_peek()
+                function_name = f"{receiver}::{method_name}"
+
+                global_function = GLOBAL_FUNCTIONS.get(function_name)
+                if not global_function:
+                    raise NameError(f"Method `{function_name}` does not exist")
+
+                if global_function.signature is None:
+                    global_function.signature = type_check_ops(
+                        global_function.ops, global_function
+                    )
+                tc.apply_signature(global_function.signature)
+
+                op.value = function_name
+                op.kind = OpKind.FN_CALL
             case OpKind.MOD:
                 tc.expect_type("int")
                 tc.expect_type("int")
