@@ -13,6 +13,7 @@ from casa.common import (
     Type,
     Variable,
 )
+from casa.parser import resolve_identifiers
 
 ANY_TYPE = "any"
 
@@ -163,7 +164,10 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                         ):
                             variable.typ = stack_type
 
-                        if variable.typ not in (stack_type, ANY_TYPE):
+                        if (
+                            variable.typ not in (stack_type, ANY_TYPE)
+                            and stack_type != ANY_TYPE
+                        ):
                             raise ValueError(
                                 f"Cannot override local variable `{variable.name}` of type `{variable.typ}` with other type `{stack_type}`"
                             )
@@ -308,10 +312,13 @@ Stack:    {tc.stack}
                 if not global_function:
                     raise NameError(f"Method `{function_name}` does not exist")
 
+                if not global_function.is_used:
+                    global_function.is_used = True
+                    resolve_identifiers(global_function.ops, global_function)
+
+                signature = type_check_ops(global_function.ops, global_function)
                 if global_function.signature is None:
-                    global_function.signature = type_check_ops(
-                        global_function.ops, global_function
-                    )
+                    global_function.signature = signature
                 tc.apply_signature(global_function.signature)
 
                 op.value = function_name
