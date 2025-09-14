@@ -471,8 +471,19 @@ Type = str
 
 
 @dataclass
+class Parameter:
+    typ: Type
+    name: str | None = None
+
+    def __repr__(self) -> str:
+        if self.name:
+            return f"{self.name}:{self.typ}"
+        return self.typ
+
+
+@dataclass
 class Signature:
-    parameters: list[Type]
+    parameters: list[Parameter]
     return_types: list[Type]
 
     @classmethod
@@ -490,12 +501,12 @@ class Signature:
             raise ValueError(f"Invalid signature: {repr}")
 
         param_part, return_part = repr.split("->", 1)
-        parameters = parse_type_list(param_part)
+        parameters = [Parameter(p) for p in parse_type_list(param_part)]
         return_types = parse_type_list(return_part)
         return cls(parameters, return_types)
 
     def __repr__(self):
-        parameters = " ".join(t for t in self.parameters) or "None"
+        parameters = " ".join(t.__repr__() for t in self.parameters) or "None"
         return_types = " ".join(t for t in self.return_types) or "None"
         return f"{parameters} -> {return_types}"
 

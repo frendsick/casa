@@ -75,7 +75,7 @@ class TypeChecker:
 
     def apply_signature(self, signature: Signature):
         for expected in signature.parameters:
-            self.expect_type(expected)
+            self.expect_type(expected.typ)
         for return_type in signature.return_types:
             self.stack_push(return_type)
 
