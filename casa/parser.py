@@ -201,20 +201,13 @@ def parse_block_ops(cursor: Cursor[Token], function_name: str) -> list[Op]:
 
 
 def get_op_list(cursor: Cursor[Token]) -> Op:
-    open_bracket = cursor.pop()
-    if not open_bracket or open_bracket.value != "[":
-        raise SyntaxError("Expected `[` but got nothing")
+    open_bracket = expect_token(cursor, value="[")
 
     # Empty list
     list_items = []
     while not expect_delimiter(cursor, Delimiter.CLOSE_BRACKET):
-        value_token = cursor.pop()
-        if not value_token:
-            raise SyntaxError("Expected list value but got nothing")
-
         # TODO: Support identifiers
-        if value_token.kind != TokenKind.LITERAL:
-            raise SyntaxError(f"Expected list value but got `{value_token.value}`")
+        value_token = expect_token(cursor, kind=TokenKind.LITERAL)
 
         op = token_to_op(value_token, cursor)
         list_items.append(op)
@@ -295,39 +288,21 @@ def get_op_keyword(
 
 
 def parse_struct(cursor: Cursor[Token]) -> Struct:
-    struct_kw = cursor.pop()
-    if not struct_kw:
-        raise SyntaxError("Expected `struct` but got nothing")
-
-    struct_name = cursor.pop()
-    if not struct_name:
-        raise SyntaxError("Expected struct name but got nothing")
-
-    open_brace = cursor.pop()
-    if not open_brace or open_brace.value != "{":
-        raise SyntaxError(f"Expected `{{` but got `{open_brace.value}`")  # type: ignore
+    expect_token(cursor, value="struct")
+    struct_name = expect_token(cursor, kind=TokenKind.IDENTIFIER)
 
     members: list[Member] = []
+    expect_token(cursor, value="{")
     while True:
-        member_name = cursor.pop()
-        if not member_name:
-            raise SyntaxError("Expected identifier but got nothing")
+        member_name = expect_token(cursor)
         if member_name.value == "}":
             break
         if member_name.kind != TokenKind.IDENTIFIER:
             raise SyntaxError(f"Expected identifier but got `{member_name.kind}`")
 
-        colon = cursor.pop()
-        if not colon:
-            raise SyntaxError("Expected `:` but got nothing")
-        if colon.value != ":":
-            raise SyntaxError(f"Expected `:` but got `{colon.value}`")  # type: ignore
+        expect_token(cursor, value=":")
 
-        member_type = cursor.pop()
-        if not member_type:
-            raise SyntaxError("Expected identifier but got nothing")
-        if member_type.kind != TokenKind.IDENTIFIER:
-            raise SyntaxError(f"Expected identifier but got {member_type.kind}")
+        member_type = expect_token(cursor, kind=TokenKind.IDENTIFIER)
 
         # Getter
         getter_name = f"{struct_name.value}.{member_name.value}"
@@ -359,14 +334,8 @@ def parse_struct(cursor: Cursor[Token]) -> Struct:
 
 
 def parse_function(cursor: Cursor[Token]) -> Function:
-    fn = cursor.pop()
-    if not fn:
-        raise SyntaxError("Expected `fn` but got nothing")
-
-    name = cursor.pop()
-    if not name:
-        raise SyntaxError("Expected function name but got nothing")
-
+    expect_token(cursor, value="fn")
+    name = expect_token(cursor, kind=TokenKind.IDENTIFIER)
     signature = parse_signature(cursor)
 
     ops: list[Op] = []
@@ -411,11 +380,7 @@ def parse_parameters(cursor: Cursor[Token]) -> list[Parameter]:
         next_token = cursor.peek()
         if next_token and next_token.value == ":":
             cursor.position += 1
-            typ = cursor.pop()
-            if not typ or typ.kind != TokenKind.IDENTIFIER:
-                raise SyntaxError(
-                    f"Expected parameter type identifier but got `{typ.kind}`"
-                )
+            typ = expect_token(cursor, kind=TokenKind.IDENTIFIER)
             parameters.append(Parameter(typ.value, name_or_type.value))
         else:
             parameters.append(Parameter(name_or_type.value))
@@ -455,37 +420,28 @@ def get_op_operator(token: Token, cursor: Cursor[Token], function_name: str) -> 
         case Operator.AND:
             return Op(operator, OpKind.AND, token.location)
         case Operator.ASSIGN:
-            next_token = cursor.pop()
-            if not next_token:
-                raise SyntaxError("Expected variable name but got nothing")
-
+            next_token = expect_token(cursor, kind=TokenKind.IDENTIFIER)
             identifier = token_to_op(next_token, cursor, function_name)
-            if not identifier or identifier.kind != OpKind.IDENTIFIER:
-                raise SyntaxError(f"Expected identifier but got `{next_token.kind}`")  # type: ignore
+            assert identifier, "Expected identifier"
+
             variable_name = identifier.value
             assert isinstance(variable_name, str), "Expected variable name"
 
             return Op(variable_name, OpKind.ASSIGN_VARIABLE, identifier.location)
         case Operator.ASSIGN_DECREMENT:
-            next_token = cursor.pop()
-            if not next_token:
-                raise SyntaxError("Expected variable name but got nothing")
-
+            next_token = expect_token(cursor, kind=TokenKind.IDENTIFIER)
             identifier = token_to_op(next_token, cursor, function_name)
-            if not identifier or identifier.kind != OpKind.IDENTIFIER:
-                raise SyntaxError(f"Expected identifier but got `{next_token.kind}`")  # type: ignore
+            assert identifier, "Expected identifier"
+
             variable_name = identifier.value
             assert isinstance(variable_name, str), "Expected variable name"
 
             return Op(variable_name, OpKind.ASSIGN_DECREMENT, token.location)
         case Operator.ASSIGN_INCREMENT:
-            next_token = cursor.pop()
-            if not next_token:
-                raise SyntaxError("Expected variable name but got nothing")
-
+            next_token = expect_token(cursor, kind=TokenKind.IDENTIFIER)
             identifier = token_to_op(next_token, cursor, function_name)
-            if not identifier or identifier.kind != OpKind.IDENTIFIER:
-                raise SyntaxError(f"Expected identifier but got `{next_token.kind}`")  # type: ignore
+            assert identifier, "Expected identifier"
+
             variable_name = identifier.value
             assert isinstance(variable_name, str), "Expected variable name"
 
@@ -518,3 +474,18 @@ def get_op_operator(token: Token, cursor: Cursor[Token], function_name: str) -> 
             return Op(operator, OpKind.ADD, token.location)
         case None:
             raise ValueError(f"`{token.value}` is not an operator")
+
+
+def expect_token(
+    cursor: Cursor[Token],
+    value: str | None = None,
+    kind: TokenKind | None = None,
+) -> Token:
+    next_token = cursor.pop()
+    if not next_token:
+        raise SyntaxError(f"Expected `{value}` but got nothing")
+    if value and value != next_token.value:
+        raise SyntaxError(f"Expected `{value}` but got `{next_token.value}`")
+    if kind and kind != next_token.kind:
+        raise SyntaxError(f"Expected `{kind}` but got `{next_token.kind}`")
+    return next_token
