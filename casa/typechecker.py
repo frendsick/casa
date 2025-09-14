@@ -7,6 +7,7 @@ from casa.common import (
     Function,
     Op,
     OpKind,
+    Parameter,
     Signature,
     Struct,
     Type,
@@ -32,7 +33,7 @@ class BranchedStack:
 class TypeChecker:
     ops: list[Op]
     stack: list[Type] = field(default_factory=list)
-    parameters: list[Type] = field(default_factory=list)
+    parameters: list[Parameter] = field(default_factory=list)
     # Saved on `return`
     return_types: list[Type] | None = None
     # Store stack states before each conditional and loop block
@@ -48,13 +49,13 @@ class TypeChecker:
 
     def stack_pop(self) -> Type:
         if not self.stack:
-            self.parameters.append(ANY_TYPE)
+            self.parameters.append(Parameter(ANY_TYPE))
             return ANY_TYPE
         return self.stack.pop()
 
     def expect_type(self, expected: Type) -> Type:
         if not self.stack:
-            self.parameters.append(expected)
+            self.parameters.append(Parameter(expected))
             return expected
 
         typ = self.stack.pop()
