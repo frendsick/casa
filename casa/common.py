@@ -73,6 +73,7 @@ class Keyword(Enum):
 class Delimiter(Enum):
     COMMA = auto()
     COLON = auto()
+    HASHTAG = auto()
     OPEN_BRACE = auto()
     CLOSE_BRACE = auto()
     OPEN_BRACKET = auto()
@@ -83,6 +84,7 @@ class Delimiter(Enum):
         mapping = {
             ",": cls.COMMA,
             ":": cls.COLON,
+            "#": cls.HASHTAG,
             "{": cls.OPEN_BRACE,
             "}": cls.CLOSE_BRACE,
             "[": cls.OPEN_BRACKET,

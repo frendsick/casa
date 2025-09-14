@@ -144,7 +144,7 @@ def get_op_delimiter(
     cursor: Cursor[Token],
     function_name: str,
 ) -> Op | None:
-    assert len(Delimiter) == 6, "Exhaustive handling for `Delimiter`"
+    assert len(Delimiter) == 7, "Exhaustive handling for `Delimiter`"
 
     delimiter = Delimiter.from_str(token.value)
     match delimiter:
@@ -153,6 +153,8 @@ def get_op_delimiter(
         case Delimiter.COLON:
             return None
         case Delimiter.COMMA:
+            return None
+        case Delimiter.HASHTAG:
             return None
         # Lambda function
         case Delimiter.OPEN_BRACE:

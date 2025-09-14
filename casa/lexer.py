@@ -22,8 +22,9 @@ class Lexer:
 
     def lex(self) -> list[Token]:
         tokens: list[Token] = []
-        while (tok := self.parse_token()) is not None:
-            tokens.append(tok)
+        while not self.cursor.is_finished():
+            if token := self.parse_token():
+                tokens.append(token)
 
         tokens.append(Token("", TokenKind.EOF, self.current_location(0)))
         return tokens
@@ -58,6 +59,14 @@ class Lexer:
         rest = self.rest()
         self.cursor.position += len(rest) - len(rest.lstrip())
 
+    def skip_line(self):
+        s = self.rest()
+        newline_index = s.find("\n")
+        if newline_index != -1:
+            self.cursor.position += newline_index + 1
+        else:
+            self.cursor.position += len(s)
+
     def is_whitespace(self) -> bool:
         if char := self.cursor.peek():
             return char.isspace()
@@ -76,6 +85,9 @@ class Lexer:
         self.skip_whitespace()
         match c := self.cursor.peek():
             case None:
+                return None
+            case "#":
+                self.skip_line()
                 return None
             case c if Delimiter.from_str(c):
                 return self.lex_token(c, TokenKind.DELIMITER)
