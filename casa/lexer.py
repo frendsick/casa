@@ -48,15 +48,20 @@ class Lexer:
         if self.cursor.is_finished():
             return None
 
-        word = []
+        word = ""
         for char in self.rest():
             if Delimiter.from_str(char):
                 break
             if char.isspace():
                 break
-            word.append(char)
+            if word == "->":
+                break
+            if word.endswith("->"):
+                word = word[:-2]
+                break
+            word += char
 
-        return "".join(word) if word else None
+        return word or None
 
     def startswith(self, prefix: str) -> bool:
         return self.rest().startswith(prefix)
@@ -124,6 +129,8 @@ class Lexer:
 
         if value in ("true", "false"):
             return Token(value, TokenKind.LITERAL, location)
+        if Delimiter.from_str(value):
+            return Token(value, TokenKind.DELIMITER, location)
         if Intrinsic.from_lowercase(value):
             return Token(value, TokenKind.INTRINSIC, location)
         if Keyword.from_lowercase(value):

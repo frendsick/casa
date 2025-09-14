@@ -144,19 +144,22 @@ def get_op_delimiter(
     cursor: Cursor[Token],
     function_name: str,
 ) -> Op | None:
-    assert len(Delimiter) == 8, "Exhaustive handling for `Delimiter`"
+    assert len(Delimiter) == 9, "Exhaustive handling for `Delimiter`"
 
     delimiter = Delimiter.from_str(token.value)
     match delimiter:
         case None:
             return None
+        case Delimiter.ARROW:
+            member = expect_token(cursor, kind=TokenKind.IDENTIFIER)
+            return Op(f"set_{member.value}", OpKind.METHOD_CALL, member.location)
         case Delimiter.COLON:
             return None
         case Delimiter.COMMA:
             return None
         case Delimiter.DOT:
-            method_name = expect_token(cursor, kind=TokenKind.IDENTIFIER)
-            return Op(method_name.value, OpKind.METHOD_CALL, method_name.location)
+            method = expect_token(cursor, kind=TokenKind.IDENTIFIER)
+            return Op(method.value, OpKind.METHOD_CALL, method.location)
         case Delimiter.HASHTAG:
             return None
         # Lambda function
@@ -322,7 +325,7 @@ def parse_struct(cursor: Cursor[Token]) -> Struct:
         GLOBAL_FUNCTIONS[getter_name] = getter
 
         # Setter
-        setter_name = f"{struct_name.value}->{member_name.value}"
+        setter_name = f"{struct_name.value}::set_{member_name.value}"
         if setter_name in GLOBAL_FUNCTIONS:
             raise NameError(f"Function `{setter_name}` is already defined")
         setter_ops: list[Op] = []
