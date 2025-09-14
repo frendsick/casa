@@ -73,6 +73,7 @@ class Keyword(Enum):
 class Delimiter(Enum):
     COMMA = auto()
     COLON = auto()
+    DOT = auto()
     HASHTAG = auto()
     OPEN_BRACE = auto()
     CLOSE_BRACE = auto()
@@ -84,6 +85,7 @@ class Delimiter(Enum):
         mapping = {
             ",": cls.COMMA,
             ":": cls.COLON,
+            ".": cls.DOT,
             "#": cls.HASHTAG,
             "{": cls.OPEN_BRACE,
             "}": cls.CLOSE_BRACE,
@@ -210,6 +212,7 @@ class OpKind(Enum):
     FN_EXEC = auto()
     FN_PUSH = auto()
     FN_RETURN = auto()
+    METHOD_CALL = auto()
 
     # Loops
     WHILE_START = auto()
@@ -246,7 +249,7 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 47, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 48, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires `bool`
@@ -262,6 +265,7 @@ class Op:
                 OpKind.IDENTIFIER
                 | OpKind.FN_CALL
                 | OpKind.FN_PUSH
+                | OpKind.METHOD_CALL
                 | OpKind.PUSH_STR
                 | OpKind.PUSH_CAPTURE
                 | OpKind.PUSH_VARIABLE

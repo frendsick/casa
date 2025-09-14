@@ -48,7 +48,7 @@ class Compiler:
 
     def compile(self) -> Bytecode:
         assert len(InstKind) == 40, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 47, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 48, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
         bytecode: list[Inst] = []
@@ -118,6 +118,14 @@ class Compiler:
                     assert variable_name in self.function.variables, "Variable exists"
                     index = self.function.variables.index(Variable(variable_name))
                     bytecode.append(Inst(InstKind.LOCAL_SET, args=[index]))
+                case OpKind.DIV:
+                    bytecode.append(Inst(InstKind.DIV))
+                case OpKind.DROP:
+                    bytecode.append(Inst(InstKind.DROP))
+                case OpKind.DUP:
+                    bytecode.append(Inst(InstKind.DUP))
+                case OpKind.EQ:
+                    bytecode.append(Inst(InstKind.EQ))
                 case OpKind.FN_CALL:
                     function_name = op.value
                     function = GLOBAL_FUNCTIONS.get(function_name)
@@ -136,14 +144,6 @@ class Compiler:
                         function.bytecode = fn_compiler.compile()
 
                     bytecode.append(Inst(InstKind.FN_CALL, args=[function_name]))
-                case OpKind.DIV:
-                    bytecode.append(Inst(InstKind.DIV))
-                case OpKind.DROP:
-                    bytecode.append(Inst(InstKind.DROP))
-                case OpKind.DUP:
-                    bytecode.append(Inst(InstKind.DUP))
-                case OpKind.EQ:
-                    bytecode.append(Inst(InstKind.EQ))
                 case OpKind.FN_EXEC:
                     bytecode.append(Inst(InstKind.FN_EXEC))
                 case OpKind.FN_PUSH:
@@ -282,6 +282,10 @@ class Compiler:
                     bytecode.append(Inst(InstKind.LOAD))
                 case OpKind.LT:
                     bytecode.append(Inst(InstKind.LT))
+                case OpKind.METHOD_CALL:
+                    raise AssertionError(
+                        "Method call should be transpiled to function call during type checking"
+                    )
                 case OpKind.MOD:
                     bytecode.append(Inst(InstKind.MOD))
                 case OpKind.MUL:

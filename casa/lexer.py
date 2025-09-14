@@ -38,6 +38,12 @@ class Lexer:
     def expect_char(self, char: str) -> bool:
         return char == self.cursor.pop()
 
+    def expect_startswith(self, prefix: str) -> bool:
+        if self.startswith(prefix):
+            self.cursor.position += len(prefix)
+            return True
+        return False
+
     def peek_word(self) -> str | None:
         if self.cursor.is_finished():
             return None
@@ -124,6 +130,12 @@ class Lexer:
             return Token(value, TokenKind.KEYWORD, location)
         if Operator.from_str(value):
             return Token(value, TokenKind.OPERATOR, location)
+        if self.expect_startswith("::"):
+            method = self.lex_multichar_token()
+            if not method:
+                raise SyntaxError("Expected method name but got nothing")
+            return Token(f"{value}::{method.value}", TokenKind.IDENTIFIER, location)
+
         return Token(value, TokenKind.IDENTIFIER, location)
 
     def parse_string_literal(self) -> str:
