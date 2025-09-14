@@ -71,6 +71,7 @@ class Keyword(Enum):
 
 
 class Delimiter(Enum):
+    ARROW = auto()
     COMMA = auto()
     COLON = auto()
     DOT = auto()
@@ -83,6 +84,7 @@ class Delimiter(Enum):
     @classmethod
     def from_str(cls, value: str) -> Self | None:
         mapping = {
+            "->": cls.ARROW,
             ",": cls.COMMA,
             ":": cls.COLON,
             ".": cls.DOT,

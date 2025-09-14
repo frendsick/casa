@@ -107,8 +107,9 @@ def get_literal_type(op: Op) -> Type | None:
 
 
 def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature:
-    tc = TypeChecker(ops=ops)
+    assert len(OpKind) == 48, "Exhaustive handling for `OpKind`"
 
+    tc = TypeChecker(ops=ops)
     for op in ops:
         match op.kind:
             case OpKind.ADD:
