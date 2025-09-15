@@ -315,10 +315,11 @@ Stack:    {tc.stack}
                 if not global_function.is_used:
                     global_function.is_used = True
                     resolve_identifiers(global_function.ops, global_function)
+                    signature = type_check_ops(global_function.ops, global_function)
+                    if global_function.signature is None:
+                        global_function.signature = signature
 
-                signature = type_check_ops(global_function.ops, global_function)
-                if global_function.signature is None:
-                    global_function.signature = signature
+                assert global_function.signature, "Signature is defined"
                 tc.apply_signature(global_function.signature)
 
                 op.value = function_name
