@@ -81,6 +81,8 @@ def resolve_identifiers(
                 if not lambda_function:
                     raise NameError(f"Lambda function `{function_name}` is not defined")
 
+                lambda_function.is_used = True
+
                 # Gather captures for the lambda function
                 for op in lambda_function.ops:
                     if op.kind != OpKind.IDENTIFIER:
