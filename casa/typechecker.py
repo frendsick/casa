@@ -196,10 +196,13 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 global_function = GLOBAL_FUNCTIONS.get(function_name)
                 assert global_function, "Expected function"
 
-                if global_function.signature is None:
-                    global_function.signature = type_check_ops(
-                        global_function.ops, global_function
-                    )
+                if not global_function.is_typechecked:
+                    signature = type_check_ops(global_function.ops, global_function)
+                    if not global_function.signature:
+                        global_function.signature = signature
+                    global_function.is_typechecked = True
+
+                assert global_function.signature, "Signature is defined"
                 tc.apply_signature(global_function.signature)
             case OpKind.FN_EXEC:
                 # Lambdas from other functions are typed as `any`
@@ -237,10 +240,11 @@ Stack:    {tc.stack}
                 global_function = GLOBAL_FUNCTIONS.get(function_name)
                 assert isinstance(global_function, Function), "Expected function"
 
-                if not global_function.signature:
+                if not global_function.is_typechecked:
                     global_function.signature = type_check_ops(
                         global_function.ops, global_function
                     )
+                    global_function.is_typechecked = True
                 tc.stack_push(f"fn[{global_function.signature}]")
             case OpKind.GE:
                 tc.stack_pop()
@@ -312,12 +316,14 @@ Stack:    {tc.stack}
                 if not global_function:
                     raise NameError(f"Method `{function_name}` does not exist")
 
-                if not global_function.is_used:
-                    global_function.is_used = True
+                if not global_function.is_typechecked:
                     resolve_identifiers(global_function.ops, global_function)
+                    global_function.is_used = True
+
                     signature = type_check_ops(global_function.ops, global_function)
-                    if global_function.signature is None:
+                    if not global_function.signature:
                         global_function.signature = signature
+                    global_function.is_typechecked = True
 
                 assert global_function.signature, "Signature is defined"
                 tc.apply_signature(global_function.signature)
