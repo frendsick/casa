@@ -569,6 +569,7 @@ class Function:
     # Bytecode will be compiled if the function is used
     bytecode: Bytecode | None = None
     is_used: bool = False
+    is_typechecked: bool = False
     variables: list[Variable] = field(default_factory=list)
     captures: list[Variable] = field(default_factory=list)
 
