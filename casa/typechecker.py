@@ -83,7 +83,7 @@ class TypeChecker:
 
 
 def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature:
-    assert len(OpKind) == 49, "Exhaustive handling for `OpKind`"
+    assert len(OpKind) == 50, "Exhaustive handling for `OpKind`"
 
     tc = TypeChecker(ops=ops)
     for op in ops:
@@ -422,6 +422,11 @@ Stack:    {tc.stack}
                 t2 = tc.stack_pop()
                 tc.stack_push(t1)
                 tc.stack_push(t2)
+            case OpKind.TYPE_CAST:
+                cast_type = op.value
+                assert isinstance(cast_type, str), "Expected cast type"
+                tc.stack_pop()
+                tc.stack_push(cast_type)
             case OpKind.WHILE_BREAK:
                 assert len(tc.branched_stacks) > 0, "While block stack state is saved"
                 branched = tc.branched_stacks[-1]
