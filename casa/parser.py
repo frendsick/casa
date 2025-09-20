@@ -24,15 +24,16 @@ from casa.common import (
 )
 
 INTRINSIC_TO_OPKIND = {
+    Intrinsic.ALLOC: OpKind.HEAP_ALLOC,
     Intrinsic.DROP: OpKind.DROP,
     Intrinsic.DUP: OpKind.DUP,
-    Intrinsic.OVER: OpKind.OVER,
-    Intrinsic.ROT: OpKind.ROT,
-    Intrinsic.SWAP: OpKind.SWAP,
-    Intrinsic.LOAD: OpKind.LOAD,
-    Intrinsic.STORE: OpKind.STORE,
-    Intrinsic.PRINT: OpKind.PRINT,
     Intrinsic.EXEC: OpKind.FN_EXEC,
+    Intrinsic.LOAD: OpKind.LOAD,
+    Intrinsic.OVER: OpKind.OVER,
+    Intrinsic.PRINT: OpKind.PRINT,
+    Intrinsic.ROT: OpKind.ROT,
+    Intrinsic.STORE: OpKind.STORE,
+    Intrinsic.SWAP: OpKind.SWAP,
 }
 
 

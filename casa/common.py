@@ -25,6 +25,7 @@ class Intrinsic(Enum):
     SWAP = auto()
 
     # Memory
+    ALLOC = auto()
     LOAD = auto()
     STORE = auto()
 
@@ -174,14 +175,19 @@ class Token:
 
 
 class OpKind(Enum):
-    # Intrinsics
+    # Stack
     DROP = auto()
     DUP = auto()
     OVER = auto()
     ROT = auto()
     SWAP = auto()
-    LOAD = auto()
+
+    # IO
     PRINT = auto()
+
+    # Memory
+    HEAP_ALLOC = auto()
+    LOAD = auto()
     STORE = auto()
 
     # Literals
@@ -252,7 +258,7 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 48, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 49, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires `bool`
@@ -286,13 +292,14 @@ class Op:
             case (
                 OpKind.DROP
                 | OpKind.DUP
-                | OpKind.OVER
-                | OpKind.ROT
-                | OpKind.SWAP
-                | OpKind.LOAD
-                | OpKind.PRINT
-                | OpKind.STORE
                 | OpKind.FN_EXEC
+                | OpKind.HEAP_ALLOC
+                | OpKind.LOAD
+                | OpKind.OVER
+                | OpKind.PRINT
+                | OpKind.ROT
+                | OpKind.STORE
+                | OpKind.SWAP
             ):
                 if not isinstance(self.value, Intrinsic):
                     raise TypeError(f"`{self.kind}` requires value of type `Intrinsic`")
@@ -423,6 +430,7 @@ class Inst:
                 | InstKind.FN_RETURN
                 | InstKind.GE
                 | InstKind.GT
+                | InstKind.HEAP_ALLOC
                 | InstKind.LE
                 | InstKind.LOAD
                 | InstKind.LT
@@ -447,7 +455,6 @@ class Inst:
                 InstKind.GLOBALS_INIT
                 | InstKind.GLOBAL_GET
                 | InstKind.GLOBAL_SET
-                | InstKind.HEAP_ALLOC
                 | InstKind.JUMP
                 | InstKind.JUMP_NE
                 | InstKind.LABEL
