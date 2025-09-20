@@ -83,7 +83,7 @@ class TypeChecker:
 
 
 def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature:
-    assert len(OpKind) == 48, "Exhaustive handling for `OpKind`"
+    assert len(OpKind) == 49, "Exhaustive handling for `OpKind`"
 
     tc = TypeChecker(ops=ops)
     for op in ops:
@@ -229,6 +229,9 @@ Stack:    {tc.stack}
                 tc.stack_pop()
                 tc.stack_pop()
                 tc.stack_push("bool")
+            case OpKind.HEAP_ALLOC:
+                tc.expect_type("int")
+                tc.stack_push("ptr")
             case OpKind.IDENTIFIER:
                 raise AssertionError("Identifiers should be resolved by the parser")
             case OpKind.IF_CONDITION:

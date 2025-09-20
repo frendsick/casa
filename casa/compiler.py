@@ -48,7 +48,7 @@ class Compiler:
 
     def compile(self) -> Bytecode:
         assert len(InstKind) == 40, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 48, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 49, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
         bytecode: list[Inst] = []
@@ -184,6 +184,8 @@ class Compiler:
                     bytecode.append(Inst(InstKind.GE))
                 case OpKind.GT:
                     bytecode.append(Inst(InstKind.GT))
+                case OpKind.HEAP_ALLOC:
+                    bytecode.append(Inst(InstKind.HEAP_ALLOC))
                 case OpKind.IDENTIFIER:
                     raise AssertionError(
                         f"Identifier `{op.value}` should be resolved by the parser"
@@ -311,8 +313,8 @@ class Compiler:
 
                     # Allocate memory for the array
                     local_list = self.locals_count
-                    heap_alloc = Inst(InstKind.HEAP_ALLOC, args=[list_len + 1])
-                    bytecode.append(heap_alloc)
+                    bytecode.append(Inst(InstKind.PUSH, args=[list_len + 1]))
+                    bytecode.append(Inst(InstKind.HEAP_ALLOC))
                     bytecode.append(Inst(InstKind.LOCAL_SET, args=[local_list]))
                     self.locals_count += 1
 
@@ -407,8 +409,8 @@ class Compiler:
 
                     # Allocate memory for the struct
                     member_count = len(struct.members)
-                    heap_alloc = Inst(InstKind.HEAP_ALLOC, args=[member_count])
-                    bytecode.append(heap_alloc)
+                    bytecode.append(Inst(InstKind.PUSH, args=[member_count]))
+                    bytecode.append(Inst(InstKind.HEAP_ALLOC))
 
                     # Create the list
                     for i in range(member_count):

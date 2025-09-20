@@ -149,8 +149,7 @@ def interpret_bytecode(
                 b = stack_pop(vm.data_stack)
                 stack_push(vm.data_stack, int(a > b))
             case InstKind.HEAP_ALLOC:
-                assert len(instruction.args) == 1, "Allocated bytes"
-                allocated_bytes = instruction.args[0]
+                allocated_bytes = stack_pop(vm.data_stack)
                 ptr = vm.heap_alloc(allocated_bytes)
                 stack_push(vm.data_stack, ptr)
             case InstKind.JUMP:
