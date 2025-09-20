@@ -346,7 +346,9 @@ def parse_struct(cursor: Cursor[Token]) -> Struct:
         getter_ops.append(Op(len(members), OpKind.PUSH_INT, member_location))
         getter_ops.append(Op(Operator.PLUS, OpKind.ADD, member_location))
         getter_ops.append(Op(Intrinsic.LOAD, OpKind.LOAD, member_location))
-        getter = Function(getter_name, getter_ops, member_location)
+        getter_params = [Parameter(struct_name.value)]
+        getter_signature = Signature(getter_params, [member_type.value])
+        getter = Function(getter_name, getter_ops, member_location, getter_signature)
         GLOBAL_FUNCTIONS[getter_name] = getter
 
         # Setter
@@ -357,7 +359,9 @@ def parse_struct(cursor: Cursor[Token]) -> Struct:
         setter_ops.append(Op(len(members), OpKind.PUSH_INT, member_location))
         setter_ops.append(Op(Operator.PLUS, OpKind.ADD, member_location))
         setter_ops.append(Op(Intrinsic.STORE, OpKind.STORE, member_location))
-        setter = Function(setter_name, setter_ops, member_location)
+        setter_params = [Parameter(struct_name.value), Parameter(member_type.value)]
+        setter_signature = Signature(setter_params, [])
+        setter = Function(setter_name, setter_ops, member_location, setter_signature)
         GLOBAL_FUNCTIONS[setter_name] = setter
 
         # Add to members list
