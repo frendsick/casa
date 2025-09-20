@@ -48,7 +48,7 @@ class Compiler:
 
     def compile(self) -> Bytecode:
         assert len(InstKind) == 40, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 50, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 51, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
         bytecode: list[Inst] = []
@@ -278,6 +278,8 @@ class Compiler:
                         end_kind=OpKind.IF_END,
                     ):
                         raise SyntaxError("`if` without matching `fi`")
+                case OpKind.INCLUDE_FILE:
+                    pass
                 case OpKind.LE:
                     bytecode.append(Inst(InstKind.LE))
                 case OpKind.LOAD:

@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import assert_never
 
 from casa.common import (
@@ -5,6 +6,7 @@ from casa.common import (
     GLOBAL_SCOPE_LABEL,
     GLOBAL_STRUCTS,
     GLOBAL_VARIABLES,
+    INCLUDED_FILES,
     Cursor,
     Delimiter,
     Function,
@@ -24,6 +26,7 @@ from casa.common import (
     Type,
     Variable,
 )
+from casa.lexer import lex_file
 
 INTRINSIC_TO_OPKIND = {
     Intrinsic.ALLOC: OpKind.HEAP_ALLOC,
@@ -51,8 +54,11 @@ def parse_ops(tokens: list[Token]) -> list[Op]:
 def resolve_identifiers(
     ops: list[Op],
     function: Function | None = None,
-):
-    for op in ops:
+) -> list[Op]:
+    index = 0
+    while index < len(ops):
+        op = ops[index]
+        index += 1
         match op.kind:
             case OpKind.ASSIGN_VARIABLE:
                 variable_name = op.value
@@ -87,7 +93,9 @@ def resolve_identifiers(
                             if op.value == local_variable.name:
                                 lambda_function.captures.append(local_variable)
 
-                resolve_identifiers(lambda_function.ops, lambda_function)
+                lambda_function.ops = resolve_identifiers(
+                    lambda_function.ops, lambda_function
+                )
             case OpKind.IDENTIFIER:
                 identifier = op.value
                 assert isinstance(identifier, str), "Expected identifier name"
@@ -97,7 +105,9 @@ def resolve_identifiers(
                     op.kind = OpKind.FN_CALL
                     if not global_function.is_used:
                         global_function.is_used = True
-                        resolve_identifiers(global_function.ops, global_function)
+                        global_function.ops = resolve_identifiers(
+                            global_function.ops, global_function
+                        )
                     continue
                 if function and identifier in function.captures:
                     op.kind = OpKind.PUSH_CAPTURE
@@ -114,6 +124,19 @@ def resolve_identifiers(
                     continue
 
                 raise NameError(f"Identifier `{identifier}` is not defined")
+            case OpKind.INCLUDE_FILE:
+                included_file = op.value
+                assert isinstance(included_file, Path), "Expected included file path"
+
+                if included_file not in INCLUDED_FILES:
+                    INCLUDED_FILES.add(included_file)
+
+                    # Include the ops from included file
+                    included_tokens = lex_file(included_file)
+                    included_ops = parse_ops(included_tokens)
+                    ops = ops[:index] + included_ops + ops[index:]
+
+    return ops
 
 
 def token_to_op(
@@ -245,7 +268,7 @@ def get_op_keyword(
     cursor: Cursor[Token],
     function_name: str,
 ) -> Op | None:
-    assert len(Keyword) == 14, "Exhaustive handling for `Keyword"
+    assert len(Keyword) == 15, "Exhaustive handling for `Keyword"
 
     keyword = Keyword.from_lowercase(token.value)
     assert keyword, f"Token `{token.value}` is not a keyword"
@@ -274,6 +297,8 @@ def get_op_keyword(
 
             GLOBAL_FUNCTIONS[function.name] = function
             return None
+        case Keyword.FI:
+            return Op(keyword, OpKind.IF_END, token.location)
         case Keyword.IF:
             return Op(keyword, OpKind.IF_START, token.location)
         case Keyword.IMPL:
@@ -285,8 +310,24 @@ def get_op_keyword(
             cursor.position -= 1
             parse_impl_block(cursor)
             return None
-        case Keyword.FI:
-            return Op(keyword, OpKind.IF_END, token.location)
+        case Keyword.INCLUDE:
+            string_literal = expect_token(cursor, kind=TokenKind.LITERAL)
+            literal_op = get_op_literal(string_literal)
+            if literal_op.kind != OpKind.PUSH_STR:
+                raise SyntaxError(
+                    f"Expected included file as string literal but got `{string_literal.value}`"
+                )
+            assert isinstance(literal_op.value, str), "Included file path"
+
+            included_path = Path(literal_op.value)
+            if not included_path.is_absolute():
+                token_path = token.location.file.parent
+                included_path = token_path / included_path
+            return Op(
+                included_path.resolve(),
+                OpKind.INCLUDE_FILE,
+                string_literal.location,
+            )
         case Keyword.RETURN:
             return Op(keyword, OpKind.FN_RETURN, token.location)
         case Keyword.STRUCT:

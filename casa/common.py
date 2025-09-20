@@ -65,6 +65,9 @@ class Keyword(Enum):
     # Data types
     STRUCT = auto()
 
+    # Include files
+    INCLUDE = auto()
+
     @classmethod
     def from_lowercase(cls, value: str) -> Self | None:
         if not value.islower():
@@ -254,6 +257,9 @@ class OpKind(Enum):
     # Types
     TYPE_CAST = auto()
 
+    # Include files
+    INCLUDE_FILE = auto()
+
     # Identifiers should be resolved by the parser
     IDENTIFIER = auto()
 
@@ -265,7 +271,7 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 50, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 51, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires `bool`
@@ -346,6 +352,11 @@ class Op:
             ):
                 if not isinstance(self.value, Operator):
                     raise TypeError(f"`{self.kind}` requires value of type `Operator`")
+            # Requires `Path`
+            case OpKind.INCLUDE_FILE:
+                if not isinstance(self.value, Path):
+                    raise TypeError(f"`{self.kind}` requires value of type `Path`")
+            # Requires `Struct`
             case OpKind.STRUCT_NEW:
                 if not isinstance(self.value, Struct):
                     raise TypeError(f"`{self.kind}` requires value of type `Struct`")
@@ -593,6 +604,7 @@ GLOBAL_FUNCTIONS: OrderedDict[str, Function] = OrderedDict()
 GLOBAL_STRUCTS: OrderedDict[str, Struct] = OrderedDict()
 GLOBAL_VARIABLES: OrderedDict[str, Variable] = OrderedDict()
 GLOBAL_SCOPE_LABEL = "_start"
+INCLUDED_FILES: set[Path] = set()
 
 
 @dataclass
