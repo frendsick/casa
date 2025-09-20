@@ -140,8 +140,9 @@ class Compiler:
                                     f"Function `{function.name}` assigns a global variable `{var.name}` before it is initialized within the global scope"
                                 )
 
-                        fn_compiler = Compiler(function.ops, function)
-                        function.bytecode = fn_compiler.compile()
+                        if self.function != function:
+                            fn_compiler = Compiler(function.ops, function)
+                            function.bytecode = fn_compiler.compile()
 
                     bytecode.append(Inst(InstKind.FN_CALL, args=[function_name]))
                 case OpKind.FN_EXEC:
@@ -496,7 +497,16 @@ class Compiler:
 
         if self.locals_count > 0:
             bytecode.insert(0, Inst(InstKind.LOCALS_INIT, args=[self.locals_count]))
-            bytecode.append(Inst(InstKind.LOCALS_UNINIT, args=[self.locals_count]))
+            locals_uninit = Inst(InstKind.LOCALS_UNINIT, args=[self.locals_count])
+            bytecode.append(locals_uninit)
+
+            i = 0
+            while i < len(bytecode):
+                instruction = bytecode[i]
+                if instruction.kind == InstKind.FN_RETURN:
+                    bytecode.insert(i, locals_uninit)
+                    i += 1
+                i += 1
 
         if self.function:
             bytecode.append(Inst(InstKind.FN_RETURN))
