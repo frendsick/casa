@@ -82,6 +82,8 @@ class Delimiter(Enum):
     CLOSE_BRACE = auto()
     OPEN_BRACKET = auto()
     CLOSE_BRACKET = auto()
+    OPEN_PAREN = auto()
+    CLOSE_PAREN = auto()
 
     @classmethod
     def from_str(cls, value: str) -> Self | None:
@@ -95,6 +97,8 @@ class Delimiter(Enum):
             "}": cls.CLOSE_BRACE,
             "[": cls.OPEN_BRACKET,
             "]": cls.CLOSE_BRACKET,
+            "(": cls.OPEN_PAREN,
+            ")": cls.CLOSE_PAREN,
         }
         assert len(mapping) == len(Delimiter), "Exhaustive handling for `Delimiter`"
         return mapping.get(value)  # type: ignore
@@ -247,6 +251,9 @@ class OpKind(Enum):
     # Structs
     STRUCT_NEW = auto()
 
+    # Types
+    TYPE_CAST = auto()
+
     # Identifiers should be resolved by the parser
     IDENTIFIER = auto()
 
@@ -258,7 +265,7 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 49, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 50, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires `bool`
@@ -271,16 +278,17 @@ class Op:
                     raise TypeError(f"`{self.kind}` requires value of type `int`")
             # Requires `str`
             case (
-                OpKind.IDENTIFIER
-                | OpKind.FN_CALL
-                | OpKind.FN_PUSH
-                | OpKind.METHOD_CALL
-                | OpKind.PUSH_STR
-                | OpKind.PUSH_CAPTURE
-                | OpKind.PUSH_VARIABLE
-                | OpKind.ASSIGN_DECREMENT
+                OpKind.ASSIGN_DECREMENT
                 | OpKind.ASSIGN_INCREMENT
                 | OpKind.ASSIGN_VARIABLE
+                | OpKind.FN_CALL
+                | OpKind.FN_PUSH
+                | OpKind.IDENTIFIER
+                | OpKind.METHOD_CALL
+                | OpKind.PUSH_CAPTURE
+                | OpKind.PUSH_STR
+                | OpKind.PUSH_VARIABLE
+                | OpKind.TYPE_CAST
             ):
                 if not isinstance(self.value, str):
                     raise TypeError(f"`{self.kind}` requires value of type `str`")

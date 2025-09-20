@@ -10,12 +10,14 @@ from casa.common import (
     Function,
     Intrinsic,
     Keyword,
+    Location,
     Member,
     Op,
     Operator,
     OpKind,
     Parameter,
     Signature,
+    Span,
     Struct,
     Token,
     TokenKind,
@@ -145,7 +147,7 @@ def get_op_delimiter(
     cursor: Cursor[Token],
     function_name: str,
 ) -> Op | None:
-    assert len(Delimiter) == 9, "Exhaustive handling for `Delimiter`"
+    assert len(Delimiter) == 11, "Exhaustive handling for `Delimiter`"
 
     delimiter = Delimiter.from_str(token.value)
     match delimiter:
@@ -178,6 +180,9 @@ def get_op_delimiter(
             return get_op_array(cursor)
         case Delimiter.CLOSE_BRACKET:
             return None
+        case Delimiter.OPEN_PAREN:
+            cursor.position -= 1
+            return get_op_type_cast(cursor)
         case _:
             assert_never(delimiter)
 
@@ -303,6 +308,18 @@ def get_op_keyword(
             return Op(keyword, OpKind.WHILE_START, token.location)
         case _:
             assert_never(keyword)
+
+
+def get_op_type_cast(cursor: Cursor[Token]) -> Op:
+    open_paren = expect_token(cursor, value="(")
+    cast_type = expect_token(cursor, kind=TokenKind.IDENTIFIER)
+    close_paren = expect_token(cursor, value=")")
+
+    open_offset = open_paren.location.span.offset
+    close_offset = close_paren.location.span.offset
+    cast_span_length = close_offset - open_offset + 1
+    location = Location(open_paren.location.file, Span(open_offset, cast_span_length))
+    return Op(cast_type.value, OpKind.TYPE_CAST, location)
 
 
 def parse_impl_block(cursor: Cursor[Token]):
