@@ -115,6 +115,10 @@ class Operator(Enum):
     DIVISION = auto()
     MODULO = auto()
 
+    # Bitshift
+    SHL = auto()
+    SHR = auto()
+
     # Boolean
     AND = auto()
     OR = auto()
@@ -142,6 +146,9 @@ class Operator(Enum):
             "*": cls.MULTIPLICATION,
             "/": cls.DIVISION,
             "%": cls.MODULO,
+            # Bitshift
+            "<<": cls.SHL,
+            ">>": cls.SHR,
             # Boolean
             "&&": cls.AND,
             "||": cls.OR,
@@ -210,6 +217,10 @@ class OpKind(Enum):
     DIV = auto()
     MOD = auto()
 
+    # Bitshift
+    SHL = auto()
+    SHR = auto()
+
     # Boolean
     AND = auto()
     OR = auto()
@@ -271,7 +282,7 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 51, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 53, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires `bool`
@@ -349,6 +360,8 @@ class Op:
                 | OpKind.NE
                 | OpKind.NOT
                 | OpKind.OR
+                | OpKind.SHL
+                | OpKind.SHR
             ):
                 if not isinstance(self.value, Operator):
                     raise TypeError(f"`{self.kind}` requires value of type `Operator`")
@@ -388,6 +401,10 @@ class InstKind(Enum):
     MOD = auto()
     MUL = auto()
     SUB = auto()
+
+    # Bitshift
+    SHL = auto()
+    SHR = auto()
 
     # Boolean
     AND = auto()
@@ -434,7 +451,7 @@ class Inst:
     args: list = field(default_factory=list)
 
     def __post_init__(self):
-        assert len(InstKind) == 40, "Exhaustive handling for `InstructionKind`"
+        assert len(InstKind) == 42, "Exhaustive handling for `InstructionKind`"
 
         match self.kind:
             # Should not have a parameter
@@ -461,6 +478,8 @@ class Inst:
                 | InstKind.OVER
                 | InstKind.PRINT
                 | InstKind.ROT
+                | InstKind.SHL
+                | InstKind.SHR
                 | InstKind.STORE
                 | InstKind.SUB
                 | InstKind.SWAP
