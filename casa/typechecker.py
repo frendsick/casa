@@ -83,7 +83,7 @@ class TypeChecker:
 
 
 def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature:
-    assert len(OpKind) == 50, "Exhaustive handling for `OpKind`"
+    assert len(OpKind) == 51, "Exhaustive handling for `OpKind`"
 
     tc = TypeChecker(ops=ops)
     for op in ops:
@@ -271,6 +271,8 @@ Stack:    {tc.stack}
                 raise TypeError(f"Stack state changed: {branched} --> {tc.stack}")
             case OpKind.IF_START:
                 tc.branched_stacks.append(BranchedStack(tc.stack))
+            case OpKind.INCLUDE_FILE:
+                pass
             case OpKind.LE:
                 tc.stack_pop()
                 tc.stack_pop()
@@ -295,7 +297,9 @@ Stack:    {tc.stack}
                     raise NameError(f"Method `{function_name}` does not exist")
 
                 if not global_function.is_typechecked:
-                    resolve_identifiers(global_function.ops, global_function)
+                    global_function.ops = resolve_identifiers(
+                        global_function.ops, global_function
+                    )
                     global_function.is_used = True
 
                     signature = type_check_ops(global_function.ops, global_function)

@@ -27,7 +27,7 @@ def main():
     ops = parse_ops(tokens)
 
     logger.info("Resolving identifiers")
-    resolve_identifiers(ops)
+    ops = resolve_identifiers(ops)
 
     logger.info("Type checking ops")
     type_check_ops(ops)
