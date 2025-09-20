@@ -83,7 +83,7 @@ class TypeChecker:
 
 
 def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature:
-    assert len(OpKind) == 51, "Exhaustive handling for `OpKind`"
+    assert len(OpKind) == 53, "Exhaustive handling for `OpKind`"
 
     tc = TypeChecker(ops=ops)
     for op in ops:
@@ -406,6 +406,10 @@ Stack:    {tc.stack}
                 tc.stack_push(t2)
                 tc.stack_push(t1)
                 tc.stack_push(t3)
+            case OpKind.SHL | OpKind.SHR:
+                tc.expect_type("int")
+                t1 = tc.stack_pop()
+                tc.stack_push(t1)
             case OpKind.STORE:
                 # TODO: Expect pointer types
                 tc.stack_pop()

@@ -506,7 +506,7 @@ def get_op_literal(token: Token) -> Op:
 
 
 def get_op_operator(token: Token, cursor: Cursor[Token], function_name: str) -> Op:
-    assert len(Operator) == 17, "Exhaustive handling for `Operator`"
+    assert len(Operator) == 19, "Exhaustive handling for `Operator`"
 
     operator = Operator.from_str(token.value)
     assert operator, f"Token `{token.value}` is not an operator"
@@ -567,6 +567,10 @@ def get_op_operator(token: Token, cursor: Cursor[Token], function_name: str) -> 
             return Op(operator, OpKind.OR, token.location)
         case Operator.PLUS:
             return Op(operator, OpKind.ADD, token.location)
+        case Operator.SHL:
+            return Op(operator, OpKind.SHL, token.location)
+        case Operator.SHR:
+            return Op(operator, OpKind.SHR, token.location)
         case None:
             raise ValueError(f"`{token.value}` is not an operator")
 

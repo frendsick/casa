@@ -34,7 +34,7 @@ def interpret_bytecode(
     bytecode: Bytecode,
     vm: VirtualMachine | None = None,
 ):
-    assert len(InstKind) == 40, "Exhaustive handling for `InstructionKind`"
+    assert len(InstKind) == 42, "Exhaustive handling for `InstructionKind`"
 
     if not vm:
         vm = VirtualMachine()
@@ -257,6 +257,14 @@ def interpret_bytecode(
                 stack_push(vm.data_stack, c)
                 stack_push(vm.data_stack, a)
                 stack_push(vm.data_stack, b)
+            case InstKind.SHL:
+                a = stack_pop(vm.data_stack)
+                b = stack_pop(vm.data_stack)
+                stack_push(vm.data_stack, b << a)
+            case InstKind.SHR:
+                a = stack_pop(vm.data_stack)
+                b = stack_pop(vm.data_stack)
+                stack_push(vm.data_stack, b >> a)
             case InstKind.STORE:
                 ptr = stack_pop(vm.data_stack)
                 if not is_valid_address(vm.heap, ptr):

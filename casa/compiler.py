@@ -47,8 +47,8 @@ class Compiler:
     locals_count: int = 0
 
     def compile(self) -> Bytecode:
-        assert len(InstKind) == 40, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 51, "Exhaustive handling for `OpKind`"
+        assert len(InstKind) == 42, "Exhaustive handling for `InstructionKind"
+        assert len(OpKind) == 53, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
         bytecode: list[Inst] = []
@@ -404,6 +404,10 @@ class Compiler:
                     bytecode.append(Inst(InstKind.LOCAL_GET, args=[index]))
                 case OpKind.ROT:
                     bytecode.append(Inst(InstKind.ROT))
+                case OpKind.SHL:
+                    bytecode.append(Inst(InstKind.SHL))
+                case OpKind.SHR:
+                    bytecode.append(Inst(InstKind.SHR))
                 case OpKind.STORE:
                     bytecode.append(Inst(InstKind.STORE))
                 case OpKind.STRUCT_NEW:
