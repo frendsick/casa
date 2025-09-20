@@ -174,7 +174,7 @@ def get_op_delimiter(
             return None
         case Delimiter.OPEN_BRACKET:
             cursor.position -= 1
-            return get_op_list(cursor)
+            return get_op_array(cursor)
         case Delimiter.CLOSE_BRACKET:
             return None
         case _:
@@ -208,22 +208,22 @@ def parse_block_ops(cursor: Cursor[Token], function_name: str) -> list[Op]:
     raise SyntaxError("Unclosed block")
 
 
-def get_op_list(cursor: Cursor[Token]) -> Op:
+def get_op_array(cursor: Cursor[Token]) -> Op:
     open_bracket = expect_token(cursor, value="[")
 
     # Empty list
-    list_items = []
+    array_items = []
     while not expect_delimiter(cursor, Delimiter.CLOSE_BRACKET):
         # TODO: Support identifiers
         value_token = expect_token(cursor, kind=TokenKind.LITERAL)
 
         op = token_to_op(value_token, cursor)
-        list_items.append(op)
+        array_items.append(op)
 
         if expect_delimiter(cursor, Delimiter.COMMA):
             continue
 
-    return Op(list_items, OpKind.PUSH_LIST, open_bracket.location)
+    return Op(array_items, OpKind.PUSH_ARRAY, open_bracket.location)
 
 
 def get_op_intrinsic(token: Token) -> Op:
