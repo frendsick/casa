@@ -185,9 +185,9 @@ class OpKind(Enum):
     STORE = auto()
 
     # Literals
+    PUSH_ARRAY = auto()
     PUSH_BOOL = auto()
     PUSH_INT = auto()
-    PUSH_LIST = auto()
     PUSH_STR = auto()
 
     # Arithmetic
@@ -279,7 +279,7 @@ class Op:
                 if not isinstance(self.value, str):
                     raise TypeError(f"`{self.kind}` requires value of type `str`")
             # Requires `list`
-            case OpKind.PUSH_LIST:
+            case OpKind.PUSH_ARRAY:
                 if not isinstance(self.value, list):
                     raise TypeError(f"`{self.kind}` requires value of type `list`")
             # Requires `Intrinsic`

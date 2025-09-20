@@ -82,31 +82,6 @@ class TypeChecker:
             self.stack_push(return_type)
 
 
-def get_list_literal_type(op: Op) -> Type:
-    list_items = op.value
-    assert isinstance(list_items, list), "Expected list"
-
-    if not list_items:
-        return "list"
-
-    item_type = get_literal_type(list_items[0])
-    assert isinstance(item_type, str), "Expected non-generic type"
-
-    return f"list[{item_type}]"
-
-
-def get_literal_type(op: Op) -> Type | None:
-    match op.kind:
-        case OpKind.PUSH_BOOL:
-            return "bool"
-        case OpKind.PUSH_INT:
-            return "int"
-        case OpKind.PUSH_LIST:
-            return "list"
-        case _:
-            return None
-
-
 def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature:
     assert len(OpKind) == 48, "Exhaustive handling for `OpKind`"
 
@@ -357,6 +332,9 @@ Stack:    {tc.stack}
                 tc.stack_push(t2)
             case OpKind.PRINT:
                 tc.stack_pop()
+            case OpKind.PUSH_ARRAY:
+                # TODO: Fine-grain array typing
+                tc.stack_push("array")
             case OpKind.PUSH_BOOL:
                 tc.stack_push("bool")
             case OpKind.PUSH_CAPTURE:
@@ -387,9 +365,6 @@ Stack:    {tc.stack}
                 )
             case OpKind.PUSH_INT:
                 tc.stack_push("int")
-            case OpKind.PUSH_LIST:
-                list_type = get_list_literal_type(op)
-                tc.stack_push(list_type)
             case OpKind.PUSH_STR:
                 tc.stack_push("str")
             case OpKind.PUSH_VARIABLE:

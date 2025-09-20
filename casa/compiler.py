@@ -300,40 +300,23 @@ class Compiler:
                     bytecode.append(Inst(InstKind.OVER))
                 case OpKind.PRINT:
                     bytecode.append(Inst(InstKind.PRINT))
-                case OpKind.PUSH_BOOL:
-                    bytecode.append(Inst(InstKind.PUSH, args=[int(op.value)]))
-                case OpKind.PUSH_CAPTURE:
-                    capture_name = op.value
-                    assert isinstance(capture_name, str), "Valid capture name"
-
-                    function_name = (
-                        self.function.name if self.function else GLOBAL_SCOPE_LABEL
-                    )
-                    bytecode.append(
-                        Inst(
-                            InstKind.CONSTANT_LOAD,
-                            args=[f"{function_name}_{capture_name}"],
-                        )
-                    )
-                case OpKind.PUSH_INT:
-                    bytecode.append(Inst(InstKind.PUSH, args=[op.value]))
-                case OpKind.PUSH_LIST:
+                case OpKind.PUSH_ARRAY:
                     assert isinstance(op.value, list), "Expected `list`"
                     list_len = len(op.value)
 
-                    # Push list items in the reverse order
+                    # Push array items in the reverse order
                     reversed_items: list[Op] = list(reversed(op.value))
                     list_bytecode = Compiler(reversed_items).compile()
                     bytecode += list_bytecode
 
-                    # Allocate memory for the list
+                    # Allocate memory for the array
                     local_list = self.locals_count
                     heap_alloc = Inst(InstKind.HEAP_ALLOC, args=[list_len + 1])
                     bytecode.append(heap_alloc)
                     bytecode.append(Inst(InstKind.LOCAL_SET, args=[local_list]))
                     self.locals_count += 1
 
-                    # First item of the list is its length
+                    # First item of the array is its length
                     local_len = self.locals_count
                     bytecode.append(Inst(InstKind.PUSH, args=[list_len]))
                     bytecode.append(Inst(InstKind.DUP))
@@ -342,7 +325,7 @@ class Compiler:
                     bytecode.append(Inst(InstKind.STORE))
                     self.locals_count += 1
 
-                    # Create the list
+                    # Create the array
                     local_index = self.locals_count
                     bytecode.append(Inst(InstKind.PUSH, args=[1]))
                     bytecode.append(Inst(InstKind.LOCAL_SET, args=[local_index]))
@@ -374,8 +357,25 @@ class Compiler:
                     bytecode.append(Inst(InstKind.JUMP, args=[start_label]))
                     bytecode.append(Inst(InstKind.LABEL, args=[end_label]))
 
-                    # Push list to the stack
+                    # Push array to the stack
                     bytecode.append(Inst(InstKind.LOCAL_GET, args=[local_list]))
+                case OpKind.PUSH_BOOL:
+                    bytecode.append(Inst(InstKind.PUSH, args=[int(op.value)]))
+                case OpKind.PUSH_CAPTURE:
+                    capture_name = op.value
+                    assert isinstance(capture_name, str), "Valid capture name"
+
+                    function_name = (
+                        self.function.name if self.function else GLOBAL_SCOPE_LABEL
+                    )
+                    bytecode.append(
+                        Inst(
+                            InstKind.CONSTANT_LOAD,
+                            args=[f"{function_name}_{capture_name}"],
+                        )
+                    )
+                case OpKind.PUSH_INT:
+                    bytecode.append(Inst(InstKind.PUSH, args=[op.value]))
                 case OpKind.PUSH_STR:
                     bytecode.append(Inst(InstKind.PUSH_STR, args=[op.value]))
                 case OpKind.PUSH_VARIABLE:
