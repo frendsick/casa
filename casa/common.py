@@ -523,6 +523,8 @@ Bytecode = list[Inst]
 LabelId = int
 Type = str
 
+ANY_TYPE = "any"
+
 
 @dataclass
 class Parameter:
@@ -563,6 +565,22 @@ class Signature:
         parameters = " ".join(t.__repr__() for t in self.parameters) or "None"
         return_types = " ".join(t for t in self.return_types) or "None"
         return f"{parameters} -> {return_types}"
+
+    def matches(self, other: Self) -> bool:
+        if len(self.parameters) != len(other.parameters) or len(
+            self.return_types
+        ) != len(other.return_types):
+            return False
+
+        for a, b in zip(self.parameters, other.parameters, strict=True):
+            if a.typ != b.typ and a.typ != ANY_TYPE and b.typ != ANY_TYPE:
+                return False
+
+        for a, b in zip(self.return_types, other.return_types, strict=True):
+            if a != b and a != ANY_TYPE and b != ANY_TYPE:
+                return False
+
+        return True
 
 
 @dataclass

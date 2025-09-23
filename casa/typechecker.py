@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from typing import assert_never
 
 from casa.common import (
+    ANY_TYPE,
     GLOBAL_FUNCTIONS,
     GLOBAL_VARIABLES,
     Function,
@@ -14,8 +15,6 @@ from casa.common import (
     Variable,
 )
 from casa.parser import resolve_identifiers
-
-ANY_TYPE = "any"
 
 
 @dataclass
@@ -483,4 +482,18 @@ Stack:    {tc.stack}
 """
         )
 
-    return Signature(tc.parameters, tc.stack)  # type_check_ops
+    inferred_signature = Signature(tc.parameters, tc.stack)
+    if (
+        function
+        and function.signature
+        and not function.signature.matches(inferred_signature)
+    ):
+        raise TypeError(
+            f"""Invalid signature for function `{function.name}`
+
+Expected: {function.signature}
+Inferred: {inferred_signature}
+"""
+        )
+
+    return inferred_signature  # type_check_ops
