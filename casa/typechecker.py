@@ -452,6 +452,13 @@ Stack:    {tc.stack}
                     raise TypeError(f"Stack state changed: {branched} --> {tc.stack}")
             case OpKind.WHILE_CONDITION:
                 tc.expect_type("bool")
+
+                assert len(tc.branched_stacks) > 0, "While block stack state is saved"
+                branched = tc.branched_stacks[-1]
+                branched.condition_present = True
+
+                if tc.stack != branched.before:
+                    raise TypeError(f"Stack state changed: {branched} --> {tc.stack}")
             case OpKind.WHILE_END:
                 branched = tc.branched_stacks.pop()
                 if branched.after != tc.stack:
