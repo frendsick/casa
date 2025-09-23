@@ -199,7 +199,6 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
             case OpKind.FN_RETURN:
                 if tc.return_types is None:
                     tc.return_types = tc.stack.copy()
-                    continue
 
                 if tc.return_types != tc.stack:
                     raise TypeError(
@@ -209,6 +208,10 @@ Expected: {tc.return_types}
 Stack:    {tc.stack}
 """
                     )
+
+                if tc.branched_stacks:
+                    branched = tc.branched_stacks[-1]
+                    tc.stack = branched.before.copy()
             case OpKind.FN_PUSH:
                 assert isinstance(op.value, str), "Expected identifier name"
                 function_name = op.value
