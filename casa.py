@@ -3,8 +3,8 @@
 import logging
 import pathlib
 
+from casa.bytecode import compile_bytecode
 from casa.cli import parse_args
-from casa.compiler import compile_bytecode
 from casa.interpreter import interpret_bytecode
 from casa.lexer import lex_file
 from casa.parser import parse_ops, resolve_identifiers
