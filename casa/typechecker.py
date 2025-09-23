@@ -22,12 +22,14 @@ ANY_TYPE = "any"
 class BranchedStack:
     before: list[Type]
     after: list[Type]
+    condition_present: bool
     default_present: bool
 
     def __init__(self, before: list[Type], after: list[Type] | None = None):
         self.before = before.copy()
         self.after = after.copy() if after else before.copy()
         self.default_present = False
+        self.condition_present = False
 
 
 @dataclass
@@ -239,6 +241,13 @@ Stack:    {tc.stack}
 
                 assert len(tc.branched_stacks) > 0, "If block stack state is saved"
                 branched = tc.branched_stacks[-1]
+
+                # First condition is run anyways
+                if not branched.condition_present:
+                    branched.condition_present = True
+                    branched.before = tc.stack.copy()
+                    branched.after = branched.before
+                    continue
 
                 if tc.stack != branched.before:
                     raise TypeError(f"Stack state changed: {branched} --> {tc.stack}")
