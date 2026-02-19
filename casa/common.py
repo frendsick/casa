@@ -383,7 +383,7 @@ class InstKind(Enum):
     DUP = auto()
     OVER = auto()
     PUSH = auto()
-    PUSH_STR = auto()  # TODO: Implement with `PUSH`
+    PUSH_STR = auto()
     ROT = auto()
     SWAP = auto()
 
@@ -449,6 +449,13 @@ class InstKind(Enum):
 class Inst:
     kind: InstKind
     args: list = field(default_factory=list)
+    location: Location | None = None
+
+    @property
+    def arg(self) -> int | str:
+        """Single argument accessor for instructions with exactly one arg."""
+        assert len(self.args) == 1, f"Expected 1 arg, got {len(self.args)}"
+        return self.args[0]
 
     def __post_init__(self):
         assert len(InstKind) == 42, "Exhaustive handling for `InstructionKind`"
@@ -501,6 +508,7 @@ class Inst:
                 | InstKind.LOCAL_GET
                 | InstKind.LOCAL_SET
                 | InstKind.PUSH
+                | InstKind.PUSH_STR
             ):
                 if len(self.args) != 1 or not isinstance(self.args[0], int):
                     raise TypeError(
@@ -511,7 +519,6 @@ class Inst:
                 InstKind.CONSTANT_LOAD
                 | InstKind.CONSTANT_STORE
                 | InstKind.FN_CALL
-                | InstKind.PUSH_STR
             ):
                 if len(self.args) != 1 or not isinstance(self.args[0], str):
                     raise TypeError(
@@ -522,6 +529,14 @@ class Inst:
 Bytecode = list[Inst]
 LabelId = int
 Type = str
+
+
+@dataclass
+class Program:
+    bytecode: Bytecode                        # Global scope instructions
+    functions: dict[str, Bytecode]            # Function name -> bytecode
+    strings: list[str]                        # String table (index = string ID)
+    globals_count: int                        # Number of global variables
 
 ANY_TYPE = "any"
 

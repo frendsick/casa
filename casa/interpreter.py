@@ -1,9 +1,10 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import assert_never
 
-from casa.common import GLOBAL_FUNCTIONS, Bytecode, Function, InstKind, LabelId
+from casa.common import GLOBAL_FUNCTIONS, Bytecode, Function, InstKind, LabelId, Program
 
 InstrAddr = int
+STRING_TAG = 1 << 60
 
 
 @dataclass
@@ -13,21 +14,26 @@ class VirtualMachine:
     data_stack: list[int]
     globals: list[int]
     heap: list[int]
-    strings: dict[LabelId, str]
+    strings: list[str]
 
-    def __init__(self):
+    def __init__(self, strings: list[str] | None = None):
         self.call_stack = []
         self.constants = {}
         self.data_stack = []
         self.globals = []
         self.heap = []
-        self.strings = {}
+        self.strings = strings or []
 
     def heap_alloc(self, size: int) -> int:
         ptr = len(self.heap)
         for _ in range(size):
             self.heap.append(0)
         return ptr
+
+
+def interpret_program(program: Program):
+    vm = VirtualMachine(strings=program.strings)
+    interpret_bytecode(program.bytecode, vm)
 
 
 def interpret_bytecode(
@@ -236,20 +242,17 @@ def interpret_bytecode(
                 stack_push(vm.data_stack, b)
             case InstKind.PRINT:
                 a = stack_pop(vm.data_stack)
-                if string := vm.strings.get(a):
-                    print(string)
+                if a >= STRING_TAG:
+                    string_index = a - STRING_TAG
+                    print(vm.strings[string_index])
                 else:
                     print(a)
             case InstKind.PUSH:
                 stack_push(vm.data_stack, instruction.args[0])
             case InstKind.PUSH_STR:
-                assert len(instruction.args) == 1, "String literal"
-                string = instruction.args[0]
-                assert isinstance(string, str), "Valid string literal"
-
-                label = id(string)
-                vm.strings[label] = string
-                stack_push(vm.data_stack, label)
+                string_index = instruction.args[0]
+                assert isinstance(string_index, int), "Valid string index"
+                stack_push(vm.data_stack, STRING_TAG + string_index)
             case InstKind.ROT:
                 a = stack_pop(vm.data_stack)
                 b = stack_pop(vm.data_stack)
