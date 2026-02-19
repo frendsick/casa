@@ -48,6 +48,22 @@ def test_parse_push_str():
     assert ops[0].value == "hello"
 
 
+def test_parse_negative_int():
+    ops = parse_string("-42")
+    assert len(ops) == 1
+    assert ops[0].kind == OpKind.PUSH_INT
+    assert ops[0].value == -42
+
+
+def test_parse_negative_int_in_array():
+    ops = parse_string("[-1, -2, -3]")
+    assert ops[0].kind == OpKind.PUSH_ARRAY
+    assert len(ops[0].value) == 3
+    assert ops[0].value[0].value == -1
+    assert ops[0].value[1].value == -2
+    assert ops[0].value[2].value == -3
+
+
 def test_parse_push_array():
     ops = parse_string("[1, 2, 3]")
     assert ops[0].kind == OpKind.PUSH_ARRAY
@@ -291,7 +307,7 @@ def test_resolve_push_variable():
 
 
 def test_resolve_struct_new():
-    ops = resolve_string('struct Foo { val: int } 42 Foo')
+    ops = resolve_string("struct Foo { val: int } 42 Foo")
     struct_new_ops = find_ops(ops, OpKind.STRUCT_NEW)
     assert len(struct_new_ops) == 1
     assert isinstance(struct_new_ops[0].value, Struct)
