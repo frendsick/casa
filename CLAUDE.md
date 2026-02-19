@@ -71,13 +71,14 @@ print  # any -> None     print top of stack
 
 ### Functions
 ```
-fn name param:type -> return_type {
+fn name[T1 T2] param:type -> return_type {
     body
 }
 ```
 - Parameters popped from stack in declaration order (first param = top)
 - Return types describe what remains on the stack after the call
 - Signatures can be explicit or inferred by the type checker
+- Optional `[T1 T2]` declares generic type variables, resolved at each call site
 - Must be defined at global scope
 
 ### Variables
@@ -181,3 +182,7 @@ include "relative/path/to/file.casa"   # included at most once
 ## Documentation
 
 When any language feature, intrinsic, operator, or standard library function is changed or added, the corresponding documentation in `docs/` and `README.md` must be updated to reflect the change.
+
+## Coding style
+
+- **Keep code flat.** Prefer early returns, `continue`, and guard clauses over deeply nested `if`/`else` blocks. Extract helpers when nesting exceeds 2–3 levels inside a loop or function.
