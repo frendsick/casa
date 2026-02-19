@@ -23,6 +23,20 @@ def run_cmd(cmd: list[str]) -> None:
         sys.exit(1)
 
 
+def build_binary(asm_source: str, output_name: str, keep_asm: bool) -> None:
+    asm_file = f"{output_name}.s"
+    obj_file = f"{output_name}.o"
+
+    pathlib.Path(asm_file).write_text(asm_source, encoding="utf-8")
+
+    run_cmd(["as", "-o", obj_file, asm_file])
+    run_cmd(["ld", "-o", output_name, obj_file])
+
+    if not keep_asm:
+        os.remove(asm_file)
+    os.remove(obj_file)
+
+
 def main():
     args = parse_args()
 
@@ -47,25 +61,13 @@ def main():
     logger.info("Emitting assembly")
     asm_source = emit_program(program)
 
-    asm_file = f"{output_name}.s"
-    obj_file = f"{output_name}.o"
+    logger.info("Building %s", output_name)
+    build_binary(asm_source, output_name, args.keep_asm)
 
-    with open(asm_file, "w", encoding="utf-8") as fh:
-        fh.write(asm_source)
-
-    try:
-        logger.info("Assembling %s", asm_file)
-        run_cmd(["as", "-o", obj_file, asm_file])
-
-        logger.info("Linking %s", obj_file)
-        run_cmd(["ld", "-o", output_name, obj_file])
-
-        logger.info("Built %s", output_name)
-    finally:
-        if not args.keep_asm and os.path.exists(asm_file):
-            os.remove(asm_file)
-        if os.path.exists(obj_file):
-            os.remove(obj_file)
+    if args.run:
+        logger.info("Running %s", output_name)
+        result = subprocess.run([f"./{output_name}"], check=False)
+        sys.exit(result.returncode)
 
 
 if __name__ == "__main__":
