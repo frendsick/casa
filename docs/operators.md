@@ -14,11 +14,11 @@ All arithmetic operators consume two values and produce one.
 
 | Operator | Stack Effect | Description |
 |----------|-------------|-------------|
-| `+` | `( a int -- a )` | Addition. The second operand must be `int`; result type matches the first operand. Works on `ptr` for pointer arithmetic. |
-| `-` | `( a int -- a )` | Subtraction. Same typing rules as `+`. |
-| `*` | `( int int -- int )` | Multiplication |
-| `/` | `( int int -- int )` | Integer division (truncates toward zero) |
-| `%` | `( int int -- int )` | Modulo (remainder) |
+| `+` | `a int -> a` | Addition. The second operand must be `int`; result type matches the first operand. Works on `ptr` for pointer arithmetic. |
+| `-` | `a int -> a` | Subtraction. Same typing rules as `+`. |
+| `*` | `int int -> int` | Multiplication |
+| `/` | `int int -> int` | Integer division (truncates toward zero) |
+| `%` | `int int -> int` | Modulo (remainder) |
 
 ```casa
 34 35 + print    # 69
@@ -42,8 +42,8 @@ buf 3 + load print  # 42
 
 | Operator | Stack Effect | Description |
 |----------|-------------|-------------|
-| `<<` | `( a int -- a )` | Left shift. Result type matches the first operand. |
-| `>>` | `( a int -- a )` | Right shift. Result type matches the first operand. |
+| `<<` | `a int -> a` | Left shift. Result type matches the first operand. |
+| `>>` | `a int -> a` | Right shift. Result type matches the first operand. |
 
 ```casa
 1 4 << print    # 16
@@ -56,12 +56,12 @@ All comparison operators consume two values and push a `bool`.
 
 | Operator | Stack Effect | Description |
 |----------|-------------|-------------|
-| `==` | `( any any -- bool )` | Equal |
-| `!=` | `( any any -- bool )` | Not equal |
-| `<`  | `( any any -- bool )` | Less than |
-| `<=` | `( any any -- bool )` | Less than or equal |
-| `>`  | `( any any -- bool )` | Greater than |
-| `>=` | `( any any -- bool )` | Greater than or equal |
+| `==` | `any any -> bool` | Equal |
+| `!=` | `any any -> bool` | Not equal |
+| `<`  | `any any -> bool` | Less than |
+| `<=` | `any any -> bool` | Less than or equal |
+| `>`  | `any any -> bool` | Greater than |
+| `>=` | `any any -> bool` | Greater than or equal |
 
 ```casa
 1 1 == print    # 1 (true)
@@ -75,9 +75,9 @@ All comparison operators consume two values and push a `bool`.
 
 | Operator | Stack Effect | Description |
 |----------|-------------|-------------|
-| `&&` | `( any any -- bool )` | Logical AND |
-| `\|\|` | `( any any -- bool )` | Logical OR |
-| `!`  | `( any -- bool )` | Logical NOT |
+| `&&` | `any any -> bool` | Logical AND |
+| `\|\|` | `any any -> bool` | Logical OR |
+| `!`  | `any -> bool` | Logical NOT |
 
 ```casa
 true true && print    # 1
@@ -91,9 +91,9 @@ Assignment operators pop a value from the stack and store it in a named variable
 
 | Operator | Stack Effect | Description |
 |----------|-------------|-------------|
-| `= name` | `( a -- )` | Assign top of stack to variable `name` |
-| `+= name` | `( int -- )` | Add top of stack to variable `name` |
-| `-= name` | `( int -- )` | Subtract top of stack from variable `name` |
+| `= name` | `a -> None` | Assign top of stack to variable `name` |
+| `+= name` | `int -> None` | Add top of stack to variable `name` |
+| `-= name` | `int -> None` | Subtract top of stack from variable `name` |
 
 ```casa
 42 = count        # count is now 42

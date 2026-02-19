@@ -50,23 +50,23 @@ true false  # bool
 
 ### Stack intrinsics
 ```
-drop   # ( a -- )        discard top
-dup    # ( a -- a a )    duplicate top
-swap   # ( a b -- b a )  swap top two
-over   # ( a b -- a b a) copy second to top
-rot    # ( a b c -- b c a ) rotate top three
+drop   # a -> None         discard top
+dup    # a -> a a          duplicate top
+swap   # a b -> b a        swap top two
+over   # a b -> a b a      copy second to top
+rot    # a b c -> b c a    rotate top three
 ```
 
 ### Memory intrinsics
 ```
-alloc  # ( int -- ptr )  heap-allocate N slots
-load   # ( ptr -- any )  read heap at address
-store  # ( any ptr -- )  write heap at address
+alloc  # int -> ptr          heap-allocate N slots
+load   # ptr -> any          read heap at address
+store  # any ptr -> None     write heap at address
 ```
 
 ### IO
 ```
-print  # ( any -- )  print top of stack
+print  # any -> None     print top of stack
 ```
 
 ### Functions
@@ -130,8 +130,8 @@ impl TypeName {
 
 ### Lambdas / closures
 ```
-{ body }   # ( -- fn[sig] )  create lambda, captures enclosing variables
-exec       # ( fn[sig] -- )  call lambda on top of stack
+{ body }   # -> fn[sig]           create lambda, captures enclosing variables
+exec       # fn[sig] -> None      call lambda on top of stack
 ```
 Example: `{ 2 * }` has type `fn[int -> int]`
 

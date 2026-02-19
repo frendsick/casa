@@ -116,7 +116,7 @@ buffer load         # type: any
 
 The `(TypeName)` syntax casts the top of the stack to the given type. This is a compile-time annotation only — no runtime check is performed.
 
-**Stack effect:** `( a -- TypeName )`
+**Stack effect:** `a -> TypeName`
 
 ```casa
 buffer load (int)    # cast any -> int
