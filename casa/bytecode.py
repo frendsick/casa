@@ -67,6 +67,7 @@ def compile_bytecode(ops: list[Op]) -> Program:
         },
         strings=compiler.string_table,
         globals_count=len(GLOBAL_VARIABLES),
+        constants_count=len(compiler.constants_table),
     )
 
 
@@ -76,10 +77,13 @@ class Compiler:
     function: Function | None = None
     locals_count: int = 0
     string_table: list[str] | None = None
+    constants_table: list[str] | None = None
 
     def __post_init__(self):
         if self.string_table is None:
             self.string_table = []
+        if self.constants_table is None:
+            self.constants_table = []
         self._current_loc: Location | None = None
 
     def intern_string(self, s: str) -> int:
@@ -88,6 +92,13 @@ class Compiler:
             return self.string_table.index(s)
         self.string_table.append(s)
         return len(self.string_table) - 1
+
+    def intern_constant(self, name: str) -> int:
+        """Add a constant name to the constants table and return its index."""
+        if name in self.constants_table:
+            return self.constants_table.index(name)
+        self.constants_table.append(name)
+        return len(self.constants_table) - 1
 
     def inst(self, kind: InstKind, args: list | None = None) -> Inst:
         """Create an Inst with the current source location."""
@@ -192,6 +203,7 @@ class Compiler:
                             fn_compiler = Compiler(
                                 function.ops, function,
                                 string_table=self.string_table,
+                                constants_table=self.constants_table,
                             )
                             function.bytecode = fn_compiler.compile()
 
@@ -208,6 +220,7 @@ class Compiler:
                     fn_compiler = Compiler(
                         lambda_function.ops, lambda_function,
                         string_table=self.string_table,
+                        constants_table=self.constants_table,
                     )
                     lambda_function.bytecode = fn_compiler.compile()
 
@@ -222,10 +235,13 @@ class Compiler:
                         else:
                             raise AssertionError("Captured variable should exist")
 
+                        constant_index = self.intern_constant(
+                            f"{lambda_function.name}_{capture.name}"
+                        )
                         bytecode.append(
                             self.inst(
                                 InstKind.CONSTANT_STORE,
-                                args=[f"{lambda_function.name}_{capture.name}"],
+                                args=[constant_index],
                             )
                         )
 
@@ -368,6 +384,7 @@ class Compiler:
                     list_compiler = Compiler(
                         reversed_items,
                         string_table=self.string_table,
+                        constants_table=self.constants_table,
                     )
                     list_bytecode = list_compiler.compile()
                     bytecode += list_bytecode
@@ -431,10 +448,13 @@ class Compiler:
                     function_name = (
                         self.function.name if self.function else GLOBAL_SCOPE_LABEL
                     )
+                    constant_index = self.intern_constant(
+                        f"{function_name}_{capture_name}"
+                    )
                     bytecode.append(
                         self.inst(
                             InstKind.CONSTANT_LOAD,
-                            args=[f"{function_name}_{capture_name}"],
+                            args=[constant_index],
                         )
                     )
                 case OpKind.PUSH_INT:
@@ -572,7 +592,7 @@ class Compiler:
                 i += 1
 
         if self.function:
-            bytecode.append(Inst(InstKind.FN_RETURN))
+            bytecode.append(self.inst(InstKind.FN_RETURN))
 
         return bytecode
 
