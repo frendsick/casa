@@ -86,6 +86,40 @@ fn fib number:int -> int {
 
 See [`examples/fibonacci.casa`](../examples/fibonacci.casa).
 
+### Generic Functions
+
+Functions can declare type variables in square brackets after the name. Type variables are resolved to concrete types at each call site, enabling type-safe polymorphism.
+
+```casa
+fn id[T] T -> T { }
+42 id print         # T=int, prints 42
+"hello" id print    # T=str, prints hello
+```
+
+Multiple type variables:
+
+```casa
+fn swap_t[T1 T2] T1 T2 -> T1 T2 { swap }
+5 "hi" swap_t       # T1=str, T2=int -> returns str, int
+```
+
+Generic functions can mix type variables with concrete types and named parameters:
+
+```casa
+fn first[T1 T2] a:T1 b:T2 -> T1 { a }
+fn wrap[T] T -> T int { 42 }
+```
+
+The type checker enforces consistency — if the same type variable appears multiple times in the parameters, all occurrences must bind to the same type:
+
+```casa
+fn pair[T] T T -> T T { }
+42 42 pair        # OK: both T=int
+42 "hi" pair      # ERROR: T bound to int and str
+```
+
+Every type variable must appear in at least one parameter (return-only type variables are not allowed).
+
 ### Restrictions
 
 - Functions must be defined at **global scope** — no nested function definitions (use lambdas instead).

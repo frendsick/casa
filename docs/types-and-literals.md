@@ -102,6 +102,18 @@ struct Point {
 
 See [Structs and Methods](structs-and-methods.md) for details.
 
+## Type Variables (Generics)
+
+Type variables let functions declare type relationships between inputs and outputs. They are declared in square brackets after the function name and are resolved to concrete types at each call site.
+
+```casa
+fn id[T] T -> T { }
+42 id        # T=int, returns int
+"hi" id      # T=str, returns str
+```
+
+Type variables are purely compile-time — they have no runtime cost. See [Functions and Lambdas — Generic Functions](functions-and-lambdas.md#generic-functions) for details.
+
 ## The `any` Type
 
 `any` is a special wildcard type that matches any other type. It is used as an escape hatch when the type system cannot determine a precise type — for example, values read from the heap with `load` have type `any`.
