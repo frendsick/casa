@@ -13,6 +13,7 @@ from tests.conftest import parse_string, resolve_string, typecheck_string
     "code,expected_type",
     [
         ("42", "int"),
+        ("-42", "int"),
         ("true", "bool"),
         ('"hello"', "str"),
         ("[1, 2]", "array"),
