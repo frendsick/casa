@@ -16,6 +16,13 @@ from casa.typechecker import type_check_ops
 logger = logging.getLogger(__name__)
 
 
+def run_cmd(cmd: list[str]) -> None:
+    result = subprocess.run(cmd, capture_output=True, check=False)
+    if result.returncode != 0:
+        print(result.stderr.decode(), file=sys.stderr)
+        sys.exit(1)
+
+
 def main():
     args = parse_args()
 
@@ -29,10 +36,7 @@ def main():
     tokens = lex_file(input_file.resolve())
 
     logger.info("Parsing ops")
-    ops = parse_ops(tokens)
-
-    logger.info("Resolving identifiers")
-    ops = resolve_identifiers(ops)
+    ops = resolve_identifiers(parse_ops(tokens))
 
     logger.info("Type checking ops")
     type_check_ops(ops)
@@ -46,25 +50,15 @@ def main():
     asm_file = f"{output_name}.s"
     obj_file = f"{output_name}.o"
 
-    with open(asm_file, "w", encoding="utf-8") as asm_fh:
-        asm_fh.write(asm_source)
+    with open(asm_file, "w", encoding="utf-8") as fh:
+        fh.write(asm_source)
 
     try:
         logger.info("Assembling %s", asm_file)
-        result = subprocess.run(
-            ["as", "-o", obj_file, asm_file], capture_output=True, check=False
-        )
-        if result.returncode != 0:
-            print(result.stderr.decode(), file=sys.stderr)
-            sys.exit(1)
+        run_cmd(["as", "-o", obj_file, asm_file])
 
         logger.info("Linking %s", obj_file)
-        result = subprocess.run(
-            ["ld", "-o", output_name, obj_file], capture_output=True, check=False
-        )
-        if result.returncode != 0:
-            print(result.stderr.decode(), file=sys.stderr)
-            sys.exit(1)
+        run_cmd(["ld", "-o", output_name, obj_file])
 
         logger.info("Built %s", output_name)
     finally:
