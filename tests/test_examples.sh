@@ -15,9 +15,19 @@ fail=0
 for f in "$EXAMPLES_DIR"/*.casa; do
     base=$(basename "$f" .casa)
     out_file="$EXAMPLES_DIR/outputs/$base.out"
+    binary="/tmp/casa_test_$base"
 
     echo "Running test: $base"
-    output=$(python3 "$ROOT_DIR/casa.py" "$f")
+
+    # Compile
+    python3 "$ROOT_DIR/casa.py" "$f" -o "$binary"
+
+    # Run and capture output
+    output=$("$binary")
+
+    # Clean up binary
+    rm -f "$binary"
+
     if [ -f "$out_file" ]; then
         if echo "$output" | diff -u - "$out_file"; then
             echo "${GREEN}[OK]${RESET} Passed: $base"
