@@ -1,5 +1,5 @@
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import assert_never
 
 from casa.common import (
@@ -76,14 +76,10 @@ class Compiler:
     ops: list[Op]
     function: Function | None = None
     locals_count: int = 0
-    string_table: list[str] | None = None
-    constants_table: list[str] | None = None
+    string_table: list[str] = field(default_factory=list)
+    constants_table: list[str] = field(default_factory=list)
 
     def __post_init__(self):
-        if self.string_table is None:
-            self.string_table = []
-        if self.constants_table is None:
-            self.constants_table = []
         self._current_loc: Location | None = None
 
     def intern_string(self, s: str) -> int:
@@ -201,7 +197,8 @@ class Compiler:
 
                         if self.function != function:
                             fn_compiler = Compiler(
-                                function.ops, function,
+                                function.ops,
+                                function,
                                 string_table=self.string_table,
                                 constants_table=self.constants_table,
                             )
@@ -218,7 +215,8 @@ class Compiler:
 
                     # Compile the lambda function
                     fn_compiler = Compiler(
-                        lambda_function.ops, lambda_function,
+                        lambda_function.ops,
+                        lambda_function,
                         string_table=self.string_table,
                         constants_table=self.constants_table,
                     )
@@ -228,7 +226,9 @@ class Compiler:
                     for index, capture in enumerate(lambda_function.captures):
                         if capture in GLOBAL_VARIABLES:
                             index = list(GLOBAL_VARIABLES.values()).index(capture)
-                            bytecode.append(self.inst(InstKind.GLOBAL_GET, args=[index]))
+                            bytecode.append(
+                                self.inst(InstKind.GLOBAL_GET, args=[index])
+                            )
                         elif self.function and capture in self.function.variables:
                             index = self.function.variables.index(capture)
                             bytecode.append(self.inst(InstKind.LOCAL_GET, args=[index]))
@@ -549,28 +549,28 @@ class Compiler:
 
                     bytecode.append(self.inst(InstKind.JUMP_NE, args=[end_label]))
                 case OpKind.WHILE_CONTINUE:
-                    start_label = self.find_matching_label(
+                    continue_target = self.find_matching_label(
                         op=op,
                         start_kind=OpKind.WHILE_START,
                         end_kind=OpKind.WHILE_END,
                         reverse=True,
                     )
-                    if not start_label:
+                    if continue_target is None:
                         raise SyntaxError("`continue` without parent `while`")
 
-                    bytecode.append(self.inst(InstKind.JUMP, args=[start_label]))
+                    bytecode.append(self.inst(InstKind.JUMP, args=[continue_target]))
                 case OpKind.WHILE_END:
                     while_label = op_to_label(op)
-                    start_label = self.find_matching_label(
+                    loop_start = self.find_matching_label(
                         op=op,
                         start_kind=OpKind.WHILE_START,
                         end_kind=OpKind.WHILE_END,
                         reverse=True,
                     )
-                    if not start_label:
+                    if loop_start is None:
                         raise SyntaxError("`done` without parent `while`")
 
-                    bytecode.append(self.inst(InstKind.JUMP, args=[start_label]))
+                    bytecode.append(self.inst(InstKind.JUMP, args=[loop_start]))
                     bytecode.append(self.inst(InstKind.LABEL, args=[while_label]))
                 case OpKind.WHILE_START:
                     label = op_to_label(op)
