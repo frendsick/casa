@@ -509,6 +509,8 @@ class Inst:
                 | InstKind.LOCAL_SET
                 | InstKind.PUSH
                 | InstKind.PUSH_STR
+                | InstKind.CONSTANT_LOAD
+                | InstKind.CONSTANT_STORE
             ):
                 if len(self.args) != 1 or not isinstance(self.args[0], int):
                     raise TypeError(
@@ -516,9 +518,7 @@ class Inst:
                     )
             # One parameter of type `str`
             case (
-                InstKind.CONSTANT_LOAD
-                | InstKind.CONSTANT_STORE
-                | InstKind.FN_CALL
+                InstKind.FN_CALL
             ):
                 if len(self.args) != 1 or not isinstance(self.args[0], str):
                     raise TypeError(
@@ -537,6 +537,7 @@ class Program:
     functions: dict[str, Bytecode]            # Function name -> bytecode
     strings: list[str]                        # String table (index = string ID)
     globals_count: int                        # Number of global variables
+    constants_count: int                      # Number of constant/capture slots
 
 ANY_TYPE = "any"
 
