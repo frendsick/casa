@@ -326,3 +326,25 @@ def test_typecheck_generic_called_from_function():
 def test_typecheck_generic_definition_without_call():
     code = "fn id[T] T -> T { }"
     typecheck_string(code)  # Should not raise
+
+
+def test_typecheck_generic_in_impl_block():
+    code = """
+    struct Box { val: int }
+    impl Box {
+        fn apply[T] self:Box T -> T { }
+    }
+    42 99 Box .apply
+    """
+    sig = typecheck_string(code)
+    assert sig.return_types == ["int"]
+
+
+def test_typecheck_generic_lambda_wrapping():
+    code = """
+    fn id[T] T -> T { }
+    42 { id } exec
+    """
+    sig = typecheck_string(code)
+    # Lambda exec produces `any` — generic type info is lost through lambda
+    assert sig.return_types == ["any"]
