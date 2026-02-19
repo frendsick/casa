@@ -27,22 +27,28 @@ from casa.typechecker import type_check_ops
 TEST_FILE = Path("test.casa")
 
 
+def _clear_globals():
+    """Reset all module-level mutable state to a clean slate."""
+    GLOBAL_FUNCTIONS.clear()
+    GLOBAL_STRUCTS.clear()
+    GLOBAL_VARIABLES.clear()
+    INCLUDED_FILES.clear()
+    reset_labels()
+    _op_label_map.clear()
+
+
 @pytest.fixture(autouse=True)
 def clear_global_state():
-    """Clear all global mutable state before and after every test."""
-    GLOBAL_FUNCTIONS.clear()
-    GLOBAL_STRUCTS.clear()
-    GLOBAL_VARIABLES.clear()
-    INCLUDED_FILES.clear()
-    reset_labels()
-    _op_label_map.clear()
+    """
+    Clear all global mutable state before and after every test.
+
+    The pre-yield clear ensures a clean slate even if a previous test's
+    teardown was skipped (e.g. due to a crash). The post-yield clear is
+    the normal teardown so the current test doesn't leak state.
+    """
+    _clear_globals()
     yield
-    GLOBAL_FUNCTIONS.clear()
-    GLOBAL_STRUCTS.clear()
-    GLOBAL_VARIABLES.clear()
-    INCLUDED_FILES.clear()
-    reset_labels()
-    _op_label_map.clear()
+    _clear_globals()
 
 
 def lex_string(code: str) -> list[Token]:
