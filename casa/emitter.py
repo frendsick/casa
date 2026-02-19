@@ -52,8 +52,8 @@ class Emitter:
     def _emit_bss(self) -> None:
         self._line(".section .bss")
         p = self.program
-        self._line(f"globals: .skip {max(p.globals_count * 8, 8)}")
-        self._line(f"constants: .skip {max(p.constants_count * 8, 8)}")
+        self._line(f"globals: .skip {p.globals_count * 8}")
+        self._line(f"constants: .skip {p.constants_count * 8}")
         self._line("return_stack: .skip 65536")
         self._line("heap: .skip 1048576")
         self._line("heap_ptr: .skip 8")
