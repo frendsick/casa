@@ -256,3 +256,73 @@ def test_typecheck_fn_exec():
     code = "fn inc a:int -> int { a 1 + } 5 { inc } exec"
     sig = typecheck_string(code)
     assert sig.return_types == ["int"]
+
+
+# ---------------------------------------------------------------------------
+# Generics (type variables)
+# ---------------------------------------------------------------------------
+def test_typecheck_generic_identity_int():
+    code = "fn id[T] T -> T { } 42 id"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["int"]
+
+
+def test_typecheck_generic_identity_str():
+    code = 'fn id[T] T -> T { } "hello" id'
+    sig = typecheck_string(code)
+    assert sig.return_types == ["str"]
+
+
+def test_typecheck_generic_identity_struct():
+    code = """
+    struct Point { x: int y: int }
+    fn id[T] T -> T { }
+    1 2 Point id
+    """
+    sig = typecheck_string(code)
+    assert sig.return_types == ["Point"]
+
+
+def test_typecheck_generic_swap():
+    code = 'fn swap_t[T1 T2] T1 T2 -> T1 T2 { swap } 5 "hi" swap_t'
+    sig = typecheck_string(code)
+    assert sig.return_types == ["str", "int"]
+
+
+def test_typecheck_generic_named_params():
+    code = "fn first[T1 T2] a:T1 b:T2 -> T1 { a } 42 99 first"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["int"]
+
+
+def test_typecheck_generic_mixed_concrete_and_type_var():
+    code = "fn wrap[T] T -> T int { 42 } 5 wrap"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["int", "int"]
+
+
+def test_typecheck_generic_consistency_error():
+    code = 'fn pair[T] T T -> T T { } 42 "hi" pair'
+    with pytest.raises(TypeError, match="Type variable.*bound to"):
+        typecheck_string(code)
+
+
+def test_typecheck_generic_return_only_type_var_error():
+    code = "fn bad[T] int -> T { } 42 bad"
+    with pytest.raises(TypeError, match="return types but not in parameters"):
+        typecheck_string(code)
+
+
+def test_typecheck_generic_called_from_function():
+    code = """
+    fn id[T] T -> T { }
+    fn double a:int -> int { a id 2 * }
+    5 double
+    """
+    sig = typecheck_string(code)
+    assert sig.return_types == ["int"]
+
+
+def test_typecheck_generic_definition_without_call():
+    code = "fn id[T] T -> T { }"
+    typecheck_string(code)  # Should not raise
