@@ -334,10 +334,11 @@ def test_typecheck_generic_in_impl_block():
     impl Box {
         fn apply[T] self:Box T -> T { }
     }
-    42 99 Box .apply
+    42 Box = b
+    "hello" b.apply
     """
     sig = typecheck_string(code)
-    assert sig.return_types == ["int"]
+    assert sig.return_types == ["str"]
 
 
 def test_typecheck_generic_lambda_wrapping():
