@@ -101,10 +101,9 @@ class Emitter:
         self._indent("decq %rsi")
         self._indent("movb $48, (%rsi)")
         self._indent("jmp .Lpi_write")
-        # Non-zero: check sign
+        # Non-zero: check sign (flags still valid from testq above)
         self._line(".Lpi_nonzero:")
         self._indent("movq %rax, %r15")
-        self._indent("testq %rax, %rax")
         self._indent("jns .Lpi_abs")
         self._indent("negq %rax")
         # Convert absolute value to decimal digits
