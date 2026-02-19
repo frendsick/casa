@@ -517,9 +517,7 @@ class Inst:
                         f"`{self.kind}` requires one parameter of type `int`\nArguments: {self.args}"
                     )
             # One parameter of type `str`
-            case (
-                InstKind.FN_CALL
-            ):
+            case InstKind.FN_CALL:
                 if len(self.args) != 1 or not isinstance(self.args[0], str):
                     raise TypeError(
                         f"`{self.kind}` requires one parameter of type `str`\nArguments: {self.args}"
@@ -533,11 +531,12 @@ Type = str
 
 @dataclass
 class Program:
-    bytecode: Bytecode                        # Global scope instructions
-    functions: dict[str, Bytecode]            # Function name -> bytecode
-    strings: list[str]                        # String table (index = string ID)
-    globals_count: int                        # Number of global variables
-    constants_count: int                      # Number of constant/capture slots
+    bytecode: Bytecode  # Global scope instructions
+    functions: dict[str, Bytecode]  # Function name -> bytecode
+    strings: list[str]  # String table (index = string ID)
+    globals_count: int  # Number of global variables
+    constants_count: int  # Number of constant/capture slots
+
 
 ANY_TYPE = "any"
 

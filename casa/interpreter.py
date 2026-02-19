@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import assert_never
 
 from casa.common import GLOBAL_FUNCTIONS, Bytecode, Function, InstKind, LabelId, Program
@@ -32,7 +32,9 @@ class VirtualMachine:
 
 
 def interpret_program(program: Program):
-    vm = VirtualMachine(strings=program.strings, constants_count=program.constants_count)
+    vm = VirtualMachine(
+        strings=program.strings, constants_count=program.constants_count
+    )
     interpret_bytecode(program.bytecode, vm)
 
 
