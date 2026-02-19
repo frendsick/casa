@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 
 import logging
+import os
 import pathlib
+import subprocess
+import sys
 
 from casa.bytecode import compile_bytecode
 from casa.cli import parse_args
-from casa.interpreter import interpret_program
+from casa.emitter import emit_program
 from casa.lexer import lex_file
 from casa.parser import parse_ops, resolve_identifiers
 from casa.typechecker import type_check_ops
@@ -17,10 +20,12 @@ def main():
     args = parse_args()
 
     log_level = logging.INFO if args.verbose else logging.WARNING
-    logging.basicConfig(level=log_level, format=f"[%(levelname)s] %(message)s")
+    logging.basicConfig(level=log_level, format="[%(levelname)s] %(message)s")
 
     input_file = pathlib.Path(args.input)
-    logger.info(f"Lexing {input_file}")
+    output_name = args.output or input_file.stem
+
+    logger.info("Lexing %s", input_file)
     tokens = lex_file(input_file.resolve())
 
     logger.info("Parsing ops")
@@ -35,8 +40,37 @@ def main():
     logger.info("Compiling bytecode")
     program = compile_bytecode(ops)
 
-    logger.info("Interpreting bytecode")
-    interpret_program(program)
+    logger.info("Emitting assembly")
+    asm_source = emit_program(program)
+
+    asm_file = f"{output_name}.s"
+    obj_file = f"{output_name}.o"
+
+    with open(asm_file, "w", encoding="utf-8") as asm_fh:
+        asm_fh.write(asm_source)
+
+    logger.info("Assembling %s", asm_file)
+    result = subprocess.run(
+        ["as", "-o", obj_file, asm_file], capture_output=True, check=False
+    )
+    if result.returncode != 0:
+        print(result.stderr.decode(), file=sys.stderr)
+        sys.exit(1)
+
+    logger.info("Linking %s", obj_file)
+    result = subprocess.run(
+        ["ld", "-o", output_name, obj_file], capture_output=True, check=False
+    )
+    if result.returncode != 0:
+        print(result.stderr.decode(), file=sys.stderr)
+        sys.exit(1)
+
+    # Clean up temporary files
+    if not args.keep_asm:
+        os.remove(asm_file)
+    os.remove(obj_file)
+
+    logger.info("Built %s", output_name)
 
 
 if __name__ == "__main__":
