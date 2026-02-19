@@ -373,10 +373,10 @@ class Emitter:
                 self._line(f".Lret_{uid}:")
             case InstKind.FN_EXEC:
                 uid = self._uid()
-                self._indent("popq %rax")
-                self._indent(f"leaq .Lret_{uid}(%rip), %rbx")
-                self._indent("movq %rbx, (%r14)")
+                self._indent(f"leaq .Lret_{uid}(%rip), %rax")
+                self._indent("movq %rax, (%r14)")
                 self._indent("addq $8, %r14")
+                self._indent("popq %rax")
                 self._indent("jmpq *%rax")
                 self._line(f".Lret_{uid}:")
             case InstKind.FN_PUSH:
