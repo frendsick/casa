@@ -348,12 +348,14 @@ Stack:    {tc.stack}
                 tc.stack_push(t2)
                 tc.stack_push(t1)
                 tc.stack_push(t2)
-            case OpKind.PRINT | OpKind.PRINT_INT | OpKind.PRINT_STR:
+            case OpKind.PRINT:
                 typ = tc.stack_pop()
                 if typ == "str":
                     op.kind = OpKind.PRINT_STR
                 else:
                     op.kind = OpKind.PRINT_INT
+            case OpKind.PRINT_INT | OpKind.PRINT_STR:
+                assert False, "PRINT_INT and PRINT_STR are resolved by the type checker"
             case OpKind.PUSH_ARRAY:
                 # TODO: Fine-grain array typing
                 tc.stack_push("array")
