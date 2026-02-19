@@ -374,9 +374,7 @@ class Compiler:
                 case OpKind.OVER:
                     bytecode.append(self.inst(InstKind.OVER))
                 case OpKind.PRINT:
-                    raise AssertionError(
-                        "PRINT should be resolved to PRINT_INT or PRINT_STR by the type checker"
-                    )
+                    assert False, "PRINT should be resolved to PRINT_INT or PRINT_STR by the type checker"
                 case OpKind.PRINT_INT:
                     bytecode.append(self.inst(InstKind.PRINT_INT))
                 case OpKind.PRINT_STR:
