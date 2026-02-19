@@ -530,8 +530,9 @@ Stack:    {tc.stack}
             if r in function.signature.type_vars and r not in param_tvs
         }
         if ret_only:
+            names = ", ".join(sorted(ret_only))
             raise TypeError(
-                f"Type variable(s) {ret_only} appear in return types "
+                f"Type variable(s) `{names}` appear in return types "
                 f"but not in parameters of `{function.name}`"
             )
 

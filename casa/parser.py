@@ -435,9 +435,13 @@ def parse_type_vars(cursor: Cursor[Token]) -> set[str]:
     type_vars: set[str] = set()
     while token := cursor.pop():
         if token.value == "]":
+            if not type_vars:
+                raise SyntaxError("Empty type parameter list `[]` is not allowed")
             return type_vars
         if token.kind == TokenKind.IDENTIFIER:
             type_vars.add(token.value)
+        elif token.value != ",":
+            raise SyntaxError(f"Expected type variable name but got `{token.value}`")
     raise SyntaxError("Expected `]` to close type parameters")
 
 
