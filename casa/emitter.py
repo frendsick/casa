@@ -249,30 +249,24 @@ class Emitter:
             # === Boolean ===
             case InstKind.AND:
                 self._indent("popq %rax")
-                self._indent("popq %rbx")
                 self._indent("testq %rax, %rax")
                 self._indent("setne %al")
-                self._indent("testq %rbx, %rbx")
-                self._indent("setne %bl")
-                self._indent("andb %bl, %al")
+                self._indent("cmpq $0, (%rsp)")
+                self._indent("setne %cl")
+                self._indent("andb %cl, %al")
                 self._indent("movzbq %al, %rax")
-                self._indent("pushq %rax")
+                self._indent("movq %rax, (%rsp)")
             case InstKind.OR:
                 self._indent("popq %rax")
-                self._indent("popq %rbx")
-                self._indent("testq %rax, %rax")
+                self._indent("orq %rax, (%rsp)")
                 self._indent("setne %al")
-                self._indent("testq %rbx, %rbx")
-                self._indent("setne %bl")
-                self._indent("orb %bl, %al")
                 self._indent("movzbq %al, %rax")
-                self._indent("pushq %rax")
+                self._indent("movq %rax, (%rsp)")
             case InstKind.NOT:
-                self._indent("popq %rax")
-                self._indent("testq %rax, %rax")
+                self._indent("cmpq $0, (%rsp)")
                 self._indent("sete %al")
                 self._indent("movzbq %al, %rax")
-                self._indent("pushq %rax")
+                self._indent("movq %rax, (%rsp)")
 
             # === Comparison ===
             case InstKind.EQ:
