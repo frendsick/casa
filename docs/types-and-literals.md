@@ -11,12 +11,15 @@ Integer type. All integers are 64-bit signed values.
 ```casa
 42 print       # 42
 0 print        # 0
+-42 print      # -42
 ```
 
-There are no negative integer literals. To get a negative number, subtract from zero:
+Negative literals are written with a `-` prefix directly attached to the digits (no space). Note that `- 42` (with a space) is the subtraction operator followed by `42`, not a negative literal.
 
 ```casa
-0 1 - print    # -1
+-42            # negative integer literal
+- 42           # subtraction operator, then 42
+10 -3 + print  # 7 (push 10, push -3, add)
 ```
 
 ### `bool`
@@ -68,6 +71,7 @@ Fixed-size array literal. Items must be literal values (integers, booleans, or s
 
 ```casa
 [1, 2, 3]
+[-1, -2, -3]    # negative literals work in arrays
 ```
 
 The array's length is stored in the first heap slot. Elements are stored starting at offset 1.
