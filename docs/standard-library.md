@@ -22,7 +22,7 @@ Copies heap slots from one pointer to another.
 
 **Signature:** `memcpy dst:ptr src:ptr n:int`
 
-**Stack effect:** `( dst src n -- )`
+**Stack effect:** `dst src n -> None`
 
 ```casa
 3 alloc = src
@@ -48,7 +48,7 @@ Returns the length of an array.
 
 **Signature:** `array::length array -> int`
 
-**Stack effect:** `( array -- int )`
+**Stack effect:** `array -> int`
 
 ```casa
 [1, 2, 3] = arr
@@ -61,7 +61,7 @@ Returns the nth element of an array (zero-indexed).
 
 **Signature:** `array::nth array:array n:int -> any`
 
-**Stack effect:** `( array n -- any )`
+**Stack effect:** `array n -> any`
 
 ```casa
 [10, 20, 30] = arr
@@ -92,7 +92,7 @@ Creates a `List` from a fixed-size array. The list's size and capacity are both 
 
 **Signature:** `List::from_array array:array -> List`
 
-**Stack effect:** `( array -- List )`
+**Stack effect:** `array -> List`
 
 ```casa
 [1, 2, 3] List::from_array = list
@@ -104,7 +104,7 @@ Returns the nth element (zero-indexed).
 
 **Signature:** `List::nth List int -> any`
 
-**Stack effect:** `( List int -- any )`
+**Stack effect:** `List int -> any`
 
 ```casa
 0 list.nth print    # 1
@@ -117,7 +117,7 @@ Appends an item to the list. If the list is at capacity, it allocates a new arra
 
 **Signature:** `List::push self:List item:any`
 
-**Stack effect:** `( List any -- )`
+**Stack effect:** `List any -> None`
 
 ```casa
 4 list.push

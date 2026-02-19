@@ -122,9 +122,9 @@ fn fizzbuzz number:int {
 
 | Operator | Stack Effect | Description |
 |----------|-------------|-------------|
-| `= name` | `( a -- )` | Assign top of stack to `name` |
-| `+= name` | `( int -- )` | Add to `name` |
-| `-= name` | `( int -- )` | Subtract from `name` |
+| `= name` | `a -> None` | Assign top of stack to `name` |
+| `+= name` | `int -> None` | Add to `name` |
+| `-= name` | `int -> None` | Subtract from `name` |
 
 A variable's type is set on first assignment and cannot change:
 
@@ -137,7 +137,7 @@ A variable's type is set on first assignment and cannot change:
 
 Lambdas are anonymous functions created with braces `{ body }`. They push a function value onto the stack.
 
-**Stack effect:** `( -- fn[sig] )`
+**Stack effect:** `-> fn[sig]`
 
 ### Basic Example
 
@@ -181,7 +181,7 @@ fn apply_twice f:fn[int -> int] x:int -> int {
 
 Calls the function value on top of the stack.
 
-**Stack effect:** `( args... fn[sig] -- results... )`
+**Stack effect:** `args... fn[sig] -> results...`
 
 The function value must be on top of the stack, with its arguments below. For `fn[int -> int]`, exec pops the function and one `int`, then pushes one `int`.
 
@@ -191,11 +191,11 @@ Built-in operations for manipulating the stack directly.
 
 | Intrinsic | Stack Effect | Description |
 |-----------|-------------|-------------|
-| `drop` | `( a -- )` | Discard top of stack |
-| `dup` | `( a -- a a )` | Duplicate top of stack |
-| `swap` | `( a b -- b a )` | Swap top two values |
-| `over` | `( a b -- a b a )` | Copy second value to top |
-| `rot` | `( a b c -- b c a )` | Rotate top three values |
+| `drop` | `a -> None` | Discard top of stack |
+| `dup` | `a -> a a` | Duplicate top of stack |
+| `swap` | `a b -> b a` | Swap top two values |
+| `over` | `a b -> a b a` | Copy second value to top |
+| `rot` | `a b c -> b c a` | Rotate top three values |
 
 ### Examples
 
@@ -222,7 +222,7 @@ See [`examples/stack_operations.casa`](../examples/stack_operations.casa).
 
 Prints the top of the stack to stdout, followed by a newline.
 
-**Stack effect:** `( a -- )`
+**Stack effect:** `a -> None`
 
 Integers and booleans are printed as decimal numbers. Strings are printed as text.
 
@@ -238,9 +238,9 @@ Low-level heap access for building data structures.
 
 | Intrinsic | Stack Effect | Description |
 |-----------|-------------|-------------|
-| `alloc` | `( int -- ptr )` | Allocate N heap slots, return pointer |
-| `load` | `( ptr -- any )` | Read value at heap address |
-| `store` | `( any ptr -- )` | Write value to heap address |
+| `alloc` | `int -> ptr` | Allocate N heap slots, return pointer |
+| `load` | `ptr -> any` | Read value at heap address |
+| `store` | `any ptr -> None` | Write value to heap address |
 
 ### Example
 

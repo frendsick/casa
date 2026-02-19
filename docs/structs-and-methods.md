@@ -15,7 +15,7 @@ struct Person {
 
 Push fields onto the stack in reverse declaration order (last declared field deepest, first declared field on top), then call the struct name. Fields are popped from the top in declaration order.
 
-**Stack effect:** `( fieldN ... field2 field1 -- StructName )`
+**Stack effect:** `fieldN ... field2 field1 -> StructName`
 
 ```casa
 18 "John Doe" Person = person
@@ -31,7 +31,7 @@ Every struct automatically gets getter and setter functions for each field.
 
 `Type::field` — pops a struct instance, pushes the field value.
 
-**Stack effect:** `( StructName -- field_type )`
+**Stack effect:** `StructName -> field_type`
 
 ```casa
 person Person::name print    # John Doe
@@ -42,7 +42,7 @@ person Person::age print     # 18
 
 `Type::set_field` — pops a new value and a struct instance, updates the field in place.
 
-**Stack effect:** `( value StructName -- )`
+**Stack effect:** `value StructName -> None`
 
 ```casa
 "Jane Doe" person Person::set_name
