@@ -76,6 +76,25 @@ class TypeChecker:
             return typ
         raise TypeError(f"Expected `{expected}` but got `{typ}`")
 
+    def _bind_type_var(
+        self,
+        bindings: dict[str, Type],
+        type_var: str,
+        actual: Type,
+    ):
+        """Bind a type variable to a concrete type, checking consistency."""
+        if type_var not in bindings:
+            bindings[type_var] = actual
+            return
+
+        bound = bindings[type_var]
+        if bound == ANY_TYPE and actual != ANY_TYPE:
+            bindings[type_var] = actual
+        elif actual != bound and actual != ANY_TYPE and bound != ANY_TYPE:
+            raise TypeError(
+                f"Type variable `{type_var}` bound to " f"`{bound}` but got `{actual}`"
+            )
+
     def apply_signature(self, signature: Signature):
         if not signature.type_vars:
             for expected in signature.parameters:
@@ -87,21 +106,10 @@ class TypeChecker:
         # Bind type variables to actual stack types
         bindings: dict[str, Type] = {}
         for expected in signature.parameters:
-            if expected.typ in signature.type_vars:
-                actual = self.stack_pop()
-                if expected.typ in bindings:
-                    bound = bindings[expected.typ]
-                    if actual != bound and actual != ANY_TYPE and bound != ANY_TYPE:
-                        raise TypeError(
-                            f"Type variable `{expected.typ}` bound to "
-                            f"`{bound}` but got `{actual}`"
-                        )
-                    if bound == ANY_TYPE and actual != ANY_TYPE:
-                        bindings[expected.typ] = actual
-                else:
-                    bindings[expected.typ] = actual
-            else:
+            if expected.typ not in signature.type_vars:
                 self.expect_type(expected.typ)
+                continue
+            self._bind_type_var(bindings, expected.typ, self.stack_pop())
 
         for return_type in signature.return_types:
             resolved = bindings.get(return_type, return_type)
