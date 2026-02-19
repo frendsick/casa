@@ -127,6 +127,13 @@ class Lexer:
         location = self.current_location(value_len)
         self.cursor.position += value_len
 
+        # Negative integer literal is not preceded by digit
+        is_previous_digit = (
+            original_position > 0
+            and self.cursor.sequence[original_position - 1].isdigit()
+        )
+        if is_negative_integer_literal(value) and not is_previous_digit:
+            return Token(value, TokenKind.LITERAL, location)
         if value in ("true", "false"):
             return Token(value, TokenKind.LITERAL, location)
         if Delimiter.from_str(value):
@@ -158,6 +165,10 @@ class Lexer:
             raise SyntaxError('Expected `"` but got nothing')
 
         return string_literal
+
+
+def is_negative_integer_literal(value: str):
+    return len(value) > 1 and value[0] == "-" and value[1:].isdigit()
 
 
 def lex_file(file: Path) -> list[Token]:

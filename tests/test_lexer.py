@@ -10,8 +10,21 @@ from tests.conftest import lex_string
 # Keywords
 # ---------------------------------------------------------------------------
 ALL_KEYWORDS = [
-    "fn", "impl", "return", "while", "do", "break", "continue", "done",
-    "if", "then", "elif", "else", "fi", "struct", "include",
+    "fn",
+    "impl",
+    "return",
+    "while",
+    "do",
+    "break",
+    "continue",
+    "done",
+    "if",
+    "then",
+    "elif",
+    "else",
+    "fi",
+    "struct",
+    "include",
 ]
 assert len(ALL_KEYWORDS) == len(Keyword)
 
@@ -28,9 +41,16 @@ def test_lex_all_keywords(word):
 # Intrinsics
 # ---------------------------------------------------------------------------
 ALL_INTRINSICS = [
-    "drop", "dup", "over", "rot", "swap",
-    "alloc", "load", "store",
-    "print", "exec",
+    "drop",
+    "dup",
+    "over",
+    "rot",
+    "swap",
+    "alloc",
+    "load",
+    "store",
+    "print",
+    "exec",
 ]
 assert len(ALL_INTRINSICS) == len(Intrinsic)
 
@@ -46,11 +66,25 @@ def test_lex_all_intrinsics(word):
 # Operators
 # ---------------------------------------------------------------------------
 ALL_OPERATORS = [
-    "+", "-", "*", "/", "%",
-    "<<", ">>",
-    "&&", "||", "!",
-    "==", ">=", ">", "<=", "<", "!=",
-    "=", "-=", "+=",
+    "+",
+    "-",
+    "*",
+    "/",
+    "%",
+    "<<",
+    ">>",
+    "&&",
+    "||",
+    "!",
+    "==",
+    ">=",
+    ">",
+    "<=",
+    "<",
+    "!=",
+    "=",
+    "-=",
+    "+=",
 ]
 assert len(ALL_OPERATORS) == len(Operator)
 
@@ -110,6 +144,30 @@ def test_lex_boolean_literals(word):
     tokens = lex_string(word)
     assert tokens[0].kind == TokenKind.LITERAL
     assert tokens[0].value == word
+
+
+def test_lex_negative_integer_literal():
+    tokens = lex_string("-42")
+    assert tokens[0].kind == TokenKind.LITERAL
+    assert tokens[0].value == "-42"
+
+
+def test_lex_minus_operator_with_space():
+    tokens = lex_string("- 42")
+    assert tokens[0].kind == TokenKind.OPERATOR
+    assert tokens[0].value == "-"
+    assert tokens[1].kind == TokenKind.LITERAL
+    assert tokens[1].value == "42"
+
+
+def test_lex_negative_after_int_no_space():
+    """10-3 is not a negative literal — the minus is stuck to the previous token."""
+    tokens = lex_string("10-3")
+    assert tokens[0].kind == TokenKind.LITERAL
+    assert tokens[0].value == "10"
+    # -3 falls through to IDENTIFIER (not LITERAL), will error at resolution
+    assert tokens[1].kind == TokenKind.IDENTIFIER
+    assert tokens[1].value == "-3"
 
 
 def test_lex_string_literal():

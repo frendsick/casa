@@ -24,6 +24,17 @@ def test_emit_push_int():
     assert "pushq $42" in asm
 
 
+def test_emit_negative_int():
+    asm = emit_string("-42")
+    assert "pushq $-42" in asm
+
+
+def test_emit_large_negative_int():
+    large_neg = -(2**32)
+    asm = emit_string(str(large_neg))
+    assert "movabsq" in asm
+
+
 def test_emit_push_large_int():
     large = 2**32
     asm = emit_string(str(large))
