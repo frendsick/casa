@@ -33,7 +33,8 @@ class VirtualMachine:
 
 def interpret_program(program: Program):
     vm = VirtualMachine(
-        strings=program.strings, constants_count=program.constants_count
+        strings=program.strings,
+        constants_count=program.constants_count,
     )
     interpret_bytecode(program.bytecode, vm)
 
