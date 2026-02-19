@@ -427,6 +427,7 @@ class InstKind(Enum):
     # Functions
     FN_CALL = auto()
     FN_EXEC = auto()
+    FN_PUSH = auto()
     FN_RETURN = auto()
 
     # Jumps
@@ -471,7 +472,7 @@ class Inst:
         return self.args[0]
 
     def __post_init__(self):
-        assert len(InstKind) == 43, "Exhaustive handling for `InstructionKind`"
+        assert len(InstKind) == 44, "Exhaustive handling for `InstructionKind`"
 
         match self.kind:
             # Should not have a parameter
@@ -531,7 +532,7 @@ class Inst:
                         f"`{self.kind}` requires one parameter of type `int`\nArguments: {self.args}"
                     )
             # One parameter of type `str`
-            case InstKind.FN_CALL:
+            case InstKind.FN_CALL | InstKind.FN_PUSH:
                 if len(self.args) != 1 or not isinstance(self.args[0], str):
                     raise TypeError(
                         f"`{self.kind}` requires one parameter of type `str`\nArguments: {self.args}"

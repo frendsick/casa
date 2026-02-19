@@ -101,7 +101,7 @@ class Compiler:
         return Inst(kind, args=args or [], location=self._current_loc)
 
     def compile(self) -> Bytecode:
-        assert len(InstKind) == 43, "Exhaustive handling for `InstructionKind"
+        assert len(InstKind) == 44, "Exhaustive handling for `InstructionKind"
         assert len(OpKind) == 55, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
@@ -245,9 +245,8 @@ class Compiler:
                             )
                         )
 
-                    # Push function pointer
-                    index = list(GLOBAL_FUNCTIONS).index(function_name)
-                    bytecode.append(self.inst(InstKind.PUSH, args=[index]))
+                    # Push function address
+                    bytecode.append(self.inst(InstKind.FN_PUSH, args=[function_name]))
 
                 case OpKind.FN_RETURN:
                     bytecode.append(self.inst(InstKind.FN_RETURN))
@@ -374,7 +373,9 @@ class Compiler:
                 case OpKind.OVER:
                     bytecode.append(self.inst(InstKind.OVER))
                 case OpKind.PRINT:
-                    assert False, "PRINT should be resolved to PRINT_INT or PRINT_STR by the type checker"
+                    assert (
+                        False
+                    ), "PRINT should be resolved to PRINT_INT or PRINT_STR by the type checker"
                 case OpKind.PRINT_INT:
                     bytecode.append(self.inst(InstKind.PRINT_INT))
                 case OpKind.PRINT_STR:

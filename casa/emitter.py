@@ -1,6 +1,6 @@
 from typing import assert_never
 
-from casa.common import GLOBAL_FUNCTIONS, Bytecode, Inst, InstKind, Program
+from casa.common import Bytecode, Inst, InstKind, Program
 
 INT32_MIN = -(1 << 31)
 INT32_MAX = (1 << 31) - 1
@@ -78,16 +78,6 @@ class Emitter:
         self._line("str_len_table:")
         for s in self.program.strings:
             self._line(f"    .quad {len(s)}")
-
-        # Function pointer table
-        fn_names = list(GLOBAL_FUNCTIONS.keys())
-        self._line("fn_table:")
-        for name in fn_names:
-            if name in self.program.functions:
-                label = f"fn_{self._sanitize_name(name)}"
-                self._line(f"    .quad {label}")
-            else:
-                self._line("    .quad 0")
 
         # Characters for print helpers
         self._line("newline: .byte 10")
@@ -192,7 +182,7 @@ class Emitter:
         self._indent("movq %rax, (%rsp)")
 
     def _emit_inst(self, inst: Inst, is_global: bool) -> None:
-        assert len(InstKind) == 43, "Exhaustive handling for `InstKind`"
+        assert len(InstKind) == 44, "Exhaustive handling for `InstKind`"
         kind = inst.kind
         match kind:
             # === Stack ===
@@ -384,13 +374,16 @@ class Emitter:
             case InstKind.FN_EXEC:
                 uid = self._uid()
                 self._indent("popq %rax")
-                self._indent("leaq fn_table(%rip), %rbx")
-                self._indent("movq (%rbx, %rax, 8), %rax")
                 self._indent(f"leaq .Lret_{uid}(%rip), %rbx")
                 self._indent("movq %rbx, (%r14)")
                 self._indent("addq $8, %r14")
                 self._indent("jmpq *%rax")
                 self._line(f".Lret_{uid}:")
+            case InstKind.FN_PUSH:
+                name = inst.str_arg
+                label = self._sanitize_name(name)
+                self._indent(f"leaq fn_{label}(%rip), %rax")
+                self._indent("pushq %rax")
             case InstKind.FN_RETURN:
                 if is_global:
                     self._indent("movq $60, %rax")
