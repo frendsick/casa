@@ -5,7 +5,7 @@ import pathlib
 
 from casa.bytecode import compile_bytecode
 from casa.cli import parse_args
-from casa.interpreter import interpret_bytecode
+from casa.interpreter import interpret_program
 from casa.lexer import lex_file
 from casa.parser import parse_ops, resolve_identifiers
 from casa.typechecker import type_check_ops
@@ -33,10 +33,10 @@ def main():
     type_check_ops(ops)
 
     logger.info("Compiling bytecode")
-    bytecode = compile_bytecode(ops)
+    program = compile_bytecode(ops)
 
     logger.info("Interpreting bytecode")
-    interpret_bytecode(bytecode)
+    interpret_program(program)
 
 
 if __name__ == "__main__":
