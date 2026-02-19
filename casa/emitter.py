@@ -307,10 +307,11 @@ class Emitter:
             case InstKind.LOCALS_INIT:
                 n = inst.int_arg
                 if n > 0:
+                    self._indent("movq %r14, %rdi")
+                    self._indent(f"movq ${n}, %rcx")
                     self._indent("xorq %rax, %rax")
-                    for _ in range(n):
-                        self._indent("movq %rax, (%r14)")
-                        self._indent("addq $8, %r14")
+                    self._indent("rep stosq")
+                    self._indent(f"addq ${n * 8}, %r14")
             case InstKind.LOCALS_UNINIT:
                 n = inst.int_arg
                 if n > 0:
