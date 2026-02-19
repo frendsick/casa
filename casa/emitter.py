@@ -3,6 +3,10 @@ from typing import assert_never
 from casa.common import GLOBAL_FUNCTIONS, Bytecode, Inst, InstKind, Program
 
 STRING_TAG = 1 << 60
+INT32_MIN = -(1 << 31)
+INT32_MAX = (1 << 31) - 1
+RETURN_STACK_SIZE = 65536
+HEAP_SIZE = 1048576
 
 
 class Emitter:
@@ -54,8 +58,8 @@ class Emitter:
         p = self.program
         self._line(f"globals: .skip {p.globals_count * 8}")
         self._line(f"constants: .skip {p.constants_count * 8}")
-        self._line("return_stack: .skip 65536")
-        self._line("heap: .skip 1048576")
+        self._line(f"return_stack: .skip {RETURN_STACK_SIZE}")
+        self._line(f"heap: .skip {HEAP_SIZE}")
         self._line("heap_ptr: .skip 8")
         self._line("print_buf: .skip 32")
         self._line("")
@@ -195,7 +199,7 @@ class Emitter:
             # === Stack ===
             case InstKind.PUSH:
                 val = inst.int_arg
-                if -2147483648 <= val <= 2147483647:
+                if INT32_MIN <= val <= INT32_MAX:
                     self._indent(f"pushq ${val}")
                 else:
                     self._indent(f"movabsq ${val}, %rax")
