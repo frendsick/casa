@@ -26,7 +26,7 @@ from casa.common import (
     Type,
     Variable,
 )
-from casa.lexer import lex_file
+from casa.lexer import is_negative_integer_literal, lex_file
 
 INTRINSIC_TO_OPKIND = {
     Intrinsic.ALLOC: OpKind.HEAP_ALLOC,
@@ -500,7 +500,7 @@ def get_op_literal(token: Token) -> Op:
         return Op(True, OpKind.PUSH_BOOL, token.location)
     if value == "false":
         return Op(False, OpKind.PUSH_BOOL, token.location)
-    if value.isdigit():
+    if value.isdigit() or is_negative_integer_literal(value):
         return Op(int(value), OpKind.PUSH_INT, token.location)
     if value.startswith('"') and value.endswith('"'):
         return Op(value[1:-1], OpKind.PUSH_STR, token.location)
