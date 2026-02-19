@@ -2,7 +2,6 @@ from typing import assert_never
 
 from casa.common import GLOBAL_FUNCTIONS, Bytecode, Inst, InstKind, Program
 
-STRING_TAG = 1 << 60
 INT32_MIN = -(1 << 31)
 INT32_MAX = (1 << 31) - 1
 RETURN_STACK_SIZE = 65536
@@ -193,7 +192,7 @@ class Emitter:
         self._indent("movq %rax, (%rsp)")
 
     def _emit_inst(self, inst: Inst, is_global: bool) -> None:
-        assert len(InstKind) == 42, "Exhaustive handling for `InstKind`"
+        assert len(InstKind) == 43, "Exhaustive handling for `InstKind`"
         kind = inst.kind
         match kind:
             # === Stack ===
@@ -205,9 +204,7 @@ class Emitter:
                     self._indent(f"movabsq ${val}, %rax")
                     self._indent("pushq %rax")
             case InstKind.PUSH_STR:
-                tagged = STRING_TAG + inst.int_arg
-                self._indent(f"movabsq ${tagged}, %rax")
-                self._indent("pushq %rax")
+                self._indent(f"pushq ${inst.int_arg}")
             case InstKind.DROP:
                 self._indent("addq $8, %rsp")
             case InstKind.DUP:
@@ -404,18 +401,17 @@ class Emitter:
                     self._indent("jmpq *(%r14)")
 
             # === IO ===
-            case InstKind.PRINT:
+            case InstKind.PRINT_INT:
                 uid = self._uid()
                 self._indent("popq %rdi")
-                self._indent(f"movabsq ${STRING_TAG}, %rax")
-                self._indent("cmpq %rax, %rdi")
-                self._indent(f"jge .Lprint_str_{uid}")
                 self._indent(f"leaq .Lprint_done_{uid}(%rip), %rax")
                 self._indent("movq %rax, (%r14)")
                 self._indent("addq $8, %r14")
                 self._indent("jmp print_int")
-                self._line(f".Lprint_str_{uid}:")
-                self._indent("subq %rax, %rdi")
+                self._line(f".Lprint_done_{uid}:")
+            case InstKind.PRINT_STR:
+                uid = self._uid()
+                self._indent("popq %rdi")
                 self._indent(f"leaq .Lprint_done_{uid}(%rip), %rax")
                 self._indent("movq %rax, (%r14)")
                 self._indent("addq $8, %r14")

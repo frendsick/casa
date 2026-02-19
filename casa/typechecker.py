@@ -84,7 +84,7 @@ class TypeChecker:
 
 
 def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature:
-    assert len(OpKind) == 53, "Exhaustive handling for `OpKind`"
+    assert len(OpKind) == 55, "Exhaustive handling for `OpKind`"
 
     tc = TypeChecker(ops=ops)
     for op in ops:
@@ -348,8 +348,12 @@ Stack:    {tc.stack}
                 tc.stack_push(t2)
                 tc.stack_push(t1)
                 tc.stack_push(t2)
-            case OpKind.PRINT:
-                tc.stack_pop()
+            case OpKind.PRINT | OpKind.PRINT_INT | OpKind.PRINT_STR:
+                typ = tc.stack_pop()
+                if typ == "str":
+                    op.kind = OpKind.PRINT_STR
+                else:
+                    op.kind = OpKind.PRINT_INT
             case OpKind.PUSH_ARRAY:
                 # TODO: Fine-grain array typing
                 tc.stack_push("array")
