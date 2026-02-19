@@ -198,6 +198,8 @@ class OpKind(Enum):
 
     # IO
     PRINT = auto()
+    PRINT_INT = auto()
+    PRINT_STR = auto()
 
     # Memory
     HEAP_ALLOC = auto()
@@ -282,7 +284,7 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 53, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 55, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires `bool`
@@ -322,6 +324,8 @@ class Op:
                 | OpKind.LOAD
                 | OpKind.OVER
                 | OpKind.PRINT
+                | OpKind.PRINT_INT
+                | OpKind.PRINT_STR
                 | OpKind.ROT
                 | OpKind.STORE
                 | OpKind.SWAP
@@ -388,7 +392,8 @@ class InstKind(Enum):
     SWAP = auto()
 
     # IO
-    PRINT = auto()
+    PRINT_INT = auto()
+    PRINT_STR = auto()
 
     # Memory
     HEAP_ALLOC = auto()
@@ -422,6 +427,7 @@ class InstKind(Enum):
     # Functions
     FN_CALL = auto()
     FN_EXEC = auto()
+    FN_PUSH = auto()
     FN_RETURN = auto()
 
     # Jumps
@@ -466,7 +472,7 @@ class Inst:
         return self.args[0]
 
     def __post_init__(self):
-        assert len(InstKind) == 42, "Exhaustive handling for `InstructionKind`"
+        assert len(InstKind) == 44, "Exhaustive handling for `InstructionKind`"
 
         match self.kind:
             # Should not have a parameter
@@ -491,7 +497,8 @@ class Inst:
                 | InstKind.NOT
                 | InstKind.OR
                 | InstKind.OVER
-                | InstKind.PRINT
+                | InstKind.PRINT_INT
+                | InstKind.PRINT_STR
                 | InstKind.ROT
                 | InstKind.SHL
                 | InstKind.SHR
@@ -525,7 +532,7 @@ class Inst:
                         f"`{self.kind}` requires one parameter of type `int`\nArguments: {self.args}"
                     )
             # One parameter of type `str`
-            case InstKind.FN_CALL:
+            case InstKind.FN_CALL | InstKind.FN_PUSH:
                 if len(self.args) != 1 or not isinstance(self.args[0], str):
                     raise TypeError(
                         f"`{self.kind}` requires one parameter of type `str`\nArguments: {self.args}"
