@@ -571,6 +571,7 @@ class Parameter:
 class Signature:
     parameters: list[Parameter]
     return_types: list[Type]
+    type_vars: set[str] = field(default_factory=set)
 
     @classmethod
     def from_str(cls, repr: str) -> Self:

@@ -7,10 +7,12 @@ Functions are defined with `fn` at global scope. They can be called before their
 ### Syntax
 
 ```
-fn name param:type ... -> return_type ... {
+fn name[TypeVar ...] param:type ... -> return_type ... {
     body
 }
 ```
+
+The `[TypeVar ...]` part is optional — see [Generic Functions](#generic-functions) below.
 
 Parameters are consumed from the top of the stack in declaration order: the first parameter is on top, and the last parameter is deepest. Return types describe what the function leaves on the stack after it returns.
 
@@ -85,6 +87,50 @@ fn fib number:int -> int {
 ```
 
 See [`examples/fibonacci.casa`](../examples/fibonacci.casa).
+
+### Generic Functions
+
+Functions can declare type variables in square brackets after the name. Type variables are resolved to concrete types at each call site, enabling type-safe polymorphism.
+
+**Stack effect:** `args... -> returns...` (type variables resolve to the actual types at the call site)
+
+```casa
+fn id[T] T -> T { }       # T -> T
+42 id print                # int -> int, prints 42
+"hello" id print           # str -> str, prints hello
+```
+
+Multiple type variables:
+
+```casa
+fn swap_t[T1 T2] T1 T2 -> T1 T2 { swap }   # T1 T2 -> T1 T2
+5 "hi" swap_t              # int str -> str int
+```
+
+Generic functions can mix type variables with concrete types and named parameters:
+
+```casa
+fn first[T1 T2] a:T1 b:T2 -> T1 { a }
+fn wrap[T] T -> T int { 42 }
+```
+
+The type checker enforces consistency — if the same type variable appears multiple times in the parameters, all occurrences must bind to the same type:
+
+```casa
+fn pair[T] T T -> T T { }
+42 42 pair        # OK: both T=int
+42 "hi" pair      # ERROR: T bound to int and str
+```
+
+Generic type parameters also work in `impl` block methods:
+
+```casa
+impl Box {
+    fn apply[T] self:Box T -> T { }
+}
+```
+
+Every type variable must appear in at least one parameter (return-only type variables are not allowed).
 
 ### Restrictions
 

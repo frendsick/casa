@@ -76,11 +76,44 @@ class TypeChecker:
             return typ
         raise TypeError(f"Expected `{expected}` but got `{typ}`")
 
+    def _bind_type_var(
+        self,
+        bindings: dict[str, Type],
+        type_var: str,
+        actual: Type,
+    ):
+        """Bind a type variable to a concrete type, checking consistency."""
+        if type_var not in bindings:
+            bindings[type_var] = actual
+            return
+
+        bound = bindings[type_var]
+        if bound == ANY_TYPE and actual != ANY_TYPE:
+            bindings[type_var] = actual
+        elif actual != bound and actual != ANY_TYPE and bound != ANY_TYPE:
+            raise TypeError(
+                f"Type variable `{type_var}` bound to " f"`{bound}` but got `{actual}`"
+            )
+
     def apply_signature(self, signature: Signature):
+        if not signature.type_vars:
+            for expected in signature.parameters:
+                self.expect_type(expected.typ)
+            for return_type in signature.return_types:
+                self.stack_push(return_type)
+            return
+
+        # Bind type variables to actual stack types
+        bindings: dict[str, Type] = {}
         for expected in signature.parameters:
-            self.expect_type(expected.typ)
+            if expected.typ not in signature.type_vars:
+                self.expect_type(expected.typ)
+                continue
+            self._bind_type_var(bindings, expected.typ, self.stack_pop())
+
         for return_type in signature.return_types:
-            self.stack_push(return_type)
+            resolved = bindings.get(return_type, return_type)
+            self.stack_push(resolved)
 
 
 def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature:
@@ -492,9 +525,29 @@ Stack:    {tc.stack}
         )
 
     inferred_signature = Signature(tc.parameters, tc.stack)
+
+    if function and function.signature and function.signature.type_vars:
+        param_tvs = {
+            p.typ
+            for p in function.signature.parameters
+            if p.typ in function.signature.type_vars
+        }
+        ret_only = {
+            r
+            for r in function.signature.return_types
+            if r in function.signature.type_vars and r not in param_tvs
+        }
+        if ret_only:
+            names = ", ".join(sorted(ret_only))
+            raise TypeError(
+                f"Type variable(s) `{names}` appear in return types "
+                f"but not in parameters of `{function.name}`"
+            )
+
     if (
         function
         and function.signature
+        and not function.signature.type_vars
         and not function.signature.matches(inferred_signature)
     ):
         raise TypeError(

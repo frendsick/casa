@@ -62,7 +62,12 @@ person.name print    # same as: person Person::name print
 person.age print     # same as: person Person::age print
 ```
 
-The type checker resolves the receiver type automatically — you do not need to write the struct name.
+The type checker resolves the receiver type automatically from whatever value is on top of the stack — you do not need to write the struct name. This means dot syntax works on any expression, not just variables:
+
+```casa
+18 "John Doe" Person .name print   # John Doe (dot on constructor result)
+person.name print                  # John Doe (dot on variable)
+```
 
 ### Arrow Syntax (Setter)
 

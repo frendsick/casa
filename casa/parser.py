@@ -430,10 +430,33 @@ def parse_struct(cursor: Cursor[Token]) -> Struct:
     return Struct(struct_name.value, members, struct_name.location)
 
 
+def parse_type_vars(cursor: Cursor[Token]) -> set[str]:
+    expect_token(cursor, value="[")
+    type_vars: set[str] = set()
+    while token := cursor.pop():
+        if token.value == "]":
+            if not type_vars:
+                raise SyntaxError("Empty type parameter list `[]` is not allowed")
+            return type_vars
+        if token.kind == TokenKind.IDENTIFIER:
+            type_vars.add(token.value)
+        elif token.value != ",":
+            raise SyntaxError(f"Expected type variable name but got `{token.value}`")
+    raise SyntaxError("Expected `]` to close type parameters")
+
+
 def parse_function(cursor: Cursor[Token]) -> Function:
     expect_token(cursor, value="fn")
     name = expect_token(cursor, kind=TokenKind.IDENTIFIER)
+
+    # Parse optional type parameters: fn name[T1 T2] ...
+    type_vars: set[str] = set()
+    next_token = cursor.peek()
+    if next_token and next_token.value == "[":
+        type_vars = parse_type_vars(cursor)
+
     signature = parse_signature(cursor)
+    signature.type_vars = type_vars
 
     ops: list[Op] = []
     variables: list[Variable] = []

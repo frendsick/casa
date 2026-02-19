@@ -329,3 +329,29 @@ def test_resolve_push_capture():
 def test_resolve_undefined_raises():
     with pytest.raises(NameError, match="not defined"):
         resolve_string("undefined_thing")
+
+
+# ---------------------------------------------------------------------------
+# Generic type parameters (parsing)
+# ---------------------------------------------------------------------------
+def test_parse_generic_function_type_vars():
+    parse_string("fn id[T] T -> T { }")
+    fn = GLOBAL_FUNCTIONS["id"]
+    assert fn.signature is not None
+    assert fn.signature.type_vars == {"T"}
+
+
+def test_parse_generic_multiple_type_vars():
+    parse_string("fn swap_t[T1 T2] T1 T2 -> T1 T2 { swap }")
+    fn = GLOBAL_FUNCTIONS["swap_t"]
+    assert fn.signature.type_vars == {"T1", "T2"}
+
+
+def test_parse_generic_empty_brackets_raises():
+    with pytest.raises(SyntaxError, match="Empty type parameter list"):
+        parse_string("fn foo[] int -> int { }")
+
+
+def test_parse_generic_invalid_token_raises():
+    with pytest.raises(SyntaxError, match="Expected type variable name"):
+        parse_string("fn foo[42] int -> int { }")
