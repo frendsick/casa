@@ -452,9 +452,17 @@ class Inst:
     location: Location | None = None
 
     @property
-    def arg(self) -> int | str:
-        """Single argument accessor for instructions with exactly one arg."""
-        assert len(self.args) == 1, f"Expected 1 arg, got {len(self.args)}"
+    def int_arg(self) -> int:
+        """Single int argument accessor."""
+        assert len(self.args) == 1, f"Expected 1 argument, got {len(self.args)}"
+        assert isinstance(self.args[0], int), f"Expected int, got {type(self.args[0])}"
+        return self.args[0]
+
+    @property
+    def str_arg(self) -> str:
+        """Single str argument accessor."""
+        assert len(self.args) == 1, f"Expected 1 argument, got {len(self.args)}"
+        assert isinstance(self.args[0], str), f"Expected str, got {type(self.args[0])}"
         return self.args[0]
 
     def __post_init__(self):
