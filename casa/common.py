@@ -554,6 +554,7 @@ class Program:
 
 
 ANY_TYPE = "any"
+BUILTIN_TYPES: set[str] = {"int", "bool", "str", "ptr", "array", "any"}
 
 
 @dataclass

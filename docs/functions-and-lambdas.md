@@ -132,6 +132,14 @@ impl Box {
 
 Every type variable must appear in at least one parameter (return-only type variables are not allowed).
 
+Type variable names must not collide with built-in types (`int`, `bool`, `str`, `ptr`, `array`, `any`, `fn`) or user-defined struct names:
+
+```casa
+fn bad[int] int -> int { }     # ERROR: shadows built-in type
+fn bad[MyStruct] MyStruct -> MyStruct { }   # ERROR: shadows struct type
+fn good[T] T -> T { }         # OK
+```
+
 ### Restrictions
 
 - Functions must be defined at **global scope** — no nested function definitions (use lambdas instead).
@@ -237,7 +245,7 @@ Built-in operations for manipulating the stack directly.
 
 | Intrinsic | Stack Effect | Description |
 |-----------|-------------|-------------|
-| `drop` | `a -> None` | Discard top of stack |
+| `drop` | `a ->` | Discard top of stack |
 | `dup` | `a -> a a` | Duplicate top of stack |
 | `swap` | `a b -> b a` | Swap top two values |
 | `over` | `a b -> a b a` | Copy second value to top |
