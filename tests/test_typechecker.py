@@ -380,3 +380,36 @@ def test_typecheck_generic_lambda_wrapping():
     sig = typecheck_string(code)
     # Lambda exec produces `any` — generic type info is lost through lambda
     assert sig.return_types == ["any"]
+
+
+# ---------------------------------------------------------------------------
+# type_check_all_functions
+# ---------------------------------------------------------------------------
+def test_typecheck_all_functions_catches_unused_error():
+    """An unused function with a type error is caught."""
+    code = "fn bad int -> str { }"
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        typecheck_string(code)
+    error = exc_info.value.errors[0]
+    assert error.kind == ErrorKind.SIGNATURE_MISMATCH
+    assert error.expected == "int -> str"
+    assert error.got == ("Inferred", "None -> None")
+
+
+def test_typecheck_all_functions_valid_unused():
+    """A valid unused function does not raise."""
+    code = "fn add a:int b:int -> int { a b + }"
+    typecheck_string(code)  # Should not raise
+    fn = GLOBAL_FUNCTIONS["add"]
+    assert fn.is_typechecked
+
+
+def test_typecheck_all_functions_with_struct():
+    """Auto-generated struct getters/setters typecheck correctly."""
+    code = """
+    struct Point { x: int y: int }
+    fn get_x p:Point -> int { p.x }
+    """
+    typecheck_string(code)  # Should not raise
+    fn = GLOBAL_FUNCTIONS["get_x"]
+    assert fn.is_typechecked

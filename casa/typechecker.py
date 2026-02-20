@@ -732,3 +732,16 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
         inferred_signature = function.signature
 
     return inferred_signature  # type_check_ops
+
+
+def type_check_all_functions():
+    """Typecheck all global functions, including those never called."""
+    for fn in list(GLOBAL_FUNCTIONS.values()):
+        if fn.is_typechecked:
+            continue
+        fn.is_typechecked = True
+        if not fn.is_used:
+            fn.ops = resolve_identifiers(fn.ops, fn)
+        signature = type_check_ops(fn.ops, fn)
+        if not fn.signature:
+            fn.signature = signature

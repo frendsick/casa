@@ -12,7 +12,7 @@ from casa.emitter import emit_program
 from casa.error import WARNINGS, CasaErrorCollection, report_errors, report_warnings
 from casa.lexer import lex_file
 from casa.parser import parse_ops, resolve_identifiers
-from casa.typechecker import type_check_ops
+from casa.typechecker import type_check_all_functions, type_check_ops
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,7 @@ def main():
 
         logger.info("Type checking ops")
         type_check_ops(ops)
+        type_check_all_functions()
 
         logger.info("Compiling bytecode")
         program = compile_bytecode(ops)
