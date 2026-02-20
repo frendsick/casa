@@ -153,8 +153,10 @@ class Emitter:
         # Allocate total_length + 8 via brk
         self._indent("movq str_alloc_ptr(%rip), %r11")
         self._indent("leaq 8(%r11, %r10), %rdi")
+        self._indent("pushq %r11")
         self._indent("movq $12, %rax")
         self._indent("syscall")
+        self._indent("popq %r11")
         self._indent("movq %rax, str_alloc_ptr(%rip)")
         # Write total length at alloc_base
         self._indent("movq %r10, (%r11)")
