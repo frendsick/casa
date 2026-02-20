@@ -22,6 +22,7 @@ from casa.error import (
     CasaWarning,
     ErrorKind,
     WarningKind,
+    raise_error,
 )
 from casa.parser import resolve_identifiers
 
@@ -108,12 +109,10 @@ class TypeChecker:
             end = typ.index("]", start)
             signature = Signature.from_str(typ[start:end])
             if signature.parameters != signature.return_types:
-                raise CasaErrorCollection(
-                    CasaError(
-                        ErrorKind.TYPE_MISMATCH,
-                        "Expected symmetrical function type",
-                        self.current_location,
-                    )
+                raise_error(
+                    ErrorKind.TYPE_MISMATCH,
+                    "Expected symmetrical function type",
+                    self.current_location,
                 )
             return typ
         message = "Type mismatch"
@@ -125,15 +124,13 @@ class TypeChecker:
         note = None
         if origin and origin != self.current_location:
             note = (f"value of type `{typ}` pushed here", origin)
-        raise CasaErrorCollection(
-            CasaError(
-                ErrorKind.TYPE_MISMATCH,
-                message,
-                self.current_location,
-                expected=expected_str,
-                got=("Got", f"`{typ}`"),
-                note=note,
-            )
+        raise_error(
+            ErrorKind.TYPE_MISMATCH,
+            message,
+            self.current_location,
+            expected=expected_str,
+            got=f"`{typ}`",
+            note=note,
         )
 
     def _bind_type_var(
@@ -151,12 +148,10 @@ class TypeChecker:
         if bound == ANY_TYPE and actual != ANY_TYPE:
             bindings[type_var] = actual
         elif actual != bound and actual != ANY_TYPE and bound != ANY_TYPE:
-            raise CasaErrorCollection(
-                CasaError(
-                    ErrorKind.TYPE_MISMATCH,
-                    f"Type variable `{type_var}` bound to `{bound}` but got `{actual}`",
-                    self.current_location,
-                )
+            raise_error(
+                ErrorKind.TYPE_MISMATCH,
+                f"Type variable `{type_var}` bound to `{bound}` but got `{actual}`",
+                self.current_location,
             )
 
     def apply_signature(self, signature: Signature, name: str | None = None):
@@ -296,12 +291,10 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                         global_variable.typ = stack_type
 
                     if global_variable.typ not in (stack_type, ANY_TYPE):
-                        raise CasaErrorCollection(
-                            CasaError(
-                                ErrorKind.INVALID_VARIABLE,
-                                f"Cannot override global variable `{global_variable.name}` of type `{global_variable.typ}` with other type `{stack_type}`",
-                                op.location,
-                            )
+                        raise_error(
+                            ErrorKind.INVALID_VARIABLE,
+                            f"Cannot override global variable `{global_variable.name}` of type `{global_variable.typ}` with other type `{stack_type}`",
+                            op.location,
                         )
 
                     tc.expect_type(stack_type)
@@ -320,12 +313,10 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                             variable.typ not in (stack_type, ANY_TYPE)
                             and stack_type != ANY_TYPE
                         ):
-                            raise CasaErrorCollection(
-                                CasaError(
-                                    ErrorKind.INVALID_VARIABLE,
-                                    f"Cannot override local variable `{variable.name}` of type `{variable.typ}` with other type `{stack_type}`",
-                                    op.location,
-                                )
+                            raise_error(
+                                ErrorKind.INVALID_VARIABLE,
+                                f"Cannot override local variable `{variable.name}` of type `{variable.typ}` with other type `{stack_type}`",
+                                op.location,
                             )
 
                         tc.expect_type(stack_type)
@@ -382,14 +373,12 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     tc.return_types = tc.stack.copy()
 
                 if tc.return_types != tc.stack:
-                    raise CasaErrorCollection(
-                        CasaError(
-                            ErrorKind.TYPE_MISMATCH,
-                            "Invalid return types",
-                            op.location,
-                            expected=str(tc.return_types),
-                            got=("Got", str(tc.stack)),
-                        )
+                    raise_error(
+                        ErrorKind.TYPE_MISMATCH,
+                        "Invalid return types",
+                        op.location,
+                        expected=str(tc.return_types),
+                        got=str(tc.stack),
                     )
 
                 if tc.branched_stacks:
@@ -438,14 +427,12 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     continue
 
                 if tc.stack != branched.before:
-                    raise CasaErrorCollection(
-                        CasaError(
-                            ErrorKind.STACK_MISMATCH,
-                            "Stack state changed across branch",
-                            op.location,
-                            expected=str(branched.before),
-                            got=("Got", str(tc.stack)),
-                        )
+                    raise_error(
+                        ErrorKind.STACK_MISMATCH,
+                        "Stack state changed across branch",
+                        op.location,
+                        expected=str(branched.before),
+                        got=str(tc.stack),
                     )
             case OpKind.IF_ELIF | OpKind.IF_ELSE:
                 assert tc.branched_stacks, "If block stack state is saved"
@@ -467,14 +454,12 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     tc.stack = before.copy()
                     tc.stack_origins = branched.before_origins.copy()
                     continue
-                raise CasaErrorCollection(
-                    CasaError(
-                        ErrorKind.STACK_MISMATCH,
-                        "Stack state changed across branch",
-                        op.location,
-                        expected=str(branched.before),
-                        got=("Got", str(tc.stack)),
-                    )
+                raise_error(
+                    ErrorKind.STACK_MISMATCH,
+                    "Stack state changed across branch",
+                    op.location,
+                    expected=str(branched.before),
+                    got=str(tc.stack),
                 )
             case OpKind.IF_END:
                 branched = tc.branched_stacks.pop()
@@ -485,14 +470,12 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     continue
                 if tc.stack == branched.before and not branched.default_present:
                     continue
-                raise CasaErrorCollection(
-                    CasaError(
-                        ErrorKind.STACK_MISMATCH,
-                        "Stack state changed across branch",
-                        op.location,
-                        expected=str(branched.before),
-                        got=("Got", str(tc.stack)),
-                    )
+                raise_error(
+                    ErrorKind.STACK_MISMATCH,
+                    "Stack state changed across branch",
+                    op.location,
+                    expected=str(branched.before),
+                    got=str(tc.stack),
                 )
             case OpKind.IF_START:
                 tc.branched_stacks.append(BranchedStack(tc.stack, tc.stack_origins))
@@ -519,12 +502,10 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
 
                 global_function = GLOBAL_FUNCTIONS.get(function_name)
                 if not global_function:
-                    raise CasaErrorCollection(
-                        CasaError(
-                            ErrorKind.UNDEFINED_NAME,
-                            f"Method `{function_name}` does not exist",
-                            op.location,
-                        )
+                    raise_error(
+                        ErrorKind.UNDEFINED_NAME,
+                        f"Method `{function_name}` does not exist",
+                        op.location,
                     )
 
                 if not global_function.is_typechecked:
@@ -589,12 +570,10 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 assert isinstance(function, Function), "Expected function"
 
                 if capture_name not in function.captures:
-                    raise CasaErrorCollection(
-                        CasaError(
-                            ErrorKind.UNDEFINED_NAME,
-                            f"Function `{function.name}` does not have capture `{capture_name}`",
-                            op.location,
-                        )
+                    raise_error(
+                        ErrorKind.UNDEFINED_NAME,
+                        f"Function `{function.name}` does not have capture `{capture_name}`",
+                        op.location,
                     )
 
                 index = function.captures.index(capture_name)
@@ -639,12 +618,10 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                         tc.stack_push(variable.typ)
                         break
                 else:
-                    raise CasaErrorCollection(
-                        CasaError(
-                            ErrorKind.UNDEFINED_NAME,
-                            f"Function `{function.name}` does not have variable `{variable_name}`",
-                            op.location,
-                        )
+                    raise_error(
+                        ErrorKind.UNDEFINED_NAME,
+                        f"Function `{function.name}` does not have variable `{variable_name}`",
+                        op.location,
                     )
             case OpKind.ROT:
                 t1 = tc.stack_pop()
@@ -700,14 +677,12 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 branched = tc.branched_stacks[-1]
 
                 if tc.stack != branched.after:
-                    raise CasaErrorCollection(
-                        CasaError(
-                            ErrorKind.STACK_MISMATCH,
-                            "Stack state changed in loop",
-                            op.location,
-                            expected=str(branched.after),
-                            got=("Got", str(tc.stack)),
-                        )
+                    raise_error(
+                        ErrorKind.STACK_MISMATCH,
+                        "Stack state changed in loop",
+                        op.location,
+                        expected=str(branched.after),
+                        got=str(tc.stack),
                     )
             case OpKind.WHILE_CONDITION:
                 tc.expect_type("bool")
@@ -717,40 +692,34 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 branched.condition_present = True
 
                 if tc.stack != branched.before:
-                    raise CasaErrorCollection(
-                        CasaError(
-                            ErrorKind.STACK_MISMATCH,
-                            "Stack state changed in loop",
-                            op.location,
-                            expected=str(branched.before),
-                            got=("Got", str(tc.stack)),
-                        )
+                    raise_error(
+                        ErrorKind.STACK_MISMATCH,
+                        "Stack state changed in loop",
+                        op.location,
+                        expected=str(branched.before),
+                        got=str(tc.stack),
                     )
             case OpKind.WHILE_END:
                 branched = tc.branched_stacks.pop()
                 if branched.after != tc.stack:
-                    raise CasaErrorCollection(
-                        CasaError(
-                            ErrorKind.STACK_MISMATCH,
-                            "Stack state changed in loop",
-                            op.location,
-                            expected=str(branched.after),
-                            got=("Got", str(tc.stack)),
-                        )
+                    raise_error(
+                        ErrorKind.STACK_MISMATCH,
+                        "Stack state changed in loop",
+                        op.location,
+                        expected=str(branched.after),
+                        got=str(tc.stack),
                     )
             case OpKind.WHILE_CONTINUE:
                 assert len(tc.branched_stacks) > 0, "While block stack state is saved"
                 branched = tc.branched_stacks[-1]
 
                 if tc.stack != branched.after:
-                    raise CasaErrorCollection(
-                        CasaError(
-                            ErrorKind.STACK_MISMATCH,
-                            "Stack state changed in loop",
-                            op.location,
-                            expected=str(branched.after),
-                            got=("Got", str(tc.stack)),
-                        )
+                    raise_error(
+                        ErrorKind.STACK_MISMATCH,
+                        "Stack state changed in loop",
+                        op.location,
+                        expected=str(branched.after),
+                        got=str(tc.stack),
                     )
             case OpKind.WHILE_START:
                 tc.branched_stacks.append(BranchedStack(tc.stack, tc.stack_origins))
@@ -760,14 +729,12 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
     fn_location = function.location if function else None
 
     if tc.return_types and tc.return_types != tc.stack:
-        raise CasaErrorCollection(
-            CasaError(
-                ErrorKind.TYPE_MISMATCH,
-                "Invalid return types",
-                fn_location,
-                expected=str(tc.return_types),
-                got=("Got", str(tc.stack)),
-            )
+        raise_error(
+            ErrorKind.TYPE_MISMATCH,
+            "Invalid return types",
+            fn_location,
+            expected=str(tc.return_types),
+            got=str(tc.stack),
         )
 
     inferred_signature = Signature(tc.parameters, tc.stack)
@@ -785,12 +752,10 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
         }
         if ret_only:
             names = ", ".join(sorted(ret_only))
-            raise CasaErrorCollection(
-                CasaError(
-                    ErrorKind.TYPE_MISMATCH,
-                    f"Type variable(s) `{names}` appear in return types but not in parameters of `{function.name}`",
-                    fn_location,
-                )
+            raise_error(
+                ErrorKind.TYPE_MISMATCH,
+                f"Type variable(s) `{names}` appear in return types but not in parameters of `{function.name}`",
+                fn_location,
             )
 
     if (
@@ -801,14 +766,13 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
     ):
         unused = _check_passthrough_params(function.signature, inferred_signature)
         if unused is None:
-            raise CasaErrorCollection(
-                CasaError(
-                    ErrorKind.SIGNATURE_MISMATCH,
-                    f"Invalid signature for function `{function.name}`",
-                    fn_location,
-                    expected=str(function.signature),
-                    got=("Inferred", str(inferred_signature)),
-                )
+            raise_error(
+                ErrorKind.SIGNATURE_MISMATCH,
+                f"Invalid signature for function `{function.name}`",
+                fn_location,
+                expected=str(function.signature),
+                got=str(inferred_signature),
+                got_label="Inferred",
             )
         for param in unused:
             WARNINGS.append(
@@ -825,12 +789,19 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
 
 def type_check_all_functions():
     """Typecheck all global functions, including those never called."""
+    all_errors: list[CasaError] = []
     for fn in list(GLOBAL_FUNCTIONS.values()):
         if fn.is_typechecked:
             continue
         fn.is_typechecked = True
         if not fn.is_used:
             fn.ops = resolve_identifiers(fn.ops, fn)
-        signature = type_check_ops(fn.ops, fn)
+        try:
+            signature = type_check_ops(fn.ops, fn)
+        except CasaErrorCollection as exc:
+            all_errors.extend(exc.errors)
+            continue
         if not fn.signature:
             fn.signature = signature
+    if all_errors:
+        raise CasaErrorCollection(all_errors)

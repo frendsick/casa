@@ -98,7 +98,7 @@ def test_casa_error_format_with_note():
         "Type mismatch",
         Location(Path("test.casa"), Span(8, 2)),
         expected="`int`",
-        got=("Got", "`str`"),
+        got="`str`",
         note=(
             "value of type `str` pushed here",
             Location(Path("test.casa"), Span(0, 7)),

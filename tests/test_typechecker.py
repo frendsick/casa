@@ -420,7 +420,8 @@ def test_typecheck_all_functions_catches_unused_error():
     error = exc_info.value.errors[0]
     assert error.kind == ErrorKind.SIGNATURE_MISMATCH
     assert error.expected == "int -> str"
-    assert error.got == ("Inferred", "None -> None")
+    assert error.got == "None -> None"
+    assert error.got_label == "Inferred"
 
 
 def test_typecheck_all_functions_valid_unused():

@@ -19,7 +19,7 @@ from casa.common import (
     Struct,
     Variable,
 )
-from casa.error import CasaError, CasaErrorCollection, ErrorKind
+from casa.error import ErrorKind, raise_error
 
 
 _label_counter = 0
@@ -192,12 +192,10 @@ class Compiler:
                         # Check if the function shadowed a global variable
                         for var in function.variables:
                             if var in GLOBAL_VARIABLES:
-                                raise CasaErrorCollection(
-                                    CasaError(
-                                        ErrorKind.UNDEFINED_NAME,
-                                        f"Function `{function.name}` assigns a global variable `{var.name}` before it is initialized within the global scope",
-                                        op.location,
-                                    )
+                                raise_error(
+                                    ErrorKind.UNDEFINED_NAME,
+                                    f"Function `{function.name}` assigns a global variable `{var.name}` before it is initialized within the global scope",
+                                    op.location,
                                 )
 
                         if self.function != function:
@@ -216,12 +214,10 @@ class Compiler:
                     function_name = op.value
                     lambda_function = GLOBAL_FUNCTIONS.get(function_name)
                     if not lambda_function:
-                        raise CasaErrorCollection(
-                            CasaError(
-                                ErrorKind.UNDEFINED_NAME,
-                                f"Function `{function_name}` is not defined",
-                                op.location,
-                            )
+                        raise_error(
+                            ErrorKind.UNDEFINED_NAME,
+                            f"Function `{function_name}` is not defined",
+                            op.location,
                         )
 
                     # Compile the lambda function
@@ -278,12 +274,10 @@ class Compiler:
                         end_kind=OpKind.IF_END,
                         reverse=True,
                     ):
-                        raise CasaErrorCollection(
-                            CasaError(
-                                ErrorKind.UNMATCHED_BLOCK,
-                                "`then` without matching `if`",
-                                op.location,
-                            )
+                        raise_error(
+                            ErrorKind.UNMATCHED_BLOCK,
+                            "`then` without matching `if`",
+                            op.location,
                         )
 
                     end_label = self.find_matching_label(
@@ -293,12 +287,10 @@ class Compiler:
                         target_kinds=[OpKind.IF_ELIF, OpKind.IF_ELSE, OpKind.IF_END],
                     )
                     if not end_label:
-                        raise CasaErrorCollection(
-                            CasaError(
-                                ErrorKind.UNMATCHED_BLOCK,
-                                "`then` without matching `fi`",
-                                op.location,
-                            )
+                        raise_error(
+                            ErrorKind.UNMATCHED_BLOCK,
+                            "`then` without matching `fi`",
+                            op.location,
                         )
 
                     bytecode.append(self.inst(InstKind.JUMP_NE, args=[end_label]))
@@ -310,12 +302,10 @@ class Compiler:
                         end_kind=OpKind.IF_END,
                         reverse=True,
                     ):
-                        raise CasaErrorCollection(
-                            CasaError(
-                                ErrorKind.UNMATCHED_BLOCK,
-                                "`elif` without parent `if`",
-                                op.location,
-                            )
+                        raise_error(
+                            ErrorKind.UNMATCHED_BLOCK,
+                            "`elif` without parent `if`",
+                            op.location,
                         )
 
                     # Elif should not be after an else
@@ -326,12 +316,10 @@ class Compiler:
                         target_kinds=[OpKind.IF_ELSE],
                         reverse=True,
                     ):
-                        raise CasaErrorCollection(
-                            CasaError(
-                                ErrorKind.UNMATCHED_BLOCK,
-                                "`elif` after `else`",
-                                op.location,
-                            )
+                        raise_error(
+                            ErrorKind.UNMATCHED_BLOCK,
+                            "`elif` after `else`",
+                            op.location,
                         )
 
                     elif_label = op_to_label(op)
@@ -341,12 +329,10 @@ class Compiler:
                         end_kind=OpKind.IF_END,
                     )
                     if not end_label:
-                        raise CasaErrorCollection(
-                            CasaError(
-                                ErrorKind.UNMATCHED_BLOCK,
-                                "`elif` without matching `fi`",
-                                op.location,
-                            )
+                        raise_error(
+                            ErrorKind.UNMATCHED_BLOCK,
+                            "`elif` without matching `fi`",
+                            op.location,
                         )
 
                     bytecode.append(self.inst(InstKind.JUMP, args=[end_label]))
@@ -359,12 +345,10 @@ class Compiler:
                         end_kind=OpKind.IF_END,
                         reverse=True,
                     ):
-                        raise CasaErrorCollection(
-                            CasaError(
-                                ErrorKind.UNMATCHED_BLOCK,
-                                "`else` without parent `if`",
-                                op.location,
-                            )
+                        raise_error(
+                            ErrorKind.UNMATCHED_BLOCK,
+                            "`else` without parent `if`",
+                            op.location,
                         )
 
                     else_label = op_to_label(op)
@@ -374,12 +358,10 @@ class Compiler:
                         end_kind=OpKind.IF_END,
                     )
                     if not end_label:
-                        raise CasaErrorCollection(
-                            CasaError(
-                                ErrorKind.UNMATCHED_BLOCK,
-                                "`else` without matching `fi`",
-                                op.location,
-                            )
+                        raise_error(
+                            ErrorKind.UNMATCHED_BLOCK,
+                            "`else` without matching `fi`",
+                            op.location,
                         )
 
                     bytecode.append(self.inst(InstKind.JUMP, args=[end_label]))
@@ -391,12 +373,10 @@ class Compiler:
                         end_kind=OpKind.IF_END,
                         reverse=True,
                     ):
-                        raise CasaErrorCollection(
-                            CasaError(
-                                ErrorKind.UNMATCHED_BLOCK,
-                                "`fi` without parent `if`",
-                                op.location,
-                            )
+                        raise_error(
+                            ErrorKind.UNMATCHED_BLOCK,
+                            "`fi` without parent `if`",
+                            op.location,
                         )
                     label = op_to_label(op)
                     bytecode.append(self.inst(InstKind.LABEL, args=[label]))
@@ -406,12 +386,10 @@ class Compiler:
                         start_kind=OpKind.IF_START,
                         end_kind=OpKind.IF_END,
                     ):
-                        raise CasaErrorCollection(
-                            CasaError(
-                                ErrorKind.UNMATCHED_BLOCK,
-                                "`if` without matching `fi`",
-                                op.location,
-                            )
+                        raise_error(
+                            ErrorKind.UNMATCHED_BLOCK,
+                            "`if` without matching `fi`",
+                            op.location,
                         )
                 case OpKind.INCLUDE_FILE:
                     pass
@@ -545,12 +523,10 @@ class Compiler:
                     # Local variable
                     assert self.function, "Expected function"
                     if variable_name not in self.function.variables:
-                        raise CasaErrorCollection(
-                            CasaError(
-                                ErrorKind.UNDEFINED_NAME,
-                                f"Local variable `{variable_name}` does not exist",
-                                op.location,
-                            )
+                        raise_error(
+                            ErrorKind.UNDEFINED_NAME,
+                            f"Local variable `{variable_name}` does not exist",
+                            op.location,
                         )
 
                     index = self.function.variables.index(Variable(variable_name))
@@ -593,12 +569,10 @@ class Compiler:
                         end_kind=OpKind.WHILE_END,
                         reverse=True,
                     ):
-                        raise CasaErrorCollection(
-                            CasaError(
-                                ErrorKind.UNMATCHED_BLOCK,
-                                "`break` without parent `while`",
-                                op.location,
-                            )
+                        raise_error(
+                            ErrorKind.UNMATCHED_BLOCK,
+                            "`break` without parent `while`",
+                            op.location,
                         )
 
                     end_label = self.find_matching_label(
@@ -607,12 +581,10 @@ class Compiler:
                         end_kind=OpKind.WHILE_END,
                     )
                     if not end_label:
-                        raise CasaErrorCollection(
-                            CasaError(
-                                ErrorKind.UNMATCHED_BLOCK,
-                                "`break` without matching `done`",
-                                op.location,
-                            )
+                        raise_error(
+                            ErrorKind.UNMATCHED_BLOCK,
+                            "`break` without matching `done`",
+                            op.location,
                         )
 
                     bytecode.append(self.inst(InstKind.JUMP, args=[end_label]))
@@ -623,12 +595,10 @@ class Compiler:
                         end_kind=OpKind.WHILE_END,
                         reverse=True,
                     ):
-                        raise CasaErrorCollection(
-                            CasaError(
-                                ErrorKind.UNMATCHED_BLOCK,
-                                "`do` without parent `while`",
-                                op.location,
-                            )
+                        raise_error(
+                            ErrorKind.UNMATCHED_BLOCK,
+                            "`do` without parent `while`",
+                            op.location,
                         )
 
                     end_label = self.find_matching_label(
@@ -637,12 +607,10 @@ class Compiler:
                         end_kind=OpKind.WHILE_END,
                     )
                     if not end_label:
-                        raise CasaErrorCollection(
-                            CasaError(
-                                ErrorKind.UNMATCHED_BLOCK,
-                                "`do` without matching `done`",
-                                op.location,
-                            )
+                        raise_error(
+                            ErrorKind.UNMATCHED_BLOCK,
+                            "`do` without matching `done`",
+                            op.location,
                         )
 
                     bytecode.append(self.inst(InstKind.JUMP_NE, args=[end_label]))
@@ -654,12 +622,10 @@ class Compiler:
                         reverse=True,
                     )
                     if continue_target is None:
-                        raise CasaErrorCollection(
-                            CasaError(
-                                ErrorKind.UNMATCHED_BLOCK,
-                                "`continue` without parent `while`",
-                                op.location,
-                            )
+                        raise_error(
+                            ErrorKind.UNMATCHED_BLOCK,
+                            "`continue` without parent `while`",
+                            op.location,
                         )
 
                     bytecode.append(self.inst(InstKind.JUMP, args=[continue_target]))
@@ -672,12 +638,10 @@ class Compiler:
                         reverse=True,
                     )
                     if loop_start is None:
-                        raise CasaErrorCollection(
-                            CasaError(
-                                ErrorKind.UNMATCHED_BLOCK,
-                                "`done` without parent `while`",
-                                op.location,
-                            )
+                        raise_error(
+                            ErrorKind.UNMATCHED_BLOCK,
+                            "`done` without parent `while`",
+                            op.location,
                         )
 
                     bytecode.append(self.inst(InstKind.JUMP, args=[loop_start]))

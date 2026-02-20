@@ -27,7 +27,7 @@ from casa.common import (
     Type,
     Variable,
 )
-from casa.error import CasaError, CasaErrorCollection, ErrorKind
+from casa.error import CasaError, CasaErrorCollection, ErrorKind, raise_error
 from casa.lexer import is_negative_integer_literal, lex_file
 
 INTRINSIC_TO_OPKIND = {
@@ -248,14 +248,12 @@ def parse_block_ops(cursor: Cursor[Token], function_name: str) -> list[Op]:
     open_brace = cursor.pop()
     if not open_brace or open_brace.value != "{":
         loc = open_brace.location if open_brace else None
-        raise CasaErrorCollection(
-            CasaError(
-                ErrorKind.UNEXPECTED_TOKEN,
-                "Unexpected token",
-                loc,
-                expected="`{`",
-                got=("Got", f"`{open_brace.value}`" if open_brace else "nothing"),
-            )
+        raise_error(
+            ErrorKind.UNEXPECTED_TOKEN,
+            "Unexpected token",
+            loc,
+            expected="`{`",
+            got=f"`{open_brace.value}`" if open_brace else "nothing",
         )
 
     ops: list[Op] = []
@@ -264,9 +262,7 @@ def parse_block_ops(cursor: Cursor[Token], function_name: str) -> list[Op]:
             return ops
         if op := token_to_op(token, cursor, function_name):
             ops.append(op)
-    raise CasaErrorCollection(
-        CasaError(ErrorKind.UNMATCHED_BLOCK, "Unclosed block", open_brace.location)
-    )
+    raise_error(ErrorKind.UNMATCHED_BLOCK, "Unclosed block", open_brace.location)
 
 
 def get_op_array(cursor: Cursor[Token]) -> Op:
@@ -320,23 +316,19 @@ def get_op_keyword(
             return Op(keyword, OpKind.IF_ELSE, token.location)
         case Keyword.FN:
             if function_name != GLOBAL_SCOPE_LABEL:
-                raise CasaErrorCollection(
-                    CasaError(
-                        ErrorKind.INVALID_SCOPE,
-                        "Functions should be defined in the global scope",
-                        token.location,
-                    )
+                raise_error(
+                    ErrorKind.INVALID_SCOPE,
+                    "Functions should be defined in the global scope",
+                    token.location,
                 )
 
             cursor.position -= 1
             function = parse_function(cursor)
             if GLOBAL_FUNCTIONS.get(function.name):
-                raise CasaErrorCollection(
-                    CasaError(
-                        ErrorKind.DUPLICATE_NAME,
-                        f"Identifier `{function.name}` is already defined",
-                        function.location,
-                    )
+                raise_error(
+                    ErrorKind.DUPLICATE_NAME,
+                    f"Identifier `{function.name}` is already defined",
+                    function.location,
                 )
 
             GLOBAL_FUNCTIONS[function.name] = function
@@ -347,12 +339,10 @@ def get_op_keyword(
             return Op(keyword, OpKind.IF_START, token.location)
         case Keyword.IMPL:
             if function_name != GLOBAL_SCOPE_LABEL:
-                raise CasaErrorCollection(
-                    CasaError(
-                        ErrorKind.INVALID_SCOPE,
-                        "Implementation blocks should be defined in the global scope",
-                        token.location,
-                    )
+                raise_error(
+                    ErrorKind.INVALID_SCOPE,
+                    "Implementation blocks should be defined in the global scope",
+                    token.location,
                 )
 
             cursor.position -= 1
@@ -362,14 +352,12 @@ def get_op_keyword(
             string_literal = expect_token(cursor, kind=TokenKind.LITERAL)
             literal_op = get_op_literal(string_literal)
             if literal_op.kind != OpKind.PUSH_STR:
-                raise CasaErrorCollection(
-                    CasaError(
-                        ErrorKind.UNEXPECTED_TOKEN,
-                        "Unexpected token for include path",
-                        string_literal.location,
-                        expected="string literal",
-                        got=("Got", f"`{string_literal.value}`"),
-                    )
+                raise_error(
+                    ErrorKind.UNEXPECTED_TOKEN,
+                    "Unexpected token for include path",
+                    string_literal.location,
+                    expected="string literal",
+                    got=f"`{string_literal.value}`",
                 )
             assert isinstance(literal_op.value, str), "Included file path"
 
@@ -386,12 +374,10 @@ def get_op_keyword(
             return Op(keyword, OpKind.FN_RETURN, token.location)
         case Keyword.STRUCT:
             if function_name != GLOBAL_SCOPE_LABEL:
-                raise CasaErrorCollection(
-                    CasaError(
-                        ErrorKind.INVALID_SCOPE,
-                        "Structs should be defined in the global scope",
-                        token.location,
-                    )
+                raise_error(
+                    ErrorKind.INVALID_SCOPE,
+                    "Structs should be defined in the global scope",
+                    token.location,
                 )
 
             cursor.position -= 1
@@ -401,12 +387,10 @@ def get_op_keyword(
 
             for member in struct.members:
                 if member.name in GLOBAL_FUNCTIONS:
-                    raise CasaErrorCollection(
-                        CasaError(
-                            ErrorKind.DUPLICATE_NAME,
-                            f"Function `{member.name}` already exists",
-                            struct.location,
-                        )
+                    raise_error(
+                        ErrorKind.DUPLICATE_NAME,
+                        f"Function `{member.name}` already exists",
+                        struct.location,
                     )
             return None
         case Keyword.THEN:
@@ -438,12 +422,10 @@ def parse_impl_block(cursor: Cursor[Token]):
         function = parse_function(cursor)
         function.name = f"{impl_type.value}::{function.name}"
         if GLOBAL_FUNCTIONS.get(function.name):
-            raise CasaErrorCollection(
-                CasaError(
-                    ErrorKind.DUPLICATE_NAME,
-                    f"Identifier `{function.name}` is already defined",
-                    function.location,
-                )
+            raise_error(
+                ErrorKind.DUPLICATE_NAME,
+                f"Identifier `{function.name}` is already defined",
+                function.location,
             )
 
         GLOBAL_FUNCTIONS[function.name] = function
@@ -461,14 +443,12 @@ def parse_struct(cursor: Cursor[Token]) -> Struct:
         if member_name.value == "}":
             break
         if member_name.kind != TokenKind.IDENTIFIER:
-            raise CasaErrorCollection(
-                CasaError(
-                    ErrorKind.UNEXPECTED_TOKEN,
-                    "Unexpected token in struct definition",
-                    member_name.location,
-                    expected="identifier",
-                    got=("Got", f"`{member_name.kind.name}`"),
-                )
+            raise_error(
+                ErrorKind.UNEXPECTED_TOKEN,
+                "Unexpected token in struct definition",
+                member_name.location,
+                expected="identifier",
+                got=f"`{member_name.kind.name}`",
             )
 
         expect_token(cursor, value=":")
@@ -478,12 +458,10 @@ def parse_struct(cursor: Cursor[Token]) -> Struct:
         # Getter
         getter_name = f"{struct_name.value}::{member_name.value}"
         if getter_name in GLOBAL_FUNCTIONS:
-            raise CasaErrorCollection(
-                CasaError(
-                    ErrorKind.DUPLICATE_NAME,
-                    f"Function `{getter_name}` is already defined",
-                    member_name.location,
-                )
+            raise_error(
+                ErrorKind.DUPLICATE_NAME,
+                f"Function `{getter_name}` is already defined",
+                member_name.location,
             )
         member_location = member_name.location
         getter_ops: list[Op] = []
@@ -498,12 +476,10 @@ def parse_struct(cursor: Cursor[Token]) -> Struct:
         # Setter
         setter_name = f"{struct_name.value}::set_{member_name.value}"
         if setter_name in GLOBAL_FUNCTIONS:
-            raise CasaErrorCollection(
-                CasaError(
-                    ErrorKind.DUPLICATE_NAME,
-                    f"Function `{setter_name}` is already defined",
-                    member_name.location,
-                )
+            raise_error(
+                ErrorKind.DUPLICATE_NAME,
+                f"Function `{setter_name}` is already defined",
+                member_name.location,
             )
         setter_ops: list[Op] = []
         setter_ops.append(Op(len(members), OpKind.PUSH_INT, member_location))
@@ -526,45 +502,35 @@ def parse_type_vars(cursor: Cursor[Token]) -> set[str]:
     while token := cursor.pop():
         if token.value == "]":
             if not type_vars:
-                raise CasaErrorCollection(
-                    CasaError(
-                        ErrorKind.SYNTAX,
-                        "Empty type parameter list `[]` is not allowed",
-                        token.location,
-                    )
+                raise_error(
+                    ErrorKind.SYNTAX,
+                    "Empty type parameter list `[]` is not allowed",
+                    token.location,
                 )
             return type_vars
         if token.kind == TokenKind.IDENTIFIER:
             if token.value in BUILTIN_TYPES:
-                raise CasaErrorCollection(
-                    CasaError(
-                        ErrorKind.DUPLICATE_NAME,
-                        f"Type variable `{token.value}` shadows built-in type `{token.value}`",
-                        token.location,
-                    )
+                raise_error(
+                    ErrorKind.DUPLICATE_NAME,
+                    f"Type variable `{token.value}` shadows built-in type `{token.value}`",
+                    token.location,
                 )
             if token.value in GLOBAL_STRUCTS:
-                raise CasaErrorCollection(
-                    CasaError(
-                        ErrorKind.DUPLICATE_NAME,
-                        f"Type variable `{token.value}` shadows struct type `{token.value}`",
-                        token.location,
-                    )
+                raise_error(
+                    ErrorKind.DUPLICATE_NAME,
+                    f"Type variable `{token.value}` shadows struct type `{token.value}`",
+                    token.location,
                 )
             type_vars.add(token.value)
         elif token.value != ",":
-            raise CasaErrorCollection(
-                CasaError(
-                    ErrorKind.UNEXPECTED_TOKEN,
-                    "Unexpected token in type parameters",
-                    token.location,
-                    expected="type variable name",
-                    got=("Got", f"`{token.value}`"),
-                )
+            raise_error(
+                ErrorKind.UNEXPECTED_TOKEN,
+                "Unexpected token in type parameters",
+                token.location,
+                expected="type variable name",
+                got=f"`{token.value}`",
             )
-    raise CasaErrorCollection(
-        CasaError(ErrorKind.SYNTAX, "Expected `]` to close type parameters")
-    )
+    raise_error(ErrorKind.SYNTAX, "Expected `]` to close type parameters")
 
 
 def parse_function(cursor: Cursor[Token]) -> Function:
@@ -603,13 +569,11 @@ def parse_signature(cursor: Cursor[Token]) -> Signature:
 
     next_token = cursor.peek()
     if not next_token:
-        raise CasaErrorCollection(
-            CasaError(
-                ErrorKind.UNEXPECTED_TOKEN,
-                "Unexpected end of input",
-                expected="`->` or `{`",
-                got=("Got", "nothing"),
-            )
+        raise_error(
+            ErrorKind.UNEXPECTED_TOKEN,
+            "Unexpected end of input",
+            expected="`->` or `{`",
+            got="nothing",
         )
 
     if next_token.value == "->":
@@ -626,14 +590,12 @@ def parse_parameters(cursor: Cursor[Token]) -> list[Parameter]:
             cursor.position -= 1
             return parameters
         if name_or_type.kind != TokenKind.IDENTIFIER:
-            raise CasaErrorCollection(
-                CasaError(
-                    ErrorKind.UNEXPECTED_TOKEN,
-                    "Unexpected token in parameter list",
-                    name_or_type.location,
-                    expected="identifier",
-                    got=("Got", f"`{name_or_type.kind.name}`"),
-                )
+            raise_error(
+                ErrorKind.UNEXPECTED_TOKEN,
+                "Unexpected token in parameter list",
+                name_or_type.location,
+                expected="identifier",
+                got=f"`{name_or_type.kind.name}`",
             )
 
         # Parse typed parameter
@@ -644,13 +606,11 @@ def parse_parameters(cursor: Cursor[Token]) -> list[Parameter]:
             parameters.append(Parameter(typ.value, name_or_type.value))
         else:
             parameters.append(Parameter(name_or_type.value))
-    raise CasaErrorCollection(
-        CasaError(
-            ErrorKind.UNEXPECTED_TOKEN,
-            "Unexpected end of input",
-            expected="`->` or block",
-            got=("Got", "nothing"),
-        )
+    raise_error(
+        ErrorKind.UNEXPECTED_TOKEN,
+        "Unexpected end of input",
+        expected="`->` or block",
+        got="nothing",
     )
 
 
@@ -661,13 +621,11 @@ def parse_return_types(cursor: Cursor[Token]) -> list[Type]:
             cursor.position -= 1
             return return_types
         return_types.append(return_type.value)
-    raise CasaErrorCollection(
-        CasaError(
-            ErrorKind.UNEXPECTED_TOKEN,
-            "Unexpected end of input",
-            expected="block",
-            got=("Got", "nothing"),
-        )
+    raise_error(
+        ErrorKind.UNEXPECTED_TOKEN,
+        "Unexpected end of input",
+        expected="block",
+        got="nothing",
     )
 
 
@@ -771,33 +729,27 @@ def expect_token(
                 else None
             )
         )
-        raise CasaErrorCollection(
-            CasaError(
-                ErrorKind.UNEXPECTED_TOKEN,
-                "Unexpected end of input",
-                last_location,
-                expected=expected,
-                got=("Got", "end of input"),
-            )
+        raise_error(
+            ErrorKind.UNEXPECTED_TOKEN,
+            "Unexpected end of input",
+            last_location,
+            expected=expected,
+            got="end of input",
         )
     if value and value != next_token.value:
-        raise CasaErrorCollection(
-            CasaError(
-                ErrorKind.UNEXPECTED_TOKEN,
-                "Unexpected token",
-                next_token.location,
-                expected=f"`{value}`",
-                got=("Got", f"`{next_token.value}`"),
-            )
+        raise_error(
+            ErrorKind.UNEXPECTED_TOKEN,
+            "Unexpected token",
+            next_token.location,
+            expected=f"`{value}`",
+            got=f"`{next_token.value}`",
         )
     if kind and kind != next_token.kind:
-        raise CasaErrorCollection(
-            CasaError(
-                ErrorKind.UNEXPECTED_TOKEN,
-                "Unexpected token",
-                next_token.location,
-                expected=f"`{kind.name}`",
-                got=("Got", f"`{next_token.kind.name}`"),
-            )
+        raise_error(
+            ErrorKind.UNEXPECTED_TOKEN,
+            "Unexpected token",
+            next_token.location,
+            expected=f"`{kind.name}`",
+            got=f"`{next_token.kind.name}`",
         )
     return next_token

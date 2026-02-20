@@ -7,6 +7,7 @@ import sys
 from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
+from typing import NoReturn
 
 from casa.common import Location
 
@@ -50,6 +51,23 @@ def offset_to_line_col(source: str, offset: int) -> tuple[int, int, str]:
     return line, col, source_line
 
 
+def _format_source_context(
+    file: Path, source: str, span_offset: int, span_length: int
+) -> list[str]:
+    """Format a single-line source span with arrow, gutter, and carets."""
+    span_length = span_length or 1
+    line, col, _ = offset_to_line_col(source, span_offset)
+    source_line = source.split("\n")[line - 1]
+    line_num_width = len(str(line))
+    padding = " " * line_num_width
+    return [
+        f"  --> {_display_path(file)}:{line}:{col}",
+        f"{padding} |",
+        f"{line} | {source_line}",
+        f"{padding} | {' ' * (col - 1)}{'^' * span_length}",
+    ]
+
+
 @dataclass
 class CasaError:
     """A single compiler error with optional source location."""
@@ -58,7 +76,8 @@ class CasaError:
     message: str
     location: Location | None = None
     expected: str | None = None
-    got: tuple[str, str] | None = None
+    got: str | None = None
+    got_label: str = "Got"
     note: tuple[str, Location] | None = None
 
     def format(self, source_cache: dict[Path, str] | None = None) -> str:
@@ -83,24 +102,19 @@ class CasaError:
 
         span_offset = self.location.span.offset
         span_length = self.location.span.length or 1
-        start_line, start_col, _ = offset_to_line_col(source, span_offset)
+        start_line, _, _ = offset_to_line_col(source, span_offset)
         end_line, end_col, _ = offset_to_line_col(source, span_offset + span_length - 1)
 
         lines = [header]
 
         if start_line == end_line:
-            source_line = source.split("\n")[start_line - 1]
-            line_num_width = len(str(start_line))
-            padding = " " * line_num_width
             lines.extend(
-                [
-                    f"  --> {_display_path(self.location.file)}:{start_line}:{start_col}",
-                    f"{padding} |",
-                    f"{start_line} | {source_line}",
-                    f"{padding} | {' ' * (start_col - 1)}{'^' * span_length}",
-                ]
+                _format_source_context(
+                    self.location.file, source, span_offset, span_length
+                )
             )
         else:
+            start_col = offset_to_line_col(source, span_offset)[1]
             lines.append(
                 f"  --> {_display_path(self.location.file)}:{start_line}:{start_col}"
             )
@@ -121,19 +135,16 @@ class CasaError:
         if not source:
             return [f"  Note: {note_message}"]
 
-        span_offset = note_location.span.offset
-        span_length = note_location.span.length or 1
-        line, col, source_line = offset_to_line_col(source, span_offset)
-        line_num_width = len(str(line))
-        padding = " " * line_num_width
-
-        return [
-            f"  Note: {note_message}",
-            f"  --> {_display_path(note_location.file)}:{line}:{col}",
-            f"{padding} |",
-            f"{line} | {source_line}",
-            f"{padding} | {' ' * (col - 1)}{'^' * span_length}",
-        ]
+        result = [f"  Note: {note_message}"]
+        result.extend(
+            _format_source_context(
+                note_location.file,
+                source,
+                note_location.span.offset,
+                note_location.span.length,
+            )
+        )
+        return result
 
     def _format_multiline_span(
         self,
@@ -174,8 +185,7 @@ class CasaError:
         if self.expected:
             lines.append(f"  Expected: {self.expected}")
         if self.got:
-            label, value = self.got
-            lines.append(f"  {label}: {value}")
+            lines.append(f"  {self.got_label}: {self.got}")
         return lines
 
 
@@ -207,21 +217,16 @@ class CasaWarning:
         if not source:
             return f"{header}\n  --> {_display_path(self.location.file)}"
 
-        span_offset = self.location.span.offset
-        span_length = self.location.span.length or 1
-        line, col, source_line = offset_to_line_col(source, span_offset)
-        line_num_width = len(str(line))
-        padding = " " * line_num_width
-
-        return "\n".join(
-            [
-                header,
-                f"  --> {_display_path(self.location.file)}:{line}:{col}",
-                f"{padding} |",
-                f"{line} | {source_line}",
-                f"{padding} | {' ' * (col - 1)}{'^' * span_length}",
-            ]
+        lines = [header]
+        lines.extend(
+            _format_source_context(
+                self.location.file,
+                source,
+                self.location.span.offset,
+                self.location.span.length,
+            )
         )
+        return "\n".join(lines)
 
 
 WARNINGS: list[CasaWarning] = []
@@ -253,6 +258,30 @@ class CasaErrorCollection(Exception):
 
     def _summary(self) -> str:
         return f"Found {len(self.errors)} error(s)."
+
+
+def raise_error(
+    kind: ErrorKind,
+    message: str,
+    location: Location | None = None,
+    *,
+    expected: str | None = None,
+    got: str | None = None,
+    got_label: str = "Got",
+    note: tuple[str, Location] | None = None,
+) -> NoReturn:
+    """Raise a CasaErrorCollection with a single error."""
+    raise CasaErrorCollection(
+        CasaError(
+            kind,
+            message,
+            location,
+            expected=expected,
+            got=got,
+            got_label=got_label,
+            note=note,
+        )
+    )
 
 
 def report_errors(
