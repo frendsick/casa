@@ -209,9 +209,9 @@ class Emitter:
                 self._indent("popq %rax")
                 self._indent("popq %rbx")
                 self._indent("popq %rcx")
-                self._indent("pushq %rcx")
-                self._indent("pushq %rax")
                 self._indent("pushq %rbx")
+                self._indent("pushq %rax")
+                self._indent("pushq %rcx")
 
             # === Arithmetic ===
             case InstKind.ADD:
