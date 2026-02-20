@@ -594,7 +594,7 @@ class Signature:
         return cls(parameters, return_types)
 
     def __repr__(self):
-        parameters = " ".join(t.__repr__() for t in self.parameters) or "None"
+        parameters = " ".join(p.typ for p in self.parameters) or "None"
         return_types = " ".join(t for t in self.return_types) or "None"
         return f"{parameters} -> {return_types}"
 
