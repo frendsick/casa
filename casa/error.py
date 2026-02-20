@@ -57,6 +57,8 @@ class CasaError:
     kind: ErrorKind
     message: str
     location: Location | None = None
+    expected: str | None = None
+    got: tuple[str, str] | None = None
 
     def format(self, source_cache: dict[Path, str] | None = None) -> str:
         """Format this error as a Rust-style diagnostic string."""
@@ -66,11 +68,15 @@ class CasaError:
         header = f"error[{self.kind.name}]: {self.message}"
 
         if not self.location:
-            return header
+            lines = [header]
+            lines.extend(self._format_expected_got())
+            return "\n".join(lines)
 
         source = source_cache.get(self.location.file)
         if not source:
-            return f"{header}\n  --> {_display_path(self.location.file)}"
+            lines = [header, f"  --> {_display_path(self.location.file)}"]
+            lines.extend(self._format_expected_got())
+            return "\n".join(lines)
 
         line, col, source_line = offset_to_line_col(source, self.location.span.offset)
         span_length = self.location.span.length or 1
@@ -84,7 +90,18 @@ class CasaError:
             f"{line} | {source_line}",
             f"{padding} | {' ' * (col - 1)}{'^' * span_length}",
         ]
+        lines.extend(self._format_expected_got())
         return "\n".join(lines)
+
+    def _format_expected_got(self) -> list[str]:
+        """Format expected/got fields as trailing lines."""
+        lines: list[str] = []
+        if self.expected:
+            lines.append(f"  Expected: {self.expected}")
+        if self.got:
+            label, value = self.got
+            lines.append(f"  {label}: {value}")
+        return lines
 
 
 class CasaErrorCollection(Exception):

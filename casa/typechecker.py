@@ -87,8 +87,10 @@ class TypeChecker:
         raise CasaErrorCollection(
             CasaError(
                 ErrorKind.TYPE_MISMATCH,
-                f"Expected `{expected}` but got `{typ}`",
+                "Type mismatch",
                 self.current_location,
+                expected=f"`{expected}`",
+                got=("Got", f"`{typ}`"),
             )
         )
 
@@ -266,8 +268,10 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     raise CasaErrorCollection(
                         CasaError(
                             ErrorKind.TYPE_MISMATCH,
-                            f"Invalid return types: expected {tc.return_types} but got {tc.stack}",
+                            "Invalid return types",
                             op.location,
+                            expected=str(tc.return_types),
+                            got=("Got", str(tc.stack)),
                         )
                     )
 
@@ -317,8 +321,10 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     raise CasaErrorCollection(
                         CasaError(
                             ErrorKind.STACK_MISMATCH,
-                            f"Stack state changed across branch: expected {branched.before} but got {tc.stack}",
+                            "Stack state changed across branch",
                             op.location,
+                            expected=str(branched.before),
+                            got=("Got", str(tc.stack)),
                         )
                     )
             case OpKind.IF_ELIF | OpKind.IF_ELSE:
@@ -341,8 +347,10 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 raise CasaErrorCollection(
                     CasaError(
                         ErrorKind.STACK_MISMATCH,
-                        f"Stack state changed across branch: expected {branched.before} but got {tc.stack}",
+                        "Stack state changed across branch",
                         op.location,
+                        expected=str(branched.before),
+                        got=("Got", str(tc.stack)),
                     )
                 )
             case OpKind.IF_END:
@@ -356,8 +364,10 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 raise CasaErrorCollection(
                     CasaError(
                         ErrorKind.STACK_MISMATCH,
-                        f"Stack state changed across branch: expected {branched.before} but got {tc.stack}",
+                        "Stack state changed across branch",
                         op.location,
+                        expected=str(branched.before),
+                        got=("Got", str(tc.stack)),
                     )
                 )
             case OpKind.IF_START:
@@ -554,8 +564,10 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     raise CasaErrorCollection(
                         CasaError(
                             ErrorKind.STACK_MISMATCH,
-                            f"Stack state changed in loop: expected {branched.after} but got {tc.stack}",
+                            "Stack state changed in loop",
                             op.location,
+                            expected=str(branched.after),
+                            got=("Got", str(tc.stack)),
                         )
                     )
             case OpKind.WHILE_CONDITION:
@@ -569,8 +581,10 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     raise CasaErrorCollection(
                         CasaError(
                             ErrorKind.STACK_MISMATCH,
-                            f"Stack state changed in loop: expected {branched.before} but got {tc.stack}",
+                            "Stack state changed in loop",
                             op.location,
+                            expected=str(branched.before),
+                            got=("Got", str(tc.stack)),
                         )
                     )
             case OpKind.WHILE_END:
@@ -579,8 +593,10 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     raise CasaErrorCollection(
                         CasaError(
                             ErrorKind.STACK_MISMATCH,
-                            f"Stack state changed in loop: expected {branched.after} but got {tc.stack}",
+                            "Stack state changed in loop",
                             op.location,
+                            expected=str(branched.after),
+                            got=("Got", str(tc.stack)),
                         )
                     )
             case OpKind.WHILE_CONTINUE:
@@ -591,8 +607,10 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     raise CasaErrorCollection(
                         CasaError(
                             ErrorKind.STACK_MISMATCH,
-                            f"Stack state changed in loop: expected {branched.after} but got {tc.stack}",
+                            "Stack state changed in loop",
                             op.location,
+                            expected=str(branched.after),
+                            got=("Got", str(tc.stack)),
                         )
                     )
             case OpKind.WHILE_START:
@@ -606,8 +624,10 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
         raise CasaErrorCollection(
             CasaError(
                 ErrorKind.TYPE_MISMATCH,
-                f"Invalid return types: expected {tc.return_types} but got {tc.stack}",
+                "Invalid return types",
                 fn_location,
+                expected=str(tc.return_types),
+                got=("Got", str(tc.stack)),
             )
         )
 
@@ -643,8 +663,10 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
         raise CasaErrorCollection(
             CasaError(
                 ErrorKind.SIGNATURE_MISMATCH,
-                f"Invalid signature for function `{function.name}`: expected {function.signature} but inferred {inferred_signature}",
+                f"Invalid signature for function `{function.name}`",
                 fn_location,
+                expected=str(function.signature),
+                got=("Inferred", str(inferred_signature)),
             )
         )
 

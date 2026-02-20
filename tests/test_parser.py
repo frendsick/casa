@@ -360,7 +360,7 @@ def test_parse_generic_invalid_token_raises():
     with pytest.raises(CasaErrorCollection) as exc_info:
         parse_string("fn foo[42] int -> int { }")
     assert exc_info.value.errors[0].kind == ErrorKind.UNEXPECTED_TOKEN
-    assert "Expected type variable name" in exc_info.value.errors[0].message
+    assert exc_info.value.errors[0].expected == "type variable name"
 
 
 @pytest.mark.parametrize("builtin", ["int", "bool", "str", "ptr", "array", "any"])

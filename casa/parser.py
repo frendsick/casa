@@ -251,8 +251,10 @@ def parse_block_ops(cursor: Cursor[Token], function_name: str) -> list[Op]:
         raise CasaErrorCollection(
             CasaError(
                 ErrorKind.UNEXPECTED_TOKEN,
-                f"Expected `{{` but got `{open_brace.value if open_brace else 'nothing'}`",
+                "Unexpected token",
                 loc,
+                expected="`{`",
+                got=("Got", f"`{open_brace.value}`" if open_brace else "nothing"),
             )
         )
 
@@ -363,8 +365,10 @@ def get_op_keyword(
                 raise CasaErrorCollection(
                     CasaError(
                         ErrorKind.UNEXPECTED_TOKEN,
-                        f"Expected included file as string literal but got `{string_literal.value}`",
+                        "Unexpected token for include path",
                         string_literal.location,
+                        expected="string literal",
+                        got=("Got", f"`{string_literal.value}`"),
                     )
                 )
             assert isinstance(literal_op.value, str), "Included file path"
@@ -460,8 +464,10 @@ def parse_struct(cursor: Cursor[Token]) -> Struct:
             raise CasaErrorCollection(
                 CasaError(
                     ErrorKind.UNEXPECTED_TOKEN,
-                    f"Expected identifier but got `{member_name.kind.name}`",
+                    "Unexpected token in struct definition",
                     member_name.location,
+                    expected="identifier",
+                    got=("Got", f"`{member_name.kind.name}`"),
                 )
             )
 
@@ -550,8 +556,10 @@ def parse_type_vars(cursor: Cursor[Token]) -> set[str]:
             raise CasaErrorCollection(
                 CasaError(
                     ErrorKind.UNEXPECTED_TOKEN,
-                    f"Expected type variable name but got `{token.value}`",
+                    "Unexpected token in type parameters",
                     token.location,
+                    expected="type variable name",
+                    got=("Got", f"`{token.value}`"),
                 )
             )
     raise CasaErrorCollection(
@@ -595,7 +603,9 @@ def parse_signature(cursor: Cursor[Token]) -> Signature:
         raise CasaErrorCollection(
             CasaError(
                 ErrorKind.UNEXPECTED_TOKEN,
-                "Expected `->` or `{` but got nothing",
+                "Unexpected end of input",
+                expected="`->` or `{`",
+                got=("Got", "nothing"),
             )
         )
 
@@ -616,8 +626,10 @@ def parse_parameters(cursor: Cursor[Token]) -> list[Parameter]:
             raise CasaErrorCollection(
                 CasaError(
                     ErrorKind.UNEXPECTED_TOKEN,
-                    f"Expected identifier but got `{name_or_type.kind.name}`",
+                    "Unexpected token in parameter list",
                     name_or_type.location,
+                    expected="identifier",
+                    got=("Got", f"`{name_or_type.kind.name}`"),
                 )
             )
 
@@ -630,7 +642,12 @@ def parse_parameters(cursor: Cursor[Token]) -> list[Parameter]:
         else:
             parameters.append(Parameter(name_or_type.value))
     raise CasaErrorCollection(
-        CasaError(ErrorKind.UNEXPECTED_TOKEN, "Expected `->` or block but got nothing")
+        CasaError(
+            ErrorKind.UNEXPECTED_TOKEN,
+            "Unexpected end of input",
+            expected="`->` or block",
+            got=("Got", "nothing"),
+        )
     )
 
 
@@ -642,7 +659,12 @@ def parse_return_types(cursor: Cursor[Token]) -> list[Type]:
             return return_types
         return_types.append(return_type.value)
     raise CasaErrorCollection(
-        CasaError(ErrorKind.UNEXPECTED_TOKEN, "Expected block but got nothing")
+        CasaError(
+            ErrorKind.UNEXPECTED_TOKEN,
+            "Unexpected end of input",
+            expected="block",
+            got=("Got", "nothing"),
+        )
     )
 
 
@@ -749,24 +771,30 @@ def expect_token(
         raise CasaErrorCollection(
             CasaError(
                 ErrorKind.UNEXPECTED_TOKEN,
-                f"Expected {expected} but got end of input",
+                "Unexpected end of input",
                 last_location,
+                expected=expected,
+                got=("Got", "end of input"),
             )
         )
     if value and value != next_token.value:
         raise CasaErrorCollection(
             CasaError(
                 ErrorKind.UNEXPECTED_TOKEN,
-                f"Expected `{value}` but got `{next_token.value}`",
+                "Unexpected token",
                 next_token.location,
+                expected=f"`{value}`",
+                got=("Got", f"`{next_token.value}`"),
             )
         )
     if kind and kind != next_token.kind:
         raise CasaErrorCollection(
             CasaError(
                 ErrorKind.UNEXPECTED_TOKEN,
-                f"Expected `{kind.name}` but got `{next_token.kind.name}`",
+                "Unexpected token",
                 next_token.location,
+                expected=f"`{kind.name}`",
+                got=("Got", f"`{next_token.kind.name}`"),
             )
         )
     return next_token
