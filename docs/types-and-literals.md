@@ -32,7 +32,7 @@ String type. String literals are enclosed in double quotes.
 "Hello world!" print
 ```
 
-Strings support the following escape sequences: `\n` (newline), `\t` (tab), `\\` (backslash), `\"` (quote), `\0` (null).
+Strings do not support escape sequences. Characters between quotes are read literally.
 
 ## Composite Types
 

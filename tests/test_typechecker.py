@@ -3,6 +3,7 @@
 import pytest
 
 from casa.common import ANY_TYPE, GLOBAL_FUNCTIONS, OpKind, Parameter, Signature
+from casa.error import WARNINGS, CasaErrorCollection, ErrorKind, WarningKind
 from tests.conftest import parse_string, resolve_string, typecheck_string
 
 
@@ -147,8 +148,34 @@ def test_typecheck_fn_signature_inference():
 def test_typecheck_fn_signature_mismatch():
     # The mismatch is only detected when the function is called
     code = "fn bad a:int -> str { a 1 + } bad"
-    with pytest.raises(TypeError, match="Invalid signature"):
+    with pytest.raises(CasaErrorCollection) as exc_info:
         typecheck_string(code)
+    assert exc_info.value.errors[0].kind == ErrorKind.SIGNATURE_MISMATCH
+
+
+def test_typecheck_fn_unused_param_passthrough():
+    """Unnamed params pass through the stack, producing a warning."""
+    code = "fn foo int -> int {} 5 foo"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["int"]
+    assert len(WARNINGS) == 1
+    assert WARNINGS[0].kind == WarningKind.UNUSED_PARAMETER
+    assert "foo" in WARNINGS[0].message
+
+
+def test_typecheck_fn_unused_param_no_warning_when_used():
+    """Named params that are used produce no warning."""
+    code = "fn foo a:int -> int { a } 5 foo"
+    typecheck_string(code)
+    assert len(WARNINGS) == 0
+
+
+def test_typecheck_fn_unused_param_wrong_return_type():
+    """Passthrough with wrong return type is still an error."""
+    code = "fn bad int -> str {} bad"
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        typecheck_string(code)
+    assert exc_info.value.errors[0].kind == ErrorKind.SIGNATURE_MISMATCH
 
 
 def test_typecheck_fn_call_stack_effect():
@@ -188,8 +215,9 @@ def test_typecheck_if_else_consistent():
 
 def test_typecheck_if_inconsistent_raises():
     code = 'if true then 1 else "two" fi'
-    with pytest.raises(TypeError):
+    with pytest.raises(CasaErrorCollection) as exc_info:
         typecheck_string(code)
+    assert exc_info.value.errors[0].kind == ErrorKind.STACK_MISMATCH
 
 
 def test_typecheck_while_loop():
@@ -303,14 +331,18 @@ def test_typecheck_generic_mixed_concrete_and_type_var():
 
 def test_typecheck_generic_consistency_error():
     code = 'fn pair[T] T T -> T T { } 42 "hi" pair'
-    with pytest.raises(TypeError, match="Type variable.*bound to"):
+    with pytest.raises(CasaErrorCollection) as exc_info:
         typecheck_string(code)
+    assert exc_info.value.errors[0].kind == ErrorKind.TYPE_MISMATCH
+    assert "bound to" in exc_info.value.errors[0].message
 
 
 def test_typecheck_generic_return_only_type_var_error():
     code = "fn bad[T] int -> T { } 42 bad"
-    with pytest.raises(TypeError, match="return types but not in parameters"):
+    with pytest.raises(CasaErrorCollection) as exc_info:
         typecheck_string(code)
+    assert exc_info.value.errors[0].kind == ErrorKind.TYPE_MISMATCH
+    assert "return types but not in parameters" in exc_info.value.errors[0].message
 
 
 def test_typecheck_generic_called_from_function():
@@ -348,3 +380,64 @@ def test_typecheck_generic_lambda_wrapping():
     sig = typecheck_string(code)
     # Lambda exec produces `any` — generic type info is lost through lambda
     assert sig.return_types == ["any"]
+
+
+# ---------------------------------------------------------------------------
+# type_check_functions
+# ---------------------------------------------------------------------------
+def test_typecheck_mismatch_shows_origin():
+    """TYPE_MISMATCH error includes a note pointing to where the value was pushed."""
+    code = '"hello" 1 *'
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        typecheck_string(code)
+    error = exc_info.value.errors[0]
+    assert error.kind == ErrorKind.TYPE_MISMATCH
+    assert "`*`" in error.message
+    assert "int int -> int" in error.message
+    assert error.note is not None
+    note_message, note_location = error.note
+    assert "str" in note_message
+    assert note_location.span.offset == 0  # points to "hello"
+
+
+def test_typecheck_mismatch_shows_fn_parameter_context():
+    """TYPE_MISMATCH error shows which parameter mismatched."""
+    code = "fn foo a:str -> str { a } 42 foo"
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        typecheck_string(code)
+    error = exc_info.value.errors[0]
+    assert error.kind == ErrorKind.TYPE_MISMATCH
+    assert "`foo`" in error.message
+    assert "str -> str" in error.message
+    assert "parameter 1 of `foo`" in error.expected
+
+
+def test_typecheck_all_functions_catches_unused_error():
+    """An unused function with a type error is caught."""
+    code = "fn bad int -> str { }"
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        typecheck_string(code)
+    error = exc_info.value.errors[0]
+    assert error.kind == ErrorKind.SIGNATURE_MISMATCH
+    assert error.expected == "int -> str"
+    assert error.got == "None -> None"
+    assert error.got_label == "Inferred"
+
+
+def test_typecheck_all_functions_valid_unused():
+    """A valid unused function does not raise."""
+    code = "fn add a:int b:int -> int { a b + }"
+    typecheck_string(code)  # Should not raise
+    fn = GLOBAL_FUNCTIONS["add"]
+    assert fn.is_typechecked
+
+
+def test_typecheck_all_functions_with_struct():
+    """Auto-generated struct getters/setters typecheck correctly."""
+    code = """
+    struct Point { x: int y: int }
+    fn get_x p:Point -> int { p.x }
+    """
+    typecheck_string(code)  # Should not raise
+    fn = GLOBAL_FUNCTIONS["get_x"]
+    assert fn.is_typechecked

@@ -20,9 +20,10 @@ from casa.common import (
 )
 from casa.bytecode import _op_label_map, compile_bytecode, reset_labels
 from casa.emitter import emit_program
+from casa.error import SOURCE_CACHE, WARNINGS
 from casa.lexer import Lexer
 from casa.parser import parse_ops, resolve_identifiers
-from casa.typechecker import type_check_ops
+from casa.typechecker import type_check_functions, type_check_ops
 
 TEST_FILE = Path("test.casa")
 
@@ -33,6 +34,8 @@ def _clear_globals():
     GLOBAL_STRUCTS.clear()
     GLOBAL_VARIABLES.clear()
     INCLUDED_FILES.clear()
+    SOURCE_CACHE.clear()
+    WARNINGS.clear()
     reset_labels()
     _op_label_map.clear()
 
@@ -53,6 +56,7 @@ def clear_global_state():
 
 def lex_string(code: str) -> list[Token]:
     """Lex a source string into tokens."""
+    SOURCE_CACHE[TEST_FILE] = code
     lexer = Lexer(cursor=Cursor(sequence=code), file=TEST_FILE)
     return lexer.lex()
 
@@ -72,13 +76,16 @@ def resolve_string(code: str) -> list[Op]:
 def typecheck_string(code: str) -> Signature:
     """Full pipeline through type checking. Returns inferred signature."""
     ops = resolve_string(code)
-    return type_check_ops(ops)
+    sig = type_check_ops(ops)
+    type_check_functions(GLOBAL_FUNCTIONS.values())
+    return sig
 
 
 def compile_string(code: str) -> Program:
     """Full pipeline through bytecode compilation."""
     ops = resolve_string(code)
     type_check_ops(ops)
+    type_check_functions(GLOBAL_FUNCTIONS.values())
     return compile_bytecode(ops)
 
 

@@ -15,9 +15,24 @@ fail=0
 for f in "$EXAMPLES_DIR"/*.casa; do
     base=$(basename "$f" .casa)
     out_file="$EXAMPLES_DIR/outputs/$base.out"
+    err_file="$EXAMPLES_DIR/outputs/$base.err"
     binary="/tmp/casa_test_$base"
 
     echo "Running test: $base"
+
+    # Examples with .err files are expected to fail compilation
+    if [ -f "$err_file" ]; then
+        error_output=$(python3 "$ROOT_DIR/casa.py" "$f" -o "$binary" 2>&1 || true)
+        if echo "$error_output" | diff -u - "$err_file"; then
+            echo "${GREEN}[OK]${RESET} Passed: $base (expected error)"
+            pass=$((pass+1))
+        else
+            echo "${RED}[X]${RESET}  Failed: $base (error output mismatch)"
+            fail=$((fail+1))
+        fi
+        rm -f "$binary"
+        continue
+    fi
 
     # Compile
     python3 "$ROOT_DIR/casa.py" "$f" -o "$binary"

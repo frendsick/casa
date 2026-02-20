@@ -15,6 +15,7 @@ from casa.common import (
     Struct,
     Variable,
 )
+from casa.error import CasaErrorCollection, ErrorKind
 from tests.conftest import lex_string, parse_string, resolve_string
 
 
@@ -327,8 +328,9 @@ def test_resolve_push_capture():
 
 
 def test_resolve_undefined_raises():
-    with pytest.raises(NameError, match="not defined"):
+    with pytest.raises(CasaErrorCollection) as exc_info:
         resolve_string("undefined_thing")
+    assert exc_info.value.errors[0].kind == ErrorKind.UNDEFINED_NAME
 
 
 # ---------------------------------------------------------------------------
@@ -348,21 +350,29 @@ def test_parse_generic_multiple_type_vars():
 
 
 def test_parse_generic_empty_brackets_raises():
-    with pytest.raises(SyntaxError, match="Empty type parameter list"):
+    with pytest.raises(CasaErrorCollection) as exc_info:
         parse_string("fn foo[] int -> int { }")
+    assert exc_info.value.errors[0].kind == ErrorKind.SYNTAX
+    assert "Empty type parameter list" in exc_info.value.errors[0].message
 
 
 def test_parse_generic_invalid_token_raises():
-    with pytest.raises(SyntaxError, match="Expected type variable name"):
+    with pytest.raises(CasaErrorCollection) as exc_info:
         parse_string("fn foo[42] int -> int { }")
+    assert exc_info.value.errors[0].kind == ErrorKind.UNEXPECTED_TOKEN
+    assert exc_info.value.errors[0].expected == "type variable name"
 
 
 @pytest.mark.parametrize("builtin", ["int", "bool", "str", "ptr", "array", "any"])
 def test_parse_generic_type_var_shadows_builtin_raises(builtin):
-    with pytest.raises(SyntaxError, match=f"shadows built-in type `{builtin}`"):
+    with pytest.raises(CasaErrorCollection) as exc_info:
         parse_string(f"fn foo[{builtin}] {builtin} -> {builtin} {{ }}")
+    assert exc_info.value.errors[0].kind == ErrorKind.DUPLICATE_NAME
+    assert f"shadows built-in type `{builtin}`" in exc_info.value.errors[0].message
 
 
 def test_parse_generic_type_var_shadows_struct_raises():
-    with pytest.raises(SyntaxError, match="shadows struct type `Foo`"):
+    with pytest.raises(CasaErrorCollection) as exc_info:
         parse_string("struct Foo { val: int } fn id[Foo] Foo -> Foo { }")
+    assert exc_info.value.errors[0].kind == ErrorKind.DUPLICATE_NAME
+    assert "shadows struct type `Foo`" in exc_info.value.errors[0].message

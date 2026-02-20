@@ -1,5 +1,5 @@
 import itertools
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from casa.common import (
@@ -13,12 +13,14 @@ from casa.common import (
     Token,
     TokenKind,
 )
+from casa.error import SOURCE_CACHE, CasaError, CasaErrorCollection, ErrorKind
 
 
 @dataclass(slots=True)
 class Lexer:
     cursor: Cursor[str]
     file: Path
+    errors: list[CasaError] = field(default_factory=list)
 
     def lex(self) -> list[Token]:
         tokens: list[Token] = []
@@ -27,6 +29,10 @@ class Lexer:
                 tokens.append(token)
 
         tokens.append(Token("", TokenKind.EOF, self.current_location(0)))
+
+        if self.errors:
+            raise CasaErrorCollection(self.errors)
+
         return tokens
 
     def rest(self) -> str:
@@ -147,14 +153,21 @@ class Lexer:
         if self.expect_startswith("::"):
             method = self.lex_multichar_token()
             if not method:
-                raise SyntaxError("Expected method name but got nothing")
+                self.errors.append(
+                    CasaError(
+                        ErrorKind.SYNTAX,
+                        "Expected method name after `::`",
+                        location,
+                    )
+                )
+                return Token(value, TokenKind.IDENTIFIER, location)
             return Token(f"{value}::{method.value}", TokenKind.IDENTIFIER, location)
 
         return Token(value, TokenKind.IDENTIFIER, location)
 
     def parse_string_literal(self) -> str:
-        if not self.expect_char('"'):
-            raise SyntaxError('String literal starts with `"`')
+        start = self.cursor.position
+        assert self.expect_char('"'), 'String literal starts with `"`'
 
         string_literal = '"'
         while char := self.cursor.pop():
@@ -162,7 +175,15 @@ class Lexer:
             if char == '"':
                 break
         else:
-            raise SyntaxError('Expected `"` but got nothing')
+            span_length = self.cursor.position - start
+            self.errors.append(
+                CasaError(
+                    ErrorKind.SYNTAX,
+                    "Unclosed string literal",
+                    Location(self.file, Span(start, span_length)),
+                )
+            )
+            return string_literal
 
         return string_literal
 
@@ -174,5 +195,6 @@ def is_negative_integer_literal(value: str):
 def lex_file(file: Path) -> list[Token]:
     with open(file, "r") as code_file:
         code = code_file.read()
+    SOURCE_CACHE[file] = code
     lexer = Lexer(file=file, cursor=Cursor(sequence=code))
     return lexer.lex()

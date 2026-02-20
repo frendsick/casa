@@ -132,7 +132,7 @@ impl Box {
 
 Every type variable must appear in at least one parameter (return-only type variables are not allowed).
 
-Type variable names must not collide with built-in types (`int`, `bool`, `str`, `ptr`, `array`, `any`, `fn`) or user-defined struct names:
+Type variable names must not collide with built-in types (`int`, `bool`, `str`, `ptr`, `array`, `any`) or user-defined struct names:
 
 ```casa
 fn bad[int] int -> int { }     # ERROR: shadows built-in type
@@ -265,7 +265,7 @@ print print          # 9 10
 print print print    # 4 5 4
 
 6 7 8 rot
-print print print    # 7 8 6
+print print print    # 6 8 7
 ```
 
 See [`examples/stack_operations.casa`](../examples/stack_operations.casa).
@@ -293,8 +293,8 @@ Low-level heap access for building data structures.
 | Intrinsic | Stack Effect | Description |
 |-----------|-------------|-------------|
 | `alloc` | `int -> ptr` | Allocate N heap slots, return pointer |
-| `load` | `ptr -> any` | Read value at heap address |
-| `store` | `any ptr -> None` | Write value to heap address |
+| `load` | `any -> any` | Read value at heap address |
+| `store` | `any any -> None` | Write value to heap address |
 
 ### Example
 
