@@ -445,13 +445,9 @@ class Compiler:
                     self.locals_count += 1
 
                     # First item of the array is its length
-                    local_len = self.locals_count
                     bytecode.append(self.inst(InstKind.PUSH, args=[list_len]))
-                    bytecode.append(self.inst(InstKind.DUP))
-                    bytecode.append(self.inst(InstKind.LOCAL_SET, args=[local_len]))
                     bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_list]))
                     bytecode.append(self.inst(InstKind.STORE))
-                    self.locals_count += 1
 
                     # Create the array
                     local_index = self.locals_count
@@ -465,7 +461,7 @@ class Compiler:
                     # while index len > do
                     bytecode.append(self.inst(InstKind.LABEL, args=[start_label]))
                     bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_index]))
-                    bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_len]))
+                    bytecode.append(self.inst(InstKind.PUSH, args=[list_len]))
                     bytecode.append(self.inst(InstKind.GE))
                     bytecode.append(self.inst(InstKind.JUMP_NE, args=[end_label]))
 
