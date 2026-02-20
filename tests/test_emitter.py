@@ -258,9 +258,37 @@ def test_emit_print_int():
     assert "jmp print_int" in asm
 
 
+def test_emit_print_int_no_newline():
+    """print_int helper should not append a newline to the output."""
+    asm = emit_string("42 print")
+    lines = asm.split("\n")
+    in_print_int = False
+    for line in lines:
+        if "print_int:" in line:
+            in_print_int = True
+        elif in_print_int and line.strip() and not line.startswith((" ", "\t")):
+            break
+        elif in_print_int:
+            assert "movb $10" not in line, "print_int should not append a newline"
+
+
 def test_emit_print_str():
     asm = emit_string('"hello" print')
     assert "jmp print_str" in asm
+
+
+def test_emit_print_str_no_newline():
+    """print_str helper should not write a newline after the string."""
+    asm = emit_string('"hello" print')
+    lines = asm.split("\n")
+    in_print_str = False
+    for line in lines:
+        if "print_str:" in line:
+            in_print_str = True
+        elif in_print_str and line.strip() and not line.startswith((" ", "\t")):
+            break
+        elif in_print_str:
+            assert "newline" not in line, "print_str should not reference newline"
 
 
 # ---------------------------------------------------------------------------

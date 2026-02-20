@@ -81,8 +81,6 @@ class Emitter:
         for s in self.program.strings:
             self._line(f"    .quad {len(s)}")
 
-        # Characters for print helpers
-        self._line("newline: .byte 10")
         self._line("")
 
     def _emit_text(self) -> None:
@@ -95,8 +93,7 @@ class Emitter:
         # print_int: value in %rdi, returns via r14
         self._line("print_int:")
         self._indent("movq %rdi, %rax")
-        self._indent("leaq print_buf+31(%rip), %rsi")
-        self._indent("movb $10, (%rsi)")
+        self._indent("leaq print_buf+32(%rip), %rsi")
         # Zero check
         self._indent("testq %rax, %rax")
         self._indent("jnz .Lpi_nonzero")
@@ -141,12 +138,6 @@ class Emitter:
         self._indent("movq (%rax, %rdi, 8), %rsi")
         self._indent("leaq str_len_table(%rip), %rax")
         self._indent("movq (%rax, %rdi, 8), %rdx")
-        self._indent("movq $1, %rax")
-        self._indent("movq $1, %rdi")
-        self._indent("syscall")
-        # Print newline
-        self._indent("leaq newline(%rip), %rsi")
-        self._indent("movq $1, %rdx")
         self._indent("movq $1, %rax")
         self._indent("movq $1, %rdi")
         self._indent("syscall")
