@@ -15,7 +15,14 @@ from casa.common import (
     Type,
     Variable,
 )
-from casa.error import CasaError, CasaErrorCollection, ErrorKind
+from casa.error import (
+    WARNINGS,
+    CasaError,
+    CasaErrorCollection,
+    CasaWarning,
+    ErrorKind,
+    WarningKind,
+)
 from casa.parser import resolve_identifiers
 
 
@@ -136,6 +143,49 @@ class TypeChecker:
         for return_type in signature.return_types:
             resolved = bindings.get(return_type, return_type)
             self.stack_push(resolved)
+
+
+def _check_passthrough_params(
+    declared: Signature, inferred: Signature
+) -> list[Parameter] | None:
+    """Check if the mismatch is explained by unused passthrough parameters.
+
+    Unnamed declared parameters stay on the data stack untouched. The body
+    operates above them, so the effective return types are the passthrough
+    parameter types (bottom of stack) plus the inferred return types (top).
+
+    Returns the list of unused parameters if valid, or None if it is a
+    genuine mismatch.
+    """
+    n_declared = len(declared.parameters)
+    n_inferred = len(inferred.parameters)
+
+    if n_inferred > n_declared:
+        return None
+
+    n_unused = n_declared - n_inferred
+
+    # The body pops from the top of the stack. First-declared params are on
+    # top, so the first n_inferred declared params must match the inferred.
+    for d, i in zip(declared.parameters[:n_inferred], inferred.parameters):
+        if d.typ != i.typ and d.typ != ANY_TYPE and i.typ != ANY_TYPE:
+            return None
+
+    # Unused params sit at the bottom. In stack order (bottom-to-top) they
+    # are the last n_unused declared params reversed.
+    unused = declared.parameters[n_inferred:]
+    passthrough_types = [p.typ for p in reversed(unused)]
+
+    # Effective returns = passthrough (bottom) + inferred returns (top)
+    effective_returns = passthrough_types + inferred.return_types
+    if len(effective_returns) != len(declared.return_types):
+        return None
+
+    for eff, dec in zip(effective_returns, declared.return_types):
+        if eff != dec and eff != ANY_TYPE and dec != ANY_TYPE:
+            return None
+
+    return unused
 
 
 def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature:
@@ -660,14 +710,25 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
         and not function.signature.type_vars
         and not function.signature.matches(inferred_signature)
     ):
-        raise CasaErrorCollection(
-            CasaError(
-                ErrorKind.SIGNATURE_MISMATCH,
-                f"Invalid signature for function `{function.name}`",
-                fn_location,
-                expected=str(function.signature),
-                got=("Inferred", str(inferred_signature)),
+        unused = _check_passthrough_params(function.signature, inferred_signature)
+        if unused is None:
+            raise CasaErrorCollection(
+                CasaError(
+                    ErrorKind.SIGNATURE_MISMATCH,
+                    f"Invalid signature for function `{function.name}`",
+                    fn_location,
+                    expected=str(function.signature),
+                    got=("Inferred", str(inferred_signature)),
+                )
             )
-        )
+        for param in unused:
+            WARNINGS.append(
+                CasaWarning(
+                    WarningKind.UNUSED_PARAMETER,
+                    f"Unused parameter `{param.typ}` in function `{function.name}`",
+                    fn_location,
+                )
+            )
+        inferred_signature = function.signature
 
     return inferred_signature  # type_check_ops

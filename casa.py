@@ -9,7 +9,7 @@ from casa.bytecode import compile_bytecode
 from casa.cli import parse_args
 from casa.compiler import compile_binary
 from casa.emitter import emit_program
-from casa.error import CasaErrorCollection, report_errors
+from casa.error import WARNINGS, CasaErrorCollection, report_errors, report_warnings
 from casa.lexer import lex_file
 from casa.parser import parse_ops, resolve_identifiers
 from casa.typechecker import type_check_ops
@@ -41,6 +41,9 @@ def main():
     except CasaErrorCollection as exc:
         report_errors(exc.errors)
         sys.exit(1)
+
+    if WARNINGS:
+        report_warnings()
 
     logger.info("Emitting assembly")
     asm_source = emit_program(program)

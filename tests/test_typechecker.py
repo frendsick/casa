@@ -3,7 +3,7 @@
 import pytest
 
 from casa.common import ANY_TYPE, GLOBAL_FUNCTIONS, OpKind, Parameter, Signature
-from casa.error import CasaErrorCollection, ErrorKind
+from casa.error import WARNINGS, CasaErrorCollection, ErrorKind, WarningKind
 from tests.conftest import parse_string, resolve_string, typecheck_string
 
 
@@ -148,6 +148,31 @@ def test_typecheck_fn_signature_inference():
 def test_typecheck_fn_signature_mismatch():
     # The mismatch is only detected when the function is called
     code = "fn bad a:int -> str { a 1 + } bad"
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        typecheck_string(code)
+    assert exc_info.value.errors[0].kind == ErrorKind.SIGNATURE_MISMATCH
+
+
+def test_typecheck_fn_unused_param_passthrough():
+    """Unnamed params pass through the stack, producing a warning."""
+    code = "fn foo int -> int {} 5 foo"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["int"]
+    assert len(WARNINGS) == 1
+    assert WARNINGS[0].kind == WarningKind.UNUSED_PARAMETER
+    assert "foo" in WARNINGS[0].message
+
+
+def test_typecheck_fn_unused_param_no_warning_when_used():
+    """Named params that are used produce no warning."""
+    code = "fn foo a:int -> int { a } 5 foo"
+    typecheck_string(code)
+    assert len(WARNINGS) == 0
+
+
+def test_typecheck_fn_unused_param_wrong_return_type():
+    """Passthrough with wrong return type is still an error."""
+    code = "fn bad int -> str {} bad"
     with pytest.raises(CasaErrorCollection) as exc_info:
         typecheck_string(code)
     assert exc_info.value.errors[0].kind == ErrorKind.SIGNATURE_MISMATCH

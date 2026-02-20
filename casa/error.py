@@ -151,6 +151,69 @@ class CasaError:
         return lines
 
 
+class WarningKind(Enum):
+    """Categories of compiler warnings."""
+
+    UNUSED_PARAMETER = auto()
+
+
+@dataclass
+class CasaWarning:
+    """A non-fatal compiler warning with optional source location."""
+
+    kind: WarningKind
+    message: str
+    location: Location | None = None
+
+    def format(self, source_cache: dict[Path, str] | None = None) -> str:
+        """Format this warning as a diagnostic string."""
+        if source_cache is None:
+            source_cache = SOURCE_CACHE
+
+        header = f"warning[{self.kind.name}]: {self.message}"
+
+        if not self.location:
+            return header
+
+        source = source_cache.get(self.location.file)
+        if not source:
+            return f"{header}\n  --> {_display_path(self.location.file)}"
+
+        span_offset = self.location.span.offset
+        span_length = self.location.span.length or 1
+        line, col, source_line = offset_to_line_col(source, span_offset)
+        line_num_width = len(str(line))
+        padding = " " * line_num_width
+
+        return "\n".join(
+            [
+                header,
+                f"  --> {_display_path(self.location.file)}:{line}:{col}",
+                f"{padding} |",
+                f"{line} | {source_line}",
+                f"{padding} | {' ' * (col - 1)}{'^' * span_length}",
+            ]
+        )
+
+
+WARNINGS: list[CasaWarning] = []
+
+
+def report_warnings(
+    warnings: list[CasaWarning] | None = None,
+    source_cache: dict[Path, str] | None = None,
+):
+    """Print all warnings to stderr."""
+    if warnings is None:
+        warnings = WARNINGS
+    if source_cache is None:
+        source_cache = SOURCE_CACHE
+
+    for warning in warnings:
+        print(warning.format(source_cache), file=sys.stderr)
+        print(file=sys.stderr)
+
+
 class CasaErrorCollection(Exception):
     """Carries one or more CasaError instances to halt a compilation phase."""
 
