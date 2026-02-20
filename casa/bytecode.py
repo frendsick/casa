@@ -536,17 +536,7 @@ class Compiler:
                         bytecode.append(self.inst(InstKind.GLOBAL_GET, args=[index]))
                         continue
 
-                    # Fallback
-                    assert self.function, "Expected function"
-                    if variable_name not in self.function.variables:
-                        raise_error(
-                            ErrorKind.UNDEFINED_NAME,
-                            f"Local variable `{variable_name}` does not exist",
-                            op.location,
-                        )
-
-                    index = self.function.variables.index(Variable(variable_name))
-                    bytecode.append(self.inst(InstKind.LOCAL_GET, args=[index]))
+                    raise AssertionError(f"Variable `{variable_name}` is not defined")
                 case OpKind.ROT:
                     bytecode.append(self.inst(InstKind.ROT))
                 case OpKind.SHL:
