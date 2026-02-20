@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import assert_never
 
 from casa.common import (
+    BUILTIN_TYPES,
     GLOBAL_FUNCTIONS,
     GLOBAL_SCOPE_LABEL,
     GLOBAL_STRUCTS,
@@ -439,6 +440,14 @@ def parse_type_vars(cursor: Cursor[Token]) -> set[str]:
                 raise SyntaxError("Empty type parameter list `[]` is not allowed")
             return type_vars
         if token.kind == TokenKind.IDENTIFIER:
+            if token.value in BUILTIN_TYPES:
+                raise SyntaxError(
+                    f"Type variable `{token.value}` shadows built-in type `{token.value}`"
+                )
+            if token.value in GLOBAL_STRUCTS:
+                raise SyntaxError(
+                    f"Type variable `{token.value}` shadows struct type `{token.value}`"
+                )
             type_vars.add(token.value)
         elif token.value != ",":
             raise SyntaxError(f"Expected type variable name but got `{token.value}`")

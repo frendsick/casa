@@ -355,3 +355,14 @@ def test_parse_generic_empty_brackets_raises():
 def test_parse_generic_invalid_token_raises():
     with pytest.raises(SyntaxError, match="Expected type variable name"):
         parse_string("fn foo[42] int -> int { }")
+
+
+@pytest.mark.parametrize("builtin", ["int", "bool", "str", "ptr", "array", "any"])
+def test_parse_generic_type_var_shadows_builtin_raises(builtin):
+    with pytest.raises(SyntaxError, match=f"shadows built-in type `{builtin}`"):
+        parse_string(f"fn foo[{builtin}] {builtin} -> {builtin} {{ }}")
+
+
+def test_parse_generic_type_var_shadows_struct_raises():
+    with pytest.raises(SyntaxError, match="shadows struct type `Foo`"):
+        parse_string("struct Foo { val: int } fn id[Foo] Foo -> Foo { }")
