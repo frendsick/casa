@@ -20,6 +20,7 @@ from casa.common import (
 )
 from casa.bytecode import _op_label_map, compile_bytecode, reset_labels
 from casa.emitter import emit_program
+from casa.error import SOURCE_CACHE
 from casa.lexer import Lexer
 from casa.parser import parse_ops, resolve_identifiers
 from casa.typechecker import type_check_ops
@@ -33,6 +34,7 @@ def _clear_globals():
     GLOBAL_STRUCTS.clear()
     GLOBAL_VARIABLES.clear()
     INCLUDED_FILES.clear()
+    SOURCE_CACHE.clear()
     reset_labels()
     _op_label_map.clear()
 
@@ -53,6 +55,7 @@ def clear_global_state():
 
 def lex_string(code: str) -> list[Token]:
     """Lex a source string into tokens."""
+    SOURCE_CACHE[TEST_FILE] = code
     lexer = Lexer(cursor=Cursor(sequence=code), file=TEST_FILE)
     return lexer.lex()
 

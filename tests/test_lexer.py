@@ -3,6 +3,7 @@
 import pytest
 
 from casa.common import Delimiter, Intrinsic, Keyword, Operator, TokenKind
+from casa.error import CasaErrorCollection, ErrorKind
 from tests.conftest import lex_string
 
 
@@ -249,3 +250,22 @@ def test_lex_full_expression():
     ]
     values = [t.value for t in tokens[:-1]]
     assert values == ["34", "35", "+", "print"]
+
+
+# ---------------------------------------------------------------------------
+# Error handling
+# ---------------------------------------------------------------------------
+def test_lex_unclosed_string_raises():
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        lex_string('"hello')
+    assert len(exc_info.value.errors) == 1
+    assert exc_info.value.errors[0].kind == ErrorKind.SYNTAX
+    assert "Unclosed string" in exc_info.value.errors[0].message
+
+
+def test_lex_missing_method_name_raises():
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        lex_string("Foo::")
+    assert len(exc_info.value.errors) == 1
+    assert exc_info.value.errors[0].kind == ErrorKind.SYNTAX
+    assert "method name" in exc_info.value.errors[0].message

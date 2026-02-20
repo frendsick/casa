@@ -3,6 +3,7 @@
 import pytest
 
 from casa.common import ANY_TYPE, GLOBAL_FUNCTIONS, OpKind, Parameter, Signature
+from casa.error import CasaErrorCollection, ErrorKind
 from tests.conftest import parse_string, resolve_string, typecheck_string
 
 
@@ -147,8 +148,9 @@ def test_typecheck_fn_signature_inference():
 def test_typecheck_fn_signature_mismatch():
     # The mismatch is only detected when the function is called
     code = "fn bad a:int -> str { a 1 + } bad"
-    with pytest.raises(TypeError, match="Invalid signature"):
+    with pytest.raises(CasaErrorCollection) as exc_info:
         typecheck_string(code)
+    assert exc_info.value.errors[0].kind == ErrorKind.SIGNATURE_MISMATCH
 
 
 def test_typecheck_fn_call_stack_effect():
@@ -188,8 +190,9 @@ def test_typecheck_if_else_consistent():
 
 def test_typecheck_if_inconsistent_raises():
     code = 'if true then 1 else "two" fi'
-    with pytest.raises(TypeError):
+    with pytest.raises(CasaErrorCollection) as exc_info:
         typecheck_string(code)
+    assert exc_info.value.errors[0].kind == ErrorKind.STACK_MISMATCH
 
 
 def test_typecheck_while_loop():
@@ -303,14 +306,18 @@ def test_typecheck_generic_mixed_concrete_and_type_var():
 
 def test_typecheck_generic_consistency_error():
     code = 'fn pair[T] T T -> T T { } 42 "hi" pair'
-    with pytest.raises(TypeError, match="Type variable.*bound to"):
+    with pytest.raises(CasaErrorCollection) as exc_info:
         typecheck_string(code)
+    assert exc_info.value.errors[0].kind == ErrorKind.TYPE_MISMATCH
+    assert "bound to" in exc_info.value.errors[0].message
 
 
 def test_typecheck_generic_return_only_type_var_error():
     code = "fn bad[T] int -> T { } 42 bad"
-    with pytest.raises(TypeError, match="return types but not in parameters"):
+    with pytest.raises(CasaErrorCollection) as exc_info:
         typecheck_string(code)
+    assert exc_info.value.errors[0].kind == ErrorKind.TYPE_MISMATCH
+    assert "return types but not in parameters" in exc_info.value.errors[0].message
 
 
 def test_typecheck_generic_called_from_function():
