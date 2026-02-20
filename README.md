@@ -67,6 +67,7 @@ source → lex → parse → resolve → type check → bytecode → emit asm �
 | [Functions and Lambdas](docs/functions-and-lambdas.md) | Functions, lambdas, closures, variables, stack intrinsics, IO, memory |
 | [Structs and Methods](docs/structs-and-methods.md) | Struct definition, accessors, `impl` blocks, dot/arrow syntax |
 | [Standard Library](docs/standard-library.md) | `include`, `memcpy`, arrays, `List` |
+| [Errors](docs/errors.md) | Error kinds, diagnostics format, multi-error collection |
 
 ## Examples
 
