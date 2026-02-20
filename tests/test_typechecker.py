@@ -383,7 +383,7 @@ def test_typecheck_generic_lambda_wrapping():
 
 
 # ---------------------------------------------------------------------------
-# type_check_all_functions
+# type_check_functions
 # ---------------------------------------------------------------------------
 def test_typecheck_mismatch_shows_origin():
     """TYPE_MISMATCH error includes a note pointing to where the value was pushed."""

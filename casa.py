@@ -7,12 +7,13 @@ import sys
 
 from casa.bytecode import compile_bytecode
 from casa.cli import parse_args
+from casa.common import GLOBAL_FUNCTIONS
 from casa.compiler import compile_binary
 from casa.emitter import emit_program
 from casa.error import WARNINGS, CasaErrorCollection, report_errors, report_warnings
 from casa.lexer import lex_file
 from casa.parser import parse_ops, resolve_identifiers
-from casa.typechecker import type_check_all_functions, type_check_ops
+from casa.typechecker import type_check_functions, type_check_ops
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ def main():
 
         logger.info("Type checking ops")
         type_check_ops(ops)
-        type_check_all_functions()
+        type_check_functions(GLOBAL_FUNCTIONS.values())
 
         logger.info("Compiling bytecode")
         program = compile_bytecode(ops)

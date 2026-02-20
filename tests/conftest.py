@@ -23,7 +23,7 @@ from casa.emitter import emit_program
 from casa.error import SOURCE_CACHE, WARNINGS
 from casa.lexer import Lexer
 from casa.parser import parse_ops, resolve_identifiers
-from casa.typechecker import type_check_all_functions, type_check_ops
+from casa.typechecker import type_check_functions, type_check_ops
 
 TEST_FILE = Path("test.casa")
 
@@ -77,7 +77,7 @@ def typecheck_string(code: str) -> Signature:
     """Full pipeline through type checking. Returns inferred signature."""
     ops = resolve_string(code)
     sig = type_check_ops(ops)
-    type_check_all_functions()
+    type_check_functions(GLOBAL_FUNCTIONS.values())
     return sig
 
 
@@ -85,7 +85,7 @@ def compile_string(code: str) -> Program:
     """Full pipeline through bytecode compilation."""
     ops = resolve_string(code)
     type_check_ops(ops)
-    type_check_all_functions()
+    type_check_functions(GLOBAL_FUNCTIONS.values())
     return compile_bytecode(ops)
 
 

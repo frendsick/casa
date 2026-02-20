@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from collections.abc import Iterable
 from typing import assert_never
 
 from casa.common import (
@@ -787,10 +788,10 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
     return inferred_signature  # type_check_ops
 
 
-def type_check_all_functions():
-    """Typecheck all global functions, including those never called."""
+def type_check_functions(functions: Iterable[Function]):
+    """Typecheck the given functions, collecting all errors."""
     all_errors: list[CasaError] = []
-    for fn in list(GLOBAL_FUNCTIONS.values()):
+    for fn in list(functions):
         if fn.is_typechecked:
             continue
         fn.is_typechecked = True
