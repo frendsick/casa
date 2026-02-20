@@ -382,3 +382,80 @@ def test_parse_generic_type_var_shadows_struct_raises():
         parse_string("struct Foo { val: int } fn id[Foo] Foo -> Foo { }")
     assert exc_info.value.errors[0].kind == ErrorKind.DUPLICATE_NAME
     assert "shadows struct type `Foo`" in exc_info.value.errors[0].message
+
+
+# ---------------------------------------------------------------------------
+# F-strings
+# ---------------------------------------------------------------------------
+def test_parse_fstring_plain_text():
+    """f"hello" with no expressions produces single PUSH_STR (no FSTRING_CONCAT)."""
+    ops = parse_string('f"hello"')
+    assert len(ops) == 1
+    assert ops[0].kind == OpKind.PUSH_STR
+    assert ops[0].value == "hello"
+
+
+def test_parse_fstring_with_expression():
+    """f"hello {x} world" produces PUSH_STR + FN_PUSH + FN_EXEC + PUSH_STR + FSTRING_CONCAT."""
+    ops = resolve_string('"hello" = x f"hello {x} world"')
+    # Filter to just the f-string related ops (after the variable assignment)
+    fstring_ops = [
+        op
+        for op in ops
+        if op.kind not in (OpKind.PUSH_STR, OpKind.ASSIGN_VARIABLE) or ops.index(op) > 1
+    ]
+    # Should have PUSH_STR("hello "), FN_PUSH + FN_EXEC (expression), PUSH_STR(" world"), FSTRING_CONCAT(3)
+    push_str_ops = [op for op in ops if op.kind == OpKind.PUSH_STR]
+    fn_push_ops = [op for op in ops if op.kind == OpKind.FN_PUSH]
+    fn_exec_ops = [op for op in ops if op.kind == OpKind.FN_EXEC]
+    concat_ops = find_ops(ops, OpKind.FSTRING_CONCAT)
+    # Original "hello" assignment + f-string text parts
+    assert len(push_str_ops) >= 3  # "hello" (assigned), "hello ", " world"
+    assert len(fn_push_ops) >= 1
+    assert len(fn_exec_ops) >= 1
+    assert len(concat_ops) == 1
+    assert concat_ops[0].value == 3
+
+
+def test_parse_fstring_expression_only():
+    """f"{x}" with single expression produces FN_PUSH + FN_EXEC (no concat for 1 part)."""
+    ops = resolve_string('"hello" = x f"{x}"')
+    concat_ops = find_ops(ops, OpKind.FSTRING_CONCAT)
+    fn_push_ops = find_ops(ops, OpKind.FN_PUSH)
+    # Single expression, no text parts: just lambda push+exec, no concat
+    assert len(fn_push_ops) >= 1
+    assert len(concat_ops) == 0
+
+
+def test_parse_fstring_expression_creates_lambda():
+    """f-string expressions create lambda functions registered in GLOBAL_FUNCTIONS."""
+    ops = resolve_string('"hello" = x f"val: {x}"')
+    fn_push_ops = find_ops(ops, OpKind.FN_PUSH)
+    assert len(fn_push_ops) >= 1
+    lambda_name = fn_push_ops[-1].value
+    assert lambda_name in GLOBAL_FUNCTIONS
+
+
+def test_parse_fstring_inside_function():
+    """f-strings work inside function bodies."""
+    code = 'fn greet name:str -> str { f"hello {name}" }'
+    parse_string(code)
+    fn = GLOBAL_FUNCTIONS["greet"]
+    push_str_ops = find_ops(fn.ops, OpKind.PUSH_STR)
+    assert any(op.value == "hello " for op in push_str_ops)
+
+
+def test_parse_fstring_escaped_braces():
+    """f"{{x}}" produces PUSH_STR with literal {x} (no expression)."""
+    ops = parse_string('f"{{x}}"')
+    assert len(ops) == 1
+    assert ops[0].kind == OpKind.PUSH_STR
+    assert ops[0].value == "{x}"
+
+
+def test_parse_fstring_empty():
+    """f"" produces single PUSH_STR with empty string."""
+    ops = parse_string('f""')
+    assert len(ops) == 1
+    assert ops[0].kind == OpKind.PUSH_STR
+    assert ops[0].value == ""

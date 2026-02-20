@@ -271,7 +271,7 @@ def _branch_mismatch_notes(
 
 
 def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature:
-    assert len(OpKind) == 55, "Exhaustive handling for `OpKind`"
+    assert len(OpKind) == 56, "Exhaustive handling for `OpKind`"
 
     tc = TypeChecker(ops=ops)
     for op in ops:
@@ -364,6 +364,12 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 tc.stack_pop()
                 tc.stack_pop()
                 tc.stack_push("bool")
+            case OpKind.FSTRING_CONCAT:
+                count = op.value
+                assert isinstance(count, int)
+                for _ in range(count):
+                    tc.expect_type("str")
+                tc.stack_push("str")
             case OpKind.FN_CALL:
                 function_name = op.value
                 assert isinstance(function_name, str), "Expected function name"

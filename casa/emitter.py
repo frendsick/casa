@@ -63,24 +63,16 @@ class Emitter:
         self._line(f"heap: .skip {HEAP_SIZE}")
         self._line("heap_ptr: .skip 8")
         self._line("print_buf: .skip 32")
+        self._line("str_alloc_ptr: .skip 8")
         self._line("")
 
     def _emit_data(self) -> None:
         self._line(".section .data")
-
-        # String literals
         for i, s in enumerate(self.program.strings):
             escaped = self._escape_string(s)
-            self._line(f'str_{i}: .asciz "{escaped}"')
-
-        # String lookup tables
-        self._line("str_table:")
-        for i in range(len(self.program.strings)):
-            self._line(f"    .quad str_{i}")
-        self._line("str_len_table:")
-        for s in self.program.strings:
-            self._line(f"    .quad {len(s)}")
-
+            self._line(".align 8")
+            self._line(f".quad {len(s)}")
+            self._line(f'str_{i}: .ascii "{escaped}"')
         self._line("")
 
     def _emit_text(self) -> None:
@@ -132,15 +124,62 @@ class Emitter:
         self._indent("jmpq *(%r14)")
         self._line("")
 
-        # print_str: string index in %rdi, returns via r14
+        # print_str: string pointer in %rdi, returns via r14
         self._line("print_str:")
-        self._indent("leaq str_table(%rip), %rax")
-        self._indent("movq (%rax, %rdi, 8), %rsi")
-        self._indent("leaq str_len_table(%rip), %rax")
-        self._indent("movq (%rax, %rdi, 8), %rdx")
-        self._indent("movq $1, %rax")
+        self._indent("movq -8(%rdi), %rdx")
+        self._indent("movq %rdi, %rsi")
         self._indent("movq $1, %rdi")
+        self._indent("movq $1, %rax")
         self._indent("syscall")
+        self._indent("subq $8, %r14")
+        self._indent("jmpq *(%r14)")
+        self._line("")
+
+        # str_concat: %rdi = part count (N), N string pointers on data stack
+        self._line("str_concat:")
+        self._indent("movq %rdi, %r8")
+        self._indent("movq %rsp, %r9")
+        # Calculate total length
+        self._indent("xorq %r10, %r10")
+        self._indent("xorq %rcx, %rcx")
+        self._line(".Lsc_len_loop:")
+        self._indent("cmpq %r8, %rcx")
+        self._indent("jge .Lsc_len_done")
+        self._indent("movq (%r9, %rcx, 8), %rax")
+        self._indent("addq -8(%rax), %r10")
+        self._indent("incq %rcx")
+        self._indent("jmp .Lsc_len_loop")
+        self._line(".Lsc_len_done:")
+        # Allocate total_length + 8 via brk
+        self._indent("movq str_alloc_ptr(%rip), %r11")
+        self._indent("leaq 8(%r11, %r10), %rdi")
+        self._indent("movq $12, %rax")
+        self._indent("syscall")
+        self._indent("movq %rax, str_alloc_ptr(%rip)")
+        # Write total length at alloc_base
+        self._indent("movq %r10, (%r11)")
+        # Result string data starts at alloc_base + 8
+        self._indent("leaq 8(%r11), %rdi")
+        # Copy each part (bottom to top = reverse stack order)
+        self._indent("movq %r8, %rcx")
+        self._indent("decq %rcx")
+        self._line(".Lsc_copy_loop:")
+        self._indent("cmpq $0, %rcx")
+        self._indent("jl .Lsc_copy_done")
+        self._indent("movq (%r9, %rcx, 8), %rsi")
+        self._indent("movq -8(%rsi), %rdx")
+        self._indent("pushq %rcx")
+        self._indent("movq %rdx, %rcx")
+        self._indent("rep movsb")
+        self._indent("popq %rcx")
+        self._indent("decq %rcx")
+        self._indent("jmp .Lsc_copy_loop")
+        self._line(".Lsc_copy_done:")
+        # Remove N pointers from stack, push result
+        self._indent("leaq (%r9, %r8, 8), %rsp")
+        self._indent("leaq 8(%r11), %rax")
+        self._indent("pushq %rax")
+        # Return via return stack
         self._indent("subq $8, %r14")
         self._indent("jmpq *(%r14)")
         self._line("")
@@ -156,6 +195,11 @@ class Emitter:
         self._line(".globl _start")
         self._line("_start:")
         self._indent("leaq return_stack(%rip), %r14")
+        # Initialize string allocation pointer via brk(0)
+        self._indent("movq $12, %rax")
+        self._indent("xorq %rdi, %rdi")
+        self._indent("syscall")
+        self._indent("movq %rax, str_alloc_ptr(%rip)")
         self._emit_bytecode(self.program.bytecode, is_global=True)
         self._indent("movq $60, %rax")
         self._indent("xorq %rdi, %rdi")
@@ -174,7 +218,7 @@ class Emitter:
         self._indent("movq %rax, (%rsp)")
 
     def _emit_inst(self, inst: Inst, is_global: bool) -> None:
-        assert len(InstKind) == 44, "Exhaustive handling for `InstKind`"
+        assert len(InstKind) == 45, "Exhaustive handling for `InstKind`"
         kind = inst.kind
         match kind:
             # === Stack ===
@@ -186,7 +230,8 @@ class Emitter:
                     self._indent(f"movabsq ${val}, %rax")
                     self._indent("pushq %rax")
             case InstKind.PUSH_STR:
-                self._indent(f"pushq ${inst.int_arg}")
+                self._indent(f"leaq str_{inst.int_arg}(%rip), %rax")
+                self._indent("pushq %rax")
             case InstKind.DROP:
                 self._indent("addq $8, %rsp")
             case InstKind.DUP:
@@ -397,6 +442,17 @@ class Emitter:
                 self._indent("addq $8, %r14")
                 self._indent("jmp print_str")
                 self._line(f".Lprint_done_{uid}:")
+
+            # === F-strings ===
+            case InstKind.FSTRING_CONCAT:
+                uid = self._uid()
+                count = inst.int_arg
+                self._indent(f"movq ${count}, %rdi")
+                self._indent(f"leaq .Lconcat_done_{uid}(%rip), %rax")
+                self._indent("movq %rax, (%r14)")
+                self._indent("addq $8, %r14")
+                self._indent("jmp str_concat")
+                self._line(f".Lconcat_done_{uid}:")
 
             case _:
                 assert_never(kind)

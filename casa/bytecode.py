@@ -102,8 +102,8 @@ class Compiler:
         return Inst(kind, args=args or [], location=self._current_loc)
 
     def compile(self) -> Bytecode:
-        assert len(InstKind) == 44, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 55, "Exhaustive handling for `OpKind`"
+        assert len(InstKind) == 45, "Exhaustive handling for `InstructionKind"
+        assert len(OpKind) == 56, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
         bytecode: list[Inst] = []
@@ -182,6 +182,10 @@ class Compiler:
                     bytecode.append(self.inst(InstKind.DUP))
                 case OpKind.EQ:
                     bytecode.append(self.inst(InstKind.EQ))
+                case OpKind.FSTRING_CONCAT:
+                    count = op.value
+                    assert isinstance(count, int)
+                    bytecode.append(self.inst(InstKind.FSTRING_CONCAT, args=[count]))
                 case OpKind.FN_CALL:
                     function_name = op.value
                     function = GLOBAL_FUNCTIONS.get(function_name)

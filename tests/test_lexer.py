@@ -374,3 +374,128 @@ def test_lex_escape_span_multiple_escapes():
     tokens = lex_string(r'"a\nb\tc"')
     # Source: " a \ n b \ t c " = 9 chars
     assert tokens[0].location.span.length == 9
+
+
+# ---------------------------------------------------------------------------
+# F-strings
+# ---------------------------------------------------------------------------
+def test_lex_fstring_plain_text():
+    """f"hello" produces FSTRING_START, FSTRING_TEXT, FSTRING_END."""
+    tokens = lex_string('f"hello"')
+    kinds = [t.kind for t in tokens if t.kind != TokenKind.EOF]
+    assert kinds == [
+        TokenKind.FSTRING_START,
+        TokenKind.FSTRING_TEXT,
+        TokenKind.FSTRING_END,
+    ]
+    assert tokens[1].value == "hello"
+
+
+def test_lex_fstring_empty():
+    """f"" produces FSTRING_START, FSTRING_END (no text part)."""
+    tokens = lex_string('f""')
+    kinds = [t.kind for t in tokens if t.kind != TokenKind.EOF]
+    assert kinds == [TokenKind.FSTRING_START, TokenKind.FSTRING_END]
+
+
+def test_lex_fstring_expression_only():
+    """f"{x}" produces FSTRING_START, EXPR_START, IDENTIFIER, EXPR_END, FSTRING_END."""
+    tokens = lex_string('f"{x}"')
+    kinds = [t.kind for t in tokens if t.kind != TokenKind.EOF]
+    assert kinds == [
+        TokenKind.FSTRING_START,
+        TokenKind.FSTRING_EXPR_START,
+        TokenKind.IDENTIFIER,
+        TokenKind.FSTRING_EXPR_END,
+        TokenKind.FSTRING_END,
+    ]
+    id_token = [t for t in tokens if t.kind == TokenKind.IDENTIFIER][0]
+    assert id_token.value == "x"
+
+
+def test_lex_fstring_text_and_expression():
+    """f"hello {x} world" produces correct token sequence."""
+    tokens = lex_string('f"hello {x} world"')
+    kinds = [t.kind for t in tokens if t.kind != TokenKind.EOF]
+    assert kinds == [
+        TokenKind.FSTRING_START,
+        TokenKind.FSTRING_TEXT,
+        TokenKind.FSTRING_EXPR_START,
+        TokenKind.IDENTIFIER,
+        TokenKind.FSTRING_EXPR_END,
+        TokenKind.FSTRING_TEXT,
+        TokenKind.FSTRING_END,
+    ]
+    text_tokens = [t for t in tokens if t.kind == TokenKind.FSTRING_TEXT]
+    assert text_tokens[0].value == "hello "
+    assert text_tokens[1].value == " world"
+
+
+def test_lex_fstring_escaped_braces():
+    """f"{{braces}}" produces FSTRING_TEXT with literal {braces}."""
+    tokens = lex_string('f"{{braces}}"')
+    kinds = [t.kind for t in tokens if t.kind != TokenKind.EOF]
+    assert kinds == [
+        TokenKind.FSTRING_START,
+        TokenKind.FSTRING_TEXT,
+        TokenKind.FSTRING_END,
+    ]
+    assert tokens[1].value == "{braces}"
+
+
+def test_lex_fstring_escape_sequences():
+    r"""f"hello\nworld" processes escape sequences inside f-strings."""
+    tokens = lex_string(r'f"hello\nworld"')
+    text_tokens = [t for t in tokens if t.kind == TokenKind.FSTRING_TEXT]
+    assert len(text_tokens) == 1
+    assert text_tokens[0].value == "hello\nworld"
+
+
+def test_lex_fstring_multiple_expressions():
+    """f"{a} and {b}" produces correct tokens for multiple expressions."""
+    tokens = lex_string('f"{a} and {b}"')
+    kinds = [t.kind for t in tokens if t.kind != TokenKind.EOF]
+    assert kinds == [
+        TokenKind.FSTRING_START,
+        TokenKind.FSTRING_EXPR_START,
+        TokenKind.IDENTIFIER,
+        TokenKind.FSTRING_EXPR_END,
+        TokenKind.FSTRING_TEXT,
+        TokenKind.FSTRING_EXPR_START,
+        TokenKind.IDENTIFIER,
+        TokenKind.FSTRING_EXPR_END,
+        TokenKind.FSTRING_END,
+    ]
+    text_tokens = [t for t in tokens if t.kind == TokenKind.FSTRING_TEXT]
+    assert text_tokens[0].value == " and "
+
+
+def test_lex_fstring_complex_expression():
+    """f"{1 2 +}" produces tokens for a multi-token expression."""
+    tokens = lex_string('f"{1 2 +}"')
+    kinds = [t.kind for t in tokens if t.kind != TokenKind.EOF]
+    assert kinds == [
+        TokenKind.FSTRING_START,
+        TokenKind.FSTRING_EXPR_START,
+        TokenKind.LITERAL,
+        TokenKind.LITERAL,
+        TokenKind.OPERATOR,
+        TokenKind.FSTRING_EXPR_END,
+        TokenKind.FSTRING_END,
+    ]
+
+
+def test_lex_fstring_unclosed_raises():
+    """Unclosed f-string raises a syntax error."""
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        lex_string('f"hello')
+    err = exc_info.value.errors[0]
+    assert err.kind == ErrorKind.SYNTAX
+
+
+def test_lex_fstring_unclosed_expression_raises():
+    """Unclosed expression in f-string raises a syntax error."""
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        lex_string('f"hello {x"')
+    err = exc_info.value.errors[0]
+    assert err.kind == ErrorKind.SYNTAX

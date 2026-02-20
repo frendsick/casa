@@ -481,3 +481,62 @@ def test_format_branch_signature():
     assert _format_branch_signature(["int"], ["int", "str"]) == "`int -> int str`"
     assert _format_branch_signature([], []) == "`None -> None`"
     assert _format_branch_signature(["any"], ["any", "int"]) == "`any -> any int`"
+
+
+# ---------------------------------------------------------------------------
+# F-strings
+# ---------------------------------------------------------------------------
+def test_typecheck_fstring_plain_text():
+    """f"hello" has stack effect -> str."""
+    sig = typecheck_string('f"hello"')
+    assert sig.return_types == ["str"]
+
+
+def test_typecheck_fstring_with_str_expression():
+    """f-string with expression returning str typechecks correctly."""
+    sig = typecheck_string('"world" = x f"hello {x}"')
+    assert sig.return_types == ["str"]
+
+
+def test_typecheck_fstring_single_expression_keeps_type():
+    """f-string with only a single expression and no text parts returns the expression type.
+
+    When there is only one part (no FSTRING_CONCAT), the type is whatever
+    the expression lambda returns. For a typed global int, exec returns int.
+    """
+    sig = typecheck_string('42 = x f"{x}"')
+    assert sig.return_types == ["int"]
+
+
+def test_typecheck_fstring_int_expression_with_text_raises():
+    """f-string expression returning int combined with text parts raises type error.
+
+    When FSTRING_CONCAT is emitted (text + expression), all parts must be str.
+    An int expression causes a TYPE_MISMATCH.
+    """
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        typecheck_string('42 = x f"val: {x}"')
+    error = exc_info.value.errors[0]
+    assert error.kind == ErrorKind.TYPE_MISMATCH
+
+
+def test_typecheck_fstring_multiple_expressions():
+    """f-string with multiple str expressions typechecks correctly."""
+    sig = typecheck_string('"a" = x "b" = y f"{x} and {y}"')
+    assert sig.return_types == ["str"]
+
+
+def test_typecheck_fstring_concat_pushes_str():
+    """FSTRING_CONCAT pops N strings and pushes one str."""
+    sig = typecheck_string('"a" = x f"prefix {x} suffix"')
+    assert sig.return_types == ["str"]
+
+
+def test_typecheck_fstring_in_function():
+    """f-strings work inside function bodies with correct type."""
+    code = """
+    fn greet name:str -> str { f"hello {name}" }
+    "world" greet
+    """
+    sig = typecheck_string(code)
+    assert sig.return_types == ["str"]
