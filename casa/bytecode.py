@@ -125,18 +125,18 @@ class Compiler:
                     variable_name = op.value
                     assert isinstance(variable_name, str), "Valid variable name"
 
-                    if variable_name in GLOBAL_VARIABLES:
-                        index = list(GLOBAL_VARIABLES.keys()).index(variable_name)
-                        bytecode.append(self.inst(InstKind.GLOBAL_GET, args=[index]))
-                        bytecode.append(self.inst(InstKind.SWAP))
-                        bytecode.append(self.inst(InstKind.ADD))
-                        bytecode.append(self.inst(InstKind.GLOBAL_SET, args=[index]))
-                    elif self.function and variable_name in self.function.variables:
+                    if self.function and variable_name in self.function.variables:
                         index = self.function.variables.index(Variable(variable_name))
                         bytecode.append(self.inst(InstKind.LOCAL_GET, args=[index]))
                         bytecode.append(self.inst(InstKind.SWAP))
                         bytecode.append(self.inst(InstKind.ADD))
                         bytecode.append(self.inst(InstKind.LOCAL_SET, args=[index]))
+                    elif variable_name in GLOBAL_VARIABLES:
+                        index = list(GLOBAL_VARIABLES.keys()).index(variable_name)
+                        bytecode.append(self.inst(InstKind.GLOBAL_GET, args=[index]))
+                        bytecode.append(self.inst(InstKind.SWAP))
+                        bytecode.append(self.inst(InstKind.ADD))
+                        bytecode.append(self.inst(InstKind.GLOBAL_SET, args=[index]))
                     else:
                         raise AssertionError(
                             f"Variable `{variable_name}` is not defined"
@@ -145,16 +145,16 @@ class Compiler:
                     variable_name = op.value
                     assert isinstance(variable_name, str), "Valid variable name"
 
-                    if variable_name in GLOBAL_VARIABLES:
-                        index = list(GLOBAL_VARIABLES.keys()).index(variable_name)
-                        bytecode.append(self.inst(InstKind.GLOBAL_GET, args=[index]))
-                        bytecode.append(self.inst(InstKind.ADD))
-                        bytecode.append(self.inst(InstKind.GLOBAL_SET, args=[index]))
-                    elif self.function and variable_name in self.function.variables:
+                    if self.function and variable_name in self.function.variables:
                         index = self.function.variables.index(Variable(variable_name))
                         bytecode.append(self.inst(InstKind.LOCAL_GET, args=[index]))
                         bytecode.append(self.inst(InstKind.ADD))
                         bytecode.append(self.inst(InstKind.LOCAL_SET, args=[index]))
+                    elif variable_name in GLOBAL_VARIABLES:
+                        index = list(GLOBAL_VARIABLES.keys()).index(variable_name)
+                        bytecode.append(self.inst(InstKind.GLOBAL_GET, args=[index]))
+                        bytecode.append(self.inst(InstKind.ADD))
+                        bytecode.append(self.inst(InstKind.GLOBAL_SET, args=[index]))
                     else:
                         raise AssertionError(
                             f"Variable `{variable_name}` is not defined"
@@ -163,17 +163,19 @@ class Compiler:
                     variable_name = op.value
                     assert isinstance(variable_name, str), "Valid variable name"
 
+                    # Local variable (shadows global with same name)
+                    if self.function and variable_name in self.function.variables:
+                        index = self.function.variables.index(Variable(variable_name))
+                        bytecode.append(self.inst(InstKind.LOCAL_SET, args=[index]))
+                        continue
+
                     # Global variable
                     if variable_name in GLOBAL_VARIABLES:
                         index = list(GLOBAL_VARIABLES.keys()).index(variable_name)
                         bytecode.append(self.inst(InstKind.GLOBAL_SET, args=[index]))
                         continue
 
-                    # Local variable
-                    assert self.function, "Function exists"
-                    assert variable_name in self.function.variables, "Variable exists"
-                    index = self.function.variables.index(Variable(variable_name))
-                    bytecode.append(self.inst(InstKind.LOCAL_SET, args=[index]))
+                    raise AssertionError(f"Variable `{variable_name}` is not defined")
                 case OpKind.DIV:
                     bytecode.append(self.inst(InstKind.DIV))
                 case OpKind.DROP:
@@ -193,9 +195,15 @@ class Compiler:
 
                     # Compile the function if it is not compiled already
                     if function.bytecode is None:
-                        # Check if the function shadowed a global variable
+                        # Check if the function assigns a non-parameter
+                        # variable that shadows a global variable
+                        param_names = set()
+                        if function.signature:
+                            param_names = {
+                                p.name for p in function.signature.parameters if p.name
+                            }
                         for var in function.variables:
-                            if var in GLOBAL_VARIABLES:
+                            if var in GLOBAL_VARIABLES and var.name not in param_names:
                                 raise_error(
                                     ErrorKind.UNDEFINED_NAME,
                                     f"Function `{function.name}` assigns a global variable `{var.name}` before it is initialized within the global scope",
@@ -203,6 +211,8 @@ class Compiler:
                                 )
 
                         if self.function != function:
+                            # Mark as being compiled to prevent recursion
+                            function.bytecode = []
                             fn_compiler = Compiler(
                                 function.ops,
                                 function,
@@ -233,16 +243,16 @@ class Compiler:
                     )
                     lambda_function.bytecode = fn_compiler.compile()
 
-                    # Setup captures
+                    # Setup captures (local variables shadow globals)
                     for index, capture in enumerate(lambda_function.captures):
-                        if capture in GLOBAL_VARIABLES:
+                        if self.function and capture in self.function.variables:
+                            index = self.function.variables.index(capture)
+                            bytecode.append(self.inst(InstKind.LOCAL_GET, args=[index]))
+                        elif capture in GLOBAL_VARIABLES:
                             index = list(GLOBAL_VARIABLES.values()).index(capture)
                             bytecode.append(
                                 self.inst(InstKind.GLOBAL_GET, args=[index])
                             )
-                        elif self.function and capture in self.function.variables:
-                            index = self.function.variables.index(capture)
-                            bytecode.append(self.inst(InstKind.LOCAL_GET, args=[index]))
                         else:
                             raise AssertionError("Captured variable should exist")
 
@@ -514,13 +524,19 @@ class Compiler:
                     variable_name = op.value
                     assert isinstance(variable_name, str), "Valid variable name"
 
+                    # Local variable (shadows global with same name)
+                    if self.function and variable_name in self.function.variables:
+                        index = self.function.variables.index(Variable(variable_name))
+                        bytecode.append(self.inst(InstKind.LOCAL_GET, args=[index]))
+                        continue
+
                     # Global variable
                     if variable_name in GLOBAL_VARIABLES:
                         index = list(GLOBAL_VARIABLES.keys()).index(variable_name)
                         bytecode.append(self.inst(InstKind.GLOBAL_GET, args=[index]))
                         continue
 
-                    # Local variable
+                    # Fallback
                     assert self.function, "Expected function"
                     if variable_name not in self.function.variables:
                         raise_error(
