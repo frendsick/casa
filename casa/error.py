@@ -29,6 +29,14 @@ class ErrorKind(Enum):
 SOURCE_CACHE: dict[Path, str] = {}
 
 
+def _display_path(path: Path) -> str:
+    """Return a relative path for display if under cwd, otherwise absolute."""
+    try:
+        return str(path.relative_to(Path.cwd()))
+    except ValueError:
+        return str(path)
+
+
 def offset_to_line_col(source: str, offset: int) -> tuple[int, int, str]:
     """Convert a byte offset to 1-based (line, col, source_line)."""
     offset = max(0, min(offset, len(source)))
@@ -62,7 +70,7 @@ class CasaError:
 
         source = source_cache.get(self.location.file)
         if not source:
-            return f"{header}\n  --> {self.location.file}"
+            return f"{header}\n  --> {_display_path(self.location.file)}"
 
         line, col, source_line = offset_to_line_col(source, self.location.span.offset)
         span_length = self.location.span.length or 1
@@ -71,7 +79,7 @@ class CasaError:
 
         lines = [
             header,
-            f"  --> {self.location.file}:{line}:{col}",
+            f"  --> {_display_path(self.location.file)}:{line}:{col}",
             f"{padding} |",
             f"{line} | {source_line}",
             f"{padding} | {' ' * (col - 1)}{'^' * span_length}",
