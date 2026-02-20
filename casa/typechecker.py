@@ -36,6 +36,11 @@ class BranchedStack:
     after_origins: list[Location | None]
     condition_present: bool
     default_present: bool
+    # Per-branch tracking for better error messages
+    branch_records: list[tuple[str, list[Type], Location]]
+    current_branch_label: str | None
+    current_branch_location: Location | None
+    if_location: Location | None
 
     def __init__(
         self,
@@ -52,6 +57,10 @@ class BranchedStack:
         )
         self.default_present = False
         self.condition_present = False
+        self.branch_records = []
+        self.current_branch_label = None
+        self.current_branch_location = None
+        self.if_location = None
 
 
 @dataclass
@@ -122,16 +131,16 @@ class TypeChecker:
         expected_str = f"`{expected}`"
         if self.current_expect_context:
             expected_str = f"`{expected}` ({self.current_expect_context})"
-        note = None
+        notes = []
         if origin and origin != self.current_location:
-            note = (f"value of type `{typ}` pushed here", origin)
+            notes = [(f"value of type `{typ}` pushed here", origin)]
         raise_error(
             ErrorKind.TYPE_MISMATCH,
             message,
             self.current_location,
             expected=expected_str,
             got=f"`{typ}`",
-            note=note,
+            notes=notes,
         )
 
     def _bind_type_var(
@@ -241,6 +250,24 @@ OP_STACK_EFFECTS: dict[OpKind, tuple[str, str]] = {
     OpKind.IF_CONDITION: ("if condition", "bool -> None"),
     OpKind.WHILE_CONDITION: ("while condition", "bool -> None"),
 }
+
+
+def _format_branch_signature(before: list[Type], after: list[Type]) -> str:
+    """Format a branch's stack effect as 'type1 type2 -> type3'."""
+    before_str = " ".join(before) if before else "None"
+    after_str = " ".join(after) if after else "None"
+    return f"`{before_str} -> {after_str}`"
+
+
+def _branch_mismatch_notes(
+    branched: BranchedStack,
+) -> list[tuple[str, Location]]:
+    """Build note entries from recorded branch results."""
+    notes: list[tuple[str, Location]] = []
+    for label, stack_after, location in branched.branch_records:
+        sig = _format_branch_signature(branched.before, stack_after)
+        notes.append((f"`{label}` branch has signature {sig}", location))
+    return notes
 
 
 def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature:
@@ -425,6 +452,8 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     branched.before_origins = tc.stack_origins.copy()
                     branched.after = branched.before
                     branched.after_origins = branched.before_origins
+                    branched.current_branch_label = "if"
+                    branched.current_branch_location = branched.if_location
                     continue
 
                 if tc.stack != branched.before:
@@ -440,8 +469,22 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 branched = tc.branched_stacks[-1]
                 before, after = branched.before, branched.after
 
+                # Record the branch that just ended
+                if branched.current_branch_label and branched.current_branch_location:
+                    branched.branch_records.append(
+                        (
+                            branched.current_branch_label,
+                            tc.stack.copy(),
+                            branched.current_branch_location,
+                        )
+                    )
+
                 if op.kind is OpKind.IF_ELSE:
                     branched.default_present = True
+                    branched.current_branch_label = "else"
+                else:
+                    branched.current_branch_label = "elif"
+                branched.current_branch_location = op.location
 
                 if tc.stack == before == after:
                     continue
@@ -457,13 +500,23 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     continue
                 raise_error(
                     ErrorKind.STACK_MISMATCH,
-                    "Stack state changed across branch",
+                    "Branches have incompatible stack effects",
                     op.location,
-                    expected=str(branched.before),
-                    got=str(tc.stack),
+                    notes=_branch_mismatch_notes(branched),
                 )
             case OpKind.IF_END:
                 branched = tc.branched_stacks.pop()
+
+                # Record the last branch
+                if branched.current_branch_label and branched.current_branch_location:
+                    branched.branch_records.append(
+                        (
+                            branched.current_branch_label,
+                            tc.stack.copy(),
+                            branched.current_branch_location,
+                        )
+                    )
+
                 if tc.stack == branched.before == branched.after:
                     continue
                 if tc.stack == branched.after and branched.default_present:
@@ -473,13 +526,14 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     continue
                 raise_error(
                     ErrorKind.STACK_MISMATCH,
-                    "Stack state changed across branch",
+                    "Branches have incompatible stack effects",
                     op.location,
-                    expected=str(branched.before),
-                    got=str(tc.stack),
+                    notes=_branch_mismatch_notes(branched),
                 )
             case OpKind.IF_START:
-                tc.branched_stacks.append(BranchedStack(tc.stack, tc.stack_origins))
+                bs = BranchedStack(tc.stack, tc.stack_origins)
+                bs.if_location = op.location
+                tc.branched_stacks.append(bs)
             case OpKind.INCLUDE_FILE:
                 pass
             case OpKind.LE:

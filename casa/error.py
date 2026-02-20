@@ -4,7 +4,7 @@ Provides Rust-style diagnostics with source context and multi-error collection.
 """
 
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
 from typing import NoReturn
@@ -78,7 +78,7 @@ class CasaError:
     expected: str | None = None
     got: str | None = None
     got_label: str = "Got"
-    note: tuple[str, Location] | None = None
+    notes: list[tuple[str, Location]] = field(default_factory=list)
 
     def format(self, source_cache: dict[Path, str] | None = None) -> str:
         """Format this error as a Rust-style diagnostic string."""
@@ -90,14 +90,14 @@ class CasaError:
         if not self.location:
             lines = [header]
             lines.extend(self._format_expected_got())
-            lines.extend(self._format_note(source_cache))
+            lines.extend(self._format_notes(source_cache))
             return "\n".join(lines)
 
         source = source_cache.get(self.location.file)
         if not source:
             lines = [header, f"  --> {_display_path(self.location.file)}"]
             lines.extend(self._format_expected_got())
-            lines.extend(self._format_note(source_cache))
+            lines.extend(self._format_notes(source_cache))
             return "\n".join(lines)
 
         span_offset = self.location.span.offset
@@ -122,28 +122,24 @@ class CasaError:
                 lines, source, start_line, start_col, end_line, end_col
             )
         lines.extend(self._format_expected_got())
-        lines.extend(self._format_note(source_cache))
+        lines.extend(self._format_notes(source_cache))
         return "\n".join(lines)
 
-    def _format_note(self, source_cache: dict[Path, str]) -> list[str]:
-        """Format the note field as a secondary source annotation."""
-        if not self.note:
-            return []
-
-        note_message, note_location = self.note
-        source = source_cache.get(note_location.file)
-        if not source:
-            return [f"  Note: {note_message}"]
-
-        result = [f"  Note: {note_message}"]
-        result.extend(
-            _format_source_context(
-                note_location.file,
-                source,
-                note_location.span.offset,
-                note_location.span.length,
-            )
-        )
+    def _format_notes(self, source_cache: dict[Path, str]) -> list[str]:
+        """Format all note entries as secondary source annotations."""
+        result: list[str] = []
+        for note_message, note_location in self.notes:
+            result.append(f"  Note: {note_message}")
+            source = source_cache.get(note_location.file)
+            if source:
+                result.extend(
+                    _format_source_context(
+                        note_location.file,
+                        source,
+                        note_location.span.offset,
+                        note_location.span.length,
+                    )
+                )
         return result
 
     def _format_multiline_span(
@@ -268,7 +264,7 @@ def raise_error(
     expected: str | None = None,
     got: str | None = None,
     got_label: str = "Got",
-    note: tuple[str, Location] | None = None,
+    notes: list[tuple[str, Location]] | None = None,
 ) -> NoReturn:
     """Raise a CasaErrorCollection with a single error."""
     raise CasaErrorCollection(
@@ -279,7 +275,7 @@ def raise_error(
             expected=expected,
             got=got,
             got_label=got_label,
-            note=note,
+            notes=notes or [],
         )
     )
 
