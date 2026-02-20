@@ -30,12 +30,24 @@ from casa.parser import resolve_identifiers
 class BranchedStack:
     before: list[Type]
     after: list[Type]
+    before_origins: list[Location | None]
+    after_origins: list[Location | None]
     condition_present: bool
     default_present: bool
 
-    def __init__(self, before: list[Type], after: list[Type] | None = None):
+    def __init__(
+        self,
+        before: list[Type],
+        before_origins: list[Location | None],
+        after: list[Type] | None = None,
+        after_origins: list[Location | None] | None = None,
+    ):
         self.before = before.copy()
+        self.before_origins = before_origins.copy()
         self.after = after.copy() if after else before.copy()
+        self.after_origins = (
+            after_origins.copy() if after_origins else before_origins.copy()
+        )
         self.default_present = False
         self.condition_present = False
 
@@ -44,6 +56,7 @@ class BranchedStack:
 class TypeChecker:
     ops: list[Op]
     stack: list[Type] = field(default_factory=list)
+    stack_origins: list[Location | None] = field(default_factory=list)
     parameters: list[Parameter] = field(default_factory=list)
     # Saved on `return`
     return_types: list[Type] | None = None
@@ -51,9 +64,12 @@ class TypeChecker:
     branched_stacks: list[BranchedStack] = field(default_factory=list)
     # Current op location for error reporting
     current_location: Location | None = None
+    # Origin of the last popped value (for error notes)
+    last_pop_origin: Location | None = None
 
-    def stack_push(self, typ: Type):
+    def stack_push(self, typ: Type, origin: Location | None = None):
         self.stack.append(typ)
+        self.stack_origins.append(origin or self.current_location)
 
     def stack_peek(self) -> Type:
         if not self.stack:
@@ -63,15 +79,20 @@ class TypeChecker:
     def stack_pop(self) -> Type:
         if not self.stack:
             self.parameters.append(Parameter(ANY_TYPE))
+            self.last_pop_origin = None
             return ANY_TYPE
+        self.last_pop_origin = self.stack_origins.pop()
         return self.stack.pop()
 
     def expect_type(self, expected: Type) -> Type:
         if not self.stack:
             self.parameters.append(Parameter(expected))
+            self.last_pop_origin = None
             return expected
 
+        origin = self.stack_origins.pop()
         typ = self.stack.pop()
+        self.last_pop_origin = origin
         if expected == ANY_TYPE:
             return typ
         if typ == ANY_TYPE:
@@ -91,6 +112,9 @@ class TypeChecker:
                     )
                 )
             return typ
+        note = None
+        if origin and origin != self.current_location:
+            note = (f"value of type `{typ}` pushed here", origin)
         raise CasaErrorCollection(
             CasaError(
                 ErrorKind.TYPE_MISMATCH,
@@ -98,6 +122,7 @@ class TypeChecker:
                 self.current_location,
                 expected=f"`{expected}`",
                 got=("Got", f"`{typ}`"),
+                note=note,
             )
         )
 
@@ -272,8 +297,9 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 tc.stack_pop()
             case OpKind.DUP:
                 t1 = tc.stack_pop()
-                tc.stack_push(t1)
-                tc.stack_push(t1)
+                origin = tc.last_pop_origin
+                tc.stack_push(t1, origin)
+                tc.stack_push(t1, origin)
             case OpKind.EQ:
                 tc.stack_pop()
                 tc.stack_pop()
@@ -328,6 +354,7 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 if tc.branched_stacks:
                     branched = tc.branched_stacks[-1]
                     tc.stack = branched.before.copy()
+                    tc.stack_origins = branched.before_origins.copy()
             case OpKind.FN_PUSH:
                 assert isinstance(op.value, str), "Expected identifier name"
                 function_name = op.value
@@ -364,7 +391,9 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 if not branched.condition_present:
                     branched.condition_present = True
                     branched.before = tc.stack.copy()
+                    branched.before_origins = tc.stack_origins.copy()
                     branched.after = branched.before
+                    branched.after_origins = branched.before_origins
                     continue
 
                 if tc.stack != branched.before:
@@ -389,10 +418,13 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     continue
                 if tc.stack == after and before != after:
                     tc.stack = before.copy()
+                    tc.stack_origins = branched.before_origins.copy()
                     continue
                 if before == after:
                     branched.after = tc.stack.copy()
+                    branched.after_origins = tc.stack_origins.copy()
                     tc.stack = before.copy()
+                    tc.stack_origins = branched.before_origins.copy()
                     continue
                 raise CasaErrorCollection(
                     CasaError(
@@ -405,11 +437,12 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 )
             case OpKind.IF_END:
                 branched = tc.branched_stacks.pop()
-                if (
-                    tc.stack == branched.before == branched.after
-                    or (tc.stack == branched.after and branched.default_present)
-                    or (tc.stack == branched.before and not branched.default_present)
-                ):
+                if tc.stack == branched.before == branched.after:
+                    continue
+                if tc.stack == branched.after and branched.default_present:
+                    tc.stack_origins = branched.after_origins.copy()
+                    continue
+                if tc.stack == branched.before and not branched.default_present:
                     continue
                 raise CasaErrorCollection(
                     CasaError(
@@ -421,7 +454,7 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     )
                 )
             case OpKind.IF_START:
-                tc.branched_stacks.append(BranchedStack(tc.stack))
+                tc.branched_stacks.append(BranchedStack(tc.stack, tc.stack_origins))
             case OpKind.INCLUDE_FILE:
                 pass
             case OpKind.LE:
@@ -490,10 +523,12 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 tc.stack_push("bool")
             case OpKind.OVER:
                 t1 = tc.stack_pop()
+                o1 = tc.last_pop_origin
                 t2 = tc.stack_pop()
-                tc.stack_push(t2)
-                tc.stack_push(t1)
-                tc.stack_push(t2)
+                o2 = tc.last_pop_origin
+                tc.stack_push(t2, o2)
+                tc.stack_push(t1, o1)
+                tc.stack_push(t2, o2)
             case OpKind.PRINT:
                 typ = tc.stack_pop()
                 if typ == "str":
@@ -572,11 +607,14 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     )
             case OpKind.ROT:
                 t1 = tc.stack_pop()
+                o1 = tc.last_pop_origin
                 t2 = tc.stack_pop()
+                o2 = tc.last_pop_origin
                 t3 = tc.stack_pop()
-                tc.stack_push(t2)
-                tc.stack_push(t1)
-                tc.stack_push(t3)
+                o3 = tc.last_pop_origin
+                tc.stack_push(t2, o2)
+                tc.stack_push(t1, o1)
+                tc.stack_push(t3, o3)
             case OpKind.SHL | OpKind.SHR:
                 tc.expect_type("int")
                 t1 = tc.stack_pop()
@@ -598,9 +636,11 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 tc.stack_push(t1)
             case OpKind.SWAP:
                 t1 = tc.stack_pop()
+                o1 = tc.last_pop_origin
                 t2 = tc.stack_pop()
-                tc.stack_push(t1)
-                tc.stack_push(t2)
+                o2 = tc.last_pop_origin
+                tc.stack_push(t1, o1)
+                tc.stack_push(t2, o2)
             case OpKind.TYPE_CAST:
                 cast_type = op.value
                 assert isinstance(cast_type, str), "Expected cast type"
@@ -664,7 +704,7 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                         )
                     )
             case OpKind.WHILE_START:
-                tc.branched_stacks.append(BranchedStack(tc.stack))
+                tc.branched_stacks.append(BranchedStack(tc.stack, tc.stack_origins))
             case _:
                 assert_never(op.kind)
 

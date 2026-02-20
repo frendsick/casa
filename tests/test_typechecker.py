@@ -385,6 +385,19 @@ def test_typecheck_generic_lambda_wrapping():
 # ---------------------------------------------------------------------------
 # type_check_all_functions
 # ---------------------------------------------------------------------------
+def test_typecheck_mismatch_shows_origin():
+    """TYPE_MISMATCH error includes a note pointing to where the value was pushed."""
+    code = '"hello" 1 *'
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        typecheck_string(code)
+    error = exc_info.value.errors[0]
+    assert error.kind == ErrorKind.TYPE_MISMATCH
+    assert error.note is not None
+    note_message, note_location = error.note
+    assert "str" in note_message
+    assert note_location.span.offset == 0  # points to "hello"
+
+
 def test_typecheck_all_functions_catches_unused_error():
     """An unused function with a type error is caught."""
     code = "fn bad int -> str { }"
