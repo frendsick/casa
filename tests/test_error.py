@@ -99,16 +99,58 @@ def test_casa_error_format_with_note():
         Location(Path("test.casa"), Span(8, 2)),
         expected="`int`",
         got="`str`",
-        note=(
-            "value of type `str` pushed here",
-            Location(Path("test.casa"), Span(0, 7)),
-        ),
+        notes=[
+            (
+                "value of type `str` pushed here",
+                Location(Path("test.casa"), Span(0, 7)),
+            ),
+        ],
     )
     result = err.format(cache)
     assert "Note: value of type `str` pushed here" in result
     assert "test.casa:1:1" in result
     assert '"hello"' in result
     assert "^^^^^^^" in result
+
+
+def test_casa_error_format_with_multiple_notes():
+    source = "if true then\n    1 2\nelse\n    3\nfi"
+    cache = {Path("test.casa"): source}
+    err = CasaError(
+        ErrorKind.STACK_MISMATCH,
+        "Branches have incompatible stack effects",
+        Location(Path("test.casa"), Span(30, 2)),
+        notes=[
+            (
+                "`if` branch has signature `None -> int int`",
+                Location(Path("test.casa"), Span(0, 2)),
+            ),
+            (
+                "`else` branch has signature `None -> int`",
+                Location(Path("test.casa"), Span(21, 4)),
+            ),
+        ],
+    )
+    result = err.format(cache)
+    assert "Branches have incompatible stack effects" in result
+    assert "`if` branch has signature" in result
+    assert "`else` branch has signature" in result
+    assert result.count("Note:") == 2
+
+
+def test_casa_error_format_note_without_source_in_cache():
+    err = CasaError(
+        ErrorKind.TYPE_MISMATCH,
+        "Type mismatch",
+        Location(Path("test.casa"), Span(0, 3)),
+        notes=[
+            ("value pushed here", Location(Path("missing.casa"), Span(0, 5))),
+        ],
+    )
+    result = err.format({Path("test.casa"): "foo"})
+    assert "Note: value pushed here" in result
+    # No source context lines since missing.casa is not in the cache
+    assert "missing.casa" not in result
 
 
 def test_casa_error_format_multiline_span():
