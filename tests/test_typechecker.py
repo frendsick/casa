@@ -392,10 +392,24 @@ def test_typecheck_mismatch_shows_origin():
         typecheck_string(code)
     error = exc_info.value.errors[0]
     assert error.kind == ErrorKind.TYPE_MISMATCH
+    assert "`*`" in error.message
+    assert "int int -> int" in error.message
     assert error.note is not None
     note_message, note_location = error.note
     assert "str" in note_message
     assert note_location.span.offset == 0  # points to "hello"
+
+
+def test_typecheck_mismatch_shows_fn_parameter_context():
+    """TYPE_MISMATCH error shows which parameter mismatched."""
+    code = "fn foo a:str -> str { a } 42 foo"
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        typecheck_string(code)
+    error = exc_info.value.errors[0]
+    assert error.kind == ErrorKind.TYPE_MISMATCH
+    assert "`foo`" in error.message
+    assert "str -> str" in error.message
+    assert "parameter 1 of `foo`" in error.expected
 
 
 def test_typecheck_all_functions_catches_unused_error():

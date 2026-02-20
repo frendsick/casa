@@ -66,6 +66,10 @@ class TypeChecker:
     current_location: Location | None = None
     # Origin of the last popped value (for error notes)
     last_pop_origin: Location | None = None
+    # Human-readable stack effect of the current operation (for error message)
+    current_op_context: str | None = None
+    # Which parameter mismatched (for error expected line)
+    current_expect_context: str | None = None
 
     def stack_push(self, typ: Type, origin: Location | None = None):
         self.stack.append(typ)
@@ -112,15 +116,21 @@ class TypeChecker:
                     )
                 )
             return typ
+        message = "Type mismatch"
+        if self.current_op_context:
+            message = f"Type mismatch in {self.current_op_context}"
+        expected_str = f"`{expected}`"
+        if self.current_expect_context:
+            expected_str = f"`{expected}` ({self.current_expect_context})"
         note = None
         if origin and origin != self.current_location:
             note = (f"value of type `{typ}` pushed here", origin)
         raise CasaErrorCollection(
             CasaError(
                 ErrorKind.TYPE_MISMATCH,
-                "Type mismatch",
+                message,
                 self.current_location,
-                expected=f"`{expected}`",
+                expected=expected_str,
                 got=("Got", f"`{typ}`"),
                 note=note,
             )
@@ -149,21 +159,29 @@ class TypeChecker:
                 )
             )
 
-    def apply_signature(self, signature: Signature):
+    def apply_signature(self, signature: Signature, name: str | None = None):
+        self.current_op_context = f"`{name}` ({signature})" if name else None
+
         if not signature.type_vars:
-            for expected in signature.parameters:
+            for i, expected in enumerate(signature.parameters):
+                if name:
+                    self.current_expect_context = f"parameter {i + 1} of `{name}`"
                 self.expect_type(expected.typ)
+            self.current_expect_context = None
             for return_type in signature.return_types:
                 self.stack_push(return_type)
             return
 
         # Bind type variables to actual stack types
         bindings: dict[str, Type] = {}
-        for expected in signature.parameters:
+        for i, expected in enumerate(signature.parameters):
+            if name:
+                self.current_expect_context = f"parameter {i + 1} of `{name}`"
             if expected.typ not in signature.type_vars:
                 self.expect_type(expected.typ)
                 continue
             self._bind_type_var(bindings, expected.typ, self.stack_pop())
+        self.current_expect_context = None
 
         for return_type in signature.return_types:
             resolved = bindings.get(return_type, return_type)
@@ -213,12 +231,35 @@ def _check_passthrough_params(
     return unused
 
 
+OP_STACK_EFFECTS: dict[OpKind, tuple[str, str]] = {
+    OpKind.ADD: ("+", "int int -> int"),
+    OpKind.SUB: ("-", "int int -> int"),
+    OpKind.MUL: ("*", "int int -> int"),
+    OpKind.DIV: ("/", "int int -> int"),
+    OpKind.MOD: ("%", "int int -> int"),
+    OpKind.SHL: ("<<", "int int -> int"),
+    OpKind.SHR: (">>", "int int -> int"),
+    OpKind.ASSIGN_DECREMENT: ("-=", "int -> None"),
+    OpKind.ASSIGN_INCREMENT: ("+=", "int -> None"),
+    OpKind.HEAP_ALLOC: ("alloc", "int -> ptr"),
+    OpKind.IF_CONDITION: ("if condition", "bool -> None"),
+    OpKind.WHILE_CONDITION: ("while condition", "bool -> None"),
+}
+
+
 def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature:
     assert len(OpKind) == 55, "Exhaustive handling for `OpKind`"
 
     tc = TypeChecker(ops=ops)
     for op in ops:
         tc.current_location = op.location
+        tc.current_expect_context = None
+        effect = OP_STACK_EFFECTS.get(op.kind)
+        if effect:
+            name, sig = effect
+            tc.current_op_context = f"`{name}` ({sig})"
+        else:
+            tc.current_op_context = None
         match op.kind:
             case OpKind.ADD:
                 tc.expect_type("int")
@@ -319,7 +360,7 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                         global_function.signature = signature
 
                 assert global_function.signature, "Signature is defined"
-                tc.apply_signature(global_function.signature)
+                tc.apply_signature(global_function.signature, function_name)
             case OpKind.FN_EXEC:
                 # Lambdas from other functions are typed as `any`
                 fn_symmetrical = "fn"
@@ -335,7 +376,7 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
 
                 start = fn_ptr.index("[") + 1
                 end = fn_ptr.index("]", start)
-                tc.apply_signature(Signature.from_str(fn_ptr[start:end]))
+                tc.apply_signature(Signature.from_str(fn_ptr[start:end]), "exec")
             case OpKind.FN_RETURN:
                 if tc.return_types is None:
                     tc.return_types = tc.stack.copy()
@@ -498,7 +539,7 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     global_function.is_typechecked = True
 
                 assert global_function.signature, "Signature is defined"
-                tc.apply_signature(global_function.signature)
+                tc.apply_signature(global_function.signature, function_name)
 
                 op.value = function_name
                 op.kind = OpKind.FN_CALL
@@ -627,8 +668,16 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 struct = op.value
                 assert isinstance(struct, Struct), "Expected struct"
 
+                member_types = " ".join(m.typ for m in struct.members)
+                tc.current_op_context = (
+                    f"`{struct.name}` ({member_types} -> {struct.name})"
+                )
                 for member in struct.members:
+                    tc.current_expect_context = (
+                        f"member `{member.name}` of `{struct.name}`"
+                    )
                     tc.expect_type(member.typ)
+                tc.current_expect_context = None
                 tc.stack_push(struct.name)
             case OpKind.SUB:
                 tc.expect_type("int")

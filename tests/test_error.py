@@ -105,7 +105,7 @@ def test_casa_error_format_with_note():
         ),
     )
     result = err.format(cache)
-    assert "note: value of type `str` pushed here" in result
+    assert "Note: value of type `str` pushed here" in result
     assert "test.casa:1:1" in result
     assert '"hello"' in result
     assert "^^^^^^^" in result
