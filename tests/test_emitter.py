@@ -339,3 +339,40 @@ def test_emit_fstring_brk_init():
     asm = emit_string('"world" = name f"hello {name}"')
     # brk syscall number is 12
     assert "movq $12, %rax" in asm
+
+
+# ---------------------------------------------------------------------------
+# to_str methods (standard library)
+# ---------------------------------------------------------------------------
+STD_INCLUDE = 'include "lib/std.casa"\n'
+
+
+def test_emit_int_to_str():
+    """int::to_str compiles and emits the function label."""
+    asm = emit_string(STD_INCLUDE + "42.to_str")
+    assert "fn_int__to_str" in asm
+
+
+def test_emit_bool_to_str():
+    """bool::to_str compiles and emits the function label."""
+    asm = emit_string(STD_INCLUDE + "true.to_str")
+    assert "fn_bool__to_str" in asm
+
+
+def test_emit_str_to_str():
+    """str::to_str compiles and emits the function label."""
+    asm = emit_string(STD_INCLUDE + '"hello".to_str')
+    assert "fn_str__to_str" in asm
+
+
+def test_emit_ptr_to_str():
+    """ptr::to_str compiles and emits the function label."""
+    asm = emit_string(STD_INCLUDE + "10 alloc .to_str")
+    assert "fn_ptr__to_str" in asm
+
+
+def test_emit_to_str_in_fstring():
+    """to_str inside f-string compiles with str_concat."""
+    asm = emit_string(STD_INCLUDE + '42 = n f"val: {n.to_str}"')
+    assert "fn_int__to_str" in asm
+    assert "str_concat" in asm

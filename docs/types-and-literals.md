@@ -13,6 +13,8 @@ Integer type. All integers are 64-bit signed values.
 -42 print      # -42
 ```
 
+Convert to string with `.to_str` (see [Standard Library](standard-library.md#type-conversions)).
+
 ### `bool`
 
 Boolean type with two values: `true` and `false`.
@@ -22,7 +24,7 @@ true print     # 1
 false print    # 0
 ```
 
-Booleans are printed as integers (`1` for true, `0` for false).
+Booleans are printed as integers (`1` for true, `0` for false). Convert to `"true"` or `"false"` with `.to_str` (see [Standard Library](standard-library.md#type-conversions)).
 
 ### `str`
 
@@ -31,6 +33,8 @@ String type. String literals are enclosed in double quotes.
 ```casa
 "Hello world!" print
 ```
+
+Convert to string with `.to_str` (identity, see [Standard Library](standard-library.md#type-conversions)).
 
 Strings support the following escape sequences:
 
@@ -111,6 +115,8 @@ Heap pointer returned by `alloc`. Used with `load` and `store` for heap memory a
 42 buffer store      # store 42 at buffer
 buffer load print    # 42
 ```
+
+Convert to string with `.to_str` (see [Standard Library](standard-library.md#type-conversions)).
 
 Pointer arithmetic is supported with `+` and `-`:
 

@@ -143,3 +143,71 @@ list.capacity print     # 6
 ```
 
 See [`examples/dynamic_list.casa`](../examples/dynamic_list.casa) for a full program using the List.
+
+## Type Conversions
+
+Convert values to their string representation. All `to_str` methods can be called with dot syntax (e.g., `42.to_str`).
+
+### `digit_to_str`
+
+Converts a single digit (0-9) to its string representation. This is a helper used internally by `int::to_str`.
+
+**Signature:** `digit_to_str d:int -> str`
+
+**Stack effect:** `int -> str`
+
+```casa
+5 digit_to_str print    # 5
+```
+
+### `int::to_str`
+
+Converts an integer to its string representation. Handles negative numbers and zero.
+
+**Signature:** `int::to_str n:int -> str`
+
+**Stack effect:** `int -> str`
+
+```casa
+42.to_str print         # 42
+0.to_str print          # 0
+-123.to_str print       # -123
+```
+
+### `bool::to_str`
+
+Converts a boolean to `"true"` or `"false"`.
+
+**Signature:** `bool::to_str b:bool -> str`
+
+**Stack effect:** `bool -> str`
+
+```casa
+true.to_str print       # true
+false.to_str print      # false
+```
+
+### `str::to_str`
+
+Identity function. Returns the string unchanged.
+
+**Signature:** `str::to_str s:str -> str`
+
+**Stack effect:** `str -> str`
+
+```casa
+"hello".to_str print    # hello
+```
+
+### `ptr::to_str`
+
+Converts a pointer to a string by casting its address to an integer and converting that.
+
+**Signature:** `ptr::to_str p:ptr -> str`
+
+**Stack effect:** `ptr -> str`
+
+```casa
+10 alloc = buf
+buf.to_str print        # prints the address as a decimal number
+```

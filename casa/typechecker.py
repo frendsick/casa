@@ -306,6 +306,33 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
 
                 stack_type = tc.stack_peek()
 
+                # Local variable (shadows global with same name)
+                local_variable = None
+                if function:
+                    for variable in function.variables:
+                        if variable.name == variable_name:
+                            local_variable = variable
+                            break
+
+                if local_variable:
+                    if not local_variable.typ or (
+                        local_variable.typ == ANY_TYPE and stack_type != ANY_TYPE
+                    ):
+                        local_variable.typ = stack_type
+
+                    if (
+                        local_variable.typ not in (stack_type, ANY_TYPE)
+                        and stack_type != ANY_TYPE
+                    ):
+                        raise_error(
+                            ErrorKind.INVALID_VARIABLE,
+                            f"Cannot override local variable `{local_variable.name}` of type `{local_variable.typ}` with other type `{stack_type}`",
+                            op.location,
+                        )
+
+                    tc.expect_type(stack_type)
+                    continue
+
                 # Global variable
                 global_variable = GLOBAL_VARIABLES.get(variable_name)
                 if global_variable:
@@ -328,31 +355,7 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     tc.expect_type(stack_type)
                     continue
 
-                # Local variable
-                assert isinstance(function, Function), "Expected function"
-                for variable in function.variables:
-                    if variable.name == variable_name:
-                        if not variable.typ or (
-                            variable.typ == ANY_TYPE and stack_type != ANY_TYPE
-                        ):
-                            variable.typ = stack_type
-
-                        if (
-                            variable.typ not in (stack_type, ANY_TYPE)
-                            and stack_type != ANY_TYPE
-                        ):
-                            raise_error(
-                                ErrorKind.INVALID_VARIABLE,
-                                f"Cannot override local variable `{variable.name}` of type `{variable.typ}` with other type `{stack_type}`",
-                                op.location,
-                            )
-
-                        tc.expect_type(stack_type)
-                        break
-                else:
-                    raise AssertionError(
-                        f"Function `{function.name}` does not have variable `{variable_name}`"
-                    )
+                raise AssertionError(f"Variable `{variable_name}` is not defined")
             case OpKind.DROP:
                 tc.stack_pop()
             case OpKind.DUP:
@@ -570,6 +573,7 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     )
 
                 if not global_function.is_typechecked:
+                    global_function.is_typechecked = True
                     global_function.ops = resolve_identifiers(
                         global_function.ops, global_function
                     )
@@ -578,7 +582,6 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     signature = type_check_ops(global_function.ops, global_function)
                     if not global_function.signature:
                         global_function.signature = signature
-                    global_function.is_typechecked = True
 
                 assert global_function.signature, "Signature is defined"
                 tc.apply_signature(global_function.signature, function_name)
@@ -661,6 +664,21 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 variable_name = op.value
                 assert isinstance(variable_name, str), "Expected variable name"
 
+                # Local variable (shadows global with same name)
+                local_found = False
+                if function:
+                    for variable in function.variables:
+                        if variable == variable_name:
+                            if not variable.typ:
+                                raise AssertionError(
+                                    f"Variable `{variable.name}` has not been type checked before its usage"
+                                )
+                            tc.stack_push(variable.typ)
+                            local_found = True
+                            break
+                if local_found:
+                    continue
+
                 # Global variable
                 global_variable = GLOBAL_VARIABLES.get(variable_name)
                 if global_variable:
@@ -668,22 +686,11 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     tc.stack_push(global_variable.typ)
                     continue
 
-                # Local variable
-                assert isinstance(function, Function), "Expected function"
-                for variable in function.variables:
-                    if variable == variable_name:
-                        if not variable.typ:
-                            raise AssertionError(
-                                f"Variable `{variable.name}` has not been type checked before its usage"
-                            )
-                        tc.stack_push(variable.typ)
-                        break
-                else:
-                    raise_error(
-                        ErrorKind.UNDEFINED_NAME,
-                        f"Function `{function.name}` does not have variable `{variable_name}`",
-                        op.location,
-                    )
+                raise_error(
+                    ErrorKind.UNDEFINED_NAME,
+                    f"Variable `{variable_name}` is not defined",
+                    op.location,
+                )
             case OpKind.ROT:
                 t1 = tc.stack_pop()
                 o1 = tc.last_pop_origin
@@ -853,6 +860,10 @@ def type_check_functions(functions: Iterable[Function]):
     all_errors: list[CasaError] = []
     for fn in list(functions):
         if fn.is_typechecked:
+            continue
+        # Skip lambda functions — they are typechecked as part of their
+        # parent function when it is resolved and typechecked.
+        if fn.name.startswith("lambda__"):
             continue
         fn.is_typechecked = True
         if not fn.is_used:

@@ -111,11 +111,12 @@ def resolve_identifiers(
                     GLOBAL_VARIABLES[variable_name] = variable
                     continue
 
-                # Function scope
+                # Function scope: local variables shadow globals
+                if variable in function.variables:
+                    continue
                 if GLOBAL_VARIABLES.get(variable_name):
                     continue
-                if variable not in function.variables:
-                    function.variables.append(variable)
+                function.variables.append(variable)
             case OpKind.FN_PUSH:
                 function_name = op.value
                 lambda_function = GLOBAL_FUNCTIONS.get(function_name)
@@ -132,16 +133,22 @@ def resolve_identifiers(
                 lambda_function.is_used = True
 
                 # Gather captures for the lambda function
+                # Local variables shadow globals with the same name
                 for op in lambda_function.ops:
                     if op.kind != OpKind.IDENTIFIER:
                         continue
-                    for global_variable in GLOBAL_VARIABLES.values():
-                        if global_variable.name == op.value:
-                            lambda_function.captures.append(global_variable)
+                    captured = False
                     if function:
                         for local_variable in function.variables:
                             if op.value == local_variable.name:
                                 lambda_function.captures.append(local_variable)
+                                captured = True
+                                break
+                    if not captured:
+                        for global_variable in GLOBAL_VARIABLES.values():
+                            if global_variable.name == op.value:
+                                lambda_function.captures.append(global_variable)
+                                break
 
                 lambda_function.ops = resolve_identifiers(
                     lambda_function.ops, lambda_function
@@ -151,6 +158,10 @@ def resolve_identifiers(
                 assert isinstance(identifier, str), "Expected identifier name"
 
                 # Check different identifiers
+                # Local variables shadow globals with the same name
+                if function and identifier in function.variables:
+                    op.kind = OpKind.PUSH_VARIABLE
+                    continue
                 if global_function := GLOBAL_FUNCTIONS.get(identifier):
                     op.kind = OpKind.FN_CALL
                     if not global_function.is_used:
@@ -168,9 +179,6 @@ def resolve_identifiers(
                 if struct := GLOBAL_STRUCTS.get(identifier):
                     op.kind = OpKind.STRUCT_NEW
                     op.value = struct
-                    continue
-                if function and identifier in function.variables:
-                    op.kind = OpKind.PUSH_VARIABLE
                     continue
 
                 errors.append(
