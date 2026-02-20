@@ -217,7 +217,13 @@ def test_typecheck_if_inconsistent_raises():
     code = 'if true then 1 else "two" fi'
     with pytest.raises(CasaErrorCollection) as exc_info:
         typecheck_string(code)
-    assert exc_info.value.errors[0].kind == ErrorKind.STACK_MISMATCH
+    error = exc_info.value.errors[0]
+    assert error.kind == ErrorKind.STACK_MISMATCH
+    assert "incompatible stack effects" in error.message
+    assert len(error.notes) == 2
+    labels = [n[0] for n in error.notes]
+    assert any("`if` branch" in l for l in labels)
+    assert any("`else` branch" in l for l in labels)
 
 
 def test_typecheck_while_loop():
@@ -394,8 +400,8 @@ def test_typecheck_mismatch_shows_origin():
     assert error.kind == ErrorKind.TYPE_MISMATCH
     assert "`*`" in error.message
     assert "int int -> int" in error.message
-    assert error.note is not None
-    note_message, note_location = error.note
+    assert len(error.notes) == 1
+    note_message, note_location = error.notes[0]
     assert "str" in note_message
     assert note_location.span.offset == 0  # points to "hello"
 
@@ -441,3 +447,37 @@ def test_typecheck_all_functions_with_struct():
     typecheck_string(code)  # Should not raise
     fn = GLOBAL_FUNCTIONS["get_x"]
     assert fn.is_typechecked
+
+
+def test_typecheck_if_elif_inconsistent_raises():
+    """Three-branch if/elif/else with incompatible stacks shows all branches."""
+    code = "if true then 1 elif false then 2 3 else 4 fi"
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        typecheck_string(code)
+    error = exc_info.value.errors[0]
+    assert error.kind == ErrorKind.STACK_MISMATCH
+    assert "incompatible stack effects" in error.message
+    labels = [n[0] for n in error.notes]
+    assert any("`if` branch" in l for l in labels)
+    assert any("`elif` branch" in l for l in labels)
+
+
+def test_typecheck_if_no_else_mismatch_raises():
+    """An if-without-else that changes the stack is a mismatch."""
+    code = "if true then 1 fi"
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        typecheck_string(code)
+    error = exc_info.value.errors[0]
+    assert error.kind == ErrorKind.STACK_MISMATCH
+    assert "incompatible stack effects" in error.message
+    labels = [n[0] for n in error.notes]
+    assert any("`if` branch" in l for l in labels)
+
+
+def test_format_branch_signature():
+    from casa.typechecker import _format_branch_signature
+
+    assert _format_branch_signature([], ["int"]) == "`None -> int`"
+    assert _format_branch_signature(["int"], ["int", "str"]) == "`int -> int str`"
+    assert _format_branch_signature([], []) == "`None -> None`"
+    assert _format_branch_signature(["any"], ["any", "int"]) == "`any -> any int`"
