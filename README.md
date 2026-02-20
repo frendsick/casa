@@ -14,7 +14,7 @@ Casa compiles to x86-64 Linux executables via GNU assembly. It features static t
 - **Structs and methods** — user-defined types with auto-generated accessors and `impl` blocks
 - **String interpolation** — f-strings with embedded expressions (`f"hello {name}"`)
 - **Compiles to native code** — generates x86-64 assembly with `ld` and `as`
-- **Standard library** — dynamic `List`, arrays, and memory utilities
+- **Standard library** — dynamic `List`, arrays, type conversions, and memory utilities
 
 ## Requirements
 
@@ -67,7 +67,7 @@ source → lex → parse → resolve → type check → bytecode → emit asm �
 | [Control Flow](docs/control-flow.md) | Conditionals (`if`/`elif`/`else`/`fi`), loops (`while`/`do`/`done`) |
 | [Functions and Lambdas](docs/functions-and-lambdas.md) | Functions, lambdas, closures, variables, stack intrinsics, IO, memory |
 | [Structs and Methods](docs/structs-and-methods.md) | Struct definition, accessors, `impl` blocks, dot/arrow syntax |
-| [Standard Library](docs/standard-library.md) | `include`, `memcpy`, arrays, `List` |
+| [Standard Library](docs/standard-library.md) | `include`, `memcpy`, arrays, `List`, type conversions |
 | [Errors](docs/errors.md) | Error kinds, diagnostics format, multi-error collection |
 
 ## Examples

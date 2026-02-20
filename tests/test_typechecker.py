@@ -241,6 +241,13 @@ def test_typecheck_variable_assign_and_push():
     assert sig.return_types == ["int"]
 
 
+def test_typecheck_local_shadows_global():
+    """Function parameter with same name as global variable shadows it."""
+    code = '"hello" = x fn foo x:int -> int { x } 42 foo'
+    sig = typecheck_string(code)
+    assert sig.return_types == ["int"]
+
+
 # ---------------------------------------------------------------------------
 # Type cast
 # ---------------------------------------------------------------------------
@@ -540,3 +547,66 @@ def test_typecheck_fstring_in_function():
     """
     sig = typecheck_string(code)
     assert sig.return_types == ["str"]
+
+
+# ---------------------------------------------------------------------------
+# to_str methods (standard library)
+# ---------------------------------------------------------------------------
+STD_INCLUDE = 'include "lib/std.casa"\n'
+
+
+def test_typecheck_int_to_str():
+    """int::to_str returns str."""
+    sig = typecheck_string(STD_INCLUDE + "42.to_str")
+    assert sig.return_types == ["str"]
+
+
+def test_typecheck_int_to_str_negative():
+    """int::to_str works with negative integers."""
+    sig = typecheck_string(STD_INCLUDE + "-42.to_str")
+    assert sig.return_types == ["str"]
+
+
+def test_typecheck_int_to_str_zero():
+    """int::to_str works with zero."""
+    sig = typecheck_string(STD_INCLUDE + "0.to_str")
+    assert sig.return_types == ["str"]
+
+
+def test_typecheck_bool_to_str():
+    """bool::to_str returns str."""
+    sig = typecheck_string(STD_INCLUDE + "true.to_str")
+    assert sig.return_types == ["str"]
+
+
+def test_typecheck_bool_to_str_false():
+    """bool::to_str returns str for false."""
+    sig = typecheck_string(STD_INCLUDE + "false.to_str")
+    assert sig.return_types == ["str"]
+
+
+def test_typecheck_str_to_str():
+    """str::to_str returns str (identity)."""
+    sig = typecheck_string(STD_INCLUDE + '"hello".to_str')
+    assert sig.return_types == ["str"]
+
+
+def test_typecheck_ptr_to_str():
+    """ptr::to_str returns str."""
+    sig = typecheck_string(STD_INCLUDE + "10 alloc .to_str")
+    assert sig.return_types == ["str"]
+
+
+def test_typecheck_to_str_in_fstring():
+    """to_str can be used inside f-strings to convert int to str."""
+    sig = typecheck_string(STD_INCLUDE + '42 = n f"val: {n.to_str}"')
+    assert sig.return_types == ["str"]
+
+
+def test_typecheck_to_str_fn_signature():
+    """int::to_str has correct inferred signature."""
+    typecheck_string(STD_INCLUDE + "42.to_str")
+    fn = GLOBAL_FUNCTIONS["int::to_str"]
+    assert fn.signature is not None
+    assert [p.typ for p in fn.signature.parameters] == ["int"]
+    assert fn.signature.return_types == ["str"]
