@@ -43,37 +43,38 @@ def test_emit_push_large_int():
 
 def test_emit_push_str():
     asm = emit_string('"hello"')
-    assert 'str_0: .asciz "hello"' in asm
+    assert ".quad 5" in asm
+    assert 'str_0: .ascii "hello"' in asm
 
 
 def test_emit_escaped_newline_str():
     asm = emit_string(r'"hello\nworld"')
-    assert 'str_0: .asciz "hello\\nworld"' in asm
+    assert 'str_0: .ascii "hello\\nworld"' in asm
 
 
 def test_emit_escaped_tab_str():
     asm = emit_string(r'"col1\tcol2"')
-    assert 'str_0: .asciz "col1\\tcol2"' in asm
+    assert 'str_0: .ascii "col1\\tcol2"' in asm
 
 
 def test_emit_escaped_backslash_str():
     asm = emit_string(r'"path\\file"')
-    assert 'str_0: .asciz "path\\\\file"' in asm
+    assert 'str_0: .ascii "path\\\\file"' in asm
 
 
 def test_emit_escaped_carriage_return_str():
     asm = emit_string(r'"line\r"')
-    assert 'str_0: .asciz "line\\r"' in asm
+    assert 'str_0: .ascii "line\\r"' in asm
 
 
 def test_emit_escaped_quote_str():
     asm = emit_string(r'"say \"hi\""')
-    assert r'str_0: .asciz "say \"hi\""' in asm
+    assert r'str_0: .ascii "say \"hi\""' in asm
 
 
 def test_emit_escaped_null_str():
     asm = emit_string(r'"hello\0world"')
-    assert 'str_0: .asciz "hello\\0world"' in asm
+    assert 'str_0: .ascii "hello\\0world"' in asm
 
 
 # ---------------------------------------------------------------------------
@@ -310,3 +311,31 @@ def test_emit_sanitized_names():
     """
     asm = emit_string(code)
     assert "fn_Foo__x" in asm
+
+
+# ---------------------------------------------------------------------------
+# F-strings
+# ---------------------------------------------------------------------------
+def test_emit_fstring_plain_text():
+    """f"hello" with no expressions emits a string like a regular PUSH_STR."""
+    asm = emit_string('f"hello"')
+    assert "str_0" in asm
+
+
+def test_emit_fstring_concat():
+    """f-string with expressions emits str_concat call."""
+    asm = emit_string('"world" = name f"hello {name}"')
+    assert "str_concat" in asm
+
+
+def test_emit_fstring_str_alloc_ptr():
+    """str_alloc_ptr BSS variable exists for dynamic string allocation."""
+    asm = emit_string('"world" = name f"hello {name}"')
+    assert "str_alloc_ptr" in asm
+
+
+def test_emit_fstring_brk_init():
+    """brk syscall initialization at program startup for string allocation."""
+    asm = emit_string('"world" = name f"hello {name}"')
+    # brk syscall number is 12
+    assert "movq $12, %rax" in asm

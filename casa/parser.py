@@ -44,10 +44,48 @@ INTRINSIC_TO_OPKIND = {
 }
 
 
+def handle_fstring(
+    start_token: Token,
+    cursor: Cursor[Token],
+    function_name: str,
+    ops: list[Op],
+) -> None:
+    part_count = 0
+    while token := cursor.pop():
+        match token.kind:
+            case TokenKind.FSTRING_TEXT:
+                ops.append(Op(token.value, OpKind.PUSH_STR, token.location))
+                part_count += 1
+            case TokenKind.FSTRING_EXPR_START:
+                expr_ops: list[Op] = []
+                while (t := cursor.pop()) and t.kind != TokenKind.FSTRING_EXPR_END:
+                    if t.kind == TokenKind.FSTRING_START:
+                        handle_fstring(t, cursor, function_name, expr_ops)
+                        continue
+                    if op := token_to_op(t, cursor, function_name):
+                        expr_ops.append(op)
+                lambda_name = f"lambda__{function_name}_o{token.location.span.offset}"
+                lambda_fn = Function(lambda_name, expr_ops, token.location)
+                GLOBAL_FUNCTIONS[lambda_name] = lambda_fn
+                ops.append(Op(lambda_name, OpKind.FN_PUSH, token.location))
+                ops.append(Op(Intrinsic.EXEC, OpKind.FN_EXEC, token.location))
+                part_count += 1
+            case TokenKind.FSTRING_END:
+                break
+    if part_count == 0:
+        ops.append(Op("", OpKind.PUSH_STR, start_token.location))
+        part_count = 1
+    if part_count > 1:
+        ops.append(Op(part_count, OpKind.FSTRING_CONCAT, start_token.location))
+
+
 def parse_ops(tokens: list[Token]) -> list[Op]:
     cursor = Cursor(sequence=tokens)
     ops: list[Op] = []
     while token := cursor.pop():
+        if token.kind == TokenKind.FSTRING_START:
+            handle_fstring(token, cursor, GLOBAL_SCOPE_LABEL, ops)
+            continue
         if op := token_to_op(token, cursor):
             ops.append(op)
     return ops
@@ -165,13 +203,23 @@ def token_to_op(
     cursor: Cursor[Token],
     function_name: str = GLOBAL_SCOPE_LABEL,
 ) -> Op | None:
-    assert len(TokenKind) == 7, "Exhaustive handling for `TokenKind`"
+    assert len(TokenKind) == 12, "Exhaustive handling for `TokenKind`"
 
     match token.kind:
         case TokenKind.DELIMITER:
             return get_op_delimiter(token, cursor, function_name)
         case TokenKind.EOF:
             return None
+        case (
+            TokenKind.FSTRING_END
+            | TokenKind.FSTRING_EXPR_END
+            | TokenKind.FSTRING_EXPR_START
+            | TokenKind.FSTRING_START
+            | TokenKind.FSTRING_TEXT
+        ):
+            raise AssertionError(
+                f"F-string token `{token.kind}` should be handled by handle_fstring"
+            )
         case TokenKind.IDENTIFIER:
             return Op(token.value, OpKind.IDENTIFIER, token.location)
         case TokenKind.LITERAL:
@@ -260,6 +308,9 @@ def parse_block_ops(cursor: Cursor[Token], function_name: str) -> list[Op]:
     while token := cursor.pop():
         if token.value == "}":
             return ops
+        if token.kind == TokenKind.FSTRING_START:
+            handle_fstring(token, cursor, function_name, ops)
+            continue
         if op := token_to_op(token, cursor, function_name):
             ops.append(op)
     raise_error(ErrorKind.UNMATCHED_BLOCK, "Unclosed block", open_brace.location)

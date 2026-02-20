@@ -22,6 +22,8 @@ ESCAPE_SEQUENCES = {
     '"': '"',
     "0": "\0",
     "r": "\r",
+    "{": "{",
+    "}": "}",
 }
 
 
@@ -34,6 +36,12 @@ class Lexer:
     def lex(self) -> list[Token]:
         tokens: list[Token] = []
         while not self.cursor.is_finished():
+            self.skip_whitespace()
+            if self.cursor.is_finished():
+                break
+            if self.startswith('f"'):
+                tokens.extend(self.parse_fstring())
+                continue
             if token := self.parse_token():
                 tokens.append(token)
 
@@ -106,6 +114,104 @@ class Lexer:
         location = Location(self.file, Span(self.cursor.position, digit_count))
         self.cursor.position += digit_count
         return Token(digits, TokenKind.LITERAL, location)
+
+    def parse_fstring(self) -> list[Token]:
+        start = self.cursor.position
+        start_loc = self.current_location(2)
+        self.cursor.position += 2  # skip f"
+
+        tokens: list[Token] = [Token("", TokenKind.FSTRING_START, start_loc)]
+        text = ""
+        text_start = self.cursor.position
+
+        while not self.cursor.is_finished():
+            char = self.cursor.peek()
+
+            if char == "\\":
+                self.cursor.position += 1
+                escaped = self.parse_escape_sequence()
+                if escaped is None:
+                    break
+                text += escaped
+                continue
+
+            if char == "{":
+                if text:
+                    loc = Location(
+                        self.file, Span(text_start, self.cursor.position - text_start)
+                    )
+                    tokens.append(Token(text, TokenKind.FSTRING_TEXT, loc))
+                    text = ""
+                expr_start = self.cursor.position
+                expr_loc = Location(self.file, Span(expr_start, 1))
+                tokens.append(Token("{", TokenKind.FSTRING_EXPR_START, expr_loc))
+                self.cursor.position += 1
+                tokens.extend(self._lex_fstring_expr())
+                text_start = self.cursor.position
+                continue
+
+            if char == '"':
+                if text:
+                    loc = Location(
+                        self.file, Span(text_start, self.cursor.position - text_start)
+                    )
+                    tokens.append(Token(text, TokenKind.FSTRING_TEXT, loc))
+                self.cursor.position += 1
+                end_loc = Location(self.file, Span(self.cursor.position - 1, 1))
+                tokens.append(Token("", TokenKind.FSTRING_END, end_loc))
+                return tokens
+
+            text += char
+            self.cursor.position += 1
+
+        span_length = self.cursor.position - start
+        self.errors.append(
+            CasaError(
+                ErrorKind.SYNTAX,
+                "Unclosed f-string",
+                Location(self.file, Span(start, span_length)),
+            )
+        )
+        return tokens
+
+    def _lex_fstring_expr(self) -> list[Token]:
+        tokens: list[Token] = []
+        depth = 0
+
+        while not self.cursor.is_finished():
+            self.skip_whitespace()
+            if self.cursor.is_finished():
+                break
+
+            char = self.cursor.peek()
+
+            if self.startswith('f"'):
+                tokens.extend(self.parse_fstring())
+                continue
+
+            if char == "}" and depth == 0:
+                end_loc = self.current_location(1)
+                tokens.append(Token("}", TokenKind.FSTRING_EXPR_END, end_loc))
+                self.cursor.position += 1
+                return tokens
+
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+
+            token = self.parse_token()
+            if token:
+                tokens.append(token)
+
+        self.errors.append(
+            CasaError(
+                ErrorKind.SYNTAX,
+                "Unclosed f-string expression",
+                self.current_location(0),
+            )
+        )
+        return tokens
 
     def parse_token(self) -> Token | None:
         self.skip_whitespace()

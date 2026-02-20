@@ -12,6 +12,7 @@ Casa compiles to x86-64 Linux executables via GNU assembly. It features static t
 - **Statically typed** — types are checked at compile time with automatic inference and generics
 - **First-class functions** — lambdas are values on the stack like any other (TODO: function pointers)
 - **Structs and methods** — user-defined types with auto-generated accessors and `impl` blocks
+- **String interpolation** — f-strings with embedded expressions (`f"hello {name}"`)
 - **Compiles to native code** — generates x86-64 assembly with `ld` and `as`
 - **Standard library** — dynamic `List`, arrays, and memory utilities
 

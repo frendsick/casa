@@ -9,6 +9,11 @@ T = TypeVar("T")
 class TokenKind(Enum):
     DELIMITER = auto()
     EOF = auto()
+    FSTRING_END = auto()
+    FSTRING_EXPR_END = auto()
+    FSTRING_EXPR_START = auto()
+    FSTRING_START = auto()
+    FSTRING_TEXT = auto()
     IDENTIFIER = auto()
     INTRINSIC = auto()
     KEYWORD = auto()
@@ -273,6 +278,9 @@ class OpKind(Enum):
     # Include files
     INCLUDE_FILE = auto()
 
+    # F-strings
+    FSTRING_CONCAT = auto()
+
     # Identifiers should be resolved by the parser
     IDENTIFIER = auto()
 
@@ -284,7 +292,7 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 55, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 56, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires `bool`
@@ -292,7 +300,7 @@ class Op:
                 if not isinstance(self.value, bool):
                     raise TypeError(f"`{self.kind}` requires value of type `bool`")
             # Requires `int`
-            case OpKind.PUSH_INT:
+            case OpKind.FSTRING_CONCAT | OpKind.PUSH_INT:
                 if not isinstance(self.value, int):
                     raise TypeError(f"`{self.kind}` requires value of type `int`")
             # Requires `str`
@@ -450,6 +458,9 @@ class InstKind(Enum):
     CONSTANT_LOAD = auto()
     CONSTANT_STORE = auto()
 
+    # F-strings
+    FSTRING_CONCAT = auto()
+
 
 @dataclass
 class Inst:
@@ -472,7 +483,7 @@ class Inst:
         return self.args[0]
 
     def __post_init__(self):
-        assert len(InstKind) == 44, "Exhaustive handling for `InstructionKind`"
+        assert len(InstKind) == 45, "Exhaustive handling for `InstructionKind`"
 
         match self.kind:
             # Should not have a parameter
@@ -512,7 +523,8 @@ class Inst:
                     )
             # One parameter of type `int`
             case (
-                InstKind.GLOBALS_INIT
+                InstKind.FSTRING_CONCAT
+                | InstKind.GLOBALS_INIT
                 | InstKind.GLOBAL_GET
                 | InstKind.GLOBAL_SET
                 | InstKind.JUMP
