@@ -19,6 +19,11 @@ Each error includes:
 - **File path, line, and column** where the error occurs
 - **Source line** with carets (`^^^`) underlining the relevant span
 
+Some errors include additional context:
+
+- **Expected** and **Got** (or **Inferred**) lines showing what was expected versus what was found
+- **Note** with a secondary source annotation pointing to a related location (e.g. where a mismatched value was originally pushed)
+
 When multiple errors are found, they are all printed before the compiler stops, followed by a summary line:
 
 ```
@@ -48,7 +53,9 @@ struct Foo { x int }
 ```
 
 ```
-error[UNEXPECTED_TOKEN]: Expected `:` but got `int`
+error[UNEXPECTED_TOKEN]: Unexpected token
+  Expected: `:`
+  Got: `int`
 ```
 
 ### `UNDEFINED_NAME`
@@ -95,6 +102,18 @@ fn outer {
 error[INVALID_SCOPE]: Functions should be defined in the global scope
 ```
 
+This also applies to `impl` blocks and `struct` definitions:
+
+```casa
+fn outer {
+    impl Foo { }
+}
+```
+
+```
+error[INVALID_SCOPE]: Implementation blocks should be defined in the global scope
+```
+
 ### `TYPE_MISMATCH`
 
 A type does not match what was expected.
@@ -117,7 +136,9 @@ if true then 1 else "two" fi
 ```
 
 ```
-error[STACK_MISMATCH]: Stack state changed across branch: expected [...] but got [...]
+error[STACK_MISMATCH]: Stack state changed across branch
+  Expected: [int]
+  Got: [str]
 ```
 
 ### `SIGNATURE_MISMATCH`
@@ -130,7 +151,9 @@ bad
 ```
 
 ```
-error[SIGNATURE_MISMATCH]: Invalid signature for function `bad`: expected a:int -> str but inferred any -> int
+error[SIGNATURE_MISMATCH]: Invalid signature for function `bad`
+  Expected: int -> str
+  Inferred: any -> int
 ```
 
 ### `INVALID_VARIABLE`
@@ -163,4 +186,16 @@ error[UNMATCHED_BLOCK]: `if` without matching `fi`
 
 The compiler collects as many errors as possible within each compilation phase before stopping. For example, the identifier resolution phase will report all undefined names at once rather than stopping at the first one.
 
-Within a single function, type checking stops after the first error because the stack state becomes unreliable. However, errors across different functions are collected independently.
+Within a single function, type checking stops at the first error because the stack state becomes unreliable. However, when checking all functions, errors from different functions are collected and reported together.
+
+## Warnings
+
+The compiler also reports non-fatal warnings. Currently the only warning kind is:
+
+### `UNUSED_PARAMETER`
+
+A function parameter is declared but not used in the function body and is instead passed through the stack untouched.
+
+```
+warning[UNUSED_PARAMETER]: Unused parameter `int` in function `add`
+```
