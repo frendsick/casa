@@ -49,6 +49,12 @@ def test_parse_push_str():
     assert ops[0].value == "hello"
 
 
+def test_parse_push_str_with_escapes():
+    ops = parse_string(r'"hello\nworld"')
+    assert ops[0].kind == OpKind.PUSH_STR
+    assert ops[0].value == "hello\nworld"
+
+
 def test_parse_negative_int():
     ops = parse_string("-42")
     assert len(ops) == 1
