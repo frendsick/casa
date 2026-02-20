@@ -15,6 +15,15 @@ from casa.common import (
 )
 from casa.error import SOURCE_CACHE, CasaError, CasaErrorCollection, ErrorKind
 
+ESCAPE_SEQUENCES = {
+    "n": "\n",
+    "t": "\t",
+    "\\": "\\",
+    '"': '"',
+    "0": "\0",
+    "r": "\r",
+}
+
 
 @dataclass(slots=True)
 class Lexer:
@@ -122,8 +131,9 @@ class Lexer:
         original_position = self.cursor.position
         if self.startswith('"'):
             string_literal = self.parse_string_literal()
-            loc = Location(self.file, Span(original_position, len(string_literal)))
-            return Token(string_literal, TokenKind.LITERAL, loc)
+            span_length = self.cursor.position - original_position
+            location = Location(self.file, Span(original_position, span_length))
+            return Token(string_literal, TokenKind.LITERAL, location)
 
         value = self.peek_word()
         if not value:
@@ -165,16 +175,42 @@ class Lexer:
 
         return Token(value, TokenKind.IDENTIFIER, location)
 
+    def parse_escape_sequence(self) -> str | None:
+        next_char = self.cursor.pop()
+        if next_char is None:
+            return None
+        if next_char in ESCAPE_SEQUENCES:
+            return ESCAPE_SEQUENCES[next_char]
+        esc_offset = self.cursor.position - 2
+        self.errors.append(
+            CasaError(
+                ErrorKind.SYNTAX,
+                f"Invalid escape sequence `\\{next_char}`",
+                Location(self.file, Span(esc_offset, 2)),
+            )
+        )
+        return ""
+
     def parse_string_literal(self) -> str:
         start = self.cursor.position
         assert self.expect_char('"'), 'String literal starts with `"`'
 
         string_literal = '"'
+        closed = False
         while char := self.cursor.pop():
-            string_literal += char
+            if char == "\\":
+                escaped = self.parse_escape_sequence()
+                if escaped is None:
+                    break
+                string_literal += escaped
+                continue
             if char == '"':
+                string_literal += char
+                closed = True
                 break
-        else:
+            string_literal += char
+
+        if not closed:
             span_length = self.cursor.position - start
             self.errors.append(
                 CasaError(
@@ -183,7 +219,6 @@ class Lexer:
                     Location(self.file, Span(start, span_length)),
                 )
             )
-            return string_literal
 
         return string_literal
 

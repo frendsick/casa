@@ -42,6 +42,8 @@ class Emitter:
                 result.append("\\t")
             elif c == "\0":
                 result.append("\\0")
+            elif c == "\r":
+                result.append("\\r")
             else:
                 result.append(c)
         return "".join(result)
