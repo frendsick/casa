@@ -274,16 +274,17 @@ See [`examples/stack_operations.casa`](../examples/stack_operations.casa).
 
 ### `print`
 
-Prints the top of the stack to stdout, followed by a newline.
+Prints the top of the stack to stdout.
 
 **Stack effect:** `a -> None`
 
 Integers and booleans are printed as decimal numbers. Strings are printed as text.
 
 ```casa
-42 print           # 42
-true print         # 1
-"Hello" print      # Hello
+42 print                    # 42
+true print                  # 1
+"Hello" print               # Hello
+"Hello" print "\n" print    # Hello followed by a newline
 ```
 
 ## Memory Intrinsics
