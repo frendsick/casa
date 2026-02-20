@@ -22,7 +22,7 @@ Each error includes:
 Some errors include additional context:
 
 - **Expected** and **Got** (or **Inferred**) lines showing what was expected versus what was found
-- **Note** with a secondary source annotation pointing to a related location (e.g. where a mismatched value was originally pushed)
+- **Notes** with secondary source annotations pointing to related locations (e.g. where a mismatched value was originally pushed, or which branches have incompatible stack effects)
 
 When multiple errors are found, they are all printed before the compiler stops, followed by a summary line:
 
@@ -129,16 +129,34 @@ error[TYPE_MISMATCH]: Type variable `T` bound to `str` but got `int`
 
 ### `STACK_MISMATCH`
 
-Branches of a conditional or loop leave the stack in inconsistent states.
+Branches of a conditional or loop leave the stack in inconsistent states. The error shows each branch's stack signature so you can see which branch diverges.
 
 ```casa
-if true then 1 else "two" fi
+fn branchy bool -> int {
+    if dup then
+        1 2
+    else
+        3
+    fi
+}
 ```
 
 ```
-error[STACK_MISMATCH]: Stack state changed across branch
-  Expected: [int]
-  Got: [str]
+error[STACK_MISMATCH]: Branches have incompatible stack effects
+  --> examples/multi_error.casa:27:5
+   |
+27 |     fi
+   |     ^^
+  Note: `if` branch has signature `any -> any int int`
+  --> examples/multi_error.casa:23:5
+   |
+23 |     if dup then
+   |     ^^
+  Note: `else` branch has signature `any -> any int`
+  --> examples/multi_error.casa:25:5
+   |
+25 |     else
+   |     ^^^^
 ```
 
 ### `SIGNATURE_MISMATCH`
