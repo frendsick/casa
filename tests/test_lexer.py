@@ -280,3 +280,97 @@ def test_lex_missing_method_name_raises():
     assert len(exc_info.value.errors) == 1
     assert exc_info.value.errors[0].kind == ErrorKind.SYNTAX
     assert "method name" in exc_info.value.errors[0].message
+
+
+# ---------------------------------------------------------------------------
+# Escape sequences
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "source,expected_char",
+    [
+        (r'"hello\nworld"', '"hello\nworld"'),
+        (r'"hello\tworld"', '"hello\tworld"'),
+        (r'"hello\\world"', '"hello\\world"'),
+        (r'"hello\"world"', '"hello"world"'),
+        (r'"hello\0world"', '"hello\0world"'),
+        (r'"hello\rworld"', '"hello\rworld"'),
+    ],
+)
+def test_lex_escape_sequences(source, expected_char):
+    tokens = lex_string(source)
+    assert tokens[0].kind == TokenKind.LITERAL
+    assert tokens[0].value == expected_char
+
+
+def test_lex_multiple_escapes_in_one_string():
+    tokens = lex_string(r'"a\nb\tc"')
+    assert tokens[0].value == '"a\nb\tc"'
+
+
+def test_lex_escaped_quote_does_not_terminate():
+    tokens = lex_string(r'"say \"hi\""')
+    assert tokens[0].kind == TokenKind.LITERAL
+    assert tokens[0].value == '"say "hi""'
+
+
+def test_lex_invalid_escape_raises():
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        lex_string(r'"bad\q"')
+    err = exc_info.value.errors[0]
+    assert err.kind == ErrorKind.SYNTAX
+    assert "Invalid escape sequence" in err.message
+    assert err.location.span.offset == 4
+    assert err.location.span.length == 2
+
+
+def test_lex_backslash_at_end_unclosed():
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        lex_string('"hello\\')
+    err = exc_info.value.errors[0]
+    assert err.kind == ErrorKind.SYNTAX
+    assert "Unclosed string" in err.message
+
+
+def test_lex_escape_span_reflects_source_length():
+    """Token span length should reflect source length, not processed length."""
+    tokens = lex_string(r'"a\nb"')
+    # Source is 6 chars: " a \ n b "
+    assert tokens[0].location.span.offset == 0
+    assert tokens[0].location.span.length == 6
+
+
+def test_lex_string_only_escape():
+    tokens = lex_string(r'"\n"')
+    assert tokens[0].value == '"\n"'
+
+
+def test_lex_escape_at_start():
+    tokens = lex_string(r'"\nhello"')
+    assert tokens[0].value == '"\nhello"'
+
+
+def test_lex_escape_at_end():
+    tokens = lex_string(r'"hello\n"')
+    assert tokens[0].value == '"hello\n"'
+
+
+def test_lex_adjacent_backslash_then_n():
+    """\\\\n in source becomes backslash followed by literal n."""
+    tokens = lex_string(r'"a\\nb"')
+    assert tokens[0].value == '"a\\nb"'
+
+
+def test_lex_multiple_invalid_escapes():
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        lex_string(r'"bad\q\x"')
+    errors = exc_info.value.errors
+    assert len(errors) == 2
+    assert all(e.kind == ErrorKind.SYNTAX for e in errors)
+    assert "\\q" in errors[0].message
+    assert "\\x" in errors[1].message
+
+
+def test_lex_escape_span_multiple_escapes():
+    tokens = lex_string(r'"a\nb\tc"')
+    # Source: " a \ n b \ t c " = 9 chars
+    assert tokens[0].location.span.length == 9

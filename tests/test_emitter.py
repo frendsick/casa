@@ -46,6 +46,36 @@ def test_emit_push_str():
     assert 'str_0: .asciz "hello"' in asm
 
 
+def test_emit_escaped_newline_str():
+    asm = emit_string(r'"hello\nworld"')
+    assert 'str_0: .asciz "hello\\nworld"' in asm
+
+
+def test_emit_escaped_tab_str():
+    asm = emit_string(r'"col1\tcol2"')
+    assert 'str_0: .asciz "col1\\tcol2"' in asm
+
+
+def test_emit_escaped_backslash_str():
+    asm = emit_string(r'"path\\file"')
+    assert 'str_0: .asciz "path\\\\file"' in asm
+
+
+def test_emit_escaped_carriage_return_str():
+    asm = emit_string(r'"line\r"')
+    assert 'str_0: .asciz "line\\r"' in asm
+
+
+def test_emit_escaped_quote_str():
+    asm = emit_string(r'"say \"hi\""')
+    assert r'str_0: .asciz "say \"hi\""' in asm
+
+
+def test_emit_escaped_null_str():
+    asm = emit_string(r'"hello\0world"')
+    assert 'str_0: .asciz "hello\\0world"' in asm
+
+
 # ---------------------------------------------------------------------------
 # Stack operations
 # ---------------------------------------------------------------------------
