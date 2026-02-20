@@ -119,7 +119,7 @@ class CasaError:
         note_message, note_location = self.note
         source = source_cache.get(note_location.file)
         if not source:
-            return [f"  note: {note_message}"]
+            return [f"  Note: {note_message}"]
 
         span_offset = note_location.span.offset
         span_length = note_location.span.length or 1
@@ -128,7 +128,7 @@ class CasaError:
         padding = " " * line_num_width
 
         return [
-            f"  note: {note_message}",
+            f"  Note: {note_message}",
             f"  --> {_display_path(note_location.file)}:{line}:{col}",
             f"{padding} |",
             f"{line} | {source_line}",
