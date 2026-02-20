@@ -59,6 +59,7 @@ class CasaError:
     location: Location | None = None
     expected: str | None = None
     got: tuple[str, str] | None = None
+    note: tuple[str, Location] | None = None
 
     def format(self, source_cache: dict[Path, str] | None = None) -> str:
         """Format this error as a Rust-style diagnostic string."""
@@ -70,12 +71,14 @@ class CasaError:
         if not self.location:
             lines = [header]
             lines.extend(self._format_expected_got())
+            lines.extend(self._format_note(source_cache))
             return "\n".join(lines)
 
         source = source_cache.get(self.location.file)
         if not source:
             lines = [header, f"  --> {_display_path(self.location.file)}"]
             lines.extend(self._format_expected_got())
+            lines.extend(self._format_note(source_cache))
             return "\n".join(lines)
 
         span_offset = self.location.span.offset
@@ -105,7 +108,32 @@ class CasaError:
                 lines, source, start_line, start_col, end_line, end_col
             )
         lines.extend(self._format_expected_got())
+        lines.extend(self._format_note(source_cache))
         return "\n".join(lines)
+
+    def _format_note(self, source_cache: dict[Path, str]) -> list[str]:
+        """Format the note field as a secondary source annotation."""
+        if not self.note:
+            return []
+
+        note_message, note_location = self.note
+        source = source_cache.get(note_location.file)
+        if not source:
+            return [f"  note: {note_message}"]
+
+        span_offset = note_location.span.offset
+        span_length = note_location.span.length or 1
+        line, col, source_line = offset_to_line_col(source, span_offset)
+        line_num_width = len(str(line))
+        padding = " " * line_num_width
+
+        return [
+            f"  note: {note_message}",
+            f"  --> {_display_path(note_location.file)}:{line}:{col}",
+            f"{padding} |",
+            f"{line} | {source_line}",
+            f"{padding} | {' ' * (col - 1)}{'^' * span_length}",
+        ]
 
     def _format_multiline_span(
         self,

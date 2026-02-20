@@ -90,6 +90,27 @@ def test_casa_error_format_multiline_source():
     assert "^^^" in result
 
 
+def test_casa_error_format_with_note():
+    source = '"hello" 42 +'
+    cache = {Path("test.casa"): source}
+    err = CasaError(
+        ErrorKind.TYPE_MISMATCH,
+        "Type mismatch",
+        Location(Path("test.casa"), Span(8, 2)),
+        expected="`int`",
+        got=("Got", "`str`"),
+        note=(
+            "value of type `str` pushed here",
+            Location(Path("test.casa"), Span(0, 7)),
+        ),
+    )
+    result = err.format(cache)
+    assert "note: value of type `str` pushed here" in result
+    assert "test.casa:1:1" in result
+    assert '"hello"' in result
+    assert "^^^^^^^" in result
+
+
 def test_casa_error_format_multiline_span():
     source = '"hello\nworld'
     cache = {Path("test.casa"): source}
