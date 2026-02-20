@@ -9,6 +9,7 @@ from casa.bytecode import compile_bytecode
 from casa.cli import parse_args
 from casa.compiler import compile_binary
 from casa.emitter import emit_program
+from casa.error import CasaErrorCollection, report_errors
 from casa.lexer import lex_file
 from casa.parser import parse_ops, resolve_identifiers
 from casa.typechecker import type_check_ops
@@ -25,17 +26,21 @@ def main():
     input_file = pathlib.Path(args.input)
     output_name = args.output or input_file.stem
 
-    logger.info("Lexing %s", input_file)
-    tokens = lex_file(input_file.resolve())
+    try:
+        logger.info("Lexing %s", input_file)
+        tokens = lex_file(input_file.resolve())
 
-    logger.info("Parsing ops")
-    ops = resolve_identifiers(parse_ops(tokens))
+        logger.info("Parsing ops")
+        ops = resolve_identifiers(parse_ops(tokens))
 
-    logger.info("Type checking ops")
-    type_check_ops(ops)
+        logger.info("Type checking ops")
+        type_check_ops(ops)
 
-    logger.info("Compiling bytecode")
-    program = compile_bytecode(ops)
+        logger.info("Compiling bytecode")
+        program = compile_bytecode(ops)
+    except CasaErrorCollection as exc:
+        report_errors(exc.errors)
+        sys.exit(1)
 
     logger.info("Emitting assembly")
     asm_source = emit_program(program)
