@@ -583,6 +583,9 @@ def parse_function(cursor: Cursor[Token]) -> Function:
     ops: list[Op] = []
     variables: list[Variable] = []
     for param in signature.parameters:
+        # Named parameters are popped from the stack into local variables via
+        # implicit `ASSIGN_VARIABLE` ops prepended to the function body.
+        # Unnamed parameters stay on the stack as passthrough values.
         if param.name:
             variables.append(Variable(param.name, param.typ))
             ops.append(Op(param.name, OpKind.ASSIGN_VARIABLE, name.location))
