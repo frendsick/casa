@@ -90,6 +90,32 @@ def test_casa_error_format_multiline_source():
     assert "^^^" in result
 
 
+def test_casa_error_format_multiline_span():
+    source = '"hello\nworld'
+    cache = {Path("test.casa"): source}
+    loc = Location(Path("test.casa"), Span(0, 12))
+    err = CasaError(ErrorKind.SYNTAX, "Unclosed string literal", loc)
+    result = err.format(cache)
+    assert "test.casa:1:1" in result
+    assert '"hello' in result
+    assert "world" in result
+    lines = result.split("\n")
+    caret_lines = [l for l in lines if "^" in l]
+    assert len(caret_lines) == 2
+
+
+def test_casa_error_format_multiline_span_three_lines():
+    source = '"hello\nfoo\nworld'
+    cache = {Path("test.casa"): source}
+    loc = Location(Path("test.casa"), Span(0, 16))
+    err = CasaError(ErrorKind.SYNTAX, "Unclosed string literal", loc)
+    result = err.format(cache)
+    assert "test.casa:1:1" in result
+    lines = result.split("\n")
+    caret_lines = [l for l in lines if "^" in l]
+    assert len(caret_lines) == 3
+
+
 # ---------------------------------------------------------------------------
 # CasaErrorCollection
 # ---------------------------------------------------------------------------

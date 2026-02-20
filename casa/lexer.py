@@ -166,6 +166,7 @@ class Lexer:
         return Token(value, TokenKind.IDENTIFIER, location)
 
     def parse_string_literal(self) -> str:
+        start = self.cursor.position
         assert self.expect_char('"'), 'String literal starts with `"`'
 
         string_literal = '"'
@@ -174,11 +175,12 @@ class Lexer:
             if char == '"':
                 break
         else:
+            span_length = self.cursor.position - start
             self.errors.append(
                 CasaError(
                     ErrorKind.SYNTAX,
                     "Unclosed string literal",
-                    self.current_location(0),
+                    Location(self.file, Span(start, span_length)),
                 )
             )
             return string_literal

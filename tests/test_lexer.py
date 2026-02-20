@@ -258,9 +258,20 @@ def test_lex_full_expression():
 def test_lex_unclosed_string_raises():
     with pytest.raises(CasaErrorCollection) as exc_info:
         lex_string('"hello')
-    assert len(exc_info.value.errors) == 1
-    assert exc_info.value.errors[0].kind == ErrorKind.SYNTAX
-    assert "Unclosed string" in exc_info.value.errors[0].message
+    err = exc_info.value.errors[0]
+    assert err.kind == ErrorKind.SYNTAX
+    assert "Unclosed string" in err.message
+    assert err.location.span.offset == 0
+    assert err.location.span.length == 6
+
+
+def test_lex_unclosed_multiline_string_raises():
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        lex_string('"hello\nworld')
+    err = exc_info.value.errors[0]
+    assert err.kind == ErrorKind.SYNTAX
+    assert err.location.span.offset == 0
+    assert err.location.span.length == 12
 
 
 def test_lex_missing_method_name_raises():

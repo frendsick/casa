@@ -78,20 +78,67 @@ class CasaError:
             lines.extend(self._format_expected_got())
             return "\n".join(lines)
 
-        line, col, source_line = offset_to_line_col(source, self.location.span.offset)
+        span_offset = self.location.span.offset
         span_length = self.location.span.length or 1
-        line_num_width = len(str(line))
-        padding = " " * line_num_width
+        start_line, start_col, _ = offset_to_line_col(source, span_offset)
+        end_line, end_col, _ = offset_to_line_col(source, span_offset + span_length - 1)
 
-        lines = [
-            header,
-            f"  --> {_display_path(self.location.file)}:{line}:{col}",
-            f"{padding} |",
-            f"{line} | {source_line}",
-            f"{padding} | {' ' * (col - 1)}{'^' * span_length}",
-        ]
+        lines = [header]
+
+        if start_line == end_line:
+            source_line = source.split("\n")[start_line - 1]
+            line_num_width = len(str(start_line))
+            padding = " " * line_num_width
+            lines.extend(
+                [
+                    f"  --> {_display_path(self.location.file)}:{start_line}:{start_col}",
+                    f"{padding} |",
+                    f"{start_line} | {source_line}",
+                    f"{padding} | {' ' * (start_col - 1)}{'^' * span_length}",
+                ]
+            )
+        else:
+            lines.append(
+                f"  --> {_display_path(self.location.file)}:{start_line}:{start_col}"
+            )
+            self._format_multiline_span(
+                lines, source, start_line, start_col, end_line, end_col
+            )
         lines.extend(self._format_expected_got())
         return "\n".join(lines)
+
+    def _format_multiline_span(
+        self,
+        lines: list[str],
+        source: str,
+        start_line: int,
+        start_col: int,
+        end_line: int,
+        end_col: int,
+    ) -> None:
+        """Append multiline source context with per-line carets."""
+        source_lines = source.split("\n")
+        line_num_width = len(str(end_line))
+        padding = " " * line_num_width
+        lines.append(f"{padding} |")
+
+        for line_num in range(start_line, end_line + 1):
+            src = source_lines[line_num - 1]
+            padded = str(line_num).rjust(line_num_width)
+            lines.append(f"{padded} | {src}")
+
+            if line_num == start_line:
+                caret_start = start_col - 1
+                caret_len = len(src) - caret_start
+            elif line_num == end_line:
+                caret_start = 0
+                caret_len = end_col
+            else:
+                caret_start = 0
+                caret_len = len(src)
+
+            if caret_len > 0:
+                lines.append(f"{padding} | {' ' * caret_start}{'^' * caret_len}")
 
     def _format_expected_got(self) -> list[str]:
         """Format expected/got fields as trailing lines."""
