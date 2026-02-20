@@ -32,7 +32,24 @@ String type. String literals are enclosed in double quotes.
 "Hello world!" print
 ```
 
-Strings do not support escape sequences. Characters between quotes are read literally.
+Strings support the following escape sequences:
+
+| Sequence | Meaning |
+|----------|---------|
+| `\n` | Newline |
+| `\t` | Tab |
+| `\\` | Literal backslash |
+| `\"` | Double quote |
+| `\0` | Null byte |
+| `\r` | Carriage return |
+
+```casa
+"hello\nworld" print    # prints on two lines
+"say \"hi\"" print      # say "hi"
+"col1\tcol2" print      # tab-separated
+```
+
+Invalid escape sequences (e.g. `\q`) produce a compile-time `SYNTAX` error.
 
 ## Composite Types
 

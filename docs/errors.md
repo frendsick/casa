@@ -44,6 +44,16 @@ Malformed tokens or structural problems in the source code.
 error[SYNTAX]: Unclosed string literal
 ```
 
+Invalid escape sequences in strings are also reported as `SYNTAX` errors:
+
+```casa
+"bad\q"
+```
+
+```
+error[SYNTAX]: Invalid escape sequence `\q`
+```
+
 ### `UNEXPECTED_TOKEN`
 
 The parser expected one token but found another.
