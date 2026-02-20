@@ -85,6 +85,7 @@ def compile_string(code: str) -> Program:
     """Full pipeline through bytecode compilation."""
     ops = resolve_string(code)
     type_check_ops(ops)
+    type_check_all_functions()
     return compile_bytecode(ops)
 
 
