@@ -446,8 +446,8 @@ def test_parse_fstring_inside_function():
 
 
 def test_parse_fstring_escaped_braces():
-    """f"{{x}}" produces PUSH_STR with literal {x} (no expression)."""
-    ops = parse_string('f"{{x}}"')
+    r"""f"\{x\}" produces PUSH_STR with literal {x} (no expression)."""
+    ops = parse_string(r'f"\{x\}"')
     assert len(ops) == 1
     assert ops[0].kind == OpKind.PUSH_STR
     assert ops[0].value == "{x}"

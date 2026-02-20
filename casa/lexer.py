@@ -22,6 +22,8 @@ ESCAPE_SEQUENCES = {
     '"': '"',
     "0": "\0",
     "r": "\r",
+    "{": "{",
+    "}": "}",
 }
 
 
@@ -131,16 +133,6 @@ class Lexer:
                 if escaped is None:
                     break
                 text += escaped
-                continue
-
-            if self.startswith("{{"):
-                text += "{"
-                self.cursor.position += 2
-                continue
-
-            if self.startswith("}}"):
-                text += "}"
-                self.cursor.position += 2
                 continue
 
             if char == "{":

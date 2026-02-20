@@ -42,6 +42,8 @@ Strings support the following escape sequences:
 | `\"` | Double quote |
 | `\0` | Null byte |
 | `\r` | Carriage return |
+| `\{` | Literal left brace |
+| `\}` | Literal right brace |
 
 ```casa
 "hello\nworld" print    # prints on two lines
@@ -78,10 +80,10 @@ Multiple expressions are supported:
 f"{first} {last}" print    # Alice Smith
 ```
 
-Use `{{` and `}}` to produce literal braces:
+Use `\{` and `\}` to produce literal braces:
 
 ```casa
-f"{{x}}" print    # {x}
+f"\{x\}" print    # {x}
 ```
 
 Escape sequences work inside f-strings just like regular strings (`\n`, `\t`, `\\`, `\"`, `\0`, `\r`):

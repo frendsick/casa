@@ -432,8 +432,8 @@ def test_lex_fstring_text_and_expression():
 
 
 def test_lex_fstring_escaped_braces():
-    """f"{{braces}}" produces FSTRING_TEXT with literal {braces}."""
-    tokens = lex_string('f"{{braces}}"')
+    r"""f"\{braces\}" produces FSTRING_TEXT with literal {braces}."""
+    tokens = lex_string(r'f"\{braces\}"')
     kinds = [t.kind for t in tokens if t.kind != TokenKind.EOF]
     assert kinds == [
         TokenKind.FSTRING_START,
