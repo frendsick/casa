@@ -51,6 +51,53 @@ Strings support the following escape sequences:
 
 Invalid escape sequences (e.g. `\q`) produce a compile-time `SYNTAX` error.
 
+### F-Strings (String Interpolation)
+
+F-strings let you embed expressions inside a string literal. Prefix a string with `f` and wrap expressions in `{}`.
+
+**Stack effect:** `( -- str )`
+
+```casa
+"world" = name
+f"hello {name}" print    # hello world
+```
+
+Expressions inside `{}` must produce a value of type `str`. Non-string types are not auto-converted.
+
+```casa
+# This will NOT work: int expression inside f-string with text
+42 = n
+f"count: {n}"    # TYPE error: expected str, got int
+```
+
+Multiple expressions are supported:
+
+```casa
+"Alice" = first
+"Smith" = last
+f"{first} {last}" print    # Alice Smith
+```
+
+Use `{{` and `}}` to produce literal braces:
+
+```casa
+f"{{x}}" print    # {x}
+```
+
+Escape sequences work inside f-strings just like regular strings (`\n`, `\t`, `\\`, `\"`, `\0`, `\r`):
+
+```casa
+f"line1\nline2" print
+# line1
+# line2
+```
+
+An f-string with no expressions is equivalent to a regular string:
+
+```casa
+f"hello"    # same as "hello"
+```
+
 ## Composite Types
 
 ### `ptr`
