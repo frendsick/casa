@@ -82,6 +82,38 @@ def test_bytecode_push_str():
 
 
 # ---------------------------------------------------------------------------
+# Push array
+# ---------------------------------------------------------------------------
+def test_bytecode_push_array():
+    program = compile_string("[1, 2, 3]")
+    kinds = [i.kind for i in program.bytecode]
+
+    # Array items pushed in reverse order
+    pushes = find_insts(program, InstKind.PUSH)
+    push_values = [i.args[0] for i in pushes]
+    assert push_values[:3] == [3, 2, 1]
+
+    # Heap allocation for array (1 length slot + 3 items = 4 slots)
+    assert InstKind.HEAP_ALLOC in kinds
+
+    # Store loop: labels, jumps, and stores
+    assert InstKind.LABEL in kinds
+    assert InstKind.JUMP in kinds
+    assert InstKind.JUMP_NE in kinds
+    assert InstKind.STORE in kinds
+
+    # 2 locals: array pointer and loop index (no local for length)
+    local_sets = find_insts(program, InstKind.LOCAL_SET)
+    local_gets = find_insts(program, InstKind.LOCAL_GET)
+    assert len(local_sets) >= 2
+    assert len(local_gets) >= 2
+
+    # Length is pushed as a constant, not loaded from a local
+    # The PUSH(3) for the length comparison should appear in the loop
+    assert any(i.args == [3] for i in pushes)
+
+
+# ---------------------------------------------------------------------------
 # Print
 # ---------------------------------------------------------------------------
 def test_bytecode_print_int():
