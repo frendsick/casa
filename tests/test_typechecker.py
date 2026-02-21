@@ -17,7 +17,7 @@ from tests.conftest import parse_string, resolve_string, typecheck_string
         ("-42", "int"),
         ("true", "bool"),
         ('"hello"', "str"),
-        ("[1, 2]", "array"),
+        ("[1, 2]", "array[int]"),
     ],
 )
 def test_typecheck_literals(code, expected_type):
@@ -656,3 +656,143 @@ def test_typecheck_to_str_fn_signature():
     assert fn.signature is not None
     assert [p.typ for p in fn.signature.parameters] == ["int"]
     assert fn.signature.return_types == ["str"]
+
+
+# ---------------------------------------------------------------------------
+# Typed array literals
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "code,expected_type",
+    [
+        ("[1, 2, 3]", "array[int]"),
+        ('["hello", "world"]', "array[str]"),
+        ("[true, false]", "array[bool]"),
+    ],
+)
+def test_typecheck_typed_array_literal(code, expected_type):
+    """Array literals infer element type from their contents."""
+    sig = typecheck_string(code)
+    assert sig.return_types == [expected_type]
+
+
+def test_typecheck_empty_array_is_array_any():
+    """Empty array literal produces array[any]."""
+    sig = typecheck_string("[]")
+    assert sig.return_types == ["array[any]"]
+
+
+def test_typecheck_nested_array():
+    """Nested array literal produces array[array[int]]."""
+    sig = typecheck_string("[[1, 2], [3, 4]]")
+    assert sig.return_types == ["array[array[int]]"]
+
+
+def test_typecheck_heterogeneous_array_raises():
+    """Mixed-type array literal raises TYPE_MISMATCH."""
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        typecheck_string('[1, "hello"]')
+    assert exc_info.value.errors[0].kind == ErrorKind.TYPE_MISMATCH
+
+
+def test_typecheck_bare_array_matches_typed_array():
+    """A function expecting bare `array` accepts `array[int]` (backward compat)."""
+    code = """
+    fn first arr:array -> int { 0 }
+    [1, 2, 3] first
+    """
+    sig = typecheck_string(code)
+    assert sig.return_types == ["int"]
+
+
+def test_typecheck_typed_array_matches_bare_array():
+    """A function expecting `array[int]` accepts bare `array` (backward compat)."""
+    code = """
+    fn first arr:array[int] -> int { 0 }
+    """
+    typecheck_string(code)
+    fn = GLOBAL_FUNCTIONS["first"]
+    assert fn.signature is not None
+    assert [p.typ for p in fn.signature.parameters] == ["array[int]"]
+
+
+def test_typecheck_signature_matches_bare_and_typed_array():
+    """Signature.matches() treats bare `array` as compatible with `array[int]`."""
+    sig_bare = Signature([Parameter("array")], ["int"])
+    sig_typed = Signature([Parameter("array[int]")], ["int"])
+    assert sig_bare.matches(sig_typed)
+    assert sig_typed.matches(sig_bare)
+
+
+def test_typecheck_signature_matches_different_typed_arrays():
+    """Signature.matches() rejects array[int] vs array[str]."""
+    sig_int = Signature([Parameter("array[int]")], ["int"])
+    sig_str = Signature([Parameter("array[str]")], ["int"])
+    assert not sig_int.matches(sig_str)
+    assert not sig_str.matches(sig_int)
+
+
+def test_typecheck_parameterized_type_in_fn_signature():
+    """Parser handles parameterized types in function signatures."""
+    code = """
+    fn sum_array arr:array[int] -> int { 0 }
+    [1, 2, 3] sum_array
+    """
+    sig = typecheck_string(code)
+    assert sig.return_types == ["int"]
+    fn = GLOBAL_FUNCTIONS["sum_array"]
+    assert [p.typ for p in fn.signature.parameters] == ["array[int]"]
+
+
+def test_typecheck_type_cast_typed_array():
+    """Type cast (array[int]) works."""
+    code = "[] (array[int])"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["array[int]"]
+
+
+def test_typecheck_array_dup():
+    """dup on typed array preserves the element type."""
+    sig = typecheck_string("[1, 2] dup")
+    assert sig.return_types == ["array[int]", "array[int]"]
+
+
+def test_typecheck_array_in_variable():
+    """Typed array stored in variable retains its type."""
+    code = "[1, 2, 3] = nums nums"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["array[int]"]
+
+
+def test_typecheck_array_nth_returns_element_type():
+    """array::nth on a typed array returns the element type, not any."""
+    code = STD_INCLUDE + "0 [1, 2, 3] array::nth"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["int"]
+
+
+def test_typecheck_array_with_int_variables():
+    """Array literal with int variables produces array[int]."""
+    code = "42 = x [x, 2, 3]"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["array[int]"]
+
+
+def test_typecheck_array_with_str_variables():
+    """Array literal with str variables produces array[str]."""
+    code = '"a" = x "b" = y [x, y]'
+    sig = typecheck_string(code)
+    assert sig.return_types == ["array[str]"]
+
+
+def test_typecheck_array_mixed_variable_and_literal_raises():
+    """Array with variable and literal of different types raises TYPE_MISMATCH."""
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        typecheck_string('42 = x [x, "hello"]')
+    assert exc_info.value.errors[0].kind == ErrorKind.TYPE_MISMATCH
+
+
+def test_typecheck_array_with_global_variable():
+    """Array literal with global variable infers correct type."""
+    code = "10 = g [g, 20, 30]"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["array[int]"]

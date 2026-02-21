@@ -737,11 +737,25 @@ def test_delimiter_from_str_consistent_with_enum():
 def test_operator_from_str_consistent_with_enum():
     """Every Operator enum member has a from_str mapping."""
     all_strings = [
-        "+", "-", "*", "/", "%",
-        "<<", ">>",
-        "&&", "||", "!",
-        "==", ">=", ">", "<=", "<", "!=",
-        "=", "-=", "+=",
+        "+",
+        "-",
+        "*",
+        "/",
+        "%",
+        "<<",
+        ">>",
+        "&&",
+        "||",
+        "!",
+        "==",
+        ">=",
+        ">",
+        "<=",
+        "<",
+        "!=",
+        "=",
+        "-=",
+        "+=",
     ]
     assert len(all_strings) == len(Operator)
     for s in all_strings:
