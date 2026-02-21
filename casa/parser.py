@@ -91,6 +91,14 @@ def parse_ops(tokens: list[Token]) -> list[Op]:
     return ops
 
 
+def _mark_used_and_resolve(global_function: Function) -> None:
+    """Mark a function as used and resolve its identifiers if not already done."""
+    if global_function.is_used:
+        return
+    global_function.is_used = True
+    global_function.ops = resolve_identifiers(global_function.ops, global_function)
+
+
 def resolve_identifiers(
     ops: list[Op],
     function: Function | None = None,
@@ -181,11 +189,7 @@ def resolve_identifiers(
                         continue
                     op.kind = OpKind.FN_PUSH
                     op.value = function_name
-                    if not global_function.is_used:
-                        global_function.is_used = True
-                        global_function.ops = resolve_identifiers(
-                            global_function.ops, global_function
-                        )
+                    _mark_used_and_resolve(global_function)
                     continue
 
                 # Check different identifiers
@@ -195,11 +199,7 @@ def resolve_identifiers(
                     continue
                 if global_function := GLOBAL_FUNCTIONS.get(identifier):
                     op.kind = OpKind.FN_CALL
-                    if not global_function.is_used:
-                        global_function.is_used = True
-                        global_function.ops = resolve_identifiers(
-                            global_function.ops, global_function
-                        )
+                    _mark_used_and_resolve(global_function)
                     continue
                 if function and identifier in function.captures:
                     op.kind = OpKind.PUSH_CAPTURE

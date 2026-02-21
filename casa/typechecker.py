@@ -270,6 +270,16 @@ def _branch_mismatch_notes(
     return notes
 
 
+def _ensure_typechecked(global_function: Function) -> None:
+    """Type-check a function if not already done, preserving declared signatures."""
+    if global_function.is_typechecked:
+        return
+    global_function.is_typechecked = True
+    signature = type_check_ops(global_function.ops, global_function)
+    if not global_function.signature:
+        global_function.signature = signature
+
+
 def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature:
     assert len(OpKind) == 56, "Exhaustive handling for `OpKind`"
 
@@ -381,11 +391,7 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 global_function = GLOBAL_FUNCTIONS.get(function_name)
                 assert global_function, "Expected function"
 
-                if not global_function.is_typechecked:
-                    global_function.is_typechecked = True
-                    signature = type_check_ops(global_function.ops, global_function)
-                    if not global_function.signature:
-                        global_function.signature = signature
+                _ensure_typechecked(global_function)
 
                 assert global_function.signature, "Signature is defined"
                 tc.apply_signature(global_function.signature, function_name)
@@ -429,11 +435,7 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 global_function = GLOBAL_FUNCTIONS.get(function_name)
                 assert isinstance(global_function, Function), "Expected function"
 
-                if not global_function.is_typechecked:
-                    global_function.is_typechecked = True
-                    signature = type_check_ops(global_function.ops, global_function)
-                    if not global_function.signature:
-                        global_function.signature = signature
+                _ensure_typechecked(global_function)
                 tc.stack_push(f"fn[{global_function.signature}]")
             case OpKind.GE:
                 tc.stack_pop()
@@ -573,15 +575,11 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     )
 
                 if not global_function.is_typechecked:
-                    global_function.is_typechecked = True
                     global_function.ops = resolve_identifiers(
                         global_function.ops, global_function
                     )
                     global_function.is_used = True
-
-                    signature = type_check_ops(global_function.ops, global_function)
-                    if not global_function.signature:
-                        global_function.signature = signature
+                _ensure_typechecked(global_function)
 
                 assert global_function.signature, "Signature is defined"
                 tc.apply_signature(global_function.signature, function_name)
