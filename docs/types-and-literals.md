@@ -128,13 +128,42 @@ buffer 3 + load print  # 99
 
 See [Functions and Lambdas — Memory Intrinsics](functions-and-lambdas.md#memory-intrinsics) for details.
 
-### `array`
+### `array[T]`
 
-Fixed-size array literal. Items must be literal values (integers, booleans, or strings).
+Fixed-size, statically typed array literal. The element type `T` is inferred from the items in the array.
 
 ```casa
-[1, 2, 3]
+[1, 2, 3]          # type: array[int]
+["a", "b", "c"]    # type: array[str]
+[true, false]       # type: array[bool]
 ```
+
+Array items can be literals or variables:
+
+```casa
+42 = x
+[x, 2, 3]          # type: array[int]
+```
+
+All items must have the same type. Heterogeneous arrays are compile-time errors:
+
+```casa
+[1, "hello"]        # TYPE_MISMATCH error
+```
+
+An empty array has type `array[any]`:
+
+```casa
+[]                  # type: array[any]
+```
+
+Arrays can be nested. The element type is inferred recursively:
+
+```casa
+[[1, 2], [3, 4]]   # type: array[array[int]]
+```
+
+The bare type name `array` matches any `array[T]` for backward compatibility (e.g. in function signatures).
 
 The array's length is stored in the first heap slot. Elements are stored starting at offset 1.
 

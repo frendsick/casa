@@ -57,11 +57,11 @@ arr.length print    # 3
 
 ### `array::nth`
 
-Returns the nth element of an array (zero-indexed).
+Returns the nth element of an array (zero-indexed). This is a generic function that returns the element type of the array.
 
-**Signature:** `array::nth array:array n:int -> any`
+**Signature:** `array::nth[T] array:array[T] n:int -> T`
 
-**Stack effect:** `array n -> any`
+**Stack effect:** `array[T] n -> T`
 
 ```casa
 [10, 20, 30] = arr
@@ -70,7 +70,7 @@ Returns the nth element of an array (zero-indexed).
 1 arr.nth print           # 20
 ```
 
-> **Note:** The return type is `any`. Use a [type cast](types-and-literals.md#type-casting) if you need a specific type.
+The return type matches the array's element type. For example, calling `nth` on an `array[int]` returns `int`, not `any`.
 
 ## `List`
 
