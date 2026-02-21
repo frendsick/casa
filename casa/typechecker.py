@@ -15,6 +15,8 @@ from casa.common import (
     Struct,
     Type,
     Variable,
+    extract_array_element_type,
+    is_array_type,
 )
 from casa.error import (
     WARNINGS,
@@ -108,9 +110,9 @@ class TypeChecker:
         origin = self.stack_origins.pop()
         typ = self.stack.pop()
         self.last_pop_origin = origin
-        if expected == ANY_TYPE:
+        if expected == ANY_TYPE or (expected == "array" and typ.startswith("array")):
             return typ
-        if typ == ANY_TYPE:
+        if typ == ANY_TYPE or (typ == "array" and expected.startswith("array")):
             return expected
         if typ == expected:
             return typ
@@ -182,15 +184,40 @@ class TypeChecker:
         for i, expected in enumerate(signature.parameters):
             if name:
                 self.current_expect_context = f"parameter {i + 1} of `{name}`"
-            if expected.typ not in signature.type_vars:
-                self.expect_type(expected.typ)
+            if expected.typ in signature.type_vars:
+                self._bind_type_var(bindings, expected.typ, self.stack_pop())
                 continue
-            self._bind_type_var(bindings, expected.typ, self.stack_pop())
+            # Handle parameterized types containing type vars, e.g. array[T]
+            inner = extract_array_element_type(expected.typ)
+            if inner and inner in signature.type_vars:
+                actual = self.stack_pop()
+                if is_array_type(actual):
+                    actual_inner = extract_array_element_type(actual)
+                    self._bind_type_var(bindings, inner, actual_inner or ANY_TYPE)
+                elif actual == ANY_TYPE:
+                    self._bind_type_var(bindings, inner, ANY_TYPE)
+                else:
+                    raise_error(
+                        ErrorKind.TYPE_MISMATCH,
+                        "Type mismatch",
+                        self.current_location,
+                        expected=f"`{expected.typ}`",
+                        got=f"`{actual}`",
+                    )
+                continue
+            self.expect_type(expected.typ)
         self.current_expect_context = None
 
         for return_type in signature.return_types:
-            resolved = bindings.get(return_type, return_type)
-            self.stack_push(resolved)
+            if return_type in bindings:
+                self.stack_push(bindings[return_type])
+                continue
+            # Handle parameterized return types like array[T]
+            inner = extract_array_element_type(return_type)
+            if inner and inner in bindings:
+                self.stack_push(f"array[{bindings[inner]}]")
+                continue
+            self.stack_push(return_type)
 
 
 def _check_passthrough_params(
@@ -250,6 +277,43 @@ OP_STACK_EFFECTS: dict[OpKind, tuple[str, str]] = {
     OpKind.IF_CONDITION: ("if condition", "bool -> None"),
     OpKind.WHILE_CONDITION: ("while condition", "bool -> None"),
 }
+
+
+def _infer_literal_type(op: Op, function: Function | None = None) -> str:
+    """Infer the type of an array item Op."""
+    match op.kind:
+        case OpKind.PUSH_INT:
+            return "int"
+        case OpKind.PUSH_STR:
+            return "str"
+        case OpKind.PUSH_BOOL:
+            return "bool"
+        case OpKind.PUSH_ARRAY:
+            items = op.value
+            if not items:
+                return "array[any]"
+            return f"array[{_infer_literal_type(items[0], function)}]"
+        case OpKind.PUSH_VARIABLE:
+            var_name = op.value
+            assert isinstance(var_name, str)
+            if function:
+                for var in function.variables:
+                    if var.name == var_name and var.typ:
+                        return var.typ
+            gvar = GLOBAL_VARIABLES.get(var_name)
+            if gvar and gvar.typ:
+                return gvar.typ
+            return ANY_TYPE
+        case OpKind.PUSH_CAPTURE:
+            cap_name = op.value
+            assert isinstance(cap_name, str)
+            if function:
+                for cap in function.captures:
+                    if cap.name == cap_name and cap.typ:
+                        return cap.typ
+            return ANY_TYPE
+        case _:
+            return ANY_TYPE
 
 
 def _format_branch_signature(before: list[Type], after: list[Type]) -> str:
@@ -567,6 +631,9 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 function_name = f"{receiver}::{method_name}"
 
                 global_function = GLOBAL_FUNCTIONS.get(function_name)
+                if not global_function and receiver.startswith("array["):
+                    function_name = f"array::{method_name}"
+                    global_function = GLOBAL_FUNCTIONS.get(function_name)
                 if not global_function:
                     raise_error(
                         ErrorKind.UNDEFINED_NAME,
@@ -622,8 +689,23 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
             case OpKind.PRINT_INT | OpKind.PRINT_STR:
                 assert False, "PRINT_INT and PRINT_STR are resolved by the type checker"
             case OpKind.PUSH_ARRAY:
-                # TODO: Fine-grain array typing
-                tc.stack_push("array")
+                items = op.value
+                assert isinstance(items, list)
+                if not items:
+                    tc.stack_push("array[any]")
+                    continue
+                first_type = _infer_literal_type(items[0], function)
+                for item in items[1:]:
+                    item_type = _infer_literal_type(item, function)
+                    if item_type != first_type:
+                        raise_error(
+                            ErrorKind.TYPE_MISMATCH,
+                            "Array literal has mixed element types",
+                            op.location,
+                            expected=f"`{first_type}`",
+                            got=f"`{item_type}`",
+                        )
+                tc.stack_push(f"array[{first_type}]")
             case OpKind.PUSH_BOOL:
                 tc.stack_push("bool")
             case OpKind.PUSH_CAPTURE:
@@ -806,11 +888,13 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
     inferred_signature = Signature(tc.parameters, tc.stack)
 
     if function and function.signature and function.signature.type_vars:
-        param_tvs = {
-            p.typ
-            for p in function.signature.parameters
-            if p.typ in function.signature.type_vars
-        }
+        param_tvs: set[str] = set()
+        for p in function.signature.parameters:
+            if p.typ in function.signature.type_vars:
+                param_tvs.add(p.typ)
+            inner = extract_array_element_type(p.typ)
+            if inner and inner in function.signature.type_vars:
+                param_tvs.add(inner)
         ret_only = {
             r
             for r in function.signature.return_types

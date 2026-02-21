@@ -573,6 +573,22 @@ ANY_TYPE = "any"
 BUILTIN_TYPES: set[str] = {"int", "bool", "str", "ptr", "array", "any"}
 
 
+def is_array_type(typ: str) -> bool:
+    """Check if a type is an array type (bare or parameterized)."""
+    return typ == "array" or typ.startswith("array[")
+
+
+def extract_array_element_type(typ: str) -> str | None:
+    """Extract the element type from a parameterized array type.
+
+    Returns None for bare 'array' or non-array types.
+    """
+    array_prefix = "array["
+    if not typ.startswith(array_prefix) or not typ.endswith("]"):
+        return None
+    return typ[len(array_prefix) : -1]
+
+
 @dataclass
 class Parameter:
     typ: Type
@@ -622,11 +638,19 @@ class Signature:
 
         for a, b in zip(self.parameters, other.parameters, strict=True):
             if a.typ != b.typ and a.typ != ANY_TYPE and b.typ != ANY_TYPE:
-                return False
+                if not (
+                    (a.typ == "array" and is_array_type(b.typ))
+                    or (b.typ == "array" and is_array_type(a.typ))
+                ):
+                    return False
 
-        for a, b in zip(self.return_types, other.return_types, strict=True):
-            if a != b and a != ANY_TYPE and b != ANY_TYPE:
-                return False
+        for ra, rb in zip(self.return_types, other.return_types, strict=True):
+            if ra != rb and ra != ANY_TYPE and rb != ANY_TYPE:
+                if not (
+                    (ra == "array" and is_array_type(rb))
+                    or (rb == "array" and is_array_type(ra))
+                ):
+                    return False
 
         return True
 

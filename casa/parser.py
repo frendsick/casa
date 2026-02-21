@@ -99,6 +99,36 @@ def _mark_used_and_resolve(global_function: Function) -> None:
     global_function.ops = resolve_identifiers(global_function.ops, global_function)
 
 
+def _resolve_array_identifiers(
+    items: list[Op],
+    function: Function | None = None,
+    errors: list[CasaError] | None = None,
+) -> None:
+    """Resolve identifier ops inside array literal items."""
+    if errors is None:
+        errors = []
+    for item in items:
+        if item.kind == OpKind.PUSH_ARRAY:
+            _resolve_array_identifiers(item.value, function, errors)
+        elif item.kind == OpKind.IDENTIFIER:
+            identifier = item.value
+            assert isinstance(identifier, str)
+            if function and identifier in function.variables:
+                item.kind = OpKind.PUSH_VARIABLE
+            elif function and identifier in function.captures:
+                item.kind = OpKind.PUSH_CAPTURE
+            elif GLOBAL_VARIABLES.get(identifier):
+                item.kind = OpKind.PUSH_VARIABLE
+            else:
+                errors.append(
+                    CasaError(
+                        ErrorKind.UNDEFINED_NAME,
+                        f"Identifier `{identifier}` is not defined",
+                        item.location,
+                    )
+                )
+
+
 def resolve_identifiers(
     ops: list[Op],
     function: Function | None = None,
@@ -161,6 +191,10 @@ def resolve_identifiers(
                 lambda_function.ops = resolve_identifiers(
                     lambda_function.ops, lambda_function
                 )
+            case OpKind.PUSH_ARRAY:
+                items = op.value
+                assert isinstance(items, list)
+                _resolve_array_identifiers(items, function, errors)
             case OpKind.IDENTIFIER:
                 identifier = op.value
                 assert isinstance(identifier, str), "Expected identifier name"
@@ -358,13 +392,29 @@ def parse_block_ops(cursor: Cursor[Token], function_name: str) -> list[Op]:
 def get_op_array(cursor: Cursor[Token]) -> Op:
     open_bracket = expect_token(cursor, value="[")
 
-    # Empty list
     array_items = []
     while not expect_delimiter(cursor, Delimiter.CLOSE_BRACKET):
-        # TODO: Support identifiers
-        value_token = expect_token(cursor, kind=TokenKind.LITERAL)
-
-        op = token_to_op(value_token, cursor)
+        next_tok = cursor.peek()
+        if next_tok and next_tok.value == "[":
+            # Nested array literal
+            op = get_op_array(cursor)
+        else:
+            value_token = cursor.pop()
+            if not value_token or value_token.kind not in (
+                TokenKind.LITERAL,
+                TokenKind.IDENTIFIER,
+            ):
+                got = f"`{value_token.kind.name}`" if value_token else "nothing"
+                raise_error(
+                    ErrorKind.UNEXPECTED_TOKEN,
+                    "Unexpected token in array literal",
+                    value_token.location if value_token else None,
+                    expected="literal or identifier",
+                    got=got,
+                )
+            item_op = token_to_op(value_token, cursor)
+            assert item_op is not None, "Array item token always produces an Op"
+            op = item_op
         array_items.append(op)
 
         if expect_delimiter(cursor, Delimiter.COMMA):
@@ -491,26 +541,38 @@ def get_op_keyword(
             assert_never(keyword)
 
 
+def parse_type(cursor: Cursor[Token]) -> Type:
+    """Parse a type, potentially parameterized like array[int]."""
+    base = expect_token(cursor, kind=TokenKind.IDENTIFIER)
+    next_tok = cursor.peek()
+    if not next_tok or next_tok.value != "[":
+        return base.value
+    cursor.position += 1  # consume [
+    inner = parse_type(cursor)
+    expect_token(cursor, value="]")
+    return f"{base.value}[{inner}]"
+
+
 def get_op_type_cast(cursor: Cursor[Token]) -> Op:
     open_paren = expect_token(cursor, value="(")
-    cast_type = expect_token(cursor, kind=TokenKind.IDENTIFIER)
+    cast_type = parse_type(cursor)
     close_paren = expect_token(cursor, value=")")
 
     open_offset = open_paren.location.span.offset
     close_offset = close_paren.location.span.offset
     cast_span_length = close_offset - open_offset + 1
     location = Location(open_paren.location.file, Span(open_offset, cast_span_length))
-    return Op(cast_type.value, OpKind.TYPE_CAST, location)
+    return Op(cast_type, OpKind.TYPE_CAST, location)
 
 
 def parse_impl_block(cursor: Cursor[Token]):
     expect_token(cursor, value="impl")
-    impl_type = expect_token(cursor, kind=TokenKind.IDENTIFIER)
+    impl_type = parse_type(cursor)
 
     expect_token(cursor, value="{")
     while (fn := cursor.peek()) and fn.value == "fn":
         function = parse_function(cursor)
-        function.name = f"{impl_type.value}::{function.name}"
+        function.name = f"{impl_type}::{function.name}"
         if GLOBAL_FUNCTIONS.get(function.name):
             raise_error(
                 ErrorKind.DUPLICATE_NAME,
@@ -543,7 +605,7 @@ def parse_struct(cursor: Cursor[Token]) -> Struct:
 
         expect_token(cursor, value=":")
 
-        member_type = expect_token(cursor, kind=TokenKind.IDENTIFIER)
+        member_type_str = parse_type(cursor)
 
         # Getter
         getter_name = f"{struct_name.value}::{member_name.value}"
@@ -559,7 +621,7 @@ def parse_struct(cursor: Cursor[Token]) -> Struct:
         getter_ops.append(Op(Operator.PLUS, OpKind.ADD, member_location))
         getter_ops.append(Op(Intrinsic.LOAD, OpKind.LOAD, member_location))
         getter_params = [Parameter(struct_name.value)]
-        getter_signature = Signature(getter_params, [member_type.value])
+        getter_signature = Signature(getter_params, [member_type_str])
         getter = Function(getter_name, getter_ops, member_location, getter_signature)
         GLOBAL_FUNCTIONS[getter_name] = getter
 
@@ -575,13 +637,13 @@ def parse_struct(cursor: Cursor[Token]) -> Struct:
         setter_ops.append(Op(len(members), OpKind.PUSH_INT, member_location))
         setter_ops.append(Op(Operator.PLUS, OpKind.ADD, member_location))
         setter_ops.append(Op(Intrinsic.STORE, OpKind.STORE, member_location))
-        setter_params = [Parameter(struct_name.value), Parameter(member_type.value)]
+        setter_params = [Parameter(struct_name.value), Parameter(member_type_str)]
         setter_signature = Signature(setter_params, [])
         setter = Function(setter_name, setter_ops, member_location, setter_signature)
         GLOBAL_FUNCTIONS[setter_name] = setter
 
         # Add to members list
-        members.append(Member(member_name.value, member_type.value))
+        members.append(Member(member_name.value, member_type_str))
 
     return Struct(struct_name.value, members, struct_name.location)
 
@@ -692,10 +754,13 @@ def parse_parameters(cursor: Cursor[Token]) -> list[Parameter]:
         next_token = cursor.peek()
         if next_token and next_token.value == ":":
             cursor.position += 1
-            typ = expect_token(cursor, kind=TokenKind.IDENTIFIER)
-            parameters.append(Parameter(typ.value, name_or_type.value))
+            typ = parse_type(cursor)
+            parameters.append(Parameter(typ, name_or_type.value))
         else:
-            parameters.append(Parameter(name_or_type.value))
+            # Unnamed parameter - might be parameterized like array[int]
+            cursor.position -= 1
+            typ = parse_type(cursor)
+            parameters.append(Parameter(typ))
     raise_error(
         ErrorKind.UNEXPECTED_TOKEN,
         "Unexpected end of input",
@@ -706,11 +771,10 @@ def parse_parameters(cursor: Cursor[Token]) -> list[Parameter]:
 
 def parse_return_types(cursor: Cursor[Token]) -> list[Type]:
     return_types: list[Type] = []
-    while return_type := cursor.pop():
-        if return_type.value == "{":
-            cursor.position -= 1
+    while cursor.peek():
+        if cursor.peek().value == "{":  # type: ignore[union-attr]
             return return_types
-        return_types.append(return_type.value)
+        return_types.append(parse_type(cursor))
     raise_error(
         ErrorKind.UNEXPECTED_TOKEN,
         "Unexpected end of input",
