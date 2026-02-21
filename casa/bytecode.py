@@ -234,14 +234,15 @@ class Compiler:
                             op.location,
                         )
 
-                    # Compile the lambda function
-                    fn_compiler = Compiler(
-                        lambda_function.ops,
-                        lambda_function,
-                        string_table=self.string_table,
-                        constants_table=self.constants_table,
-                    )
-                    lambda_function.bytecode = fn_compiler.compile()
+                    # Compile the function only if not already compiled
+                    if lambda_function.bytecode is None:
+                        fn_compiler = Compiler(
+                            lambda_function.ops,
+                            lambda_function,
+                            string_table=self.string_table,
+                            constants_table=self.constants_table,
+                        )
+                        lambda_function.bytecode = fn_compiler.compile()
 
                     # Setup captures (local variables shadow globals)
                     for index, capture in enumerate(lambda_function.captures):

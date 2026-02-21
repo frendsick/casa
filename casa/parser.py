@@ -157,6 +157,28 @@ def resolve_identifiers(
                 identifier = op.value
                 assert isinstance(identifier, str), "Expected identifier name"
 
+                # Function reference: &name pushes a function as a value
+                if identifier.startswith("&"):
+                    function_name = identifier[1:]
+                    global_function = GLOBAL_FUNCTIONS.get(function_name)
+                    if not global_function:
+                        errors.append(
+                            CasaError(
+                                ErrorKind.UNDEFINED_NAME,
+                                f"Function `{function_name}` is not defined",
+                                op.location,
+                            )
+                        )
+                        continue
+                    op.kind = OpKind.FN_PUSH
+                    op.value = function_name
+                    if not global_function.is_used:
+                        global_function.is_used = True
+                        global_function.ops = resolve_identifiers(
+                            global_function.ops, global_function
+                        )
+                    continue
+
                 # Check different identifiers
                 # Local variables shadow globals with the same name
                 if function and identifier in function.variables:
