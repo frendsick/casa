@@ -68,7 +68,7 @@ def compile_bytecode(ops: list[Op]) -> Program:
             idx = list(GLOBAL_VARIABLES.keys()).index(var_name)
             bytecode.append(Inst(InstKind.GLOBAL_GET, args=[idx]))
             bytecode.append(Inst(InstKind.PUSH, args=[0]))
-            bytecode.append(Inst(InstKind.EQ))
+            bytecode.append(Inst(InstKind.NE))
             bytecode.append(Inst(InstKind.JUMP_NE, args=[skip_label]))
             bytecode.append(Inst(InstKind.GLOBAL_GET, args=[idx]))
             if is_array_type(var.typ):
@@ -718,7 +718,7 @@ class Compiler:
                             Inst(InstKind.LOCAL_GET, args=[var_idx])
                         )
                         owned_local_frees.append(Inst(InstKind.PUSH, args=[0]))
-                        owned_local_frees.append(Inst(InstKind.EQ))
+                        owned_local_frees.append(Inst(InstKind.NE))
                         owned_local_frees.append(
                             Inst(InstKind.JUMP_NE, args=[skip_label])
                         )

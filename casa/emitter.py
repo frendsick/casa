@@ -180,13 +180,18 @@ class Emitter:
         self._line("")
 
         # heap_free: heap index in %rdi, slot count in %rsi
+        # Free list requires 2 slots (size + next pointer).
+        # Blocks smaller than 2 slots are not added to the free list.
         self._line("heap_free:")
+        self._indent("cmpq $2, %rsi")
+        self._indent("jl .Lhf_skip")
         # Store size at block[0], old head at block[1]
         self._indent("leaq heap(%rip), %rdx")
         self._indent("movq %rsi, (%rdx, %rdi, 8)")
         self._indent("movq free_list_head(%rip), %rax")
         self._indent("movq %rax, 8(%rdx, %rdi, 8)")
         self._indent("movq %rdi, free_list_head(%rip)")
+        self._line(".Lhf_skip:")
         self._indent("subq $8, %r14")
         self._indent("jmpq *(%r14)")
         self._line("")
@@ -337,6 +342,9 @@ class Emitter:
         self._indent("xorq %rdi, %rdi")
         self._indent("syscall")
         self._indent("movq %rax, str_alloc_ptr(%rip)")
+        # Reserve heap index 0 as null sentinel
+        self._indent("movq $1, %rax")
+        self._indent("movq %rax, heap_ptr(%rip)")
         self._emit_bytecode(self.program.bytecode, is_global=True)
         self._indent("movq $60, %rax")
         self._indent("xorq %rdi, %rdi")
