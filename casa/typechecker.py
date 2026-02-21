@@ -431,9 +431,7 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
 
                 if not global_function.is_typechecked:
                     global_function.is_typechecked = True
-                    signature = type_check_ops(
-                        global_function.ops, global_function
-                    )
+                    signature = type_check_ops(global_function.ops, global_function)
                     if not global_function.signature:
                         global_function.signature = signature
                 tc.stack_push(f"fn[{global_function.signature}]")

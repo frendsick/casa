@@ -6,7 +6,6 @@ from casa.common import Delimiter, Intrinsic, Keyword, Operator, TokenKind
 from casa.error import CasaErrorCollection, ErrorKind
 from tests.conftest import lex_string
 
-
 # ---------------------------------------------------------------------------
 # Keywords
 # ---------------------------------------------------------------------------

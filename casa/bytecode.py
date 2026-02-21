@@ -21,7 +21,6 @@ from casa.common import (
 )
 from casa.error import ErrorKind, raise_error
 
-
 _label_counter = 0
 
 
