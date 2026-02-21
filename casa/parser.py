@@ -543,7 +543,12 @@ def get_op_keyword(
 
 def parse_type(cursor: Cursor[Token]) -> Type:
     """Parse a type, potentially parameterized like array[int] or fn[int -> int]."""
-    base = expect_token(cursor, kind=TokenKind.IDENTIFIER)
+    next_token = cursor.peek()
+    if next_token and next_token.value == "fn":
+        base = cursor.pop()
+        assert base is not None
+    else:
+        base = expect_token(cursor, kind=TokenKind.IDENTIFIER)
     next_tok = cursor.peek()
     if not next_tok or next_tok.value != "[":
         return base.value
