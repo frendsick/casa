@@ -1,4 +1,3 @@
-import itertools
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -32,6 +31,11 @@ class Lexer:
     cursor: Cursor[str]
     file: Path
     errors: list[CasaError] = field(default_factory=list)
+    _source: str = field(init=False)
+
+    def __post_init__(self):
+        assert isinstance(self.cursor.sequence, str)
+        self._source = self.cursor.sequence
 
     def lex(self) -> list[Token]:
         tokens: list[Token] = []
@@ -52,27 +56,18 @@ class Lexer:
 
         return tokens
 
-    def rest(self) -> str:
-        return self.cursor.sequence[self.cursor.position :]  # type: ignore
-
     def current_location(self, span_length: int) -> Location:
         return Location(self.file, Span(self.cursor.position, span_length))
-
-    def expect_char(self, char: str) -> bool:
-        return char == self.cursor.pop()
-
-    def expect_startswith(self, prefix: str) -> bool:
-        if self.startswith(prefix):
-            self.cursor.position += len(prefix)
-            return True
-        return False
 
     def peek_word(self) -> str | None:
         if self.cursor.is_finished():
             return None
 
+        seq = self._source
         word = ""
-        for char in self.rest():
+        pos = self.cursor.position
+        while pos < len(seq):
+            char = seq[pos]
             if Delimiter.from_str(char):
                 break
             if char.isspace():
@@ -83,37 +78,39 @@ class Lexer:
                 word = word[:-2]
                 break
             word += char
+            pos += 1
 
         return word or None
 
     def startswith(self, prefix: str) -> bool:
-        return self.rest().startswith(prefix)
+        return self._source.startswith(prefix, self.cursor.position)
 
     def skip_whitespace(self):
-        rest = self.rest()
-        self.cursor.position += len(rest) - len(rest.lstrip())
+        seq = self._source
+        pos = self.cursor.position
+        while pos < len(seq) and seq[pos].isspace():
+            pos += 1
+        self.cursor.position = pos
 
     def skip_line(self):
-        s = self.rest()
-        newline_index = s.find("\n")
-        if newline_index != -1:
-            self.cursor.position += newline_index + 1
+        idx = self._source.find("\n", self.cursor.position)
+        if idx != -1:
+            self.cursor.position = idx + 1
         else:
-            self.cursor.position += len(s)
-
-    def is_whitespace(self) -> bool:
-        if char := self.cursor.peek():
-            return char.isspace()
-        return False
+            self.cursor.position = len(self._source)
 
     def lex_integer_literal(self) -> Token:
-        digits = "".join(itertools.takewhile(str.isdigit, self.rest()))
-        assert digits, "Could not parse integer literal"
+        seq = self._source
+        start = self.cursor.position
+        pos = start
+        while pos < len(seq) and seq[pos].isdigit():
+            pos += 1
+        assert pos > start, "Could not parse integer literal"
 
-        digit_count = len(digits)
-        location = Location(self.file, Span(self.cursor.position, digit_count))
-        self.cursor.position += digit_count
-        return Token(digits, TokenKind.LITERAL, location)
+        digit_count = pos - start
+        location = Location(self.file, Span(start, digit_count))
+        self.cursor.position = pos
+        return Token(seq[start:pos], TokenKind.LITERAL, location)
 
     def parse_fstring(self) -> list[Token]:
         start = self.cursor.position
@@ -124,8 +121,19 @@ class Lexer:
         text = ""
         text_start = self.cursor.position
 
+        def flush_text():
+            nonlocal text
+            if not text:
+                return
+            loc = Location(
+                self.file, Span(text_start, self.cursor.position - text_start)
+            )
+            tokens.append(Token(text, TokenKind.FSTRING_TEXT, loc))
+            text = ""
+
         while not self.cursor.is_finished():
             char = self.cursor.peek()
+            assert char is not None
 
             if char == "\\":
                 self.cursor.position += 1
@@ -136,12 +144,7 @@ class Lexer:
                 continue
 
             if char == "{":
-                if text:
-                    loc = Location(
-                        self.file, Span(text_start, self.cursor.position - text_start)
-                    )
-                    tokens.append(Token(text, TokenKind.FSTRING_TEXT, loc))
-                    text = ""
+                flush_text()
                 expr_start = self.cursor.position
                 expr_loc = Location(self.file, Span(expr_start, 1))
                 tokens.append(Token("{", TokenKind.FSTRING_EXPR_START, expr_loc))
@@ -151,11 +154,7 @@ class Lexer:
                 continue
 
             if char == '"':
-                if text:
-                    loc = Location(
-                        self.file, Span(text_start, self.cursor.position - text_start)
-                    )
-                    tokens.append(Token(text, TokenKind.FSTRING_TEXT, loc))
+                flush_text()
                 self.cursor.position += 1
                 end_loc = Location(self.file, Span(self.cursor.position - 1, 1))
                 tokens.append(Token("", TokenKind.FSTRING_END, end_loc))
@@ -214,7 +213,6 @@ class Lexer:
         return tokens
 
     def parse_token(self) -> Token | None:
-        self.skip_whitespace()
         match c := self.cursor.peek():
             case None:
                 return None
@@ -251,8 +249,7 @@ class Lexer:
 
         # Negative integer literal is not preceded by digit
         is_previous_digit = (
-            original_position > 0
-            and self.cursor.sequence[original_position - 1].isdigit()
+            original_position > 0 and self._source[original_position - 1].isdigit()
         )
         if is_negative_integer_literal(value) and not is_previous_digit:
             return Token(value, TokenKind.LITERAL, location)
@@ -266,7 +263,8 @@ class Lexer:
             return Token(value, TokenKind.KEYWORD, location)
         if Operator.from_str(value):
             return Token(value, TokenKind.OPERATOR, location)
-        if self.expect_startswith("::"):
+        if self.startswith("::"):
+            self.cursor.position += 2
             method = self.lex_multichar_token()
             if not method:
                 self.errors.append(
@@ -299,7 +297,7 @@ class Lexer:
 
     def parse_string_literal(self) -> str:
         start = self.cursor.position
-        assert self.expect_char('"'), 'String literal starts with `"`'
+        assert self.cursor.pop() == '"', 'String literal starts with `"`'
 
         string_literal = '"'
         closed = False
@@ -329,12 +327,12 @@ class Lexer:
         return string_literal
 
 
-def is_negative_integer_literal(value: str):
+def is_negative_integer_literal(value: str) -> bool:
     return len(value) > 1 and value[0] == "-" and value[1:].isdigit()
 
 
 def lex_file(file: Path) -> list[Token]:
-    with open(file, "r") as code_file:
+    with open(file, "r", encoding="utf-8") as code_file:
         code = code_file.read()
     SOURCE_CACHE[file] = code
     lexer = Lexer(file=file, cursor=Cursor(sequence=code))
