@@ -53,7 +53,6 @@ class Intrinsic(Enum):
 
 class OwnershipState(Enum):
     OWNED = auto()
-    MOVED = auto()
     COPY = auto()
 
 

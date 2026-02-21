@@ -51,7 +51,6 @@ class BranchedStack:
     current_branch_location: Location | None
     if_location: Location | None
     before_ownership: dict[str, OwnershipState]
-    after_ownership: dict[str, OwnershipState]
 
     def __init__(
         self,
@@ -79,7 +78,6 @@ class BranchedStack:
         self.current_branch_location = None
         self.if_location = None
         self.before_ownership = {}
-        self.after_ownership = {}
 
 
 @dataclass
