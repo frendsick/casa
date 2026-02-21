@@ -498,3 +498,343 @@ def test_lex_fstring_unclosed_expression_raises():
         lex_string('f"hello {x"')
     err = exc_info.value.errors[0]
     assert err.kind == ErrorKind.SYNTAX
+
+
+# ---------------------------------------------------------------------------
+# Arrow (`->`) handling in peek_word
+# ---------------------------------------------------------------------------
+def test_lex_arrow_standalone():
+    """Standalone -> is a delimiter."""
+    tokens = lex_string("->")
+    assert tokens[0].kind == TokenKind.DELIMITER
+    assert tokens[0].value == "->"
+
+
+def test_lex_arrow_with_spaces():
+    """-> surrounded by spaces produces three tokens."""
+    tokens = lex_string("a -> b")
+    non_eof = [t for t in tokens if t.kind != TokenKind.EOF]
+    assert len(non_eof) == 3
+    assert non_eof[0].value == "a"
+    assert non_eof[1].kind == TokenKind.DELIMITER
+    assert non_eof[1].value == "->"
+    assert non_eof[2].value == "b"
+
+
+def test_lex_arrow_after_identifier():
+    """a-> should split into identifier 'a' and delimiter '->'."""
+    tokens = lex_string("a->b")
+    non_eof = [t for t in tokens if t.kind != TokenKind.EOF]
+    assert non_eof[0].value == "a"
+    assert non_eof[0].kind == TokenKind.IDENTIFIER
+    assert non_eof[1].kind == TokenKind.DELIMITER
+    assert non_eof[1].value == "->"
+    assert non_eof[2].value == "b"
+    assert non_eof[2].kind == TokenKind.IDENTIFIER
+
+
+def test_lex_arrow_in_function_signature():
+    """Arrow in fn signature: fn foo x:int -> int."""
+    tokens = lex_string("fn foo x:int -> int")
+    values = [t.value for t in tokens if t.kind != TokenKind.EOF]
+    assert "->" in values
+    arrow_idx = values.index("->")
+    assert tokens[arrow_idx].kind == TokenKind.DELIMITER
+
+
+def test_lex_arrow_setter_syntax():
+    """Arrow setter: value person->name splits correctly."""
+    tokens = lex_string('"Jane" person->name')
+    non_eof = [t for t in tokens if t.kind != TokenKind.EOF]
+    assert non_eof[0].kind == TokenKind.LITERAL
+    assert non_eof[0].value == '"Jane"'
+    assert non_eof[1].value == "person"
+    assert non_eof[2].kind == TokenKind.DELIMITER
+    assert non_eof[2].value == "->"
+    assert non_eof[3].value == "name"
+
+
+# ---------------------------------------------------------------------------
+# Namespace (::) edge cases
+# ---------------------------------------------------------------------------
+def test_lex_namespace_basic():
+    """Type::method produces a single IDENTIFIER token."""
+    tokens = lex_string("Foo::bar")
+    assert tokens[0].kind == TokenKind.IDENTIFIER
+    assert tokens[0].value == "Foo::bar"
+
+
+def test_lex_namespace_chained():
+    """Nested namespace A::B::c produces a single token."""
+    tokens = lex_string("A::B::c")
+    assert tokens[0].kind == TokenKind.IDENTIFIER
+    assert tokens[0].value == "A::B::c"
+
+
+def test_lex_namespace_in_expression():
+    """Namespace call in an expression context."""
+    tokens = lex_string("42 Foo::bar")
+    non_eof = [t for t in tokens if t.kind != TokenKind.EOF]
+    assert len(non_eof) == 2
+    assert non_eof[0].kind == TokenKind.LITERAL
+    assert non_eof[1].kind == TokenKind.IDENTIFIER
+    assert non_eof[1].value == "Foo::bar"
+
+
+def test_lex_namespace_missing_method_eof():
+    """Trailing :: at EOF raises syntax error."""
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        lex_string("Foo::")
+    assert exc_info.value.errors[0].kind == ErrorKind.SYNTAX
+
+
+def test_lex_namespace_missing_method_space():
+    """:: followed by space and then identifier raises syntax error."""
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        lex_string("Foo:: bar")
+    assert exc_info.value.errors[0].kind == ErrorKind.SYNTAX
+
+
+# ---------------------------------------------------------------------------
+# Whitespace handling
+# ---------------------------------------------------------------------------
+def test_lex_whitespace_only():
+    """Input of only whitespace produces just EOF."""
+    tokens = lex_string("   \t\n  ")
+    assert len(tokens) == 1
+    assert tokens[0].kind == TokenKind.EOF
+
+
+def test_lex_multiple_whitespace_between_tokens():
+    """Multiple spaces/tabs between tokens are skipped correctly."""
+    tokens = lex_string("42   \t   hello")
+    non_eof = [t for t in tokens if t.kind != TokenKind.EOF]
+    assert len(non_eof) == 2
+    assert non_eof[0].value == "42"
+    assert non_eof[1].value == "hello"
+
+
+def test_lex_leading_trailing_whitespace():
+    """Leading and trailing whitespace is ignored."""
+    tokens = lex_string("   42   ")
+    non_eof = [t for t in tokens if t.kind != TokenKind.EOF]
+    assert len(non_eof) == 1
+    assert non_eof[0].value == "42"
+
+
+def test_lex_newlines_between_tokens():
+    """Newlines separate tokens properly."""
+    tokens = lex_string("42\n43\n44")
+    non_eof = [t for t in tokens if t.kind != TokenKind.EOF]
+    assert len(non_eof) == 3
+    assert [t.value for t in non_eof] == ["42", "43", "44"]
+
+
+# ---------------------------------------------------------------------------
+# Long inputs (verify no O(n^2) regression)
+# ---------------------------------------------------------------------------
+def test_lex_long_string():
+    """Long string literal lexes without error."""
+    content = "a" * 5000
+    tokens = lex_string(f'"{content}"')
+    assert tokens[0].kind == TokenKind.LITERAL
+    assert tokens[0].value == f'"{content}"'
+
+
+def test_lex_long_identifier():
+    """Long identifier lexes without error."""
+    name = "x" * 5000
+    tokens = lex_string(name)
+    assert tokens[0].kind == TokenKind.IDENTIFIER
+    assert tokens[0].value == name
+
+
+def test_lex_many_tokens():
+    """Many tokens in sequence lex correctly."""
+    source = " ".join(str(i) for i in range(1000))
+    tokens = lex_string(source)
+    non_eof = [t for t in tokens if t.kind != TokenKind.EOF]
+    assert len(non_eof) == 1000
+    assert all(t.kind == TokenKind.LITERAL for t in non_eof)
+
+
+# ---------------------------------------------------------------------------
+# Delimiter.from_str and Operator.from_str correctness
+# ---------------------------------------------------------------------------
+def test_delimiter_from_str_all_values():
+    """Delimiter.from_str returns correct enum for every delimiter string."""
+    expected = {
+        "->": Delimiter.ARROW,
+        ",": Delimiter.COMMA,
+        ":": Delimiter.COLON,
+        ".": Delimiter.DOT,
+        "#": Delimiter.HASHTAG,
+        "{": Delimiter.OPEN_BRACE,
+        "}": Delimiter.CLOSE_BRACE,
+        "[": Delimiter.OPEN_BRACKET,
+        "]": Delimiter.CLOSE_BRACKET,
+        "(": Delimiter.OPEN_PAREN,
+        ")": Delimiter.CLOSE_PAREN,
+    }
+    for string, delim in expected.items():
+        assert Delimiter.from_str(string) == delim
+
+
+def test_delimiter_from_str_returns_none_for_unknown():
+    """Delimiter.from_str returns None for non-delimiter strings."""
+    assert Delimiter.from_str("x") is None
+    assert Delimiter.from_str("") is None
+    assert Delimiter.from_str("abc") is None
+    assert Delimiter.from_str("+") is None
+
+
+def test_operator_from_str_all_values():
+    """Operator.from_str returns correct enum for every operator string."""
+    expected = {
+        "+": Operator.PLUS,
+        "-": Operator.MINUS,
+        "*": Operator.MULTIPLICATION,
+        "/": Operator.DIVISION,
+        "%": Operator.MODULO,
+        "<<": Operator.SHL,
+        ">>": Operator.SHR,
+        "&&": Operator.AND,
+        "||": Operator.OR,
+        "!": Operator.NOT,
+        "==": Operator.EQ,
+        ">=": Operator.GE,
+        ">": Operator.GT,
+        "<=": Operator.LE,
+        "<": Operator.LT,
+        "!=": Operator.NE,
+        "=": Operator.ASSIGN,
+        "-=": Operator.ASSIGN_DECREMENT,
+        "+=": Operator.ASSIGN_INCREMENT,
+    }
+    for string, op in expected.items():
+        assert Operator.from_str(string) == op
+
+
+def test_operator_from_str_returns_none_for_unknown():
+    """Operator.from_str returns None for non-operator strings."""
+    assert Operator.from_str("x") is None
+    assert Operator.from_str("") is None
+    assert Operator.from_str("**") is None
+    assert Operator.from_str("=>") is None
+
+
+# ---------------------------------------------------------------------------
+# Delimiter.from_str and Operator.from_str consistency
+# ---------------------------------------------------------------------------
+def test_delimiter_from_str_consistent_with_enum():
+    """Every Delimiter enum member has a from_str mapping."""
+    all_strings = ["->", ",", ":", ".", "#", "{", "}", "[", "]", "(", ")"]
+    assert len(all_strings) == len(Delimiter)
+    for s in all_strings:
+        assert Delimiter.from_str(s) is not None
+
+
+def test_operator_from_str_consistent_with_enum():
+    """Every Operator enum member has a from_str mapping."""
+    all_strings = [
+        "+", "-", "*", "/", "%",
+        "<<", ">>",
+        "&&", "||", "!",
+        "==", ">=", ">", "<=", "<", "!=",
+        "=", "-=", "+=",
+    ]
+    assert len(all_strings) == len(Operator)
+    for s in all_strings:
+        assert Operator.from_str(s) is not None
+
+
+# ---------------------------------------------------------------------------
+# Function reference (&)
+# ---------------------------------------------------------------------------
+def test_lex_function_reference():
+    """&name produces an IDENTIFIER token."""
+    tokens = lex_string("&foo")
+    assert tokens[0].kind == TokenKind.IDENTIFIER
+    assert tokens[0].value == "&foo"
+
+
+# ---------------------------------------------------------------------------
+# Mixed token sequences
+# ---------------------------------------------------------------------------
+def test_lex_struct_instantiation():
+    """Struct instantiation: fields then struct name."""
+    tokens = lex_string('18 "John" Person')
+    non_eof = [t for t in tokens if t.kind != TokenKind.EOF]
+    assert len(non_eof) == 3
+    assert non_eof[0].kind == TokenKind.LITERAL
+    assert non_eof[0].value == "18"
+    assert non_eof[1].kind == TokenKind.LITERAL
+    assert non_eof[1].value == '"John"'
+    assert non_eof[2].kind == TokenKind.IDENTIFIER
+    assert non_eof[2].value == "Person"
+
+
+def test_lex_dot_accessor():
+    """Dot in accessor context: person.name."""
+    tokens = lex_string("person.name")
+    non_eof = [t for t in tokens if t.kind != TokenKind.EOF]
+    assert non_eof[0].value == "person"
+    assert non_eof[1].kind == TokenKind.DELIMITER
+    assert non_eof[1].value == "."
+    assert non_eof[2].value == "name"
+
+
+def test_lex_type_cast():
+    """Type cast (TypeName) produces delimiter and identifier tokens."""
+    tokens = lex_string("(SomeType)")
+    non_eof = [t for t in tokens if t.kind != TokenKind.EOF]
+    assert non_eof[0].kind == TokenKind.DELIMITER
+    assert non_eof[0].value == "("
+    assert non_eof[1].kind == TokenKind.IDENTIFIER
+    assert non_eof[1].value == "SomeType"
+    assert non_eof[2].kind == TokenKind.DELIMITER
+    assert non_eof[2].value == ")"
+
+
+def test_lex_array_literal():
+    """Array literal [1, 2, 3] produces correct tokens."""
+    tokens = lex_string("[1, 2, 3]")
+    non_eof = [t for t in tokens if t.kind != TokenKind.EOF]
+    values = [t.value for t in non_eof]
+    assert values == ["[", "1", ",", "2", ",", "3", "]"]
+
+
+def test_lex_lambda_block():
+    """Lambda { body } produces delimiter and body tokens."""
+    tokens = lex_string("{ 2 * }")
+    non_eof = [t for t in tokens if t.kind != TokenKind.EOF]
+    assert non_eof[0].kind == TokenKind.DELIMITER
+    assert non_eof[0].value == "{"
+    assert non_eof[-1].kind == TokenKind.DELIMITER
+    assert non_eof[-1].value == "}"
+
+
+# ---------------------------------------------------------------------------
+# Comment edge cases
+# ---------------------------------------------------------------------------
+def test_lex_comment_at_end_of_file():
+    """Comment at EOF with no trailing newline."""
+    tokens = lex_string("42 # trailing comment")
+    non_eof = [t for t in tokens if t.kind != TokenKind.EOF]
+    assert len(non_eof) == 1
+    assert non_eof[0].value == "42"
+
+
+def test_lex_empty_comment():
+    """Just a # with nothing after it."""
+    tokens = lex_string("#")
+    assert len(tokens) == 1
+    assert tokens[0].kind == TokenKind.EOF
+
+
+def test_lex_multiple_comment_lines():
+    """Multiple lines with comments interspersed."""
+    tokens = lex_string("1\n# comment\n2\n# another\n3")
+    non_eof = [t for t in tokens if t.kind != TokenKind.EOF]
+    assert len(non_eof) == 3
+    assert [t.value for t in non_eof] == ["1", "2", "3"]
