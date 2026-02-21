@@ -160,6 +160,15 @@ def resolve_identifiers(
                 # Function reference: &name pushes a function as a value
                 if identifier.startswith("&"):
                     function_name = identifier[1:]
+                    if not function_name:
+                        errors.append(
+                            CasaError(
+                                ErrorKind.SYNTAX,
+                                "Expected function name after `&`",
+                                op.location,
+                            )
+                        )
+                        continue
                     global_function = GLOBAL_FUNCTIONS.get(function_name)
                     if not global_function:
                         errors.append(

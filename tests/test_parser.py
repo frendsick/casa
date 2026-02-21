@@ -374,6 +374,12 @@ def test_resolve_fn_ref_marks_used():
     assert GLOBAL_FUNCTIONS["greet"].is_used is True
 
 
+def test_resolve_fn_ref_bare_ampersand_raises():
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        resolve_string("&")
+    assert exc_info.value.errors[0].kind == ErrorKind.SYNTAX
+
+
 # ---------------------------------------------------------------------------
 # Generic type parameters (parsing)
 # ---------------------------------------------------------------------------

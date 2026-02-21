@@ -310,6 +310,16 @@ def test_typecheck_fn_ref_accessor():
     assert sig.return_types == ["fn[Point -> int]"]
 
 
+def test_typecheck_fn_ref_inside_function():
+    code = """
+    fn inc a:int -> int { a 1 + }
+    fn apply_inc x:int -> int { x &inc exec }
+    5 apply_inc
+    """
+    sig = typecheck_string(code)
+    assert sig.return_types == ["int"]
+
+
 # ---------------------------------------------------------------------------
 # ANY_TYPE matching
 # ---------------------------------------------------------------------------
