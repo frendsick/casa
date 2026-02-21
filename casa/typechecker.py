@@ -112,16 +112,16 @@ class TypeChecker:
         origin = self.stack_origins.pop()
         typ = self.stack.pop()
         self.last_pop_origin = origin
-        if expected == ANY_TYPE or (
-            expected == "array" and is_array_type(typ)
-        ) or (
-            expected == "fn" and is_fn_type(typ)
+        if (
+            expected == ANY_TYPE
+            or (expected == "array" and is_array_type(typ))
+            or (expected == "fn" and is_fn_type(typ))
         ):
             return typ
-        if typ == ANY_TYPE or (
-            typ == "array" and is_array_type(expected)
-        ) or (
-            typ == "fn" and is_fn_type(expected)
+        if (
+            typ == ANY_TYPE
+            or (typ == "array" and is_array_type(expected))
+            or (typ == "fn" and is_fn_type(expected))
         ):
             return expected
         if typ == expected:
@@ -228,15 +228,13 @@ class TypeChecker:
                 if is_fn_type(actual):
                     actual_sig_str = extract_fn_signature_str(actual)
                     if actual_sig_str:
-                        expected_inner = Signature.from_str(fn_sig_str)
-                        actual_inner = Signature.from_str(actual_sig_str)
-                        for ep, ap in zip(
-                            expected_inner.parameters, actual_inner.parameters
-                        ):
+                        exp_fn_sig = Signature.from_str(fn_sig_str)
+                        act_fn_sig = Signature.from_str(actual_sig_str)
+                        for ep, ap in zip(exp_fn_sig.parameters, act_fn_sig.parameters):
                             if ep.typ in signature.type_vars:
                                 self._bind_type_var(bindings, ep.typ, ap.typ)
                         for er, ar in zip(
-                            expected_inner.return_types, actual_inner.return_types
+                            exp_fn_sig.return_types, act_fn_sig.return_types
                         ):
                             if er in signature.type_vars:
                                 self._bind_type_var(bindings, er, ar)
