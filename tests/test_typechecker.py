@@ -796,3 +796,118 @@ def test_typecheck_array_with_global_variable():
     code = "10 = g [g, 20, 30]"
     sig = typecheck_string(code)
     assert sig.return_types == ["array[int]"]
+
+
+# ---------------------------------------------------------------------------
+# fn[sig] as parameter type (type checker)
+# ---------------------------------------------------------------------------
+def test_typecheck_fn_type_parameter():
+    """Function with fn[int -> int] parameter type checks correctly."""
+    code = """
+    fn apply f:fn[int -> int] x:int -> int { x f exec }
+    5 { 1 + } apply
+    """
+    sig = typecheck_string(code)
+    assert sig.return_types == ["int"]
+
+
+def test_typecheck_generic_fn_type_binding():
+    """Generic fn type parameter binds type variables correctly."""
+    code = """
+    fn apply[T] f:fn[T -> T] x:T -> T { x f exec }
+    5 { 1 + } apply
+    """
+    sig = typecheck_string(code)
+    assert sig.return_types == ["int"]
+
+
+def test_typecheck_generic_fn_type_two_vars():
+    """Generic fn type with T1 and T2 binds correctly."""
+    code = """
+    fn transform[T1 T2] f:fn[T1 -> T2] x:T1 -> T2 { x f exec }
+    42 { 0 > } transform
+    """
+    sig = typecheck_string(code)
+    assert sig.return_types == ["bool"]
+
+
+def test_typecheck_fn_type_records_in_signature():
+    """fn[int -> int] is properly recorded in the function signature."""
+    code = "fn apply f:fn[int -> int] x:int -> int { x f exec }"
+    typecheck_string(code)
+    fn = GLOBAL_FUNCTIONS["apply"]
+    assert fn.signature is not None
+    assert [p.typ for p in fn.signature.parameters] == ["fn[int -> int]", "int"]
+    assert fn.signature.return_types == ["int"]
+
+
+# ---------------------------------------------------------------------------
+# Signature.from_str with fn types
+# ---------------------------------------------------------------------------
+def test_signature_from_str_fn_type():
+    """Signature.from_str handles fn[int -> int] as a parameter type."""
+    sig = Signature.from_str("fn[int -> int] int -> int")
+    assert [p.typ for p in sig.parameters] == ["fn[int -> int]", "int"]
+    assert sig.return_types == ["int"]
+
+
+def test_signature_from_str_fn_type_nested():
+    """Signature.from_str handles fn[array[int] -> int] with nested brackets."""
+    sig = Signature.from_str("fn[array[int] -> int] -> int")
+    assert [p.typ for p in sig.parameters] == ["fn[array[int] -> int]"]
+    assert sig.return_types == ["int"]
+
+
+def test_signature_from_str_fn_type_multi_param():
+    """Signature.from_str handles fn[int int -> int] with multiple params."""
+    sig = Signature.from_str("fn[int int -> int] int int -> int")
+    assert [p.typ for p in sig.parameters] == ["fn[int int -> int]", "int", "int"]
+    assert sig.return_types == ["int"]
+
+
+# ---------------------------------------------------------------------------
+# map / filter / reduce (type checker)
+# ---------------------------------------------------------------------------
+def test_typecheck_map_returns_array_int():
+    """map with fn[int -> int] on array[int] returns array[int]."""
+    code = STD_INCLUDE + "{ 2 * } [1, 2, 3] .map"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["array[int]"]
+
+
+def test_typecheck_map_type_transform():
+    """map with fn[int -> bool] on array[int] returns array[bool]."""
+    code = STD_INCLUDE + "{ 0 > } [1, 2, 3] .map"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["array[bool]"]
+
+
+def test_typecheck_filter_returns_array_int():
+    """filter with fn[int -> bool] on array[int] returns array[int]."""
+    code = STD_INCLUDE + "{ 1 > } [1, 2, 3] .filter"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["array[int]"]
+
+
+def test_typecheck_reduce_returns_int():
+    """reduce with fn[int int -> int] on array[int] returns int."""
+    code = STD_INCLUDE + "{ + } 0 [1, 2, 3] .reduce"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["int"]
+
+
+def test_typecheck_map_then_filter():
+    """Chaining map then filter preserves array type."""
+    code = STD_INCLUDE + """
+    { 2 * } [1, 2, 3] .map = mapped
+    { 4 > } mapped .filter
+    """
+    sig = typecheck_string(code)
+    assert sig.return_types == ["array[int]"]
+
+
+def test_typecheck_map_str_array():
+    """map on array[str] with any->any identity returns array[any]."""
+    code = STD_INCLUDE + '{ dup drop } ["a", "b", "c"] .map'
+    sig = typecheck_string(code)
+    assert sig.return_types == ["array[any]"]
