@@ -500,3 +500,79 @@ def test_parse_fstring_empty():
     assert len(ops) == 1
     assert ops[0].kind == OpKind.PUSH_STR
     assert ops[0].value == ""
+
+
+# ---------------------------------------------------------------------------
+# fn[sig] as parameter type (parsing)
+# ---------------------------------------------------------------------------
+def test_parse_fn_type_named_parameter():
+    """fn[int -> int] parses correctly as a named parameter type."""
+    parse_string("fn apply f:fn[int -> int] x:int -> int { x f exec }")
+    fn = GLOBAL_FUNCTIONS["apply"]
+    assert fn.signature is not None
+    assert [p.typ for p in fn.signature.parameters] == ["fn[int -> int]", "int"]
+    assert [p.name for p in fn.signature.parameters] == ["f", "x"]
+    assert fn.signature.return_types == ["int"]
+
+
+def test_parse_fn_type_generic_parameter():
+    """fn[T -> T] parses as a generic parameter type within a generic function."""
+    parse_string("fn apply[T] f:fn[T -> T] x:T -> T { x f exec }")
+    fn = GLOBAL_FUNCTIONS["apply"]
+    assert fn.signature is not None
+    assert [p.typ for p in fn.signature.parameters] == ["fn[T -> T]", "T"]
+    assert fn.signature.return_types == ["T"]
+    assert fn.signature.type_vars == {"T"}
+
+
+def test_parse_fn_type_nested_brackets():
+    """fn[array[int] -> int] with nested brackets parses correctly."""
+    parse_string(
+        "fn apply f:fn[array[int] -> int] arr:array[int] -> int { arr f exec }"
+    )
+    fn = GLOBAL_FUNCTIONS["apply"]
+    assert fn.signature is not None
+    assert [p.typ for p in fn.signature.parameters] == [
+        "fn[array[int] -> int]",
+        "array[int]",
+    ]
+    assert fn.signature.return_types == ["int"]
+
+
+def test_parse_fn_type_multi_param():
+    """fn[int int -> int] with multiple parameters parses correctly."""
+    parse_string("fn apply f:fn[int int -> int] a:int b:int -> int { b a f exec }")
+    fn = GLOBAL_FUNCTIONS["apply"]
+    assert fn.signature is not None
+    assert [p.typ for p in fn.signature.parameters] == [
+        "fn[int int -> int]",
+        "int",
+        "int",
+    ]
+
+
+def test_parse_fn_type_unnamed_parameter():
+    """fn[int -> int] parses correctly as an unnamed parameter type."""
+    parse_string("fn apply fn[int -> int] int -> int { exec }")
+    fn = GLOBAL_FUNCTIONS["apply"]
+    assert fn.signature is not None
+    assert [p.typ for p in fn.signature.parameters] == ["fn[int -> int]", "int"]
+    assert fn.signature.return_types == ["int"]
+
+
+def test_parse_fn_type_in_return_type():
+    """fn[int -> int] can appear as a return type."""
+    parse_string("fn get_fn -> fn[int -> int] { { 1 + } }")
+    fn = GLOBAL_FUNCTIONS["get_fn"]
+    assert fn.signature is not None
+    assert fn.signature.return_types == ["fn[int -> int]"]
+
+
+def test_parse_fn_type_two_generic_vars():
+    """fn[T1 -> T2] parses with two distinct generic type variables."""
+    parse_string("fn transform[T1 T2] f:fn[T1 -> T2] x:T1 -> T2 { x f exec }")
+    fn = GLOBAL_FUNCTIONS["transform"]
+    assert fn.signature is not None
+    assert [p.typ for p in fn.signature.parameters] == ["fn[T1 -> T2]", "T1"]
+    assert fn.signature.return_types == ["T2"]
+    assert fn.signature.type_vars == {"T1", "T2"}

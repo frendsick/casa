@@ -186,6 +186,16 @@ Call a function value with `exec`:
 21 double exec print   # 42
 ```
 
+`fn[sig]` can be used as a parameter type in function declarations, allowing functions to accept callbacks:
+
+```casa
+fn apply f:fn[int -> int] x:int -> int {
+    x f exec
+}
+
+40 { 2 + } apply print   # 42
+```
+
 See [Functions and Lambdas](functions-and-lambdas.md#lambdas) for details.
 
 ### User-Defined Structs

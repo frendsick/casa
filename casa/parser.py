@@ -542,12 +542,37 @@ def get_op_keyword(
 
 
 def parse_type(cursor: Cursor[Token]) -> Type:
-    """Parse a type, potentially parameterized like array[int]."""
-    base = expect_token(cursor, kind=TokenKind.IDENTIFIER)
+    """Parse a type, potentially parameterized like array[int] or fn[int -> int]."""
+    next_token = cursor.peek()
+    if next_token and next_token.value == "fn":
+        base = cursor.pop()
+        assert base is not None
+    else:
+        base = expect_token(cursor, kind=TokenKind.IDENTIFIER)
     next_tok = cursor.peek()
     if not next_tok or next_tok.value != "[":
         return base.value
     cursor.position += 1  # consume [
+
+    # fn types need balanced bracket tracking for inner signatures
+    if base.value == "fn":
+        result: list[str] = []
+        depth = 0
+        while token := cursor.pop():
+            if token.value == "[":
+                depth += 1
+                result.append("[")
+            elif token.value == "]":
+                if depth == 0:
+                    break
+                depth -= 1
+                result.append("]")
+            else:
+                if result and result[-1] not in ("[",) and token.value not in ("]",):
+                    result.append(" ")
+                result.append(token.value)
+        return f"fn[{''.join(result)}]"
+
     inner = parse_type(cursor)
     expect_token(cursor, value="]")
     return f"{base.value}[{inner}]"
@@ -741,6 +766,14 @@ def parse_parameters(cursor: Cursor[Token]) -> list[Parameter]:
         if name_or_type.value in ("->", "{"):
             cursor.position -= 1
             return parameters
+
+        # Allow fn keyword as an unnamed parameter type
+        if name_or_type.value == "fn":
+            cursor.position -= 1
+            typ = parse_type(cursor)
+            parameters.append(Parameter(typ))
+            continue
+
         if name_or_type.kind != TokenKind.IDENTIFIER:
             raise_error(
                 ErrorKind.UNEXPECTED_TOKEN,

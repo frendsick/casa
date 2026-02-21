@@ -589,6 +589,22 @@ def extract_array_element_type(typ: str) -> str | None:
     return typ[len(array_prefix) : -1]
 
 
+def is_fn_type(typ: str) -> bool:
+    """Check if a type is a function type (bare or parameterized)."""
+    return typ == "fn" or typ.startswith("fn[")
+
+
+def extract_fn_signature_str(typ: str) -> str | None:
+    """Extract the signature string from a parameterized fn type.
+
+    Returns None for bare 'fn' or non-fn types.
+    """
+    fn_prefix = "fn["
+    if not typ.startswith(fn_prefix) or not typ.endswith("]"):
+        return None
+    return typ[len(fn_prefix) : -1]
+
+
 @dataclass
 class Parameter:
     typ: Type
@@ -608,21 +624,44 @@ class Signature:
 
     @classmethod
     def from_str(cls, repr: str) -> Self:
-        def parse_type_list(part: str) -> list[Type]:
-            if part.strip() == "None":
-                return []
+        def tokenize(s: str) -> list[str]:
+            """Split a signature string into type tokens, respecting brackets."""
+            tokens: list[str] = []
+            current: list[str] = []
+            depth = 0
+            for ch in s.strip():
+                if ch == "[":
+                    depth += 1
+                    current.append(ch)
+                elif ch == "]":
+                    depth -= 1
+                    current.append(ch)
+                elif ch == " " and depth == 0:
+                    if current:
+                        tokens.append("".join(current))
+                        current = []
+                else:
+                    current.append(ch)
+            if current:
+                tokens.append("".join(current))
+            return tokens
 
-            types: list[Type] = []
-            for token in part.split():
-                types.append(token)
-            return types
-
-        if "->" not in repr:
+        def split_on_arrow(tokens: list[str]) -> tuple[list[str], list[str]]:
+            """Split token list on '->' at bracket depth 0."""
+            for i, tok in enumerate(tokens):
+                if tok == "->":
+                    return tokens[:i], tokens[i + 1 :]
             raise ValueError(f"Invalid signature: {repr}")
 
-        param_part, return_part = repr.split("->", 1)
-        parameters = [Parameter(p) for p in parse_type_list(param_part)]
-        return_types = parse_type_list(return_part)
+        def parse_type_list(tokens: list[str]) -> list[Type]:
+            if len(tokens) == 1 and tokens[0] == "None":
+                return []
+            return list(tokens)
+
+        tokens = tokenize(repr)
+        param_tokens, return_tokens = split_on_arrow(tokens)
+        parameters = [Parameter(p) for p in parse_type_list(param_tokens)]
+        return_types = parse_type_list(return_tokens)
         return cls(parameters, return_types)
 
     def __repr__(self):
