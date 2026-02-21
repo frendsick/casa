@@ -95,21 +95,23 @@ class Delimiter(Enum):
 
     @classmethod
     def from_str(cls, value: str) -> Self | None:
-        mapping = {
-            "->": cls.ARROW,
-            ",": cls.COMMA,
-            ":": cls.COLON,
-            ".": cls.DOT,
-            "#": cls.HASHTAG,
-            "{": cls.OPEN_BRACE,
-            "}": cls.CLOSE_BRACE,
-            "[": cls.OPEN_BRACKET,
-            "]": cls.CLOSE_BRACKET,
-            "(": cls.OPEN_PAREN,
-            ")": cls.CLOSE_PAREN,
-        }
-        assert len(mapping) == len(Delimiter), "Exhaustive handling for `Delimiter`"
-        return mapping.get(value)  # type: ignore
+        return cls._MAPPING.get(value)  # type: ignore
+
+
+Delimiter._MAPPING = {  # type: ignore
+    "->": Delimiter.ARROW,
+    ",": Delimiter.COMMA,
+    ":": Delimiter.COLON,
+    ".": Delimiter.DOT,
+    "#": Delimiter.HASHTAG,
+    "{": Delimiter.OPEN_BRACE,
+    "}": Delimiter.CLOSE_BRACE,
+    "[": Delimiter.OPEN_BRACKET,
+    "]": Delimiter.CLOSE_BRACKET,
+    "(": Delimiter.OPEN_PAREN,
+    ")": Delimiter.CLOSE_PAREN,
+}
+assert len(Delimiter._MAPPING) == len(Delimiter), "Exhaustive handling for `Delimiter`"  # type: ignore
 
 
 class Operator(Enum):
@@ -144,34 +146,36 @@ class Operator(Enum):
 
     @classmethod
     def from_str(cls, value: str) -> Self | None:
-        mapping = {
-            # Arithmetic
-            "+": cls.PLUS,
-            "-": cls.MINUS,
-            "*": cls.MULTIPLICATION,
-            "/": cls.DIVISION,
-            "%": cls.MODULO,
-            # Bitshift
-            "<<": cls.SHL,
-            ">>": cls.SHR,
-            # Boolean
-            "&&": cls.AND,
-            "||": cls.OR,
-            "!": cls.NOT,
-            # Comparison
-            "==": cls.EQ,
-            ">=": cls.GE,
-            ">": cls.GT,
-            "<=": cls.LE,
-            "<": cls.LT,
-            "!=": cls.NE,
-            # Assignment
-            "=": cls.ASSIGN,
-            "-=": cls.ASSIGN_DECREMENT,
-            "+=": cls.ASSIGN_INCREMENT,
-        }
-        assert len(mapping) == len(Operator), "Exhaustive handling for `Operator`"
-        return mapping.get(value)  # type: ignore
+        return cls._MAPPING.get(value)  # type: ignore
+
+
+Operator._MAPPING = {  # type: ignore
+    # Arithmetic
+    "+": Operator.PLUS,
+    "-": Operator.MINUS,
+    "*": Operator.MULTIPLICATION,
+    "/": Operator.DIVISION,
+    "%": Operator.MODULO,
+    # Bitshift
+    "<<": Operator.SHL,
+    ">>": Operator.SHR,
+    # Boolean
+    "&&": Operator.AND,
+    "||": Operator.OR,
+    "!": Operator.NOT,
+    # Comparison
+    "==": Operator.EQ,
+    ">=": Operator.GE,
+    ">": Operator.GT,
+    "<=": Operator.LE,
+    "<": Operator.LT,
+    "!=": Operator.NE,
+    # Assignment
+    "=": Operator.ASSIGN,
+    "-=": Operator.ASSIGN_DECREMENT,
+    "+=": Operator.ASSIGN_INCREMENT,
+}
+assert len(Operator._MAPPING) == len(Operator), "Exhaustive handling for `Operator`"  # type: ignore
 
 
 @dataclass
