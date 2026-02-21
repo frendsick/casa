@@ -542,12 +542,30 @@ def get_op_keyword(
 
 
 def parse_type(cursor: Cursor[Token]) -> Type:
-    """Parse a type, potentially parameterized like array[int]."""
+    """Parse a type, potentially parameterized like array[int] or fn[int -> int]."""
     base = expect_token(cursor, kind=TokenKind.IDENTIFIER)
     next_tok = cursor.peek()
     if not next_tok or next_tok.value != "[":
         return base.value
     cursor.position += 1  # consume [
+
+    # fn types need balanced bracket tracking for inner signatures
+    if base.value == "fn":
+        parts: list[str] = []
+        depth = 0
+        while token := cursor.pop():
+            if token.value == "[":
+                depth += 1
+                parts.append(token.value)
+            elif token.value == "]":
+                if depth == 0:
+                    break
+                depth -= 1
+                parts.append(token.value)
+            else:
+                parts.append(token.value)
+        return f"fn[{' '.join(parts)}]"
+
     inner = parse_type(cursor)
     expect_token(cursor, value="]")
     return f"{base.value}[{inner}]"

@@ -16,7 +16,9 @@ from casa.common import (
     Type,
     Variable,
     extract_array_element_type,
+    extract_fn_signature_str,
     is_array_type,
+    is_fn_type,
 )
 from casa.error import (
     WARNINGS,
@@ -205,6 +207,38 @@ class TypeChecker:
                         got=f"`{actual}`",
                     )
                 continue
+            # Handle fn[sig] types containing type vars, e.g. fn[T -> T]
+            fn_sig_str = extract_fn_signature_str(expected.typ)
+            if fn_sig_str and any(tv in fn_sig_str for tv in signature.type_vars):
+                actual = self.stack_pop()
+                if is_fn_type(actual):
+                    actual_sig_str = extract_fn_signature_str(actual)
+                    if actual_sig_str:
+                        expected_inner = Signature.from_str(fn_sig_str)
+                        actual_inner = Signature.from_str(actual_sig_str)
+                        for ep, ap in zip(
+                            expected_inner.parameters, actual_inner.parameters
+                        ):
+                            if ep.typ in signature.type_vars:
+                                self._bind_type_var(bindings, ep.typ, ap.typ)
+                        for er, ar in zip(
+                            expected_inner.return_types, actual_inner.return_types
+                        ):
+                            if er in signature.type_vars:
+                                self._bind_type_var(bindings, er, ar)
+                elif actual == ANY_TYPE:
+                    for tv in signature.type_vars:
+                        if tv in fn_sig_str:
+                            self._bind_type_var(bindings, tv, ANY_TYPE)
+                else:
+                    raise_error(
+                        ErrorKind.TYPE_MISMATCH,
+                        "Type mismatch",
+                        self.current_location,
+                        expected=f"`{expected.typ}`",
+                        got=f"`{actual}`",
+                    )
+                continue
             self.expect_type(expected.typ)
         self.current_expect_context = None
 
@@ -216,6 +250,14 @@ class TypeChecker:
             inner = extract_array_element_type(return_type)
             if inner and inner in bindings:
                 self.stack_push(f"array[{bindings[inner]}]")
+                continue
+            # Handle fn[sig] return types with bound type vars
+            fn_sig_str = extract_fn_signature_str(return_type)
+            if fn_sig_str and any(tv in fn_sig_str for tv in bindings):
+                resolved = fn_sig_str
+                for tv, bound in bindings.items():
+                    resolved = resolved.replace(tv, bound)
+                self.stack_push(f"fn[{resolved}]")
                 continue
             self.stack_push(return_type)
 
@@ -472,9 +514,7 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 if fn_ptr == fn_symmetrical:
                     continue
 
-                start = fn_ptr.index("[") + 1
-                end = fn_ptr.index("]", start)
-                tc.apply_signature(Signature.from_str(fn_ptr[start:end]), "exec")
+                tc.apply_signature(Signature.from_str(fn_ptr[3:-1]), "exec")
             case OpKind.FN_RETURN:
                 if tc.return_types is None:
                     tc.return_types = tc.stack.copy()
@@ -895,6 +935,11 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
             inner = extract_array_element_type(p.typ)
             if inner and inner in function.signature.type_vars:
                 param_tvs.add(inner)
+            fn_sig_str = extract_fn_signature_str(p.typ)
+            if fn_sig_str:
+                for tv in function.signature.type_vars:
+                    if tv in fn_sig_str:
+                        param_tvs.add(tv)
         ret_only = {
             r
             for r in function.signature.return_types
