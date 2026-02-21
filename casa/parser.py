@@ -32,9 +32,11 @@ from casa.lexer import is_negative_integer_literal, lex_file
 
 INTRINSIC_TO_OPKIND = {
     Intrinsic.ALLOC: OpKind.HEAP_ALLOC,
+    Intrinsic.CLONE: OpKind.CLONE,
     Intrinsic.DROP: OpKind.DROP,
     Intrinsic.DUP: OpKind.DUP,
     Intrinsic.EXEC: OpKind.FN_EXEC,
+    Intrinsic.FREE: OpKind.HEAP_FREE,
     Intrinsic.LOAD: OpKind.LOAD,
     Intrinsic.OVER: OpKind.OVER,
     Intrinsic.PRINT: OpKind.PRINT,
@@ -647,7 +649,13 @@ def parse_struct(cursor: Cursor[Token]) -> Struct:
         getter_ops.append(Op(Intrinsic.LOAD, OpKind.LOAD, member_location))
         getter_params = [Parameter(struct_name.value)]
         getter_signature = Signature(getter_params, [member_type_str])
-        getter = Function(getter_name, getter_ops, member_location, getter_signature)
+        getter = Function(
+            getter_name,
+            getter_ops,
+            member_location,
+            getter_signature,
+            is_auto_generated=True,
+        )
         GLOBAL_FUNCTIONS[getter_name] = getter
 
         # Setter
@@ -664,7 +672,13 @@ def parse_struct(cursor: Cursor[Token]) -> Struct:
         setter_ops.append(Op(Intrinsic.STORE, OpKind.STORE, member_location))
         setter_params = [Parameter(struct_name.value), Parameter(member_type_str)]
         setter_signature = Signature(setter_params, [])
-        setter = Function(setter_name, setter_ops, member_location, setter_signature)
+        setter = Function(
+            setter_name,
+            setter_ops,
+            member_location,
+            setter_signature,
+            is_auto_generated=True,
+        )
         GLOBAL_FUNCTIONS[setter_name] = setter
 
         # Add to members list

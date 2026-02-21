@@ -46,7 +46,7 @@ def test_dup_copy_types_allowed():
 def test_over_owned_array_error():
     """over on owned type produces DUP_OWNED error."""
     with pytest.raises(CasaErrorCollection) as exc_info:
-        typecheck_string("42 [1, 2] over")
+        typecheck_string("[1, 2] 42 over")
     assert any(e.kind == ErrorKind.DUP_OWNED for e in exc_info.value.errors)
 
 

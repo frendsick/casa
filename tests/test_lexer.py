@@ -51,6 +51,8 @@ ALL_INTRINSICS = [
     "store",
     "print",
     "exec",
+    "clone",
+    "free",
 ]
 assert len(ALL_INTRINSICS) == len(Intrinsic)
 

@@ -751,8 +751,15 @@ def test_typecheck_type_cast_typed_array():
 
 
 def test_typecheck_array_dup():
-    """dup on typed array preserves the element type."""
-    sig = typecheck_string("[1, 2] dup")
+    """dup on owned array type produces DUP_OWNED error."""
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        typecheck_string("[1, 2] dup")
+    assert any(e.kind == ErrorKind.DUP_OWNED for e in exc_info.value.errors)
+
+
+def test_typecheck_array_clone():
+    """clone on typed array produces two array values on stack."""
+    sig = typecheck_string("[1, 2] clone")
     assert sig.return_types == ["array[int]", "array[int]"]
 
 

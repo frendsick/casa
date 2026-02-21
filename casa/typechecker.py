@@ -5,11 +5,13 @@ from typing import assert_never
 from casa.common import (
     ANY_TYPE,
     GLOBAL_FUNCTIONS,
+    GLOBAL_STRUCTS,
     GLOBAL_VARIABLES,
     Function,
     Location,
     Op,
     OpKind,
+    OwnershipState,
     Parameter,
     Signature,
     Struct,
@@ -19,6 +21,7 @@ from casa.common import (
     extract_fn_signature_str,
     is_array_type,
     is_fn_type,
+    is_owned_type,
 )
 from casa.error import (
     WARNINGS,
@@ -38,6 +41,8 @@ class BranchedStack:
     after: list[Type]
     before_origins: list[Location | None]
     after_origins: list[Location | None]
+    before_owned: list[bool]
+    after_owned: list[bool]
     condition_present: bool
     default_present: bool
     # Per-branch tracking for better error messages
@@ -45,19 +50,27 @@ class BranchedStack:
     current_branch_label: str | None
     current_branch_location: Location | None
     if_location: Location | None
+    before_ownership: dict[str, OwnershipState]
+    after_ownership: dict[str, OwnershipState]
 
     def __init__(
         self,
         before: list[Type],
         before_origins: list[Location | None],
+        before_owned: list[bool] | None = None,
         after: list[Type] | None = None,
         after_origins: list[Location | None] | None = None,
+        after_owned: list[bool] | None = None,
     ):
         self.before = before.copy()
         self.before_origins = before_origins.copy()
+        self.before_owned = before_owned.copy() if before_owned else []
         self.after = after.copy() if after else before.copy()
         self.after_origins = (
             after_origins.copy() if after_origins else before_origins.copy()
+        )
+        self.after_owned = (
+            after_owned.copy() if after_owned else self.before_owned.copy()
         )
         self.default_present = False
         self.condition_present = False
@@ -65,6 +78,8 @@ class BranchedStack:
         self.current_branch_label = None
         self.current_branch_location = None
         self.if_location = None
+        self.before_ownership = {}
+        self.after_ownership = {}
 
 
 @dataclass
@@ -72,6 +87,7 @@ class TypeChecker:
     ops: list[Op]
     stack: list[Type] = field(default_factory=list)
     stack_origins: list[Location | None] = field(default_factory=list)
+    stack_owned: list[bool] = field(default_factory=list)
     parameters: list[Parameter] = field(default_factory=list)
     # Saved on `return`
     return_types: list[Type] | None = None
@@ -81,14 +97,25 @@ class TypeChecker:
     current_location: Location | None = None
     # Origin of the last popped value (for error notes)
     last_pop_origin: Location | None = None
+    # Ownership of the last popped value
+    last_pop_owned: bool = False
     # Human-readable stack effect of the current operation (for error message)
     current_op_context: str | None = None
     # Which parameter mismatched (for error expected line)
     current_expect_context: str | None = None
+    # Ownership tracking for variables
+    variable_ownership: dict[str, OwnershipState] = field(default_factory=dict)
+    # Current function being type-checked
+    function: Function | None = None
 
-    def stack_push(self, typ: Type, origin: Location | None = None):
+    def stack_push(
+        self, typ: Type, origin: Location | None = None, owned: bool | None = None
+    ):
         self.stack.append(typ)
         self.stack_origins.append(origin or self.current_location)
+        if owned is None:
+            owned = is_owned_type(typ)
+        self.stack_owned.append(owned)
 
     def stack_peek(self) -> Type:
         if not self.stack:
@@ -99,19 +126,24 @@ class TypeChecker:
         if not self.stack:
             self.parameters.append(Parameter(ANY_TYPE))
             self.last_pop_origin = None
+            self.last_pop_owned = False
             return ANY_TYPE
         self.last_pop_origin = self.stack_origins.pop()
+        self.last_pop_owned = self.stack_owned.pop()
         return self.stack.pop()
 
     def expect_type(self, expected: Type) -> Type:
         if not self.stack:
             self.parameters.append(Parameter(expected))
             self.last_pop_origin = None
+            self.last_pop_owned = False
             return expected
 
         origin = self.stack_origins.pop()
         typ = self.stack.pop()
+        owned = self.stack_owned.pop()
         self.last_pop_origin = origin
+        self.last_pop_owned = owned
         if (
             expected == ANY_TYPE
             or (expected == "array" and is_array_type(typ))
@@ -399,9 +431,9 @@ def _ensure_typechecked(global_function: Function) -> None:
 
 
 def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature:
-    assert len(OpKind) == 56, "Exhaustive handling for `OpKind`"
+    assert len(OpKind) == 58, "Exhaustive handling for `OpKind`"
 
-    tc = TypeChecker(ops=ops)
+    tc = TypeChecker(ops=ops, function=function)
     for op in ops:
         tc.current_location = op.location
         tc.current_expect_context = None
@@ -459,6 +491,10 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                         )
 
                     tc.expect_type(stack_type)
+                    if is_owned_type(stack_type):
+                        tc.variable_ownership[variable_name] = OwnershipState.OWNED
+                    else:
+                        tc.variable_ownership[variable_name] = OwnershipState.COPY
                     continue
 
                 # Global variable
@@ -481,16 +517,30 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                         )
 
                     tc.expect_type(stack_type)
+                    if is_owned_type(stack_type):
+                        tc.variable_ownership[variable_name] = OwnershipState.OWNED
+                    else:
+                        tc.variable_ownership[variable_name] = OwnershipState.COPY
                     continue
 
                 raise AssertionError(f"Variable `{variable_name}` is not defined")
             case OpKind.DROP:
-                tc.stack_pop()
+                t1 = tc.stack_pop()
+                if tc.last_pop_owned:
+                    op.typ = t1
             case OpKind.DUP:
                 t1 = tc.stack_pop()
                 origin = tc.last_pop_origin
-                tc.stack_push(t1, origin)
-                tc.stack_push(t1, origin)
+                if tc.last_pop_owned:
+                    is_auto_gen = function is not None and function.is_auto_generated
+                    if not is_auto_gen:
+                        raise_error(
+                            ErrorKind.DUP_OWNED,
+                            f"Cannot duplicate owned type `{t1}`, use `clone` instead",
+                            op.location,
+                        )
+                tc.stack_push(t1, origin, owned=tc.last_pop_owned)
+                tc.stack_push(t1, origin, owned=tc.last_pop_owned)
             case OpKind.EQ:
                 tc.stack_pop()
                 tc.stack_pop()
@@ -544,6 +594,7 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     branched = tc.branched_stacks[-1]
                     tc.stack = branched.before.copy()
                     tc.stack_origins = branched.before_origins.copy()
+                    tc.stack_owned = branched.before_owned.copy()
             case OpKind.FN_PUSH:
                 assert isinstance(op.value, str), "Expected identifier name"
                 function_name = op.value
@@ -577,8 +628,11 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     branched.condition_present = True
                     branched.before = tc.stack.copy()
                     branched.before_origins = tc.stack_origins.copy()
+                    branched.before_owned = tc.stack_owned.copy()
                     branched.after = branched.before
                     branched.after_origins = branched.before_origins
+                    branched.after_owned = branched.before_owned
+                    branched.before_ownership = tc.variable_ownership.copy()
                     branched.current_branch_label = "if"
                     branched.current_branch_location = branched.if_location
                     continue
@@ -614,16 +668,23 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 branched.current_branch_location = op.location
 
                 if tc.stack == before == after:
+                    tc.variable_ownership = branched.before_ownership.copy()
+                    tc.stack_owned = branched.before_owned.copy()
                     continue
                 if tc.stack == after and before != after:
                     tc.stack = before.copy()
                     tc.stack_origins = branched.before_origins.copy()
+                    tc.stack_owned = branched.before_owned.copy()
+                    tc.variable_ownership = branched.before_ownership.copy()
                     continue
                 if before == after:
                     branched.after = tc.stack.copy()
                     branched.after_origins = tc.stack_origins.copy()
+                    branched.after_owned = tc.stack_owned.copy()
                     tc.stack = before.copy()
                     tc.stack_origins = branched.before_origins.copy()
+                    tc.stack_owned = branched.before_owned.copy()
+                    tc.variable_ownership = branched.before_ownership.copy()
                     continue
                 raise_error(
                     ErrorKind.STACK_MISMATCH,
@@ -658,8 +719,9 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     notes=_branch_mismatch_notes(branched),
                 )
             case OpKind.IF_START:
-                bs = BranchedStack(tc.stack, tc.stack_origins)
+                bs = BranchedStack(tc.stack, tc.stack_origins, tc.stack_owned)
                 bs.if_location = op.location
+                bs.before_ownership = tc.variable_ownership.copy()
                 tc.branched_stacks.append(bs)
             case OpKind.INCLUDE_FILE:
                 pass
@@ -727,11 +789,21 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
             case OpKind.OVER:
                 t1 = tc.stack_pop()
                 o1 = tc.last_pop_origin
+                ow1 = tc.last_pop_owned
                 t2 = tc.stack_pop()
                 o2 = tc.last_pop_origin
-                tc.stack_push(t2, o2)
-                tc.stack_push(t1, o1)
-                tc.stack_push(t2, o2)
+                ow2 = tc.last_pop_owned
+                if ow2:
+                    is_auto_gen = function is not None and function.is_auto_generated
+                    if not is_auto_gen:
+                        raise_error(
+                            ErrorKind.DUP_OWNED,
+                            f"Cannot duplicate owned type `{t2}` via `over`, use `clone` instead",
+                            op.location,
+                        )
+                tc.stack_push(t2, o2, owned=ow2)
+                tc.stack_push(t1, o1, owned=ow1)
+                tc.stack_push(t2, o2, owned=ow2)
             case OpKind.PRINT:
                 typ = tc.stack_pop()
                 if typ == "str":
@@ -776,13 +848,25 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 capture = function.captures[index]
 
                 if capture.typ:
-                    tc.stack_push(capture.typ)
+                    if is_owned_type(capture.typ):
+                        raise_error(
+                            ErrorKind.CAPTURE_OWNED,
+                            f"Cannot capture owned type `{capture.typ}` in closure",
+                            op.location,
+                        )
+                    tc.stack_push(capture.typ, owned=False)
                     continue
 
                 if global_variable := GLOBAL_VARIABLES.get(capture.name):
                     assert global_variable.typ, "Variable type"
                     capture.typ = global_variable.typ
-                    tc.stack_push(global_variable.typ)
+                    if is_owned_type(global_variable.typ):
+                        raise_error(
+                            ErrorKind.CAPTURE_OWNED,
+                            f"Cannot capture owned type `{global_variable.typ}` in closure",
+                            op.location,
+                        )
+                    tc.stack_push(global_variable.typ, owned=False)
                     continue
 
                 raise AssertionError(
@@ -805,7 +889,7 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                                 raise AssertionError(
                                     f"Variable `{variable.name}` has not been type checked before its usage"
                                 )
-                            tc.stack_push(variable.typ)
+                            tc.stack_push(variable.typ, owned=False)
                             local_found = True
                             break
                 if local_found:
@@ -815,7 +899,7 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 global_variable = GLOBAL_VARIABLES.get(variable_name)
                 if global_variable:
                     assert global_variable.typ, "Global variable type should be defined"
-                    tc.stack_push(global_variable.typ)
+                    tc.stack_push(global_variable.typ, owned=False)
                     continue
 
                 raise_error(
@@ -826,13 +910,16 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
             case OpKind.ROT:
                 t1 = tc.stack_pop()
                 o1 = tc.last_pop_origin
+                ow1 = tc.last_pop_owned
                 t2 = tc.stack_pop()
                 o2 = tc.last_pop_origin
+                ow2 = tc.last_pop_owned
                 t3 = tc.stack_pop()
                 o3 = tc.last_pop_origin
-                tc.stack_push(t2, o2)
-                tc.stack_push(t1, o1)
-                tc.stack_push(t3, o3)
+                ow3 = tc.last_pop_owned
+                tc.stack_push(t2, o2, owned=ow2)
+                tc.stack_push(t1, o1, owned=ow1)
+                tc.stack_push(t3, o3, owned=ow3)
             case OpKind.SHL | OpKind.SHR:
                 tc.expect_type("int")
                 t1 = tc.stack_pop()
@@ -863,10 +950,12 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
             case OpKind.SWAP:
                 t1 = tc.stack_pop()
                 o1 = tc.last_pop_origin
+                ow1 = tc.last_pop_owned
                 t2 = tc.stack_pop()
                 o2 = tc.last_pop_origin
-                tc.stack_push(t1, o1)
-                tc.stack_push(t2, o2)
+                ow2 = tc.last_pop_owned
+                tc.stack_push(t1, o1, owned=ow1)
+                tc.stack_push(t2, o2, owned=ow2)
             case OpKind.TYPE_CAST:
                 cast_type = op.value
                 assert isinstance(cast_type, str), "Expected cast type"
@@ -909,6 +998,7 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                         expected=str(branched.after),
                         got=str(tc.stack),
                     )
+                tc.variable_ownership = branched.before_ownership.copy()
             case OpKind.WHILE_CONTINUE:
                 assert len(tc.branched_stacks) > 0, "While block stack state is saved"
                 branched = tc.branched_stacks[-1]
@@ -922,7 +1012,23 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                         got=str(tc.stack),
                     )
             case OpKind.WHILE_START:
-                tc.branched_stacks.append(BranchedStack(tc.stack, tc.stack_origins))
+                bs = BranchedStack(tc.stack, tc.stack_origins, tc.stack_owned)
+                bs.before_ownership = tc.variable_ownership.copy()
+                tc.branched_stacks.append(bs)
+            case OpKind.CLONE:
+                t1 = tc.stack_pop()
+                if not tc.last_pop_owned:
+                    raise_error(
+                        ErrorKind.TYPE_MISMATCH,
+                        f"Cannot clone copy type `{t1}`, `clone` is only for owned types",
+                        op.location,
+                    )
+                op.typ = t1
+                tc.stack_push(t1, owned=True)
+                tc.stack_push(t1, owned=True)
+            case OpKind.HEAP_FREE:
+                t1 = tc.stack_pop()
+                op.typ = t1
             case _:
                 assert_never(op.kind)
 

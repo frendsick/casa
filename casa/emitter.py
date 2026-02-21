@@ -62,6 +62,7 @@ class Emitter:
         self._line(f"return_stack: .skip {RETURN_STACK_SIZE}")
         self._line(f"heap: .skip {HEAP_SIZE}")
         self._line("heap_ptr: .skip 8")
+        self._line("free_list_head: .skip 8")
         self._line("print_buf: .skip 32")
         self._line("str_alloc_ptr: .skip 8")
         self._line("")
@@ -131,6 +132,140 @@ class Emitter:
         self._indent("movq $1, %rdi")
         self._indent("movq $1, %rax")
         self._indent("syscall")
+        self._indent("subq $8, %r14")
+        self._indent("jmpq *(%r14)")
+        self._line("")
+
+        # heap_alloc: slot count in %rdi, returns heap index in %rax via r14
+        self._line("heap_alloc:")
+        self._indent("movq %rdi, %rcx")
+        # Check free list first
+        self._indent("movq free_list_head(%rip), %rax")
+        self._indent("testq %rax, %rax")
+        self._indent("jz .Lha_bump")
+        # Walk free list for a block >= requested size
+        self._indent("xorq %rbx, %rbx")  # prev = NULL
+        self._line(".Lha_walk:")
+        self._indent("leaq heap(%rip), %rdx")
+        self._indent("movq (%rdx, %rax, 8), %rsi")  # block size
+        self._indent("cmpq %rcx, %rsi")
+        self._indent("jge .Lha_reuse")
+        # Follow next pointer
+        self._indent("movq %rax, %rbx")  # prev = current
+        self._indent("leaq heap(%rip), %rdx")
+        self._indent("movq 8(%rdx, %rax, 8), %rax")  # next
+        self._indent("testq %rax, %rax")
+        self._indent("jnz .Lha_walk")
+        self._indent("jmp .Lha_bump")
+        # Reuse block: unlink from free list
+        self._line(".Lha_reuse:")
+        self._indent("leaq heap(%rip), %rdx")
+        self._indent("movq 8(%rdx, %rax, 8), %rsi")  # next
+        self._indent("testq %rbx, %rbx")
+        self._indent("jz .Lha_reuse_head")
+        self._indent("movq %rsi, 8(%rdx, %rbx, 8)")  # prev->next = next
+        self._indent("jmp .Lha_reuse_done")
+        self._line(".Lha_reuse_head:")
+        self._indent("movq %rsi, free_list_head(%rip)")
+        self._line(".Lha_reuse_done:")
+        self._indent("subq $8, %r14")
+        self._indent("jmpq *(%r14)")
+        # Bump allocator fallback
+        self._line(".Lha_bump:")
+        self._indent("movq heap_ptr(%rip), %rax")
+        self._indent("leaq (%rax, %rcx), %rdx")
+        self._indent("movq %rdx, heap_ptr(%rip)")
+        self._indent("subq $8, %r14")
+        self._indent("jmpq *(%r14)")
+        self._line("")
+
+        # heap_free: heap index in %rdi, slot count in %rsi
+        self._line("heap_free:")
+        # Store size at block[0], old head at block[1]
+        self._indent("leaq heap(%rip), %rdx")
+        self._indent("movq %rsi, (%rdx, %rdi, 8)")
+        self._indent("movq free_list_head(%rip), %rax")
+        self._indent("movq %rax, 8(%rdx, %rdi, 8)")
+        self._indent("movq %rdi, free_list_head(%rip)")
+        self._indent("subq $8, %r14")
+        self._indent("jmpq *(%r14)")
+        self._line("")
+
+        # clone_array: heap index on top of stack (below dup'd copy)
+        # Pops the top (original), allocates new array, copies, pushes new
+        self._line("clone_array:")
+        self._indent("popq %rdi")  # original heap index
+        self._indent("leaq heap(%rip), %rbx")
+        self._indent("movq (%rbx, %rdi, 8), %rcx")  # length
+        self._indent("leaq 1(%rcx), %rsi")  # total slots = length + 1
+        # Save rdi (original) and rsi (slot count) on return stack
+        self._indent("movq %rdi, (%r14)")
+        self._indent("movq %rsi, 8(%r14)")
+        self._indent("addq $16, %r14")
+        # Allocate
+        self._indent("movq %rsi, %rdi")
+        self._indent("leaq .Lca_after_alloc(%rip), %rax")
+        self._indent("movq %rax, (%r14)")
+        self._indent("addq $8, %r14")
+        self._indent("jmp heap_alloc")
+        self._line(".Lca_after_alloc:")
+        # rax = new heap index; restore original and slot count
+        self._indent("subq $16, %r14")
+        self._indent("movq (%r14), %rdi")  # original
+        self._indent("movq 8(%r14), %rcx")  # slot count
+        # Copy slots
+        self._indent("leaq heap(%rip), %rbx")
+        self._indent("xorq %rsi, %rsi")
+        self._line(".Lca_copy:")
+        self._indent("cmpq %rcx, %rsi")
+        self._indent("jge .Lca_done")
+        self._indent("movq (%rbx, %rdi, 8), %rdx")
+        self._indent("movq %rdx, (%rbx, %rax, 8)")
+        self._indent("incq %rdi")
+        self._indent("incq %rax")
+        self._indent("incq %rsi")
+        self._indent("jmp .Lca_copy")
+        self._line(".Lca_done:")
+        self._indent("subq %rcx, %rax")  # rax back to start of new block
+        self._indent("pushq %rax")
+        self._indent("subq $8, %r14")
+        self._indent("jmpq *(%r14)")
+        self._line("")
+
+        # clone_struct: heap index on stack, member count in %rdi
+        self._line("clone_struct:")
+        self._indent("popq %rsi")  # original heap index
+        self._indent("movq %rdi, %rcx")  # member count
+        # Save original and count on return stack
+        self._indent("movq %rsi, (%r14)")
+        self._indent("movq %rcx, 8(%r14)")
+        self._indent("addq $16, %r14")
+        # Allocate
+        self._indent("movq %rcx, %rdi")
+        self._indent("leaq .Lcs_after_alloc(%rip), %rax")
+        self._indent("movq %rax, (%r14)")
+        self._indent("addq $8, %r14")
+        self._indent("jmp heap_alloc")
+        self._line(".Lcs_after_alloc:")
+        # rax = new heap index
+        self._indent("subq $16, %r14")
+        self._indent("movq (%r14), %rsi")  # original
+        self._indent("movq 8(%r14), %rcx")  # count
+        # Copy members
+        self._indent("leaq heap(%rip), %rbx")
+        self._indent("xorq %rdi, %rdi")
+        self._line(".Lcs_copy:")
+        self._indent("cmpq %rcx, %rdi")
+        self._indent("jge .Lcs_done")
+        self._indent("movq (%rbx, %rsi, 8), %rdx")
+        self._indent("movq %rdx, (%rbx, %rax, 8)")
+        self._indent("incq %rsi")
+        self._indent("incq %rax")
+        self._indent("incq %rdi")
+        self._indent("jmp .Lcs_copy")
+        self._line(".Lcs_done:")
+        self._indent("subq %rcx, %rax")
+        self._indent("pushq %rax")
         self._indent("subq $8, %r14")
         self._indent("jmpq *(%r14)")
         self._line("")
@@ -220,7 +355,7 @@ class Emitter:
         self._indent("movq %rax, (%rsp)")
 
     def _emit_inst(self, inst: Inst, is_global: bool) -> None:
-        assert len(InstKind) == 45, "Exhaustive handling for `InstKind`"
+        assert len(InstKind) == 49, "Exhaustive handling for `InstKind`"
         kind = inst.kind
         match kind:
             # === Stack ===
@@ -379,11 +514,14 @@ class Emitter:
 
             # === Memory (heap) ===
             case InstKind.HEAP_ALLOC:
-                self._indent("popq %rax")
-                self._indent("movq heap_ptr(%rip), %rbx")
-                self._indent("pushq %rbx")
-                self._indent("addq %rax, %rbx")
-                self._indent("movq %rbx, heap_ptr(%rip)")
+                uid = self._uid()
+                self._indent("popq %rdi")
+                self._indent(f"leaq .Lalloc_done_{uid}(%rip), %rax")
+                self._indent("movq %rax, (%r14)")
+                self._indent("addq $8, %r14")
+                self._indent("jmp heap_alloc")
+                self._line(f".Lalloc_done_{uid}:")
+                self._indent("pushq %rax")
             case InstKind.LOAD:
                 self._indent("popq %rax")
                 self._indent("leaq heap(%rip), %rbx")
@@ -444,6 +582,46 @@ class Emitter:
                 self._indent("addq $8, %r14")
                 self._indent("jmp print_str")
                 self._line(f".Lprint_done_{uid}:")
+
+            # === Memory management ===
+            case InstKind.HEAP_FREE:
+                uid = self._uid()
+                member_count = inst.int_arg
+                self._indent("popq %rdi")
+                self._indent(f"movq ${member_count}, %rsi")
+                self._indent(f"leaq .Lfree_done_{uid}(%rip), %rax")
+                self._indent("movq %rax, (%r14)")
+                self._indent("addq $8, %r14")
+                self._indent("jmp heap_free")
+                self._line(f".Lfree_done_{uid}:")
+            case InstKind.HEAP_FREE_ARRAY:
+                uid = self._uid()
+                # Array: read length from heap[idx], total slots = length + 1
+                self._indent("popq %rdi")
+                self._indent("leaq heap(%rip), %rbx")
+                self._indent("movq (%rbx, %rdi, 8), %rsi")
+                self._indent("incq %rsi")
+                self._indent(f"leaq .Lfree_done_{uid}(%rip), %rax")
+                self._indent("movq %rax, (%r14)")
+                self._indent("addq $8, %r14")
+                self._indent("jmp heap_free")
+                self._line(f".Lfree_done_{uid}:")
+            case InstKind.CLONE_ARRAY:
+                uid = self._uid()
+                self._indent(f"leaq .Lclone_done_{uid}(%rip), %rax")
+                self._indent("movq %rax, (%r14)")
+                self._indent("addq $8, %r14")
+                self._indent("jmp clone_array")
+                self._line(f".Lclone_done_{uid}:")
+            case InstKind.CLONE_STRUCT:
+                uid = self._uid()
+                member_count = inst.int_arg
+                self._indent(f"movq ${member_count}, %rdi")
+                self._indent(f"leaq .Lclone_done_{uid}(%rip), %rax")
+                self._indent("movq %rax, (%r14)")
+                self._indent("addq $8, %r14")
+                self._indent("jmp clone_struct")
+                self._line(f".Lclone_done_{uid}:")
 
             # === F-strings ===
             case InstKind.FSTRING_CONCAT:

@@ -5,6 +5,7 @@ from typing import assert_never
 from casa.common import (
     GLOBAL_FUNCTIONS,
     GLOBAL_SCOPE_LABEL,
+    GLOBAL_STRUCTS,
     GLOBAL_VARIABLES,
     Bytecode,
     Cursor,
@@ -18,6 +19,8 @@ from casa.common import (
     Program,
     Struct,
     Variable,
+    is_array_type,
+    is_owned_type,
 )
 from casa.error import ErrorKind, raise_error
 
@@ -57,6 +60,24 @@ def compile_bytecode(ops: list[Op]) -> Program:
         bytecode.append(Inst(InstKind.GLOBALS_INIT, args=[len(GLOBAL_VARIABLES)]))
 
     bytecode += compiler.compile()
+
+    # Insert frees for owned globals before program exit
+    for var_name, var in GLOBAL_VARIABLES.items():
+        if var.typ and is_owned_type(var.typ):
+            skip_label = new_label()
+            idx = list(GLOBAL_VARIABLES.keys()).index(var_name)
+            bytecode.append(Inst(InstKind.GLOBAL_GET, args=[idx]))
+            bytecode.append(Inst(InstKind.PUSH, args=[0]))
+            bytecode.append(Inst(InstKind.EQ))
+            bytecode.append(Inst(InstKind.JUMP_NE, args=[skip_label]))
+            bytecode.append(Inst(InstKind.GLOBAL_GET, args=[idx]))
+            if is_array_type(var.typ):
+                bytecode.append(Inst(InstKind.HEAP_FREE_ARRAY, args=[0]))
+            else:
+                struct = GLOBAL_STRUCTS.get(var.typ)
+                member_count = len(struct.members) if struct else 1
+                bytecode.append(Inst(InstKind.HEAP_FREE, args=[member_count]))
+            bytecode.append(Inst(InstKind.LABEL, args=[skip_label]))
 
     return Program(
         bytecode=bytecode,
@@ -127,8 +148,8 @@ class Compiler:
             function.bytecode = fn_compiler.compile()
 
     def compile(self) -> Bytecode:
-        assert len(InstKind) == 45, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 56, "Exhaustive handling for `OpKind`"
+        assert len(InstKind) == 49, "Exhaustive handling for `InstructionKind"
+        assert len(OpKind) == 58, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
         bytecode: list[Inst] = []
@@ -204,7 +225,19 @@ class Compiler:
                 case OpKind.DIV:
                     bytecode.append(self.inst(InstKind.DIV))
                 case OpKind.DROP:
-                    bytecode.append(self.inst(InstKind.DROP))
+                    if op.typ and is_owned_type(op.typ):
+                        if is_array_type(op.typ):
+                            bytecode.append(
+                                self.inst(InstKind.HEAP_FREE_ARRAY, args=[0])
+                            )
+                        else:
+                            struct = GLOBAL_STRUCTS.get(op.typ)
+                            member_count = len(struct.members) if struct else 1
+                            bytecode.append(
+                                self.inst(InstKind.HEAP_FREE, args=[member_count])
+                            )
+                    else:
+                        bytecode.append(self.inst(InstKind.DROP))
                 case OpKind.DUP:
                     bytecode.append(self.inst(InstKind.DUP))
                 case OpKind.EQ:
@@ -560,6 +593,27 @@ class Compiler:
                     bytecode.append(self.inst(InstKind.SWAP))
                 case OpKind.TYPE_CAST:
                     pass
+                case OpKind.CLONE:
+                    assert op.typ is not None, "Clone type should be annotated"
+                    bytecode.append(self.inst(InstKind.DUP))
+                    if is_array_type(op.typ):
+                        bytecode.append(self.inst(InstKind.CLONE_ARRAY))
+                    else:
+                        struct = GLOBAL_STRUCTS.get(op.typ)
+                        member_count = len(struct.members) if struct else 1
+                        bytecode.append(
+                            self.inst(InstKind.CLONE_STRUCT, args=[member_count])
+                        )
+                case OpKind.HEAP_FREE:
+                    if op.typ and is_array_type(op.typ):
+                        bytecode.append(self.inst(InstKind.HEAP_FREE_ARRAY, args=[0]))
+                    elif op.typ and op.typ in GLOBAL_STRUCTS:
+                        struct = GLOBAL_STRUCTS[op.typ]
+                        bytecode.append(
+                            self.inst(InstKind.HEAP_FREE, args=[len(struct.members)])
+                        )
+                    else:
+                        bytecode.append(self.inst(InstKind.HEAP_FREE, args=[1]))
                 case OpKind.WHILE_BREAK:
                     if not self.find_matching_label(
                         op=op,
@@ -653,12 +707,47 @@ class Compiler:
         if self.locals_count > 0:
             bytecode.insert(0, Inst(InstKind.LOCALS_INIT, args=[self.locals_count]))
             locals_uninit = Inst(InstKind.LOCALS_UNINIT, args=[self.locals_count])
+
+            # Build free instructions for owned locals
+            owned_local_frees: list[Inst] = []
+            if self.function:
+                for var_idx, var in enumerate(self.function.variables):
+                    if var.typ and is_owned_type(var.typ):
+                        skip_label = new_label()
+                        owned_local_frees.append(
+                            Inst(InstKind.LOCAL_GET, args=[var_idx])
+                        )
+                        owned_local_frees.append(Inst(InstKind.PUSH, args=[0]))
+                        owned_local_frees.append(Inst(InstKind.EQ))
+                        owned_local_frees.append(
+                            Inst(InstKind.JUMP_NE, args=[skip_label])
+                        )
+                        owned_local_frees.append(
+                            Inst(InstKind.LOCAL_GET, args=[var_idx])
+                        )
+                        if is_array_type(var.typ):
+                            owned_local_frees.append(
+                                Inst(InstKind.HEAP_FREE_ARRAY, args=[0])
+                            )
+                        else:
+                            struct = GLOBAL_STRUCTS.get(var.typ)
+                            member_count = len(struct.members) if struct else 1
+                            owned_local_frees.append(
+                                Inst(InstKind.HEAP_FREE, args=[member_count])
+                            )
+                        owned_local_frees.append(
+                            Inst(InstKind.LABEL, args=[skip_label])
+                        )
+
             bytecode.append(locals_uninit)
 
             i = 0
             while i < len(bytecode):
                 instruction = bytecode[i]
                 if instruction.kind == InstKind.FN_RETURN:
+                    for free_inst in reversed(owned_local_frees):
+                        bytecode.insert(i, free_inst)
+                    i += len(owned_local_frees)
                     bytecode.insert(i, locals_uninit)
                     i += 1
                 i += 1

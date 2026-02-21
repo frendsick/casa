@@ -40,11 +40,21 @@ class Intrinsic(Enum):
     # Functions
     EXEC = auto()
 
+    # Ownership
+    CLONE = auto()
+    FREE = auto()
+
     @classmethod
     def from_lowercase(cls, value: str) -> Self | None:
         if not value.islower():
             return None
         return cls.__members__.get(value.upper())
+
+
+class OwnershipState(Enum):
+    OWNED = auto()
+    MOVED = auto()
+    COPY = auto()
 
 
 class Keyword(Enum):
@@ -212,6 +222,7 @@ class OpKind(Enum):
 
     # Memory
     HEAP_ALLOC = auto()
+    HEAP_FREE = auto()
     LOAD = auto()
     STORE = auto()
 
@@ -279,6 +290,9 @@ class OpKind(Enum):
     # Types
     TYPE_CAST = auto()
 
+    # Ownership
+    CLONE = auto()
+
     # Include files
     INCLUDE_FILE = auto()
 
@@ -294,9 +308,10 @@ class Op:
     value: Any
     kind: OpKind
     location: Location
+    typ: str | None = None
 
     def __post_init__(self):
-        assert len(OpKind) == 56, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 58, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires `bool`
@@ -329,10 +344,12 @@ class Op:
                     raise TypeError(f"`{self.kind}` requires value of type `list`")
             # Requires `Intrinsic`
             case (
-                OpKind.DROP
+                OpKind.CLONE
+                | OpKind.DROP
                 | OpKind.DUP
                 | OpKind.FN_EXEC
                 | OpKind.HEAP_ALLOC
+                | OpKind.HEAP_FREE
                 | OpKind.LOAD
                 | OpKind.OVER
                 | OpKind.PRINT
@@ -409,6 +426,10 @@ class InstKind(Enum):
 
     # Memory
     HEAP_ALLOC = auto()
+    HEAP_FREE = auto()
+    HEAP_FREE_ARRAY = auto()
+    CLONE_ARRAY = auto()
+    CLONE_STRUCT = auto()
     LOAD = auto()
     STORE = auto()
 
@@ -487,13 +508,14 @@ class Inst:
         return self.args[0]
 
     def __post_init__(self):
-        assert len(InstKind) == 45, "Exhaustive handling for `InstructionKind`"
+        assert len(InstKind) == 49, "Exhaustive handling for `InstructionKind`"
 
         match self.kind:
             # Should not have a parameter
             case (
                 InstKind.ADD
                 | InstKind.AND
+                | InstKind.CLONE_ARRAY
                 | InstKind.DIV
                 | InstKind.DROP
                 | InstKind.DUP
@@ -527,10 +549,13 @@ class Inst:
                     )
             # One parameter of type `int`
             case (
-                InstKind.FSTRING_CONCAT
+                InstKind.CLONE_STRUCT
+                | InstKind.FSTRING_CONCAT
                 | InstKind.GLOBALS_INIT
                 | InstKind.GLOBAL_GET
                 | InstKind.GLOBAL_SET
+                | InstKind.HEAP_FREE
+                | InstKind.HEAP_FREE_ARRAY
                 | InstKind.JUMP
                 | InstKind.JUMP_NE
                 | InstKind.LABEL
@@ -603,6 +628,15 @@ def extract_fn_signature_str(typ: str) -> str | None:
     if not typ.startswith(fn_prefix) or not typ.endswith("]"):
         return None
     return typ[len(fn_prefix) : -1]
+
+
+def is_owned_type(typ: str) -> bool:
+    """Check if a type has ownership semantics (heap-allocated)."""
+    if typ in ("int", "bool", "str", "ptr", "any") or is_fn_type(typ):
+        return False
+    if is_array_type(typ) or typ in GLOBAL_STRUCTS:
+        return True
+    return False
 
 
 @dataclass
@@ -744,6 +778,7 @@ class Function:
     bytecode: Bytecode | None = None
     is_used: bool = False
     is_typechecked: bool = False
+    is_auto_generated: bool = False
     variables: list[Variable] = field(default_factory=list)
     captures: list[Variable] = field(default_factory=list)
 
