@@ -301,6 +301,24 @@ print print print    # 6 8 7
 
 See [`examples/stack_operations.casa`](../examples/stack_operations.casa).
 
+**Note:** `dup` and `over` are restricted on [owned types](ownership.md) (`array[T]`, structs). Use `clone` instead to create independent copies.
+
+## Ownership Intrinsics
+
+Built-in operations for managing owned values. See [Ownership and Memory Management](ownership.md) for full details.
+
+| Intrinsic | Stack Effect | Description |
+|-----------|-------------|-------------|
+| `clone` | `owned -> owned owned` | Deep-copy an owned value |
+| `free` | `owned ->` | Explicitly free an owned value |
+
+### Examples
+
+```casa
+[1, 2, 3] clone = copy = original   # two independent arrays
+[4, 5, 6] free                       # explicitly free an array
+```
+
 ## IO
 
 ### `print`

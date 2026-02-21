@@ -210,6 +210,31 @@ if true then
 error[UNMATCHED_BLOCK]: `if` without matching `fi`
 ```
 
+### `DUP_OWNED`
+
+Attempting to duplicate an owned type with `dup` or `over`. Use `clone` instead.
+
+```casa
+[1, 2, 3] dup
+```
+
+```
+error[DUP_OWNED]: Cannot duplicate owned type `array[int]`, use `clone` instead
+```
+
+### `CAPTURE_OWNED`
+
+Attempting to capture an owned type in a lambda closure.
+
+```casa
+[1, 2, 3] = arr
+{ arr.length }
+```
+
+```
+error[CAPTURE_OWNED]: Cannot capture owned type `array[int]` in closure
+```
+
 ## Multi-Error Collection
 
 The compiler collects as many errors as possible within each compilation phase before stopping. For example, the identifier resolution phase will report all undefined names at once rather than stopping at the first one.

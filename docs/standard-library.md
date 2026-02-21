@@ -157,7 +157,7 @@ Returns the nth element (zero-indexed).
 
 ### `List::push`
 
-Appends an item to the list. If the list is at capacity, it allocates a new array with double the capacity and copies the existing elements.
+Appends an item to the list. If the list is at capacity, it allocates a new array with double the capacity, copies the existing elements, and frees the old array.
 
 **Signature:** `List::push self:List item:any`
 

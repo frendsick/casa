@@ -2,6 +2,10 @@
 
 Casa is a statically typed language. Types are checked at compile time and most can be inferred automatically — you rarely need to write type annotations outside of function signatures.
 
+## Copy vs Owned Types
+
+Casa types are divided into **copy types** and **owned types**. Copy types (`int`, `bool`, `str`, `ptr`, `fn[sig]`, `any`) are freely duplicated with no cleanup needed. Owned types (`array[T]`, user-defined structs) are heap-allocated and automatically freed when they go out of scope. See [Ownership and Memory Management](ownership.md) for details.
+
 ## Primitive Types
 
 ### `int`
