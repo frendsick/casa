@@ -112,16 +112,30 @@ class TypeChecker:
         origin = self.stack_origins.pop()
         typ = self.stack.pop()
         self.last_pop_origin = origin
-        if expected == ANY_TYPE or (expected == "array" and typ.startswith("array")):
+        if expected == ANY_TYPE or (
+            expected == "array" and is_array_type(typ)
+        ) or (
+            expected == "fn" and is_fn_type(typ)
+        ):
             return typ
-        if typ == ANY_TYPE or (typ == "array" and expected.startswith("array")):
+        if typ == ANY_TYPE or (
+            typ == "array" and is_array_type(expected)
+        ) or (
+            typ == "fn" and is_fn_type(expected)
+        ):
             return expected
         if typ == expected:
             return typ
-        if expected == "fn" and typ.startswith("fn"):
-            start = typ.index("[") + 1
-            end = typ.index("]", start)
-            signature = Signature.from_str(typ[start:end])
+        # Match fn[sig] types using Signature.matches (handles ANY_TYPE)
+        exp_sig_str = extract_fn_signature_str(expected)
+        act_sig_str = extract_fn_signature_str(typ)
+        if exp_sig_str and act_sig_str:
+            exp_sig = Signature.from_str(exp_sig_str)
+            act_sig = Signature.from_str(act_sig_str)
+            if exp_sig.matches(act_sig):
+                return expected
+        if expected == "fn" and typ.startswith("fn["):
+            signature = Signature.from_str(typ[3:-1])
             if signature.parameters != signature.return_types:
                 raise_error(
                     ErrorKind.TYPE_MISMATCH,

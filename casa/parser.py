@@ -556,20 +556,22 @@ def parse_type(cursor: Cursor[Token]) -> Type:
 
     # fn types need balanced bracket tracking for inner signatures
     if base.value == "fn":
-        parts: list[str] = []
+        result: list[str] = []
         depth = 0
         while token := cursor.pop():
             if token.value == "[":
                 depth += 1
-                parts.append(token.value)
+                result.append("[")
             elif token.value == "]":
                 if depth == 0:
                     break
                 depth -= 1
-                parts.append(token.value)
+                result.append("]")
             else:
-                parts.append(token.value)
-        return f"fn[{' '.join(parts)}]"
+                if result and result[-1] not in ("[",) and token.value not in ("]",):
+                    result.append(" ")
+                result.append(token.value)
+        return f"fn[{''.join(result)}]"
 
     inner = parse_type(cursor)
     expect_token(cursor, value="]")
@@ -764,6 +766,14 @@ def parse_parameters(cursor: Cursor[Token]) -> list[Parameter]:
         if name_or_type.value in ("->", "{"):
             cursor.position -= 1
             return parameters
+
+        # Allow fn keyword as an unnamed parameter type
+        if name_or_type.value == "fn":
+            cursor.position -= 1
+            typ = parse_type(cursor)
+            parameters.append(Parameter(typ))
+            continue
+
         if name_or_type.kind != TokenKind.IDENTIFIER:
             raise_error(
                 ErrorKind.UNEXPECTED_TOKEN,
