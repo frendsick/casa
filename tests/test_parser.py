@@ -340,6 +340,41 @@ def test_resolve_undefined_raises():
 
 
 # ---------------------------------------------------------------------------
+# Function references
+# ---------------------------------------------------------------------------
+def test_resolve_fn_ref():
+    ops = resolve_string("fn greet { } &greet")
+    fn_push_ops = find_ops(ops, OpKind.FN_PUSH)
+    assert len(fn_push_ops) == 1
+    assert fn_push_ops[0].value == "greet"
+
+
+def test_resolve_fn_ref_method():
+    code = """
+    struct Foo { val: int }
+    impl Foo {
+        fn double self:Foo -> int { self Foo::val 2 * }
+    }
+    &Foo::double
+    """
+    ops = resolve_string(code)
+    fn_push_ops = find_ops(ops, OpKind.FN_PUSH)
+    assert len(fn_push_ops) == 1
+    assert fn_push_ops[0].value == "Foo::double"
+
+
+def test_resolve_fn_ref_undefined_raises():
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        resolve_string("&undefined")
+    assert exc_info.value.errors[0].kind == ErrorKind.UNDEFINED_NAME
+
+
+def test_resolve_fn_ref_marks_used():
+    resolve_string("fn greet { } &greet")
+    assert GLOBAL_FUNCTIONS["greet"].is_used is True
+
+
+# ---------------------------------------------------------------------------
 # Generic type parameters (parsing)
 # ---------------------------------------------------------------------------
 def test_parse_generic_function_type_vars():

@@ -275,6 +275,42 @@ def test_typecheck_lambda_exec():
 
 
 # ---------------------------------------------------------------------------
+# Function references
+# ---------------------------------------------------------------------------
+def test_typecheck_fn_ref_pushes_signature():
+    code = "fn add a:int b:int -> int { a b + } &add"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["fn[int int -> int]"]
+
+
+def test_typecheck_fn_ref_exec():
+    code = "fn inc a:int -> int { a 1 + } 5 &inc exec"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["int"]
+
+
+def test_typecheck_fn_ref_method():
+    code = """
+    struct Point { x: int y: int }
+    impl Point {
+        fn sum self:Point -> int { self Point::x self Point::y + }
+    }
+    &Point::sum
+    """
+    sig = typecheck_string(code)
+    assert sig.return_types == ["fn[Point -> int]"]
+
+
+def test_typecheck_fn_ref_accessor():
+    code = """
+    struct Point { x: int y: int }
+    &Point::x
+    """
+    sig = typecheck_string(code)
+    assert sig.return_types == ["fn[Point -> int]"]
+
+
+# ---------------------------------------------------------------------------
 # ANY_TYPE matching
 # ---------------------------------------------------------------------------
 def test_typecheck_any_type_matches():
