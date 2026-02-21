@@ -72,6 +72,50 @@ Returns the nth element of an array (zero-indexed). This is a generic function t
 
 The return type matches the array's element type. For example, calling `nth` on an `array[int]` returns `int`, not `any`.
 
+### `array::map`
+
+Applies a function to each element, returning a new array with the results.
+
+**Signature:** `array::map[T1 T2] arr:array[T1] f:fn[T1 -> T2] -> array[T2]`
+
+**Stack effect:** `array[T1] fn[T1 -> T2] -> array[T2]`
+
+```casa
+{ 2 * } [1, 2, 3].map
+# result: [2, 4, 6]
+```
+
+The return type is determined by the function's return type. For example, mapping `fn[int -> str]` over an `array[int]` produces `array[str]`.
+
+### `array::filter`
+
+Returns a new array containing only elements for which the function returns `true`.
+
+**Signature:** `array::filter[T] arr:array[T] f:fn[T -> bool] -> array[T]`
+
+**Stack effect:** `array[T] fn[T -> bool] -> array[T]`
+
+```casa
+{ 2 % 0 == } [1, 2, 3, 4].filter
+# result: [2, 4]
+```
+
+### `array::reduce`
+
+Reduces an array to a single value by applying a function to an accumulator and each element.
+
+**Signature:** `array::reduce[T1 T2] arr:array[T1] acc:T2 f:fn[T2 T1 -> T2] -> T2`
+
+**Stack effect:** `array[T1] T2 fn[T2 T1 -> T2] -> T2`
+
+The accumulator is the initial value. The function receives the current accumulator and the current element, and returns the new accumulator.
+
+```casa
+{ + } 0 [1, 2, 3].reduce print    # 6
+```
+
+The accumulator type and the array element type can differ.
+
 ## `List`
 
 A dynamic list that grows automatically when items are pushed.
