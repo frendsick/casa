@@ -21,7 +21,6 @@ from casa.common import (
 )
 from casa.error import ErrorKind, raise_error
 
-
 _label_counter = 0
 
 
@@ -100,6 +99,32 @@ class Compiler:
     def inst(self, kind: InstKind, args: list | None = None) -> Inst:
         """Create an Inst with the current source location."""
         return Inst(kind, args=args or [], location=self._current_loc)
+
+    def _compile_function(self, function: Function, op: Op) -> None:
+        """Compile a function if not already compiled."""
+        if function.bytecode is not None:
+            return
+        # Check if the function assigns a non-parameter
+        # variable that shadows a global variable
+        param_names = set()
+        if function.signature:
+            param_names = {p.name for p in function.signature.parameters if p.name}
+        for var in function.variables:
+            if var in GLOBAL_VARIABLES and var.name not in param_names:
+                raise_error(
+                    ErrorKind.UNDEFINED_NAME,
+                    f"Function `{function.name}` assigns a global variable `{var.name}` before it is initialized within the global scope",
+                    op.location,
+                )
+        if self.function != function:
+            function.bytecode = []
+            fn_compiler = Compiler(
+                function.ops,
+                function,
+                string_table=self.string_table,
+                constants_table=self.constants_table,
+            )
+            function.bytecode = fn_compiler.compile()
 
     def compile(self) -> Bytecode:
         assert len(InstKind) == 45, "Exhaustive handling for `InstructionKind"
@@ -193,33 +218,7 @@ class Compiler:
                     function = GLOBAL_FUNCTIONS.get(function_name)
                     assert isinstance(function, Function), "Expected function"
 
-                    # Compile the function if it is not compiled already
-                    if function.bytecode is None:
-                        # Check if the function assigns a non-parameter
-                        # variable that shadows a global variable
-                        param_names = set()
-                        if function.signature:
-                            param_names = {
-                                p.name for p in function.signature.parameters if p.name
-                            }
-                        for var in function.variables:
-                            if var in GLOBAL_VARIABLES and var.name not in param_names:
-                                raise_error(
-                                    ErrorKind.UNDEFINED_NAME,
-                                    f"Function `{function.name}` assigns a global variable `{var.name}` before it is initialized within the global scope",
-                                    op.location,
-                                )
-
-                        if self.function != function:
-                            # Mark as being compiled to prevent recursion
-                            function.bytecode = []
-                            fn_compiler = Compiler(
-                                function.ops,
-                                function,
-                                string_table=self.string_table,
-                                constants_table=self.constants_table,
-                            )
-                            function.bytecode = fn_compiler.compile()
+                    self._compile_function(function, op)
 
                     bytecode.append(self.inst(InstKind.FN_CALL, args=[function_name]))
                 case OpKind.FN_EXEC:
@@ -234,14 +233,7 @@ class Compiler:
                             op.location,
                         )
 
-                    # Compile the lambda function
-                    fn_compiler = Compiler(
-                        lambda_function.ops,
-                        lambda_function,
-                        string_table=self.string_table,
-                        constants_table=self.constants_table,
-                    )
-                    lambda_function.bytecode = fn_compiler.compile()
+                    self._compile_function(lambda_function, op)
 
                     # Setup captures (local variables shadow globals)
                     for index, capture in enumerate(lambda_function.captures):

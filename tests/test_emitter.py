@@ -210,6 +210,26 @@ def test_emit_fn_push():
 
 
 # ---------------------------------------------------------------------------
+# Function references
+# ---------------------------------------------------------------------------
+def test_emit_fn_ref():
+    asm = emit_string("fn add a:int b:int -> int { a b + } &add")
+    assert "leaq fn_add" in asm
+
+
+def test_emit_fn_ref_method():
+    code = """
+    struct Foo { val: int }
+    impl Foo {
+        fn double self:Foo -> int { self Foo::val 2 * }
+    }
+    &Foo::double
+    """
+    asm = emit_string(code)
+    assert "leaq fn_Foo__double" in asm
+
+
+# ---------------------------------------------------------------------------
 # Globals
 # ---------------------------------------------------------------------------
 def test_emit_global_get_set():

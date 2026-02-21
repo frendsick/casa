@@ -199,6 +199,34 @@ def test_bytecode_fn_push_exec():
 
 
 # ---------------------------------------------------------------------------
+# Function references
+# ---------------------------------------------------------------------------
+def test_bytecode_fn_ref():
+    code = "fn add a:int b:int -> int { a b + } &add"
+    program = compile_string(code)
+    pushes = find_insts(program, InstKind.FN_PUSH)
+    assert len(pushes) >= 1
+    assert any(i.args == ["add"] for i in pushes)
+
+
+def test_bytecode_fn_ref_no_captures():
+    code = "fn add a:int b:int -> int { a b + } &add"
+    program = compile_string(code)
+    constant_stores = find_insts(program, InstKind.CONSTANT_STORE)
+    assert len(constant_stores) == 0
+
+
+def test_bytecode_fn_ref_no_double_compile():
+    code = "fn foo a:int -> int { a } 5 foo &foo"
+    program = compile_string(code)
+    # Both call and reference should work without error
+    calls = find_insts(program, InstKind.FN_CALL)
+    pushes = find_insts(program, InstKind.FN_PUSH)
+    assert len(calls) >= 1
+    assert len(pushes) >= 1
+
+
+# ---------------------------------------------------------------------------
 # Constants (captures)
 # ---------------------------------------------------------------------------
 def test_bytecode_constants():
