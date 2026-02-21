@@ -69,6 +69,37 @@ Push the arguments onto the stack, then write the function name:
 20 fib print
 ```
 
+### Function References
+
+The `&name` syntax pushes a named function onto the stack as a value instead of calling it.
+
+**Stack effect:** `-> fn[sig]`
+
+```casa
+fn add a:int b:int -> int { a b + }
+
+&add                # pushes fn[int int -> int]
+3 5 &add exec       # calls add, result: 8
+&add = my_fn        # store in variable
+3 5 my_fn exec      # call via variable, result: 8
+```
+
+This works for struct accessors and methods too:
+
+```casa
+struct Point { x: int y: int }
+
+&Point::x           # pushes fn[Point -> int]
+
+impl Point {
+    fn sum self:Point -> int { self.x self.y + }
+}
+
+&Point::sum          # pushes fn[Point -> int]
+```
+
+Use `exec` to call the function reference, just like with lambdas. See [`exec`](#exec) for details.
+
 ### Early Return
 
 Use `return` to exit a function early. The stack at the `return` point must match the function's return type.
