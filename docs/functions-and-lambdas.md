@@ -163,7 +163,7 @@ impl Box {
 
 Every type variable must appear in at least one parameter (return-only type variables are not allowed).
 
-Type variable names must not collide with built-in types (`int`, `bool`, `str`, `ptr`, `array`, `any`) or user-defined struct names:
+Type variable names must not collide with built-in types (`int`, `bool`, `char`, `cstr`, `str`, `ptr`, `array`, `any`) or user-defined struct names:
 
 ```casa
 fn bad[int] int -> int { }     # ERROR: shadows built-in type
@@ -309,18 +309,20 @@ Prints the top of the stack to stdout.
 
 **Stack effect:** `a -> None`
 
-Integers and booleans are printed as decimal numbers. Strings are printed as text.
+Integers are printed as decimal numbers. Booleans are printed as `true` or `false`. Strings, characters, and C strings are printed as text.
 
 ```casa
 42 print                    # 42
-true print                  # 1
+true print                  # true
 "Hello" print               # Hello
+'A' print                   # A
+"Hello" .as_cstr print      # Hello
 "Hello" print "\n" print    # Hello followed by a newline
 ```
 
 ## Memory Intrinsics
 
-Low-level byte-addressed heap access for building data structures.
+Low-level byte-addressed memory access for building data structures. All load/store intrinsics use absolute addressing.
 
 | Intrinsic | Stack Effect | Description |
 |-----------|-------------|-------------|

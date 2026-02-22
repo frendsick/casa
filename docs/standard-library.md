@@ -244,6 +244,226 @@ list.capacity print     # 6
 
 See [`examples/dynamic_list.casa`](../examples/dynamic_list.casa) for a full program using the List.
 
+## String Methods
+
+Methods for working with `str` values. Method calls on any `str` receiver are resolved to `str::method`.
+
+### `str::length`
+
+Returns the length of a string in bytes.
+
+**Signature:** `str::length s:str -> int`
+
+**Stack effect:** `str -> int`
+
+```casa
+"hello".length print    # 5
+"".length print         # 0
+```
+
+### `str::at`
+
+Returns the character at the given index.
+
+**Signature:** `str::at s:str index:int -> char`
+
+**Stack effect:** `str int -> char`
+
+```casa
+0 "hello".at print      # h
+4 "hello".at print      # o
+```
+
+### `str::set`
+
+Writes a character at the given index in a string (mutates in place).
+
+**Signature:** `str::set s:str index:int c:char`
+
+**Stack effect:** `str int char -> None`
+
+```casa
+14 alloc (str) = buf
+5 buf (ptr) store64
+'H' 0 buf.set
+'i' 1 buf.set
+'\0' 2 buf.set
+buf print    # Hi
+```
+
+### `str::as_cstr`
+
+Returns a `cstr` pointing to the string's byte data (skipping the 8-byte length prefix). The returned `cstr` is null-terminated.
+
+**Signature:** `str::as_cstr s:str -> cstr`
+
+**Stack effect:** `str -> cstr`
+
+```casa
+"hello" .as_cstr print    # hello
+```
+
+### `str::eq`
+
+Compares two strings by content. Returns `true` if they have the same length and identical bytes.
+
+**Signature:** `str::eq b:str a:str -> bool`
+
+**Stack effect:** `str str -> bool`
+
+```casa
+"hello" "hello" str::eq print    # 1
+"hello" "world" str::eq print    # 0
+```
+
+### `str::substring`
+
+Extracts a substring starting at `start` with the given `len`.
+
+**Signature:** `str::substring len:int start:int s:str -> str`
+
+**Stack effect:** `int int str -> str`
+
+```casa
+3 1 "hello".substring print    # ell
+```
+
+### `str::find`
+
+Finds the first occurrence of `needle` in the string. Returns the index, or -1 if not found.
+
+**Signature:** `str::find needle:str s:str -> int`
+
+**Stack effect:** `str str -> int`
+
+```casa
+"lo" "hello".find print     # 3
+"xyz" "hello".find print    # -1
+```
+
+### `str::starts_with`
+
+Returns `true` if the string starts with the given prefix.
+
+**Signature:** `str::starts_with prefix:str s:str -> bool`
+
+**Stack effect:** `str str -> bool`
+
+```casa
+"hel" "hello".starts_with print    # 1
+"xyz" "hello".starts_with print    # 0
+```
+
+### `str::ends_with`
+
+Returns `true` if the string ends with the given suffix.
+
+**Signature:** `str::ends_with suffix:str s:str -> bool`
+
+**Stack effect:** `str str -> bool`
+
+```casa
+"llo" "hello".ends_with print    # 1
+"xyz" "hello".ends_with print    # 0
+```
+
+### `str::concat`
+
+Concatenates two strings, returning a new string.
+
+**Signature:** `str::concat b:str a:str -> str`
+
+**Stack effect:** `str str -> str`
+
+```casa
+"world" "hello " str::concat print    # hello world
+```
+
+## C String Methods
+
+Methods for working with `cstr` values. Method calls on any `cstr` receiver are resolved to `cstr::method`.
+
+### `cstr::to_str`
+
+Converts a null-terminated C string to a `str`. Scans for the null byte to determine length, then allocates a new string with a length prefix and copies the bytes.
+
+**Signature:** `cstr::to_str s:cstr -> str`
+
+**Stack effect:** `cstr -> str`
+
+```casa
+"hello" .as_cstr .to_str print    # hello
+```
+
+## Character Classification
+
+Methods on `char` for classifying ASCII characters.
+
+### `char::is_digit`
+
+Returns `true` if the character is an ASCII digit (`'0'`-`'9'`).
+
+**Signature:** `fn is_digit c:char -> bool`
+
+**Stack effect:** `char -> bool`
+
+```casa
+'0'.is_digit print    # 1
+'A'.is_digit print    # 0
+```
+
+### `char::is_upper`
+
+Returns `true` if the character is an uppercase ASCII letter (`'A'`-`'Z'`).
+
+**Signature:** `fn is_upper c:char -> bool`
+
+**Stack effect:** `char -> bool`
+
+```casa
+'A'.is_upper print    # 1
+'a'.is_upper print    # 0
+```
+
+### `char::is_lower`
+
+Returns `true` if the character is a lowercase ASCII letter (`'a'`-`'z'`).
+
+**Signature:** `fn is_lower c:char -> bool`
+
+**Stack effect:** `char -> bool`
+
+```casa
+'a'.is_lower print    # 1
+'A'.is_lower print    # 0
+```
+
+### `char::is_alpha`
+
+Returns `true` if the character is an ASCII letter (uppercase or lowercase).
+
+**Signature:** `fn is_alpha c:char -> bool`
+
+**Stack effect:** `char -> bool`
+
+```casa
+'A'.is_alpha print    # 1
+'0'.is_alpha print    # 0
+```
+
+### `char::is_space`
+
+Returns `true` if the character is ASCII whitespace (space, tab, newline, or carriage return).
+
+**Signature:** `fn is_space c:char -> bool`
+
+**Stack effect:** `char -> bool`
+
+```casa
+' '.is_space print    # 1
+'A'.is_space print    # 0
+```
+
 ## Type Conversions
 
 Convert values to their string representation. All `to_str` methods can be called with dot syntax (e.g., `42.to_str`).
