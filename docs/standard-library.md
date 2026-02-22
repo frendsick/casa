@@ -18,7 +18,7 @@ Paths are resolved relative to the file containing the `include` directive. All 
 
 ## `memcpy`
 
-Copies 64-bit values from one pointer to another. The count `n` is the number of 8-byte values to copy.
+Copies `n` bytes from one pointer to another.
 
 **Signature:** `memcpy dst:ptr src:ptr n:int`
 
@@ -31,7 +31,7 @@ Copies 64-bit values from one pointer to another. The count `n` is the number of
 30 src (ptr) 16 + store64
 
 24 alloc = dst
-3 src dst memcpy
+24 src dst memcpy
 
 dst (ptr) load64 print        # 10
 dst (ptr) 8 + load64 print    # 20
