@@ -43,6 +43,13 @@ SIMPLE_OP_CASES = [
     ("1 2 swap", InstKind.SWAP),
     ("1 2 over", InstKind.OVER),
     ("1 2 3 rot", InstKind.ROT),
+    ("60 syscall0", InstKind.SYSCALL0),
+    ("0 60 syscall1", InstKind.SYSCALL1),
+    ("0 0 60 syscall2", InstKind.SYSCALL2),
+    ("0 0 0 60 syscall3", InstKind.SYSCALL3),
+    ("0 0 0 0 60 syscall4", InstKind.SYSCALL4),
+    ("0 0 0 0 0 60 syscall5", InstKind.SYSCALL5),
+    ("0 0 0 0 0 0 60 syscall6", InstKind.SYSCALL6),
 ]
 
 

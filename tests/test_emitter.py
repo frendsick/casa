@@ -313,6 +313,79 @@ def test_emit_print_str_no_newline():
 
 
 # ---------------------------------------------------------------------------
+# Syscall intrinsics
+# ---------------------------------------------------------------------------
+def test_emit_syscall0():
+    asm = emit_string("60 syscall0")
+    assert "popq %rax" in asm
+    assert "syscall" in asm
+    assert "pushq %rax" in asm
+
+
+def test_emit_syscall1():
+    asm = emit_string("0 60 syscall1")
+    assert "popq %rax" in asm
+    assert "popq %rdi" in asm
+    assert "syscall" in asm
+    assert "pushq %rax" in asm
+
+
+def test_emit_syscall2():
+    asm = emit_string("0 0 60 syscall2")
+    assert "popq %rax" in asm
+    assert "popq %rdi" in asm
+    assert "popq %rsi" in asm
+    assert "syscall" in asm
+    assert "pushq %rax" in asm
+
+
+def test_emit_syscall3():
+    asm = emit_string("1 0 1 1 syscall3")
+    assert "popq %rax" in asm
+    assert "popq %rdi" in asm
+    assert "popq %rsi" in asm
+    assert "popq %rdx" in asm
+    assert "syscall" in asm
+    assert "pushq %rax" in asm
+
+
+def test_emit_syscall4():
+    asm = emit_string("0 0 0 0 60 syscall4")
+    assert "popq %rax" in asm
+    assert "popq %rdi" in asm
+    assert "popq %rsi" in asm
+    assert "popq %rdx" in asm
+    assert "popq %r10" in asm
+    assert "syscall" in asm
+    assert "pushq %rax" in asm
+
+
+def test_emit_syscall5():
+    asm = emit_string("0 0 0 0 0 60 syscall5")
+    assert "popq %rax" in asm
+    assert "popq %rdi" in asm
+    assert "popq %rsi" in asm
+    assert "popq %rdx" in asm
+    assert "popq %r10" in asm
+    assert "popq %r8" in asm
+    assert "syscall" in asm
+    assert "pushq %rax" in asm
+
+
+def test_emit_syscall6():
+    asm = emit_string("0 0 0 0 0 0 60 syscall6")
+    assert "popq %rax" in asm
+    assert "popq %rdi" in asm
+    assert "popq %rsi" in asm
+    assert "popq %rdx" in asm
+    assert "popq %r10" in asm
+    assert "popq %r8" in asm
+    assert "popq %r9" in asm
+    assert "syscall" in asm
+    assert "pushq %rax" in asm
+
+
+# ---------------------------------------------------------------------------
 # Exit syscall
 # ---------------------------------------------------------------------------
 def test_emit_exit_syscall():

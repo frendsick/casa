@@ -113,6 +113,69 @@ def test_typecheck_store():
 
 
 # ---------------------------------------------------------------------------
+# Syscall intrinsics
+# ---------------------------------------------------------------------------
+def test_typecheck_syscall0():
+    sig = typecheck_string("60 syscall0")
+    assert sig.return_types == ["int"]
+
+
+def test_typecheck_syscall1():
+    sig = typecheck_string("0 60 syscall1")
+    assert sig.return_types == ["int"]
+
+
+def test_typecheck_syscall2():
+    sig = typecheck_string("0 0 60 syscall2")
+    assert sig.return_types == ["int"]
+
+
+def test_typecheck_syscall3():
+    sig = typecheck_string("1 0 1 1 syscall3")
+    assert sig.return_types == ["int"]
+
+
+def test_typecheck_syscall4():
+    sig = typecheck_string("0 0 0 0 60 syscall4")
+    assert sig.return_types == ["int"]
+
+
+def test_typecheck_syscall5():
+    sig = typecheck_string("0 0 0 0 0 60 syscall5")
+    assert sig.return_types == ["int"]
+
+
+def test_typecheck_syscall6():
+    sig = typecheck_string("1 2 3 4 5 6 100 syscall6")
+    assert sig.return_types == ["int"]
+
+
+def test_typecheck_syscall_accepts_any_type_for_args():
+    """Syscall arguments (not the syscall number) accept any type."""
+    sig = typecheck_string('"hello" 42 syscall1')
+    assert sig.return_types == ["int"]
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        ('"not_a_number" syscall0'),
+        ('0 "not_a_number" syscall1'),
+        ('0 0 "not_a_number" syscall2'),
+        ('0 0 0 "not_a_number" syscall3'),
+        ('0 0 0 0 "not_a_number" syscall4'),
+        ('0 0 0 0 0 "not_a_number" syscall5'),
+        ('0 0 0 0 0 0 "not_a_number" syscall6'),
+    ],
+)
+def test_typecheck_syscall_requires_int_syscall_number(code):
+    """Syscall number (top of stack) must be int for all syscall intrinsics."""
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        typecheck_string(code)
+    assert exc_info.value.errors[0].kind == ErrorKind.TYPE_MISMATCH
+
+
+# ---------------------------------------------------------------------------
 # Print resolves to PRINT_INT / PRINT_STR
 # ---------------------------------------------------------------------------
 def test_typecheck_print_resolves_to_print_int():
