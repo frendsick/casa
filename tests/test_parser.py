@@ -121,6 +121,13 @@ INTRINSIC_CASES = [
     ("store", OpKind.STORE, Intrinsic.STORE),
     ("print", OpKind.PRINT, Intrinsic.PRINT),
     ("exec", OpKind.FN_EXEC, Intrinsic.EXEC),
+    ("syscall0", OpKind.SYSCALL0, Intrinsic.SYSCALL0),
+    ("syscall1", OpKind.SYSCALL1, Intrinsic.SYSCALL1),
+    ("syscall2", OpKind.SYSCALL2, Intrinsic.SYSCALL2),
+    ("syscall3", OpKind.SYSCALL3, Intrinsic.SYSCALL3),
+    ("syscall4", OpKind.SYSCALL4, Intrinsic.SYSCALL4),
+    ("syscall5", OpKind.SYSCALL5, Intrinsic.SYSCALL5),
+    ("syscall6", OpKind.SYSCALL6, Intrinsic.SYSCALL6),
 ]
 
 

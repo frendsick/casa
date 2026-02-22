@@ -220,7 +220,7 @@ class Emitter:
         self._indent("movq %rax, (%rsp)")
 
     def _emit_inst(self, inst: Inst, is_global: bool) -> None:
-        assert len(InstKind) == 45, "Exhaustive handling for `InstKind`"
+        assert len(InstKind) == 52, "Exhaustive handling for `InstKind`"
         kind = inst.kind
         match kind:
             # === Stack ===
@@ -456,8 +456,32 @@ class Emitter:
                 self._indent("jmp str_concat")
                 self._line(f".Lconcat_done_{uid}:")
 
+            # === Syscalls ===
+            case InstKind.SYSCALL0:
+                self._emit_syscall(0)
+            case InstKind.SYSCALL1:
+                self._emit_syscall(1)
+            case InstKind.SYSCALL2:
+                self._emit_syscall(2)
+            case InstKind.SYSCALL3:
+                self._emit_syscall(3)
+            case InstKind.SYSCALL4:
+                self._emit_syscall(4)
+            case InstKind.SYSCALL5:
+                self._emit_syscall(5)
+            case InstKind.SYSCALL6:
+                self._emit_syscall(6)
+
             case _:
                 assert_never(kind)
+
+    def _emit_syscall(self, arg_count: int) -> None:
+        regs = ["%rdi", "%rsi", "%rdx", "%r10", "%r8", "%r9"]
+        self._indent("popq %rax")
+        for i in range(arg_count):
+            self._indent(f"popq {regs[i]}")
+        self._indent("syscall")
+        self._indent("pushq %rax")
 
 
 def emit_program(program: Program) -> str:

@@ -127,8 +127,8 @@ class Compiler:
             function.bytecode = fn_compiler.compile()
 
     def compile(self) -> Bytecode:
-        assert len(InstKind) == 45, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 56, "Exhaustive handling for `OpKind`"
+        assert len(InstKind) == 52, "Exhaustive handling for `InstructionKind"
+        assert len(OpKind) == 63, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
         bytecode: list[Inst] = []
@@ -647,6 +647,20 @@ class Compiler:
                 case OpKind.WHILE_START:
                     label = op_to_label(op)
                     bytecode.append(self.inst(InstKind.LABEL, args=[label]))
+                case OpKind.SYSCALL0:
+                    bytecode.append(self.inst(InstKind.SYSCALL0))
+                case OpKind.SYSCALL1:
+                    bytecode.append(self.inst(InstKind.SYSCALL1))
+                case OpKind.SYSCALL2:
+                    bytecode.append(self.inst(InstKind.SYSCALL2))
+                case OpKind.SYSCALL3:
+                    bytecode.append(self.inst(InstKind.SYSCALL3))
+                case OpKind.SYSCALL4:
+                    bytecode.append(self.inst(InstKind.SYSCALL4))
+                case OpKind.SYSCALL5:
+                    bytecode.append(self.inst(InstKind.SYSCALL5))
+                case OpKind.SYSCALL6:
+                    bytecode.append(self.inst(InstKind.SYSCALL6))
                 case _:
                     assert_never(op.kind)
 

@@ -330,6 +330,13 @@ OP_STACK_EFFECTS: dict[OpKind, tuple[str, str]] = {
     OpKind.HEAP_ALLOC: ("alloc", "int -> ptr"),
     OpKind.IF_CONDITION: ("if condition", "bool -> None"),
     OpKind.WHILE_CONDITION: ("while condition", "bool -> None"),
+    OpKind.SYSCALL0: ("syscall0", "int -> int"),
+    OpKind.SYSCALL1: ("syscall1", "any int -> int"),
+    OpKind.SYSCALL2: ("syscall2", "any any int -> int"),
+    OpKind.SYSCALL3: ("syscall3", "any any any int -> int"),
+    OpKind.SYSCALL4: ("syscall4", "any any any any int -> int"),
+    OpKind.SYSCALL5: ("syscall5", "any any any any any int -> int"),
+    OpKind.SYSCALL6: ("syscall6", "any any any any any any int -> int"),
 }
 
 
@@ -399,7 +406,7 @@ def _ensure_typechecked(global_function: Function) -> None:
 
 
 def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature:
-    assert len(OpKind) == 56, "Exhaustive handling for `OpKind`"
+    assert len(OpKind) == 63, "Exhaustive handling for `OpKind`"
 
     tc = TypeChecker(ops=ops)
     for op in ops:
@@ -923,6 +930,20 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     )
             case OpKind.WHILE_START:
                 tc.branched_stacks.append(BranchedStack(tc.stack, tc.stack_origins))
+            case (
+                OpKind.SYSCALL0
+                | OpKind.SYSCALL1
+                | OpKind.SYSCALL2
+                | OpKind.SYSCALL3
+                | OpKind.SYSCALL4
+                | OpKind.SYSCALL5
+                | OpKind.SYSCALL6
+            ):
+                arg_count = int(op.kind.name[-1])
+                tc.expect_type("int")
+                for _ in range(arg_count):
+                    tc.stack_pop()
+                tc.stack_push("int")
             case _:
                 assert_never(op.kind)
 

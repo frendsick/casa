@@ -41,6 +41,13 @@ INTRINSIC_TO_OPKIND = {
     Intrinsic.ROT: OpKind.ROT,
     Intrinsic.STORE: OpKind.STORE,
     Intrinsic.SWAP: OpKind.SWAP,
+    Intrinsic.SYSCALL0: OpKind.SYSCALL0,
+    Intrinsic.SYSCALL1: OpKind.SYSCALL1,
+    Intrinsic.SYSCALL2: OpKind.SYSCALL2,
+    Intrinsic.SYSCALL3: OpKind.SYSCALL3,
+    Intrinsic.SYSCALL4: OpKind.SYSCALL4,
+    Intrinsic.SYSCALL5: OpKind.SYSCALL5,
+    Intrinsic.SYSCALL6: OpKind.SYSCALL6,
 }
 
 

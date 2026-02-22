@@ -344,3 +344,41 @@ buf 2 + load print    # 30
 Values read with `load` have type `any`. Use a [type cast](types-and-literals.md#type-casting) `(TypeName)` to restore a specific type.
 
 See [Standard Library](standard-library.md) for higher-level abstractions built on these primitives.
+
+## Syscall Intrinsics
+
+Direct Linux system call access. Each intrinsic pops N+1 values from the stack (the syscall number on top, then arguments in order) and pushes the kernel return value as `int`. The syscall number must be `int`. Arguments have no type constraints.
+
+| Intrinsic | Stack Effect | Description |
+|-----------|-------------|-------------|
+| `syscall0` | `nr -> int` | Syscall with 0 args |
+| `syscall1` | `a1 nr -> int` | Syscall with 1 arg |
+| `syscall2` | `a2 a1 nr -> int` | Syscall with 2 args |
+| `syscall3` | `a3 a2 a1 nr -> int` | Syscall with 3 args |
+| `syscall4` | `a4 a3 a2 a1 nr -> int` | Syscall with 4 args |
+| `syscall5` | `a5 a4 a3 a2 a1 nr -> int` | Syscall with 5 args |
+| `syscall6` | `a6 a5 a4 a3 a2 a1 nr -> int` | Syscall with 6 args |
+
+### Register Mapping
+
+Arguments are placed in registers following the Linux x86-64 syscall convention:
+
+| Argument | Register |
+|----------|----------|
+| Syscall number | `%rax` |
+| arg1 | `%rdi` |
+| arg2 | `%rsi` |
+| arg3 | `%rdx` |
+| arg4 | `%r10` |
+| arg5 | `%r8` |
+| arg6 | `%r9` |
+
+### Examples
+
+```casa
+# exit(0)
+0 60 syscall1 drop
+
+# write(1, buf, len) where buf is a string pointer and len is its length
+len buf 1 1 syscall3 drop
+```

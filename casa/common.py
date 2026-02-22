@@ -40,6 +40,15 @@ class Intrinsic(Enum):
     # Functions
     EXEC = auto()
 
+    # Syscalls
+    SYSCALL0 = auto()
+    SYSCALL1 = auto()
+    SYSCALL2 = auto()
+    SYSCALL3 = auto()
+    SYSCALL4 = auto()
+    SYSCALL5 = auto()
+    SYSCALL6 = auto()
+
     @classmethod
     def from_lowercase(cls, value: str) -> Self | None:
         if not value.islower():
@@ -215,6 +224,15 @@ class OpKind(Enum):
     LOAD = auto()
     STORE = auto()
 
+    # Syscalls
+    SYSCALL0 = auto()
+    SYSCALL1 = auto()
+    SYSCALL2 = auto()
+    SYSCALL3 = auto()
+    SYSCALL4 = auto()
+    SYSCALL5 = auto()
+    SYSCALL6 = auto()
+
     # Literals
     PUSH_ARRAY = auto()
     PUSH_BOOL = auto()
@@ -296,7 +314,7 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 56, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 63, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires `bool`
@@ -341,6 +359,13 @@ class Op:
                 | OpKind.ROT
                 | OpKind.STORE
                 | OpKind.SWAP
+                | OpKind.SYSCALL0
+                | OpKind.SYSCALL1
+                | OpKind.SYSCALL2
+                | OpKind.SYSCALL3
+                | OpKind.SYSCALL4
+                | OpKind.SYSCALL5
+                | OpKind.SYSCALL6
             ):
                 if not isinstance(self.value, Intrinsic):
                     raise TypeError(f"`{self.kind}` requires value of type `Intrinsic`")
@@ -465,6 +490,15 @@ class InstKind(Enum):
     # F-strings
     FSTRING_CONCAT = auto()
 
+    # Syscalls
+    SYSCALL0 = auto()
+    SYSCALL1 = auto()
+    SYSCALL2 = auto()
+    SYSCALL3 = auto()
+    SYSCALL4 = auto()
+    SYSCALL5 = auto()
+    SYSCALL6 = auto()
+
 
 @dataclass
 class Inst:
@@ -487,7 +521,7 @@ class Inst:
         return self.args[0]
 
     def __post_init__(self):
-        assert len(InstKind) == 45, "Exhaustive handling for `InstructionKind`"
+        assert len(InstKind) == 52, "Exhaustive handling for `InstructionKind`"
 
         match self.kind:
             # Should not have a parameter
@@ -520,6 +554,13 @@ class Inst:
                 | InstKind.STORE
                 | InstKind.SUB
                 | InstKind.SWAP
+                | InstKind.SYSCALL0
+                | InstKind.SYSCALL1
+                | InstKind.SYSCALL2
+                | InstKind.SYSCALL3
+                | InstKind.SYSCALL4
+                | InstKind.SYSCALL5
+                | InstKind.SYSCALL6
             ):
                 if self.args:
                     raise TypeError(
