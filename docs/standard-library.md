@@ -188,6 +188,116 @@ list.capacity print     # 6
 
 See [`examples/dynamic_list.casa`](../examples/dynamic_list.casa) for a full program using the List.
 
+## `Arena`
+
+A bump allocator that hands out pointers from a single pre-allocated buffer. Allocations are fast (just a pointer bump) and the entire arena can be reset at once instead of freeing individual allocations.
+
+### Definition
+
+```casa
+struct Arena {
+    buffer: ptr
+    size: int
+    offset: int
+}
+```
+
+### `Arena::new`
+
+Creates a new arena with the given number of heap slots.
+
+**Signature:** `Arena::new _arena_size:int -> Arena`
+
+**Stack effect:** `int -> Arena`
+
+```casa
+10 Arena::new = arena
+```
+
+### `Arena::alloc`
+
+Allocates `n` contiguous slots from the arena and returns a pointer to the first slot.
+
+**Signature:** `Arena::alloc self:Arena n:int -> ptr`
+
+**Stack effect:** `Arena int -> ptr`
+
+```casa
+3 arena.alloc = ptr1
+42 ptr1 store
+99 ptr1 1 + store
+7 ptr1 2 + store
+```
+
+### `Arena::reset`
+
+Resets the arena offset to zero, making the entire buffer available for reuse. Previously returned pointers should not be used after a reset.
+
+**Signature:** `Arena::reset self:Arena`
+
+**Stack effect:** `Arena -> None`
+
+```casa
+arena.reset
+```
+
+### `Arena::used`
+
+Returns the number of slots currently allocated.
+
+**Signature:** `Arena::used self:Arena -> int`
+
+**Stack effect:** `Arena -> int`
+
+```casa
+arena.used print    # 0 on a fresh arena
+```
+
+### `Arena::available`
+
+Returns the number of slots remaining in the arena.
+
+**Signature:** `Arena::available self:Arena -> int`
+
+**Stack effect:** `Arena -> int`
+
+```casa
+arena.available print    # equals size on a fresh arena
+```
+
+### Complete Example
+
+```casa
+include "../lib/std.casa"
+
+10 Arena::new = arena
+arena.used print          # 0
+arena.available print     # 10
+
+3 arena.alloc = ptr1
+42 ptr1 store
+99 ptr1 1 + store
+7 ptr1 2 + store
+
+arena.used print          # 3
+arena.available print     # 7
+
+arena.reset
+arena.used print          # 0
+arena.available print     # 10
+
+4 arena.alloc = ptr2
+1 ptr2 store
+2 ptr2 1 + store
+3 ptr2 2 + store
+4 ptr2 3 + store
+
+arena.used print          # 4
+arena.available print     # 6
+```
+
+See [`examples/arena.casa`](../examples/arena.casa) for a full program using the Arena.
+
 ## Type Conversions
 
 Convert values to their string representation. All `to_str` methods can be called with dot syntax (e.g., `42.to_str`).
