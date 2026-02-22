@@ -617,7 +617,7 @@ class Program:
 
 
 ANY_TYPE = "any"
-BUILTIN_TYPES: set[str] = {"int", "bool", "str", "ptr", "array", "any"}
+BUILTIN_TYPES: set[str] = {"int", "bool", "str", "ptr", "array", "any", "option"}
 
 
 def is_array_type(typ: str) -> bool:
