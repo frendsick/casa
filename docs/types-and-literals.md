@@ -108,22 +108,22 @@ f"hello"    # same as "hello"
 
 ### `ptr`
 
-Heap pointer returned by `alloc`. Used with `load` and `store` for heap memory access.
+Heap pointer returned by `alloc`. Used with sized load/store intrinsics (`load8`/`load16`/`load32`/`load64` and `store8`/`store16`/`store32`/`store64`) for byte-addressed heap memory access.
 
 ```casa
-10 alloc = buffer    # allocate 10 heap slots
-42 buffer store      # store 42 at buffer
-buffer load print    # 42
+32 alloc = buffer              # allocate 32 bytes
+42 buffer (ptr) store64        # store 64-bit value at buffer
+buffer (ptr) load64 print      # 42
 ```
 
 Convert to string with `.to_str` (see [Standard Library](standard-library.md#type-conversions)).
 
-Pointer arithmetic is supported with `+` and `-`:
+Pointer arithmetic is supported with `+` and `-` using byte offsets:
 
 ```casa
-10 alloc = buffer
-99 buffer 3 + store   # store 99 at offset 3
-buffer 3 + load print  # 99
+32 alloc = buffer
+99 buffer (ptr) 8 + store64    # store 99 at byte offset 8
+buffer (ptr) 8 + load64 print  # 99
 ```
 
 See [Functions and Lambdas — Memory Intrinsics](functions-and-lambdas.md#memory-intrinsics) for details.
@@ -165,7 +165,7 @@ Arrays can be nested. The element type is inferred recursively:
 
 The bare type name `array` matches any `array[T]` for backward compatibility (e.g. in function signatures).
 
-The array's length is stored in the first heap slot. Elements are stored starting at offset 1.
+The array's length is stored in the first 8 bytes (64-bit value). Elements are stored starting at byte offset 8, each taking 8 bytes.
 
 See [Standard Library — Arrays](standard-library.md#arrays) for `array::length` and `array::nth`.
 
@@ -216,7 +216,7 @@ Optional type representing a value that may or may not be present. Built with th
 none             # type: option (compatible with any option[T])
 ```
 
-At runtime, an option is heap-allocated as 2 slots: `[tag, value]`. The tag is `1` for `Some` and `0` for `None`.
+At runtime, an option is heap-allocated as 16 bytes: `[tag, value]` where each field is 8 bytes. The tag is `1` for `Some` and `0` for `None`.
 
 Options stored in variables retain their type:
 
@@ -275,12 +275,12 @@ Type variables are purely compile-time — they have no runtime cost. See [Funct
 
 ## The `any` Type
 
-`any` is a special wildcard type that matches any other type. It is used as an escape hatch when the type system cannot determine a precise type — for example, values read from the heap with `load` have type `any`.
+`any` is a special wildcard type that matches any other type. It is used as an escape hatch when the type system cannot determine a precise type.
 
 ```casa
-10 alloc = buffer
-42 buffer store
-buffer load         # type: any
+32 alloc = buffer
+42 buffer (ptr) store64
+buffer (ptr) load64    # type: int
 ```
 
 ## Type Casting
@@ -290,10 +290,10 @@ The `(TypeName)` syntax casts the top of the stack to the given type. This is a 
 **Stack effect:** `a -> TypeName`
 
 ```casa
-buffer load (int)    # cast any -> int
+buffer (ptr) load64 (int)    # cast int -> int (no-op here, but useful for generic data)
 ```
 
-This is useful after `load` or when working with generic data structures that return `any`.
+This is useful when working with generic data structures that return `any`.
 
 ## Comments
 
