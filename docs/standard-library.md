@@ -116,6 +116,62 @@ The accumulator is the initial value. The function receives the current accumula
 
 The accumulator type and the array element type can differ.
 
+## Option
+
+Methods for working with `option[T]` values. Method calls on any `option[T]` receiver are resolved to `option::method`.
+
+### `option::is_some`
+
+Returns `true` if the option contains a value.
+
+**Signature:** `option::is_some self:option -> bool`
+
+**Stack effect:** `option -> bool`
+
+```casa
+42 some .is_some print    # 1
+none .is_some print       # 0
+```
+
+### `option::is_none`
+
+Returns `true` if the option is empty.
+
+**Signature:** `option::is_none self:option -> bool`
+
+**Stack effect:** `option -> bool`
+
+```casa
+42 some .is_none print    # 0
+none .is_none print       # 1
+```
+
+### `option::unwrap`
+
+Extracts the contained value. Prints an error and exits with code 60 if called on `none`.
+
+**Signature:** `option::unwrap[T] self:option[T] -> T`
+
+**Stack effect:** `option[T] -> T`
+
+```casa
+42 some .unwrap print     # 42
+none .unwrap              # error: called unwrap on None
+```
+
+### `option::unwrap_or`
+
+Returns the contained value, or a default if the option is empty.
+
+**Signature:** `option::unwrap_or[T] self:option[T] default:T -> T`
+
+**Stack effect:** `option[T] T -> T`
+
+```casa
+0 42 some .unwrap_or print    # 42
+0 none .unwrap_or print       # 0
+```
+
 ## `List`
 
 A dynamic list that grows automatically when items are pushed.

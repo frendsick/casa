@@ -469,3 +469,42 @@ def test_emit_to_str_in_fstring():
     asm = emit_string(STD_INCLUDE + '42 = n f"val: {n.to_str}"')
     assert "fn_int__to_str" in asm
     assert "str_concat" in asm
+
+
+# ---------------------------------------------------------------------------
+# option[T] (none / some)
+# ---------------------------------------------------------------------------
+def test_emit_none():
+    """none generates assembly with heap_ptr reference."""
+    asm = emit_string("none")
+    assert "heap_ptr" in asm
+
+
+def test_emit_some():
+    """42 some generates assembly with heap allocation."""
+    asm = emit_string("42 some")
+    assert "heap_ptr" in asm
+
+
+def test_emit_option_is_some():
+    """option::is_some emits correct function label."""
+    asm = emit_string(STD_INCLUDE + "42 some .is_some")
+    assert "fn_option__is_some" in asm
+
+
+def test_emit_option_is_none():
+    """option::is_none emits correct function label."""
+    asm = emit_string(STD_INCLUDE + "42 some .is_none")
+    assert "fn_option__is_none" in asm
+
+
+def test_emit_option_unwrap():
+    """option::unwrap emits correct function label."""
+    asm = emit_string(STD_INCLUDE + "42 some .unwrap")
+    assert "fn_option__unwrap" in asm
+
+
+def test_emit_option_unwrap_or():
+    """option::unwrap_or emits correct function label."""
+    asm = emit_string(STD_INCLUDE + "0 42 some .unwrap_or")
+    assert "fn_option__unwrap_or" in asm

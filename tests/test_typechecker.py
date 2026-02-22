@@ -974,3 +974,212 @@ def test_typecheck_map_str_array():
     code = STD_INCLUDE + '{ dup drop } ["a", "b", "c"] .map'
     sig = typecheck_string(code)
     assert sig.return_types == ["array[any]"]
+
+
+# ---------------------------------------------------------------------------
+# Option[T] type
+# ---------------------------------------------------------------------------
+def test_typecheck_none_pushes_option():
+    """none pushes bare option onto the stack."""
+    sig = typecheck_string("none")
+    assert sig.return_types == ["option"]
+
+
+def test_typecheck_some_int():
+    """42 some pushes option[int] onto the stack."""
+    sig = typecheck_string("42 some")
+    assert sig.return_types == ["option[int]"]
+
+
+def test_typecheck_some_str():
+    """'hello' some pushes option[str] onto the stack."""
+    sig = typecheck_string('"hello" some')
+    assert sig.return_types == ["option[str]"]
+
+
+def test_typecheck_some_bool():
+    """true some pushes option[bool] onto the stack."""
+    sig = typecheck_string("true some")
+    assert sig.return_types == ["option[bool]"]
+
+
+def test_typecheck_none_compat_with_option_int():
+    """none is compatible with option[int] in function signatures."""
+    code = """
+    fn take_opt opt:option[int] -> int { 0 }
+    none take_opt
+    """
+    sig = typecheck_string(code)
+    assert sig.return_types == ["int"]
+
+
+def test_typecheck_option_in_variable():
+    """option[int] stored in variable retains its type."""
+    code = "42 some = x x"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["option[int]"]
+
+
+def test_typecheck_none_in_variable():
+    """none stored in variable retains bare option type."""
+    code = "none = x x"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["option"]
+
+
+def test_typecheck_option_dup():
+    """dup on option[int] preserves the element type."""
+    sig = typecheck_string("42 some dup")
+    assert sig.return_types == ["option[int]", "option[int]"]
+
+
+def test_typecheck_bare_option_matches_typed_option():
+    """A function expecting bare option accepts option[int] (like bare array)."""
+    code = """
+    fn check opt:option -> bool { true }
+    42 some check
+    """
+    sig = typecheck_string(code)
+    assert sig.return_types == ["bool"]
+
+
+def test_typecheck_typed_option_matches_bare_option():
+    """A function expecting option[int] accepts bare option (like typed array)."""
+    code = """
+    fn check opt:option[int] -> bool { true }
+    """
+    typecheck_string(code)
+    fn = GLOBAL_FUNCTIONS["check"]
+    assert fn.signature is not None
+    assert [p.typ for p in fn.signature.parameters] == ["option[int]"]
+
+
+def test_typecheck_signature_matches_bare_and_typed_option():
+    """Signature.matches() treats bare option as compatible with option[int]."""
+    sig_bare = Signature([Parameter("option")], ["int"])
+    sig_typed = Signature([Parameter("option[int]")], ["int"])
+    assert sig_bare.matches(sig_typed)
+    assert sig_typed.matches(sig_bare)
+
+
+def test_typecheck_signature_matches_different_typed_options():
+    """Signature.matches() rejects option[int] vs option[str]."""
+    sig_int = Signature([Parameter("option[int]")], ["int"])
+    sig_str = Signature([Parameter("option[str]")], ["int"])
+    assert not sig_int.matches(sig_str)
+    assert not sig_str.matches(sig_int)
+
+
+def test_typecheck_option_is_some():
+    """is_some on option[int] returns bool."""
+    code = STD_INCLUDE + "42 some .is_some"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["bool"]
+
+
+def test_typecheck_option_is_none():
+    """is_none on option[int] returns bool."""
+    code = STD_INCLUDE + "42 some .is_none"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["bool"]
+
+
+def test_typecheck_none_is_some():
+    """is_some on none returns bool."""
+    code = STD_INCLUDE + "none .is_some"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["bool"]
+
+
+def test_typecheck_none_is_none():
+    """is_none on none returns bool."""
+    code = STD_INCLUDE + "none .is_none"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["bool"]
+
+
+def test_typecheck_option_unwrap():
+    """unwrap on option[int] returns int."""
+    code = STD_INCLUDE + "42 some .unwrap"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["int"]
+
+
+def test_typecheck_option_unwrap_or():
+    """unwrap_or on option[int] with int default returns int."""
+    code = STD_INCLUDE + "0 42 some .unwrap_or"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["int"]
+
+
+def test_typecheck_option_in_generic_function():
+    """Generic function accepting option[T] parameter."""
+    code = """
+    fn id[T] T -> T { }
+    42 some id
+    """
+    sig = typecheck_string(code)
+    assert sig.return_types == ["option[int]"]
+
+
+def test_typecheck_option_type_in_fn_signature():
+    """Parser handles option[int] in function signatures."""
+    code = """
+    fn wrap x:int -> option[int] { x some }
+    42 wrap
+    """
+    sig = typecheck_string(code)
+    assert sig.return_types == ["option[int]"]
+
+
+def test_typecheck_option_type_cast():
+    """Type cast (option[int]) works."""
+    code = "none (option[int])"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["option[int]"]
+
+
+def test_typecheck_signature_from_str_option_type():
+    """Signature.from_str handles option[int] as a parameter type."""
+    sig = Signature.from_str("option[int] -> int")
+    assert [p.typ for p in sig.parameters] == ["option[int]"]
+    assert sig.return_types == ["int"]
+
+
+# ---------------------------------------------------------------------------
+# Option[T] branch compatibility
+# ---------------------------------------------------------------------------
+def test_typecheck_option_none_if_some_else():
+    """none in if branch and some in else branch are compatible."""
+    code = "if true then none else 42 some fi"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["option[int]"]
+
+
+def test_typecheck_option_some_if_none_else():
+    """some in if branch and none in else branch are compatible."""
+    code = "if true then 42 some else none fi"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["option[int]"]
+
+
+def test_typecheck_option_mixed_elif():
+    """Multiple elif branches mixing none and some are compatible."""
+    code = "if true then none elif false then 42 some else 99 some fi"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["option[int]"]
+
+
+def test_typecheck_option_different_some_types_rejected():
+    """option[int] and option[bool] in different branches are incompatible."""
+    code = "if true then 42 some else true some fi"
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        typecheck_string(code)
+    assert exc_info.value.errors[0].kind == ErrorKind.STACK_MISMATCH
+
+
+def test_typecheck_option_none_if_no_else_no_change():
+    """none in if-without-else that doesn't change the stack is fine."""
+    code = "none if true then drop none fi"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["option"]
