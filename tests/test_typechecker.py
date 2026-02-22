@@ -1170,6 +1170,14 @@ def test_typecheck_option_mixed_elif():
     assert sig.return_types == ["option[int]"]
 
 
+def test_typecheck_option_different_some_types_rejected():
+    """option[int] and option[bool] in different branches are incompatible."""
+    code = "if true then 42 some else true some fi"
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        typecheck_string(code)
+    assert exc_info.value.errors[0].kind == ErrorKind.STACK_MISMATCH
+
+
 def test_typecheck_option_none_if_no_else_no_change():
     """none in if-without-else that doesn't change the stack is fine."""
     code = "none if true then drop none fi"
