@@ -236,7 +236,7 @@ fn check opt:option -> bool { true }
 
 ```casa
 fn safe_head arr:array[int] -> option[int] {
-    if 0 arr .length < then
+    if 0 arr .length > then
         0 arr array::nth some
     else
         none
