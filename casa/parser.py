@@ -319,14 +319,14 @@ def get_op_delimiter(
         case None:
             return None
         case Delimiter.ARROW:
-            member = expect_token(cursor, kind=TokenKind.IDENTIFIER)
+            member = expect_name_token(cursor)
             return Op(f"set_{member.value}", OpKind.METHOD_CALL, member.location)
         case Delimiter.COLON:
             return None
         case Delimiter.COMMA:
             return None
         case Delimiter.DOT:
-            method = expect_token(cursor, kind=TokenKind.IDENTIFIER)
+            method = expect_name_token(cursor)
             return Op(method.value, OpKind.METHOD_CALL, method.location)
         case Delimiter.HASHTAG:
             return None
@@ -712,7 +712,7 @@ def parse_type_vars(cursor: Cursor[Token]) -> set[str]:
 
 def parse_function(cursor: Cursor[Token]) -> Function:
     expect_token(cursor, value="fn")
-    name = expect_token(cursor, kind=TokenKind.IDENTIFIER)
+    name = expect_name_token(cursor)
 
     # Parse optional type parameters: fn name[T1 T2] ...
     type_vars: set[str] = set()
@@ -897,6 +897,40 @@ def get_op_operator(token: Token, cursor: Cursor[Token], function_name: str) -> 
             return Op(operator, OpKind.SHR, token.location)
         case None:
             raise ValueError(f"`{token.value}` is not an operator")
+
+
+NAME_TOKEN_KINDS = {TokenKind.IDENTIFIER, TokenKind.INTRINSIC, TokenKind.KEYWORD}
+
+
+def expect_name_token(cursor: Cursor[Token]) -> Token:
+    """Pop a token that is a valid name (identifier, intrinsic, or keyword)."""
+    token = cursor.pop()
+    if not token or token.kind == TokenKind.EOF:
+        last_location = (
+            token.location
+            if token
+            else (
+                cursor.sequence[cursor.position - 1].location
+                if cursor.position > 0
+                else None
+            )
+        )
+        raise_error(
+            ErrorKind.UNEXPECTED_TOKEN,
+            "Unexpected end of input",
+            last_location,
+            expected="name",
+            got="end of input",
+        )
+    if token.kind not in NAME_TOKEN_KINDS:
+        raise_error(
+            ErrorKind.UNEXPECTED_TOKEN,
+            "Unexpected token",
+            token.location,
+            expected="name",
+            got=f"`{token.kind.name}`",
+        )
+    return token
 
 
 def expect_token(
