@@ -220,7 +220,7 @@ class Emitter:
         self._indent("movq %rax, (%rsp)")
 
     def _emit_inst(self, inst: Inst, is_global: bool) -> None:
-        assert len(InstKind) == 52, "Exhaustive handling for `InstKind`"
+        assert len(InstKind) == 58, "Exhaustive handling for `InstKind`"
         kind = inst.kind
         match kind:
             # === Stack ===
@@ -384,16 +384,46 @@ class Emitter:
                 self._indent("pushq %rbx")
                 self._indent("addq %rax, %rbx")
                 self._indent("movq %rbx, heap_ptr(%rip)")
-            case InstKind.LOAD:
+            case InstKind.LOAD8:
                 self._indent("popq %rax")
                 self._indent("leaq heap(%rip), %rbx")
-                self._indent("movq (%rbx, %rax, 8), %rax")
+                self._indent("movzbl (%rbx,%rax), %eax")
                 self._indent("pushq %rax")
-            case InstKind.STORE:
+            case InstKind.LOAD16:
+                self._indent("popq %rax")
+                self._indent("leaq heap(%rip), %rbx")
+                self._indent("movzwl (%rbx,%rax), %eax")
+                self._indent("pushq %rax")
+            case InstKind.LOAD32:
+                self._indent("popq %rax")
+                self._indent("leaq heap(%rip), %rbx")
+                self._indent("movl (%rbx,%rax), %eax")
+                self._indent("pushq %rax")
+            case InstKind.LOAD64:
+                self._indent("popq %rax")
+                self._indent("leaq heap(%rip), %rbx")
+                self._indent("movq (%rbx,%rax), %rax")
+                self._indent("pushq %rax")
+            case InstKind.STORE8:
                 self._indent("popq %rax")
                 self._indent("popq %rbx")
                 self._indent("leaq heap(%rip), %rcx")
-                self._indent("movq %rbx, (%rcx, %rax, 8)")
+                self._indent("movb %bl, (%rcx,%rax)")
+            case InstKind.STORE16:
+                self._indent("popq %rax")
+                self._indent("popq %rbx")
+                self._indent("leaq heap(%rip), %rcx")
+                self._indent("movw %bx, (%rcx,%rax)")
+            case InstKind.STORE32:
+                self._indent("popq %rax")
+                self._indent("popq %rbx")
+                self._indent("leaq heap(%rip), %rcx")
+                self._indent("movl %ebx, (%rcx,%rax)")
+            case InstKind.STORE64:
+                self._indent("popq %rax")
+                self._indent("popq %rbx")
+                self._indent("leaq heap(%rip), %rcx")
+                self._indent("movq %rbx, (%rcx,%rax)")
 
             # === Functions ===
             case InstKind.FN_CALL:

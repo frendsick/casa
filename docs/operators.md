@@ -33,9 +33,9 @@ All arithmetic operators consume two values and produce one.
 `+` and `-` support `ptr` as the first operand, allowing offset-based heap access:
 
 ```casa
-10 alloc = buf
-42 buf 3 + store    # store 42 at buf+3
-buf 3 + load print  # 42
+32 alloc = buf
+42 buf (ptr) 8 + store64    # store 42 at byte offset 8
+buf (ptr) 8 + load64 print  # 42
 ```
 
 ## Bitshift

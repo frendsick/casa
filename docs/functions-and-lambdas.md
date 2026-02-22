@@ -320,28 +320,35 @@ true print                  # 1
 
 ## Memory Intrinsics
 
-Low-level heap access for building data structures.
+Low-level byte-addressed heap access for building data structures.
 
 | Intrinsic | Stack Effect | Description |
 |-----------|-------------|-------------|
-| `alloc` | `int -> ptr` | Allocate N heap slots, return pointer |
-| `load` | `any -> any` | Read value at heap address |
-| `store` | `any any -> None` | Write value to heap address |
+| `alloc` | `int -> ptr` | Allocate N bytes of heap memory, return pointer |
+| `load8` | `ptr -> int` | Load 8-bit value from address (zero-extended) |
+| `load16` | `ptr -> int` | Load 16-bit value from address (zero-extended) |
+| `load32` | `ptr -> int` | Load 32-bit value from address (zero-extended) |
+| `load64` | `ptr -> int` | Load 64-bit value from address |
+| `store8` | `any ptr -> None` | Store 8-bit value to address |
+| `store16` | `any ptr -> None` | Store 16-bit value to address |
+| `store32` | `any ptr -> None` | Store 32-bit value to address |
+| `store64` | `any ptr -> None` | Store 64-bit value to address |
 
 ### Example
 
 ```casa
-3 alloc = buf         # allocate 3 slots
-10 buf store          # buf[0] = 10
-20 buf 1 + store      # buf[1] = 20
-30 buf 2 + store      # buf[2] = 30
+32 alloc = buf                # allocate 32 bytes
+42 buf (ptr) store64          # store 64-bit value at buf
+buf (ptr) load64 print        # 42
 
-buf load print        # 10
-buf 1 + load print    # 20
-buf 2 + load print    # 30
+255 buf (ptr) 8 + store8      # store 8-bit value at byte offset 8
+buf (ptr) 8 + load8 print     # 255
+
+100000 buf (ptr) 16 + store32 # store 32-bit value at byte offset 16
+buf (ptr) 16 + load32 print   # 100000
 ```
 
-Values read with `load` have type `any`. Use a [type cast](types-and-literals.md#type-casting) `(TypeName)` to restore a specific type.
+Values are addressed by byte offset. Use pointer arithmetic (`+`) to access different offsets within an allocated block. Choose the load/store size that matches your data width.
 
 See [Standard Library](standard-library.md) for higher-level abstractions built on these primitives.
 

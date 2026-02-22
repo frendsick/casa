@@ -363,6 +363,14 @@ OP_STACK_EFFECTS: dict[OpKind, tuple[str, str]] = {
     OpKind.ASSIGN_DECREMENT: ("-=", "int -> None"),
     OpKind.ASSIGN_INCREMENT: ("+=", "int -> None"),
     OpKind.HEAP_ALLOC: ("alloc", "int -> ptr"),
+    OpKind.LOAD8: ("load8", "ptr -> int"),
+    OpKind.LOAD16: ("load16", "ptr -> int"),
+    OpKind.LOAD32: ("load32", "ptr -> int"),
+    OpKind.LOAD64: ("load64", "ptr -> int"),
+    OpKind.STORE8: ("store8", "any ptr -> None"),
+    OpKind.STORE16: ("store16", "any ptr -> None"),
+    OpKind.STORE32: ("store32", "any ptr -> None"),
+    OpKind.STORE64: ("store64", "any ptr -> None"),
     OpKind.IF_CONDITION: ("if condition", "bool -> None"),
     OpKind.WHILE_CONDITION: ("while condition", "bool -> None"),
     OpKind.SYSCALL0: ("syscall0", "int -> int"),
@@ -491,7 +499,7 @@ def _ensure_typechecked(global_function: Function) -> None:
 
 
 def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature:
-    assert len(OpKind) == 65, "Exhaustive handling for `OpKind`"
+    assert len(OpKind) == 71, "Exhaustive handling for `OpKind`"
 
     tc = TypeChecker(ops=ops)
     for op in ops:
@@ -766,10 +774,9 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 tc.stack_pop()
                 tc.stack_pop()
                 tc.stack_push("bool")
-            case OpKind.LOAD:
-                # TODO: Expect pointer types
-                tc.stack_pop()
-                tc.stack_push(ANY_TYPE)
+            case OpKind.LOAD8 | OpKind.LOAD16 | OpKind.LOAD32 | OpKind.LOAD64:
+                tc.expect_type("ptr")
+                tc.stack_push("int")
             case OpKind.LT:
                 tc.stack_pop()
                 tc.stack_pop()
@@ -944,9 +951,8 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
             case OpKind.SOME:
                 t1 = tc.stack_pop()
                 tc.stack_push(f"option[{t1}]")
-            case OpKind.STORE:
-                # TODO: Expect pointer types
-                tc.stack_pop()
+            case OpKind.STORE8 | OpKind.STORE16 | OpKind.STORE32 | OpKind.STORE64:
+                tc.expect_type("ptr")
                 tc.stack_pop()
             case OpKind.STRUCT_NEW:
                 struct = op.value

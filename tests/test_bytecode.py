@@ -107,7 +107,7 @@ def test_bytecode_push_array():
     assert InstKind.LABEL in kinds
     assert InstKind.JUMP in kinds
     assert InstKind.JUMP_NE in kinds
-    assert InstKind.STORE in kinds
+    assert InstKind.STORE64 in kinds
 
     # 2 locals: array pointer and loop index (no local for length)
     local_sets = find_insts(program, InstKind.LOCAL_SET)
@@ -142,9 +142,9 @@ def test_bytecode_heap_alloc():
 
 
 def test_bytecode_load_store():
-    program = compile_string("42 10 alloc store 10 alloc load")
-    assert len(find_insts(program, InstKind.STORE)) >= 1
-    assert len(find_insts(program, InstKind.LOAD)) >= 1
+    program = compile_string("42 10 alloc store64 10 alloc load64")
+    assert len(find_insts(program, InstKind.STORE64)) >= 1
+    assert len(find_insts(program, InstKind.LOAD64)) >= 1
 
 
 # ---------------------------------------------------------------------------
@@ -287,19 +287,19 @@ def test_bytecode_string_interning():
 # Option[T] (none / some)
 # ---------------------------------------------------------------------------
 def test_bytecode_none():
-    """none generates HEAP_ALLOC and STORE instructions (tag 0)."""
+    """none generates HEAP_ALLOC and STORE64 instructions (tag 0)."""
     program = compile_string("none")
     kinds = [i.kind for i in program.bytecode]
     assert InstKind.HEAP_ALLOC in kinds
-    assert InstKind.STORE in kinds
+    assert InstKind.STORE64 in kinds
 
 
 def test_bytecode_some():
-    """42 some generates HEAP_ALLOC and STORE instructions (tag 1, value)."""
+    """42 some generates HEAP_ALLOC and STORE64 instructions (tag 1, value)."""
     program = compile_string("42 some")
     kinds = [i.kind for i in program.bytecode]
     assert InstKind.HEAP_ALLOC in kinds
-    assert InstKind.STORE in kinds
+    assert InstKind.STORE64 in kinds
 
 
 def test_bytecode_none_push_tag_zero():
@@ -314,3 +314,36 @@ def test_bytecode_some_push_tag_one():
     program = compile_string("42 some")
     pushes = find_insts(program, InstKind.PUSH)
     assert any(i.args == [1] for i in pushes)
+
+
+# ---------------------------------------------------------------------------
+# Sized load/store variants
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "size,expected_kind",
+    [
+        ("load8", InstKind.LOAD8),
+        ("load16", InstKind.LOAD16),
+        ("load32", InstKind.LOAD32),
+        ("load64", InstKind.LOAD64),
+    ],
+)
+def test_bytecode_sized_load(size, expected_kind):
+    """Each sized load variant produces the correct InstKind."""
+    program = compile_string(f"10 alloc {size}")
+    assert len(find_insts(program, expected_kind)) >= 1
+
+
+@pytest.mark.parametrize(
+    "size,expected_kind",
+    [
+        ("store8", InstKind.STORE8),
+        ("store16", InstKind.STORE16),
+        ("store32", InstKind.STORE32),
+        ("store64", InstKind.STORE64),
+    ],
+)
+def test_bytecode_sized_store(size, expected_kind):
+    """Each sized store variant produces the correct InstKind."""
+    program = compile_string(f"42 10 alloc {size}")
+    assert len(find_insts(program, expected_kind)) >= 1

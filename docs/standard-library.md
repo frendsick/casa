@@ -18,29 +18,29 @@ Paths are resolved relative to the file containing the `include` directive. All 
 
 ## `memcpy`
 
-Copies heap slots from one pointer to another.
+Copies `n` bytes from one pointer to another.
 
 **Signature:** `memcpy dst:ptr src:ptr n:int`
 
 **Stack effect:** `dst src n -> None`
 
 ```casa
-3 alloc = src
-10 src store
-20 src 1 + store
-30 src 2 + store
+24 alloc = src
+10 src (ptr) store64
+20 src (ptr) 8 + store64
+30 src (ptr) 16 + store64
 
-3 alloc = dst
-3 src dst memcpy
+24 alloc = dst
+24 src dst memcpy
 
-dst load print        # 10
-dst 1 + load print    # 20
-dst 2 + load print    # 30
+dst (ptr) load64 print        # 10
+dst (ptr) 8 + load64 print    # 20
+dst (ptr) 16 + load64 print   # 30
 ```
 
 ## Arrays
 
-Arrays are fixed-size heap-allocated sequences created with bracket syntax. The length is stored in the first heap slot, and elements start at offset 1.
+Arrays are fixed-size heap-allocated sequences created with bracket syntax. The length is stored in the first 8 bytes, and elements start at byte offset 8 (each element takes 8 bytes).
 
 ### `array::length`
 

@@ -267,7 +267,7 @@ def test_emit_heap_alloc():
 
 
 def test_emit_load_store():
-    asm = emit_string("42 10 alloc store")
+    asm = emit_string("42 10 alloc store64")
     assert "leaq heap(%rip)" in asm
 
 
@@ -508,3 +508,59 @@ def test_emit_option_unwrap_or():
     """option::unwrap_or emits correct function label."""
     asm = emit_string(STD_INCLUDE + "0 42 some .unwrap_or")
     assert "fn_option__unwrap_or" in asm
+
+
+# ---------------------------------------------------------------------------
+# Sized load assembly patterns
+# ---------------------------------------------------------------------------
+def test_emit_load8():
+    """load8 emits movzbl for zero-extended byte load."""
+    asm = emit_string("10 alloc load8")
+    assert "movzbl" in asm
+
+
+def test_emit_load16():
+    """load16 emits movzwl for zero-extended word load."""
+    asm = emit_string("10 alloc load16")
+    assert "movzwl" in asm
+
+
+def test_emit_load32():
+    """load32 emits movl for 32-bit load."""
+    asm = emit_string("10 alloc load32")
+    assert "movl" in asm
+
+
+def test_emit_load64():
+    """load64 emits movq with heap addressing."""
+    asm = emit_string("10 alloc load64")
+    assert "movq" in asm
+    assert "leaq heap(%rip)" in asm
+
+
+# ---------------------------------------------------------------------------
+# Sized store assembly patterns
+# ---------------------------------------------------------------------------
+def test_emit_store8():
+    """store8 emits movb for byte store."""
+    asm = emit_string("42 10 alloc store8")
+    assert "movb" in asm
+
+
+def test_emit_store16():
+    """store16 emits movw for word store."""
+    asm = emit_string("42 10 alloc store16")
+    assert "movw" in asm
+
+
+def test_emit_store32():
+    """store32 emits movl for 32-bit store."""
+    asm = emit_string("42 10 alloc store32")
+    assert "movl" in asm
+
+
+def test_emit_store64():
+    """store64 emits movq with heap addressing."""
+    asm = emit_string("42 10 alloc store64")
+    assert "movq" in asm
+    assert "leaq heap(%rip)" in asm

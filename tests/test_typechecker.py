@@ -103,12 +103,46 @@ def test_typecheck_alloc():
 
 
 def test_typecheck_load():
-    sig = typecheck_string("10 alloc load")
-    assert sig.return_types == [ANY_TYPE]
+    sig = typecheck_string("10 alloc load64")
+    assert sig.return_types == ["int"]
 
 
 def test_typecheck_store():
-    sig = typecheck_string("42 10 alloc store")
+    sig = typecheck_string("42 10 alloc store64")
+    assert sig.return_types == []
+
+
+@pytest.mark.parametrize("size", ["load8", "load16", "load32", "load64"])
+def test_typecheck_load_sizes(size):
+    """All load sizes have ptr -> int signature."""
+    sig = typecheck_string(f"10 alloc {size}")
+    assert sig.return_types == ["int"]
+
+
+@pytest.mark.parametrize("size", ["store8", "store16", "store32", "store64"])
+def test_typecheck_store_sizes(size):
+    """All store sizes have any ptr -> None signature."""
+    sig = typecheck_string(f"42 10 alloc {size}")
+    assert sig.return_types == []
+
+
+def test_typecheck_load_rejects_non_ptr():
+    """load64 rejects non-ptr address."""
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        typecheck_string("42 load64")
+    assert exc_info.value.errors[0].kind == ErrorKind.TYPE_MISMATCH
+
+
+def test_typecheck_store_rejects_non_ptr():
+    """store64 rejects non-ptr address."""
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        typecheck_string("42 99 store64")
+    assert exc_info.value.errors[0].kind == ErrorKind.TYPE_MISMATCH
+
+
+def test_typecheck_store_accepts_any_value_type():
+    """store64 accepts any type for the value."""
+    sig = typecheck_string('"hello" 10 alloc store64')
     assert sig.return_types == []
 
 
