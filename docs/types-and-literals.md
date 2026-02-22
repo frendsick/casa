@@ -198,6 +198,42 @@ fn apply f:fn[int -> int] x:int -> int {
 
 See [Functions and Lambdas](functions-and-lambdas.md#lambdas) for details.
 
+### `option[T]`
+
+Optional type representing a value that may or may not be present. Built with the `some` and `none` constructors.
+
+`none` pushes an empty option with bare type `option`. It is compatible with any `option[T]`.
+
+**Stack effect:** `( -- option )`
+
+`some` wraps the top-of-stack value into an option. The resulting type is `option[T]` where `T` is the type of the wrapped value.
+
+**Stack effect:** `( T -- option[T] )`
+
+```casa
+42 some          # type: option[int]
+"hello" some     # type: option[str]
+none             # type: option (compatible with any option[T])
+```
+
+At runtime, an option is heap-allocated as 2 slots: `[tag, value]`. The tag is `1` for `Some` and `0` for `None`.
+
+Options stored in variables retain their type:
+
+```casa
+42 some = x      # x has type option[int]
+none = y         # y has type option (bare)
+```
+
+A bare `option` type matches any `option[T]` in function signatures, similar to how bare `array` matches any `array[T]`:
+
+```casa
+fn check opt:option -> bool { true }
+42 some check    # works: option[int] matches bare option
+```
+
+See [Standard Library -- Option](standard-library.md#option) for `is_some`, `is_none`, `unwrap`, and `unwrap_or`.
+
 ### User-Defined Structs
 
 Struct names are types. After defining a struct, its name can be used as a type.
