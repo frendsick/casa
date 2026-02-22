@@ -61,7 +61,7 @@ Invalid escape sequences (e.g. `\q`) produce a compile-time `SYNTAX` error.
 
 F-strings let you embed expressions inside a string literal. Prefix a string with `f` and wrap expressions in `{}`.
 
-**Stack effect:** `( -- str )`
+**Stack effect:** `-> str`
 
 ```casa
 "world" = name
@@ -204,11 +204,11 @@ Optional type representing a value that may or may not be present. Built with th
 
 `none` pushes an empty option with bare type `option`. It is compatible with any `option[T]`.
 
-**Stack effect:** `( -- option )`
+**Stack effect:** `-> option`
 
 `some` wraps the top-of-stack value into an option. The resulting type is `option[T]` where `T` is the type of the wrapped value.
 
-**Stack effect:** `( T -- option[T] )`
+**Stack effect:** `T -> option[T]`
 
 ```casa
 42 some          # type: option[int]
