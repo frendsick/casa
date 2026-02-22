@@ -26,9 +26,44 @@ false print    # 0
 
 Booleans are printed as integers (`1` for true, `0` for false). Convert to `"true"` or `"false"` with `.to_str` (see [Standard Library](standard-library.md#type-conversions)).
 
+### `char`
+
+Single character type. Character literals are enclosed in single quotes.
+
+```casa
+'A' print      # A
+'z' print      # z
+```
+
+Characters support the following escape sequences:
+
+| Sequence | Meaning |
+|----------|---------|
+| `\n` | Newline |
+| `\t` | Tab |
+| `\\` | Literal backslash |
+| `\'` | Single quote |
+| `\0` | Null byte |
+| `\r` | Carriage return |
+
+```casa
+'\n' print     # prints a newline
+'\t' print     # prints a tab
+'\\' print     # prints a backslash
+'\'' print     # prints a single quote
+```
+
+Invalid escape sequences (e.g. `\q`) produce a compile-time `SYNTAX` error. Empty char literals (`''`) are also errors.
+
+Characters can be cast to `int` to get their ASCII code:
+
+```casa
+'A' (int) print    # 65
+```
+
 ### `str`
 
-String type. String literals are enclosed in double quotes.
+String type. String literals are enclosed in double quotes. Internally, strings are stored as `[8-byte length][N bytes data][\0]`, with the pointer pointing to the length prefix.
 
 ```casa
 "Hello world!" print
@@ -56,6 +91,16 @@ Strings support the following escape sequences:
 ```
 
 Invalid escape sequences (e.g. `\q`) produce a compile-time `SYNTAX` error.
+
+### `cstr`
+
+Null-terminated C string type. There is no literal syntax for `cstr`. Create one from a `str` using `str::as_cstr` (see [Standard Library](standard-library.md#stras_cstr)). The `cstr` points directly to the byte data (no length prefix), terminated by a null byte.
+
+```casa
+"hello" .as_cstr print    # hello
+```
+
+Convert to `str` with `cstr::to_str` (see [Standard Library](standard-library.md#cstrto_str)).
 
 ### F-Strings (String Interpolation)
 
@@ -108,7 +153,7 @@ f"hello"    # same as "hello"
 
 ### `ptr`
 
-Heap pointer returned by `alloc`. Used with sized load/store intrinsics (`load8`/`load16`/`load32`/`load64` and `store8`/`store16`/`store32`/`store64`) for byte-addressed heap memory access.
+Heap pointer returned by `alloc`. Used with sized load/store intrinsics (`load8`/`load16`/`load32`/`load64` and `store8`/`store16`/`store32`/`store64`) for byte-addressed memory access. Load/store intrinsics use absolute addressing.
 
 ```casa
 32 alloc = buffer              # allocate 32 bytes

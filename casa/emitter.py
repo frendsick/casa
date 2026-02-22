@@ -63,7 +63,6 @@ class Emitter:
         self._line(f"heap: .skip {HEAP_SIZE}")
         self._line("heap_ptr: .skip 8")
         self._line("print_buf: .skip 32")
-        self._line("str_alloc_ptr: .skip 8")
         self._line("")
 
     def _emit_data(self) -> None:
@@ -71,8 +70,11 @@ class Emitter:
         for i, s in enumerate(self.program.strings):
             escaped = self._escape_string(s)
             self._line(".align 8")
+            self._line(f"str_{i}:")
             self._line(f".quad {len(s)}")
-            self._line(f'str_{i}: .ascii "{escaped}"')
+            self._line(f'.asciz "{escaped}"')
+        self._line('bool_true: .ascii "true"')
+        self._line('bool_false: .ascii "false"')
         self._line("")
 
     def _emit_text(self) -> None:
@@ -124,10 +126,10 @@ class Emitter:
         self._indent("jmpq *(%r14)")
         self._line("")
 
-        # print_str: string pointer in %rdi, returns via r14
+        # print_str: string pointer in %rdi (points to length prefix), returns via r14
         self._line("print_str:")
-        self._indent("movq -8(%rdi), %rdx")
-        self._indent("movq %rdi, %rsi")
+        self._indent("movq (%rdi), %rdx")
+        self._indent("leaq 8(%rdi), %rsi")
         self._indent("movq $1, %rdi")
         self._indent("movq $1, %rax")
         self._indent("syscall")
@@ -146,22 +148,20 @@ class Emitter:
         self._indent("cmpq %r8, %rcx")
         self._indent("jge .Lsc_len_done")
         self._indent("movq (%r9, %rcx, 8), %rax")
-        self._indent("addq -8(%rax), %r10")
+        self._indent("addq (%rax), %r10")
         self._indent("incq %rcx")
         self._indent("jmp .Lsc_len_loop")
         self._line(".Lsc_len_done:")
-        # Allocate total_length + 8 via brk
-        self._indent("movq str_alloc_ptr(%rip), %r11")
-        self._indent("leaq 8(%r11, %r10), %rdi")
-        self._indent("pushq %r11")
-        self._indent("movq $12, %rax")
-        self._indent("syscall")
-        self._indent("popq %r11")
-        self._indent("movq %rax, str_alloc_ptr(%rip)")
-        # Write total length at alloc_base
-        self._indent("movq %r10, (%r11)")
-        # Result string data starts at alloc_base + 8
-        self._indent("leaq 8(%r11), %rdi")
+        # Allocate total_length + 9 on heap (8 for length, 1 for null)
+        self._indent("leaq heap(%rip), %r11")
+        self._indent("movq heap_ptr(%rip), %r12")
+        self._indent("leaq (%r11, %r12), %r13")
+        self._indent("leaq 9(%r10, %r12), %rax")
+        self._indent("movq %rax, heap_ptr(%rip)")
+        # Write total length at base
+        self._indent("movq %r10, (%r13)")
+        # Result data starts at base + 8
+        self._indent("leaq 8(%r13), %rdi")
         # Copy each part (bottom to top = reverse stack order)
         self._indent("movq %r8, %rcx")
         self._indent("decq %rcx")
@@ -169,7 +169,8 @@ class Emitter:
         self._indent("cmpq $0, %rcx")
         self._indent("jl .Lsc_copy_done")
         self._indent("movq (%r9, %rcx, 8), %rsi")
-        self._indent("movq -8(%rsi), %rdx")
+        self._indent("movq (%rsi), %rdx")
+        self._indent("addq $8, %rsi")
         self._indent("pushq %rcx")
         self._indent("movq %rdx, %rcx")
         self._indent("rep movsb")
@@ -177,10 +178,11 @@ class Emitter:
         self._indent("decq %rcx")
         self._indent("jmp .Lsc_copy_loop")
         self._line(".Lsc_copy_done:")
+        # Write null terminator
+        self._indent("movb $0, (%rdi)")
         # Remove N pointers from stack, push result
         self._indent("leaq (%r9, %r8, 8), %rsp")
-        self._indent("leaq 8(%r11), %rax")
-        self._indent("pushq %rax")
+        self._indent("pushq %r13")
         # Return via return stack
         self._indent("subq $8, %r14")
         self._indent("jmpq *(%r14)")
@@ -197,11 +199,6 @@ class Emitter:
         self._line(".globl _start")
         self._line("_start:")
         self._indent("leaq return_stack(%rip), %r14")
-        # Initialize string allocation pointer via brk(0)
-        self._indent("movq $12, %rax")
-        self._indent("xorq %rdi, %rdi")
-        self._indent("syscall")
-        self._indent("movq %rax, str_alloc_ptr(%rip)")
         self._emit_bytecode(self.program.bytecode, is_global=True)
         self._indent("movq $60, %rax")
         self._indent("xorq %rdi, %rdi")
@@ -220,7 +217,7 @@ class Emitter:
         self._indent("movq %rax, (%rsp)")
 
     def _emit_inst(self, inst: Inst, is_global: bool) -> None:
-        assert len(InstKind) == 58, "Exhaustive handling for `InstKind`"
+        assert len(InstKind) == 62, "Exhaustive handling for `InstKind`"
         kind = inst.kind
         match kind:
             # === Stack ===
@@ -380,50 +377,44 @@ class Emitter:
             # === Memory (heap) ===
             case InstKind.HEAP_ALLOC:
                 self._indent("popq %rax")
-                self._indent("movq heap_ptr(%rip), %rbx")
-                self._indent("pushq %rbx")
-                self._indent("addq %rax, %rbx")
-                self._indent("movq %rbx, heap_ptr(%rip)")
+                self._indent("leaq heap(%rip), %rbx")
+                self._indent("movq heap_ptr(%rip), %rcx")
+                self._indent("leaq (%rbx,%rcx), %rdx")
+                self._indent("pushq %rdx")
+                self._indent("addq %rax, %rcx")
+                self._indent("movq %rcx, heap_ptr(%rip)")
             case InstKind.LOAD8:
                 self._indent("popq %rax")
-                self._indent("leaq heap(%rip), %rbx")
-                self._indent("movzbl (%rbx,%rax), %eax")
+                self._indent("movzbl (%rax), %eax")
                 self._indent("pushq %rax")
             case InstKind.LOAD16:
                 self._indent("popq %rax")
-                self._indent("leaq heap(%rip), %rbx")
-                self._indent("movzwl (%rbx,%rax), %eax")
+                self._indent("movzwl (%rax), %eax")
                 self._indent("pushq %rax")
             case InstKind.LOAD32:
                 self._indent("popq %rax")
-                self._indent("leaq heap(%rip), %rbx")
-                self._indent("movl (%rbx,%rax), %eax")
+                self._indent("movl (%rax), %eax")
                 self._indent("pushq %rax")
             case InstKind.LOAD64:
                 self._indent("popq %rax")
-                self._indent("leaq heap(%rip), %rbx")
-                self._indent("movq (%rbx,%rax), %rax")
+                self._indent("movq (%rax), %rax")
                 self._indent("pushq %rax")
             case InstKind.STORE8:
                 self._indent("popq %rax")
                 self._indent("popq %rbx")
-                self._indent("leaq heap(%rip), %rcx")
-                self._indent("movb %bl, (%rcx,%rax)")
+                self._indent("movb %bl, (%rax)")
             case InstKind.STORE16:
                 self._indent("popq %rax")
                 self._indent("popq %rbx")
-                self._indent("leaq heap(%rip), %rcx")
-                self._indent("movw %bx, (%rcx,%rax)")
+                self._indent("movw %bx, (%rax)")
             case InstKind.STORE32:
                 self._indent("popq %rax")
                 self._indent("popq %rbx")
-                self._indent("leaq heap(%rip), %rcx")
-                self._indent("movl %ebx, (%rcx,%rax)")
+                self._indent("movl %ebx, (%rax)")
             case InstKind.STORE64:
                 self._indent("popq %rax")
                 self._indent("popq %rbx")
-                self._indent("leaq heap(%rip), %rcx")
-                self._indent("movq %rbx, (%rcx,%rax)")
+                self._indent("movq %rbx, (%rax)")
 
             # === Functions ===
             case InstKind.FN_CALL:
@@ -466,6 +457,21 @@ class Emitter:
                 self._indent("addq $8, %r14")
                 self._indent("jmp print_int")
                 self._line(f".Lprint_done_{uid}:")
+            case InstKind.PRINT_BOOL:
+                uid = self._uid()
+                self._indent("popq %rax")
+                self._indent("testq %rax, %rax")
+                self._indent(f"jz .Lpb_false_{uid}")
+                self._indent("leaq bool_true(%rip), %rsi")
+                self._indent("movq $4, %rdx")
+                self._indent(f"jmp .Lpb_write_{uid}")
+                self._line(f".Lpb_false_{uid}:")
+                self._indent("leaq bool_false(%rip), %rsi")
+                self._indent("movq $5, %rdx")
+                self._line(f".Lpb_write_{uid}:")
+                self._indent("movq $1, %rdi")
+                self._indent("movq $1, %rax")
+                self._indent("syscall")
             case InstKind.PRINT_STR:
                 uid = self._uid()
                 self._indent("popq %rdi")
@@ -474,6 +480,33 @@ class Emitter:
                 self._indent("addq $8, %r14")
                 self._indent("jmp print_str")
                 self._line(f".Lprint_done_{uid}:")
+            case InstKind.PUSH_CHAR:
+                val = inst.int_arg
+                self._indent(f"pushq ${val}")
+            case InstKind.PRINT_CHAR:
+                self._indent("popq %rax")
+                self._indent("movb %al, -1(%rsp)")
+                self._indent("leaq -1(%rsp), %rsi")
+                self._indent("movq $1, %rdx")
+                self._indent("movq $1, %rdi")
+                self._indent("movq $1, %rax")
+                self._indent("syscall")
+            case InstKind.PRINT_CSTR:
+                uid = self._uid()
+                self._indent("popq %rsi")
+                self._indent("movq %rsi, %rdi")
+                self._line(f".Lpc_scan_{uid}:")
+                self._indent("cmpb $0, (%rsi)")
+                self._indent(f"je .Lpc_done_{uid}")
+                self._indent("incq %rsi")
+                self._indent(f"jmp .Lpc_scan_{uid}")
+                self._line(f".Lpc_done_{uid}:")
+                self._indent("movq %rsi, %rdx")
+                self._indent("subq %rdi, %rdx")
+                self._indent("movq %rdi, %rsi")
+                self._indent("movq $1, %rdi")
+                self._indent("movq $1, %rax")
+                self._indent("syscall")
 
             # === F-strings ===
             case InstKind.FSTRING_CONCAT:

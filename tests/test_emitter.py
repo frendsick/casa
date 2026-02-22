@@ -44,37 +44,38 @@ def test_emit_push_large_int():
 def test_emit_push_str():
     asm = emit_string('"hello"')
     assert ".quad 5" in asm
-    assert 'str_0: .ascii "hello"' in asm
+    assert "str_0:" in asm
+    assert '.asciz "hello"' in asm
 
 
 def test_emit_escaped_newline_str():
     asm = emit_string(r'"hello\nworld"')
-    assert 'str_0: .ascii "hello\\nworld"' in asm
+    assert '.asciz "hello\\nworld"' in asm
 
 
 def test_emit_escaped_tab_str():
     asm = emit_string(r'"col1\tcol2"')
-    assert 'str_0: .ascii "col1\\tcol2"' in asm
+    assert '.asciz "col1\\tcol2"' in asm
 
 
 def test_emit_escaped_backslash_str():
     asm = emit_string(r'"path\\file"')
-    assert 'str_0: .ascii "path\\\\file"' in asm
+    assert '.asciz "path\\\\file"' in asm
 
 
 def test_emit_escaped_carriage_return_str():
     asm = emit_string(r'"line\r"')
-    assert 'str_0: .ascii "line\\r"' in asm
+    assert '.asciz "line\\r"' in asm
 
 
 def test_emit_escaped_quote_str():
     asm = emit_string(r'"say \"hi\""')
-    assert r'str_0: .ascii "say \"hi\""' in asm
+    assert r'.asciz "say \"hi\""' in asm
 
 
 def test_emit_escaped_null_str():
     asm = emit_string(r'"hello\0world"')
-    assert 'str_0: .ascii "hello\\0world"' in asm
+    assert '.asciz "hello\\0world"' in asm
 
 
 # ---------------------------------------------------------------------------
@@ -421,17 +422,11 @@ def test_emit_fstring_concat():
     assert "str_concat" in asm
 
 
-def test_emit_fstring_str_alloc_ptr():
-    """str_alloc_ptr BSS variable exists for dynamic string allocation."""
+def test_emit_fstring_heap_concat():
+    """F-string concat uses heap allocation for dynamic string building."""
     asm = emit_string('"world" = name f"hello {name}"')
-    assert "str_alloc_ptr" in asm
-
-
-def test_emit_fstring_brk_init():
-    """brk syscall initialization at program startup for string allocation."""
-    asm = emit_string('"world" = name f"hello {name}"')
-    # brk syscall number is 12
-    assert "movq $12, %rax" in asm
+    assert "heap" in asm
+    assert "str_concat" in asm
 
 
 # ---------------------------------------------------------------------------
@@ -564,3 +559,84 @@ def test_emit_store64():
     asm = emit_string("42 10 alloc store64")
     assert "movq" in asm
     assert "leaq heap(%rip)" in asm
+
+
+# ---------------------------------------------------------------------------
+# Char / cstr emission
+# ---------------------------------------------------------------------------
+def test_emit_push_char():
+    """Char literal emits pushq with ASCII value."""
+    asm = emit_string("'a'")
+    assert "pushq $97" in asm
+
+
+def test_emit_push_char_newline():
+    r"""Escaped newline char literal emits pushq with ASCII 10."""
+    asm = emit_string("'\\n'")
+    assert "pushq $10" in asm
+
+
+def test_emit_print_char():
+    """print on char emits inline write syscall for 1 byte."""
+    asm = emit_string("'a' print")
+    assert "movb %al, -1(%rsp)" in asm
+
+
+def test_emit_print_cstr():
+    """print on cstr emits inline null-scan and write syscall."""
+    asm = emit_string('"hello" (cstr) print')
+    assert "cmpb $0" in asm
+
+
+# ---------------------------------------------------------------------------
+# String stdlib methods
+# ---------------------------------------------------------------------------
+STD_INCLUDE = 'include "lib/std.casa"\n'
+
+
+def test_emit_str_length_method():
+    """str::length emits the correct function label."""
+    asm = emit_string(STD_INCLUDE + '"hello".length')
+    assert "fn_str__length" in asm
+
+
+def test_emit_str_at():
+    """str::at emits the correct function label."""
+    asm = emit_string(STD_INCLUDE + '0 "hello".at')
+    assert "fn_str__at" in asm
+
+
+def test_emit_str_eq():
+    """str::eq emits the correct function label."""
+    asm = emit_string(STD_INCLUDE + '"a" "b" str::eq')
+    assert "fn_str__eq" in asm
+
+
+def test_emit_str_concat():
+    """str::concat emits the correct function label."""
+    asm = emit_string(STD_INCLUDE + '"hello" " world" str::concat')
+    assert "fn_str__concat" in asm
+
+
+def test_emit_str_substring():
+    """str::substring emits the correct function label."""
+    asm = emit_string(STD_INCLUDE + '"hello" 1 3 str::substring')
+    assert "fn_str__substring" in asm
+
+
+def test_emit_str_find():
+    """str::find emits the correct function label."""
+    asm = emit_string(STD_INCLUDE + '"hello" "ell" str::find')
+    assert "fn_str__find" in asm
+
+
+def test_emit_str_starts_with():
+    """str::starts_with emits the correct function label."""
+    asm = emit_string(STD_INCLUDE + '"hello" "hel" str::starts_with')
+    assert "fn_str__starts_with" in asm
+
+
+def test_emit_str_ends_with():
+    """str::ends_with emits the correct function label."""
+    asm = emit_string(STD_INCLUDE + '"hello" "llo" str::ends_with')
+    assert "fn_str__ends_with" in asm

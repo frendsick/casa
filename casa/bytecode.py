@@ -127,8 +127,8 @@ class Compiler:
             function.bytecode = fn_compiler.compile()
 
     def compile(self) -> Bytecode:
-        assert len(InstKind) == 58, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 71, "Exhaustive handling for `OpKind`"
+        assert len(InstKind) == 62, "Exhaustive handling for `InstructionKind"
+        assert len(OpKind) == 75, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
         bytecode: list[Inst] = []
@@ -430,7 +430,13 @@ class Compiler:
                 case OpKind.PRINT:
                     assert (
                         False
-                    ), "PRINT should be resolved to PRINT_INT or PRINT_STR by the type checker"
+                    ), "PRINT should be resolved to a PRINT variant by the type checker"
+                case OpKind.PRINT_BOOL:
+                    bytecode.append(self.inst(InstKind.PRINT_BOOL))
+                case OpKind.PRINT_CHAR:
+                    bytecode.append(self.inst(InstKind.PRINT_CHAR))
+                case OpKind.PRINT_CSTR:
+                    bytecode.append(self.inst(InstKind.PRINT_CSTR))
                 case OpKind.PRINT_INT:
                     bytecode.append(self.inst(InstKind.PRINT_INT))
                 case OpKind.PRINT_STR:
@@ -497,6 +503,8 @@ class Compiler:
                     bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_list]))
                 case OpKind.PUSH_BOOL:
                     bytecode.append(self.inst(InstKind.PUSH, args=[int(op.value)]))
+                case OpKind.PUSH_CHAR:
+                    bytecode.append(self.inst(InstKind.PUSH_CHAR, args=[op.value]))
                 case OpKind.PUSH_CAPTURE:
                     capture_name = op.value
                     assert isinstance(capture_name, str), "Valid capture name"

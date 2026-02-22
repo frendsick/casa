@@ -23,6 +23,7 @@ ESCAPE_SEQUENCES = {
     "r": "\r",
     "{": "{",
     "}": "}",
+    "'": "'",
 }
 
 
@@ -219,6 +220,8 @@ class Lexer:
             case "#":
                 self.skip_line()
                 return None
+            case "'":
+                return self.parse_char_literal()
             case c if Delimiter.from_str(c):
                 return self.lex_token(c, TokenKind.DELIMITER)
             case c if c.isdigit():
@@ -327,6 +330,72 @@ class Lexer:
             )
 
         return string_literal
+
+    def parse_char_literal(self) -> Token:
+        start = self.cursor.position
+        assert self.cursor.pop() == "'", "Char literal starts with `'`"
+
+        char_value: str | None = None
+        next_char = self.cursor.pop()
+        if next_char is None:
+            span_length = self.cursor.position - start
+            self.errors.append(
+                CasaError(
+                    ErrorKind.SYNTAX,
+                    "Unclosed char literal",
+                    Location(self.file, Span(start, span_length)),
+                )
+            )
+            return Token(
+                "'\0'", TokenKind.LITERAL, Location(self.file, Span(start, span_length))
+            )
+
+        if next_char == "\\":
+            escaped = self.parse_escape_sequence()
+            if escaped is None:
+                span_length = self.cursor.position - start
+                self.errors.append(
+                    CasaError(
+                        ErrorKind.SYNTAX,
+                        "Unclosed char literal",
+                        Location(self.file, Span(start, span_length)),
+                    )
+                )
+                return Token(
+                    "'\0'",
+                    TokenKind.LITERAL,
+                    Location(self.file, Span(start, span_length)),
+                )
+            char_value = escaped
+        elif next_char == "'":
+            span_length = self.cursor.position - start
+            self.errors.append(
+                CasaError(
+                    ErrorKind.SYNTAX,
+                    "Empty char literal",
+                    Location(self.file, Span(start, span_length)),
+                )
+            )
+            return Token(
+                "'\0'", TokenKind.LITERAL, Location(self.file, Span(start, span_length))
+            )
+        else:
+            char_value = next_char
+
+        closing = self.cursor.pop()
+        if closing != "'":
+            span_length = self.cursor.position - start
+            self.errors.append(
+                CasaError(
+                    ErrorKind.SYNTAX,
+                    "Unclosed char literal",
+                    Location(self.file, Span(start, span_length)),
+                )
+            )
+
+        span_length = self.cursor.position - start
+        location = Location(self.file, Span(start, span_length))
+        return Token(f"'{char_value}'", TokenKind.LITERAL, location)
 
 
 def is_negative_integer_literal(value: str) -> bool:

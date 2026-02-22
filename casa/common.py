@@ -39,7 +39,6 @@ class Intrinsic(Enum):
     STORE16 = auto()
     STORE32 = auto()
     STORE64 = auto()
-
     # IO
     PRINT = auto()
 
@@ -222,6 +221,9 @@ class OpKind(Enum):
 
     # IO
     PRINT = auto()
+    PRINT_BOOL = auto()
+    PRINT_CHAR = auto()
+    PRINT_CSTR = auto()
     PRINT_INT = auto()
     PRINT_STR = auto()
 
@@ -248,6 +250,7 @@ class OpKind(Enum):
     # Literals
     PUSH_ARRAY = auto()
     PUSH_BOOL = auto()
+    PUSH_CHAR = auto()
     PUSH_INT = auto()
     PUSH_NONE = auto()
     PUSH_STR = auto()
@@ -328,7 +331,7 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 71, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 75, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires Python `None`
@@ -340,7 +343,7 @@ class Op:
                 if not isinstance(self.value, bool):
                     raise TypeError(f"`{self.kind}` requires value of type `bool`")
             # Requires `int`
-            case OpKind.FSTRING_CONCAT | OpKind.PUSH_INT:
+            case OpKind.FSTRING_CONCAT | OpKind.PUSH_CHAR | OpKind.PUSH_INT:
                 if not isinstance(self.value, int):
                     raise TypeError(f"`{self.kind}` requires value of type `int`")
             # Requires `str`
@@ -375,6 +378,9 @@ class Op:
                 | OpKind.LOAD64
                 | OpKind.OVER
                 | OpKind.PRINT
+                | OpKind.PRINT_BOOL
+                | OpKind.PRINT_CHAR
+                | OpKind.PRINT_CSTR
                 | OpKind.PRINT_INT
                 | OpKind.PRINT_STR
                 | OpKind.ROT
@@ -448,11 +454,15 @@ class InstKind(Enum):
     DUP = auto()
     OVER = auto()
     PUSH = auto()
+    PUSH_CHAR = auto()
     PUSH_STR = auto()
     ROT = auto()
     SWAP = auto()
 
     # IO
+    PRINT_BOOL = auto()
+    PRINT_CHAR = auto()
+    PRINT_CSTR = auto()
     PRINT_INT = auto()
     PRINT_STR = auto()
 
@@ -551,7 +561,7 @@ class Inst:
         return self.args[0]
 
     def __post_init__(self):
-        assert len(InstKind) == 58, "Exhaustive handling for `InstructionKind`"
+        assert len(InstKind) == 62, "Exhaustive handling for `InstructionKind`"
 
         match self.kind:
             # Should not have a parameter
@@ -579,6 +589,9 @@ class Inst:
                 | InstKind.NOT
                 | InstKind.OR
                 | InstKind.OVER
+                | InstKind.PRINT_BOOL
+                | InstKind.PRINT_CHAR
+                | InstKind.PRINT_CSTR
                 | InstKind.PRINT_INT
                 | InstKind.PRINT_STR
                 | InstKind.ROT
@@ -616,6 +629,7 @@ class Inst:
                 | InstKind.LOCAL_GET
                 | InstKind.LOCAL_SET
                 | InstKind.PUSH
+                | InstKind.PUSH_CHAR
                 | InstKind.PUSH_STR
                 | InstKind.CONSTANT_LOAD
                 | InstKind.CONSTANT_STORE
@@ -647,7 +661,17 @@ class Program:
 
 
 ANY_TYPE = "any"
-BUILTIN_TYPES: set[str] = {"int", "bool", "str", "ptr", "array", "any", "option"}
+BUILTIN_TYPES: set[str] = {
+    "int",
+    "bool",
+    "char",
+    "cstr",
+    "str",
+    "ptr",
+    "array",
+    "any",
+    "option",
+}
 
 
 def is_array_type(typ: str) -> bool:
