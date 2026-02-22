@@ -237,7 +237,9 @@ class OpKind(Enum):
     PUSH_ARRAY = auto()
     PUSH_BOOL = auto()
     PUSH_INT = auto()
+    PUSH_NONE = auto()
     PUSH_STR = auto()
+    SOME = auto()
 
     # Arithmetic
     ADD = auto()
@@ -314,9 +316,13 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 63, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 65, "Exhaustive handling for `OpKind`"
 
         match self.kind:
+            # Requires Python `None`
+            case OpKind.PUSH_NONE | OpKind.SOME:
+                if self.value is not None:
+                    raise TypeError(f"`{self.kind}` requires value of type `NoneType`")
             # Requires `bool`
             case OpKind.PUSH_BOOL:
                 if not isinstance(self.value, bool):
@@ -611,7 +617,7 @@ class Program:
 
 
 ANY_TYPE = "any"
-BUILTIN_TYPES: set[str] = {"int", "bool", "str", "ptr", "array", "any"}
+BUILTIN_TYPES: set[str] = {"int", "bool", "str", "ptr", "array", "any", "option"}
 
 
 def is_array_type(typ: str) -> bool:
@@ -628,6 +634,22 @@ def extract_array_element_type(typ: str) -> str | None:
     if not typ.startswith(array_prefix) or not typ.endswith("]"):
         return None
     return typ[len(array_prefix) : -1]
+
+
+def is_option_type(typ: str) -> bool:
+    """Check if a type is an option type (bare or parameterized)."""
+    return typ == "option" or typ.startswith("option[")
+
+
+def extract_option_element_type(typ: str) -> str | None:
+    """Extract the element type from a parameterized option type.
+
+    Returns None for bare 'option' or non-option types.
+    """
+    option_prefix = "option["
+    if not typ.startswith(option_prefix) or not typ.endswith("]"):
+        return None
+    return typ[len(option_prefix) : -1]
 
 
 def is_fn_type(typ: str) -> bool:
@@ -721,6 +743,8 @@ class Signature:
                 if not (
                     (a.typ == "array" and is_array_type(b.typ))
                     or (b.typ == "array" and is_array_type(a.typ))
+                    or (a.typ == "option" and is_option_type(b.typ))
+                    or (b.typ == "option" and is_option_type(a.typ))
                 ):
                     return False
 
@@ -729,6 +753,8 @@ class Signature:
                 if not (
                     (ra == "array" and is_array_type(rb))
                     or (rb == "array" and is_array_type(ra))
+                    or (ra == "option" and is_option_type(rb))
+                    or (rb == "option" and is_option_type(ra))
                 ):
                     return False
 

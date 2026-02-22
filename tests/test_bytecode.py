@@ -281,3 +281,36 @@ def test_bytecode_string_interning():
     assert program.strings.count("hello") == 1
     assert "world" in program.strings
     assert len(program.strings) == 2
+
+
+# ---------------------------------------------------------------------------
+# Option[T] (none / some)
+# ---------------------------------------------------------------------------
+def test_bytecode_none():
+    """none generates HEAP_ALLOC and STORE instructions (tag 0)."""
+    program = compile_string("none")
+    kinds = [i.kind for i in program.bytecode]
+    assert InstKind.HEAP_ALLOC in kinds
+    assert InstKind.STORE in kinds
+
+
+def test_bytecode_some():
+    """42 some generates HEAP_ALLOC and STORE instructions (tag 1, value)."""
+    program = compile_string("42 some")
+    kinds = [i.kind for i in program.bytecode]
+    assert InstKind.HEAP_ALLOC in kinds
+    assert InstKind.STORE in kinds
+
+
+def test_bytecode_none_push_tag_zero():
+    """none pushes tag 0 for the none variant."""
+    program = compile_string("none")
+    pushes = find_insts(program, InstKind.PUSH)
+    assert any(i.args == [0] for i in pushes)
+
+
+def test_bytecode_some_push_tag_one():
+    """some pushes tag 1 for the some variant."""
+    program = compile_string("42 some")
+    pushes = find_insts(program, InstKind.PUSH)
+    assert any(i.args == [1] for i in pushes)

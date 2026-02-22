@@ -17,8 +17,10 @@ from casa.common import (
     Variable,
     extract_array_element_type,
     extract_fn_signature_str,
+    extract_option_element_type,
     is_array_type,
     is_fn_type,
+    is_option_type,
 )
 from casa.error import (
     WARNINGS,
@@ -116,16 +118,24 @@ class TypeChecker:
             expected == ANY_TYPE
             or (expected == "array" and is_array_type(typ))
             or (expected == "fn" and is_fn_type(typ))
+            or (expected == "option" and is_option_type(typ))
         ):
             return typ
         if (
             typ == ANY_TYPE
             or (typ == "array" and is_array_type(expected))
             or (typ == "fn" and is_fn_type(expected))
+            or (typ == "option" and is_option_type(expected))
         ):
             return expected
         if typ == expected:
             return typ
+        # Match option[any] with option[T] (any is wildcard)
+        exp_option = extract_option_element_type(expected)
+        act_option = extract_option_element_type(typ)
+        if exp_option is not None and act_option is not None:
+            if exp_option == ANY_TYPE or act_option == ANY_TYPE:
+                return expected
         # Match fn[sig] types using Signature.matches (handles ANY_TYPE)
         exp_sig_str = extract_fn_signature_str(expected)
         act_sig_str = extract_fn_signature_str(typ)
@@ -221,6 +231,26 @@ class TypeChecker:
                         got=f"`{actual}`",
                     )
                 continue
+            # Handle option[T] containing type vars
+            option_inner = extract_option_element_type(expected.typ)
+            if option_inner and option_inner in signature.type_vars:
+                actual = self.stack_pop()
+                if is_option_type(actual):
+                    actual_inner = extract_option_element_type(actual)
+                    self._bind_type_var(
+                        bindings, option_inner, actual_inner or ANY_TYPE
+                    )
+                elif actual == ANY_TYPE:
+                    self._bind_type_var(bindings, option_inner, ANY_TYPE)
+                else:
+                    raise_error(
+                        ErrorKind.TYPE_MISMATCH,
+                        "Type mismatch",
+                        self.current_location,
+                        expected=f"`{expected.typ}`",
+                        got=f"`{actual}`",
+                    )
+                continue
             # Handle fn[sig] types containing type vars, e.g. fn[T -> T]
             fn_sig_str = extract_fn_signature_str(expected.typ)
             if fn_sig_str and any(tv in fn_sig_str for tv in signature.type_vars):
@@ -262,6 +292,11 @@ class TypeChecker:
             inner = extract_array_element_type(return_type)
             if inner and inner in bindings:
                 self.stack_push(f"array[{bindings[inner]}]")
+                continue
+            # Handle option[T] return types with bound type vars
+            option_inner = extract_option_element_type(return_type)
+            if option_inner and option_inner in bindings:
+                self.stack_push(f"option[{bindings[option_inner]}]")
                 continue
             # Handle fn[sig] return types with bound type vars
             fn_sig_str = extract_fn_signature_str(return_type)
@@ -345,6 +380,8 @@ def _infer_literal_type(op: Op, function: Function | None = None) -> str:
     match op.kind:
         case OpKind.PUSH_INT:
             return "int"
+        case OpKind.PUSH_NONE:
+            return "option"
         case OpKind.PUSH_STR:
             return "str"
         case OpKind.PUSH_BOOL:
@@ -406,7 +443,7 @@ def _ensure_typechecked(global_function: Function) -> None:
 
 
 def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature:
-    assert len(OpKind) == 63, "Exhaustive handling for `OpKind`"
+    assert len(OpKind) == 65, "Exhaustive handling for `OpKind`"
 
     tc = TypeChecker(ops=ops)
     for op in ops:
@@ -693,6 +730,9 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 if not global_function and receiver.startswith("array["):
                     function_name = f"array::{method_name}"
                     global_function = GLOBAL_FUNCTIONS.get(function_name)
+                if not global_function and is_option_type(receiver):
+                    function_name = f"option::{method_name}"
+                    global_function = GLOBAL_FUNCTIONS.get(function_name)
                 if not global_function:
                     raise_error(
                         ErrorKind.UNDEFINED_NAME,
@@ -797,6 +837,8 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 )
             case OpKind.PUSH_INT:
                 tc.stack_push("int")
+            case OpKind.PUSH_NONE:
+                tc.stack_push("option")
             case OpKind.PUSH_STR:
                 tc.stack_push("str")
             case OpKind.PUSH_VARIABLE:
@@ -844,6 +886,9 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 tc.expect_type("int")
                 t1 = tc.stack_pop()
                 tc.stack_push(t1)
+            case OpKind.SOME:
+                t1 = tc.stack_pop()
+                tc.stack_push(f"option[{t1}]")
             case OpKind.STORE:
                 # TODO: Expect pointer types
                 tc.stack_pop()
@@ -968,6 +1013,9 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
             inner = extract_array_element_type(p.typ)
             if inner and inner in function.signature.type_vars:
                 param_tvs.add(inner)
+            option_inner = extract_option_element_type(p.typ)
+            if option_inner and option_inner in function.signature.type_vars:
+                param_tvs.add(option_inner)
             fn_sig_str = extract_fn_signature_str(p.typ)
             if fn_sig_str:
                 for tv in function.signature.type_vars:
