@@ -927,3 +927,73 @@ def test_lex_some_in_expression():
     assert non_eof[0].value == "42"
     assert non_eof[1].kind == TokenKind.LITERAL
     assert non_eof[1].value == "some"
+
+
+# ---------------------------------------------------------------------------
+# Char literals
+# ---------------------------------------------------------------------------
+def test_lex_char_literal():
+    """Single character in single quotes is a LITERAL token."""
+    tokens = lex_string("'a'")
+    assert tokens[0].kind == TokenKind.LITERAL
+    assert tokens[0].value == "'a'"
+
+
+def test_lex_char_literal_escape_newline():
+    r"""Escaped newline char literal \n."""
+    tokens = lex_string("'\\n'")
+    assert tokens[0].kind == TokenKind.LITERAL
+    assert tokens[0].value == "'\n'"
+
+
+def test_lex_char_literal_escape_tab():
+    r"""Escaped tab char literal \t."""
+    tokens = lex_string("'\\t'")
+    assert tokens[0].kind == TokenKind.LITERAL
+    assert tokens[0].value == "'\t'"
+
+
+def test_lex_char_literal_escape_backslash():
+    r"""Escaped backslash char literal \\."""
+    tokens = lex_string("'\\\\'")
+    assert tokens[0].kind == TokenKind.LITERAL
+    assert tokens[0].value == "'\\'"
+
+
+def test_lex_char_literal_escape_null():
+    r"""Escaped null char literal \0."""
+    tokens = lex_string("'\\0'")
+    assert tokens[0].kind == TokenKind.LITERAL
+    assert tokens[0].value == "'\0'"
+
+
+def test_lex_char_literal_escape_single_quote():
+    r"""Escaped single quote char literal \'."""
+    tokens = lex_string("'\\''")
+    assert tokens[0].kind == TokenKind.LITERAL
+    assert tokens[0].value == "'''"
+
+
+def test_lex_char_literal_in_expression():
+    """Char literal followed by print lexes as two tokens."""
+    tokens = lex_string("'a' print")
+    non_eof = [t for t in tokens if t.kind != TokenKind.EOF]
+    assert len(non_eof) == 2
+    assert non_eof[0].kind == TokenKind.LITERAL
+    assert non_eof[1].kind == TokenKind.INTRINSIC
+
+
+def test_lex_char_literal_unclosed():
+    """Unclosed char literal raises syntax error."""
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        lex_string("'a")
+    err = exc_info.value.errors[0]
+    assert err.kind == ErrorKind.SYNTAX
+
+
+def test_lex_char_literal_empty():
+    """Empty char literal raises syntax error."""
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        lex_string("''")
+    err = exc_info.value.errors[0]
+    assert err.kind == ErrorKind.SYNTAX

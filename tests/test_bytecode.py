@@ -347,3 +347,30 @@ def test_bytecode_sized_store(size, expected_kind):
     """Each sized store variant produces the correct InstKind."""
     program = compile_string(f"42 10 alloc {size}")
     assert len(find_insts(program, expected_kind)) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Char / cstr instructions
+# ---------------------------------------------------------------------------
+def test_bytecode_push_char():
+    """Char literal produces PUSH_CHAR instruction."""
+    program = compile_string("'a'")
+    assert len(find_insts(program, InstKind.PUSH_CHAR)) >= 1
+
+
+def test_bytecode_push_char_escape():
+    r"""Escaped char literal produces PUSH_CHAR instruction."""
+    program = compile_string("'\\n'")
+    assert len(find_insts(program, InstKind.PUSH_CHAR)) >= 1
+
+
+def test_bytecode_print_char():
+    """Char print produces PRINT_CHAR instruction."""
+    program = compile_string("'a' print")
+    assert len(find_insts(program, InstKind.PRINT_CHAR)) >= 1
+
+
+def test_bytecode_print_cstr():
+    """cstr print produces PRINT_CSTR instruction."""
+    program = compile_string('"hello" (cstr) print')
+    assert len(find_insts(program, InstKind.PRINT_CSTR)) >= 1

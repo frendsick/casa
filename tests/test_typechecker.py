@@ -18,6 +18,7 @@ from tests.conftest import parse_string, resolve_string, typecheck_string
         ("true", "bool"),
         ('"hello"', "str"),
         ("[1, 2]", "array[int]"),
+        ("'a'", "char"),
     ],
 )
 def test_typecheck_literals(code, expected_type):
@@ -210,14 +211,22 @@ def test_typecheck_syscall_requires_int_syscall_number(code):
 
 
 # ---------------------------------------------------------------------------
-# Print resolves to PRINT_INT / PRINT_STR
+# Print resolves to PRINT_INT / PRINT_STR / PRINT_CHAR / PRINT_CSTR
 # ---------------------------------------------------------------------------
+PRINT_KINDS = (
+    OpKind.PRINT_INT,
+    OpKind.PRINT_STR,
+    OpKind.PRINT_CHAR,
+    OpKind.PRINT_CSTR,
+)
+
+
 def test_typecheck_print_resolves_to_print_int():
     ops = resolve_string("42 print")
     from casa.typechecker import type_check_ops
 
     type_check_ops(ops)
-    print_op = [o for o in ops if o.kind in (OpKind.PRINT_INT, OpKind.PRINT_STR)][0]
+    print_op = [o for o in ops if o.kind in PRINT_KINDS][0]
     assert print_op.kind == OpKind.PRINT_INT
 
 
@@ -226,7 +235,7 @@ def test_typecheck_print_resolves_to_print_str():
     from casa.typechecker import type_check_ops
 
     type_check_ops(ops)
-    print_op = [o for o in ops if o.kind in (OpKind.PRINT_INT, OpKind.PRINT_STR)][0]
+    print_op = [o for o in ops if o.kind in PRINT_KINDS][0]
     assert print_op.kind == OpKind.PRINT_STR
 
 
@@ -1217,3 +1226,133 @@ def test_typecheck_option_none_if_no_else_no_change():
     code = "none if true then drop none fi"
     sig = typecheck_string(code)
     assert sig.return_types == ["option"]
+
+
+# ---------------------------------------------------------------------------
+# Char / cstr types
+# ---------------------------------------------------------------------------
+def test_typecheck_char_literal():
+    """Char literal pushes 'char' type onto the stack."""
+    sig = typecheck_string("'a'")
+    assert sig.return_types == ["char"]
+
+
+def test_typecheck_char_escape():
+    r"""Escaped char literal pushes 'char' type."""
+    sig = typecheck_string("'\\n'")
+    assert sig.return_types == ["char"]
+
+
+def test_typecheck_char_comparison():
+    """Char comparison operators return bool."""
+    sig = typecheck_string("'a' 'b' ==")
+    assert sig.return_types == ["bool"]
+
+
+def test_typecheck_char_comparison_ne():
+    """Char != comparison returns bool."""
+    sig = typecheck_string("'a' 'b' !=")
+    assert sig.return_types == ["bool"]
+
+
+def test_typecheck_char_comparison_lt():
+    """Char < comparison returns bool."""
+    sig = typecheck_string("'a' 'z' <")
+    assert sig.return_types == ["bool"]
+
+
+def test_typecheck_char_comparison_gt():
+    """Char > comparison returns bool."""
+    sig = typecheck_string("'z' 'a' >")
+    assert sig.return_types == ["bool"]
+
+
+def test_typecheck_print_resolves_to_print_char():
+    """print on char resolves to PRINT_CHAR op."""
+    ops = resolve_string("'a' print")
+    from casa.typechecker import type_check_ops
+
+    type_check_ops(ops)
+    print_op = [
+        o
+        for o in ops
+        if o.kind in (OpKind.PRINT_INT, OpKind.PRINT_STR, OpKind.PRINT_CHAR)
+    ][0]
+    assert print_op.kind == OpKind.PRINT_CHAR
+
+
+def test_typecheck_print_resolves_to_print_cstr():
+    """print on cstr resolves to PRINT_CSTR op."""
+    ops = resolve_string('"hello" (cstr) print')
+    from casa.typechecker import type_check_ops
+
+    type_check_ops(ops)
+    print_op = [
+        o
+        for o in ops
+        if o.kind in (OpKind.PRINT_INT, OpKind.PRINT_STR, OpKind.PRINT_CSTR)
+    ][0]
+    assert print_op.kind == OpKind.PRINT_CSTR
+
+
+def test_typecheck_char_in_variable():
+    """Char stored in variable retains its type."""
+    sig = typecheck_string("'x' = ch ch")
+    assert sig.return_types == ["char"]
+
+
+def test_typecheck_char_dup():
+    """dup on char preserves the type."""
+    sig = typecheck_string("'a' dup")
+    assert sig.return_types == ["char", "char"]
+
+
+# ---------------------------------------------------------------------------
+# String stdlib methods (str:: namespace)
+# ---------------------------------------------------------------------------
+def test_typecheck_str_length_method():
+    """str::length returns int."""
+    sig = typecheck_string(STD_INCLUDE + '"hello".length')
+    assert sig.return_types == ["int"]
+
+
+def test_typecheck_str_at():
+    """str::at returns char (byte value at index)."""
+    sig = typecheck_string(STD_INCLUDE + '0 "hello".at')
+    assert sig.return_types == ["char"]
+
+
+def test_typecheck_str_eq():
+    """str::eq returns bool."""
+    sig = typecheck_string(STD_INCLUDE + '"a" "b" str::eq')
+    assert sig.return_types == ["bool"]
+
+
+def test_typecheck_str_substring():
+    """str::substring returns str."""
+    sig = typecheck_string(STD_INCLUDE + '"hello" 1 3 str::substring')
+    assert sig.return_types == ["str"]
+
+
+def test_typecheck_str_find():
+    """str::find returns int (-1 if not found)."""
+    sig = typecheck_string(STD_INCLUDE + '"hello" "ell" str::find')
+    assert sig.return_types == ["int"]
+
+
+def test_typecheck_str_starts_with():
+    """str::starts_with returns bool."""
+    sig = typecheck_string(STD_INCLUDE + '"hello" "hel" str::starts_with')
+    assert sig.return_types == ["bool"]
+
+
+def test_typecheck_str_ends_with():
+    """str::ends_with returns bool."""
+    sig = typecheck_string(STD_INCLUDE + '"hello" "llo" str::ends_with')
+    assert sig.return_types == ["bool"]
+
+
+def test_typecheck_str_concat():
+    """str::concat returns str."""
+    sig = typecheck_string(STD_INCLUDE + '"hello" " world" str::concat')
+    assert sig.return_types == ["str"]
