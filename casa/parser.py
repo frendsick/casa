@@ -844,6 +844,8 @@ def get_op_literal(token: Token) -> Op:
         return Op(None, OpKind.SOME, token.location)
     if value.isdigit() or is_negative_integer_literal(value):
         return Op(int(value), OpKind.PUSH_INT, token.location)
+    if value.startswith("'") and value.endswith("'") and len(value) == 3:
+        return Op(ord(value[1]), OpKind.PUSH_CHAR, token.location)
     if value.startswith('"') and value.endswith('"'):
         return Op(value[1:-1], OpKind.PUSH_STR, token.location)
     raise ValueError(f"Token `{token.value}` is not a literal")

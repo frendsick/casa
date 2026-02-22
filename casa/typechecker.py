@@ -386,6 +386,8 @@ OP_STACK_EFFECTS: dict[OpKind, tuple[str, str]] = {
 def _infer_literal_type(op: Op, function: Function | None = None) -> str:
     """Infer the type of an array item Op."""
     match op.kind:
+        case OpKind.PUSH_CHAR:
+            return "char"
         case OpKind.PUSH_INT:
             return "int"
         case OpKind.PUSH_NONE:
@@ -499,7 +501,7 @@ def _ensure_typechecked(global_function: Function) -> None:
 
 
 def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature:
-    assert len(OpKind) == 71, "Exhaustive handling for `OpKind`"
+    assert len(OpKind) == 75, "Exhaustive handling for `OpKind`"
 
     tc = TypeChecker(ops=ops)
     for op in ops:
@@ -845,10 +847,22 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 typ = tc.stack_pop()
                 if typ == "str":
                     op.kind = OpKind.PRINT_STR
+                elif typ == "bool":
+                    op.kind = OpKind.PRINT_BOOL
+                elif typ == "char":
+                    op.kind = OpKind.PRINT_CHAR
+                elif typ == "cstr":
+                    op.kind = OpKind.PRINT_CSTR
                 else:
                     op.kind = OpKind.PRINT_INT
-            case OpKind.PRINT_INT | OpKind.PRINT_STR:
-                assert False, "PRINT_INT and PRINT_STR are resolved by the type checker"
+            case (
+                OpKind.PRINT_BOOL
+                | OpKind.PRINT_CHAR
+                | OpKind.PRINT_CSTR
+                | OpKind.PRINT_INT
+                | OpKind.PRINT_STR
+            ):
+                assert False, "PRINT variants are resolved by the type checker"
             case OpKind.PUSH_ARRAY:
                 items = op.value
                 assert isinstance(items, list)
@@ -897,6 +911,8 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 raise AssertionError(
                     f"Capture `{capture.name}` has not been type checked before its usage"
                 )
+            case OpKind.PUSH_CHAR:
+                tc.stack_push("char")
             case OpKind.PUSH_INT:
                 tc.stack_push("int")
             case OpKind.PUSH_NONE:
