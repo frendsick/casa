@@ -128,7 +128,7 @@ class Compiler:
 
     def compile(self) -> Bytecode:
         assert len(InstKind) == 52, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 63, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 65, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
         bytecode: list[Inst] = []
@@ -509,6 +509,14 @@ class Compiler:
                     )
                 case OpKind.PUSH_INT:
                     bytecode.append(self.inst(InstKind.PUSH, args=[op.value]))
+                case OpKind.PUSH_NONE:
+                    # Allocate 2 heap slots, store tag 0 at slot 0
+                    bytecode.append(self.inst(InstKind.PUSH, args=[2]))
+                    bytecode.append(self.inst(InstKind.HEAP_ALLOC))
+                    bytecode.append(self.inst(InstKind.DUP))
+                    bytecode.append(self.inst(InstKind.PUSH, args=[0]))
+                    bytecode.append(self.inst(InstKind.SWAP))
+                    bytecode.append(self.inst(InstKind.STORE))
                 case OpKind.PUSH_STR:
                     string_index = self.intern_string(op.value)
                     bytecode.append(self.inst(InstKind.PUSH_STR, args=[string_index]))
@@ -535,6 +543,25 @@ class Compiler:
                     bytecode.append(self.inst(InstKind.SHL))
                 case OpKind.SHR:
                     bytecode.append(self.inst(InstKind.SHR))
+                case OpKind.SOME:
+                    # Stack: [value]
+                    # Allocate 2 slots, store tag=1 at slot[0], value at slot[1]
+                    local_ptr = self.locals_count
+                    self.locals_count += 1
+                    bytecode.append(self.inst(InstKind.PUSH, args=[2]))
+                    bytecode.append(self.inst(InstKind.HEAP_ALLOC))
+                    bytecode.append(self.inst(InstKind.LOCAL_SET, args=[local_ptr]))
+                    # Store value at slot[1] (ptr+1)
+                    bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_ptr]))
+                    bytecode.append(self.inst(InstKind.PUSH, args=[1]))
+                    bytecode.append(self.inst(InstKind.ADD))
+                    bytecode.append(self.inst(InstKind.STORE))
+                    # Store tag=1 at slot[0] (ptr)
+                    bytecode.append(self.inst(InstKind.PUSH, args=[1]))
+                    bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_ptr]))
+                    bytecode.append(self.inst(InstKind.STORE))
+                    # Push ptr
+                    bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_ptr]))
                 case OpKind.STORE:
                     bytecode.append(self.inst(InstKind.STORE))
                 case OpKind.STRUCT_NEW:
