@@ -1144,3 +1144,34 @@ def test_typecheck_signature_from_str_option_type():
     sig = Signature.from_str("option[int] -> int")
     assert [p.typ for p in sig.parameters] == ["option[int]"]
     assert sig.return_types == ["int"]
+
+
+# ---------------------------------------------------------------------------
+# Option[T] branch compatibility
+# ---------------------------------------------------------------------------
+def test_typecheck_option_none_if_some_else():
+    """none in if branch and some in else branch are compatible."""
+    code = "if true then none else 42 some fi"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["option[int]"]
+
+
+def test_typecheck_option_some_if_none_else():
+    """some in if branch and none in else branch are compatible."""
+    code = "if true then 42 some else none fi"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["option[int]"]
+
+
+def test_typecheck_option_mixed_elif():
+    """Multiple elif branches mixing none and some are compatible."""
+    code = "if true then none elif false then 42 some else 99 some fi"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["option[int]"]
+
+
+def test_typecheck_option_none_if_no_else_no_change():
+    """none in if-without-else that doesn't change the stack is fine."""
+    code = "none if true then drop none fi"
+    sig = typecheck_string(code)
+    assert sig.return_types == ["option"]

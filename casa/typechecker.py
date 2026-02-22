@@ -421,6 +421,54 @@ def _format_branch_signature(before: list[Type], after: list[Type]) -> str:
     return f"`{before_str} -> {after_str}`"
 
 
+def _unify_type(a: Type, b: Type) -> Type | None:
+    """Resolve two compatible types to the more specific one.
+
+    Returns the unified type, or None if the types are incompatible.
+    """
+    if a == b:
+        return a
+    if a == ANY_TYPE:
+        return b
+    if b == ANY_TYPE:
+        return a
+    if is_option_type(a) and is_option_type(b):
+        inner_a = extract_option_element_type(a)
+        inner_b = extract_option_element_type(b)
+        if inner_a is None:
+            return b
+        if inner_b is None:
+            return a
+        unified = _unify_type(inner_a, inner_b)
+        return f"option[{unified}]" if unified is not None else None
+    if is_array_type(a) and is_array_type(b):
+        inner_a = extract_array_element_type(a)
+        inner_b = extract_array_element_type(b)
+        if inner_a is None:
+            return b
+        if inner_b is None:
+            return a
+        unified = _unify_type(inner_a, inner_b)
+        return f"array[{unified}]" if unified is not None else None
+    return None
+
+
+def _stacks_compatible(stack_a: list[Type], stack_b: list[Type]) -> list[Type] | None:
+    """Compare two stacks element-wise using type compatibility rules.
+
+    Returns the unified (more specific) stack if compatible, None otherwise.
+    """
+    if len(stack_a) != len(stack_b):
+        return None
+    unified: list[Type] = []
+    for a, b in zip(stack_a, stack_b):
+        result = _unify_type(a, b)
+        if result is None:
+            return None
+        unified.append(result)
+    return unified
+
+
 def _branch_mismatch_notes(
     branched: BranchedStack,
 ) -> list[tuple[str, Location]]:
@@ -659,7 +707,9 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
 
                 if tc.stack == before == after:
                     continue
-                if tc.stack == after and before != after:
+                unified_cur_after = _stacks_compatible(tc.stack, after)
+                if unified_cur_after is not None and before != after:
+                    branched.after = unified_cur_after
                     tc.stack = before.copy()
                     tc.stack_origins = branched.before_origins.copy()
                     continue
@@ -690,10 +740,15 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
 
                 if tc.stack == branched.before == branched.after:
                     continue
-                if tc.stack == branched.after and branched.default_present:
+                unified_cur_after = _stacks_compatible(tc.stack, branched.after)
+                if unified_cur_after is not None and branched.default_present:
+                    tc.stack = unified_cur_after
                     tc.stack_origins = branched.after_origins.copy()
                     continue
-                if tc.stack == branched.before and not branched.default_present:
+                unified_cur_before = _stacks_compatible(tc.stack, branched.before)
+                if unified_cur_before is not None and not branched.default_present:
+                    tc.stack = unified_cur_before
+                    tc.stack_origins = branched.before_origins.copy()
                     continue
                 raise_error(
                     ErrorKind.STACK_MISMATCH,
