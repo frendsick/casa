@@ -67,6 +67,19 @@ fi
 
 The first branch pushes an `int`, the second pushes a `str` — the type checker rejects this.
 
+Compatible types are allowed across branches. For example, `none` (bare `option`) and `some` (`option[T]`) can appear in different branches. The type checker unifies them to the more specific type:
+
+```casa
+if condition then
+    none           # option
+else
+    42 some        # option[int]
+fi
+# result type: option[int]
+```
+
+The same applies to bare `array` and `array[T]`, and to `any` with any concrete type.
+
 If there is no `else` branch, the `if`/`elif` branches must not change the stack at all (since the "no match" path leaves the stack unchanged).
 
 ## Loops

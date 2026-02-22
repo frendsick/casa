@@ -232,6 +232,18 @@ fn check opt:option -> bool { true }
 42 some check    # works: option[int] matches bare option
 ```
 
+`none` and `some` can appear in different branches of a conditional. The type checker unifies them to the more specific `option[T]`:
+
+```casa
+fn safe_head arr:array[int] -> option[int] {
+    if 0 arr .length < then
+        0 arr array::nth some
+    else
+        none
+    fi
+}
+```
+
 See [Standard Library -- Option](standard-library.md#option) for `is_some`, `is_none`, `unwrap`, and `unwrap_or`.
 
 ### User-Defined Structs
