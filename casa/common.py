@@ -31,8 +31,14 @@ class Intrinsic(Enum):
 
     # Memory
     ALLOC = auto()
-    LOAD = auto()
-    STORE = auto()
+    LOAD8 = auto()
+    LOAD16 = auto()
+    LOAD32 = auto()
+    LOAD64 = auto()
+    STORE8 = auto()
+    STORE16 = auto()
+    STORE32 = auto()
+    STORE64 = auto()
 
     # IO
     PRINT = auto()
@@ -221,8 +227,14 @@ class OpKind(Enum):
 
     # Memory
     HEAP_ALLOC = auto()
-    LOAD = auto()
-    STORE = auto()
+    LOAD8 = auto()
+    LOAD16 = auto()
+    LOAD32 = auto()
+    LOAD64 = auto()
+    STORE8 = auto()
+    STORE16 = auto()
+    STORE32 = auto()
+    STORE64 = auto()
 
     # Syscalls
     SYSCALL0 = auto()
@@ -316,7 +328,7 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 65, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 71, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires Python `None`
@@ -357,13 +369,19 @@ class Op:
                 | OpKind.DUP
                 | OpKind.FN_EXEC
                 | OpKind.HEAP_ALLOC
-                | OpKind.LOAD
+                | OpKind.LOAD8
+                | OpKind.LOAD16
+                | OpKind.LOAD32
+                | OpKind.LOAD64
                 | OpKind.OVER
                 | OpKind.PRINT
                 | OpKind.PRINT_INT
                 | OpKind.PRINT_STR
                 | OpKind.ROT
-                | OpKind.STORE
+                | OpKind.STORE8
+                | OpKind.STORE16
+                | OpKind.STORE32
+                | OpKind.STORE64
                 | OpKind.SWAP
                 | OpKind.SYSCALL0
                 | OpKind.SYSCALL1
@@ -440,8 +458,14 @@ class InstKind(Enum):
 
     # Memory
     HEAP_ALLOC = auto()
-    LOAD = auto()
-    STORE = auto()
+    LOAD8 = auto()
+    LOAD16 = auto()
+    LOAD32 = auto()
+    LOAD64 = auto()
+    STORE8 = auto()
+    STORE16 = auto()
+    STORE32 = auto()
+    STORE64 = auto()
 
     # Arithmetic
     ADD = auto()
@@ -527,7 +551,7 @@ class Inst:
         return self.args[0]
 
     def __post_init__(self):
-        assert len(InstKind) == 52, "Exhaustive handling for `InstructionKind`"
+        assert len(InstKind) == 58, "Exhaustive handling for `InstructionKind`"
 
         match self.kind:
             # Should not have a parameter
@@ -544,7 +568,10 @@ class Inst:
                 | InstKind.GT
                 | InstKind.HEAP_ALLOC
                 | InstKind.LE
-                | InstKind.LOAD
+                | InstKind.LOAD8
+                | InstKind.LOAD16
+                | InstKind.LOAD32
+                | InstKind.LOAD64
                 | InstKind.LT
                 | InstKind.MOD
                 | InstKind.MUL
@@ -557,7 +584,10 @@ class Inst:
                 | InstKind.ROT
                 | InstKind.SHL
                 | InstKind.SHR
-                | InstKind.STORE
+                | InstKind.STORE8
+                | InstKind.STORE16
+                | InstKind.STORE32
+                | InstKind.STORE64
                 | InstKind.SUB
                 | InstKind.SWAP
                 | InstKind.SYSCALL0

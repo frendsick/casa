@@ -127,8 +127,8 @@ class Compiler:
             function.bytecode = fn_compiler.compile()
 
     def compile(self) -> Bytecode:
-        assert len(InstKind) == 52, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 65, "Exhaustive handling for `OpKind`"
+        assert len(InstKind) == 58, "Exhaustive handling for `InstructionKind"
+        assert len(OpKind) == 71, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
         bytecode: list[Inst] = []
@@ -401,8 +401,14 @@ class Compiler:
                     pass
                 case OpKind.LE:
                     bytecode.append(self.inst(InstKind.LE))
-                case OpKind.LOAD:
-                    bytecode.append(self.inst(InstKind.LOAD))
+                case OpKind.LOAD8:
+                    bytecode.append(self.inst(InstKind.LOAD8))
+                case OpKind.LOAD16:
+                    bytecode.append(self.inst(InstKind.LOAD16))
+                case OpKind.LOAD32:
+                    bytecode.append(self.inst(InstKind.LOAD32))
+                case OpKind.LOAD64:
+                    bytecode.append(self.inst(InstKind.LOAD64))
                 case OpKind.LT:
                     bytecode.append(self.inst(InstKind.LT))
                 case OpKind.METHOD_CALL:
@@ -443,9 +449,9 @@ class Compiler:
                     list_bytecode = list_compiler.compile()
                     bytecode += list_bytecode
 
-                    # Allocate memory for the array
+                    # Allocate memory for the array (byte-based)
                     local_list = self.locals_count
-                    bytecode.append(self.inst(InstKind.PUSH, args=[list_len + 1]))
+                    bytecode.append(self.inst(InstKind.PUSH, args=[(list_len + 1) * 8]))
                     bytecode.append(self.inst(InstKind.HEAP_ALLOC))
                     bytecode.append(self.inst(InstKind.LOCAL_SET, args=[local_list]))
                     self.locals_count += 1
@@ -453,33 +459,33 @@ class Compiler:
                     # First item of the array is its length
                     bytecode.append(self.inst(InstKind.PUSH, args=[list_len]))
                     bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_list]))
-                    bytecode.append(self.inst(InstKind.STORE))
+                    bytecode.append(self.inst(InstKind.STORE64))
 
                     # Create the array
                     local_index = self.locals_count
-                    bytecode.append(self.inst(InstKind.PUSH, args=[1]))
+                    bytecode.append(self.inst(InstKind.PUSH, args=[8]))
                     bytecode.append(self.inst(InstKind.LOCAL_SET, args=[local_index]))
                     self.locals_count += 1
 
                     start_label = new_label()
                     end_label = new_label()
 
-                    # while index len > do
+                    # while index limit > do
                     bytecode.append(self.inst(InstKind.LABEL, args=[start_label]))
                     bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_index]))
-                    bytecode.append(self.inst(InstKind.PUSH, args=[list_len]))
+                    bytecode.append(self.inst(InstKind.PUSH, args=[(list_len + 1) * 8]))
                     bytecode.append(self.inst(InstKind.GE))
                     bytecode.append(self.inst(InstKind.JUMP_NE, args=[end_label]))
 
-                    # list index + store
+                    # list index + store64
                     bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_list]))
                     bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_index]))
                     bytecode.append(self.inst(InstKind.ADD))
-                    bytecode.append(self.inst(InstKind.STORE))
+                    bytecode.append(self.inst(InstKind.STORE64))
 
-                    # 1 += index
+                    # 8 += index
                     bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_index]))
-                    bytecode.append(self.inst(InstKind.PUSH, args=[1]))
+                    bytecode.append(self.inst(InstKind.PUSH, args=[8]))
                     bytecode.append(self.inst(InstKind.ADD))
                     bytecode.append(self.inst(InstKind.LOCAL_SET, args=[local_index]))
 
@@ -510,13 +516,13 @@ class Compiler:
                 case OpKind.PUSH_INT:
                     bytecode.append(self.inst(InstKind.PUSH, args=[op.value]))
                 case OpKind.PUSH_NONE:
-                    # Allocate 2 heap slots, store tag 0 at slot 0
-                    bytecode.append(self.inst(InstKind.PUSH, args=[2]))
+                    # Allocate 16 bytes, store tag 0 at byte offset 0
+                    bytecode.append(self.inst(InstKind.PUSH, args=[16]))
                     bytecode.append(self.inst(InstKind.HEAP_ALLOC))
                     bytecode.append(self.inst(InstKind.DUP))
                     bytecode.append(self.inst(InstKind.PUSH, args=[0]))
                     bytecode.append(self.inst(InstKind.SWAP))
-                    bytecode.append(self.inst(InstKind.STORE))
+                    bytecode.append(self.inst(InstKind.STORE64))
                 case OpKind.PUSH_STR:
                     string_index = self.intern_string(op.value)
                     bytecode.append(self.inst(InstKind.PUSH_STR, args=[string_index]))
@@ -545,42 +551,48 @@ class Compiler:
                     bytecode.append(self.inst(InstKind.SHR))
                 case OpKind.SOME:
                     # Stack: [value]
-                    # Allocate 2 slots, store tag=1 at slot[0], value at slot[1]
+                    # Allocate 16 bytes, store tag=1 at byte 0, value at byte 8
                     local_ptr = self.locals_count
                     self.locals_count += 1
-                    bytecode.append(self.inst(InstKind.PUSH, args=[2]))
+                    bytecode.append(self.inst(InstKind.PUSH, args=[16]))
                     bytecode.append(self.inst(InstKind.HEAP_ALLOC))
                     bytecode.append(self.inst(InstKind.LOCAL_SET, args=[local_ptr]))
-                    # Store value at slot[1] (ptr+1)
+                    # Store value at byte offset 8
                     bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_ptr]))
-                    bytecode.append(self.inst(InstKind.PUSH, args=[1]))
+                    bytecode.append(self.inst(InstKind.PUSH, args=[8]))
                     bytecode.append(self.inst(InstKind.ADD))
-                    bytecode.append(self.inst(InstKind.STORE))
-                    # Store tag=1 at slot[0] (ptr)
+                    bytecode.append(self.inst(InstKind.STORE64))
+                    # Store tag=1 at byte offset 0
                     bytecode.append(self.inst(InstKind.PUSH, args=[1]))
                     bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_ptr]))
-                    bytecode.append(self.inst(InstKind.STORE))
+                    bytecode.append(self.inst(InstKind.STORE64))
                     # Push ptr
                     bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_ptr]))
-                case OpKind.STORE:
-                    bytecode.append(self.inst(InstKind.STORE))
+                case OpKind.STORE8:
+                    bytecode.append(self.inst(InstKind.STORE8))
+                case OpKind.STORE16:
+                    bytecode.append(self.inst(InstKind.STORE16))
+                case OpKind.STORE32:
+                    bytecode.append(self.inst(InstKind.STORE32))
+                case OpKind.STORE64:
+                    bytecode.append(self.inst(InstKind.STORE64))
                 case OpKind.STRUCT_NEW:
                     struct = op.value
                     assert isinstance(struct, Struct), "Expected struct"
 
-                    # Allocate memory for the struct
+                    # Allocate memory for the struct (byte-based)
                     member_count = len(struct.members)
-                    bytecode.append(self.inst(InstKind.PUSH, args=[member_count]))
+                    bytecode.append(self.inst(InstKind.PUSH, args=[member_count * 8]))
                     bytecode.append(self.inst(InstKind.HEAP_ALLOC))
 
-                    # Create the list
+                    # Store each member
                     for i in range(member_count):
                         bytecode.append(self.inst(InstKind.SWAP))
                         bytecode.append(self.inst(InstKind.OVER))
                         if i > 0:
-                            bytecode.append(self.inst(InstKind.PUSH, args=[i]))
+                            bytecode.append(self.inst(InstKind.PUSH, args=[i * 8]))
                             bytecode.append(self.inst(InstKind.ADD))
-                        bytecode.append(self.inst(InstKind.STORE))
+                        bytecode.append(self.inst(InstKind.STORE64))
                 case OpKind.SUB:
                     bytecode.append(self.inst(InstKind.SUB))
                 case OpKind.SWAP:

@@ -35,11 +35,17 @@ INTRINSIC_TO_OPKIND = {
     Intrinsic.DROP: OpKind.DROP,
     Intrinsic.DUP: OpKind.DUP,
     Intrinsic.EXEC: OpKind.FN_EXEC,
-    Intrinsic.LOAD: OpKind.LOAD,
+    Intrinsic.LOAD8: OpKind.LOAD8,
+    Intrinsic.LOAD16: OpKind.LOAD16,
+    Intrinsic.LOAD32: OpKind.LOAD32,
+    Intrinsic.LOAD64: OpKind.LOAD64,
     Intrinsic.OVER: OpKind.OVER,
     Intrinsic.PRINT: OpKind.PRINT,
     Intrinsic.ROT: OpKind.ROT,
-    Intrinsic.STORE: OpKind.STORE,
+    Intrinsic.STORE8: OpKind.STORE8,
+    Intrinsic.STORE16: OpKind.STORE16,
+    Intrinsic.STORE32: OpKind.STORE32,
+    Intrinsic.STORE64: OpKind.STORE64,
     Intrinsic.SWAP: OpKind.SWAP,
     Intrinsic.SYSCALL0: OpKind.SYSCALL0,
     Intrinsic.SYSCALL1: OpKind.SYSCALL1,
@@ -649,9 +655,11 @@ def parse_struct(cursor: Cursor[Token]) -> Struct:
             )
         member_location = member_name.location
         getter_ops: list[Op] = []
-        getter_ops.append(Op(len(members), OpKind.PUSH_INT, member_location))
+        getter_ops.append(Op("ptr", OpKind.TYPE_CAST, member_location))
+        getter_ops.append(Op(len(members) * 8, OpKind.PUSH_INT, member_location))
         getter_ops.append(Op(Operator.PLUS, OpKind.ADD, member_location))
-        getter_ops.append(Op(Intrinsic.LOAD, OpKind.LOAD, member_location))
+        getter_ops.append(Op(Intrinsic.LOAD64, OpKind.LOAD64, member_location))
+        getter_ops.append(Op(member_type_str, OpKind.TYPE_CAST, member_location))
         getter_params = [Parameter(struct_name.value)]
         getter_signature = Signature(getter_params, [member_type_str])
         getter = Function(getter_name, getter_ops, member_location, getter_signature)
@@ -666,9 +674,10 @@ def parse_struct(cursor: Cursor[Token]) -> Struct:
                 member_name.location,
             )
         setter_ops: list[Op] = []
-        setter_ops.append(Op(len(members), OpKind.PUSH_INT, member_location))
+        setter_ops.append(Op("ptr", OpKind.TYPE_CAST, member_location))
+        setter_ops.append(Op(len(members) * 8, OpKind.PUSH_INT, member_location))
         setter_ops.append(Op(Operator.PLUS, OpKind.ADD, member_location))
-        setter_ops.append(Op(Intrinsic.STORE, OpKind.STORE, member_location))
+        setter_ops.append(Op(Intrinsic.STORE64, OpKind.STORE64, member_location))
         setter_params = [Parameter(struct_name.value), Parameter(member_type_str)]
         setter_signature = Signature(setter_params, [])
         setter = Function(setter_name, setter_ops, member_location, setter_signature)
