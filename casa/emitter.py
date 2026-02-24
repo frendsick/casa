@@ -217,7 +217,7 @@ class Emitter:
         self._indent("movq %rax, (%rsp)")
 
     def _emit_inst(self, inst: Inst, is_global: bool) -> None:
-        assert len(InstKind) == 62, "Exhaustive handling for `InstKind`"
+        assert len(InstKind) == 66, "Exhaustive handling for `InstKind`"
         kind = inst.kind
         match kind:
             # === Stack ===
@@ -281,6 +281,19 @@ class Emitter:
             case InstKind.SHR:
                 self._indent("popq %rcx")
                 self._indent("sarq %cl, (%rsp)")
+
+            # === Bitwise ===
+            case InstKind.BIT_AND:
+                self._indent("popq %rax")
+                self._indent("andq %rax, (%rsp)")
+            case InstKind.BIT_OR:
+                self._indent("popq %rax")
+                self._indent("orq %rax, (%rsp)")
+            case InstKind.BIT_XOR:
+                self._indent("popq %rax")
+                self._indent("xorq %rax, (%rsp)")
+            case InstKind.BIT_NOT:
+                self._indent("notq (%rsp)")
 
             # === Boolean ===
             case InstKind.AND:

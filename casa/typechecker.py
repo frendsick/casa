@@ -360,6 +360,9 @@ OP_STACK_EFFECTS: dict[OpKind, tuple[str, str]] = {
     OpKind.MOD: ("%", "int int -> int"),
     OpKind.SHL: ("<<", "int int -> int"),
     OpKind.SHR: (">>", "int int -> int"),
+    OpKind.BIT_AND: ("&", "int int -> int"),
+    OpKind.BIT_OR: ("|", "int int -> int"),
+    OpKind.BIT_XOR: ("^", "int int -> int"),
     OpKind.ASSIGN_DECREMENT: ("-=", "int -> None"),
     OpKind.ASSIGN_INCREMENT: ("+=", "int -> None"),
     OpKind.HEAP_ALLOC: ("alloc", "int -> ptr"),
@@ -501,7 +504,7 @@ def _ensure_typechecked(global_function: Function) -> None:
 
 
 def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature:
-    assert len(OpKind) == 75, "Exhaustive handling for `OpKind`"
+    assert len(OpKind) == 79, "Exhaustive handling for `OpKind`"
 
     tc = TypeChecker(ops=ops)
     for op in ops:
@@ -828,6 +831,9 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 tc.stack_pop()
                 tc.stack_pop()
                 tc.stack_push("bool")
+            case OpKind.BIT_NOT:
+                tc.expect_type("int")
+                tc.stack_push("int")
             case OpKind.NOT:
                 tc.stack_pop()
                 tc.stack_push("bool")
@@ -960,6 +966,10 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 tc.stack_push(t2, o2)
                 tc.stack_push(t1, o1)
                 tc.stack_push(t3, o3)
+            case OpKind.BIT_AND | OpKind.BIT_OR | OpKind.BIT_XOR:
+                tc.expect_type("int")
+                tc.expect_type("int")
+                tc.stack_push("int")
             case OpKind.SHL | OpKind.SHR:
                 tc.expect_type("int")
                 t1 = tc.stack_pop()
