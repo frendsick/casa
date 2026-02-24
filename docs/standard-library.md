@@ -395,6 +395,117 @@ Converts a null-terminated C string to a `str`. Scans for the null byte to deter
 "hello" .as_cstr .to_str print    # hello
 ```
 
+## File I/O
+
+Functions for reading, writing, and managing files. All file operations use Linux system calls internally.
+
+### File I/O Constants
+
+The standard library provides constants for common file open flags:
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `O_RDONLY` | 0 | Open for reading only |
+| `O_WRONLY` | 1 | Open for writing only |
+| `O_CREAT` | 64 | Create the file if it does not exist |
+| `O_TRUNC` | 512 | Truncate the file to zero length |
+
+Flags can be combined with the bitwise OR operator (`|`):
+
+```casa
+O_WRONLY O_CREAT | O_TRUNC |    # open for writing, create if needed, truncate
+```
+
+### `file::open`
+
+Opens a file and returns a file descriptor. Returns a negative value on error.
+
+**Signature:** `file::open path:str flags:int mode:int -> int`
+
+**Stack effect:** `str int int -> int`
+
+```casa
+0 O_RDONLY 0 "input.txt" file::open = fd
+```
+
+The `mode` parameter sets file permissions when creating a new file (e.g., 420 for `rw-r--r--`). It is ignored when opening an existing file.
+
+### `file::read`
+
+Reads up to `size` bytes from a file descriptor into a buffer. Returns the number of bytes read, or a negative value on error.
+
+**Signature:** `file::read fd:int buf:ptr size:int -> int`
+
+**Stack effect:** `int ptr int -> int`
+
+```casa
+1024 alloc = buf
+1024 buf fd file::read = bytes_read
+```
+
+### `file::write`
+
+Writes a string to a file descriptor. Returns the number of bytes written, or a negative value on error.
+
+**Signature:** `file::write fd:int data:str -> int`
+
+**Stack effect:** `int str -> int`
+
+```casa
+"Hello, file!\n" fd file::write drop
+```
+
+### `file::close`
+
+Closes a file descriptor. Returns 0 on success, or a negative value on error.
+
+**Signature:** `file::close fd:int -> int`
+
+**Stack effect:** `int -> int`
+
+```casa
+fd file::close drop
+```
+
+### `file::read_all`
+
+Reads the entire contents of a file into a string. Prints an error and exits if the file cannot be opened.
+
+**Signature:** `file::read_all path:str -> str`
+
+**Stack effect:** `str -> str`
+
+```casa
+"input.txt" file::read_all = content
+content print
+```
+
+### `file::write_all`
+
+Writes a string to a file, creating or truncating it. Returns `true` on success, `false` if the file cannot be opened.
+
+**Signature:** `file::write_all path:str content:str -> bool`
+
+**Stack effect:** `str str -> bool`
+
+```casa
+"Hello, world!\n" "output.txt" file::write_all drop
+```
+
+### `file::remove`
+
+Deletes a file. Returns 0 on success, or a negative value on error.
+
+**Signature:** `file::remove path:str -> int`
+
+**Stack effect:** `str -> int`
+
+```casa
+"temp.txt" file::remove drop
+```
+
+See [`examples/file_io.casa`](../examples/file_io.casa) for a full program using file I/O.
+
 ## Character Classification
 
 Methods on `char` for classifying ASCII characters.

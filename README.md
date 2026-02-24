@@ -67,7 +67,7 @@ source → lex → parse → resolve → type check → bytecode → emit asm �
 | [Control Flow](docs/control-flow.md) | Conditionals (`if`/`elif`/`else`/`fi`), loops (`while`/`do`/`done`) |
 | [Functions and Lambdas](docs/functions-and-lambdas.md) | Functions, lambdas, closures, variables, stack intrinsics, IO, memory |
 | [Structs and Methods](docs/structs-and-methods.md) | Struct definition, accessors, `impl` blocks, dot/arrow syntax |
-| [Standard Library](docs/standard-library.md) | `include`, `memcpy`, arrays (`map`, `filter`, `reduce`), `option[T]`, `List`, string methods, C string methods, character classification, type conversions |
+| [Standard Library](docs/standard-library.md) | `include`, `memcpy`, arrays (`map`, `filter`, `reduce`), `option[T]`, `List`, string methods, C string methods, file I/O, character classification, type conversions |
 | [Errors](docs/errors.md) | Error kinds, diagnostics format, multi-error collection |
 
 ## Examples
@@ -81,6 +81,7 @@ source → lex → parse → resolve → type check → bytecode → emit asm �
 | [euler01.casa](examples/euler01.casa) | Project Euler problem 1 — sum of multiples |
 | [string_operations.casa](examples/string_operations.casa) | String methods, char type, and cstr conversion |
 | [bitwise_operations.casa](examples/bitwise_operations.casa) | Bitwise AND, OR, XOR, and NOT operations |
+| [file_io.casa](examples/file_io.casa) | File I/O operations: read, write, and remove files |
 
 More examples: [examples](./examples/)
 
