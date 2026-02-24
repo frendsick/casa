@@ -852,7 +852,7 @@ def get_op_literal(token: Token) -> Op:
 
 
 def get_op_operator(token: Token, cursor: Cursor[Token], function_name: str) -> Op:
-    assert len(Operator) == 19, "Exhaustive handling for `Operator`"
+    assert len(Operator) == 23, "Exhaustive handling for `Operator`"
 
     operator = Operator.from_str(token.value)
     assert operator, f"Token `{token.value}` is not an operator"
@@ -860,6 +860,14 @@ def get_op_operator(token: Token, cursor: Cursor[Token], function_name: str) -> 
     match operator:
         case Operator.AND:
             return Op(operator, OpKind.AND, token.location)
+        case Operator.BIT_AND:
+            return Op(operator, OpKind.BIT_AND, token.location)
+        case Operator.BIT_NOT:
+            return Op(operator, OpKind.BIT_NOT, token.location)
+        case Operator.BIT_OR:
+            return Op(operator, OpKind.BIT_OR, token.location)
+        case Operator.BIT_XOR:
+            return Op(operator, OpKind.BIT_XOR, token.location)
         case Operator.ASSIGN:
             next_token = expect_token(cursor, kind=TokenKind.IDENTIFIER)
             identifier = token_to_op(next_token, cursor, function_name)

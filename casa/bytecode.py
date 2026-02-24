@@ -127,8 +127,8 @@ class Compiler:
             function.bytecode = fn_compiler.compile()
 
     def compile(self) -> Bytecode:
-        assert len(InstKind) == 62, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 75, "Exhaustive handling for `OpKind`"
+        assert len(InstKind) == 66, "Exhaustive handling for `InstructionKind"
+        assert len(OpKind) == 79, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
         bytecode: list[Inst] = []
@@ -557,6 +557,14 @@ class Compiler:
                     bytecode.append(self.inst(InstKind.SHL))
                 case OpKind.SHR:
                     bytecode.append(self.inst(InstKind.SHR))
+                case OpKind.BIT_AND:
+                    bytecode.append(self.inst(InstKind.BIT_AND))
+                case OpKind.BIT_OR:
+                    bytecode.append(self.inst(InstKind.BIT_OR))
+                case OpKind.BIT_XOR:
+                    bytecode.append(self.inst(InstKind.BIT_XOR))
+                case OpKind.BIT_NOT:
+                    bytecode.append(self.inst(InstKind.BIT_NOT))
                 case OpKind.SOME:
                     # Stack: [value]
                     # Allocate 16 bytes, store tag=1 at byte 0, value at byte 8

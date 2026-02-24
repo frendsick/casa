@@ -63,7 +63,7 @@ source → lex → parse → resolve → type check → bytecode → emit asm �
 | Document | Topics |
 |----------|--------|
 | [Types and Literals](docs/types-and-literals.md) | Primitive types, composite types, literals, type casting, comments |
-| [Operators](docs/operators.md) | Arithmetic, comparison, boolean, bitshift, assignment |
+| [Operators](docs/operators.md) | Arithmetic, bitshift, bitwise, comparison, boolean, assignment |
 | [Control Flow](docs/control-flow.md) | Conditionals (`if`/`elif`/`else`/`fi`), loops (`while`/`do`/`done`) |
 | [Functions and Lambdas](docs/functions-and-lambdas.md) | Functions, lambdas, closures, variables, stack intrinsics, IO, memory |
 | [Structs and Methods](docs/structs-and-methods.md) | Struct definition, accessors, `impl` blocks, dot/arrow syntax |
@@ -80,6 +80,7 @@ source → lex → parse → resolve → type check → bytecode → emit asm �
 | [struct.casa](examples/struct.casa) | Structs, getters, setters, and methods |
 | [euler01.casa](examples/euler01.casa) | Project Euler problem 1 — sum of multiples |
 | [string_operations.casa](examples/string_operations.casa) | String methods, char type, and cstr conversion |
+| [bitwise_operations.casa](examples/bitwise_operations.casa) | Bitwise AND, OR, XOR, and NOT operations |
 
 More examples: [examples](./examples/)
 

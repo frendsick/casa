@@ -50,6 +50,24 @@ buf (ptr) 8 + load64 print  # 42
 16 4 >> print   # 1
 ```
 
+## Bitwise
+
+| Operator | Stack Effect | Description |
+|----------|-------------|-------------|
+| `&` | `int int -> int` | Bitwise AND |
+| `\|` | `int int -> int` | Bitwise OR |
+| `^` | `int int -> int` | Bitwise XOR |
+| `~` | `int -> int` | Bitwise NOT (one's complement) |
+
+```casa
+12 10 & print   # 8 (1100 AND 1010 = 1000)
+12 10 | print   # 14 (1100 OR 1010 = 1110)
+12 10 ^ print   # 6 (1100 XOR 1010 = 0110)
+12 ~ print      # -13 (inverts all bits)
+```
+
+> **Note:** `&` is also used as a function reference prefix (`&name`). When followed by an identifier, it creates a function reference. When used after two values on the stack, it performs bitwise AND.
+
 ## Comparison
 
 All comparison operators consume two values and push a `bool`.

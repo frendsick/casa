@@ -140,6 +140,12 @@ class Operator(Enum):
     SHL = auto()
     SHR = auto()
 
+    # Bitwise
+    BIT_AND = auto()
+    BIT_OR = auto()
+    BIT_XOR = auto()
+    BIT_NOT = auto()
+
     # Boolean
     AND = auto()
     OR = auto()
@@ -173,6 +179,11 @@ Operator._MAPPING = {  # type: ignore
     # Bitshift
     "<<": Operator.SHL,
     ">>": Operator.SHR,
+    # Bitwise
+    "&": Operator.BIT_AND,
+    "|": Operator.BIT_OR,
+    "^": Operator.BIT_XOR,
+    "~": Operator.BIT_NOT,
     # Boolean
     "&&": Operator.AND,
     "||": Operator.OR,
@@ -267,6 +278,12 @@ class OpKind(Enum):
     SHL = auto()
     SHR = auto()
 
+    # Bitwise
+    BIT_AND = auto()
+    BIT_OR = auto()
+    BIT_XOR = auto()
+    BIT_NOT = auto()
+
     # Boolean
     AND = auto()
     OR = auto()
@@ -331,7 +348,7 @@ class Op:
     location: Location
 
     def __post_init__(self):
-        assert len(OpKind) == 75, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 79, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires Python `None`
@@ -419,6 +436,10 @@ class Op:
             case (
                 OpKind.ADD
                 | OpKind.AND
+                | OpKind.BIT_AND
+                | OpKind.BIT_NOT
+                | OpKind.BIT_OR
+                | OpKind.BIT_XOR
                 | OpKind.DIV
                 | OpKind.MOD
                 | OpKind.MUL
@@ -487,6 +508,12 @@ class InstKind(Enum):
     # Bitshift
     SHL = auto()
     SHR = auto()
+
+    # Bitwise
+    BIT_AND = auto()
+    BIT_OR = auto()
+    BIT_XOR = auto()
+    BIT_NOT = auto()
 
     # Boolean
     AND = auto()
@@ -561,13 +588,17 @@ class Inst:
         return self.args[0]
 
     def __post_init__(self):
-        assert len(InstKind) == 62, "Exhaustive handling for `InstructionKind`"
+        assert len(InstKind) == 66, "Exhaustive handling for `InstructionKind`"
 
         match self.kind:
             # Should not have a parameter
             case (
                 InstKind.ADD
                 | InstKind.AND
+                | InstKind.BIT_AND
+                | InstKind.BIT_NOT
+                | InstKind.BIT_OR
+                | InstKind.BIT_XOR
                 | InstKind.DIV
                 | InstKind.DROP
                 | InstKind.DUP
