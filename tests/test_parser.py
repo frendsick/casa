@@ -97,6 +97,9 @@ OPERATOR_CASES = [
     ("<=", OpKind.LE, Operator.LE),
     ("<", OpKind.LT, Operator.LT),
     ("!=", OpKind.NE, Operator.NE),
+    ("&", OpKind.BIT_AND, Operator.BIT_AND),
+    ("|", OpKind.BIT_OR, Operator.BIT_OR),
+    ("^", OpKind.BIT_XOR, Operator.BIT_XOR),
 ]
 
 
@@ -105,6 +108,12 @@ def test_parse_all_operators(text, expected_kind, expected_value):
     ops = parse_string(f"1 2 {text}")
     op = [o for o in ops if o.kind == expected_kind][0]
     assert op.value == expected_value
+
+
+def test_parse_bit_not():
+    ops = parse_string("1 ~")
+    op = [o for o in ops if o.kind == OpKind.BIT_NOT][0]
+    assert op.value == Operator.BIT_NOT
 
 
 # ---------------------------------------------------------------------------
@@ -387,10 +396,10 @@ def test_resolve_fn_ref_marks_used():
     assert GLOBAL_FUNCTIONS["greet"].is_used is True
 
 
-def test_resolve_fn_ref_bare_ampersand_raises():
-    with pytest.raises(CasaErrorCollection) as exc_info:
-        resolve_string("&")
-    assert exc_info.value.errors[0].kind == ErrorKind.SYNTAX
+def test_resolve_bare_ampersand_is_bitwise_and():
+    ops = resolve_string("1 2 &")
+    bit_and_ops = [o for o in ops if o.kind == OpKind.BIT_AND]
+    assert len(bit_and_ops) == 1
 
 
 # ---------------------------------------------------------------------------

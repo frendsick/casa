@@ -50,6 +50,10 @@ SIMPLE_OP_CASES = [
     ("0 0 0 0 60 syscall4", InstKind.SYSCALL4),
     ("0 0 0 0 0 60 syscall5", InstKind.SYSCALL5),
     ("0 0 0 0 0 0 60 syscall6", InstKind.SYSCALL6),
+    ("3 5 &", InstKind.BIT_AND),
+    ("3 5 |", InstKind.BIT_OR),
+    ("3 5 ^", InstKind.BIT_XOR),
+    ("5 ~", InstKind.BIT_NOT),
 ]
 
 

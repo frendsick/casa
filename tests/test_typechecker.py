@@ -45,6 +45,33 @@ def test_typecheck_bitshift(op):
 
 
 # ---------------------------------------------------------------------------
+# Bitwise
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("op", ["&", "|", "^"])
+def test_typecheck_bitwise_binary(op):
+    sig = typecheck_string(f"3 5 {op}")
+    assert sig.return_types == ["int"]
+
+
+def test_typecheck_bitwise_not():
+    sig = typecheck_string("5 ~")
+    assert sig.return_types == ["int"]
+
+
+@pytest.mark.parametrize("op", ["&", "|", "^"])
+def test_typecheck_bitwise_rejects_bool(op):
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        typecheck_string(f"true false {op}")
+    assert exc_info.value.errors[0].kind == ErrorKind.TYPE_MISMATCH
+
+
+def test_typecheck_bitwise_not_rejects_bool():
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        typecheck_string("true ~")
+    assert exc_info.value.errors[0].kind == ErrorKind.TYPE_MISMATCH
+
+
+# ---------------------------------------------------------------------------
 # Boolean
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize("op", ["&&", "||"])

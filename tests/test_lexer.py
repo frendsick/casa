@@ -98,6 +98,10 @@ ALL_OPERATORS = [
     "=",
     "-=",
     "+=",
+    "&",
+    "|",
+    "^",
+    "~",
 ]
 assert len(ALL_OPERATORS) == len(Operator)
 
@@ -723,6 +727,10 @@ def test_operator_from_str_all_values():
         "=": Operator.ASSIGN,
         "-=": Operator.ASSIGN_DECREMENT,
         "+=": Operator.ASSIGN_INCREMENT,
+        "&": Operator.BIT_AND,
+        "|": Operator.BIT_OR,
+        "^": Operator.BIT_XOR,
+        "~": Operator.BIT_NOT,
     }
     for string, op in expected.items():
         assert Operator.from_str(string) == op
@@ -769,6 +777,10 @@ def test_operator_from_str_consistent_with_enum():
         "=",
         "-=",
         "+=",
+        "&",
+        "|",
+        "^",
+        "~",
     ]
     assert len(all_strings) == len(Operator)
     for s in all_strings:
