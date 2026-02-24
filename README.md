@@ -81,6 +81,7 @@ source → lex → parse → resolve → type check → bytecode → emit asm �
 | [euler01.casa](examples/euler01.casa) | Project Euler problem 1 — sum of multiples |
 | [string_operations.casa](examples/string_operations.casa) | String methods, char type, and cstr conversion |
 | [bitwise_operations.casa](examples/bitwise_operations.casa) | Bitwise AND, OR, XOR, and NOT operations |
+| [file_io.casa](examples/file_io.casa) | File I/O operations: read, write, and remove files |
 
 More examples: [examples](./examples/)
 

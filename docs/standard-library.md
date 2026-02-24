@@ -504,6 +504,8 @@ Deletes a file. Returns 0 on success, or a negative value on error.
 "temp.txt" file::remove drop
 ```
 
+See [`examples/file_io.casa`](../examples/file_io.casa) for a full program using file I/O.
+
 ## Character Classification
 
 Methods on `char` for classifying ASCII characters.
