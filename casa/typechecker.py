@@ -17,6 +17,8 @@ from casa.common import (
     Variable,
     extract_array_element_type,
     extract_fn_signature_str,
+    extract_generic_base,
+    extract_generic_inner,
     extract_option_element_type,
     is_array_type,
     is_fn_type,
@@ -119,6 +121,7 @@ class TypeChecker:
             or (expected == "array" and is_array_type(typ))
             or (expected == "fn" and is_fn_type(typ))
             or (expected == "option" and is_option_type(typ))
+            or extract_generic_base(typ) == expected
         ):
             return typ
         if (
@@ -126,6 +129,7 @@ class TypeChecker:
             or (typ == "array" and is_array_type(expected))
             or (typ == "fn" and is_fn_type(expected))
             or (typ == "option" and is_option_type(expected))
+            or extract_generic_base(expected) == typ
         ):
             return expected
         if typ == expected:
@@ -135,6 +139,14 @@ class TypeChecker:
         act_option = extract_option_element_type(typ)
         if exp_option is not None and act_option is not None:
             if exp_option == ANY_TYPE or act_option == ANY_TYPE:
+                return expected
+        # Match user-defined generics like Foo[any] with Foo[T]
+        exp_generic_base = extract_generic_base(expected)
+        act_generic_base = extract_generic_base(typ)
+        if exp_generic_base is not None and exp_generic_base == act_generic_base:
+            exp_inner = extract_generic_inner(expected)
+            act_inner = extract_generic_inner(typ)
+            if exp_inner == ANY_TYPE or act_inner == ANY_TYPE:
                 return expected
         # Match fn[sig] types using Signature.matches (handles ANY_TYPE)
         exp_sig_str = extract_fn_signature_str(expected)
@@ -251,6 +263,30 @@ class TypeChecker:
                         got=f"`{actual}`",
                     )
                 continue
+            # Handle user-defined generic types like Foo[T]
+            generic_base = extract_generic_base(expected.typ)
+            generic_inner = extract_generic_inner(expected.typ)
+            if generic_base and generic_inner and generic_inner in signature.type_vars:
+                actual = self.stack_pop()
+                actual_base = extract_generic_base(actual)
+                if actual_base == generic_base:
+                    actual_inner = extract_generic_inner(actual)
+                    self._bind_type_var(
+                        bindings, generic_inner, actual_inner or ANY_TYPE
+                    )
+                elif actual == generic_base:
+                    self._bind_type_var(bindings, generic_inner, ANY_TYPE)
+                elif actual == ANY_TYPE:
+                    self._bind_type_var(bindings, generic_inner, ANY_TYPE)
+                else:
+                    raise_error(
+                        ErrorKind.TYPE_MISMATCH,
+                        "Type mismatch",
+                        self.current_location,
+                        expected=f"`{expected.typ}`",
+                        got=f"`{actual}`",
+                    )
+                continue
             # Handle fn[sig] types containing type vars, e.g. fn[T -> T]
             fn_sig_str = extract_fn_signature_str(expected.typ)
             if fn_sig_str and any(tv in fn_sig_str for tv in signature.type_vars):
@@ -297,6 +333,12 @@ class TypeChecker:
             option_inner = extract_option_element_type(return_type)
             if option_inner and option_inner in bindings:
                 self.stack_push(f"option[{bindings[option_inner]}]")
+                continue
+            # Handle user-defined generic return types like Foo[T]
+            generic_base = extract_generic_base(return_type)
+            generic_inner = extract_generic_inner(return_type)
+            if generic_base and generic_inner and generic_inner in bindings:
+                self.stack_push(f"{generic_base}[{bindings[generic_inner]}]")
                 continue
             # Handle fn[sig] return types with bound type vars
             fn_sig_str = extract_fn_signature_str(return_type)
@@ -463,6 +505,17 @@ def _unify_type(a: Type, b: Type) -> Type | None:
             return a
         unified = _unify_type(inner_a, inner_b)
         return f"array[{unified}]" if unified is not None else None
+    base_a = extract_generic_base(a)
+    base_b = extract_generic_base(b)
+    if base_a is not None and base_a == base_b:
+        inner_a = extract_generic_inner(a)
+        inner_b = extract_generic_inner(b)
+        if inner_a is None:
+            return b
+        if inner_b is None:
+            return a
+        unified = _unify_type(inner_a, inner_b)
+        return f"{base_a}[{unified}]" if unified is not None else None
     return None
 
 
@@ -800,6 +853,10 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 if not global_function and is_option_type(receiver):
                     function_name = f"option::{method_name}"
                     global_function = GLOBAL_FUNCTIONS.get(function_name)
+                receiver_base = extract_generic_base(receiver)
+                if not global_function and receiver_base:
+                    function_name = f"{receiver_base}::{method_name}"
+                    global_function = GLOBAL_FUNCTIONS.get(function_name)
                 if not global_function:
                     raise_error(
                         ErrorKind.UNDEFINED_NAME,
@@ -1103,6 +1160,9 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
             option_inner = extract_option_element_type(p.typ)
             if option_inner and option_inner in function.signature.type_vars:
                 param_tvs.add(option_inner)
+            generic_inner = extract_generic_inner(p.typ)
+            if generic_inner and generic_inner in function.signature.type_vars:
+                param_tvs.add(generic_inner)
             fn_sig_str = extract_fn_signature_str(p.typ)
             if fn_sig_str:
                 for tv in function.signature.type_vars:

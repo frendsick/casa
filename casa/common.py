@@ -721,6 +721,36 @@ def extract_array_element_type(typ: str) -> str | None:
     return typ[len(array_prefix) : -1]
 
 
+BUILTIN_GENERIC_BASES: set[str] = {"array", "option", "fn"}
+
+
+def extract_generic_base(typ: str) -> str | None:
+    """Extract the base name from a user-defined generic type.
+
+    For 'Foo[Bar]' returns 'Foo'. Returns None for built-in generics
+    (array, option, fn) and non-parameterized types.
+    """
+    bracket = typ.find("[")
+    if bracket <= 0 or not typ.endswith("]"):
+        return None
+    base = typ[:bracket]
+    if base in BUILTIN_GENERIC_BASES:
+        return None
+    return base
+
+
+def extract_generic_inner(typ: str) -> str | None:
+    """Extract the inner type from a user-defined generic type.
+
+    For 'Foo[Bar]' returns 'Bar'. Returns None for built-in generics
+    and non-parameterized types.
+    """
+    base = extract_generic_base(typ)
+    if base is None:
+        return None
+    return typ[len(base) + 1 : -1]
+
+
 def is_option_type(typ: str) -> bool:
     """Check if a type is an option type (bare or parameterized)."""
     return typ == "option" or typ.startswith("option[")
@@ -830,6 +860,8 @@ class Signature:
                     or (b.typ == "array" and is_array_type(a.typ))
                     or (a.typ == "option" and is_option_type(b.typ))
                     or (b.typ == "option" and is_option_type(a.typ))
+                    or extract_generic_base(b.typ) == a.typ
+                    or extract_generic_base(a.typ) == b.typ
                 ):
                     return False
 
@@ -840,6 +872,8 @@ class Signature:
                     or (rb == "array" and is_array_type(ra))
                     or (ra == "option" and is_option_type(rb))
                     or (rb == "option" and is_option_type(ra))
+                    or extract_generic_base(rb) == ra
+                    or extract_generic_base(ra) == rb
                 ):
                     return False
 
