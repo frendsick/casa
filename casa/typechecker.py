@@ -17,7 +17,7 @@ from casa.common import (
     Variable,
     extract_fn_signature_str,
     extract_generic_base,
-    extract_generic_inner,
+    extract_generic_params,
     is_fn_type,
 )
 from casa.error import (
@@ -130,9 +130,15 @@ class TypeChecker:
         exp_base = extract_generic_base(expected)
         act_base = extract_generic_base(typ)
         if exp_base is not None and exp_base == act_base:
-            exp_inner = extract_generic_inner(expected)
-            act_inner = extract_generic_inner(typ)
-            if exp_inner == ANY_TYPE or act_inner == ANY_TYPE:
+            exp_params = extract_generic_params(expected)
+            act_params = extract_generic_params(typ)
+            if exp_params and act_params and len(exp_params) == len(act_params):
+                if all(
+                    ep == ANY_TYPE or ap == ANY_TYPE
+                    for ep, ap in zip(exp_params, act_params)
+                ):
+                    return expected
+            elif exp_params is None or act_params is None:
                 return expected
         # Match fn[sig] types using Signature.matches (handles ANY_TYPE)
         exp_sig_str = extract_fn_signature_str(expected)
@@ -211,21 +217,34 @@ class TypeChecker:
             if expected.typ in signature.type_vars:
                 self._bind_type_var(bindings, expected.typ, self.stack_pop())
                 continue
-            # Handle parameterized types containing type vars, e.g. array[T], option[T], Foo[T]
+            # Handle parameterized types containing type vars, e.g. array[T], Map[K V]
             generic_base = extract_generic_base(expected.typ)
-            generic_inner = extract_generic_inner(expected.typ)
-            if generic_base and generic_inner and generic_inner in signature.type_vars:
+            generic_params = extract_generic_params(expected.typ)
+            if (
+                generic_base
+                and generic_params
+                and any(p in signature.type_vars for p in generic_params)
+            ):
                 actual = self.stack_pop()
                 actual_base = extract_generic_base(actual)
                 if actual_base == generic_base:
-                    actual_inner = extract_generic_inner(actual)
-                    self._bind_type_var(
-                        bindings, generic_inner, actual_inner or ANY_TYPE
-                    )
+                    actual_params = extract_generic_params(actual)
+                    if actual_params and len(actual_params) == len(generic_params):
+                        for ep, ap in zip(generic_params, actual_params):
+                            if ep in signature.type_vars:
+                                self._bind_type_var(bindings, ep, ap)
+                    else:
+                        for ep in generic_params:
+                            if ep in signature.type_vars:
+                                self._bind_type_var(bindings, ep, ANY_TYPE)
                 elif actual == generic_base:
-                    self._bind_type_var(bindings, generic_inner, ANY_TYPE)
+                    for ep in generic_params:
+                        if ep in signature.type_vars:
+                            self._bind_type_var(bindings, ep, ANY_TYPE)
                 elif actual == ANY_TYPE:
-                    self._bind_type_var(bindings, generic_inner, ANY_TYPE)
+                    for ep in generic_params:
+                        if ep in signature.type_vars:
+                            self._bind_type_var(bindings, ep, ANY_TYPE)
                 else:
                     raise_error(
                         ErrorKind.TYPE_MISMATCH,
@@ -272,11 +291,16 @@ class TypeChecker:
             if return_type in bindings:
                 self.stack_push(bindings[return_type])
                 continue
-            # Handle parameterized return types like array[T], option[T], Foo[T]
+            # Handle parameterized return types like array[T], option[T], Map[K V]
             generic_base = extract_generic_base(return_type)
-            generic_inner = extract_generic_inner(return_type)
-            if generic_base and generic_inner and generic_inner in bindings:
-                self.stack_push(f"{generic_base}[{bindings[generic_inner]}]")
+            generic_params = extract_generic_params(return_type)
+            if (
+                generic_base
+                and generic_params
+                and any(p in bindings for p in generic_params)
+            ):
+                substituted = [bindings.get(p, p) for p in generic_params]
+                self.stack_push(f"{generic_base}[{' '.join(substituted)}]")
                 continue
             # Handle fn[sig] return types with bound type vars
             fn_sig_str = extract_fn_signature_str(return_type)
@@ -428,14 +452,21 @@ def _unify_type(a: Type, b: Type) -> Type | None:
     base_a = extract_generic_base(a)
     base_b = extract_generic_base(b)
     if base_a is not None and base_a == base_b:
-        inner_a = extract_generic_inner(a)
-        inner_b = extract_generic_inner(b)
-        if inner_a is None:
+        params_a = extract_generic_params(a)
+        params_b = extract_generic_params(b)
+        if params_a is None:
             return b
-        if inner_b is None:
+        if params_b is None:
             return a
-        unified = _unify_type(inner_a, inner_b)
-        return f"{base_a}[{unified}]" if unified is not None else None
+        if len(params_a) != len(params_b):
+            return None
+        unified_params = []
+        for pa, pb in zip(params_a, params_b):
+            u = _unify_type(pa, pb)
+            if u is None:
+                return None
+            unified_params.append(u)
+        return f"{base_a}[{' '.join(unified_params)}]"
     if base_a is not None and base_a == b:
         return a
     if base_b is not None and base_b == a:
@@ -1072,9 +1103,11 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
         for p in function.signature.parameters:
             if p.typ in function.signature.type_vars:
                 param_tvs.add(p.typ)
-            generic_inner = extract_generic_inner(p.typ)
-            if generic_inner and generic_inner in function.signature.type_vars:
-                param_tvs.add(generic_inner)
+            generic_params = extract_generic_params(p.typ)
+            if generic_params:
+                for gp in generic_params:
+                    if gp in function.signature.type_vars:
+                        param_tvs.add(gp)
             fn_sig_str = extract_fn_signature_str(p.typ)
             if fn_sig_str:
                 for tv in function.signature.type_vars:

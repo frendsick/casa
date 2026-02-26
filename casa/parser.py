@@ -586,9 +586,11 @@ def parse_type(cursor: Cursor[Token]) -> Type:
                 result.append(token.value)
         return f"fn[{''.join(result)}]"
 
-    inner = parse_type(cursor)
+    inner_types = [parse_type(cursor)]
+    while cursor.peek() and cursor.peek().value != "]":
+        inner_types.append(parse_type(cursor))
     expect_token(cursor, value="]")
-    return f"{base.value}[{inner}]"
+    return f"{base.value}[{' '.join(inner_types)}]"
 
 
 def get_op_type_cast(cursor: Cursor[Token]) -> Op:

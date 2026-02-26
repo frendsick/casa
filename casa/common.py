@@ -732,6 +732,39 @@ def extract_generic_inner(typ: str) -> str | None:
     return typ[len(base) + 1 : -1]
 
 
+def extract_generic_params(typ: str) -> list[str] | None:
+    """Extract all type parameters from a parameterized generic type.
+
+    For 'HashMap[str int]' returns ['str', 'int'].
+    For 'List[int]' returns ['int'].
+    For 'fn[...]' or non-generic types returns None.
+    """
+    base = extract_generic_base(typ)
+    if base is None:
+        return None
+    inner = typ[len(base) + 1 : -1]
+    # Tokenize inner content, splitting on spaces at bracket depth 0
+    params: list[str] = []
+    current: list[str] = []
+    depth = 0
+    for char in inner:
+        if char == "[":
+            depth += 1
+            current.append(char)
+        elif char == "]":
+            depth -= 1
+            current.append(char)
+        elif char == " " and depth == 0:
+            if current:
+                params.append("".join(current))
+                current = []
+        else:
+            current.append(char)
+    if current:
+        params.append("".join(current))
+    return params if params else None
+
+
 def is_fn_type(typ: str) -> bool:
     """Check if a type is a function type (bare or parameterized)."""
     return typ == "fn" or typ.startswith("fn[")
