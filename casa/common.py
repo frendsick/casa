@@ -720,18 +720,6 @@ def extract_generic_base(typ: str) -> str | None:
     return base
 
 
-def extract_generic_inner(typ: str) -> str | None:
-    """Extract the inner type from a parameterized generic type.
-
-    For 'array[int]' returns 'int', for 'List[str]' returns 'str'.
-    Returns None for fn types and non-parameterized types.
-    """
-    base = extract_generic_base(typ)
-    if base is None:
-        return None
-    return typ[len(base) + 1 : -1]
-
-
 def extract_generic_params(typ: str) -> list[str] | None:
     """Extract all type parameters from a parameterized generic type.
 

@@ -134,7 +134,7 @@ class TypeChecker:
             act_params = extract_generic_params(typ)
             if exp_params and act_params and len(exp_params) == len(act_params):
                 if all(
-                    ep == ANY_TYPE or ap == ANY_TYPE
+                    ep == ap or ep == ANY_TYPE or ap == ANY_TYPE
                     for ep, ap in zip(exp_params, act_params)
                 ):
                     return expected
