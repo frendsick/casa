@@ -489,7 +489,7 @@ class Compiler:
                     bytecode.append(self.inst(InstKind.LABEL, args=[start_label]))
                     bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_index]))
                     bytecode.append(self.inst(InstKind.PUSH, args=[(list_len + 2) * 8]))
-                    bytecode.append(self.inst(InstKind.GE))
+                    bytecode.append(self.inst(InstKind.GT))
                     bytecode.append(self.inst(InstKind.JUMP_NE, args=[end_label]))
 
                     # list index + store64
