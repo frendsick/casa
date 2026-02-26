@@ -561,6 +561,10 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     ):
                         local_variable.typ = stack_type
 
+                    # Allow refining bare type to parameterized, e.g. Map -> Map[str int]
+                    if extract_generic_base(stack_type) == local_variable.typ:
+                        local_variable.typ = stack_type
+
                     if (
                         local_variable.typ not in (stack_type, ANY_TYPE)
                         and stack_type != ANY_TYPE
@@ -584,6 +588,10 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     if not global_variable.typ or (
                         global_variable.typ == ANY_TYPE and stack_type != ANY_TYPE
                     ):
+                        global_variable.typ = stack_type
+
+                    # Allow refining bare type to parameterized, e.g. Map -> Map[str int]
+                    if extract_generic_base(stack_type) == global_variable.typ:
                         global_variable.typ = stack_type
 
                     if global_variable.typ not in (stack_type, ANY_TYPE):

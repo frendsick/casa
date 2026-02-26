@@ -397,6 +397,244 @@ impl ptr {
     fn to_str p:ptr -> str { p (int) .to_str }
 }
 
+# ---------------------------------------------------------------------------
+# Hash helpers
+# ---------------------------------------------------------------------------
+0 = MAP_KIND_STR
+1 = MAP_KIND_INT
+16 = MAP_INITIAL_CAP
+
+fn str_hash s:str -> int {
+    5381 = sh_h
+    s .length = sh_len
+    0 = sh_i
+    while sh_i sh_len > do
+        sh_h 5 << sh_h + sh_i s .at (int) + = sh_h
+        1 += sh_i
+    done
+    # Make sure the result is positive
+    if 0 sh_h < then
+        0 sh_h - = sh_h
+    fi
+    sh_h
+}
+
+fn int_hash n:int -> int {
+    if 0 n < then
+        0 n -
+    else
+        n
+    fi
+}
+
+fn map_hash_key kind:int key:any -> int {
+    if MAP_KIND_STR kind == then
+        key (str) str_hash
+    else
+        key (int) int_hash
+    fi
+}
+
+fn map_keys_eq kind:int b:any a:any -> bool {
+    if MAP_KIND_STR kind == then
+        a (str) b (str) str::eq
+    else
+        a (int) b (int) ==
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Map[K V] - hash map with separate chaining
+# ---------------------------------------------------------------------------
+# Bucket entry layout (24 bytes):
+#   offset 0:  key   (8 bytes)
+#   offset 8:  value (8 bytes)
+#   offset 16: next  (8 bytes, 0 = no next)
+
+struct Map {
+    buckets:  ptr
+    size:     int
+    capacity: int
+    kind:     int
+}
+
+impl Map {
+    fn new kind:int -> Map {
+        kind MAP_INITIAL_CAP 0 MAP_INITIAL_CAP 8 * alloc Map
+    }
+
+    fn str_new -> Map {
+        MAP_KIND_STR Map::new
+    }
+
+    fn int_new -> Map {
+        MAP_KIND_INT Map::new
+    }
+
+    fn length self:Map -> int {
+        self.size
+    }
+
+    fn get[K V] self:Map[K V] key:K -> option[V] {
+        key (any) self.kind map_hash_key self.capacity 1 - & = mg_idx
+        self.buckets mg_idx 8 * + load64 = mg_node
+        none = mg_result
+        while 0 mg_node != do
+            mg_node (ptr) load64 = mg_nk
+            if mg_nk key (any) self.kind map_keys_eq then
+                mg_node (ptr) 8 + load64 (V) some = mg_result
+                break
+            fi
+            mg_node (ptr) 16 + load64 = mg_node
+        done
+        mg_result (option[V])
+    }
+
+    fn has[K V] self:Map[K V] key:K -> bool {
+        key self.get .is_some
+    }
+
+    fn set[K V] self:Map[K V] value:V key:K -> Map[K V] {
+        key (any) self.kind map_hash_key self.capacity 1 - & = ms_idx
+        self.buckets ms_idx 8 * + load64 = ms_node
+        false = ms_found
+        while 0 ms_node != do
+            ms_node (ptr) load64 = ms_nk
+            if ms_nk key (any) self.kind map_keys_eq then
+                value ms_node (ptr) 8 + store64
+                true = ms_found
+                break
+            fi
+            ms_node (ptr) 16 + load64 = ms_node
+        done
+        if ms_found ! then
+            24 alloc = ms_entry
+            key ms_entry (ptr) store64
+            value ms_entry (ptr) 8 + store64
+            self.buckets ms_idx 8 * + load64 ms_entry (ptr) 16 + store64
+            ms_entry (int) self.buckets ms_idx 8 * + store64
+            self.size 1 + self->size
+            if self.capacity 3 * 4 / self.size >= then
+                self.resize
+            fi
+        fi
+        self (Map[K V])
+    }
+
+    fn delete[K V] self:Map[K V] key:K -> Map[K V] {
+        key (any) self.kind map_hash_key self.capacity 1 - & = md_idx
+        self.buckets md_idx 8 * + load64 = md_node
+        0 = md_prev
+        while 0 md_node != do
+            md_node (ptr) load64 = md_nk
+            if md_nk key (any) self.kind map_keys_eq then
+                md_node (ptr) 16 + load64 = md_next
+                if 0 md_prev == then
+                    md_next (int) self.buckets md_idx 8 * + store64
+                else
+                    md_next md_prev (ptr) 16 + store64
+                fi
+                self.size 1 - self->size
+                break
+            fi
+            md_node = md_prev
+            md_node (ptr) 16 + load64 = md_node
+        done
+        self (Map[K V])
+    }
+
+    fn resize self:Map {
+        self.capacity 2 * = mr_new_cap
+        mr_new_cap 8 * alloc = mr_new_bkt
+        0 = mr_i
+        while mr_i self.capacity > do
+            self.buckets mr_i 8 * + load64 = mr_node
+            while 0 mr_node != do
+                mr_node (ptr) 16 + load64 = mr_nxt
+                mr_node (ptr) load64 = mr_nk
+                mr_nk self.kind map_hash_key mr_new_cap 1 - & = mr_bi
+                mr_new_bkt mr_bi 8 * + load64 mr_node (ptr) 16 + store64
+                mr_node (int) mr_new_bkt mr_bi 8 * + store64
+                mr_nxt = mr_node
+            done
+            1 += mr_i
+        done
+        mr_new_bkt self->buckets
+        mr_new_cap self->capacity
+    }
+
+    fn keys[K V] self:Map[K V] -> List[K] {
+        List::new = mk_list
+        0 = mk_i
+        while mk_i self.capacity > do
+            self.buckets mk_i 8 * + load64 = mk_node
+            while 0 mk_node != do
+                mk_node (ptr) load64 (K) mk_list.push
+                mk_node (ptr) 16 + load64 = mk_node
+            done
+            1 += mk_i
+        done
+        mk_list (List[K])
+    }
+
+    fn values[K V] self:Map[K V] -> List[V] {
+        List::new = mv_list
+        0 = mv_i
+        while mv_i self.capacity > do
+            self.buckets mv_i 8 * + load64 = mv_node
+            while 0 mv_node != do
+                mv_node (ptr) 8 + load64 (V) mv_list.push
+                mv_node (ptr) 16 + load64 = mv_node
+            done
+            1 += mv_i
+        done
+        mv_list (List[V])
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Set[K] - hash set wrapping Map
+# ---------------------------------------------------------------------------
+struct Set {
+    map: Map
+}
+
+impl Set {
+    fn new kind:int -> Set {
+        kind Map::new (any) Set
+    }
+
+    fn str_new -> Set {
+        MAP_KIND_STR Set::new
+    }
+
+    fn int_new -> Set {
+        MAP_KIND_INT Set::new
+    }
+
+    fn length self:Set -> int {
+        self.map.length
+    }
+
+    fn has[K] self:Set[K] key:K -> bool {
+        key (any) self.map (Map[K int]) .has
+    }
+
+    fn add[K] self:Set[K] key:K -> Set[K] {
+        key (any) 0 self.map (Map[K int]) .set drop
+        self (Set[K])
+    }
+
+    fn remove[K] self:Set[K] key:K -> Set[K] {
+        key (any) self.map (Map[K int]) .delete drop
+        self (Set[K])
+    }
+
+    fn to_list[K] self:Set[K] -> List[K] {
+        self.map (Map[K int]) .keys
+    }
+}
+
 impl option {
     fn is_some self:option -> bool {
         self (ptr) load64 1 ==
