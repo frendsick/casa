@@ -705,36 +705,31 @@ BUILTIN_TYPES: set[str] = {
 }
 
 
-def is_array_type(typ: str) -> bool:
-    """Check if a type is an array type (bare or parameterized)."""
-    return typ == "array" or typ.startswith("array[")
+def extract_generic_base(typ: str) -> str | None:
+    """Extract the base name from a parameterized generic type.
 
-
-def extract_array_element_type(typ: str) -> str | None:
-    """Extract the element type from a parameterized array type.
-
-    Returns None for bare 'array' or non-array types.
+    For 'array[int]' returns 'array', for 'List[int]' returns 'List'.
+    Returns None for fn types and non-parameterized types.
     """
-    array_prefix = "array["
-    if not typ.startswith(array_prefix) or not typ.endswith("]"):
+    bracket = typ.find("[")
+    if bracket <= 0 or not typ.endswith("]"):
         return None
-    return typ[len(array_prefix) : -1]
+    base = typ[:bracket]
+    if base == "fn":
+        return None
+    return base
 
 
-def is_option_type(typ: str) -> bool:
-    """Check if a type is an option type (bare or parameterized)."""
-    return typ == "option" or typ.startswith("option[")
+def extract_generic_inner(typ: str) -> str | None:
+    """Extract the inner type from a parameterized generic type.
 
-
-def extract_option_element_type(typ: str) -> str | None:
-    """Extract the element type from a parameterized option type.
-
-    Returns None for bare 'option' or non-option types.
+    For 'array[int]' returns 'int', for 'List[str]' returns 'str'.
+    Returns None for fn types and non-parameterized types.
     """
-    option_prefix = "option["
-    if not typ.startswith(option_prefix) or not typ.endswith("]"):
+    base = extract_generic_base(typ)
+    if base is None:
         return None
-    return typ[len(option_prefix) : -1]
+    return typ[len(base) + 1 : -1]
 
 
 def is_fn_type(typ: str) -> bool:
@@ -826,20 +821,15 @@ class Signature:
         for a, b in zip(self.parameters, other.parameters, strict=True):
             if a.typ != b.typ and a.typ != ANY_TYPE and b.typ != ANY_TYPE:
                 if not (
-                    (a.typ == "array" and is_array_type(b.typ))
-                    or (b.typ == "array" and is_array_type(a.typ))
-                    or (a.typ == "option" and is_option_type(b.typ))
-                    or (b.typ == "option" and is_option_type(a.typ))
+                    extract_generic_base(b.typ) == a.typ
+                    or extract_generic_base(a.typ) == b.typ
                 ):
                     return False
 
         for ra, rb in zip(self.return_types, other.return_types, strict=True):
             if ra != rb and ra != ANY_TYPE and rb != ANY_TYPE:
                 if not (
-                    (ra == "array" and is_array_type(rb))
-                    or (rb == "array" and is_array_type(ra))
-                    or (ra == "option" and is_option_type(rb))
-                    or (rb == "option" and is_option_type(ra))
+                    extract_generic_base(rb) == ra or extract_generic_base(ra) == rb
                 ):
                     return False
 

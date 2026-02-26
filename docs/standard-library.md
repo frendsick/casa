@@ -40,7 +40,7 @@ dst (ptr) 16 + load64 print   # 30
 
 ## Arrays
 
-Arrays are fixed-size heap-allocated sequences created with bracket syntax. The length is stored in the first 8 bytes, and elements start at byte offset 8 (each element takes 8 bytes).
+Arrays are fixed-size heap-allocated sequences created with bracket syntax. Each array has a 16-byte header: the data pointer at offset 0 and the length at offset 8. Elements are stored contiguously after the header, each taking 8 bytes.
 
 ### `array::length`
 
@@ -172,57 +172,136 @@ Returns the contained value, or a default if the option is empty.
 0 none .unwrap_or print       # 0
 ```
 
-## `List`
+## `List[T]`
 
-A dynamic list that grows automatically when items are pushed.
+A generic dynamic list that grows automatically when items are pushed. The type parameter `T` tracks the element type at compile time.
 
 ### Definition
 
 ```casa
 struct List {
+    data:     ptr
     size:     int
     capacity: int
-    array:    array
 }
+```
+
+### `List::new`
+
+Creates an empty `List` with an initial capacity of 8.
+
+**Signature:** `List::new -> List`
+
+**Stack effect:** `-> List`
+
+```casa
+List::new = v
 ```
 
 ### `List::from_array`
 
-Creates a `List` from a fixed-size array. The list's size and capacity are both set to the array's length.
+Creates a `List[T]` from a fixed-size array. The list's size and capacity are both set to the array's length. The data pointer points directly into the array's data.
 
-**Signature:** `List::from_array array:array -> List`
+**Signature:** `List::from_array[T] arr:array[T] -> List[T]`
 
-**Stack effect:** `array -> List`
+**Stack effect:** `array[T] -> List[T]`
 
 ```casa
 [1, 2, 3] List::from_array = list
 ```
 
-### `List::nth`
+### `List::length`
 
-Returns the nth element (zero-indexed).
+Returns the number of elements in the list.
 
-**Signature:** `List::nth List int -> any`
+**Signature:** `List::length self:List -> int`
 
-**Stack effect:** `List int -> any`
+**Stack effect:** `List -> int`
 
 ```casa
-0 list.nth print    # 1
-2 list.nth print    # 3
+list.length print    # 3
+```
+
+### `List::get`
+
+Returns the element at index `n` (zero-indexed). Prints an error and exits if the index is out of bounds.
+
+**Signature:** `List::get[T] self:List[T] n:int -> T`
+
+**Stack effect:** `List[T] int -> T`
+
+```casa
+0 list.get print    # 1
+2 list.get print    # 3
+```
+
+The return type matches the list's element type. For example, calling `get` on a `List[int]` returns `int`.
+
+### `List::set`
+
+Sets the element at index `n`. Prints an error and exits if the index is out of bounds.
+
+**Signature:** `List::set[T] self:List[T] n:int item:T`
+
+**Stack effect:** `List[T] int T -> None`
+
+```casa
+99 1 list.set
+1 list.get print    # 99
 ```
 
 ### `List::push`
 
-Appends an item to the list. If the list is at capacity, it allocates a new array with double the capacity and copies the existing elements.
+Appends an item to the list. If the list is at capacity, it allocates a new buffer with double the capacity and copies the existing elements.
 
-**Signature:** `List::push self:List item:any`
+**Signature:** `List::push[T] self:List[T] item:T`
 
-**Stack effect:** `List any -> None`
+**Stack effect:** `List[T] T -> None`
 
 ```casa
 4 list.push
-list.size print       # 4
-3 list.nth print      # 4
+list.length print    # 4
+3 list.get print     # 4
+```
+
+### `List::pop`
+
+Removes and returns the last element. Prints an error and exits if the list is empty.
+
+**Signature:** `List::pop[T] self:List[T] -> T`
+
+**Stack effect:** `List[T] -> T`
+
+```casa
+list.pop print          # 4
+list.length print       # 3
+```
+
+### `List::slice`
+
+Returns an `array[T]` view into the list's data from index `start` (inclusive) to `end` (exclusive). This is a zero-copy operation. Prints an error and exits if the range is out of bounds.
+
+**Signature:** `List::slice[T] self:List[T] start:int end:int -> array[T]`
+
+**Stack effect:** `List[T] int int -> array[T]`
+
+```casa
+3 1 list.slice = sliced
+sliced.length print          # 2
+0 sliced array::nth print    # 200
+```
+
+### `List::to_array`
+
+Returns an `array[T]` view of the entire list. This is a zero-copy operation equivalent to `0 self.size self.slice`.
+
+**Signature:** `List::to_array[T] self:List[T] -> array[T]`
+
+**Stack effect:** `List[T] -> array[T]`
+
+```casa
+list.to_array = arr
+arr.length print    # 3
 ```
 
 ### Complete Example
@@ -230,19 +309,26 @@ list.size print       # 4
 ```casa
 include "../lib/std.casa"
 
-[1, 2, 3] List::from_array = list
-list.size print         # 3
-list.capacity print     # 3
+List::new = v
+10 v.push
+20 v.push
+30 v.push
+v.length print          # 3
+0 v.get print           # 10
+2 v.get print           # 30
 
-4 list.push
-list.size print         # 4
-list.capacity print     # 6
+99 1 v.set
+1 v.get print           # 99
 
-0 list.nth print        # 1
-3 list.nth print        # 4
+v.pop print             # 30
+v.length print          # 2
+
+[100, 200, 300] List::from_array = v2
+3 1 v2.slice = sliced
+sliced.length print     # 2
 ```
 
-See [`examples/dynamic_list.casa`](../examples/dynamic_list.casa) for a full program using the List.
+See [`examples/vec.casa`](../examples/vec.casa) for a full program demonstrating all List methods.
 
 ## String Methods
 
