@@ -291,6 +291,30 @@ fn safe_head arr:array[int] -> option[int] {
 
 See [Standard Library -- Option](standard-library.md#option) for `is_some`, `is_none`, `unwrap`, and `unwrap_or`.
 
+### `Map[K V]`
+
+A generic hash map with separate chaining. The type parameters `K` and `V` represent the key and value types. Maps require a kind constant (`MAP_KIND_STR` or `MAP_KIND_INT`) to specify the key type at creation.
+
+```casa
+Map::str_new (Map[str int]) = m    # string-keyed map
+Map::int_new (Map[int str]) = n    # integer-keyed map
+```
+
+Convenience constructors return a bare `Map` type, so use a type cast at creation to set the generic parameters.
+
+See [Standard Library -- Map](standard-library.md#mapk-v) for `new`, `str_new`, `int_new`, `length`, `get`, `has`, `set`, `delete`, `keys`, and `values`.
+
+### `Set[K]`
+
+A generic hash set backed by a `Map`. The type parameter `K` represents the element type.
+
+```casa
+Set::str_new (Set[str]) = s    # string set
+Set::int_new (Set[int]) = t    # integer set
+```
+
+See [Standard Library -- Set](standard-library.md#setk) for `new`, `str_new`, `int_new`, `length`, `has`, `add`, `remove`, and `to_list`.
+
 ### User-Defined Structs
 
 Struct names are types. After defining a struct, its name can be used as a type.

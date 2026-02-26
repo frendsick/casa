@@ -330,6 +330,340 @@ sliced.length print     # 2
 
 See [`examples/vec.casa`](../examples/vec.casa) for a full program demonstrating all List methods.
 
+## `Map[K V]`
+
+A generic hash map using separate chaining. The type parameters `K` and `V` track the key and value types at compile time. Maps require a kind constant to specify whether keys are strings or integers.
+
+### Definition
+
+```casa
+struct Map {
+    buckets:  ptr
+    size:     int
+    capacity: int
+    kind:     int
+}
+```
+
+### Map Kind Constants
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `MAP_KIND_STR` | 0 | String keys |
+| `MAP_KIND_INT` | 1 | Integer keys |
+
+### `Map::new`
+
+Creates an empty `Map` with the given key kind.
+
+**Signature:** `Map::new kind:int -> Map`
+
+**Stack effect:** `int -> Map`
+
+```casa
+MAP_KIND_STR Map::new (Map[str int]) = m
+```
+
+Note: `Map::new` returns a bare `Map` type. Use a type cast at creation to get the parameterized type.
+
+### `Map::str_new`
+
+Convenience function that creates a string-keyed `Map`.
+
+**Signature:** `Map::str_new -> Map`
+
+**Stack effect:** `-> Map`
+
+```casa
+Map::str_new (Map[str int]) = m
+```
+
+### `Map::int_new`
+
+Convenience function that creates an integer-keyed `Map`.
+
+**Signature:** `Map::int_new -> Map`
+
+**Stack effect:** `-> Map`
+
+```casa
+Map::int_new (Map[int int]) = m
+```
+
+### `Map::length`
+
+Returns the number of entries in the map.
+
+**Signature:** `Map::length self:Map -> int`
+
+**Stack effect:** `Map -> int`
+
+```casa
+m.length print    # 3
+```
+
+### `Map::get`
+
+Returns an `option[V]` for the given key. Returns `none` if the key is not present.
+
+**Signature:** `Map::get[K V] self:Map[K V] key:K -> option[V]`
+
+**Stack effect:** `Map[K V] K -> option[V]`
+
+```casa
+"Alice" m.get .unwrap print    # 25
+"Dave" m.get .is_none print    # 1
+```
+
+### `Map::has`
+
+Returns `true` if the map contains the given key.
+
+**Signature:** `Map::has[K V] self:Map[K V] key:K -> bool`
+
+**Stack effect:** `Map[K V] K -> bool`
+
+```casa
+"Alice" m.has print    # 1
+"Dave" m.has print     # 0
+```
+
+### `Map::set`
+
+Sets a key-value pair in the map. If the key already exists, the value is updated. Returns the map for chaining.
+
+**Signature:** `Map::set[K V] self:Map[K V] value:V key:K -> Map[K V]`
+
+**Stack effect:** `Map[K V] V K -> Map[K V]`
+
+The parameter order in the function declaration is `self value key`. Since Casa pops parameters in declaration order (first parameter = top of stack), the calling convention is:
+
+```casa
+"Alice" 25 m.set = m    # key="Alice", value=25
+```
+
+Key is pushed first, then value, then the map (via dot syntax).
+
+### `Map::delete`
+
+Removes a key from the map. Returns the map for chaining. Does nothing if the key is not present.
+
+**Signature:** `Map::delete[K V] self:Map[K V] key:K -> Map[K V]`
+
+**Stack effect:** `Map[K V] K -> Map[K V]`
+
+```casa
+"Bob" m.delete = m
+```
+
+### `Map::keys`
+
+Returns a `List[K]` of all keys in the map.
+
+**Signature:** `Map::keys[K V] self:Map[K V] -> List[K]`
+
+**Stack effect:** `Map[K V] -> List[K]`
+
+```casa
+m.keys = key_list
+```
+
+### `Map::values`
+
+Returns a `List[V]` of all values in the map.
+
+**Signature:** `Map::values[K V] self:Map[K V] -> List[V]`
+
+**Stack effect:** `Map[K V] -> List[V]`
+
+```casa
+m.values = val_list
+```
+
+### Complete Example
+
+```casa
+include "../lib/std.casa"
+
+# Create a string-keyed map
+Map::str_new (Map[str int]) = m
+"Alice" 25 m.set = m
+"Bob" 30 m.set = m
+
+m.length print                     # 2
+"Alice" m.get .unwrap print        # 25
+"Bob" m.delete = m
+m.length print                     # 1
+```
+
+See [`examples/hash_map.casa`](../examples/hash_map.casa) for a full program demonstrating Map and Set.
+
+## `Set[K]`
+
+A generic hash set backed by a `Map`. The type parameter `K` tracks the element type at compile time.
+
+### Definition
+
+```casa
+struct Set {
+    map: Map
+}
+```
+
+### `Set::new`
+
+Creates an empty `Set` with the given key kind.
+
+**Signature:** `Set::new kind:int -> Set`
+
+**Stack effect:** `int -> Set`
+
+```casa
+MAP_KIND_STR Set::new (Set[str]) = s
+```
+
+Note: `Set::new` returns a bare `Set` type. Use a type cast at creation to get the parameterized type.
+
+### `Set::str_new`
+
+Convenience function that creates a string-element `Set`.
+
+**Signature:** `Set::str_new -> Set`
+
+**Stack effect:** `-> Set`
+
+```casa
+Set::str_new (Set[str]) = s
+```
+
+### `Set::int_new`
+
+Convenience function that creates an integer-element `Set`.
+
+**Signature:** `Set::int_new -> Set`
+
+**Stack effect:** `-> Set`
+
+```casa
+Set::int_new (Set[int]) = s
+```
+
+### `Set::length`
+
+Returns the number of elements in the set.
+
+**Signature:** `Set::length self:Set -> int`
+
+**Stack effect:** `Set -> int`
+
+```casa
+s.length print    # 3
+```
+
+### `Set::has`
+
+Returns `true` if the set contains the given key.
+
+**Signature:** `Set::has[K] self:Set[K] key:K -> bool`
+
+**Stack effect:** `Set[K] K -> bool`
+
+```casa
+"apple" s.has print    # 1
+"grape" s.has print    # 0
+```
+
+### `Set::add`
+
+Adds an element to the set. Returns the set for chaining. Does nothing if the element is already present.
+
+**Signature:** `Set::add[K] self:Set[K] key:K -> Set[K]`
+
+**Stack effect:** `Set[K] K -> Set[K]`
+
+```casa
+"apple" s.add = s
+```
+
+### `Set::remove`
+
+Removes an element from the set. Returns the set for chaining. Does nothing if the element is not present.
+
+**Signature:** `Set::remove[K] self:Set[K] key:K -> Set[K]`
+
+**Stack effect:** `Set[K] K -> Set[K]`
+
+```casa
+"apple" s.remove = s
+```
+
+### `Set::to_list`
+
+Returns a `List[K]` of all elements in the set.
+
+**Signature:** `Set::to_list[K] self:Set[K] -> List[K]`
+
+**Stack effect:** `Set[K] -> List[K]`
+
+```casa
+s.to_list = elements
+```
+
+### Complete Example
+
+```casa
+include "../lib/std.casa"
+
+# Create a string set
+Set::str_new (Set[str]) = s
+"apple" s.add = s
+"banana" s.add = s
+"cherry" s.add = s
+
+s.length print              # 3
+"banana" s.has print        # 1
+"banana" s.remove = s
+"banana" s.has print        # 0
+```
+
+See [`examples/hash_map.casa`](../examples/hash_map.casa) for a full program demonstrating Map and Set.
+
+## Hash Helper Functions
+
+Internal helper functions used by `Map` and `Set`. These can also be called directly.
+
+### `str_hash`
+
+Computes a hash value for a string using the djb2 algorithm.
+
+**Signature:** `str_hash s:str -> int`
+
+**Stack effect:** `str -> int`
+
+### `int_hash`
+
+Returns the absolute value of an integer as a hash.
+
+**Signature:** `int_hash n:int -> int`
+
+**Stack effect:** `int -> int`
+
+### `map_hash_key`
+
+Dispatches to `str_hash` or `int_hash` based on the map kind.
+
+**Signature:** `map_hash_key kind:int key:any -> int`
+
+**Stack effect:** `int any -> int`
+
+### `map_keys_eq`
+
+Compares two keys for equality based on the map kind. Uses `str::eq` for string keys and `==` for integer keys.
+
+**Signature:** `map_keys_eq kind:int b:any a:any -> bool`
+
+**Stack effect:** `int any any -> bool`
+
 ## String Methods
 
 Methods for working with `str` values. Method calls on any `str` receiver are resolved to `str::method`.
