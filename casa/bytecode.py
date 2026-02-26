@@ -455,21 +455,30 @@ class Compiler:
                     list_bytecode = list_compiler.compile()
                     bytecode += list_bytecode
 
-                    # Allocate memory for the array (byte-based)
+                    # Allocate memory: header (data_ptr + length) + elements
                     local_list = self.locals_count
-                    bytecode.append(self.inst(InstKind.PUSH, args=[(list_len + 1) * 8]))
+                    bytecode.append(self.inst(InstKind.PUSH, args=[(list_len + 2) * 8]))
                     bytecode.append(self.inst(InstKind.HEAP_ALLOC))
                     bytecode.append(self.inst(InstKind.LOCAL_SET, args=[local_list]))
                     self.locals_count += 1
 
-                    # First item of the array is its length
-                    bytecode.append(self.inst(InstKind.PUSH, args=[list_len]))
+                    # Store data_ptr (allocation + 16) at offset 0
+                    bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_list]))
+                    bytecode.append(self.inst(InstKind.PUSH, args=[16]))
+                    bytecode.append(self.inst(InstKind.ADD))
                     bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_list]))
                     bytecode.append(self.inst(InstKind.STORE64))
 
-                    # Create the array
-                    local_index = self.locals_count
+                    # Store length at offset 8
+                    bytecode.append(self.inst(InstKind.PUSH, args=[list_len]))
+                    bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_list]))
                     bytecode.append(self.inst(InstKind.PUSH, args=[8]))
+                    bytecode.append(self.inst(InstKind.ADD))
+                    bytecode.append(self.inst(InstKind.STORE64))
+
+                    # Store elements starting at offset 16
+                    local_index = self.locals_count
+                    bytecode.append(self.inst(InstKind.PUSH, args=[16]))
                     bytecode.append(self.inst(InstKind.LOCAL_SET, args=[local_index]))
                     self.locals_count += 1
 
@@ -479,7 +488,7 @@ class Compiler:
                     # while index limit > do
                     bytecode.append(self.inst(InstKind.LABEL, args=[start_label]))
                     bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_index]))
-                    bytecode.append(self.inst(InstKind.PUSH, args=[(list_len + 1) * 8]))
+                    bytecode.append(self.inst(InstKind.PUSH, args=[(list_len + 2) * 8]))
                     bytecode.append(self.inst(InstKind.GE))
                     bytecode.append(self.inst(InstKind.JUMP_NE, args=[end_label]))
 
