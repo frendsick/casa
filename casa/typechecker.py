@@ -5,8 +5,10 @@ from typing import assert_never
 from casa.common import (
     ANY_TYPE,
     GLOBAL_FUNCTIONS,
+    GLOBAL_TRAITS,
     GLOBAL_VARIABLES,
     Function,
+    Intrinsic,
     Location,
     Op,
     OpKind,
@@ -18,6 +20,7 @@ from casa.common import (
     extract_fn_signature_str,
     extract_generic_base,
     extract_generic_inner,
+    extract_generic_params,
     is_fn_type,
 )
 from casa.error import (
@@ -130,10 +133,19 @@ class TypeChecker:
         exp_base = extract_generic_base(expected)
         act_base = extract_generic_base(typ)
         if exp_base is not None and exp_base == act_base:
-            exp_inner = extract_generic_inner(expected)
-            act_inner = extract_generic_inner(typ)
-            if exp_inner == ANY_TYPE or act_inner == ANY_TYPE:
-                return expected
+            exp_params = extract_generic_params(expected)
+            act_params = extract_generic_params(typ)
+            if exp_params and act_params and len(exp_params) == len(act_params):
+                if all(
+                    ep == ANY_TYPE or ap == ANY_TYPE or ep == ap
+                    for ep, ap in zip(exp_params, act_params)
+                ):
+                    return expected
+            else:
+                exp_inner = extract_generic_inner(expected)
+                act_inner = extract_generic_inner(typ)
+                if exp_inner == ANY_TYPE or act_inner == ANY_TYPE:
+                    return expected
         # Match fn[sig] types using Signature.matches (handles ANY_TYPE)
         exp_sig_str = extract_fn_signature_str(expected)
         act_sig_str = extract_fn_signature_str(typ)
@@ -211,30 +223,45 @@ class TypeChecker:
             if expected.typ in signature.type_vars:
                 self._bind_type_var(bindings, expected.typ, self.stack_pop())
                 continue
-            # Handle parameterized types containing type vars, e.g. array[T], option[T], Foo[T]
+            # Handle parameterized types containing type vars
             generic_base = extract_generic_base(expected.typ)
-            generic_inner = extract_generic_inner(expected.typ)
-            if generic_base and generic_inner and generic_inner in signature.type_vars:
-                actual = self.stack_pop()
-                actual_base = extract_generic_base(actual)
-                if actual_base == generic_base:
-                    actual_inner = extract_generic_inner(actual)
-                    self._bind_type_var(
-                        bindings, generic_inner, actual_inner or ANY_TYPE
-                    )
-                elif actual == generic_base:
-                    self._bind_type_var(bindings, generic_inner, ANY_TYPE)
-                elif actual == ANY_TYPE:
-                    self._bind_type_var(bindings, generic_inner, ANY_TYPE)
-                else:
-                    raise_error(
-                        ErrorKind.TYPE_MISMATCH,
-                        "Type mismatch",
-                        self.current_location,
-                        expected=f"`{expected.typ}`",
-                        got=f"`{actual}`",
-                    )
-                continue
+            if generic_base:
+                exp_params = extract_generic_params(expected.typ)
+                has_tv = exp_params and any(
+                    p in signature.type_vars for p in exp_params
+                )
+                if has_tv:
+                    actual = self.stack_pop()
+                    actual_base = extract_generic_base(actual)
+                    if actual_base == generic_base:
+                        act_params = extract_generic_params(actual)
+                        if act_params and exp_params and len(act_params) == len(exp_params):
+                            for ep, ap in zip(exp_params, act_params):
+                                if ep in signature.type_vars:
+                                    self._bind_type_var(bindings, ep, ap)
+                        elif exp_params:
+                            for ep in exp_params:
+                                if ep in signature.type_vars:
+                                    self._bind_type_var(bindings, ep, ANY_TYPE)
+                    elif actual == generic_base:
+                        if exp_params:
+                            for ep in exp_params:
+                                if ep in signature.type_vars:
+                                    self._bind_type_var(bindings, ep, ANY_TYPE)
+                    elif actual == ANY_TYPE:
+                        if exp_params:
+                            for ep in exp_params:
+                                if ep in signature.type_vars:
+                                    self._bind_type_var(bindings, ep, ANY_TYPE)
+                    else:
+                        raise_error(
+                            ErrorKind.TYPE_MISMATCH,
+                            "Type mismatch",
+                            self.current_location,
+                            expected=f"`{expected.typ}`",
+                            got=f"`{actual}`",
+                        )
+                    continue
             # Handle fn[sig] types containing type vars, e.g. fn[T -> T]
             fn_sig_str = extract_fn_signature_str(expected.typ)
             if fn_sig_str and any(tv in fn_sig_str for tv in signature.type_vars):
@@ -272,12 +299,18 @@ class TypeChecker:
             if return_type in bindings:
                 self.stack_push(bindings[return_type])
                 continue
-            # Handle parameterized return types like array[T], option[T], Foo[T]
+            # Handle parameterized return types with multi-param support
             generic_base = extract_generic_base(return_type)
-            generic_inner = extract_generic_inner(return_type)
-            if generic_base and generic_inner and generic_inner in bindings:
-                self.stack_push(f"{generic_base}[{bindings[generic_inner]}]")
-                continue
+            if generic_base:
+                ret_params = extract_generic_params(return_type)
+                if ret_params and any(p in bindings for p in ret_params):
+                    resolved_params = [
+                        bindings.get(p, p) for p in ret_params
+                    ]
+                    self.stack_push(
+                        f"{generic_base}[{' '.join(resolved_params)}]"
+                    )
+                    continue
             # Handle fn[sig] return types with bound type vars
             fn_sig_str = extract_fn_signature_str(return_type)
             if fn_sig_str and any(tv in fn_sig_str for tv in bindings):
@@ -428,14 +461,21 @@ def _unify_type(a: Type, b: Type) -> Type | None:
     base_a = extract_generic_base(a)
     base_b = extract_generic_base(b)
     if base_a is not None and base_a == base_b:
-        inner_a = extract_generic_inner(a)
-        inner_b = extract_generic_inner(b)
-        if inner_a is None:
+        params_a = extract_generic_params(a)
+        params_b = extract_generic_params(b)
+        if params_a is None:
             return b
-        if inner_b is None:
+        if params_b is None:
             return a
-        unified = _unify_type(inner_a, inner_b)
-        return f"{base_a}[{unified}]" if unified is not None else None
+        if len(params_a) != len(params_b):
+            return None
+        unified_params = []
+        for pa, pb in zip(params_a, params_b):
+            u = _unify_type(pa, pb)
+            if u is None:
+                return None
+            unified_params.append(u)
+        return f"{base_a}[{' '.join(unified_params)}]"
     if base_a is not None and base_a == b:
         return a
     if base_b is not None and base_b == a:
@@ -480,11 +520,176 @@ def _ensure_typechecked(global_function: Function) -> None:
         global_function.signature = signature
 
 
+def _resolve_trait_sig(sig: Signature, type_var: str) -> Signature:
+    """Create a copy of a trait method signature with Self replaced by type_var."""
+    params = []
+    for p in sig.parameters:
+        resolved_typ = p.typ.replace("Self", type_var)
+        params.append(Parameter(resolved_typ, p.name))
+    ret = [r.replace("Self", type_var) for r in sig.return_types]
+    return Signature(params, ret)
+
+
+def _inject_trait_fn_ptrs(
+    tc: "TypeChecker",
+    sig: Signature,
+    ops: list[Op],
+    op_index: int,
+    location: Location,
+    function: Function | None,
+) -> int:
+    """Auto-inject FN_PUSH ops for trait-bounded function calls.
+
+    Determines concrete types for type variables, checks structural trait
+    satisfaction, and inserts FN_PUSH ops before the call. Returns the
+    number of ops inserted.
+    """
+    bindings: dict[str, str] = {}
+
+    # Non-hidden parameters (user-visible)
+    non_hidden = [
+        p for p in sig.parameters if not p.name or not p.name.startswith("__trait_")
+    ]
+
+    # Bind type vars from the stack (peek at stack positions)
+    stack_depth = len(tc.stack)
+    for i, p in enumerate(non_hidden):
+        stack_idx = stack_depth - 1 - i
+        if stack_idx < 0:
+            break
+        actual = tc.stack[stack_idx]
+        if p.typ in sig.type_vars:
+            if p.typ not in bindings:
+                bindings[p.typ] = actual
+        else:
+            exp_base = extract_generic_base(p.typ)
+            if exp_base:
+                act_base = extract_generic_base(actual)
+                if act_base == exp_base:
+                    exp_params = extract_generic_params(p.typ)
+                    act_params = extract_generic_params(actual)
+                    if exp_params and act_params:
+                        for ep, ap in zip(exp_params, act_params):
+                            if ep in sig.type_vars and ep not in bindings:
+                                bindings[ep] = ap
+
+    # Also check TYPE_CAST look-ahead for return type binding
+    if op_index < len(ops) and ops[op_index].kind == OpKind.TYPE_CAST:
+        cast_type = ops[op_index].value
+        assert isinstance(cast_type, str)
+        for ret in sig.return_types:
+            ret_base = extract_generic_base(ret)
+            cast_base = extract_generic_base(cast_type)
+            if ret_base and cast_base and ret_base == cast_base:
+                ret_params = extract_generic_params(ret)
+                cast_params = extract_generic_params(cast_type)
+                if ret_params and cast_params:
+                    for rp, cp in zip(ret_params, cast_params):
+                        if rp in sig.type_vars and rp not in bindings:
+                            bindings[rp] = cp
+
+    # Inject FN_PUSH ops for each trait bound's methods.
+    # Methods are pushed in reverse order so the first method ends up on top
+    # (first declared param = top of stack).
+    inserted = 0
+    insert_pos = op_index - 1  # Insert before the FN_CALL
+    for tv, trait_name in sig.trait_bounds.items():
+        concrete_type = bindings.get(tv)
+        if not concrete_type:
+            raise_error(
+                ErrorKind.TYPE_MISMATCH,
+                f"Cannot determine concrete type for type variable `{tv}`",
+                location,
+            )
+        trait = GLOBAL_TRAITS[trait_name]
+        # For type variables, forward the hidden fn ptrs
+        is_forwarding = (
+            function
+            and function.signature
+            and function.signature.trait_bounds.get(concrete_type) == trait_name
+        )
+        if is_forwarding:
+            for method in reversed(trait.methods):
+                hidden_var = f"__trait_{concrete_type}_{method.name}"
+                push_op = Op(hidden_var, OpKind.PUSH_VARIABLE, location)
+                ops.insert(insert_pos, push_op)
+                insert_pos += 1
+                inserted += 1
+                fn_sig = _resolve_trait_sig(method.signature, concrete_type)
+                tc.stack_push(f"fn[{fn_sig}]")
+            continue
+        # Verify structural satisfaction
+        if not type_satisfies_trait(concrete_type, trait_name, function):
+            raise_error(
+                ErrorKind.MISSING_TRAIT_METHOD,
+                f"Type `{concrete_type}` does not satisfy trait `{trait_name}`",
+                location,
+            )
+        for method in reversed(trait.methods):
+            fn_name = f"{concrete_type}::{method.name}"
+            global_fn = GLOBAL_FUNCTIONS.get(fn_name)
+            assert global_fn, f"Function `{fn_name}` should exist"
+            if not global_fn.is_used:
+                from casa.parser import resolve_identifiers as _resolve
+
+                global_fn.is_used = True
+                global_fn.ops = _resolve(global_fn.ops, global_fn)
+            _ensure_typechecked(global_fn)
+            push_op = Op(fn_name, OpKind.FN_PUSH, location)
+            ops.insert(insert_pos, push_op)
+            insert_pos += 1
+            inserted += 1
+            assert global_fn.signature
+            tc.stack_push(f"fn[{global_fn.signature}]")
+    return inserted
+
+
+def type_satisfies_trait(
+    type_name: str,
+    trait_name: str,
+    function: Function | None = None,
+) -> bool:
+    """Check if a type structurally satisfies a trait.
+
+    A type satisfies a trait when its impl block contains all required methods
+    with matching signatures (Self replaced by the concrete type).
+    For type variables, checks if the type var has a matching trait bound.
+    """
+    trait = GLOBAL_TRAITS.get(trait_name)
+    if not trait:
+        return False
+    # Type variable with matching bound satisfies the trait
+    if function and function.signature and function.signature.trait_bounds:
+        bound = function.signature.trait_bounds.get(type_name)
+        if bound == trait_name:
+            return True
+    for method in trait.methods:
+        fn_name = f"{type_name}::{method.name}"
+        fn = GLOBAL_FUNCTIONS.get(fn_name)
+        if not fn:
+            return False
+        if not fn.signature:
+            return False
+        # Check signature matches with Self replaced by type_name
+        for tp, mp in zip(fn.signature.parameters, method.signature.parameters):
+            expected = mp.typ.replace("Self", type_name)
+            if tp.typ != expected and tp.typ != ANY_TYPE and expected != ANY_TYPE:
+                return False
+        for tr, mr in zip(fn.signature.return_types, method.signature.return_types):
+            expected = mr.replace("Self", type_name)
+            if tr != expected and tr != ANY_TYPE and expected != ANY_TYPE:
+                return False
+    return True
+
+
 def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature:
     assert len(OpKind) == 79, "Exhaustive handling for `OpKind`"
 
     tc = TypeChecker(ops=ops)
-    for op in ops:
+    op_index = 0
+    while op_index < len(ops):
+        op = ops[op_index]
+        op_index += 1
         tc.current_location = op.location
         tc.current_expect_context = None
         effect = OP_STACK_EFFECTS.get(op.kind)
@@ -587,14 +792,22 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 function_name = op.value
                 assert isinstance(function_name, str), "Expected function name"
 
-                function_name = function_name
                 global_function = GLOBAL_FUNCTIONS.get(function_name)
                 assert global_function, "Expected function"
 
                 _ensure_typechecked(global_function)
 
                 assert global_function.signature, "Signature is defined"
-                tc.apply_signature(global_function.signature, function_name)
+                sig = global_function.signature
+
+                # Auto-inject trait fn pointers if needed
+                if sig.trait_bounds:
+                    injected = _inject_trait_fn_ptrs(
+                        tc, sig, ops, op_index, op.location, function
+                    )
+                    op_index += injected
+
+                tc.apply_signature(sig, function_name)
             case OpKind.FN_EXEC:
                 # Lambdas from other functions are typed as `any`
                 fn_symmetrical = "fn"
@@ -768,6 +981,48 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 assert isinstance(method_name, str), "Expected method name"
 
                 receiver = tc.stack_peek()
+
+                # Trait method call on a type variable
+                if (
+                    function
+                    and function.signature
+                    and function.signature.trait_bounds
+                    and receiver in function.signature.trait_bounds
+                ):
+                    trait_name = function.signature.trait_bounds[receiver]
+                    trait = GLOBAL_TRAITS.get(trait_name)
+                    if trait:
+                        for tm in trait.methods:
+                            if tm.name == method_name:
+                                hidden_var = f"__trait_{receiver}_{method_name}"
+                                # Pop the receiver
+                                tc.stack_pop()
+                                # Build signature with Self replaced
+                                resolved_sig = _resolve_trait_sig(
+                                    tm.signature, receiver
+                                )
+                                # Push receiver back and apply sig
+                                tc.stack_push(receiver)
+                                tc.apply_signature(resolved_sig, f"{receiver}::{method_name}")
+                                # Rewrite op to push hidden fn ptr + exec
+                                op.kind = OpKind.PUSH_VARIABLE
+                                op.value = hidden_var
+                                exec_op = Op(
+                                    Intrinsic.EXEC,
+                                    OpKind.FN_EXEC,
+                                    op.location,
+                                )
+                                ops.insert(op_index, exec_op)
+                                op_index += 1
+                                break
+                        else:
+                            raise_error(
+                                ErrorKind.UNDEFINED_NAME,
+                                f"Method `{method_name}` not found in trait `{trait_name}`",
+                                op.location,
+                            )
+                        continue
+
                 function_name = f"{receiver}::{method_name}"
 
                 global_function = GLOBAL_FUNCTIONS.get(function_name)
@@ -790,7 +1045,16 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 _ensure_typechecked(global_function)
 
                 assert global_function.signature, "Signature is defined"
-                tc.apply_signature(global_function.signature, function_name)
+                sig = global_function.signature
+
+                # Auto-inject trait fn pointers for method calls too
+                if sig.trait_bounds:
+                    injected = _inject_trait_fn_ptrs(
+                        tc, sig, ops, op_index, op.location, function
+                    )
+                    op_index += injected
+
+                tc.apply_signature(sig, function_name)
 
                 op.value = function_name
                 op.kind = OpKind.FN_CALL
@@ -1072,9 +1336,11 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
         for p in function.signature.parameters:
             if p.typ in function.signature.type_vars:
                 param_tvs.add(p.typ)
-            generic_inner = extract_generic_inner(p.typ)
-            if generic_inner and generic_inner in function.signature.type_vars:
-                param_tvs.add(generic_inner)
+            gen_params = extract_generic_params(p.typ)
+            if gen_params:
+                for gp in gen_params:
+                    if gp in function.signature.type_vars:
+                        param_tvs.add(gp)
             fn_sig_str = extract_fn_signature_str(p.typ)
             if fn_sig_str:
                 for tv in function.signature.type_vars:

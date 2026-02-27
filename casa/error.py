@@ -25,6 +25,8 @@ class ErrorKind(Enum):
     SIGNATURE_MISMATCH = auto()
     INVALID_VARIABLE = auto()
     UNMATCHED_BLOCK = auto()
+    MISSING_TRAIT_METHOD = auto()
+    TRAIT_SIGNATURE_MISMATCH = auto()
 
 
 SOURCE_CACHE: dict[Path, str] = {}
