@@ -10,6 +10,7 @@ import pytest
 from casa.common import (
     GLOBAL_FUNCTIONS,
     GLOBAL_STRUCTS,
+    GLOBAL_TRAITS,
     GLOBAL_VARIABLES,
     INCLUDED_FILES,
     Cursor,
@@ -32,6 +33,7 @@ def _clear_globals():
     """Reset all module-level mutable state to a clean slate."""
     GLOBAL_FUNCTIONS.clear()
     GLOBAL_STRUCTS.clear()
+    GLOBAL_TRAITS.clear()
     GLOBAL_VARIABLES.clear()
     INCLUDED_FILES.clear()
     SOURCE_CACHE.clear()

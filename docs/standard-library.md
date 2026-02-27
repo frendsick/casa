@@ -728,3 +728,293 @@ Converts a pointer to a string by casting its address to an integer and converti
 10 alloc = buf
 buf.to_str print        # prints the address as a decimal number
 ```
+
+## Hash Helpers
+
+Standalone hash functions used by the built-in `Hashable` trait implementations.
+
+### `str_hash`
+
+Computes a hash for a string using the djb2 algorithm. Returns a non-negative integer.
+
+**Signature:** `str_hash s:str -> int`
+
+**Stack effect:** `str -> int`
+
+```casa
+"hello" str_hash print    # prints hash value
+```
+
+### `int_hash`
+
+Returns the absolute value of an integer, for use as a hash.
+
+**Signature:** `int_hash n:int -> int`
+
+**Stack effect:** `int -> int`
+
+```casa
+-42 int_hash print    # 42
+42 int_hash print     # 42
+```
+
+## `Map[K V]`
+
+A generic hash map using separate chaining. Keys must satisfy the `Hashable` trait (see [Traits](traits.md)). The type parameters `K` and `V` track key and value types at compile time.
+
+### Definition
+
+```casa
+struct Map {
+    buckets:  ptr
+    size:     int
+    capacity: int
+}
+```
+
+### `Map::new`
+
+Creates an empty map with an initial capacity of 16.
+
+**Signature:** `Map::new[K: Hashable, V] -> Map[K V]`
+
+**Stack effect:** `-> Map[K V]`
+
+```casa
+Map::new (Map[str int]) = m
+```
+
+The type cast `(Map[str int])` tells the compiler the concrete types for `K` and `V`. The compiler verifies that `str` satisfies `Hashable`.
+
+### `Map::length`
+
+Returns the number of key-value pairs in the map.
+
+**Signature:** `Map::length self:Map -> int`
+
+**Stack effect:** `Map -> int`
+
+```casa
+m.length print    # 0
+```
+
+### `Map::get`
+
+Looks up a key and returns `option[V]`. Returns `some` with the value if found, `none` otherwise.
+
+**Signature:** `Map::get[K: Hashable, V] self:Map[K V] key:K -> option[V]`
+
+**Stack effect:** `Map[K V] K -> option[V]`
+
+```casa
+"hello" m.get .unwrap print    # prints the value for "hello"
+"missing" m.get .is_none print # 1
+```
+
+### `Map::has`
+
+Returns `true` if the key exists in the map.
+
+**Signature:** `Map::has[K: Hashable, V] self:Map[K V] key:K -> bool`
+
+**Stack effect:** `Map[K V] K -> bool`
+
+```casa
+"hello" m.has print    # true or false
+```
+
+### `Map::set`
+
+Inserts or updates a key-value pair. Returns the updated map. Automatically resizes at 75% load factor.
+
+**Signature:** `Map::set[K: Hashable, V] self:Map[K V] value:V key:K -> Map[K V]`
+
+**Stack effect:** `Map[K V] V K -> Map[K V]`
+
+```casa
+"one" 1 m.set = m
+```
+
+Note: the key is on top of the stack, the value is below it, and the map is below the value.
+
+### `Map::delete`
+
+Removes a key from the map. Returns the updated map. If the key does not exist, the map is returned unchanged.
+
+**Signature:** `Map::delete[K: Hashable, V] self:Map[K V] key:K -> Map[K V]`
+
+**Stack effect:** `Map[K V] K -> Map[K V]`
+
+```casa
+"one" m.delete = m
+```
+
+### `Map::keys`
+
+Returns a `List[K]` of all keys in the map. Does not require `Hashable` bound.
+
+**Signature:** `Map::keys[K V] self:Map[K V] -> List[K]`
+
+**Stack effect:** `Map[K V] -> List[K]`
+
+```casa
+m.keys = key_list
+```
+
+### `Map::values`
+
+Returns a `List[V]` of all values in the map. Does not require `Hashable` bound.
+
+**Signature:** `Map::values[K V] self:Map[K V] -> List[V]`
+
+**Stack effect:** `Map[K V] -> List[V]`
+
+```casa
+m.values = val_list
+```
+
+### Complete Example
+
+```casa
+include "../lib/std.casa"
+
+# Create a map from strings to ints
+Map::new (Map[str int]) = m
+
+# Insert key-value pairs
+"one" 1 m.set = m
+"two" 2 m.set = m
+"three" 3 m.set = m
+
+# Look up values
+"one" m.get .unwrap print      # 1
+"two" m.get .unwrap print      # 2
+
+# Check membership
+"one" m.has print              # true
+"four" m.has print             # false
+
+# Update a value
+"one" 42 m.set = m
+"one" m.get .unwrap print      # 42
+
+# Delete a key
+"two" m.delete = m
+m.length print                 # 2
+
+# Integer keys work too
+Map::new (Map[int str]) = m2
+1 "hello" m2.set = m2
+1 m2.get .unwrap print         # hello
+```
+
+See [`examples/hash_map.casa`](../examples/hash_map.casa) for a full program.
+
+## `Set[K]`
+
+A generic hash set backed by a `Map[K int]`. Keys must satisfy the `Hashable` trait (see [Traits](traits.md)). The type parameter `K` tracks the element type at compile time.
+
+### Definition
+
+```casa
+struct Set {
+    map: Map
+}
+```
+
+### `Set::new`
+
+Creates an empty set.
+
+**Signature:** `Set::new[K: Hashable] -> Set[K]`
+
+**Stack effect:** `-> Set[K]`
+
+```casa
+Set::new (Set[str]) = s
+```
+
+### `Set::length`
+
+Returns the number of elements in the set.
+
+**Signature:** `Set::length self:Set -> int`
+
+**Stack effect:** `Set -> int`
+
+```casa
+s.length print    # 0
+```
+
+### `Set::has`
+
+Returns `true` if the element is in the set.
+
+**Signature:** `Set::has[K: Hashable] self:Set[K] key:K -> bool`
+
+**Stack effect:** `Set[K] K -> bool`
+
+```casa
+"apple" s.has print    # true or false
+```
+
+### `Set::add`
+
+Adds an element to the set. Returns the updated set. Adding a duplicate has no effect.
+
+**Signature:** `Set::add[K: Hashable] self:Set[K] key:K -> Set[K]`
+
+**Stack effect:** `Set[K] K -> Set[K]`
+
+```casa
+"apple" s.add = s
+```
+
+### `Set::remove`
+
+Removes an element from the set. Returns the updated set. If the element does not exist, the set is returned unchanged.
+
+**Signature:** `Set::remove[K: Hashable] self:Set[K] key:K -> Set[K]`
+
+**Stack effect:** `Set[K] K -> Set[K]`
+
+```casa
+"apple" s.remove = s
+```
+
+### `Set::to_list`
+
+Returns a `List[K]` of all elements in the set. Does not require `Hashable` bound.
+
+**Signature:** `Set::to_list[K] self:Set[K] -> List[K]`
+
+**Stack effect:** `Set[K] -> List[K]`
+
+```casa
+s.to_list = elements
+```
+
+### Complete Example
+
+```casa
+include "../lib/std.casa"
+
+# Create a set of strings
+Set::new (Set[str]) = s
+
+# Add elements
+"apple" s.add = s
+"banana" s.add = s
+"cherry" s.add = s
+
+s.length print         # 3
+"apple" s.has print    # true
+"grape" s.has print    # false
+
+# Remove an element
+"banana" s.remove = s
+s.length print         # 2
+"banana" s.has print   # false
+```
+
+See [`examples/hash_map.casa`](../examples/hash_map.casa) for a full program using both Map and Set.

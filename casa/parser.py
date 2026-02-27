@@ -6,6 +6,7 @@ from casa.common import (
     GLOBAL_FUNCTIONS,
     GLOBAL_SCOPE_LABEL,
     GLOBAL_STRUCTS,
+    GLOBAL_TRAITS,
     GLOBAL_VARIABLES,
     INCLUDED_FILES,
     Cursor,
@@ -24,8 +25,11 @@ from casa.common import (
     Struct,
     Token,
     TokenKind,
+    Trait,
+    TraitMethod,
     Type,
     Variable,
+    resolve_trait_sig,
 )
 from casa.error import CasaError, CasaErrorCollection, ErrorKind, raise_error
 from casa.lexer import is_negative_integer_literal, lex_file
@@ -142,6 +146,39 @@ def _resolve_array_identifiers(
                 )
 
 
+def _resolve_trait_method_sig(sig: Signature, type_var: str) -> Signature:
+    """Create a copy of a trait method signature with self type replaced by type_var."""
+    return resolve_trait_sig(sig, type_var)
+
+
+def _resolve_trait_ref(
+    name: str,
+    function: Function | None,
+    location: Location,
+) -> str | None:
+    """Check if name is a trait-bound method call like K::hash.
+
+    Returns the hidden variable name (e.g. __trait_K_hash) if it matches,
+    or None if not a trait reference.
+    """
+    if not function or not function.signature:
+        return None
+    if "::" not in name:
+        return None
+    parts = name.split("::", 1)
+    tv, method_name = parts[0], parts[1]
+    trait_name = function.signature.trait_bounds.get(tv)
+    if not trait_name:
+        return None
+    trait = GLOBAL_TRAITS.get(trait_name)
+    if not trait:
+        return None
+    for method in trait.methods:
+        if method.name == method_name:
+            return f"__trait_{tv}_{method_name}"
+    return None
+
+
 def resolve_identifiers(
     ops: list[Op],
     function: Function | None = None,
@@ -224,6 +261,12 @@ def resolve_identifiers(
                             )
                         )
                         continue
+                    # Check trait bound reference: &K::method
+                    trait_var = _resolve_trait_ref(function_name, function, op.location)
+                    if trait_var:
+                        op.kind = OpKind.PUSH_VARIABLE
+                        op.value = trait_var
+                        continue
                     global_function = GLOBAL_FUNCTIONS.get(function_name)
                     if not global_function:
                         errors.append(
@@ -237,6 +280,16 @@ def resolve_identifiers(
                     op.kind = OpKind.FN_PUSH
                     op.value = function_name
                     _mark_used_and_resolve(global_function)
+                    continue
+
+                # Check trait bound call: K::method -> push var + exec
+                trait_var = _resolve_trait_ref(identifier, function, op.location)
+                if trait_var:
+                    op.kind = OpKind.PUSH_VARIABLE
+                    op.value = trait_var
+                    exec_op = Op(Intrinsic.EXEC, OpKind.FN_EXEC, op.location)
+                    ops.insert(index, exec_op)
+                    index += 1
                     continue
 
                 # Check different identifiers
@@ -361,6 +414,8 @@ def get_op_delimiter(
         case Delimiter.OPEN_PAREN:
             cursor.position -= 1
             return get_op_type_cast(cursor)
+        case Delimiter.CLOSE_PAREN:
+            return None
         case _:
             assert_never(delimiter)
 
@@ -449,7 +504,7 @@ def get_op_keyword(
     cursor: Cursor[Token],
     function_name: str,
 ) -> Op | None:
-    assert len(Keyword) == 15, "Exhaustive handling for `Keyword"
+    assert len(Keyword) == 16, "Exhaustive handling for `Keyword"
 
     keyword = Keyword.from_lowercase(token.value)
     assert keyword, f"Token `{token.value}` is not a keyword"
@@ -546,6 +601,24 @@ def get_op_keyword(
                         struct.location,
                     )
             return None
+        case Keyword.TRAIT:
+            if function_name != GLOBAL_SCOPE_LABEL:
+                raise_error(
+                    ErrorKind.INVALID_SCOPE,
+                    "Traits should be defined in the global scope",
+                    token.location,
+                )
+
+            cursor.position -= 1
+            trait = parse_trait(cursor)
+            if trait.name in GLOBAL_TRAITS:
+                raise_error(
+                    ErrorKind.DUPLICATE_NAME,
+                    f"Trait `{trait.name}` is already defined",
+                    trait.location,
+                )
+            GLOBAL_TRAITS[trait.name] = trait
+            return None
         case Keyword.THEN:
             return Op(keyword, OpKind.IF_CONDITION, token.location)
         case Keyword.WHILE:
@@ -586,8 +659,20 @@ def parse_type(cursor: Cursor[Token]) -> Type:
                 result.append(token.value)
         return f"fn[{''.join(result)}]"
 
-    inner = parse_type(cursor)
-    expect_token(cursor, value="]")
+    inner_types: list[str] = []
+    while True:
+        next_tok = cursor.peek()
+        if next_tok and next_tok.value == "]":
+            cursor.pop()
+            break
+        inner_types.append(parse_type(cursor))
+    if not inner_types:
+        raise_error(
+            ErrorKind.UNEXPECTED_TOKEN,
+            f"Expected type parameter inside `{base.value}[...]`",
+            base.location,
+        )
+    inner = " ".join(inner_types)
     return f"{base.value}[{inner}]"
 
 
@@ -689,9 +774,86 @@ def parse_struct(cursor: Cursor[Token]) -> Struct:
     return Struct(struct_name.value, members, struct_name.location)
 
 
-def parse_type_vars(cursor: Cursor[Token]) -> set[str]:
+def parse_trait(cursor: Cursor[Token]) -> Trait:
+    expect_token(cursor, value="trait")
+    trait_name = expect_token(cursor, kind=TokenKind.IDENTIFIER)
+
+    methods: list[TraitMethod] = []
+    expect_token(cursor, value="{")
+    while True:
+        next_tok = cursor.peek()
+        if not next_tok:
+            raise_error(
+                ErrorKind.UNMATCHED_BLOCK,
+                "Unclosed trait block",
+                trait_name.location,
+            )
+        if next_tok.value == "}":
+            cursor.pop()
+            break
+        if next_tok.value != "fn":
+            raise_error(
+                ErrorKind.UNEXPECTED_TOKEN,
+                "Expected method declaration in trait",
+                next_tok.location,
+                expected="`fn`",
+                got=f"`{next_tok.value}`",
+            )
+        cursor.pop()  # consume fn
+        method_name = expect_token(cursor, kind=TokenKind.IDENTIFIER)
+        signature = parse_trait_method_signature(cursor)
+        methods.append(TraitMethod(method_name.value, signature))
+
+    return Trait(trait_name.value, methods, trait_name.location)
+
+
+def parse_trait_method_signature(cursor: Cursor[Token]) -> Signature:
+    """Parse a trait method signature (no body, stops at fn or })."""
+    parameters: list[Parameter] = []
+
+    # Parse parameters, stopping at ->, fn, or }
+    while name_or_type := cursor.peek():
+        if name_or_type.value in ("->", "{", "fn", "}"):
+            break
+        cursor.pop()
+
+        if name_or_type.kind != TokenKind.IDENTIFIER and name_or_type.value != "fn":
+            raise_error(
+                ErrorKind.UNEXPECTED_TOKEN,
+                "Unexpected token in trait method parameter list",
+                name_or_type.location,
+                expected="identifier",
+                got=f"`{name_or_type.kind.name}`",
+            )
+
+        next_token = cursor.peek()
+        if next_token and next_token.value == ":":
+            cursor.pop()
+            typ = parse_type(cursor)
+            parameters.append(Parameter(typ, name_or_type.value))
+        else:
+            cursor.position -= 1
+            typ = parse_type(cursor)
+            parameters.append(Parameter(typ))
+
+    return_types: list[Type] = []
+    next_token = cursor.peek()
+    if next_token and next_token.value == "->":
+        cursor.pop()
+        while cursor.peek():
+            if cursor.peek().value in ("fn", "}"):  # type: ignore[union-attr]
+                break
+            return_types.append(parse_type(cursor))
+
+    return Signature(parameters, return_types)
+
+
+def parse_type_vars(
+    cursor: Cursor[Token],
+) -> tuple[set[str], dict[str, str]]:
     expect_token(cursor, value="[")
     type_vars: set[str] = set()
+    trait_bounds: dict[str, str] = {}
     while token := cursor.pop():
         if token.value == "]":
             if not type_vars:
@@ -700,7 +862,7 @@ def parse_type_vars(cursor: Cursor[Token]) -> set[str]:
                     "Empty type parameter list `[]` is not allowed",
                     token.location,
                 )
-            return type_vars
+            return type_vars, trait_bounds
         if token.kind == TokenKind.IDENTIFIER:
             if token.value in BUILTIN_TYPES:
                 raise_error(
@@ -715,6 +877,19 @@ def parse_type_vars(cursor: Cursor[Token]) -> set[str]:
                     token.location,
                 )
             type_vars.add(token.value)
+            # Check for trait bound: K: Hashable
+            next_tok = cursor.peek()
+            if next_tok and next_tok.value == ":":
+                cursor.pop()  # consume :
+                trait_tok = expect_token(cursor, kind=TokenKind.IDENTIFIER)
+                trait = GLOBAL_TRAITS.get(trait_tok.value)
+                if not trait:
+                    raise_error(
+                        ErrorKind.UNDEFINED_NAME,
+                        f"Trait `{trait_tok.value}` is not defined",
+                        trait_tok.location,
+                    )
+                trait_bounds[token.value] = trait_tok.value
         elif token.value != ",":
             raise_error(
                 ErrorKind.UNEXPECTED_TOKEN,
@@ -730,22 +905,40 @@ def parse_function(cursor: Cursor[Token]) -> Function:
     expect_token(cursor, value="fn")
     name = expect_token(cursor, kind=TokenKind.IDENTIFIER)
 
-    # Parse optional type parameters: fn name[T1 T2] ...
+    # Parse optional type parameters: fn name[T1 T2] or fn name[K: Hashable, V]
     type_vars: set[str] = set()
+    trait_bounds: dict[str, str] = {}
     next_token = cursor.peek()
     if next_token and next_token.value == "[":
-        type_vars = parse_type_vars(cursor)
+        type_vars, trait_bounds = parse_type_vars(cursor)
 
     signature = parse_signature(cursor)
     signature.type_vars = type_vars
+    signature.trait_bounds = trait_bounds
 
     ops: list[Op] = []
     variables: list[Variable] = []
+
+    # Expand trait bounds into hidden parameters and variables.
+    # For each bound (K: Hashable), add hidden fn pointer params for each
+    # trait method. These are prepended to the signature so they sit on top
+    # of the stack before the user-visible params.
+    # Replace self type with the type variable name in signatures.
+    hidden_params: list[Parameter] = []
+    for tv, trait_name in trait_bounds.items():
+        trait = GLOBAL_TRAITS[trait_name]
+        for method in trait.methods:
+            hidden_name = f"__trait_{tv}_{method.name}"
+            resolved_sig = _resolve_trait_method_sig(method.signature, tv)
+            hidden_type = f"fn[{resolved_sig}]"
+            hidden_params.append(Parameter(hidden_type, hidden_name))
+            variables.append(Variable(hidden_name, hidden_type))
+            ops.append(Op(hidden_name, OpKind.ASSIGN_VARIABLE, name.location))
+
+    signature.parameters = hidden_params + signature.parameters
+
     for param in signature.parameters:
-        # Named parameters are popped from the stack into local variables via
-        # implicit `ASSIGN_VARIABLE` ops prepended to the function body.
-        # Unnamed parameters stay on the stack as passthrough values.
-        if param.name:
+        if param.name and not param.name.startswith("__trait_"):
             variables.append(Variable(param.name, param.typ))
             ops.append(Op(param.name, OpKind.ASSIGN_VARIABLE, name.location))
 

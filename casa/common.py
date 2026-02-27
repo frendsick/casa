@@ -83,6 +83,7 @@ class Keyword(Enum):
 
     # Data types
     STRUCT = auto()
+    TRAIT = auto()
 
     # Include files
     INCLUDE = auto()
@@ -732,6 +733,49 @@ def extract_generic_inner(typ: str) -> str | None:
     return typ[len(base) + 1 : -1]
 
 
+def split_type_tokens(s: str) -> list[str]:
+    """Split a space-separated type string into tokens, respecting brackets.
+
+    For 'str int' returns ['str', 'int'].
+    For 'str List[int]' returns ['str', 'List[int]'].
+    For 'int -> int' returns ['int', '->', 'int'].
+    """
+    tokens: list[str] = []
+    current: list[str] = []
+    depth = 0
+    for ch in s.strip():
+        if ch == "[":
+            depth += 1
+            current.append(ch)
+        elif ch == "]":
+            depth -= 1
+            current.append(ch)
+        elif ch == " " and depth == 0:
+            if current:
+                tokens.append("".join(current))
+                current = []
+        else:
+            current.append(ch)
+    if current:
+        tokens.append("".join(current))
+    return tokens
+
+
+def extract_generic_params(typ: str) -> list[str] | None:
+    """Extract multiple generic type parameters respecting bracket depth.
+
+    For 'Map[str int]' returns ['str', 'int'].
+    For 'Map[str List[int]]' returns ['str', 'List[int]'].
+    For 'array[int]' returns ['int'].
+    Returns None for fn types and non-parameterized types.
+    """
+    base = extract_generic_base(typ)
+    if base is None:
+        return None
+    inner = typ[len(base) + 1 : -1]
+    return split_type_tokens(inner)
+
+
 def is_fn_type(typ: str) -> bool:
     """Check if a type is a function type (bare or parameterized)."""
     return typ == "fn" or typ.startswith("fn[")
@@ -764,31 +808,10 @@ class Signature:
     parameters: list[Parameter]
     return_types: list[Type]
     type_vars: set[str] = field(default_factory=set)
+    trait_bounds: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_str(cls, repr: str) -> Self:
-        def tokenize(s: str) -> list[str]:
-            """Split a signature string into type tokens, respecting brackets."""
-            tokens: list[str] = []
-            current: list[str] = []
-            depth = 0
-            for ch in s.strip():
-                if ch == "[":
-                    depth += 1
-                    current.append(ch)
-                elif ch == "]":
-                    depth -= 1
-                    current.append(ch)
-                elif ch == " " and depth == 0:
-                    if current:
-                        tokens.append("".join(current))
-                        current = []
-                else:
-                    current.append(ch)
-            if current:
-                tokens.append("".join(current))
-            return tokens
-
         def split_on_arrow(tokens: list[str]) -> tuple[list[str], list[str]]:
             """Split token list on '->' at bracket depth 0."""
             for i, tok in enumerate(tokens):
@@ -801,7 +824,7 @@ class Signature:
                 return []
             return list(tokens)
 
-        tokens = tokenize(repr)
+        tokens = split_type_tokens(repr)
         param_tokens, return_tokens = split_on_arrow(tokens)
         parameters = [Parameter(p) for p in parse_type_list(param_tokens)]
         return_types = parse_type_list(return_tokens)
@@ -876,6 +899,43 @@ class Struct:
 
 
 @dataclass
+class TraitMethod:
+    name: str
+    signature: Signature
+
+
+@dataclass
+class Trait:
+    name: str
+    methods: list[TraitMethod]
+    location: Location
+
+
+TRAIT_SELF_TYPE = "self"
+
+
+def _replace_trait_self(typ: str, replacement: str) -> str:
+    """Replace the trait self placeholder in a type string."""
+    if typ == TRAIT_SELF_TYPE:
+        return replacement
+    return typ
+
+
+def resolve_trait_sig(sig: "Signature", type_var: str) -> "Signature":
+    """Create a copy of a trait method signature with self type replaced by type_var.
+
+    Only replaces self in type positions, not in parameter names,
+    since 'self' is a common parameter name.
+    """
+    params = []
+    for p in sig.parameters:
+        resolved_typ = _replace_trait_self(p.typ, type_var)
+        params.append(Parameter(resolved_typ, p.name))
+    ret = [_replace_trait_self(r, type_var) for r in sig.return_types]
+    return Signature(params, ret)
+
+
+@dataclass
 class Function:
     name: str
     ops: list[Op]
@@ -892,6 +952,7 @@ class Function:
 
 GLOBAL_FUNCTIONS: OrderedDict[str, Function] = OrderedDict()
 GLOBAL_STRUCTS: OrderedDict[str, Struct] = OrderedDict()
+GLOBAL_TRAITS: OrderedDict[str, Trait] = OrderedDict()
 GLOBAL_VARIABLES: OrderedDict[str, Variable] = OrderedDict()
 GLOBAL_SCOPE_LABEL = "_start"
 INCLUDED_FILES: set[Path] = set()

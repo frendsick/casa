@@ -24,6 +24,7 @@ ALL_KEYWORDS = [
     "else",
     "fi",
     "struct",
+    "trait",
     "include",
 ]
 assert len(ALL_KEYWORDS) == len(Keyword)
