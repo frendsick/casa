@@ -22,6 +22,7 @@ from casa.common import (
     extract_generic_inner,
     extract_generic_params,
     is_fn_type,
+    resolve_trait_sig,
 )
 from casa.error import (
     WARNINGS,
@@ -260,7 +261,14 @@ class TypeChecker:
                     if ep in signature.type_vars:
                         self._bind_type_var(bindings, ep, ap)
                 return True
-        if actual_base == generic_base or actual == generic_base or actual == ANY_TYPE:
+            raise_error(
+                ErrorKind.TYPE_MISMATCH,
+                "Type mismatch",
+                self.current_location,
+                expected=f"`{expected.typ}`",
+                got=f"`{actual}`",
+            )
+        if actual == generic_base or actual == ANY_TYPE:
             for ep in exp_params:
                 if ep in signature.type_vars:
                     self._bind_type_var(bindings, ep, ANY_TYPE)
@@ -533,13 +541,8 @@ def _ensure_typechecked(global_function: Function) -> None:
 
 
 def _resolve_trait_sig(sig: Signature, type_var: str) -> Signature:
-    """Create a copy of a trait method signature with Self replaced by type_var."""
-    params = []
-    for p in sig.parameters:
-        resolved_typ = p.typ.replace("Self", type_var)
-        params.append(Parameter(resolved_typ, p.name))
-    ret = [r.replace("Self", type_var) for r in sig.return_types]
-    return Signature(params, ret)
+    """Create a copy of a trait method signature with self type replaced by type_var."""
+    return resolve_trait_sig(sig, type_var)
 
 
 def _bind_generic_params(
@@ -581,6 +584,8 @@ def _inject_trait_fn_ptrs(
     satisfaction, and inserts FN_PUSH ops before the call. Returns the
     number of ops inserted.
     """
+    from casa.parser import resolve_identifiers as _resolve
+
     bindings: dict[str, str] = {}
 
     # Non-hidden parameters (user-visible)
@@ -648,10 +653,13 @@ def _inject_trait_fn_ptrs(
         for method in reversed(trait.methods):
             fn_name = f"{concrete_type}::{method.name}"
             global_fn = GLOBAL_FUNCTIONS.get(fn_name)
-            assert global_fn, f"Function `{fn_name}` should exist"
+            if not global_fn or not global_fn.signature:
+                raise_error(
+                    ErrorKind.MISSING_TRAIT_METHOD,
+                    f"Function `{fn_name}` required by trait `{trait_name}` not found",
+                    location,
+                )
             if not global_fn.is_used:
-                from casa.parser import resolve_identifiers as _resolve
-
                 global_fn.is_used = True
                 global_fn.ops = _resolve(global_fn.ops, global_fn)
             _ensure_typechecked(global_fn)
@@ -659,7 +667,6 @@ def _inject_trait_fn_ptrs(
             ops.insert(insert_pos, push_op)
             insert_pos += 1
             inserted += 1
-            assert global_fn.signature
             tc.stack_push(f"fn[{global_fn.signature}]")
     return inserted
 
@@ -672,7 +679,7 @@ def type_satisfies_trait(
     """Check if a type structurally satisfies a trait.
 
     A type satisfies a trait when its impl block contains all required methods
-    with matching signatures (Self replaced by the concrete type).
+    with matching signatures (self type replaced by the concrete type).
     For type variables, checks if the type var has a matching trait bound.
     """
     trait = GLOBAL_TRAITS.get(trait_name)
@@ -690,14 +697,29 @@ def type_satisfies_trait(
             return False
         if not fn.signature:
             return False
-        # Check signature matches with Self replaced by type_name
-        for tp, mp in zip(fn.signature.parameters, method.signature.parameters):
-            expected = mp.typ.replace("Self", type_name)
-            if tp.typ != expected and tp.typ != ANY_TYPE and expected != ANY_TYPE:
+        # Check signature matches with self type replaced by type_name
+        resolved = resolve_trait_sig(method.signature, type_name)
+        if len(fn.signature.parameters) != len(resolved.parameters):
+            return False
+        if len(fn.signature.return_types) != len(resolved.return_types):
+            return False
+        for actual_param, expected_param in zip(
+            fn.signature.parameters, resolved.parameters
+        ):
+            if (
+                actual_param.typ != expected_param.typ
+                and actual_param.typ != ANY_TYPE
+                and expected_param.typ != ANY_TYPE
+            ):
                 return False
-        for tr, mr in zip(fn.signature.return_types, method.signature.return_types):
-            expected = mr.replace("Self", type_name)
-            if tr != expected and tr != ANY_TYPE and expected != ANY_TYPE:
+        for actual_ret, expected_ret in zip(
+            fn.signature.return_types, resolved.return_types
+        ):
+            if (
+                actual_ret != expected_ret
+                and actual_ret != ANY_TYPE
+                and expected_ret != ANY_TYPE
+            ):
                 return False
     return True
 
@@ -1017,7 +1039,7 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                                 hidden_var = f"__trait_{receiver}_{method_name}"
                                 # Pop the receiver
                                 tc.stack_pop()
-                                # Build signature with Self replaced
+                                # Build signature with self type replaced
                                 resolved_sig = _resolve_trait_sig(
                                     tm.signature, receiver
                                 )

@@ -29,6 +29,7 @@ from casa.common import (
     TraitMethod,
     Type,
     Variable,
+    resolve_trait_sig,
 )
 from casa.error import CasaError, CasaErrorCollection, ErrorKind, raise_error
 from casa.lexer import is_negative_integer_literal, lex_file
@@ -146,16 +147,8 @@ def _resolve_array_identifiers(
 
 
 def _resolve_trait_method_sig(sig: Signature, type_var: str) -> Signature:
-    """Create a copy of a trait method signature with Self replaced by type_var."""
-    params = []
-    for p in sig.parameters:
-        resolved_typ = p.typ.replace("Self", type_var)
-        resolved_name = p.name
-        if resolved_name:
-            resolved_name = resolved_name.replace("Self", type_var)
-        params.append(Parameter(resolved_typ, resolved_name))
-    ret = [r.replace("Self", type_var) for r in sig.return_types]
-    return Signature(params, ret)
+    """Create a copy of a trait method signature with self type replaced by type_var."""
+    return resolve_trait_sig(sig, type_var)
 
 
 def _resolve_trait_ref(
@@ -673,6 +666,12 @@ def parse_type(cursor: Cursor[Token]) -> Type:
             cursor.pop()
             break
         inner_types.append(parse_type(cursor))
+    if not inner_types:
+        raise_error(
+            ErrorKind.UNEXPECTED_TOKEN,
+            f"Expected type parameter inside `{base.value}[...]`",
+            base.location,
+        )
     inner = " ".join(inner_types)
     return f"{base.value}[{inner}]"
 
@@ -924,7 +923,7 @@ def parse_function(cursor: Cursor[Token]) -> Function:
     # For each bound (K: Hashable), add hidden fn pointer params for each
     # trait method. These are prepended to the signature so they sit on top
     # of the stack before the user-visible params.
-    # Replace Self with the type variable name in signatures.
+    # Replace self type with the type variable name in signatures.
     hidden_params: list[Parameter] = []
     for tv, trait_name in trait_bounds.items():
         trait = GLOBAL_TRAITS[trait_name]

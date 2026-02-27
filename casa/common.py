@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
@@ -909,6 +910,28 @@ class Trait:
     name: str
     methods: list[TraitMethod]
     location: Location
+
+
+TRAIT_SELF_TYPE = "self"
+
+
+def _replace_trait_self(text: str, replacement: str) -> str:
+    """Replace the trait self placeholder as a whole word in a type string."""
+    return re.sub(r"\bself\b", replacement, text)
+
+
+def resolve_trait_sig(sig: "Signature", type_var: str) -> "Signature":
+    """Create a copy of a trait method signature with self type replaced by type_var.
+
+    Only replaces self in type positions, not in parameter names,
+    since 'self' is a common parameter name.
+    """
+    params = []
+    for p in sig.parameters:
+        resolved_typ = _replace_trait_self(p.typ, type_var)
+        params.append(Parameter(resolved_typ, p.name))
+    ret = [_replace_trait_self(r, type_var) for r in sig.return_types]
+    return Signature(params, ret)
 
 
 @dataclass
