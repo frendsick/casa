@@ -183,8 +183,8 @@ Types can satisfy traits by implementing the required methods in their `impl` bl
 
 ```casa
 trait Hashable {
-    fn hash self:Self -> int
-    fn eq self:Self other:Self -> bool
+    fn hash self:self -> int
+    fn eq self:self other:self -> bool
 }
 
 struct Point {

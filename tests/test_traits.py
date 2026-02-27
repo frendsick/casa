@@ -28,7 +28,7 @@ STD_INCLUDE = f'include "{STD_LIB_PATH}"\n'
 # (include is only processed during resolve_identifiers, not during parse_ops,
 # so trait bounds on functions would fail if the trait comes from an include)
 HASHABLE_TRAIT = (
-    "trait Hashable { fn hash self:Self -> int  fn eq self:Self other:Self -> bool }\n"
+    "trait Hashable { fn hash self:self -> int  fn eq self:self other:self -> bool }\n"
 )
 
 HASHABLE_IMPL_STR = (
@@ -129,12 +129,12 @@ class TestTraitParsing:
         assert "Hashable" in GLOBAL_TRAITS
 
     def test_parse_trait_name(self):
-        parse_string("trait Hashable { fn hash self:Self -> int }")
+        parse_string("trait Hashable { fn hash self:self -> int }")
         trait = GLOBAL_TRAITS["Hashable"]
         assert trait.name == "Hashable"
 
     def test_parse_trait_is_trait_type(self):
-        parse_string("trait Hashable { fn hash self:Self -> int }")
+        parse_string("trait Hashable { fn hash self:self -> int }")
         trait = GLOBAL_TRAITS["Hashable"]
         assert isinstance(trait, Trait)
 
@@ -150,7 +150,7 @@ class TestTraitParsing:
         assert names == ["hash", "eq"]
 
     def test_parse_trait_method_is_trait_method(self):
-        parse_string("trait Hashable { fn hash self:Self -> int }")
+        parse_string("trait Hashable { fn hash self:self -> int }")
         trait = GLOBAL_TRAITS["Hashable"]
         assert isinstance(trait.methods[0], TraitMethod)
 
@@ -159,7 +159,7 @@ class TestTraitParsing:
         trait = GLOBAL_TRAITS["Hashable"]
         hash_method = trait.methods[0]
         assert len(hash_method.signature.parameters) == 1
-        assert hash_method.signature.parameters[0].typ == "Self"
+        assert hash_method.signature.parameters[0].typ == "self"
         assert hash_method.signature.parameters[0].name == "self"
 
     def test_parse_trait_method_signature_return(self):
@@ -173,8 +173,8 @@ class TestTraitParsing:
         trait = GLOBAL_TRAITS["Hashable"]
         eq_method = trait.methods[1]
         assert len(eq_method.signature.parameters) == 2
-        assert eq_method.signature.parameters[0].typ == "Self"
-        assert eq_method.signature.parameters[1].typ == "Self"
+        assert eq_method.signature.parameters[0].typ == "self"
+        assert eq_method.signature.parameters[1].typ == "self"
 
     def test_parse_trait_eq_method_return(self):
         parse_string(HASHABLE_TRAIT)
@@ -188,14 +188,14 @@ class TestTraitParsing:
         assert len(GLOBAL_TRAITS["Empty"].methods) == 0
 
     def test_parse_trait_single_method(self):
-        parse_string("trait Printable { fn to_str self:Self -> str }")
+        parse_string("trait Printable { fn to_str self:self -> str }")
         trait = GLOBAL_TRAITS["Printable"]
         assert len(trait.methods) == 1
         assert trait.methods[0].name == "to_str"
 
     def test_parse_trait_unclosed_block_raises(self):
         with pytest.raises(CasaErrorCollection):
-            parse_string("trait Foo { fn bar self:Self -> int")
+            parse_string("trait Foo { fn bar self:self -> int")
 
     def test_parse_trait_unexpected_token_raises(self):
         with pytest.raises(CasaErrorCollection) as exc_info:
@@ -205,13 +205,13 @@ class TestTraitParsing:
     def test_parse_duplicate_trait_raises(self):
         with pytest.raises(CasaErrorCollection) as exc_info:
             parse_string(
-                "trait Foo { fn bar self:Self -> int }\n"
-                "trait Foo { fn baz self:Self -> int }\n"
+                "trait Foo { fn bar self:self -> int }\n"
+                "trait Foo { fn baz self:self -> int }\n"
             )
         assert exc_info.value.errors[0].kind == ErrorKind.DUPLICATE_NAME
 
     def test_parse_trait_has_location(self):
-        parse_string("trait MyTrait { fn do_thing self:Self -> int }")
+        parse_string("trait MyTrait { fn do_thing self:self -> int }")
         trait = GLOBAL_TRAITS["MyTrait"]
         assert trait.location is not None
 
@@ -222,7 +222,7 @@ class TestTraitParsing:
 class TestTraitBoundsParsing:
     def test_trait_bound_basic(self):
         parse_string(
-            "trait Hashable { fn hash self:Self -> int }\n"
+            "trait Hashable { fn hash self:self -> int }\n"
             "fn test_fn[K: Hashable] K -> int { .hash }"
         )
         fn = GLOBAL_FUNCTIONS["test_fn"]
@@ -232,7 +232,7 @@ class TestTraitBoundsParsing:
 
     def test_trait_bound_with_unbounded_var(self):
         parse_string(
-            "trait Hashable { fn hash self:Self -> int }\n"
+            "trait Hashable { fn hash self:self -> int }\n"
             "fn test_fn[K: Hashable, V] K V -> int { drop .hash }"
         )
         fn = GLOBAL_FUNCTIONS["test_fn"]
@@ -241,8 +241,8 @@ class TestTraitBoundsParsing:
 
     def test_trait_bound_multiple_bounded(self):
         parse_string(
-            "trait Hashable { fn hash self:Self -> int }\n"
-            "trait Printable { fn to_str self:Self -> str }\n"
+            "trait Hashable { fn hash self:self -> int }\n"
+            "trait Printable { fn to_str self:self -> str }\n"
             "fn test_fn[K: Hashable, V: Printable] K V -> int { .to_str drop .hash }"
         )
         fn = GLOBAL_FUNCTIONS["test_fn"]
@@ -255,7 +255,7 @@ class TestTraitBoundsParsing:
 
     def test_trait_bound_hidden_params_prepended(self):
         parse_string(
-            "trait Hashable { fn hash self:Self -> int }\n"
+            "trait Hashable { fn hash self:self -> int }\n"
             "fn test_fn[K: Hashable] K -> int { .hash }"
         )
         fn = GLOBAL_FUNCTIONS["test_fn"]
@@ -266,9 +266,7 @@ class TestTraitBoundsParsing:
         assert hidden[0].typ == "fn[K -> int]"
 
     def test_trait_bound_two_methods_hidden_params(self):
-        parse_string(
-            HASHABLE_TRAIT + "fn test_fn[K: Hashable] K -> int { .hash }"
-        )
+        parse_string(HASHABLE_TRAIT + "fn test_fn[K: Hashable] K -> int { .hash }")
         fn = GLOBAL_FUNCTIONS["test_fn"]
         sig = fn.signature
         hidden = [p for p in sig.parameters if p.name and p.name.startswith("__trait_")]
@@ -278,9 +276,7 @@ class TestTraitBoundsParsing:
         assert "__trait_K_eq" in names
 
     def test_trait_bound_hidden_params_have_correct_types(self):
-        parse_string(
-            HASHABLE_TRAIT + "fn test_fn[K: Hashable] K -> int { .hash }"
-        )
+        parse_string(HASHABLE_TRAIT + "fn test_fn[K: Hashable] K -> int { .hash }")
         fn = GLOBAL_FUNCTIONS["test_fn"]
         hidden = {
             p.name: p.typ
@@ -292,7 +288,7 @@ class TestTraitBoundsParsing:
 
     def test_trait_bound_creates_variables_for_hidden_params(self):
         parse_string(
-            "trait Hashable { fn hash self:Self -> int }\n"
+            "trait Hashable { fn hash self:self -> int }\n"
             "fn test_fn[K: Hashable] K -> int { .hash }"
         )
         fn = GLOBAL_FUNCTIONS["test_fn"]
@@ -301,7 +297,7 @@ class TestTraitBoundsParsing:
 
     def test_trait_bound_creates_assign_ops_for_hidden_params(self):
         parse_string(
-            "trait Hashable { fn hash self:Self -> int }\n"
+            "trait Hashable { fn hash self:self -> int }\n"
             "fn test_fn[K: Hashable] K -> int { .hash }"
         )
         fn = GLOBAL_FUNCTIONS["test_fn"]
@@ -331,9 +327,7 @@ class TestTypeSatisfiesTrait:
     def test_struct_without_impl_does_not_satisfy(self):
         from casa.typechecker import type_satisfies_trait
 
-        parse_string(
-            HASHABLE_TRAIT + "struct Bar { val: int }\n"
-        )
+        parse_string(HASHABLE_TRAIT + "struct Bar { val: int }\n")
         assert type_satisfies_trait("Bar", "Hashable") is False
 
     def test_partial_impl_does_not_satisfy(self):
@@ -389,7 +383,7 @@ class TestTypeSatisfiesTrait:
         from casa.typechecker import type_satisfies_trait
 
         parse_string(
-            HASHABLE_TRAIT + "trait Printable { fn to_str self:Self -> str }\n"
+            HASHABLE_TRAIT + "trait Printable { fn to_str self:self -> str }\n"
         )
         fn = Function(
             name="test_fn",
@@ -412,8 +406,7 @@ class TestTraitMethodCallDotSyntax:
     def test_dot_hash_on_bounded_type_var(self):
         """Calling .hash on a trait-bounded type variable should typecheck."""
         typecheck_string(
-            HASHABLE_TRAIT
-            + "fn get_hash[K: Hashable] k:K -> int { k .hash }\n"
+            HASHABLE_TRAIT + "fn get_hash[K: Hashable] k:K -> int { k .hash }\n"
         )
         fn = GLOBAL_FUNCTIONS["get_hash"]
         assert fn.signature is not None
@@ -421,8 +414,7 @@ class TestTraitMethodCallDotSyntax:
     def test_dot_eq_on_bounded_type_var(self):
         """Calling .eq on a trait-bounded type variable should typecheck."""
         typecheck_string(
-            HASHABLE_TRAIT
-            + "fn are_eq[K: Hashable] a:K b:K -> bool { b a .eq }\n"
+            HASHABLE_TRAIT + "fn are_eq[K: Hashable] a:K b:K -> bool { b a .eq }\n"
         )
         fn = GLOBAL_FUNCTIONS["are_eq"]
         assert fn.signature is not None
@@ -545,7 +537,7 @@ class TestSignatureTraitBounds:
 class TestMultiParamGenerics:
     def test_parse_map_type_in_signature(self):
         parse_string(
-            "trait Hashable { fn hash self:Self -> int }\n"
+            "trait Hashable { fn hash self:self -> int }\n"
             "struct MapStruct { data: ptr }\n"
             "fn test_fn m:MapStruct -> int { 0 }"
         )

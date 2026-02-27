@@ -4,12 +4,12 @@ Traits define a set of required methods that a type must implement. They enable 
 
 ## Defining a Trait
 
-Use the `trait` keyword to declare a trait with one or more method signatures. Method bodies are not allowed in trait definitions. Use `Self` as a placeholder for the implementing type.
+Use the `trait` keyword to declare a trait with one or more method signatures. Method bodies are not allowed in trait definitions. Use `self` as a placeholder for the implementing type.
 
 ```casa
 trait Hashable {
-    fn hash self:Self -> int
-    fn eq self:Self other:Self -> bool
+    fn hash self:self -> int
+    fn eq self:self other:self -> bool
 }
 ```
 
@@ -31,7 +31,7 @@ impl int {
 }
 ```
 
-The compiler checks that `str::hash` and `str::eq` exist with signatures matching what `Hashable` requires (with `Self` replaced by `str`). If any method is missing or has a wrong signature, a compile-time error is reported.
+The compiler checks that `str::hash` and `str::eq` exist with signatures matching what `Hashable` requires (with `self` replaced by `str`). If any method is missing or has a wrong signature, a compile-time error is reported.
 
 ## Custom Types
 
@@ -130,8 +130,8 @@ The standard library defines the `Hashable` trait and provides implementations f
 
 ```casa
 trait Hashable {
-    fn hash self:Self -> int
-    fn eq self:Self other:Self -> bool
+    fn hash self:self -> int
+    fn eq self:self other:self -> bool
 }
 ```
 
