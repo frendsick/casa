@@ -1,4 +1,3 @@
-import re
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
@@ -915,9 +914,11 @@ class Trait:
 TRAIT_SELF_TYPE = "self"
 
 
-def _replace_trait_self(text: str, replacement: str) -> str:
-    """Replace the trait self placeholder as a whole word in a type string."""
-    return re.sub(r"\bself\b", replacement, text)
+def _replace_trait_self(typ: str, replacement: str) -> str:
+    """Replace the trait self placeholder in a type string."""
+    if typ == TRAIT_SELF_TYPE:
+        return replacement
+    return typ
 
 
 def resolve_trait_sig(sig: "Signature", type_var: str) -> "Signature":
