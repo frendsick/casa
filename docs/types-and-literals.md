@@ -316,7 +316,15 @@ fn id[T] T -> T { }
 "hi" id      # T=str, returns str
 ```
 
-Type variables are purely compile-time — they have no runtime cost. See [Functions and Lambdas — Generic Functions](functions-and-lambdas.md#generic-functions) for details.
+Type variables can have trait bounds to constrain which types are accepted:
+
+```casa
+fn hash_key[K: Hashable] key:K -> int {
+    key K::hash
+}
+```
+
+Type variables are purely compile-time, including trait bounds. See [Functions and Lambdas — Generic Functions](functions-and-lambdas.md#generic-functions) and [Traits](traits.md) for details.
 
 ## The `any` Type
 

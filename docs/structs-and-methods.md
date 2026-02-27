@@ -176,3 +176,28 @@ person.age print        # 19
 ```
 
 See [`examples/struct.casa`](../examples/struct.casa).
+
+## Traits
+
+Types can satisfy traits by implementing the required methods in their `impl` blocks. Trait satisfaction is structural: no special declaration is needed. See [Traits](traits.md) for details.
+
+```casa
+trait Hashable {
+    fn hash self:Self -> int
+    fn eq self:Self other:Self -> bool
+}
+
+struct Point {
+    x: int
+    y: int
+}
+
+impl Point {
+    fn hash self:Point -> int { self.x 31 * self.y + }
+    fn eq self:Point other:Point -> bool {
+        self.x other.x == self.y other.y == &&
+    }
+}
+
+# Point now satisfies Hashable and can be used as a Map key
+```

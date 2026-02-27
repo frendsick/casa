@@ -161,6 +161,19 @@ impl Box {
 }
 ```
 
+### Trait Bounds
+
+Type variables can have trait bounds that restrict which types are accepted. Use `K: TraitName` syntax:
+
+```casa
+fn get[K: Hashable, V] self:Map[K V] key:K -> option[V] {
+    key K::hash self.capacity % = idx
+    ...
+}
+```
+
+Multiple type variables are separated by commas. Variables without a `:` have no bounds. See [Traits](traits.md) for details on defining and satisfying traits.
+
 Every type variable must appear in at least one parameter (return-only type variables are not allowed).
 
 Type variable names must not collide with built-in types (`int`, `bool`, `char`, `cstr`, `str`, `ptr`, `array`, `any`) or user-defined struct names:

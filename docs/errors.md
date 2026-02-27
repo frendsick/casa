@@ -216,6 +216,27 @@ The compiler collects as many errors as possible within each compilation phase b
 
 Within a single function, type checking stops at the first error because the stack state becomes unreliable. However, when checking all functions, errors from different functions are collected and reported together.
 
+### `MISSING_TRAIT_METHOD`
+
+A type is used where a trait bound is required, but it does not implement all required methods.
+
+```casa
+struct Foo { x: int }
+Map::new (Map[Foo int]) = m    # Foo has no hash or eq methods
+```
+
+```
+error[MISSING_TRAIT_METHOD]: Type `Foo` does not satisfy trait `Hashable`
+```
+
+### `TRAIT_SIGNATURE_MISMATCH`
+
+A type has a method with the right name for a trait, but its signature does not match the trait's requirement.
+
+```
+error[TRAIT_SIGNATURE_MISMATCH]: Method signature does not match trait requirement
+```
+
 ## Warnings
 
 The compiler also reports non-fatal warnings. Currently the only warning kind is:
