@@ -223,103 +223,115 @@ class TypeChecker:
             if expected.typ in signature.type_vars:
                 self._bind_type_var(bindings, expected.typ, self.stack_pop())
                 continue
-            # Handle parameterized types containing type vars
-            generic_base = extract_generic_base(expected.typ)
-            if generic_base:
-                exp_params = extract_generic_params(expected.typ)
-                has_tv = exp_params and any(
-                    p in signature.type_vars for p in exp_params
-                )
-                if has_tv:
-                    actual = self.stack_pop()
-                    actual_base = extract_generic_base(actual)
-                    if actual_base == generic_base:
-                        act_params = extract_generic_params(actual)
-                        if act_params and exp_params and len(act_params) == len(exp_params):
-                            for ep, ap in zip(exp_params, act_params):
-                                if ep in signature.type_vars:
-                                    self._bind_type_var(bindings, ep, ap)
-                        elif exp_params:
-                            for ep in exp_params:
-                                if ep in signature.type_vars:
-                                    self._bind_type_var(bindings, ep, ANY_TYPE)
-                    elif actual == generic_base:
-                        if exp_params:
-                            for ep in exp_params:
-                                if ep in signature.type_vars:
-                                    self._bind_type_var(bindings, ep, ANY_TYPE)
-                    elif actual == ANY_TYPE:
-                        if exp_params:
-                            for ep in exp_params:
-                                if ep in signature.type_vars:
-                                    self._bind_type_var(bindings, ep, ANY_TYPE)
-                    else:
-                        raise_error(
-                            ErrorKind.TYPE_MISMATCH,
-                            "Type mismatch",
-                            self.current_location,
-                            expected=f"`{expected.typ}`",
-                            got=f"`{actual}`",
-                        )
-                    continue
-            # Handle fn[sig] types containing type vars, e.g. fn[T -> T]
-            fn_sig_str = extract_fn_signature_str(expected.typ)
-            if fn_sig_str and any(tv in fn_sig_str for tv in signature.type_vars):
-                actual = self.stack_pop()
-                if is_fn_type(actual):
-                    actual_sig_str = extract_fn_signature_str(actual)
-                    if actual_sig_str:
-                        exp_fn_sig = Signature.from_str(fn_sig_str)
-                        act_fn_sig = Signature.from_str(actual_sig_str)
-                        for ep, ap in zip(exp_fn_sig.parameters, act_fn_sig.parameters):
-                            if ep.typ in signature.type_vars:
-                                self._bind_type_var(bindings, ep.typ, ap.typ)
-                        for er, ar in zip(
-                            exp_fn_sig.return_types, act_fn_sig.return_types
-                        ):
-                            if er in signature.type_vars:
-                                self._bind_type_var(bindings, er, ar)
-                elif actual == ANY_TYPE:
-                    for tv in signature.type_vars:
-                        if tv in fn_sig_str:
-                            self._bind_type_var(bindings, tv, ANY_TYPE)
-                else:
-                    raise_error(
-                        ErrorKind.TYPE_MISMATCH,
-                        "Type mismatch",
-                        self.current_location,
-                        expected=f"`{expected.typ}`",
-                        got=f"`{actual}`",
-                    )
+            if self._bind_generic_param(bindings, expected, signature):
+                continue
+            if self._bind_fn_param(bindings, expected, signature):
                 continue
             self.expect_type(expected.typ)
         self.current_expect_context = None
 
         for return_type in signature.return_types:
-            if return_type in bindings:
-                self.stack_push(bindings[return_type])
-                continue
-            # Handle parameterized return types with multi-param support
-            generic_base = extract_generic_base(return_type)
-            if generic_base:
-                ret_params = extract_generic_params(return_type)
-                if ret_params and any(p in bindings for p in ret_params):
-                    resolved_params = [
-                        bindings.get(p, p) for p in ret_params
-                    ]
-                    self.stack_push(
-                        f"{generic_base}[{' '.join(resolved_params)}]"
-                    )
-                    continue
-            # Handle fn[sig] return types with bound type vars
-            fn_sig_str = extract_fn_signature_str(return_type)
-            if fn_sig_str and any(tv in fn_sig_str for tv in bindings):
-                resolved = fn_sig_str
-                for tv, bound in bindings.items():
-                    resolved = resolved.replace(tv, bound)
-                self.stack_push(f"fn[{resolved}]")
-                continue
-            self.stack_push(return_type)
+            resolved = _resolve_return_type(return_type, bindings)
+            self.stack_push(resolved)
+
+    def _bind_generic_param(
+        self,
+        bindings: dict[str, Type],
+        expected: Parameter,
+        signature: Signature,
+    ) -> bool:
+        """Bind type vars from a parameterized param like Map[K V].
+
+        Returns True if this parameter was handled.
+        """
+        generic_base = extract_generic_base(expected.typ)
+        if not generic_base:
+            return False
+        exp_params = extract_generic_params(expected.typ)
+        if not exp_params or not any(p in signature.type_vars for p in exp_params):
+            return False
+
+        actual = self.stack_pop()
+        actual_base = extract_generic_base(actual)
+        if actual_base == generic_base:
+            act_params = extract_generic_params(actual)
+            if act_params and len(act_params) == len(exp_params):
+                for ep, ap in zip(exp_params, act_params):
+                    if ep in signature.type_vars:
+                        self._bind_type_var(bindings, ep, ap)
+                return True
+        if actual_base == generic_base or actual == generic_base or actual == ANY_TYPE:
+            for ep in exp_params:
+                if ep in signature.type_vars:
+                    self._bind_type_var(bindings, ep, ANY_TYPE)
+            return True
+        raise_error(
+            ErrorKind.TYPE_MISMATCH,
+            "Type mismatch",
+            self.current_location,
+            expected=f"`{expected.typ}`",
+            got=f"`{actual}`",
+        )
+
+    def _bind_fn_param(
+        self,
+        bindings: dict[str, Type],
+        expected: Parameter,
+        signature: Signature,
+    ) -> bool:
+        """Bind type vars from a fn[sig] param like fn[T -> T].
+
+        Returns True if this parameter was handled.
+        """
+        fn_sig_str = extract_fn_signature_str(expected.typ)
+        if not fn_sig_str or not any(tv in fn_sig_str for tv in signature.type_vars):
+            return False
+
+        actual = self.stack_pop()
+        if actual == ANY_TYPE:
+            for tv in signature.type_vars:
+                if tv in fn_sig_str:
+                    self._bind_type_var(bindings, tv, ANY_TYPE)
+            return True
+        if not is_fn_type(actual):
+            raise_error(
+                ErrorKind.TYPE_MISMATCH,
+                "Type mismatch",
+                self.current_location,
+                expected=f"`{expected.typ}`",
+                got=f"`{actual}`",
+            )
+        actual_sig_str = extract_fn_signature_str(actual)
+        if not actual_sig_str:
+            return True
+        exp_fn_sig = Signature.from_str(fn_sig_str)
+        act_fn_sig = Signature.from_str(actual_sig_str)
+        for ep, ap in zip(exp_fn_sig.parameters, act_fn_sig.parameters):
+            if ep.typ in signature.type_vars:
+                self._bind_type_var(bindings, ep.typ, ap.typ)
+        for er, ar in zip(exp_fn_sig.return_types, act_fn_sig.return_types):
+            if er in signature.type_vars:
+                self._bind_type_var(bindings, er, ar)
+        return True
+
+
+def _resolve_return_type(return_type: Type, bindings: dict[str, Type]) -> Type:
+    """Resolve a return type by substituting bound type variables."""
+    if return_type in bindings:
+        return bindings[return_type]
+    generic_base = extract_generic_base(return_type)
+    if generic_base:
+        ret_params = extract_generic_params(return_type)
+        if ret_params and any(p in bindings for p in ret_params):
+            resolved = [bindings.get(p, p) for p in ret_params]
+            return f"{generic_base}[{' '.join(resolved)}]"
+    fn_sig_str = extract_fn_signature_str(return_type)
+    if fn_sig_str and any(tv in fn_sig_str for tv in bindings):
+        resolved_sig = fn_sig_str
+        for tv, bound in bindings.items():
+            resolved_sig = resolved_sig.replace(tv, bound)
+        return f"fn[{resolved_sig}]"
+    return return_type
 
 
 def _check_passthrough_params(
@@ -530,6 +542,31 @@ def _resolve_trait_sig(sig: Signature, type_var: str) -> Signature:
     return Signature(params, ret)
 
 
+def _bind_generic_params(
+    bindings: dict[str, str],
+    expected_type: str,
+    actual_type: str,
+    type_vars: set[str],
+) -> None:
+    """Bind type variables from a parameterized type match.
+
+    Given expected 'Map[K V]' and actual 'Map[str int]', binds K=str, V=int.
+    """
+    exp_base = extract_generic_base(expected_type)
+    if not exp_base:
+        return
+    act_base = extract_generic_base(actual_type)
+    if act_base != exp_base:
+        return
+    exp_params = extract_generic_params(expected_type)
+    act_params = extract_generic_params(actual_type)
+    if not exp_params or not act_params:
+        return
+    for ep, ap in zip(exp_params, act_params):
+        if ep in type_vars and ep not in bindings:
+            bindings[ep] = ap
+
+
 def _inject_trait_fn_ptrs(
     tc: "TypeChecker",
     sig: Signature,
@@ -561,32 +598,15 @@ def _inject_trait_fn_ptrs(
         if p.typ in sig.type_vars:
             if p.typ not in bindings:
                 bindings[p.typ] = actual
-        else:
-            exp_base = extract_generic_base(p.typ)
-            if exp_base:
-                act_base = extract_generic_base(actual)
-                if act_base == exp_base:
-                    exp_params = extract_generic_params(p.typ)
-                    act_params = extract_generic_params(actual)
-                    if exp_params and act_params:
-                        for ep, ap in zip(exp_params, act_params):
-                            if ep in sig.type_vars and ep not in bindings:
-                                bindings[ep] = ap
+            continue
+        _bind_generic_params(bindings, p.typ, actual, sig.type_vars)
 
     # Also check TYPE_CAST look-ahead for return type binding
     if op_index < len(ops) and ops[op_index].kind == OpKind.TYPE_CAST:
         cast_type = ops[op_index].value
         assert isinstance(cast_type, str)
         for ret in sig.return_types:
-            ret_base = extract_generic_base(ret)
-            cast_base = extract_generic_base(cast_type)
-            if ret_base and cast_base and ret_base == cast_base:
-                ret_params = extract_generic_params(ret)
-                cast_params = extract_generic_params(cast_type)
-                if ret_params and cast_params:
-                    for rp, cp in zip(ret_params, cast_params):
-                        if rp in sig.type_vars and rp not in bindings:
-                            bindings[rp] = cp
+            _bind_generic_params(bindings, ret, cast_type, sig.type_vars)
 
     # Inject FN_PUSH ops for each trait bound's methods.
     # Methods are pushed in reverse order so the first method ends up on top
