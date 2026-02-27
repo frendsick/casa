@@ -818,16 +818,16 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 _ensure_typechecked(global_function)
 
                 assert global_function.signature, "Signature is defined"
-                sig = global_function.signature
+                fn_sig = global_function.signature
 
                 # Auto-inject trait fn pointers if needed
-                if sig.trait_bounds:
+                if fn_sig.trait_bounds:
                     injected = _inject_trait_fn_ptrs(
-                        tc, sig, ops, op_index, op.location, function
+                        tc, fn_sig, ops, op_index, op.location, function
                     )
                     op_index += injected
 
-                tc.apply_signature(sig, function_name)
+                tc.apply_signature(fn_sig, function_name)
             case OpKind.FN_EXEC:
                 # Lambdas from other functions are typed as `any`
                 fn_symmetrical = "fn"
@@ -1023,7 +1023,9 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                                 )
                                 # Push receiver back and apply sig
                                 tc.stack_push(receiver)
-                                tc.apply_signature(resolved_sig, f"{receiver}::{method_name}")
+                                tc.apply_signature(
+                                    resolved_sig, f"{receiver}::{method_name}"
+                                )
                                 # Rewrite op to push hidden fn ptr + exec
                                 op.kind = OpKind.PUSH_VARIABLE
                                 op.value = hidden_var
@@ -1065,16 +1067,16 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 _ensure_typechecked(global_function)
 
                 assert global_function.signature, "Signature is defined"
-                sig = global_function.signature
+                fn_sig = global_function.signature
 
                 # Auto-inject trait fn pointers for method calls too
-                if sig.trait_bounds:
+                if fn_sig.trait_bounds:
                     injected = _inject_trait_fn_ptrs(
-                        tc, sig, ops, op_index, op.location, function
+                        tc, fn_sig, ops, op_index, op.location, function
                     )
                     op_index += injected
 
-                tc.apply_signature(sig, function_name)
+                tc.apply_signature(fn_sig, function_name)
 
                 op.value = function_name
                 op.kind = OpKind.FN_CALL

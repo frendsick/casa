@@ -269,9 +269,7 @@ def resolve_identifiers(
                         )
                         continue
                     # Check trait bound reference: &K::method
-                    trait_var = _resolve_trait_ref(
-                        function_name, function, op.location
-                    )
+                    trait_var = _resolve_trait_ref(function_name, function, op.location)
                     if trait_var:
                         op.kind = OpKind.PUSH_VARIABLE
                         op.value = trait_var
@@ -296,9 +294,7 @@ def resolve_identifiers(
                 if trait_var:
                     op.kind = OpKind.PUSH_VARIABLE
                     op.value = trait_var
-                    exec_op = Op(
-                        Intrinsic.EXEC, OpKind.FN_EXEC, op.location
-                    )
+                    exec_op = Op(Intrinsic.EXEC, OpKind.FN_EXEC, op.location)
                     ops.insert(index, exec_op)
                     index += 1
                     continue
@@ -425,6 +421,8 @@ def get_op_delimiter(
         case Delimiter.OPEN_PAREN:
             cursor.position -= 1
             return get_op_type_cast(cursor)
+        case Delimiter.CLOSE_PAREN:
+            return None
         case _:
             assert_never(delimiter)
 
