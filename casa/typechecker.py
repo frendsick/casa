@@ -766,6 +766,29 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     op.type_annotation if op.type_annotation else stack_type
                 )
 
+                if op.type_annotation:
+                    annotation = op.type_annotation
+                    if annotation == ANY_TYPE:
+                        WARNINGS.append(
+                            CasaWarning(
+                                WarningKind.LOSSY_TYPE_ANNOTATION,
+                                f"Type annotation `any` discards type information from `{stack_type}`",
+                                op.location,
+                            )
+                        )
+                    elif (
+                        extract_generic_base(stack_type) is not None
+                        and extract_generic_base(annotation) is None
+                        and extract_generic_base(stack_type) == annotation
+                    ):
+                        WARNINGS.append(
+                            CasaWarning(
+                                WarningKind.LOSSY_TYPE_ANNOTATION,
+                                f"Type annotation `{annotation}` discards type parameter from `{stack_type}`",
+                                op.location,
+                            )
+                        )
+
                 # Local variable (shadows global with same name)
                 local_variable = None
                 if function:

@@ -8,7 +8,7 @@ from casa.common import (
     OpKind,
     Variable,
 )
-from casa.error import CasaErrorCollection, ErrorKind
+from casa.error import WARNINGS, CasaErrorCollection, ErrorKind, WarningKind
 from tests.conftest import parse_string, resolve_string, typecheck_string
 
 
@@ -217,3 +217,43 @@ class TestTypecheckerTypeAnnotation:
         """
         sig = typecheck_string(code)
         assert sig.return_types == ["Point"]
+
+
+class TestTypecheckerTypeAnnotationWarnings:
+    """Type annotation warns when annotation loses type information."""
+
+    def test_warn_annotation_any(self):
+        """Annotating as any warns about losing type information."""
+        typecheck_string("42 = x:any")
+        assert len(WARNINGS) == 1
+        assert WARNINGS[0].kind == WarningKind.LOSSY_TYPE_ANNOTATION
+        assert "any" in WARNINGS[0].message
+
+    def test_warn_bare_option_loses_param(self):
+        """Annotating option[int] as bare option warns."""
+        typecheck_string("42 some = x:option")
+        assert len(WARNINGS) == 1
+        assert WARNINGS[0].kind == WarningKind.LOSSY_TYPE_ANNOTATION
+        assert "option" in WARNINGS[0].message
+
+    def test_warn_bare_array_loses_param(self):
+        """Annotating array[int] as bare array warns."""
+        typecheck_string("[1, 2] = x:array")
+        assert len(WARNINGS) == 1
+        assert WARNINGS[0].kind == WarningKind.LOSSY_TYPE_ANNOTATION
+        assert "array" in WARNINGS[0].message
+
+    def test_no_warn_matching_types(self):
+        """No warning when annotation matches stack type."""
+        typecheck_string("42 = x:int")
+        assert len(WARNINGS) == 0
+
+    def test_no_warn_narrowing_option(self):
+        """No warning when narrowing bare option to option[int]."""
+        typecheck_string("none = x:option[int]")
+        assert len(WARNINGS) == 0
+
+    def test_no_warn_narrowing_any(self):
+        """No warning when narrowing any to concrete type."""
+        typecheck_string("42 (any) = x:int")
+        assert len(WARNINGS) == 0
