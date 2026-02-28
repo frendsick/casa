@@ -167,6 +167,283 @@ class Compiler:
             f"Variable `{variable_name}` is not defined"
         )
 
+    def _compile_assignment(self, op: Op, bytecode: list[Inst]) -> None:
+        """Compile ASSIGN_VARIABLE, ASSIGN_INCREMENT, ASSIGN_DECREMENT ops."""
+        variable_name = op.value
+        assert isinstance(variable_name, str), "Valid variable name"
+        get_kind, set_kind, index = self._resolve_variable(variable_name)
+        match op.kind:
+            case OpKind.ASSIGN_DECREMENT:
+                bytecode.append(self.inst(get_kind, args=[index]))
+                bytecode.append(self.inst(InstKind.SWAP))
+                bytecode.append(self.inst(InstKind.ADD))
+                bytecode.append(self.inst(set_kind, args=[index]))
+            case OpKind.ASSIGN_INCREMENT:
+                bytecode.append(self.inst(get_kind, args=[index]))
+                bytecode.append(self.inst(InstKind.ADD))
+                bytecode.append(self.inst(set_kind, args=[index]))
+            case OpKind.ASSIGN_VARIABLE:
+                bytecode.append(self.inst(set_kind, args=[index]))
+
+    def _compile_if_block(self, op: Op, bytecode: list[Inst]) -> None:
+        """Compile IF_START, IF_CONDITION, IF_ELIF, IF_ELSE, IF_END ops."""
+        match op.kind:
+            case OpKind.IF_CONDITION:
+                self._require_matching_label(
+                    op, OpKind.IF_START, OpKind.IF_END,
+                    "`then` without matching `if`",
+                    reverse=True,
+                )
+                end_label = self._require_matching_label(
+                    op, OpKind.IF_START, OpKind.IF_END,
+                    "`then` without matching `fi`",
+                    target_kinds=[
+                        OpKind.IF_ELIF, OpKind.IF_ELSE, OpKind.IF_END
+                    ],
+                )
+                bytecode.append(self.inst(InstKind.JUMP_NE, args=[end_label]))
+            case OpKind.IF_ELIF:
+                self._require_matching_label(
+                    op, OpKind.IF_START, OpKind.IF_END,
+                    "`elif` without parent `if`",
+                    reverse=True,
+                )
+                if self.find_matching_label(
+                    op=op,
+                    start_kind=OpKind.IF_START,
+                    end_kind=OpKind.IF_END,
+                    target_kinds=[OpKind.IF_ELSE],
+                    reverse=True,
+                ):
+                    raise_error(
+                        ErrorKind.UNMATCHED_BLOCK,
+                        "`elif` after `else`",
+                        op.location,
+                    )
+                elif_label = op_to_label(op)
+                end_label = self._require_matching_label(
+                    op, OpKind.IF_START, OpKind.IF_END,
+                    "`elif` without matching `fi`",
+                )
+                bytecode.append(self.inst(InstKind.JUMP, args=[end_label]))
+                bytecode.append(self.inst(InstKind.LABEL, args=[elif_label]))
+            case OpKind.IF_ELSE:
+                self._require_matching_label(
+                    op, OpKind.IF_START, OpKind.IF_END,
+                    "`else` without parent `if`",
+                    reverse=True,
+                )
+                else_label = op_to_label(op)
+                end_label = self._require_matching_label(
+                    op, OpKind.IF_START, OpKind.IF_END,
+                    "`else` without matching `fi`",
+                )
+                bytecode.append(self.inst(InstKind.JUMP, args=[end_label]))
+                bytecode.append(self.inst(InstKind.LABEL, args=[else_label]))
+            case OpKind.IF_END:
+                self._require_matching_label(
+                    op, OpKind.IF_START, OpKind.IF_END,
+                    "`fi` without parent `if`",
+                    reverse=True,
+                )
+                label = op_to_label(op)
+                bytecode.append(self.inst(InstKind.LABEL, args=[label]))
+            case OpKind.IF_START:
+                self._require_matching_label(
+                    op, OpKind.IF_START, OpKind.IF_END,
+                    "`if` without matching `fi`",
+                )
+
+    def _compile_while_block(self, op: Op, bytecode: list[Inst]) -> None:
+        """Compile WHILE_START, WHILE_CONDITION, WHILE_BREAK, WHILE_CONTINUE, WHILE_END ops."""
+        match op.kind:
+            case OpKind.WHILE_BREAK:
+                self._require_matching_label(
+                    op, OpKind.WHILE_START, OpKind.WHILE_END,
+                    "`break` without parent `while`",
+                    reverse=True,
+                )
+                end_label = self._require_matching_label(
+                    op, OpKind.WHILE_START, OpKind.WHILE_END,
+                    "`break` without matching `done`",
+                )
+                bytecode.append(self.inst(InstKind.JUMP, args=[end_label]))
+            case OpKind.WHILE_CONDITION:
+                self._require_matching_label(
+                    op, OpKind.WHILE_START, OpKind.WHILE_END,
+                    "`do` without parent `while`",
+                    reverse=True,
+                )
+                end_label = self._require_matching_label(
+                    op, OpKind.WHILE_START, OpKind.WHILE_END,
+                    "`do` without matching `done`",
+                )
+                bytecode.append(self.inst(InstKind.JUMP_NE, args=[end_label]))
+            case OpKind.WHILE_CONTINUE:
+                continue_target = self._require_matching_label(
+                    op, OpKind.WHILE_START, OpKind.WHILE_END,
+                    "`continue` without parent `while`",
+                    reverse=True,
+                )
+                bytecode.append(self.inst(InstKind.JUMP, args=[continue_target]))
+            case OpKind.WHILE_END:
+                while_label = op_to_label(op)
+                loop_start = self._require_matching_label(
+                    op, OpKind.WHILE_START, OpKind.WHILE_END,
+                    "`done` without parent `while`",
+                    reverse=True,
+                )
+                bytecode.append(self.inst(InstKind.JUMP, args=[loop_start]))
+                bytecode.append(self.inst(InstKind.LABEL, args=[while_label]))
+            case OpKind.WHILE_START:
+                label = op_to_label(op)
+                bytecode.append(self.inst(InstKind.LABEL, args=[label]))
+
+    def _compile_function_ops(self, op: Op, bytecode: list[Inst]) -> None:
+        """Compile FN_CALL and FN_PUSH ops."""
+        match op.kind:
+            case OpKind.FN_CALL:
+                function_name = op.value
+                function = GLOBAL_FUNCTIONS.get(function_name)
+                assert isinstance(function, Function), "Expected function"
+                self._compile_function(function, op)
+                bytecode.append(self.inst(InstKind.FN_CALL, args=[function_name]))
+            case OpKind.FN_PUSH:
+                function_name = op.value
+                lambda_function = GLOBAL_FUNCTIONS.get(function_name)
+                if not lambda_function:
+                    raise_error(
+                        ErrorKind.UNDEFINED_NAME,
+                        f"Function `{function_name}` is not defined",
+                        op.location,
+                    )
+                self._compile_function(lambda_function, op)
+                for index, capture in enumerate(lambda_function.captures):
+                    if self.function and capture in self.function.variables:
+                        index = self.function.variables.index(capture)
+                        bytecode.append(self.inst(InstKind.LOCAL_GET, args=[index]))
+                    elif capture in GLOBAL_VARIABLES:
+                        index = list(GLOBAL_VARIABLES.values()).index(capture)
+                        bytecode.append(
+                            self.inst(InstKind.GLOBAL_GET, args=[index])
+                        )
+                    else:
+                        raise AssertionError("Captured variable should exist")
+                    constant_index = self.intern_constant(
+                        f"{lambda_function.name}_{capture.name}"
+                    )
+                    bytecode.append(
+                        self.inst(
+                            InstKind.CONSTANT_STORE,
+                            args=[constant_index],
+                        )
+                    )
+                bytecode.append(self.inst(InstKind.FN_PUSH, args=[function_name]))
+
+    def _compile_push_array(self, op: Op, bytecode: list[Inst]) -> None:
+        """Compile PUSH_ARRAY op."""
+        assert isinstance(op.value, list), "Expected `list`"
+        list_len = len(op.value)
+
+        # Push array items in the reverse order
+        reversed_items: list[Op] = list(reversed(op.value))
+        list_compiler = Compiler(
+            reversed_items,
+            string_table=self.string_table,
+            constants_table=self.constants_table,
+        )
+        bytecode += list_compiler.compile()
+
+        # Allocate memory: header (data_ptr + length) + elements
+        local_list = self.locals_count
+        bytecode.append(self.inst(InstKind.PUSH, args=[(list_len + 2) * 8]))
+        bytecode.append(self.inst(InstKind.HEAP_ALLOC))
+        bytecode.append(self.inst(InstKind.LOCAL_SET, args=[local_list]))
+        self.locals_count += 1
+
+        # Store data_ptr (allocation + 16) at offset 0
+        bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_list]))
+        bytecode.append(self.inst(InstKind.PUSH, args=[16]))
+        bytecode.append(self.inst(InstKind.ADD))
+        bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_list]))
+        bytecode.append(self.inst(InstKind.STORE64))
+
+        # Store length at offset 8
+        bytecode.append(self.inst(InstKind.PUSH, args=[list_len]))
+        bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_list]))
+        bytecode.append(self.inst(InstKind.PUSH, args=[8]))
+        bytecode.append(self.inst(InstKind.ADD))
+        bytecode.append(self.inst(InstKind.STORE64))
+
+        # Store elements starting at offset 16
+        local_index = self.locals_count
+        bytecode.append(self.inst(InstKind.PUSH, args=[16]))
+        bytecode.append(self.inst(InstKind.LOCAL_SET, args=[local_index]))
+        self.locals_count += 1
+
+        start_label = new_label()
+        end_label = new_label()
+
+        # while index limit > do
+        bytecode.append(self.inst(InstKind.LABEL, args=[start_label]))
+        bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_index]))
+        bytecode.append(self.inst(InstKind.PUSH, args=[(list_len + 2) * 8]))
+        bytecode.append(self.inst(InstKind.GE))
+        bytecode.append(self.inst(InstKind.JUMP_NE, args=[end_label]))
+
+        # list index + store64
+        bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_list]))
+        bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_index]))
+        bytecode.append(self.inst(InstKind.ADD))
+        bytecode.append(self.inst(InstKind.STORE64))
+
+        # 8 += index
+        bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_index]))
+        bytecode.append(self.inst(InstKind.PUSH, args=[8]))
+        bytecode.append(self.inst(InstKind.ADD))
+        bytecode.append(self.inst(InstKind.LOCAL_SET, args=[local_index]))
+
+        # done
+        bytecode.append(self.inst(InstKind.JUMP, args=[start_label]))
+        bytecode.append(self.inst(InstKind.LABEL, args=[end_label]))
+
+        # Push array to the stack
+        bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_list]))
+
+    def _compile_some(self, op: Op, bytecode: list[Inst]) -> None:
+        """Compile SOME op -- wraps top of stack in an option."""
+        local_ptr = self.locals_count
+        self.locals_count += 1
+        bytecode.append(self.inst(InstKind.PUSH, args=[16]))
+        bytecode.append(self.inst(InstKind.HEAP_ALLOC))
+        bytecode.append(self.inst(InstKind.LOCAL_SET, args=[local_ptr]))
+        # Store value at byte offset 8
+        bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_ptr]))
+        bytecode.append(self.inst(InstKind.PUSH, args=[8]))
+        bytecode.append(self.inst(InstKind.ADD))
+        bytecode.append(self.inst(InstKind.STORE64))
+        # Store tag=1 at byte offset 0
+        bytecode.append(self.inst(InstKind.PUSH, args=[1]))
+        bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_ptr]))
+        bytecode.append(self.inst(InstKind.STORE64))
+        # Push ptr
+        bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_ptr]))
+
+    def _compile_struct_new(self, op: Op, bytecode: list[Inst]) -> None:
+        """Compile STRUCT_NEW op."""
+        struct = op.value
+        assert isinstance(struct, Struct), "Expected struct"
+        member_count = len(struct.members)
+        bytecode.append(self.inst(InstKind.PUSH, args=[member_count * 8]))
+        bytecode.append(self.inst(InstKind.HEAP_ALLOC))
+        for i in range(member_count):
+            bytecode.append(self.inst(InstKind.SWAP))
+            bytecode.append(self.inst(InstKind.OVER))
+            if i > 0:
+                bytecode.append(self.inst(InstKind.PUSH, args=[i * 8]))
+                bytecode.append(self.inst(InstKind.ADD))
+            bytecode.append(self.inst(InstKind.STORE64))
+
     def _compile_function(self, function: Function, op: Op) -> None:
         """Compile a function if not already compiled."""
         if function.bytecode is not None:
@@ -212,154 +489,21 @@ class Compiler:
                 bytecode.append(self.inst(DIRECT_OP_TO_INST[op.kind]))
                 continue
             match op.kind:
-                case OpKind.ASSIGN_DECREMENT:
-                    variable_name = op.value
-                    assert isinstance(variable_name, str), "Valid variable name"
-                    get_kind, set_kind, index = self._resolve_variable(
-                        variable_name
-                    )
-                    bytecode.append(self.inst(get_kind, args=[index]))
-                    bytecode.append(self.inst(InstKind.SWAP))
-                    bytecode.append(self.inst(InstKind.ADD))
-                    bytecode.append(self.inst(set_kind, args=[index]))
-                case OpKind.ASSIGN_INCREMENT:
-                    variable_name = op.value
-                    assert isinstance(variable_name, str), "Valid variable name"
-                    get_kind, set_kind, index = self._resolve_variable(
-                        variable_name
-                    )
-                    bytecode.append(self.inst(get_kind, args=[index]))
-                    bytecode.append(self.inst(InstKind.ADD))
-                    bytecode.append(self.inst(set_kind, args=[index]))
-                case OpKind.ASSIGN_VARIABLE:
-                    variable_name = op.value
-                    assert isinstance(variable_name, str), "Valid variable name"
-                    _, set_kind, index = self._resolve_variable(
-                        variable_name
-                    )
-                    bytecode.append(self.inst(set_kind, args=[index]))
+                case OpKind.ASSIGN_DECREMENT | OpKind.ASSIGN_INCREMENT | OpKind.ASSIGN_VARIABLE:
+                    self._compile_assignment(op, bytecode)
                 case OpKind.FSTRING_CONCAT:
                     count = op.value
                     assert isinstance(count, int)
                     bytecode.append(self.inst(InstKind.FSTRING_CONCAT, args=[count]))
-                case OpKind.FN_CALL:
-                    function_name = op.value
-                    function = GLOBAL_FUNCTIONS.get(function_name)
-                    assert isinstance(function, Function), "Expected function"
-
-                    self._compile_function(function, op)
-
-                    bytecode.append(self.inst(InstKind.FN_CALL, args=[function_name]))
-                case OpKind.FN_PUSH:
-                    function_name = op.value
-                    lambda_function = GLOBAL_FUNCTIONS.get(function_name)
-                    if not lambda_function:
-                        raise_error(
-                            ErrorKind.UNDEFINED_NAME,
-                            f"Function `{function_name}` is not defined",
-                            op.location,
-                        )
-
-                    self._compile_function(lambda_function, op)
-
-                    # Setup captures (local variables shadow globals)
-                    for index, capture in enumerate(lambda_function.captures):
-                        if self.function and capture in self.function.variables:
-                            index = self.function.variables.index(capture)
-                            bytecode.append(self.inst(InstKind.LOCAL_GET, args=[index]))
-                        elif capture in GLOBAL_VARIABLES:
-                            index = list(GLOBAL_VARIABLES.values()).index(capture)
-                            bytecode.append(
-                                self.inst(InstKind.GLOBAL_GET, args=[index])
-                            )
-                        else:
-                            raise AssertionError("Captured variable should exist")
-
-                        constant_index = self.intern_constant(
-                            f"{lambda_function.name}_{capture.name}"
-                        )
-                        bytecode.append(
-                            self.inst(
-                                InstKind.CONSTANT_STORE,
-                                args=[constant_index],
-                            )
-                        )
-
-                    # Push function address
-                    bytecode.append(self.inst(InstKind.FN_PUSH, args=[function_name]))
-
+                case OpKind.FN_CALL | OpKind.FN_PUSH:
+                    self._compile_function_ops(op, bytecode)
                 case OpKind.IDENTIFIER:
                     raise AssertionError(
                         f"Identifier `{op.value}` should be resolved by the parser"
                     )
-                case OpKind.IF_CONDITION:
-                    self._require_matching_label(
-                        op, OpKind.IF_START, OpKind.IF_END,
-                        "`then` without matching `if`",
-                        reverse=True,
-                    )
-                    end_label = self._require_matching_label(
-                        op, OpKind.IF_START, OpKind.IF_END,
-                        "`then` without matching `fi`",
-                        target_kinds=[
-                            OpKind.IF_ELIF, OpKind.IF_ELSE, OpKind.IF_END
-                        ],
-                    )
-                    bytecode.append(self.inst(InstKind.JUMP_NE, args=[end_label]))
-                case OpKind.IF_ELIF:
-                    self._require_matching_label(
-                        op, OpKind.IF_START, OpKind.IF_END,
-                        "`elif` without parent `if`",
-                        reverse=True,
-                    )
-                    # Elif should not be after an else
-                    if self.find_matching_label(
-                        op=op,
-                        start_kind=OpKind.IF_START,
-                        end_kind=OpKind.IF_END,
-                        target_kinds=[OpKind.IF_ELSE],
-                        reverse=True,
-                    ):
-                        raise_error(
-                            ErrorKind.UNMATCHED_BLOCK,
-                            "`elif` after `else`",
-                            op.location,
-                        )
-
-                    elif_label = op_to_label(op)
-                    end_label = self._require_matching_label(
-                        op, OpKind.IF_START, OpKind.IF_END,
-                        "`elif` without matching `fi`",
-                    )
-                    bytecode.append(self.inst(InstKind.JUMP, args=[end_label]))
-                    bytecode.append(self.inst(InstKind.LABEL, args=[elif_label]))
-                case OpKind.IF_ELSE:
-                    self._require_matching_label(
-                        op, OpKind.IF_START, OpKind.IF_END,
-                        "`else` without parent `if`",
-                        reverse=True,
-                    )
-                    else_label = op_to_label(op)
-                    end_label = self._require_matching_label(
-                        op, OpKind.IF_START, OpKind.IF_END,
-                        "`else` without matching `fi`",
-                    )
-                    bytecode.append(self.inst(InstKind.JUMP, args=[end_label]))
-                    bytecode.append(self.inst(InstKind.LABEL, args=[else_label]))
-                case OpKind.IF_END:
-                    self._require_matching_label(
-                        op, OpKind.IF_START, OpKind.IF_END,
-                        "`fi` without parent `if`",
-                        reverse=True,
-                    )
-                    label = op_to_label(op)
-                    bytecode.append(self.inst(InstKind.LABEL, args=[label]))
-                case OpKind.IF_START:
-                    self._require_matching_label(
-                        op, OpKind.IF_START, OpKind.IF_END,
-                        "`if` without matching `fi`",
-                    )
-                case OpKind.INCLUDE_FILE:
+                case OpKind.IF_CONDITION | OpKind.IF_ELIF | OpKind.IF_ELSE | OpKind.IF_END | OpKind.IF_START:
+                    self._compile_if_block(op, bytecode)
+                case OpKind.INCLUDE_FILE | OpKind.TYPE_CAST:
                     pass
                 case OpKind.METHOD_CALL:
                     raise AssertionError(
@@ -370,74 +514,7 @@ class Compiler:
                         False
                     ), "PRINT should be resolved to a PRINT variant by the type checker"
                 case OpKind.PUSH_ARRAY:
-                    assert isinstance(op.value, list), "Expected `list`"
-                    list_len = len(op.value)
-
-                    # Push array items in the reverse order
-                    reversed_items: list[Op] = list(reversed(op.value))
-                    list_compiler = Compiler(
-                        reversed_items,
-                        string_table=self.string_table,
-                        constants_table=self.constants_table,
-                    )
-                    list_bytecode = list_compiler.compile()
-                    bytecode += list_bytecode
-
-                    # Allocate memory: header (data_ptr + length) + elements
-                    local_list = self.locals_count
-                    bytecode.append(self.inst(InstKind.PUSH, args=[(list_len + 2) * 8]))
-                    bytecode.append(self.inst(InstKind.HEAP_ALLOC))
-                    bytecode.append(self.inst(InstKind.LOCAL_SET, args=[local_list]))
-                    self.locals_count += 1
-
-                    # Store data_ptr (allocation + 16) at offset 0
-                    bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_list]))
-                    bytecode.append(self.inst(InstKind.PUSH, args=[16]))
-                    bytecode.append(self.inst(InstKind.ADD))
-                    bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_list]))
-                    bytecode.append(self.inst(InstKind.STORE64))
-
-                    # Store length at offset 8
-                    bytecode.append(self.inst(InstKind.PUSH, args=[list_len]))
-                    bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_list]))
-                    bytecode.append(self.inst(InstKind.PUSH, args=[8]))
-                    bytecode.append(self.inst(InstKind.ADD))
-                    bytecode.append(self.inst(InstKind.STORE64))
-
-                    # Store elements starting at offset 16
-                    local_index = self.locals_count
-                    bytecode.append(self.inst(InstKind.PUSH, args=[16]))
-                    bytecode.append(self.inst(InstKind.LOCAL_SET, args=[local_index]))
-                    self.locals_count += 1
-
-                    start_label = new_label()
-                    end_label = new_label()
-
-                    # while index limit > do
-                    bytecode.append(self.inst(InstKind.LABEL, args=[start_label]))
-                    bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_index]))
-                    bytecode.append(self.inst(InstKind.PUSH, args=[(list_len + 2) * 8]))
-                    bytecode.append(self.inst(InstKind.GE))
-                    bytecode.append(self.inst(InstKind.JUMP_NE, args=[end_label]))
-
-                    # list index + store64
-                    bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_list]))
-                    bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_index]))
-                    bytecode.append(self.inst(InstKind.ADD))
-                    bytecode.append(self.inst(InstKind.STORE64))
-
-                    # 8 += index
-                    bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_index]))
-                    bytecode.append(self.inst(InstKind.PUSH, args=[8]))
-                    bytecode.append(self.inst(InstKind.ADD))
-                    bytecode.append(self.inst(InstKind.LOCAL_SET, args=[local_index]))
-
-                    # done
-                    bytecode.append(self.inst(InstKind.JUMP, args=[start_label]))
-                    bytecode.append(self.inst(InstKind.LABEL, args=[end_label]))
-
-                    # Push array to the stack
-                    bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_list]))
+                    self._compile_push_array(op, bytecode)
                 case OpKind.PUSH_BOOL:
                     bytecode.append(self.inst(InstKind.PUSH, args=[int(op.value)]))
                 case OpKind.PUSH_CHAR:
@@ -445,7 +522,6 @@ class Compiler:
                 case OpKind.PUSH_CAPTURE:
                     capture_name = op.value
                     assert isinstance(capture_name, str), "Valid capture name"
-
                     function_name = (
                         self.function.name if self.function else GLOBAL_SCOPE_LABEL
                     )
@@ -461,7 +537,6 @@ class Compiler:
                 case OpKind.PUSH_INT:
                     bytecode.append(self.inst(InstKind.PUSH, args=[op.value]))
                 case OpKind.PUSH_NONE:
-                    # Allocate 16 bytes, store tag 0 at byte offset 0
                     bytecode.append(self.inst(InstKind.PUSH, args=[16]))
                     bytecode.append(self.inst(InstKind.HEAP_ALLOC))
                     bytecode.append(self.inst(InstKind.DUP))
@@ -474,89 +549,14 @@ class Compiler:
                 case OpKind.PUSH_VARIABLE:
                     variable_name = op.value
                     assert isinstance(variable_name, str), "Valid variable name"
-                    get_kind, _, index = self._resolve_variable(
-                        variable_name
-                    )
+                    get_kind, _, index = self._resolve_variable(variable_name)
                     bytecode.append(self.inst(get_kind, args=[index]))
                 case OpKind.SOME:
-                    # Stack: [value]
-                    # Allocate 16 bytes, store tag=1 at byte 0, value at byte 8
-                    local_ptr = self.locals_count
-                    self.locals_count += 1
-                    bytecode.append(self.inst(InstKind.PUSH, args=[16]))
-                    bytecode.append(self.inst(InstKind.HEAP_ALLOC))
-                    bytecode.append(self.inst(InstKind.LOCAL_SET, args=[local_ptr]))
-                    # Store value at byte offset 8
-                    bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_ptr]))
-                    bytecode.append(self.inst(InstKind.PUSH, args=[8]))
-                    bytecode.append(self.inst(InstKind.ADD))
-                    bytecode.append(self.inst(InstKind.STORE64))
-                    # Store tag=1 at byte offset 0
-                    bytecode.append(self.inst(InstKind.PUSH, args=[1]))
-                    bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_ptr]))
-                    bytecode.append(self.inst(InstKind.STORE64))
-                    # Push ptr
-                    bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_ptr]))
+                    self._compile_some(op, bytecode)
                 case OpKind.STRUCT_NEW:
-                    struct = op.value
-                    assert isinstance(struct, Struct), "Expected struct"
-
-                    # Allocate memory for the struct (byte-based)
-                    member_count = len(struct.members)
-                    bytecode.append(self.inst(InstKind.PUSH, args=[member_count * 8]))
-                    bytecode.append(self.inst(InstKind.HEAP_ALLOC))
-
-                    # Store each member
-                    for i in range(member_count):
-                        bytecode.append(self.inst(InstKind.SWAP))
-                        bytecode.append(self.inst(InstKind.OVER))
-                        if i > 0:
-                            bytecode.append(self.inst(InstKind.PUSH, args=[i * 8]))
-                            bytecode.append(self.inst(InstKind.ADD))
-                        bytecode.append(self.inst(InstKind.STORE64))
-                case OpKind.TYPE_CAST:
-                    pass
-                case OpKind.WHILE_BREAK:
-                    self._require_matching_label(
-                        op, OpKind.WHILE_START, OpKind.WHILE_END,
-                        "`break` without parent `while`",
-                        reverse=True,
-                    )
-                    end_label = self._require_matching_label(
-                        op, OpKind.WHILE_START, OpKind.WHILE_END,
-                        "`break` without matching `done`",
-                    )
-                    bytecode.append(self.inst(InstKind.JUMP, args=[end_label]))
-                case OpKind.WHILE_CONDITION:
-                    self._require_matching_label(
-                        op, OpKind.WHILE_START, OpKind.WHILE_END,
-                        "`do` without parent `while`",
-                        reverse=True,
-                    )
-                    end_label = self._require_matching_label(
-                        op, OpKind.WHILE_START, OpKind.WHILE_END,
-                        "`do` without matching `done`",
-                    )
-                    bytecode.append(self.inst(InstKind.JUMP_NE, args=[end_label]))
-                case OpKind.WHILE_CONTINUE:
-                    continue_target = self._require_matching_label(
-                        op, OpKind.WHILE_START, OpKind.WHILE_END,
-                        "`continue` without parent `while`",
-                        reverse=True,
-                    )
-                    bytecode.append(self.inst(InstKind.JUMP, args=[continue_target]))
-                case OpKind.WHILE_END:
-                    while_label = op_to_label(op)
-                    loop_start = self._require_matching_label(
-                        op, OpKind.WHILE_START, OpKind.WHILE_END,
-                        "`done` without parent `while`",
-                        reverse=True,
-                    )
-                    bytecode.append(self.inst(InstKind.JUMP, args=[loop_start]))
-                    bytecode.append(self.inst(InstKind.LABEL, args=[while_label]))
-                case OpKind.WHILE_START:
-                    label = op_to_label(op)
-                    bytecode.append(self.inst(InstKind.LABEL, args=[label]))
+                    self._compile_struct_new(op, bytecode)
+                case OpKind.WHILE_BREAK | OpKind.WHILE_CONDITION | OpKind.WHILE_CONTINUE | OpKind.WHILE_END | OpKind.WHILE_START:
+                    self._compile_while_block(op, bytecode)
 
         if self.locals_count > 0:
             bytecode.insert(0, Inst(InstKind.LOCALS_INIT, args=[self.locals_count]))
