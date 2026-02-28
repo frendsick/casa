@@ -894,8 +894,8 @@ def parse_trait_method_signature(cursor: Cursor[Token]) -> Signature:
     next_token = cursor.peek()
     if next_token and next_token.value == "->":
         cursor.pop()
-        while cursor.peek():
-            if cursor.peek().value in ("fn", "}"):  # type: ignore[union-attr]
+        while token := cursor.peek():
+            if token.value in ("fn", "}"):
                 break
             return_types.append(parse_type(cursor))
 
@@ -1072,8 +1072,8 @@ def parse_parameters(cursor: Cursor[Token]) -> list[Parameter]:
 def parse_return_types(cursor: Cursor[Token]) -> list[Type]:
     """Parse return types after the arrow in a function signature."""
     return_types: list[Type] = []
-    while cursor.peek():
-        if cursor.peek().value == "{":  # type: ignore[union-attr]
+    while token := cursor.peek():
+        if token.value == "{":
             return return_types
         return_types.append(parse_type(cursor))
     raise_error(

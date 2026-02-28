@@ -123,10 +123,10 @@ class Delimiter(Enum):
     @classmethod
     def from_str(cls, value: str) -> Self | None:
         """Look up a delimiter by its source string."""
-        return cls.SOURCE_MAP.get(value)  # type: ignore
+        return _DELIMITER_SOURCE_MAP.get(value)
 
 
-Delimiter.SOURCE_MAP = {  # type: ignore
+_DELIMITER_SOURCE_MAP: dict[str, Delimiter] = {
     "->": Delimiter.ARROW,
     ",": Delimiter.COMMA,
     ":": Delimiter.COLON,
@@ -139,9 +139,9 @@ Delimiter.SOURCE_MAP = {  # type: ignore
     "(": Delimiter.OPEN_PAREN,
     ")": Delimiter.CLOSE_PAREN,
 }
-assert len(Delimiter.SOURCE_MAP) == len(Delimiter), (  # type: ignore
-    "Exhaustive handling for `Delimiter`"
-)
+assert len(_DELIMITER_SOURCE_MAP) == len(
+    Delimiter
+), "Exhaustive handling for `Delimiter`"
 
 
 class Operator(Enum):
@@ -185,10 +185,10 @@ class Operator(Enum):
     @classmethod
     def from_str(cls, value: str) -> Self | None:
         """Look up an operator by its source string."""
-        return cls.SOURCE_MAP.get(value)  # type: ignore
+        return _OPERATOR_SOURCE_MAP.get(value)
 
 
-Operator.SOURCE_MAP = {  # type: ignore
+_OPERATOR_SOURCE_MAP: dict[str, Operator] = {
     # Arithmetic
     "+": Operator.PLUS,
     "-": Operator.MINUS,
@@ -219,7 +219,7 @@ Operator.SOURCE_MAP = {  # type: ignore
     "-=": Operator.ASSIGN_DECREMENT,
     "+=": Operator.ASSIGN_INCREMENT,
 }
-assert len(Operator.SOURCE_MAP) == len(Operator), "Exhaustive handling for `Operator`"  # type: ignore
+assert len(_OPERATOR_SOURCE_MAP) == len(Operator), "Exhaustive handling for `Operator`"
 
 
 @dataclass
@@ -995,7 +995,7 @@ class Function:
 
     name: str
     ops: list[Op]
-    location: Location
+    location: Location | None
     # Missing signature will be inferred during type checking
     signature: Signature | None = None
     # Bytecode will be compiled if the function is used
