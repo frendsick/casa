@@ -788,6 +788,7 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                                 op.location,
                             )
                         )
+                        effective_type = stack_type
 
                 # Local variable (shadows global with same name)
                 local_variable = None

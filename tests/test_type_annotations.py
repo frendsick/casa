@@ -229,19 +229,21 @@ class TestTypecheckerTypeAnnotationWarnings:
         assert WARNINGS[0].kind == WarningKind.LOSSY_TYPE_ANNOTATION
         assert "any" in WARNINGS[0].message
 
-    def test_warn_bare_option_loses_param(self):
-        """Annotating option[int] as bare option warns."""
-        typecheck_string("42 some = x:option")
+    def test_warn_bare_option_retains_type(self):
+        """Annotating option[int] as bare option warns and retains original type."""
+        sig = typecheck_string("42 some = x:option x")
         assert len(WARNINGS) == 1
         assert WARNINGS[0].kind == WarningKind.LOSSY_TYPE_ANNOTATION
         assert "option" in WARNINGS[0].message
+        assert sig.return_types == ["option[int]"]
 
-    def test_warn_bare_array_loses_param(self):
-        """Annotating array[int] as bare array warns."""
-        typecheck_string("[1, 2] = x:array")
+    def test_warn_bare_array_retains_type(self):
+        """Annotating array[int] as bare array warns and retains original type."""
+        sig = typecheck_string("[1, 2] = x:array x")
         assert len(WARNINGS) == 1
         assert WARNINGS[0].kind == WarningKind.LOSSY_TYPE_ANNOTATION
         assert "array" in WARNINGS[0].message
+        assert sig.return_types == ["array[int]"]
 
     def test_no_warn_matching_types(self):
         """No warning when annotation matches stack type."""
