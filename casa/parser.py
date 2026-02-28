@@ -1069,7 +1069,18 @@ def get_op_operator(token: Token, cursor: Cursor[Token], function_name: str) -> 
             variable_name = identifier.value
             assert isinstance(variable_name, str), "Expected variable name"
 
-            return Op(variable_name, OpKind.ASSIGN_VARIABLE, identifier.location)
+            type_annotation = None
+            colon = cursor.peek()
+            if colon and colon.value == ":":
+                cursor.position += 1
+                type_annotation = parse_type(cursor)
+
+            return Op(
+                variable_name,
+                OpKind.ASSIGN_VARIABLE,
+                identifier.location,
+                type_annotation=type_annotation,
+            )
         case Operator.ASSIGN_DECREMENT:
             next_token = expect_token(cursor, kind=TokenKind.IDENTIFIER)
             identifier = token_to_op(next_token, cursor, function_name)

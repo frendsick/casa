@@ -762,6 +762,9 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 assert isinstance(variable_name, str), "Expected variable name"
 
                 stack_type = tc.stack_peek()
+                effective_type = (
+                    op.type_annotation if op.type_annotation else stack_type
+                )
 
                 # Local variable (shadows global with same name)
                 local_variable = None
@@ -773,21 +776,21 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
 
                 if local_variable:
                     if not local_variable.typ or (
-                        local_variable.typ == ANY_TYPE and stack_type != ANY_TYPE
+                        local_variable.typ == ANY_TYPE and effective_type != ANY_TYPE
                     ):
-                        local_variable.typ = stack_type
+                        local_variable.typ = effective_type
 
                     if (
-                        local_variable.typ not in (stack_type, ANY_TYPE)
-                        and stack_type != ANY_TYPE
+                        local_variable.typ not in (effective_type, ANY_TYPE)
+                        and effective_type != ANY_TYPE
                     ):
                         raise_error(
                             ErrorKind.INVALID_VARIABLE,
-                            f"Cannot override local variable `{local_variable.name}` of type `{local_variable.typ}` with other type `{stack_type}`",
+                            f"Cannot override local variable `{local_variable.name}` of type `{local_variable.typ}` with other type `{effective_type}`",
                             op.location,
                         )
 
-                    tc.expect_type(stack_type)
+                    tc.expect_type(effective_type)
                     continue
 
                 # Global variable
@@ -798,18 +801,18 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                     ), "Valid global variable"
 
                     if not global_variable.typ or (
-                        global_variable.typ == ANY_TYPE and stack_type != ANY_TYPE
+                        global_variable.typ == ANY_TYPE and effective_type != ANY_TYPE
                     ):
-                        global_variable.typ = stack_type
+                        global_variable.typ = effective_type
 
-                    if global_variable.typ not in (stack_type, ANY_TYPE):
+                    if global_variable.typ not in (effective_type, ANY_TYPE):
                         raise_error(
                             ErrorKind.INVALID_VARIABLE,
-                            f"Cannot override global variable `{global_variable.name}` of type `{global_variable.typ}` with other type `{stack_type}`",
+                            f"Cannot override global variable `{global_variable.name}` of type `{global_variable.typ}` with other type `{effective_type}`",
                             op.location,
                         )
 
-                    tc.expect_type(stack_type)
+                    tc.expect_type(effective_type)
                     continue
 
                 raise AssertionError(f"Variable `{variable_name}` is not defined")
