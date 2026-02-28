@@ -29,23 +29,23 @@ class Emitter:
         return name.replace("::", "__")
 
     @staticmethod
-    def _escape_string(s: str) -> str:
+    def _escape_string(string: str) -> str:
         result = []
-        for c in s:
-            if c == "\\":
+        for char in string:
+            if char == "\\":
                 result.append("\\\\")
-            elif c == '"':
+            elif char == '"':
                 result.append('\\"')
-            elif c == "\n":
+            elif char == "\n":
                 result.append("\\n")
-            elif c == "\t":
+            elif char == "\t":
                 result.append("\\t")
-            elif c == "\0":
+            elif char == "\0":
                 result.append("\\0")
-            elif c == "\r":
+            elif char == "\r":
                 result.append("\\r")
             else:
-                result.append(c)
+                result.append(char)
         return "".join(result)
 
     def emit(self) -> str:
@@ -56,9 +56,9 @@ class Emitter:
 
     def _emit_bss(self) -> None:
         self._line(".section .bss")
-        p = self.program
-        self._line(f"globals: .skip {p.globals_count * 8}")
-        self._line(f"constants: .skip {p.constants_count * 8}")
+        program = self.program
+        self._line(f"globals: .skip {program.globals_count * 8}")
+        self._line(f"constants: .skip {program.constants_count * 8}")
         self._line(f"return_stack: .skip {RETURN_STACK_SIZE}")
         self._line(f"heap: .skip {HEAP_SIZE}")
         self._line("heap_ptr: .skip 8")
@@ -355,17 +355,17 @@ class Emitter:
 
             # === Locals (on return stack via %r14) ===
             case InstKind.LOCALS_INIT:
-                n = inst.int_arg
-                if n > 0:
+                count = inst.int_arg
+                if count > 0:
                     self._indent("movq %r14, %rdi")
-                    self._indent(f"movq ${n}, %rcx")
+                    self._indent(f"movq ${count}, %rcx")
                     self._indent("xorq %rax, %rax")
                     self._indent("rep stosq")
-                    self._indent(f"addq ${n * 8}, %r14")
+                    self._indent(f"addq ${count * 8}, %r14")
             case InstKind.LOCALS_UNINIT:
-                n = inst.int_arg
-                if n > 0:
-                    self._indent(f"subq ${n * 8}, %r14")
+                count = inst.int_arg
+                if count > 0:
+                    self._indent(f"subq ${count * 8}, %r14")
             case InstKind.LOCAL_GET:
                 idx = inst.int_arg
                 offset = (idx + 1) * 8
