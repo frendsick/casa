@@ -1198,9 +1198,9 @@ def _inject_trait_fn_ptrs(
     satisfaction, and inserts FN_PUSH ops before the call. Returns the
     number of ops inserted.
     """
-    from casa.parser import (
+    from casa.parser import (  # pylint: disable=reimported,import-outside-toplevel
         resolve_identifiers as _resolve,
-    )  # pylint: disable=reimported,import-outside-toplevel
+    )
 
     bindings: dict[str, str] = {}
 

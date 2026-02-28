@@ -123,10 +123,10 @@ class Delimiter(Enum):
     @classmethod
     def from_str(cls, value: str) -> Self | None:
         """Look up a delimiter by its source string."""
-        return cls._MAPPING.get(value)  # type: ignore
+        return cls.SOURCE_MAP.get(value)  # type: ignore
 
 
-Delimiter._MAPPING = {  # type: ignore
+Delimiter.SOURCE_MAP = {  # type: ignore
     "->": Delimiter.ARROW,
     ",": Delimiter.COMMA,
     ":": Delimiter.COLON,
@@ -139,7 +139,7 @@ Delimiter._MAPPING = {  # type: ignore
     "(": Delimiter.OPEN_PAREN,
     ")": Delimiter.CLOSE_PAREN,
 }
-assert len(Delimiter._MAPPING) == len(Delimiter), (  # type: ignore
+assert len(Delimiter.SOURCE_MAP) == len(Delimiter), (  # type: ignore
     "Exhaustive handling for `Delimiter`"
 )
 
@@ -185,10 +185,10 @@ class Operator(Enum):
     @classmethod
     def from_str(cls, value: str) -> Self | None:
         """Look up an operator by its source string."""
-        return cls._MAPPING.get(value)  # type: ignore
+        return cls.SOURCE_MAP.get(value)  # type: ignore
 
 
-Operator._MAPPING = {  # type: ignore
+Operator.SOURCE_MAP = {  # type: ignore
     # Arithmetic
     "+": Operator.PLUS,
     "-": Operator.MINUS,
@@ -219,7 +219,7 @@ Operator._MAPPING = {  # type: ignore
     "-=": Operator.ASSIGN_DECREMENT,
     "+=": Operator.ASSIGN_INCREMENT,
 }
-assert len(Operator._MAPPING) == len(Operator), "Exhaustive handling for `Operator`"  # type: ignore
+assert len(Operator.SOURCE_MAP) == len(Operator), "Exhaustive handling for `Operator`"  # type: ignore
 
 
 @dataclass
@@ -852,7 +852,7 @@ class Signature:
     trait_bounds: dict[str, str] = field(default_factory=dict)
 
     @classmethod
-    def from_str(cls, repr: str) -> Self:
+    def from_str(cls, sig_str: str) -> Self:
         """Parse a signature from its string representation."""
 
         def split_on_arrow(tokens: list[str]) -> tuple[list[str], list[str]]:
@@ -860,14 +860,14 @@ class Signature:
             for i, tok in enumerate(tokens):
                 if tok == "->":
                     return tokens[:i], tokens[i + 1 :]
-            raise ValueError(f"Invalid signature: {repr}")
+            raise ValueError(f"Invalid signature: {sig_str}")
 
         def parse_type_list(tokens: list[str]) -> list[Type]:
             if len(tokens) == 1 and tokens[0] == "None":
                 return []
             return list(tokens)
 
-        tokens = split_type_tokens(repr)
+        tokens = split_type_tokens(sig_str)
         param_tokens, return_tokens = split_on_arrow(tokens)
         parameters = [Parameter(p) for p in parse_type_list(param_tokens)]
         return_types = parse_type_list(return_tokens)

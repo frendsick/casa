@@ -206,7 +206,7 @@ def _resolve_fn_ref(
         )
         return True
     # Check trait bound reference: &K::method
-    trait_var = _resolve_trait_ref(function_name, function, op.location)
+    trait_var = _resolve_trait_ref(function_name, function)
     if trait_var:
         op.kind = OpKind.PUSH_VARIABLE
         op.value = trait_var
@@ -268,7 +268,6 @@ def _create_member_accessor(
 def _resolve_trait_ref(
     name: str,
     function: Function | None,
-    _location: Location,
 ) -> str | None:
     """Check if name is a trait-bound method call like K::hash.
 
@@ -352,7 +351,7 @@ def resolve_identifiers(
                     continue
 
                 # Check trait bound call: K::method -> push var + exec
-                trait_var = _resolve_trait_ref(identifier, function, op.location)
+                trait_var = _resolve_trait_ref(identifier, function)
                 if trait_var:
                     op.kind = OpKind.PUSH_VARIABLE
                     op.value = trait_var

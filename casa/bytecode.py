@@ -73,20 +73,18 @@ DIRECT_OP_TO_INST: dict[OpKind, InstKind] = {
     OpKind.SYSCALL6: InstKind.SYSCALL6,
 }
 
-_label_counter = 0
+_label_counter = [0]
 
 
 def new_label() -> LabelId:
     """Allocate and return a fresh label ID."""
-    global _label_counter  # pylint: disable=global-statement
-    _label_counter += 1
-    return _label_counter
+    _label_counter[0] += 1
+    return _label_counter[0]
 
 
 def reset_labels():
     """Reset the label counter to zero."""
-    global _label_counter  # pylint: disable=global-statement
-    _label_counter = 0
+    _label_counter[0] = 0
 
 
 # Stable mapping from Op identity to label, assigned on first access
