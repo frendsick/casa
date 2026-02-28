@@ -21,6 +21,57 @@ from casa.common import (
 )
 from casa.error import ErrorKind, raise_error
 
+DIRECT_OP_TO_INST: dict[OpKind, InstKind] = {
+    OpKind.ADD: InstKind.ADD,
+    OpKind.AND: InstKind.AND,
+    OpKind.BIT_AND: InstKind.BIT_AND,
+    OpKind.BIT_NOT: InstKind.BIT_NOT,
+    OpKind.BIT_OR: InstKind.BIT_OR,
+    OpKind.BIT_XOR: InstKind.BIT_XOR,
+    OpKind.DIV: InstKind.DIV,
+    OpKind.DROP: InstKind.DROP,
+    OpKind.DUP: InstKind.DUP,
+    OpKind.EQ: InstKind.EQ,
+    OpKind.FN_EXEC: InstKind.FN_EXEC,
+    OpKind.FN_RETURN: InstKind.FN_RETURN,
+    OpKind.GE: InstKind.GE,
+    OpKind.GT: InstKind.GT,
+    OpKind.HEAP_ALLOC: InstKind.HEAP_ALLOC,
+    OpKind.LE: InstKind.LE,
+    OpKind.LOAD8: InstKind.LOAD8,
+    OpKind.LOAD16: InstKind.LOAD16,
+    OpKind.LOAD32: InstKind.LOAD32,
+    OpKind.LOAD64: InstKind.LOAD64,
+    OpKind.LT: InstKind.LT,
+    OpKind.MOD: InstKind.MOD,
+    OpKind.MUL: InstKind.MUL,
+    OpKind.NE: InstKind.NE,
+    OpKind.NOT: InstKind.NOT,
+    OpKind.OR: InstKind.OR,
+    OpKind.OVER: InstKind.OVER,
+    OpKind.PRINT_BOOL: InstKind.PRINT_BOOL,
+    OpKind.PRINT_CHAR: InstKind.PRINT_CHAR,
+    OpKind.PRINT_CSTR: InstKind.PRINT_CSTR,
+    OpKind.PRINT_INT: InstKind.PRINT_INT,
+    OpKind.PRINT_STR: InstKind.PRINT_STR,
+    OpKind.ROT: InstKind.ROT,
+    OpKind.SHL: InstKind.SHL,
+    OpKind.SHR: InstKind.SHR,
+    OpKind.STORE8: InstKind.STORE8,
+    OpKind.STORE16: InstKind.STORE16,
+    OpKind.STORE32: InstKind.STORE32,
+    OpKind.STORE64: InstKind.STORE64,
+    OpKind.SUB: InstKind.SUB,
+    OpKind.SWAP: InstKind.SWAP,
+    OpKind.SYSCALL0: InstKind.SYSCALL0,
+    OpKind.SYSCALL1: InstKind.SYSCALL1,
+    OpKind.SYSCALL2: InstKind.SYSCALL2,
+    OpKind.SYSCALL3: InstKind.SYSCALL3,
+    OpKind.SYSCALL4: InstKind.SYSCALL4,
+    OpKind.SYSCALL5: InstKind.SYSCALL5,
+    OpKind.SYSCALL6: InstKind.SYSCALL6,
+}
+
 _label_counter = 0
 
 
@@ -157,11 +208,10 @@ class Compiler:
 
         while op := cursor.pop():
             self._current_loc = op.location
+            if op.kind in DIRECT_OP_TO_INST:
+                bytecode.append(self.inst(DIRECT_OP_TO_INST[op.kind]))
+                continue
             match op.kind:
-                case OpKind.ADD:
-                    bytecode.append(self.inst(InstKind.ADD))
-                case OpKind.AND:
-                    bytecode.append(self.inst(InstKind.AND))
                 case OpKind.ASSIGN_DECREMENT:
                     variable_name = op.value
                     assert isinstance(variable_name, str), "Valid variable name"
@@ -188,14 +238,6 @@ class Compiler:
                         variable_name
                     )
                     bytecode.append(self.inst(set_kind, args=[index]))
-                case OpKind.DIV:
-                    bytecode.append(self.inst(InstKind.DIV))
-                case OpKind.DROP:
-                    bytecode.append(self.inst(InstKind.DROP))
-                case OpKind.DUP:
-                    bytecode.append(self.inst(InstKind.DUP))
-                case OpKind.EQ:
-                    bytecode.append(self.inst(InstKind.EQ))
                 case OpKind.FSTRING_CONCAT:
                     count = op.value
                     assert isinstance(count, int)
@@ -208,8 +250,6 @@ class Compiler:
                     self._compile_function(function, op)
 
                     bytecode.append(self.inst(InstKind.FN_CALL, args=[function_name]))
-                case OpKind.FN_EXEC:
-                    bytecode.append(self.inst(InstKind.FN_EXEC))
                 case OpKind.FN_PUSH:
                     function_name = op.value
                     lambda_function = GLOBAL_FUNCTIONS.get(function_name)
@@ -248,14 +288,6 @@ class Compiler:
                     # Push function address
                     bytecode.append(self.inst(InstKind.FN_PUSH, args=[function_name]))
 
-                case OpKind.FN_RETURN:
-                    bytecode.append(self.inst(InstKind.FN_RETURN))
-                case OpKind.GE:
-                    bytecode.append(self.inst(InstKind.GE))
-                case OpKind.GT:
-                    bytecode.append(self.inst(InstKind.GT))
-                case OpKind.HEAP_ALLOC:
-                    bytecode.append(self.inst(InstKind.HEAP_ALLOC))
                 case OpKind.IDENTIFIER:
                     raise AssertionError(
                         f"Identifier `{op.value}` should be resolved by the parser"
@@ -329,48 +361,14 @@ class Compiler:
                     )
                 case OpKind.INCLUDE_FILE:
                     pass
-                case OpKind.LE:
-                    bytecode.append(self.inst(InstKind.LE))
-                case OpKind.LOAD8:
-                    bytecode.append(self.inst(InstKind.LOAD8))
-                case OpKind.LOAD16:
-                    bytecode.append(self.inst(InstKind.LOAD16))
-                case OpKind.LOAD32:
-                    bytecode.append(self.inst(InstKind.LOAD32))
-                case OpKind.LOAD64:
-                    bytecode.append(self.inst(InstKind.LOAD64))
-                case OpKind.LT:
-                    bytecode.append(self.inst(InstKind.LT))
                 case OpKind.METHOD_CALL:
                     raise AssertionError(
                         "Method call should be transpiled to function call during type checking"
                     )
-                case OpKind.MOD:
-                    bytecode.append(self.inst(InstKind.MOD))
-                case OpKind.MUL:
-                    bytecode.append(self.inst(InstKind.MUL))
-                case OpKind.NE:
-                    bytecode.append(self.inst(InstKind.NE))
-                case OpKind.NOT:
-                    bytecode.append(self.inst(InstKind.NOT))
-                case OpKind.OR:
-                    bytecode.append(self.inst(InstKind.OR))
-                case OpKind.OVER:
-                    bytecode.append(self.inst(InstKind.OVER))
                 case OpKind.PRINT:
                     assert (
                         False
                     ), "PRINT should be resolved to a PRINT variant by the type checker"
-                case OpKind.PRINT_BOOL:
-                    bytecode.append(self.inst(InstKind.PRINT_BOOL))
-                case OpKind.PRINT_CHAR:
-                    bytecode.append(self.inst(InstKind.PRINT_CHAR))
-                case OpKind.PRINT_CSTR:
-                    bytecode.append(self.inst(InstKind.PRINT_CSTR))
-                case OpKind.PRINT_INT:
-                    bytecode.append(self.inst(InstKind.PRINT_INT))
-                case OpKind.PRINT_STR:
-                    bytecode.append(self.inst(InstKind.PRINT_STR))
                 case OpKind.PUSH_ARRAY:
                     assert isinstance(op.value, list), "Expected `list`"
                     list_len = len(op.value)
@@ -480,20 +478,6 @@ class Compiler:
                         variable_name
                     )
                     bytecode.append(self.inst(get_kind, args=[index]))
-                case OpKind.ROT:
-                    bytecode.append(self.inst(InstKind.ROT))
-                case OpKind.SHL:
-                    bytecode.append(self.inst(InstKind.SHL))
-                case OpKind.SHR:
-                    bytecode.append(self.inst(InstKind.SHR))
-                case OpKind.BIT_AND:
-                    bytecode.append(self.inst(InstKind.BIT_AND))
-                case OpKind.BIT_OR:
-                    bytecode.append(self.inst(InstKind.BIT_OR))
-                case OpKind.BIT_XOR:
-                    bytecode.append(self.inst(InstKind.BIT_XOR))
-                case OpKind.BIT_NOT:
-                    bytecode.append(self.inst(InstKind.BIT_NOT))
                 case OpKind.SOME:
                     # Stack: [value]
                     # Allocate 16 bytes, store tag=1 at byte 0, value at byte 8
@@ -513,14 +497,6 @@ class Compiler:
                     bytecode.append(self.inst(InstKind.STORE64))
                     # Push ptr
                     bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_ptr]))
-                case OpKind.STORE8:
-                    bytecode.append(self.inst(InstKind.STORE8))
-                case OpKind.STORE16:
-                    bytecode.append(self.inst(InstKind.STORE16))
-                case OpKind.STORE32:
-                    bytecode.append(self.inst(InstKind.STORE32))
-                case OpKind.STORE64:
-                    bytecode.append(self.inst(InstKind.STORE64))
                 case OpKind.STRUCT_NEW:
                     struct = op.value
                     assert isinstance(struct, Struct), "Expected struct"
@@ -538,10 +514,6 @@ class Compiler:
                             bytecode.append(self.inst(InstKind.PUSH, args=[i * 8]))
                             bytecode.append(self.inst(InstKind.ADD))
                         bytecode.append(self.inst(InstKind.STORE64))
-                case OpKind.SUB:
-                    bytecode.append(self.inst(InstKind.SUB))
-                case OpKind.SWAP:
-                    bytecode.append(self.inst(InstKind.SWAP))
                 case OpKind.TYPE_CAST:
                     pass
                 case OpKind.WHILE_BREAK:
@@ -585,22 +557,6 @@ class Compiler:
                 case OpKind.WHILE_START:
                     label = op_to_label(op)
                     bytecode.append(self.inst(InstKind.LABEL, args=[label]))
-                case OpKind.SYSCALL0:
-                    bytecode.append(self.inst(InstKind.SYSCALL0))
-                case OpKind.SYSCALL1:
-                    bytecode.append(self.inst(InstKind.SYSCALL1))
-                case OpKind.SYSCALL2:
-                    bytecode.append(self.inst(InstKind.SYSCALL2))
-                case OpKind.SYSCALL3:
-                    bytecode.append(self.inst(InstKind.SYSCALL3))
-                case OpKind.SYSCALL4:
-                    bytecode.append(self.inst(InstKind.SYSCALL4))
-                case OpKind.SYSCALL5:
-                    bytecode.append(self.inst(InstKind.SYSCALL5))
-                case OpKind.SYSCALL6:
-                    bytecode.append(self.inst(InstKind.SYSCALL6))
-                case _:
-                    assert_never(op.kind)
 
         if self.locals_count > 0:
             bytecode.insert(0, Inst(InstKind.LOCALS_INIT, args=[self.locals_count]))
