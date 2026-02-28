@@ -1,7 +1,10 @@
+"""Command-line argument parsing for the Casa compiler."""
+
 import argparse
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse and return command-line arguments."""
     parser = argparse.ArgumentParser()
     parser.add_argument("input", help="input file")
     parser.add_argument("-o", "--output", help="output binary name")
