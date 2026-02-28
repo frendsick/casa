@@ -138,8 +138,12 @@ class TypeChecker:
             act_params = extract_generic_params(typ)
             if exp_params and act_params and len(exp_params) == len(act_params):
                 if all(
-                    ep == ANY_TYPE or ap == ANY_TYPE or ep == ap
-                    for ep, ap in zip(exp_params, act_params)
+                    expected_param == ANY_TYPE
+                    or actual_param == ANY_TYPE
+                    or expected_param == actual_param
+                    for expected_param, actual_param in zip(
+                        exp_params, act_params
+                    )
                 ):
                     return expected
             else:
@@ -257,9 +261,11 @@ class TypeChecker:
         if actual_base == generic_base:
             act_params = extract_generic_params(actual)
             if act_params and len(act_params) == len(exp_params):
-                for ep, ap in zip(exp_params, act_params):
-                    if ep in signature.type_vars:
-                        self._bind_type_var(bindings, ep, ap)
+                for expected_param, actual_param in zip(exp_params, act_params):
+                    if expected_param in signature.type_vars:
+                        self._bind_type_var(
+                            bindings, expected_param, actual_param
+                        )
                 return True
             raise_error(
                 ErrorKind.TYPE_MISMATCH,
@@ -292,14 +298,16 @@ class TypeChecker:
         Returns True if this parameter was handled.
         """
         fn_sig_str = extract_fn_signature_str(expected.typ)
-        if not fn_sig_str or not any(tv in fn_sig_str for tv in signature.type_vars):
+        if not fn_sig_str or not any(
+            type_var in fn_sig_str for type_var in signature.type_vars
+        ):
             return False
 
         actual = self.stack_pop()
         if actual == ANY_TYPE:
-            for tv in signature.type_vars:
-                if tv in fn_sig_str:
-                    self._bind_type_var(bindings, tv, ANY_TYPE)
+            for type_var in signature.type_vars:
+                if type_var in fn_sig_str:
+                    self._bind_type_var(bindings, type_var, ANY_TYPE)
             return True
         if not is_fn_type(actual):
             raise_error(
@@ -314,9 +322,13 @@ class TypeChecker:
             return True
         exp_fn_sig = Signature.from_str(fn_sig_str)
         act_fn_sig = Signature.from_str(actual_sig_str)
-        for ep, ap in zip(exp_fn_sig.parameters, act_fn_sig.parameters):
-            if ep.typ in signature.type_vars:
-                self._bind_type_var(bindings, ep.typ, ap.typ)
+        for expected_param, actual_param in zip(
+            exp_fn_sig.parameters, act_fn_sig.parameters
+        ):
+            if expected_param.typ in signature.type_vars:
+                self._bind_type_var(
+                    bindings, expected_param.typ, actual_param.typ
+                )
         for er, ar in zip(exp_fn_sig.return_types, act_fn_sig.return_types):
             if er in signature.type_vars:
                 self._bind_type_var(bindings, er, ar)
@@ -334,10 +346,10 @@ def _resolve_return_type(return_type: Type, bindings: dict[str, Type]) -> Type:
             resolved = [bindings.get(p, p) for p in ret_params]
             return f"{generic_base}[{' '.join(resolved)}]"
     fn_sig_str = extract_fn_signature_str(return_type)
-    if fn_sig_str and any(tv in fn_sig_str for tv in bindings):
+    if fn_sig_str and any(type_var in fn_sig_str for type_var in bindings):
         resolved_sig = fn_sig_str
-        for tv, bound in bindings.items():
-            resolved_sig = resolved_sig.replace(tv, bound)
+        for type_var, bound in bindings.items():
+            resolved_sig = resolved_sig.replace(type_var, bound)
         return f"fn[{resolved_sig}]"
     return return_type
 
@@ -565,9 +577,9 @@ def _bind_generic_params(
     act_params = extract_generic_params(actual_type)
     if not exp_params or not act_params:
         return
-    for ep, ap in zip(exp_params, act_params):
-        if ep in type_vars and ep not in bindings:
-            bindings[ep] = ap
+    for expected_param, actual_param in zip(exp_params, act_params):
+        if expected_param in type_vars and expected_param not in bindings:
+            bindings[expected_param] = actual_param
 
 
 def _inject_trait_fn_ptrs(
@@ -692,19 +704,19 @@ def type_satisfies_trait(
             return True
     for method in trait.methods:
         fn_name = f"{type_name}::{method.name}"
-        fn = GLOBAL_FUNCTIONS.get(fn_name)
-        if not fn:
+        trait_fn = GLOBAL_FUNCTIONS.get(fn_name)
+        if not trait_fn:
             return False
-        if not fn.signature:
+        if not trait_fn.signature:
             return False
         # Check signature matches with self type replaced by type_name
         resolved = resolve_trait_sig(method.signature, type_name)
-        if len(fn.signature.parameters) != len(resolved.parameters):
+        if len(trait_fn.signature.parameters) != len(resolved.parameters):
             return False
-        if len(fn.signature.return_types) != len(resolved.return_types):
+        if len(trait_fn.signature.return_types) != len(resolved.return_types):
             return False
         for actual_param, expected_param in zip(
-            fn.signature.parameters, resolved.parameters
+            trait_fn.signature.parameters, resolved.parameters
         ):
             if (
                 actual_param.typ != expected_param.typ
@@ -713,7 +725,7 @@ def type_satisfies_trait(
             ):
                 return False
         for actual_ret, expected_ret in zip(
-            fn.signature.return_types, resolved.return_types
+            trait_fn.signature.return_types, resolved.return_types
         ):
             if (
                 actual_ret != expected_ret
@@ -1153,12 +1165,12 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 tc.stack_push("bool")
             case OpKind.OVER:
                 t1 = tc.stack_pop()
-                o1 = tc.last_pop_origin
+                first_origin = tc.last_pop_origin
                 t2 = tc.stack_pop()
-                o2 = tc.last_pop_origin
-                tc.stack_push(t2, o2)
-                tc.stack_push(t1, o1)
-                tc.stack_push(t2, o2)
+                second_origin = tc.last_pop_origin
+                tc.stack_push(t2, second_origin)
+                tc.stack_push(t1, first_origin)
+                tc.stack_push(t2, second_origin)
             case OpKind.PRINT:
                 typ = tc.stack_pop()
                 if typ == "str":
@@ -1268,14 +1280,14 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 )
             case OpKind.ROT:
                 t1 = tc.stack_pop()
-                o1 = tc.last_pop_origin
+                first_origin = tc.last_pop_origin
                 t2 = tc.stack_pop()
-                o2 = tc.last_pop_origin
+                second_origin = tc.last_pop_origin
                 t3 = tc.stack_pop()
-                o3 = tc.last_pop_origin
-                tc.stack_push(t2, o2)
-                tc.stack_push(t1, o1)
-                tc.stack_push(t3, o3)
+                third_origin = tc.last_pop_origin
+                tc.stack_push(t2, second_origin)
+                tc.stack_push(t1, first_origin)
+                tc.stack_push(t3, third_origin)
             case OpKind.BIT_AND | OpKind.BIT_OR | OpKind.BIT_XOR:
                 tc.expect_type("int")
                 tc.expect_type("int")
@@ -1311,11 +1323,11 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 tc.stack_push(t1)
             case OpKind.SWAP:
                 t1 = tc.stack_pop()
-                o1 = tc.last_pop_origin
+                first_origin = tc.last_pop_origin
                 t2 = tc.stack_pop()
-                o2 = tc.last_pop_origin
-                tc.stack_push(t1, o1)
-                tc.stack_push(t2, o2)
+                second_origin = tc.last_pop_origin
+                tc.stack_push(t1, first_origin)
+                tc.stack_push(t2, second_origin)
             case OpKind.TYPE_CAST:
                 cast_type = op.value
                 assert isinstance(cast_type, str), "Expected cast type"
@@ -1414,9 +1426,9 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                         param_tvs.add(gp)
             fn_sig_str = extract_fn_signature_str(p.typ)
             if fn_sig_str:
-                for tv in function.signature.type_vars:
-                    if tv in fn_sig_str:
-                        param_tvs.add(tv)
+                for type_var in function.signature.type_vars:
+                    if type_var in fn_sig_str:
+                        param_tvs.add(type_var)
         ret_only = {
             r
             for r in function.signature.return_types
@@ -1462,22 +1474,22 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
 def type_check_functions(functions: Iterable[Function]):
     """Typecheck the given functions, collecting all errors."""
     all_errors: list[CasaError] = []
-    for fn in list(functions):
-        if fn.is_typechecked:
+    for function in list(functions):
+        if function.is_typechecked:
             continue
-        # Skip lambda functions — they are typechecked as part of their
+        # Skip lambda functions -- they are typechecked as part of their
         # parent function when it is resolved and typechecked.
-        if fn.name.startswith("lambda__"):
+        if function.name.startswith("lambda__"):
             continue
-        fn.is_typechecked = True
-        if not fn.is_used:
-            fn.ops = resolve_identifiers(fn.ops, fn)
+        function.is_typechecked = True
+        if not function.is_used:
+            function.ops = resolve_identifiers(function.ops, function)
         try:
-            signature = type_check_ops(fn.ops, fn)
+            signature = type_check_ops(function.ops, function)
         except CasaErrorCollection as exc:
             all_errors.extend(exc.errors)
             continue
-        if not fn.signature:
-            fn.signature = signature
+        if not function.signature:
+            function.signature = signature
     if all_errors:
         raise CasaErrorCollection(all_errors)
