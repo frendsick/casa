@@ -157,6 +157,105 @@ def _resolve_trait_method_sig(sig: Signature, type_var: str) -> Signature:
     return resolve_trait_sig(sig, type_var)
 
 
+def _gather_captures(
+    lambda_function: Function,
+    function: Function | None,
+) -> None:
+    """Gather captured variables for a lambda function from enclosing scopes."""
+    for op in lambda_function.ops:
+        if op.kind != OpKind.IDENTIFIER:
+            continue
+        captured = False
+        if function:
+            for local_variable in function.variables:
+                if op.value == local_variable.name:
+                    lambda_function.captures.append(local_variable)
+                    captured = True
+                    break
+        if not captured:
+            for global_variable in GLOBAL_VARIABLES.values():
+                if global_variable.name == op.value:
+                    lambda_function.captures.append(global_variable)
+                    break
+
+
+def _resolve_fn_ref(
+    identifier: str,
+    op: Op,
+    function: Function | None,
+    errors: list[CasaError],
+) -> bool:
+    """Resolve a function reference (&name). Returns True if handled."""
+    function_name = identifier[1:]
+    if not function_name:
+        errors.append(
+            CasaError(
+                ErrorKind.SYNTAX,
+                "Expected function name after `&`",
+                op.location,
+            )
+        )
+        return True
+    # Check trait bound reference: &K::method
+    trait_var = _resolve_trait_ref(function_name, function, op.location)
+    if trait_var:
+        op.kind = OpKind.PUSH_VARIABLE
+        op.value = trait_var
+        return True
+    global_function = GLOBAL_FUNCTIONS.get(function_name)
+    if not global_function:
+        errors.append(
+            CasaError(
+                ErrorKind.UNDEFINED_NAME,
+                f"Function `{function_name}` is not defined",
+                op.location,
+            )
+        )
+        return True
+    op.kind = OpKind.FN_PUSH
+    op.value = function_name
+    _mark_used_and_resolve(global_function)
+    return True
+
+
+def _create_member_accessor(
+    struct_name: str,
+    member_name: str,
+    member_type: str,
+    member_index: int,
+    location: Location,
+) -> tuple[Function, Function]:
+    """Create getter and setter functions for a struct member."""
+    offset = member_index * 8
+
+    # Getter
+    getter_name = f"{struct_name}::{member_name}"
+    getter_ops: list[Op] = [
+        Op("ptr", OpKind.TYPE_CAST, location),
+        Op(offset, OpKind.PUSH_INT, location),
+        Op(Operator.PLUS, OpKind.ADD, location),
+        Op(Intrinsic.LOAD64, OpKind.LOAD64, location),
+        Op(member_type, OpKind.TYPE_CAST, location),
+    ]
+    getter_params = [Parameter(struct_name)]
+    getter_signature = Signature(getter_params, [member_type])
+    getter = Function(getter_name, getter_ops, location, getter_signature)
+
+    # Setter
+    setter_name = f"{struct_name}::set_{member_name}"
+    setter_ops: list[Op] = [
+        Op("ptr", OpKind.TYPE_CAST, location),
+        Op(offset, OpKind.PUSH_INT, location),
+        Op(Operator.PLUS, OpKind.ADD, location),
+        Op(Intrinsic.STORE64, OpKind.STORE64, location),
+    ]
+    setter_params = [Parameter(struct_name), Parameter(member_type)]
+    setter_signature = Signature(setter_params, [])
+    setter = Function(setter_name, setter_ops, location, setter_signature)
+
+    return getter, setter
+
+
 def _resolve_trait_ref(
     name: str,
     function: Function | None,
@@ -225,25 +324,7 @@ def resolve_identifiers(
                     continue
 
                 lambda_function.is_used = True
-
-                # Gather captures for the lambda function
-                # Local variables shadow globals with the same name
-                for op in lambda_function.ops:
-                    if op.kind != OpKind.IDENTIFIER:
-                        continue
-                    captured = False
-                    if function:
-                        for local_variable in function.variables:
-                            if op.value == local_variable.name:
-                                lambda_function.captures.append(local_variable)
-                                captured = True
-                                break
-                    if not captured:
-                        for global_variable in GLOBAL_VARIABLES.values():
-                            if global_variable.name == op.value:
-                                lambda_function.captures.append(global_variable)
-                                break
-
+                _gather_captures(lambda_function, function)
                 lambda_function.ops = resolve_identifiers(
                     lambda_function.ops, lambda_function
                 )
@@ -257,35 +338,7 @@ def resolve_identifiers(
 
                 # Function reference: &name pushes a function as a value
                 if identifier.startswith("&"):
-                    function_name = identifier[1:]
-                    if not function_name:
-                        errors.append(
-                            CasaError(
-                                ErrorKind.SYNTAX,
-                                "Expected function name after `&`",
-                                op.location,
-                            )
-                        )
-                        continue
-                    # Check trait bound reference: &K::method
-                    trait_var = _resolve_trait_ref(function_name, function, op.location)
-                    if trait_var:
-                        op.kind = OpKind.PUSH_VARIABLE
-                        op.value = trait_var
-                        continue
-                    global_function = GLOBAL_FUNCTIONS.get(function_name)
-                    if not global_function:
-                        errors.append(
-                            CasaError(
-                                ErrorKind.UNDEFINED_NAME,
-                                f"Function `{function_name}` is not defined",
-                                op.location,
-                            )
-                        )
-                        continue
-                    op.kind = OpKind.FN_PUSH
-                    op.value = function_name
-                    _mark_used_and_resolve(global_function)
+                    _resolve_fn_ref(identifier, op, function, errors)
                     continue
 
                 # Check trait bound call: K::method -> push var + exec
@@ -298,7 +351,6 @@ def resolve_identifiers(
                     index += 1
                     continue
 
-                # Check different identifiers
                 # Local variables shadow globals with the same name
                 if function and identifier in function.variables:
                     op.kind = OpKind.PUSH_VARIABLE
@@ -733,48 +785,24 @@ def parse_struct(cursor: Cursor[Token]) -> Struct:
             )
 
         expect_token(cursor, value=":")
-
         member_type_str = parse_type(cursor)
 
-        # Getter
-        getter_name = f"{struct_name.value}::{member_name.value}"
-        if getter_name in GLOBAL_FUNCTIONS:
-            raise_error(
-                ErrorKind.DUPLICATE_NAME,
-                f"Function `{getter_name}` is already defined",
-                member_name.location,
-            )
-        member_location = member_name.location
-        getter_ops: list[Op] = []
-        getter_ops.append(Op("ptr", OpKind.TYPE_CAST, member_location))
-        getter_ops.append(Op(len(members) * 8, OpKind.PUSH_INT, member_location))
-        getter_ops.append(Op(Operator.PLUS, OpKind.ADD, member_location))
-        getter_ops.append(Op(Intrinsic.LOAD64, OpKind.LOAD64, member_location))
-        getter_ops.append(Op(member_type_str, OpKind.TYPE_CAST, member_location))
-        getter_params = [Parameter(struct_name.value)]
-        getter_signature = Signature(getter_params, [member_type_str])
-        getter = Function(getter_name, getter_ops, member_location, getter_signature)
-        GLOBAL_FUNCTIONS[getter_name] = getter
+        getter, setter = _create_member_accessor(
+            struct_name.value,
+            member_name.value,
+            member_type_str,
+            len(members),
+            member_name.location,
+        )
+        for accessor in (getter, setter):
+            if accessor.name in GLOBAL_FUNCTIONS:
+                raise_error(
+                    ErrorKind.DUPLICATE_NAME,
+                    f"Function `{accessor.name}` is already defined",
+                    member_name.location,
+                )
+            GLOBAL_FUNCTIONS[accessor.name] = accessor
 
-        # Setter
-        setter_name = f"{struct_name.value}::set_{member_name.value}"
-        if setter_name in GLOBAL_FUNCTIONS:
-            raise_error(
-                ErrorKind.DUPLICATE_NAME,
-                f"Function `{setter_name}` is already defined",
-                member_name.location,
-            )
-        setter_ops: list[Op] = []
-        setter_ops.append(Op("ptr", OpKind.TYPE_CAST, member_location))
-        setter_ops.append(Op(len(members) * 8, OpKind.PUSH_INT, member_location))
-        setter_ops.append(Op(Operator.PLUS, OpKind.ADD, member_location))
-        setter_ops.append(Op(Intrinsic.STORE64, OpKind.STORE64, member_location))
-        setter_params = [Parameter(struct_name.value), Parameter(member_type_str)]
-        setter_signature = Signature(setter_params, [])
-        setter = Function(setter_name, setter_ops, member_location, setter_signature)
-        GLOBAL_FUNCTIONS[setter_name] = setter
-
-        # Add to members list
         members.append(Member(member_name.value, member_type_str))
 
     return Struct(struct_name.value, members, struct_name.location)
