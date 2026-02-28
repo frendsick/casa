@@ -221,6 +221,7 @@ fn fizzbuzz number:int {
 | Operator | Stack Effect | Description |
 |----------|-------------|-------------|
 | `= name` | `a -> None` | Assign top of stack to `name` |
+| `= name:type` | `a -> None` | Assign with type annotation |
 | `+= name` | `int -> None` | Add to `name` |
 | `-= name` | `int -> None` | Subtract from `name` |
 
@@ -229,6 +230,13 @@ A variable's type is set on first assignment and cannot change:
 ```casa
 42 = x       # x is int
 "hi" = x     # ERROR: cannot assign str to int variable
+```
+
+The `= name:type` form annotates the variable type explicitly. The type checker verifies the stack value is compatible and uses the annotated type for the variable. This is useful for narrowing `any` or bare `option` to a concrete type:
+
+```casa
+42 (any) = x:int            # narrow any to int
+none = empty:option[int]    # narrow bare option to option[int]
 ```
 
 ## Lambdas

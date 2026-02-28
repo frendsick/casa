@@ -86,6 +86,7 @@ source → lex → parse → resolve → type check → bytecode → emit asm �
 | [file_io.casa](examples/file_io.casa) | File I/O operations: read, write, and remove files |
 | [vec.casa](examples/vec.casa) | Generic `List[T]` with push, pop, get, set, slice |
 | [hash_map.casa](examples/hash_map.casa) | `Map[K V]` and `Set[K]` with the `Hashable` trait |
+| [type_annotations.casa](examples/type_annotations.casa) | Type annotations on variable assignments (`= name:type`) |
 
 More examples: [examples](./examples/)
 

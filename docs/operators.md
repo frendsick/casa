@@ -110,6 +110,7 @@ Assignment operators pop a value from the stack and store it in a named variable
 | Operator | Stack Effect | Description |
 |----------|-------------|-------------|
 | `= name` | `a -> None` | Assign top of stack to variable `name` |
+| `= name:type` | `a -> None` | Assign with type annotation, verifies and narrows the type |
 | `+= name` | `int -> None` | Add top of stack to variable `name` |
 | `-= name` | `int -> None` | Subtract top of stack from variable `name` |
 
@@ -117,6 +118,16 @@ Assignment operators pop a value from the stack and store it in a named variable
 42 = count        # count is now 42
 1 += count        # count is now 43
 10 -= count       # count is now 33
+```
+
+### Type annotations
+
+The `= name:type` form lets you annotate the type of a variable at assignment time. The type checker verifies the stack value is compatible and uses the annotated type for the variable.
+
+```casa
+42 = x:int                  # explicit int annotation
+none = empty:option[int]    # narrow bare option to option[int]
+42 (any) = val:int          # narrow any to int
 ```
 
 Variables are created on first assignment. See [Functions and Lambdas — Variables](functions-and-lambdas.md#variables) for scoping rules.
