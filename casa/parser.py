@@ -75,11 +75,17 @@ def handle_fstring(
                 part_count += 1
             case TokenKind.FSTRING_EXPR_START:
                 expr_ops: list[Op] = []
-                while (t := cursor.pop()) and t.kind != TokenKind.FSTRING_EXPR_END:
-                    if t.kind == TokenKind.FSTRING_START:
-                        handle_fstring(t, cursor, function_name, expr_ops)
+                while (
+                    expr_token := cursor.pop()
+                ) and expr_token.kind != TokenKind.FSTRING_EXPR_END:
+                    if expr_token.kind == TokenKind.FSTRING_START:
+                        handle_fstring(
+                            expr_token, cursor, function_name, expr_ops
+                        )
                         continue
-                    if op := token_to_op(t, cursor, function_name):
+                    if op := token_to_op(
+                        expr_token, cursor, function_name
+                    ):
                         expr_ops.append(op)
                 lambda_name = f"lambda__{function_name}_o{token.location.span.offset}"
                 lambda_fn = Function(lambda_name, expr_ops, token.location)
