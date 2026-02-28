@@ -261,46 +261,25 @@ class Compiler:
                         f"Identifier `{op.value}` should be resolved by the parser"
                     )
                 case OpKind.IF_CONDITION:
-                    if not self.find_matching_label(
-                        op=op,
-                        start_kind=OpKind.IF_START,
-                        end_kind=OpKind.IF_END,
+                    self._require_matching_label(
+                        op, OpKind.IF_START, OpKind.IF_END,
+                        "`then` without matching `if`",
                         reverse=True,
-                    ):
-                        raise_error(
-                            ErrorKind.UNMATCHED_BLOCK,
-                            "`then` without matching `if`",
-                            op.location,
-                        )
-
-                    end_label = self.find_matching_label(
-                        op=op,
-                        start_kind=OpKind.IF_START,
-                        end_kind=OpKind.IF_END,
-                        target_kinds=[OpKind.IF_ELIF, OpKind.IF_ELSE, OpKind.IF_END],
                     )
-                    if not end_label:
-                        raise_error(
-                            ErrorKind.UNMATCHED_BLOCK,
-                            "`then` without matching `fi`",
-                            op.location,
-                        )
-
+                    end_label = self._require_matching_label(
+                        op, OpKind.IF_START, OpKind.IF_END,
+                        "`then` without matching `fi`",
+                        target_kinds=[
+                            OpKind.IF_ELIF, OpKind.IF_ELSE, OpKind.IF_END
+                        ],
+                    )
                     bytecode.append(self.inst(InstKind.JUMP_NE, args=[end_label]))
                 case OpKind.IF_ELIF:
-                    # Elif must be inside if block
-                    if not self.find_matching_label(
-                        op=op,
-                        start_kind=OpKind.IF_START,
-                        end_kind=OpKind.IF_END,
+                    self._require_matching_label(
+                        op, OpKind.IF_START, OpKind.IF_END,
+                        "`elif` without parent `if`",
                         reverse=True,
-                    ):
-                        raise_error(
-                            ErrorKind.UNMATCHED_BLOCK,
-                            "`elif` without parent `if`",
-                            op.location,
-                        )
-
+                    )
                     # Elif should not be after an else
                     if self.find_matching_label(
                         op=op,
@@ -316,74 +295,38 @@ class Compiler:
                         )
 
                     elif_label = op_to_label(op)
-                    end_label = self.find_matching_label(
-                        op=op,
-                        start_kind=OpKind.IF_START,
-                        end_kind=OpKind.IF_END,
+                    end_label = self._require_matching_label(
+                        op, OpKind.IF_START, OpKind.IF_END,
+                        "`elif` without matching `fi`",
                     )
-                    if not end_label:
-                        raise_error(
-                            ErrorKind.UNMATCHED_BLOCK,
-                            "`elif` without matching `fi`",
-                            op.location,
-                        )
-
                     bytecode.append(self.inst(InstKind.JUMP, args=[end_label]))
                     bytecode.append(self.inst(InstKind.LABEL, args=[elif_label]))
                 case OpKind.IF_ELSE:
-                    # Else must be inside if block
-                    if not self.find_matching_label(
-                        op=op,
-                        start_kind=OpKind.IF_START,
-                        end_kind=OpKind.IF_END,
+                    self._require_matching_label(
+                        op, OpKind.IF_START, OpKind.IF_END,
+                        "`else` without parent `if`",
                         reverse=True,
-                    ):
-                        raise_error(
-                            ErrorKind.UNMATCHED_BLOCK,
-                            "`else` without parent `if`",
-                            op.location,
-                        )
-
-                    else_label = op_to_label(op)
-                    end_label = self.find_matching_label(
-                        op=op,
-                        start_kind=OpKind.IF_START,
-                        end_kind=OpKind.IF_END,
                     )
-                    if not end_label:
-                        raise_error(
-                            ErrorKind.UNMATCHED_BLOCK,
-                            "`else` without matching `fi`",
-                            op.location,
-                        )
-
+                    else_label = op_to_label(op)
+                    end_label = self._require_matching_label(
+                        op, OpKind.IF_START, OpKind.IF_END,
+                        "`else` without matching `fi`",
+                    )
                     bytecode.append(self.inst(InstKind.JUMP, args=[end_label]))
                     bytecode.append(self.inst(InstKind.LABEL, args=[else_label]))
                 case OpKind.IF_END:
-                    if not self.find_matching_label(
-                        op=op,
-                        start_kind=OpKind.IF_START,
-                        end_kind=OpKind.IF_END,
+                    self._require_matching_label(
+                        op, OpKind.IF_START, OpKind.IF_END,
+                        "`fi` without parent `if`",
                         reverse=True,
-                    ):
-                        raise_error(
-                            ErrorKind.UNMATCHED_BLOCK,
-                            "`fi` without parent `if`",
-                            op.location,
-                        )
+                    )
                     label = op_to_label(op)
                     bytecode.append(self.inst(InstKind.LABEL, args=[label]))
                 case OpKind.IF_START:
-                    if not self.find_matching_label(
-                        op=op,
-                        start_kind=OpKind.IF_START,
-                        end_kind=OpKind.IF_END,
-                    ):
-                        raise_error(
-                            ErrorKind.UNMATCHED_BLOCK,
-                            "`if` without matching `fi`",
-                            op.location,
-                        )
+                    self._require_matching_label(
+                        op, OpKind.IF_START, OpKind.IF_END,
+                        "`if` without matching `fi`",
+                    )
                 case OpKind.INCLUDE_FILE:
                     pass
                 case OpKind.LE:
@@ -602,87 +545,41 @@ class Compiler:
                 case OpKind.TYPE_CAST:
                     pass
                 case OpKind.WHILE_BREAK:
-                    if not self.find_matching_label(
-                        op=op,
-                        start_kind=OpKind.WHILE_START,
-                        end_kind=OpKind.WHILE_END,
+                    self._require_matching_label(
+                        op, OpKind.WHILE_START, OpKind.WHILE_END,
+                        "`break` without parent `while`",
                         reverse=True,
-                    ):
-                        raise_error(
-                            ErrorKind.UNMATCHED_BLOCK,
-                            "`break` without parent `while`",
-                            op.location,
-                        )
-
-                    end_label = self.find_matching_label(
-                        op=op,
-                        start_kind=OpKind.WHILE_START,
-                        end_kind=OpKind.WHILE_END,
                     )
-                    if not end_label:
-                        raise_error(
-                            ErrorKind.UNMATCHED_BLOCK,
-                            "`break` without matching `done`",
-                            op.location,
-                        )
-
+                    end_label = self._require_matching_label(
+                        op, OpKind.WHILE_START, OpKind.WHILE_END,
+                        "`break` without matching `done`",
+                    )
                     bytecode.append(self.inst(InstKind.JUMP, args=[end_label]))
                 case OpKind.WHILE_CONDITION:
-                    if not self.find_matching_label(
-                        op=op,
-                        start_kind=OpKind.WHILE_START,
-                        end_kind=OpKind.WHILE_END,
+                    self._require_matching_label(
+                        op, OpKind.WHILE_START, OpKind.WHILE_END,
+                        "`do` without parent `while`",
                         reverse=True,
-                    ):
-                        raise_error(
-                            ErrorKind.UNMATCHED_BLOCK,
-                            "`do` without parent `while`",
-                            op.location,
-                        )
-
-                    end_label = self.find_matching_label(
-                        op=op,
-                        start_kind=OpKind.WHILE_START,
-                        end_kind=OpKind.WHILE_END,
                     )
-                    if not end_label:
-                        raise_error(
-                            ErrorKind.UNMATCHED_BLOCK,
-                            "`do` without matching `done`",
-                            op.location,
-                        )
-
+                    end_label = self._require_matching_label(
+                        op, OpKind.WHILE_START, OpKind.WHILE_END,
+                        "`do` without matching `done`",
+                    )
                     bytecode.append(self.inst(InstKind.JUMP_NE, args=[end_label]))
                 case OpKind.WHILE_CONTINUE:
-                    continue_target = self.find_matching_label(
-                        op=op,
-                        start_kind=OpKind.WHILE_START,
-                        end_kind=OpKind.WHILE_END,
+                    continue_target = self._require_matching_label(
+                        op, OpKind.WHILE_START, OpKind.WHILE_END,
+                        "`continue` without parent `while`",
                         reverse=True,
                     )
-                    if continue_target is None:
-                        raise_error(
-                            ErrorKind.UNMATCHED_BLOCK,
-                            "`continue` without parent `while`",
-                            op.location,
-                        )
-
                     bytecode.append(self.inst(InstKind.JUMP, args=[continue_target]))
                 case OpKind.WHILE_END:
                     while_label = op_to_label(op)
-                    loop_start = self.find_matching_label(
-                        op=op,
-                        start_kind=OpKind.WHILE_START,
-                        end_kind=OpKind.WHILE_END,
+                    loop_start = self._require_matching_label(
+                        op, OpKind.WHILE_START, OpKind.WHILE_END,
+                        "`done` without parent `while`",
                         reverse=True,
                     )
-                    if loop_start is None:
-                        raise_error(
-                            ErrorKind.UNMATCHED_BLOCK,
-                            "`done` without parent `while`",
-                            op.location,
-                        )
-
                     bytecode.append(self.inst(InstKind.JUMP, args=[loop_start]))
                     bytecode.append(self.inst(InstKind.LABEL, args=[while_label]))
                 case OpKind.WHILE_START:
@@ -722,6 +619,22 @@ class Compiler:
             bytecode.append(self.inst(InstKind.FN_RETURN))
 
         return bytecode
+
+    def _require_matching_label(
+        self,
+        op: Op,
+        start_kind: OpKind,
+        end_kind: OpKind,
+        message: str,
+        **kwargs,
+    ) -> LabelId:
+        """Find a matching label or raise an error."""
+        label = self.find_matching_label(
+            op=op, start_kind=start_kind, end_kind=end_kind, **kwargs
+        )
+        if label is None:
+            raise_error(ErrorKind.UNMATCHED_BLOCK, message, op.location)
+        return label
 
     def find_matching_label(
         self,
