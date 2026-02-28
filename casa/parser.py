@@ -61,6 +61,23 @@ INTRINSIC_TO_OPKIND = {
 }
 
 
+def _parse_fstring_expr(
+    cursor: Cursor[Token],
+    function_name: str,
+) -> list[Op]:
+    """Parse the expression inside an f-string interpolation block."""
+    expr_ops: list[Op] = []
+    while (
+        expr_token := cursor.pop()
+    ) and expr_token.kind != TokenKind.FSTRING_EXPR_END:
+        if expr_token.kind == TokenKind.FSTRING_START:
+            handle_fstring(expr_token, cursor, function_name, expr_ops)
+            continue
+        if op := token_to_op(expr_token, cursor, function_name):
+            expr_ops.append(op)
+    return expr_ops
+
+
 def handle_fstring(
     start_token: Token,
     cursor: Cursor[Token],
@@ -74,19 +91,7 @@ def handle_fstring(
                 ops.append(Op(token.value, OpKind.PUSH_STR, token.location))
                 part_count += 1
             case TokenKind.FSTRING_EXPR_START:
-                expr_ops: list[Op] = []
-                while (
-                    expr_token := cursor.pop()
-                ) and expr_token.kind != TokenKind.FSTRING_EXPR_END:
-                    if expr_token.kind == TokenKind.FSTRING_START:
-                        handle_fstring(
-                            expr_token, cursor, function_name, expr_ops
-                        )
-                        continue
-                    if op := token_to_op(
-                        expr_token, cursor, function_name
-                    ):
-                        expr_ops.append(op)
+                expr_ops = _parse_fstring_expr(cursor, function_name)
                 lambda_name = f"lambda__{function_name}_o{token.location.span.offset}"
                 lambda_fn = Function(lambda_name, expr_ops, token.location)
                 GLOBAL_FUNCTIONS[lambda_name] = lambda_fn
@@ -522,29 +527,27 @@ def get_op_array(cursor: Cursor[Token]) -> Op:
     while not expect_delimiter(cursor, Delimiter.CLOSE_BRACKET):
         next_tok = cursor.peek()
         if next_tok and next_tok.value == "[":
-            # Nested array literal
-            op = get_op_array(cursor)
-        else:
-            value_token = cursor.pop()
-            if not value_token or value_token.kind not in (
-                TokenKind.LITERAL,
-                TokenKind.IDENTIFIER,
-            ):
-                got = f"`{value_token.kind.name}`" if value_token else "nothing"
-                raise_error(
-                    ErrorKind.UNEXPECTED_TOKEN,
-                    "Unexpected token in array literal",
-                    value_token.location if value_token else None,
-                    expected="literal or identifier",
-                    got=got,
-                )
-            item_op = token_to_op(value_token, cursor)
-            assert item_op is not None, "Array item token always produces an Op"
-            op = item_op
-        array_items.append(op)
-
-        if expect_delimiter(cursor, Delimiter.COMMA):
+            array_items.append(get_op_array(cursor))
+            expect_delimiter(cursor, Delimiter.COMMA)
             continue
+
+        value_token = cursor.pop()
+        if not value_token or value_token.kind not in (
+            TokenKind.LITERAL,
+            TokenKind.IDENTIFIER,
+        ):
+            got = f"`{value_token.kind.name}`" if value_token else "nothing"
+            raise_error(
+                ErrorKind.UNEXPECTED_TOKEN,
+                "Unexpected token in array literal",
+                value_token.location if value_token else None,
+                expected="literal or identifier",
+                got=got,
+            )
+        item_op = token_to_op(value_token, cursor)
+        assert item_op is not None, "Array item token always produces an Op"
+        array_items.append(item_op)
+        expect_delimiter(cursor, Delimiter.COMMA)
 
     return Op(array_items, OpKind.PUSH_ARRAY, open_bracket.location)
 
@@ -557,6 +560,90 @@ def get_op_intrinsic(token: Token) -> Op:
     return Op(intrinsic, INTRINSIC_TO_OPKIND[intrinsic], token.location)
 
 
+def _require_global_scope(function_name: str, what: str, location: Location) -> None:
+    """Raise an error if not in global scope."""
+    if function_name != GLOBAL_SCOPE_LABEL:
+        raise_error(ErrorKind.INVALID_SCOPE, f"{what} should be defined in the global scope", location)
+
+
+def _handle_keyword_fn(token: Token, cursor: Cursor[Token], function_name: str) -> None:
+    """Handle the `fn` keyword: parse and register a function definition."""
+    _require_global_scope(function_name, "Functions", token.location)
+    cursor.position -= 1
+    function = parse_function(cursor)
+    if GLOBAL_FUNCTIONS.get(function.name):
+        raise_error(
+            ErrorKind.DUPLICATE_NAME,
+            f"Identifier `{function.name}` is already defined",
+            function.location,
+        )
+    GLOBAL_FUNCTIONS[function.name] = function
+
+
+def _handle_keyword_struct(token: Token, cursor: Cursor[Token], function_name: str) -> None:
+    """Handle the `struct` keyword: parse and register a struct definition."""
+    _require_global_scope(function_name, "Structs", token.location)
+    cursor.position -= 1
+    struct = parse_struct(cursor)
+    GLOBAL_STRUCTS[struct.name] = struct
+    for member in struct.members:
+        if member.name in GLOBAL_FUNCTIONS:
+            raise_error(
+                ErrorKind.DUPLICATE_NAME,
+                f"Function `{member.name}` already exists",
+                struct.location,
+            )
+
+
+def _handle_keyword_trait(token: Token, cursor: Cursor[Token], function_name: str) -> None:
+    """Handle the `trait` keyword: parse and register a trait definition."""
+    _require_global_scope(function_name, "Traits", token.location)
+    cursor.position -= 1
+    trait = parse_trait(cursor)
+    if trait.name in GLOBAL_TRAITS:
+        raise_error(
+            ErrorKind.DUPLICATE_NAME,
+            f"Trait `{trait.name}` is already defined",
+            trait.location,
+        )
+    GLOBAL_TRAITS[trait.name] = trait
+
+
+def _handle_keyword_include(token: Token, cursor: Cursor[Token]) -> Op:
+    """Handle the `include` keyword: parse the include path."""
+    string_literal = expect_token(cursor, kind=TokenKind.LITERAL)
+    literal_op = get_op_literal(string_literal)
+    if literal_op.kind != OpKind.PUSH_STR:
+        raise_error(
+            ErrorKind.UNEXPECTED_TOKEN,
+            "Unexpected token for include path",
+            string_literal.location,
+            expected="string literal",
+            got=f"`{string_literal.value}`",
+        )
+    assert isinstance(literal_op.value, str), "Included file path"
+    included_path = Path(literal_op.value)
+    if not included_path.is_absolute():
+        token_path = token.location.file.parent
+        included_path = token_path / included_path
+    return Op(included_path.resolve(), OpKind.INCLUDE_FILE, string_literal.location)
+
+
+SIMPLE_KEYWORD_OPS = {
+    Keyword.BREAK: OpKind.WHILE_BREAK,
+    Keyword.CONTINUE: OpKind.WHILE_CONTINUE,
+    Keyword.DO: OpKind.WHILE_CONDITION,
+    Keyword.DONE: OpKind.WHILE_END,
+    Keyword.ELIF: OpKind.IF_ELIF,
+    Keyword.ELSE: OpKind.IF_ELSE,
+    Keyword.FI: OpKind.IF_END,
+    Keyword.IF: OpKind.IF_START,
+    Keyword.RETURN: OpKind.FN_RETURN,
+    Keyword.THEN: OpKind.IF_CONDITION,
+    Keyword.WHILE: OpKind.WHILE_START,
+}
+
+
 def get_op_keyword(
     token: Token,
     cursor: Cursor[Token],
@@ -567,120 +654,26 @@ def get_op_keyword(
     keyword = Keyword.from_lowercase(token.value)
     assert keyword, f"Token `{token.value}` is not a keyword"
 
+    if keyword in SIMPLE_KEYWORD_OPS:
+        return Op(keyword, SIMPLE_KEYWORD_OPS[keyword], token.location)
+
     match keyword:
-        case Keyword.BREAK:
-            return Op(keyword, OpKind.WHILE_BREAK, token.location)
-        case Keyword.CONTINUE:
-            return Op(keyword, OpKind.WHILE_CONTINUE, token.location)
-        case Keyword.DO:
-            return Op(keyword, OpKind.WHILE_CONDITION, token.location)
-        case Keyword.DONE:
-            return Op(keyword, OpKind.WHILE_END, token.location)
-        case Keyword.ELIF:
-            return Op(keyword, OpKind.IF_ELIF, token.location)
-        case Keyword.ELSE:
-            return Op(keyword, OpKind.IF_ELSE, token.location)
         case Keyword.FN:
-            if function_name != GLOBAL_SCOPE_LABEL:
-                raise_error(
-                    ErrorKind.INVALID_SCOPE,
-                    "Functions should be defined in the global scope",
-                    token.location,
-                )
-
-            cursor.position -= 1
-            function = parse_function(cursor)
-            if GLOBAL_FUNCTIONS.get(function.name):
-                raise_error(
-                    ErrorKind.DUPLICATE_NAME,
-                    f"Identifier `{function.name}` is already defined",
-                    function.location,
-                )
-
-            GLOBAL_FUNCTIONS[function.name] = function
+            _handle_keyword_fn(token, cursor, function_name)
             return None
-        case Keyword.FI:
-            return Op(keyword, OpKind.IF_END, token.location)
-        case Keyword.IF:
-            return Op(keyword, OpKind.IF_START, token.location)
         case Keyword.IMPL:
-            if function_name != GLOBAL_SCOPE_LABEL:
-                raise_error(
-                    ErrorKind.INVALID_SCOPE,
-                    "Implementation blocks should be defined in the global scope",
-                    token.location,
-                )
-
+            _require_global_scope(function_name, "Implementation blocks", token.location)
             cursor.position -= 1
             parse_impl_block(cursor)
             return None
         case Keyword.INCLUDE:
-            string_literal = expect_token(cursor, kind=TokenKind.LITERAL)
-            literal_op = get_op_literal(string_literal)
-            if literal_op.kind != OpKind.PUSH_STR:
-                raise_error(
-                    ErrorKind.UNEXPECTED_TOKEN,
-                    "Unexpected token for include path",
-                    string_literal.location,
-                    expected="string literal",
-                    got=f"`{string_literal.value}`",
-                )
-            assert isinstance(literal_op.value, str), "Included file path"
-
-            included_path = Path(literal_op.value)
-            if not included_path.is_absolute():
-                token_path = token.location.file.parent
-                included_path = token_path / included_path
-            return Op(
-                included_path.resolve(),
-                OpKind.INCLUDE_FILE,
-                string_literal.location,
-            )
-        case Keyword.RETURN:
-            return Op(keyword, OpKind.FN_RETURN, token.location)
+            return _handle_keyword_include(token, cursor)
         case Keyword.STRUCT:
-            if function_name != GLOBAL_SCOPE_LABEL:
-                raise_error(
-                    ErrorKind.INVALID_SCOPE,
-                    "Structs should be defined in the global scope",
-                    token.location,
-                )
-
-            cursor.position -= 1
-
-            struct = parse_struct(cursor)
-            GLOBAL_STRUCTS[struct.name] = struct
-
-            for member in struct.members:
-                if member.name in GLOBAL_FUNCTIONS:
-                    raise_error(
-                        ErrorKind.DUPLICATE_NAME,
-                        f"Function `{member.name}` already exists",
-                        struct.location,
-                    )
+            _handle_keyword_struct(token, cursor, function_name)
             return None
         case Keyword.TRAIT:
-            if function_name != GLOBAL_SCOPE_LABEL:
-                raise_error(
-                    ErrorKind.INVALID_SCOPE,
-                    "Traits should be defined in the global scope",
-                    token.location,
-                )
-
-            cursor.position -= 1
-            trait = parse_trait(cursor)
-            if trait.name in GLOBAL_TRAITS:
-                raise_error(
-                    ErrorKind.DUPLICATE_NAME,
-                    f"Trait `{trait.name}` is already defined",
-                    trait.location,
-                )
-            GLOBAL_TRAITS[trait.name] = trait
+            _handle_keyword_trait(token, cursor, function_name)
             return None
-        case Keyword.THEN:
-            return Op(keyword, OpKind.IF_CONDITION, token.location)
-        case Keyword.WHILE:
-            return Op(keyword, OpKind.WHILE_START, token.location)
         case _:
             assert_never(keyword)
 
