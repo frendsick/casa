@@ -351,7 +351,7 @@ class TypeChecker:
                 self.expect_type("int")
                 self.stack_push("int")
 
-    def check_comparison(self, _op: Op) -> None:
+    def check_comparison(self) -> None:
         """Handle EQ, NE, LT, LE, GT, GE."""
         self.stack_pop()
         self.stack_pop()
@@ -1200,7 +1200,7 @@ def _inject_trait_fn_ptrs(
     """
     from casa.parser import (
         resolve_identifiers as _resolve,
-    )  # pylint: disable=reimported
+    )  # pylint: disable=reimported,import-outside-toplevel
 
     bindings: dict[str, str] = {}
 
@@ -1361,7 +1361,7 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
             case OpKind.ADD | OpKind.SUB | OpKind.DIV | OpKind.MOD | OpKind.MUL:
                 tc.check_arithmetic(op)
             case OpKind.EQ | OpKind.NE | OpKind.LT | OpKind.LE | OpKind.GT | OpKind.GE:
-                tc.check_comparison(op)
+                tc.check_comparison()
             case OpKind.AND | OpKind.OR | OpKind.NOT:
                 tc.check_boolean(op)
             case (

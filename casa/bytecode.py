@@ -2,6 +2,7 @@
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from typing import assert_never
 from casa.common import (
     GLOBAL_FUNCTIONS,
     GLOBAL_SCOPE_LABEL,
@@ -77,14 +78,14 @@ _label_counter = 0
 
 def new_label() -> LabelId:
     """Allocate and return a fresh label ID."""
-    global _label_counter
+    global _label_counter  # pylint: disable=global-statement
     _label_counter += 1
     return _label_counter
 
 
 def reset_labels():
     """Reset the label counter to zero."""
-    global _label_counter
+    global _label_counter  # pylint: disable=global-statement
     _label_counter = 0
 
 
@@ -436,7 +437,7 @@ class Compiler:
         # Push array to the stack
         bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_list]))
 
-    def _compile_some(self, _op: Op, bytecode: list[Inst]) -> None:
+    def _compile_some(self, bytecode: list[Inst]) -> None:
         """Compile SOME op -- wraps top of stack in an option."""
         local_ptr = self.locals_count
         self.locals_count += 1
@@ -591,7 +592,7 @@ class Compiler:
                     get_kind, _, index = self._resolve_variable(variable_name)
                     bytecode.append(self.inst(get_kind, args=[index]))
                 case OpKind.SOME:
-                    self._compile_some(op, bytecode)
+                    self._compile_some(bytecode)
                 case OpKind.STRUCT_NEW:
                     self._compile_struct_new(op, bytecode)
                 case (
@@ -602,6 +603,8 @@ class Compiler:
                     | OpKind.WHILE_START
                 ):
                     self._compile_while_block(op, bytecode)
+                case _:
+                    assert_never(op.kind)
 
         if self.locals_count > 0:
             bytecode.insert(0, Inst(InstKind.LOCALS_INIT, args=[self.locals_count]))
