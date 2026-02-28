@@ -82,19 +82,21 @@ class Compiler:
     def __post_init__(self):
         self._current_loc: Location | None = None
 
-    def intern_string(self, s: str) -> int:
+    @staticmethod
+    def _intern(table: list[str], value: str) -> int:
+        """Add a value to a table if not present and return its index."""
+        if value in table:
+            return table.index(value)
+        table.append(value)
+        return len(table) - 1
+
+    def intern_string(self, value: str) -> int:
         """Add a string to the string table and return its index."""
-        if s in self.string_table:
-            return self.string_table.index(s)
-        self.string_table.append(s)
-        return len(self.string_table) - 1
+        return self._intern(self.string_table, value)
 
     def intern_constant(self, name: str) -> int:
         """Add a constant name to the constants table and return its index."""
-        if name in self.constants_table:
-            return self.constants_table.index(name)
-        self.constants_table.append(name)
-        return len(self.constants_table) - 1
+        return self._intern(self.constants_table, name)
 
     def inst(self, kind: InstKind, args: list | None = None) -> Inst:
         """Create an Inst with the current source location."""
