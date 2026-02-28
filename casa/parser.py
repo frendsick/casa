@@ -578,7 +578,11 @@ def get_op_intrinsic(token: Token) -> Op:
 def _require_global_scope(function_name: str, what: str, location: Location) -> None:
     """Raise an error if not in global scope."""
     if function_name != GLOBAL_SCOPE_LABEL:
-        raise_error(ErrorKind.INVALID_SCOPE, f"{what} should be defined in the global scope", location)
+        raise_error(
+            ErrorKind.INVALID_SCOPE,
+            f"{what} should be defined in the global scope",
+            location,
+        )
 
 
 def _handle_keyword_fn(token: Token, cursor: Cursor[Token], function_name: str) -> None:
