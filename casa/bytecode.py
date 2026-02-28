@@ -100,6 +100,20 @@ class Compiler:
         """Create an Inst with the current source location."""
         return Inst(kind, args=args or [], location=self._current_loc)
 
+    def _resolve_variable(
+        self, variable_name: str
+    ) -> tuple[InstKind, InstKind, int]:
+        """Resolve a variable to its get/set instructions and index."""
+        if self.function and variable_name in self.function.variables:
+            index = self.function.variables.index(Variable(variable_name))
+            return InstKind.LOCAL_GET, InstKind.LOCAL_SET, index
+        if variable_name in GLOBAL_VARIABLES:
+            index = list(GLOBAL_VARIABLES.keys()).index(variable_name)
+            return InstKind.GLOBAL_GET, InstKind.GLOBAL_SET, index
+        raise AssertionError(
+            f"Variable `{variable_name}` is not defined"
+        )
+
     def _compile_function(self, function: Function, op: Op) -> None:
         """Compile a function if not already compiled."""
         if function.bytecode is not None:
@@ -149,58 +163,29 @@ class Compiler:
                 case OpKind.ASSIGN_DECREMENT:
                     variable_name = op.value
                     assert isinstance(variable_name, str), "Valid variable name"
-
-                    if self.function and variable_name in self.function.variables:
-                        index = self.function.variables.index(Variable(variable_name))
-                        bytecode.append(self.inst(InstKind.LOCAL_GET, args=[index]))
-                        bytecode.append(self.inst(InstKind.SWAP))
-                        bytecode.append(self.inst(InstKind.ADD))
-                        bytecode.append(self.inst(InstKind.LOCAL_SET, args=[index]))
-                    elif variable_name in GLOBAL_VARIABLES:
-                        index = list(GLOBAL_VARIABLES.keys()).index(variable_name)
-                        bytecode.append(self.inst(InstKind.GLOBAL_GET, args=[index]))
-                        bytecode.append(self.inst(InstKind.SWAP))
-                        bytecode.append(self.inst(InstKind.ADD))
-                        bytecode.append(self.inst(InstKind.GLOBAL_SET, args=[index]))
-                    else:
-                        raise AssertionError(
-                            f"Variable `{variable_name}` is not defined"
-                        )
+                    get_kind, set_kind, index = self._resolve_variable(
+                        variable_name
+                    )
+                    bytecode.append(self.inst(get_kind, args=[index]))
+                    bytecode.append(self.inst(InstKind.SWAP))
+                    bytecode.append(self.inst(InstKind.ADD))
+                    bytecode.append(self.inst(set_kind, args=[index]))
                 case OpKind.ASSIGN_INCREMENT:
                     variable_name = op.value
                     assert isinstance(variable_name, str), "Valid variable name"
-
-                    if self.function and variable_name in self.function.variables:
-                        index = self.function.variables.index(Variable(variable_name))
-                        bytecode.append(self.inst(InstKind.LOCAL_GET, args=[index]))
-                        bytecode.append(self.inst(InstKind.ADD))
-                        bytecode.append(self.inst(InstKind.LOCAL_SET, args=[index]))
-                    elif variable_name in GLOBAL_VARIABLES:
-                        index = list(GLOBAL_VARIABLES.keys()).index(variable_name)
-                        bytecode.append(self.inst(InstKind.GLOBAL_GET, args=[index]))
-                        bytecode.append(self.inst(InstKind.ADD))
-                        bytecode.append(self.inst(InstKind.GLOBAL_SET, args=[index]))
-                    else:
-                        raise AssertionError(
-                            f"Variable `{variable_name}` is not defined"
-                        )
+                    get_kind, set_kind, index = self._resolve_variable(
+                        variable_name
+                    )
+                    bytecode.append(self.inst(get_kind, args=[index]))
+                    bytecode.append(self.inst(InstKind.ADD))
+                    bytecode.append(self.inst(set_kind, args=[index]))
                 case OpKind.ASSIGN_VARIABLE:
                     variable_name = op.value
                     assert isinstance(variable_name, str), "Valid variable name"
-
-                    # Local variable (shadows global with same name)
-                    if self.function and variable_name in self.function.variables:
-                        index = self.function.variables.index(Variable(variable_name))
-                        bytecode.append(self.inst(InstKind.LOCAL_SET, args=[index]))
-                        continue
-
-                    # Global variable
-                    if variable_name in GLOBAL_VARIABLES:
-                        index = list(GLOBAL_VARIABLES.keys()).index(variable_name)
-                        bytecode.append(self.inst(InstKind.GLOBAL_SET, args=[index]))
-                        continue
-
-                    raise AssertionError(f"Variable `{variable_name}` is not defined")
+                    _, set_kind, index = self._resolve_variable(
+                        variable_name
+                    )
+                    bytecode.append(self.inst(set_kind, args=[index]))
                 case OpKind.DIV:
                     bytecode.append(self.inst(InstKind.DIV))
                 case OpKind.DROP:
@@ -546,20 +531,10 @@ class Compiler:
                 case OpKind.PUSH_VARIABLE:
                     variable_name = op.value
                     assert isinstance(variable_name, str), "Valid variable name"
-
-                    # Local variable (shadows global with same name)
-                    if self.function and variable_name in self.function.variables:
-                        index = self.function.variables.index(Variable(variable_name))
-                        bytecode.append(self.inst(InstKind.LOCAL_GET, args=[index]))
-                        continue
-
-                    # Global variable
-                    if variable_name in GLOBAL_VARIABLES:
-                        index = list(GLOBAL_VARIABLES.keys()).index(variable_name)
-                        bytecode.append(self.inst(InstKind.GLOBAL_GET, args=[index]))
-                        continue
-
-                    raise AssertionError(f"Variable `{variable_name}` is not defined")
+                    get_kind, _, index = self._resolve_variable(
+                        variable_name
+                    )
+                    bytecode.append(self.inst(get_kind, args=[index]))
                 case OpKind.ROT:
                     bytecode.append(self.inst(InstKind.ROT))
                 case OpKind.SHL:
