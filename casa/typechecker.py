@@ -577,8 +577,8 @@ class TypeChecker:
             op.location,
         )
 
-    def check_if_block(self, op: Op) -> bool:
-        """Handle IF_START through IF_END. Returns True if caller should continue."""
+    def check_if_block(self, op: Op) -> None:
+        """Handle IF_START through IF_END."""
         match op.kind:
             case OpKind.IF_START:
                 bs = BranchedStack(self.stack, self.stack_origins)
@@ -598,7 +598,7 @@ class TypeChecker:
                     branched.after_origins = branched.before_origins
                     branched.current_branch_label = "if"
                     branched.current_branch_location = branched.if_location
-                    return True
+                    return
 
                 if self.stack != branched.before:
                     raise_error(
@@ -630,19 +630,19 @@ class TypeChecker:
                 branched.current_branch_location = op.location
 
                 if self.stack == before == after:
-                    return True
+                    return
                 unified_cur_after = _stacks_compatible(self.stack, after)
                 if unified_cur_after is not None and before != after:
                     branched.after = unified_cur_after
                     self.stack = before.copy()
                     self.stack_origins = branched.before_origins.copy()
-                    return True
+                    return
                 if before == after:
                     branched.after = self.stack.copy()
                     branched.after_origins = self.stack_origins.copy()
                     self.stack = before.copy()
                     self.stack_origins = branched.before_origins.copy()
-                    return True
+                    return
                 raise_error(
                     ErrorKind.STACK_MISMATCH,
                     "Branches have incompatible stack effects",
@@ -662,24 +662,23 @@ class TypeChecker:
                     )
 
                 if self.stack == branched.before == branched.after:
-                    return True
+                    return
                 unified_cur_after = _stacks_compatible(self.stack, branched.after)
                 if unified_cur_after is not None and branched.default_present:
                     self.stack = unified_cur_after
                     self.stack_origins = branched.after_origins.copy()
-                    return True
+                    return
                 unified_cur_before = _stacks_compatible(self.stack, branched.before)
                 if unified_cur_before is not None and not branched.default_present:
                     self.stack = unified_cur_before
                     self.stack_origins = branched.before_origins.copy()
-                    return True
+                    return
                 raise_error(
                     ErrorKind.STACK_MISMATCH,
                     "Branches have incompatible stack effects",
                     op.location,
                     notes=_branch_mismatch_notes(branched),
                 )
-        return False
 
     def check_while_block(self, op: Op) -> None:
         """Handle WHILE_START through WHILE_END."""

@@ -1011,7 +1011,7 @@ GLOBAL_SCOPE_LABEL = "_start"
 
 @dataclass
 class CompilationContext:
-    """Holds all mutable state for a single compilation run."""
+    """Groups all mutable compilation state. Module-level globals alias the default instance."""
 
     functions: OrderedDict[str, Function] = field(default_factory=OrderedDict)
     structs: OrderedDict[str, Struct] = field(default_factory=OrderedDict)
