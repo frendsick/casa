@@ -951,12 +951,7 @@ class Function:
     captures: list[Variable] = field(default_factory=list)
 
 
-GLOBAL_FUNCTIONS: OrderedDict[str, Function] = OrderedDict()
-GLOBAL_STRUCTS: OrderedDict[str, Struct] = OrderedDict()
-GLOBAL_TRAITS: OrderedDict[str, Trait] = OrderedDict()
-GLOBAL_VARIABLES: OrderedDict[str, Variable] = OrderedDict()
 GLOBAL_SCOPE_LABEL = "_start"
-INCLUDED_FILES: set[Path] = set()
 
 
 @dataclass
@@ -968,6 +963,14 @@ class CompilationContext:
     traits: OrderedDict[str, Trait] = field(default_factory=OrderedDict)
     variables: OrderedDict[str, Variable] = field(default_factory=OrderedDict)
     included_files: set[Path] = field(default_factory=set)
+
+
+_DEFAULT_CONTEXT = CompilationContext()
+GLOBAL_FUNCTIONS = _DEFAULT_CONTEXT.functions
+GLOBAL_STRUCTS = _DEFAULT_CONTEXT.structs
+GLOBAL_TRAITS = _DEFAULT_CONTEXT.traits
+GLOBAL_VARIABLES = _DEFAULT_CONTEXT.variables
+INCLUDED_FILES = _DEFAULT_CONTEXT.included_files
 
 
 @dataclass
