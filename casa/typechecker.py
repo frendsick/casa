@@ -887,6 +887,105 @@ class TypeChecker:
             self.stack_pop()
         self.stack_push("int")
 
+    def _check_struct_new(self, op: Op) -> None:
+        """Handle STRUCT_NEW."""
+        struct = op.value
+        assert isinstance(struct, Struct), "Expected struct"
+        member_types = " ".join(m.typ for m in struct.members)
+        self.current_op_context = (
+            f"`{struct.name}` ({member_types} -> {struct.name})"
+        )
+        for member in struct.members:
+            self.current_expect_context = (
+                f"member `{member.name}` of `{struct.name}`"
+            )
+            self.expect_type(member.typ)
+        self.current_expect_context = None
+        self.stack_push(struct.name)
+
+    def _check_method_call(
+        self,
+        op: Op,
+        ops: list[Op],
+        op_index: int,
+        function: Function | None,
+    ) -> int:
+        """Handle METHOD_CALL. Returns updated op_index."""
+        method_name = op.value
+        assert isinstance(method_name, str), "Expected method name"
+        receiver = self.stack_peek()
+
+        if (
+            function
+            and function.signature
+            and function.signature.trait_bounds
+            and receiver in function.signature.trait_bounds
+        ):
+            trait_name = function.signature.trait_bounds[receiver]
+            trait = GLOBAL_TRAITS.get(trait_name)
+            if trait:
+                for trait_method in trait.methods:
+                    if trait_method.name != method_name:
+                        continue
+                    hidden_var = f"__trait_{receiver}_{method_name}"
+                    self.stack_pop()
+                    resolved_sig = _resolve_trait_sig(
+                        trait_method.signature, receiver
+                    )
+                    self.stack_push(receiver)
+                    self.apply_signature(
+                        resolved_sig, f"{receiver}::{method_name}"
+                    )
+                    op.kind = OpKind.PUSH_VARIABLE
+                    op.value = hidden_var
+                    exec_op = Op(
+                        Intrinsic.EXEC,
+                        OpKind.FN_EXEC,
+                        op.location,
+                    )
+                    ops.insert(op_index, exec_op)
+                    op_index += 1
+                    return op_index
+                raise_error(
+                    ErrorKind.UNDEFINED_NAME,
+                    f"Method `{method_name}` not found in trait `{trait_name}`",
+                    op.location,
+                )
+
+        function_name = f"{receiver}::{method_name}"
+        global_function = GLOBAL_FUNCTIONS.get(function_name)
+        receiver_base = extract_generic_base(receiver)
+        if not global_function and receiver_base:
+            function_name = f"{receiver_base}::{method_name}"
+            global_function = GLOBAL_FUNCTIONS.get(function_name)
+        if not global_function:
+            raise_error(
+                ErrorKind.UNDEFINED_NAME,
+                f"Method `{function_name}` does not exist",
+                op.location,
+            )
+
+        if not global_function.is_typechecked:
+            global_function.ops = resolve_identifiers(
+                global_function.ops, global_function
+            )
+            global_function.is_used = True
+        _ensure_typechecked(global_function)
+
+        assert global_function.signature, "Signature is defined"
+        fn_sig = global_function.signature
+
+        if fn_sig.trait_bounds:
+            injected = _inject_trait_fn_ptrs(
+                self, fn_sig, ops, op_index, op.location, function
+            )
+            op_index += injected
+
+        self.apply_signature(fn_sig, function_name)
+        op.value = function_name
+        op.kind = OpKind.FN_CALL
+        return op_index
+
 
 def _resolve_return_type(return_type: Type, bindings: dict[str, Type]) -> Type:
     """Resolve a return type by substituting bound type variables."""
@@ -1306,185 +1405,95 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
         else:
             tc.current_op_context = None
         match op.kind:
-            # Arithmetic
-            case OpKind.ADD | OpKind.SUB | OpKind.MUL | OpKind.DIV | OpKind.MOD:
+            case (
+                OpKind.ADD | OpKind.SUB | OpKind.DIV
+                | OpKind.MOD | OpKind.MUL
+            ):
                 tc._check_arithmetic(op)
-            # Comparison
-            case OpKind.EQ | OpKind.NE | OpKind.LT | OpKind.LE | OpKind.GT | OpKind.GE:
+            case (
+                OpKind.EQ | OpKind.NE | OpKind.LT
+                | OpKind.LE | OpKind.GT | OpKind.GE
+            ):
                 tc._check_comparison(op)
-            # Boolean
             case OpKind.AND | OpKind.OR | OpKind.NOT:
                 tc._check_boolean(op)
-            # Bitwise
             case (
                 OpKind.BIT_AND | OpKind.BIT_OR | OpKind.BIT_XOR
                 | OpKind.BIT_NOT | OpKind.SHL | OpKind.SHR
             ):
                 tc._check_bitwise(op)
-            # Stack ops
-            case OpKind.DROP | OpKind.DUP | OpKind.SWAP | OpKind.OVER | OpKind.ROT:
-                tc._check_stack_ops(op)
-            # Memory
             case (
-                OpKind.LOAD8 | OpKind.LOAD16 | OpKind.LOAD32 | OpKind.LOAD64
-                | OpKind.STORE8 | OpKind.STORE16 | OpKind.STORE32 | OpKind.STORE64
-                | OpKind.HEAP_ALLOC
+                OpKind.DROP | OpKind.DUP | OpKind.SWAP
+                | OpKind.OVER | OpKind.ROT
+            ):
+                tc._check_stack_ops(op)
+            case (
+                OpKind.LOAD8 | OpKind.LOAD16 | OpKind.LOAD32
+                | OpKind.LOAD64 | OpKind.STORE8 | OpKind.STORE16
+                | OpKind.STORE32 | OpKind.STORE64 | OpKind.HEAP_ALLOC
             ):
                 tc._check_memory(op)
-            # Assignment
-            case OpKind.ASSIGN_VARIABLE | OpKind.ASSIGN_INCREMENT | OpKind.ASSIGN_DECREMENT:
+            case (
+                OpKind.ASSIGN_VARIABLE | OpKind.ASSIGN_INCREMENT
+                | OpKind.ASSIGN_DECREMENT
+            ):
                 tc._check_assignment(op, function)
-            # Push variable / capture
             case OpKind.PUSH_VARIABLE | OpKind.PUSH_CAPTURE:
                 tc._check_push(op, function)
-            # If blocks
             case (
                 OpKind.IF_START | OpKind.IF_CONDITION
                 | OpKind.IF_ELIF | OpKind.IF_ELSE | OpKind.IF_END
             ):
-                if tc._check_if_block(op):
-                    continue
-            # While blocks
+                tc._check_if_block(op)
             case (
                 OpKind.WHILE_START | OpKind.WHILE_CONDITION
-                | OpKind.WHILE_BREAK | OpKind.WHILE_CONTINUE | OpKind.WHILE_END
+                | OpKind.WHILE_BREAK | OpKind.WHILE_CONTINUE
+                | OpKind.WHILE_END
             ):
                 tc._check_while_block(op)
-            # Function ops
-            case OpKind.FN_CALL | OpKind.FN_EXEC | OpKind.FN_PUSH | OpKind.FN_RETURN:
+            case (
+                OpKind.FN_CALL | OpKind.FN_EXEC
+                | OpKind.FN_PUSH | OpKind.FN_RETURN
+            ):
                 op_index = tc._check_function_ops(
                     op, ops, op_index, function
                 )
-            # Literals
             case (
                 OpKind.PUSH_INT | OpKind.PUSH_STR | OpKind.PUSH_BOOL
                 | OpKind.PUSH_CHAR | OpKind.PUSH_NONE | OpKind.SOME
                 | OpKind.PUSH_ARRAY | OpKind.FSTRING_CONCAT
             ):
                 tc._check_literals(op, function)
-            # IO
             case OpKind.PRINT:
                 tc._check_io(op)
-            case (
-                OpKind.PRINT_BOOL | OpKind.PRINT_CHAR
-                | OpKind.PRINT_CSTR | OpKind.PRINT_INT | OpKind.PRINT_STR
-            ):
-                assert False, "PRINT variants are resolved by the type checker"
-            # Syscalls
             case (
                 OpKind.SYSCALL0 | OpKind.SYSCALL1 | OpKind.SYSCALL2
                 | OpKind.SYSCALL3 | OpKind.SYSCALL4 | OpKind.SYSCALL5
                 | OpKind.SYSCALL6
             ):
                 tc._check_syscalls(op)
-            # Method call
-            case OpKind.METHOD_CALL:
-                method_name = op.value
-                assert isinstance(method_name, str), "Expected method name"
-
-                receiver = tc.stack_peek()
-
-                # Trait method call on a type variable
-                if (
-                    function
-                    and function.signature
-                    and function.signature.trait_bounds
-                    and receiver in function.signature.trait_bounds
-                ):
-                    trait_name = function.signature.trait_bounds[receiver]
-                    trait = GLOBAL_TRAITS.get(trait_name)
-                    if trait:
-                        for tm in trait.methods:
-                            if tm.name == method_name:
-                                hidden_var = f"__trait_{receiver}_{method_name}"
-                                tc.stack_pop()
-                                resolved_sig = _resolve_trait_sig(
-                                    tm.signature, receiver
-                                )
-                                tc.stack_push(receiver)
-                                tc.apply_signature(
-                                    resolved_sig,
-                                    f"{receiver}::{method_name}",
-                                )
-                                op.kind = OpKind.PUSH_VARIABLE
-                                op.value = hidden_var
-                                exec_op = Op(
-                                    Intrinsic.EXEC,
-                                    OpKind.FN_EXEC,
-                                    op.location,
-                                )
-                                ops.insert(op_index, exec_op)
-                                op_index += 1
-                                break
-                        else:
-                            raise_error(
-                                ErrorKind.UNDEFINED_NAME,
-                                f"Method `{method_name}` not found in trait `{trait_name}`",
-                                op.location,
-                            )
-                        continue
-
-                function_name = f"{receiver}::{method_name}"
-
-                global_function = GLOBAL_FUNCTIONS.get(function_name)
-                receiver_base = extract_generic_base(receiver)
-                if not global_function and receiver_base:
-                    function_name = f"{receiver_base}::{method_name}"
-                    global_function = GLOBAL_FUNCTIONS.get(function_name)
-                if not global_function:
-                    raise_error(
-                        ErrorKind.UNDEFINED_NAME,
-                        f"Method `{function_name}` does not exist",
-                        op.location,
-                    )
-
-                if not global_function.is_typechecked:
-                    global_function.ops = resolve_identifiers(
-                        global_function.ops, global_function
-                    )
-                    global_function.is_used = True
-                _ensure_typechecked(global_function)
-
-                assert global_function.signature, "Signature is defined"
-                fn_sig = global_function.signature
-
-                if fn_sig.trait_bounds:
-                    injected = _inject_trait_fn_ptrs(
-                        tc, fn_sig, ops, op_index, op.location, function
-                    )
-                    op_index += injected
-
-                tc.apply_signature(fn_sig, function_name)
-
-                op.value = function_name
-                op.kind = OpKind.FN_CALL
-            # Struct
             case OpKind.STRUCT_NEW:
-                struct = op.value
-                assert isinstance(struct, Struct), "Expected struct"
-                member_types = " ".join(m.typ for m in struct.members)
-                tc.current_op_context = (
-                    f"`{struct.name}` ({member_types} -> {struct.name})"
+                tc._check_struct_new(op)
+            case OpKind.METHOD_CALL:
+                op_index = tc._check_method_call(
+                    op, ops, op_index, function
                 )
-                for member in struct.members:
-                    tc.current_expect_context = (
-                        f"member `{member.name}` of `{struct.name}`"
-                    )
-                    tc.expect_type(member.typ)
-                tc.current_expect_context = None
-                tc.stack_push(struct.name)
-            # Type cast
             case OpKind.TYPE_CAST:
-                cast_type = op.value
-                assert isinstance(cast_type, str), "Expected cast type"
                 tc.stack_pop()
-                tc.stack_push(cast_type)
-            # No-ops
+                tc.stack_push(op.value)
             case OpKind.INCLUDE_FILE:
                 pass
             case OpKind.IDENTIFIER:
                 raise AssertionError(
                     "Identifiers should be resolved by the parser"
+                )
+            case (
+                OpKind.PRINT_BOOL | OpKind.PRINT_CHAR
+                | OpKind.PRINT_CSTR | OpKind.PRINT_INT
+                | OpKind.PRINT_STR
+            ):
+                assert False, (
+                    "PRINT variants are resolved by the type checker"
                 )
             case _:
                 assert_never(op.kind)
