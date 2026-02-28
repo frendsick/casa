@@ -541,36 +541,89 @@ class Emitter:
         assert len(InstKind) == 66, "Exhaustive handling for `InstKind`"
         kind = inst.kind
         match kind:
-            case (InstKind.PUSH | InstKind.PUSH_STR | InstKind.PUSH_CHAR
-                  | InstKind.DROP | InstKind.DUP | InstKind.SWAP
-                  | InstKind.OVER | InstKind.ROT):
+            case (
+                InstKind.PUSH
+                | InstKind.PUSH_STR
+                | InstKind.PUSH_CHAR
+                | InstKind.DROP
+                | InstKind.DUP
+                | InstKind.SWAP
+                | InstKind.OVER
+                | InstKind.ROT
+            ):
                 self._emit_stack_ops(inst)
-            case (InstKind.ADD | InstKind.SUB | InstKind.MUL | InstKind.DIV
-                  | InstKind.MOD | InstKind.SHL | InstKind.SHR
-                  | InstKind.BIT_AND | InstKind.BIT_OR | InstKind.BIT_XOR
-                  | InstKind.BIT_NOT | InstKind.AND | InstKind.OR
-                  | InstKind.NOT | InstKind.EQ | InstKind.NE | InstKind.LT
-                  | InstKind.LE | InstKind.GT | InstKind.GE):
+            case (
+                InstKind.ADD
+                | InstKind.SUB
+                | InstKind.MUL
+                | InstKind.DIV
+                | InstKind.MOD
+                | InstKind.SHL
+                | InstKind.SHR
+                | InstKind.BIT_AND
+                | InstKind.BIT_OR
+                | InstKind.BIT_XOR
+                | InstKind.BIT_NOT
+                | InstKind.AND
+                | InstKind.OR
+                | InstKind.NOT
+                | InstKind.EQ
+                | InstKind.NE
+                | InstKind.LT
+                | InstKind.LE
+                | InstKind.GT
+                | InstKind.GE
+            ):
                 self._emit_arithmetic(inst)
-            case (InstKind.LABEL | InstKind.JUMP | InstKind.JUMP_NE
-                  | InstKind.GLOBALS_INIT | InstKind.GLOBAL_GET
-                  | InstKind.GLOBAL_SET | InstKind.LOCALS_INIT
-                  | InstKind.LOCALS_UNINIT | InstKind.LOCAL_GET
-                  | InstKind.LOCAL_SET | InstKind.CONSTANT_LOAD
-                  | InstKind.CONSTANT_STORE | InstKind.FN_CALL
-                  | InstKind.FN_EXEC | InstKind.FN_PUSH | InstKind.FN_RETURN):
+            case (
+                InstKind.LABEL
+                | InstKind.JUMP
+                | InstKind.JUMP_NE
+                | InstKind.GLOBALS_INIT
+                | InstKind.GLOBAL_GET
+                | InstKind.GLOBAL_SET
+                | InstKind.LOCALS_INIT
+                | InstKind.LOCALS_UNINIT
+                | InstKind.LOCAL_GET
+                | InstKind.LOCAL_SET
+                | InstKind.CONSTANT_LOAD
+                | InstKind.CONSTANT_STORE
+                | InstKind.FN_CALL
+                | InstKind.FN_EXEC
+                | InstKind.FN_PUSH
+                | InstKind.FN_RETURN
+            ):
                 self._emit_control_flow(inst, is_global)
-            case (InstKind.HEAP_ALLOC | InstKind.LOAD8 | InstKind.LOAD16
-                  | InstKind.LOAD32 | InstKind.LOAD64 | InstKind.STORE8
-                  | InstKind.STORE16 | InstKind.STORE32 | InstKind.STORE64):
+            case (
+                InstKind.HEAP_ALLOC
+                | InstKind.LOAD8
+                | InstKind.LOAD16
+                | InstKind.LOAD32
+                | InstKind.LOAD64
+                | InstKind.STORE8
+                | InstKind.STORE16
+                | InstKind.STORE32
+                | InstKind.STORE64
+            ):
                 self._emit_memory(inst)
-            case (InstKind.PRINT_INT | InstKind.PRINT_BOOL | InstKind.PRINT_STR
-                  | InstKind.PRINT_CHAR | InstKind.PRINT_CSTR
-                  | InstKind.FSTRING_CONCAT):
+            case (
+                InstKind.PRINT_INT
+                | InstKind.PRINT_BOOL
+                | InstKind.PRINT_STR
+                | InstKind.PRINT_CHAR
+                | InstKind.PRINT_CSTR
+                | InstKind.FSTRING_CONCAT
+            ):
                 self._emit_io_ops(inst)
-            case (InstKind.SYSCALL0 | InstKind.SYSCALL1 | InstKind.SYSCALL2
-                  | InstKind.SYSCALL3 | InstKind.SYSCALL4 | InstKind.SYSCALL5
-                  | InstKind.SYSCALL6):
+            case (
+                InstKind.SYSCALL0
+                | InstKind.SYSCALL1
+                | InstKind.SYSCALL2
+                | InstKind.SYSCALL3
+                | InstKind.SYSCALL4
+                | InstKind.SYSCALL5
+                | InstKind.SYSCALL6
+            ):
                 self._emit_syscall_ops(inst)
             case _:
                 assert_never(kind)

@@ -2,8 +2,6 @@
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import assert_never
-
 from casa.common import (
     GLOBAL_FUNCTIONS,
     GLOBAL_SCOPE_LABEL,
@@ -161,9 +159,7 @@ class Compiler:
         """Create an Inst with the current source location."""
         return Inst(kind, args=args or [], location=self._current_loc)
 
-    def _resolve_variable(
-        self, variable_name: str
-    ) -> tuple[InstKind, InstKind, int]:
+    def _resolve_variable(self, variable_name: str) -> tuple[InstKind, InstKind, int]:
         """Resolve a variable to its get/set instructions and index."""
         if self.function and variable_name in self.function.variables:
             index = self.function.variables.index(Variable(variable_name))
@@ -171,9 +167,7 @@ class Compiler:
         if variable_name in GLOBAL_VARIABLES:
             index = list(GLOBAL_VARIABLES.keys()).index(variable_name)
             return InstKind.GLOBAL_GET, InstKind.GLOBAL_SET, index
-        raise AssertionError(
-            f"Variable `{variable_name}` is not defined"
-        )
+        raise AssertionError(f"Variable `{variable_name}` is not defined")
 
     def _compile_assignment(self, op: Op, bytecode: list[Inst]) -> None:
         """Compile ASSIGN_VARIABLE, ASSIGN_INCREMENT, ASSIGN_DECREMENT ops."""
@@ -198,21 +192,25 @@ class Compiler:
         match op.kind:
             case OpKind.IF_CONDITION:
                 self._require_matching_label(
-                    op, OpKind.IF_START, OpKind.IF_END,
+                    op,
+                    OpKind.IF_START,
+                    OpKind.IF_END,
                     "`then` without matching `if`",
                     reverse=True,
                 )
                 end_label = self._require_matching_label(
-                    op, OpKind.IF_START, OpKind.IF_END,
+                    op,
+                    OpKind.IF_START,
+                    OpKind.IF_END,
                     "`then` without matching `fi`",
-                    target_kinds=[
-                        OpKind.IF_ELIF, OpKind.IF_ELSE, OpKind.IF_END
-                    ],
+                    target_kinds=[OpKind.IF_ELIF, OpKind.IF_ELSE, OpKind.IF_END],
                 )
                 bytecode.append(self.inst(InstKind.JUMP_NE, args=[end_label]))
             case OpKind.IF_ELIF:
                 self._require_matching_label(
-                    op, OpKind.IF_START, OpKind.IF_END,
+                    op,
+                    OpKind.IF_START,
+                    OpKind.IF_END,
                     "`elif` without parent `if`",
                     reverse=True,
                 )
@@ -230,27 +228,35 @@ class Compiler:
                     )
                 elif_label = op_to_label(op)
                 end_label = self._require_matching_label(
-                    op, OpKind.IF_START, OpKind.IF_END,
+                    op,
+                    OpKind.IF_START,
+                    OpKind.IF_END,
                     "`elif` without matching `fi`",
                 )
                 bytecode.append(self.inst(InstKind.JUMP, args=[end_label]))
                 bytecode.append(self.inst(InstKind.LABEL, args=[elif_label]))
             case OpKind.IF_ELSE:
                 self._require_matching_label(
-                    op, OpKind.IF_START, OpKind.IF_END,
+                    op,
+                    OpKind.IF_START,
+                    OpKind.IF_END,
                     "`else` without parent `if`",
                     reverse=True,
                 )
                 else_label = op_to_label(op)
                 end_label = self._require_matching_label(
-                    op, OpKind.IF_START, OpKind.IF_END,
+                    op,
+                    OpKind.IF_START,
+                    OpKind.IF_END,
                     "`else` without matching `fi`",
                 )
                 bytecode.append(self.inst(InstKind.JUMP, args=[end_label]))
                 bytecode.append(self.inst(InstKind.LABEL, args=[else_label]))
             case OpKind.IF_END:
                 self._require_matching_label(
-                    op, OpKind.IF_START, OpKind.IF_END,
+                    op,
+                    OpKind.IF_START,
+                    OpKind.IF_END,
                     "`fi` without parent `if`",
                     reverse=True,
                 )
@@ -258,7 +264,9 @@ class Compiler:
                 bytecode.append(self.inst(InstKind.LABEL, args=[label]))
             case OpKind.IF_START:
                 self._require_matching_label(
-                    op, OpKind.IF_START, OpKind.IF_END,
+                    op,
+                    OpKind.IF_START,
+                    OpKind.IF_END,
                     "`if` without matching `fi`",
                 )
 
@@ -267,29 +275,39 @@ class Compiler:
         match op.kind:
             case OpKind.WHILE_BREAK:
                 self._require_matching_label(
-                    op, OpKind.WHILE_START, OpKind.WHILE_END,
+                    op,
+                    OpKind.WHILE_START,
+                    OpKind.WHILE_END,
                     "`break` without parent `while`",
                     reverse=True,
                 )
                 end_label = self._require_matching_label(
-                    op, OpKind.WHILE_START, OpKind.WHILE_END,
+                    op,
+                    OpKind.WHILE_START,
+                    OpKind.WHILE_END,
                     "`break` without matching `done`",
                 )
                 bytecode.append(self.inst(InstKind.JUMP, args=[end_label]))
             case OpKind.WHILE_CONDITION:
                 self._require_matching_label(
-                    op, OpKind.WHILE_START, OpKind.WHILE_END,
+                    op,
+                    OpKind.WHILE_START,
+                    OpKind.WHILE_END,
                     "`do` without parent `while`",
                     reverse=True,
                 )
                 end_label = self._require_matching_label(
-                    op, OpKind.WHILE_START, OpKind.WHILE_END,
+                    op,
+                    OpKind.WHILE_START,
+                    OpKind.WHILE_END,
                     "`do` without matching `done`",
                 )
                 bytecode.append(self.inst(InstKind.JUMP_NE, args=[end_label]))
             case OpKind.WHILE_CONTINUE:
                 continue_target = self._require_matching_label(
-                    op, OpKind.WHILE_START, OpKind.WHILE_END,
+                    op,
+                    OpKind.WHILE_START,
+                    OpKind.WHILE_END,
                     "`continue` without parent `while`",
                     reverse=True,
                 )
@@ -297,7 +315,9 @@ class Compiler:
             case OpKind.WHILE_END:
                 while_label = op_to_label(op)
                 loop_start = self._require_matching_label(
-                    op, OpKind.WHILE_START, OpKind.WHILE_END,
+                    op,
+                    OpKind.WHILE_START,
+                    OpKind.WHILE_END,
                     "`done` without parent `while`",
                     reverse=True,
                 )
@@ -332,9 +352,7 @@ class Compiler:
                         bytecode.append(self.inst(InstKind.LOCAL_GET, args=[index]))
                     elif capture in GLOBAL_VARIABLES:
                         index = list(GLOBAL_VARIABLES.values()).index(capture)
-                        bytecode.append(
-                            self.inst(InstKind.GLOBAL_GET, args=[index])
-                        )
+                        bytecode.append(self.inst(InstKind.GLOBAL_GET, args=[index]))
                     else:
                         raise AssertionError("Captured variable should exist")
                     constant_index = self.intern_constant(
@@ -418,7 +436,7 @@ class Compiler:
         # Push array to the stack
         bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_list]))
 
-    def _compile_some(self, op: Op, bytecode: list[Inst]) -> None:
+    def _compile_some(self, _op: Op, bytecode: list[Inst]) -> None:
         """Compile SOME op -- wraps top of stack in an option."""
         local_ptr = self.locals_count
         self.locals_count += 1
@@ -500,7 +518,11 @@ class Compiler:
                 bytecode.append(self.inst(DIRECT_OP_TO_INST[op.kind]))
                 continue
             match op.kind:
-                case OpKind.ASSIGN_DECREMENT | OpKind.ASSIGN_INCREMENT | OpKind.ASSIGN_VARIABLE:
+                case (
+                    OpKind.ASSIGN_DECREMENT
+                    | OpKind.ASSIGN_INCREMENT
+                    | OpKind.ASSIGN_VARIABLE
+                ):
                     self._compile_assignment(op, bytecode)
                 case OpKind.FSTRING_CONCAT:
                     count = op.value
@@ -513,8 +535,11 @@ class Compiler:
                         f"Identifier `{op.value}` should be resolved by the parser"
                     )
                 case (
-                    OpKind.IF_CONDITION | OpKind.IF_ELIF
-                    | OpKind.IF_ELSE | OpKind.IF_END | OpKind.IF_START
+                    OpKind.IF_CONDITION
+                    | OpKind.IF_ELIF
+                    | OpKind.IF_ELSE
+                    | OpKind.IF_END
+                    | OpKind.IF_START
                 ):
                     self._compile_if_block(op, bytecode)
                 case OpKind.INCLUDE_FILE | OpKind.TYPE_CAST:
@@ -570,8 +595,10 @@ class Compiler:
                 case OpKind.STRUCT_NEW:
                     self._compile_struct_new(op, bytecode)
                 case (
-                    OpKind.WHILE_BREAK | OpKind.WHILE_CONDITION
-                    | OpKind.WHILE_CONTINUE | OpKind.WHILE_END
+                    OpKind.WHILE_BREAK
+                    | OpKind.WHILE_CONDITION
+                    | OpKind.WHILE_CONTINUE
+                    | OpKind.WHILE_END
                     | OpKind.WHILE_START
                 ):
                     self._compile_while_block(op, bytecode)

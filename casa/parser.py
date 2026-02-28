@@ -268,7 +268,7 @@ def _create_member_accessor(
 def _resolve_trait_ref(
     name: str,
     function: Function | None,
-    location: Location,
+    _location: Location,
 ) -> str | None:
     """Check if name is a trait-bound method call like K::hash.
 
@@ -555,9 +555,7 @@ def get_op_array(cursor: Cursor[Token]) -> Op:
                 got=got,
             )
         item_op = token_to_op(value_token, cursor)
-        assert item_op is not None, (
-            "Array item token always produces an Op"
-        )
+        assert item_op is not None, "Array item token always produces an Op"
         array_items.append(item_op)
         expect_delimiter(cursor, Delimiter.COMMA)
 
@@ -566,9 +564,9 @@ def get_op_array(cursor: Cursor[Token]) -> Op:
 
 def get_op_intrinsic(token: Token) -> Op:
     """Convert an intrinsic token into its op."""
-    assert len(INTRINSIC_TO_OPKIND) == len(Intrinsic), (
-        "Exhaustive handling for `Intrinsic`"
-    )
+    assert len(INTRINSIC_TO_OPKIND) == len(
+        Intrinsic
+    ), "Exhaustive handling for `Intrinsic`"
 
     intrinsic = Intrinsic.from_lowercase(token.value)
     assert intrinsic, f"Token `{token.value}` is not an intrinsic"
@@ -599,7 +597,9 @@ def _handle_keyword_fn(token: Token, cursor: Cursor[Token], function_name: str) 
     GLOBAL_FUNCTIONS[function.name] = function
 
 
-def _handle_keyword_struct(token: Token, cursor: Cursor[Token], function_name: str) -> None:
+def _handle_keyword_struct(
+    token: Token, cursor: Cursor[Token], function_name: str
+) -> None:
     """Handle the `struct` keyword: parse and register a struct definition."""
     _require_global_scope(function_name, "Structs", token.location)
     cursor.position -= 1
@@ -614,7 +614,9 @@ def _handle_keyword_struct(token: Token, cursor: Cursor[Token], function_name: s
             )
 
 
-def _handle_keyword_trait(token: Token, cursor: Cursor[Token], function_name: str) -> None:
+def _handle_keyword_trait(
+    token: Token, cursor: Cursor[Token], function_name: str
+) -> None:
     """Handle the `trait` keyword: parse and register a trait definition."""
     _require_global_scope(function_name, "Traits", token.location)
     cursor.position -= 1
@@ -682,7 +684,9 @@ def get_op_keyword(
             _handle_keyword_fn(token, cursor, function_name)
             return None
         case Keyword.IMPL:
-            _require_global_scope(function_name, "Implementation blocks", token.location)
+            _require_global_scope(
+                function_name, "Implementation blocks", token.location
+            )
             cursor.position -= 1
             parse_impl_block(cursor)
             return None

@@ -151,9 +151,7 @@ class TypeChecker:
                     expected_param == ANY_TYPE
                     or actual_param == ANY_TYPE
                     or expected_param == actual_param
-                    for expected_param, actual_param in zip(
-                        exp_params, act_params
-                    )
+                    for expected_param, actual_param in zip(exp_params, act_params)
                 ):
                     return expected
             else:
@@ -274,9 +272,7 @@ class TypeChecker:
             if act_params and len(act_params) == len(exp_params):
                 for expected_param, actual_param in zip(exp_params, act_params):
                     if expected_param in signature.type_vars:
-                        self._bind_type_var(
-                            bindings, expected_param, actual_param
-                        )
+                        self._bind_type_var(bindings, expected_param, actual_param)
                 return True
             raise_error(
                 ErrorKind.TYPE_MISMATCH,
@@ -337,15 +333,13 @@ class TypeChecker:
             exp_fn_sig.parameters, act_fn_sig.parameters
         ):
             if expected_param.typ in signature.type_vars:
-                self._bind_type_var(
-                    bindings, expected_param.typ, actual_param.typ
-                )
+                self._bind_type_var(bindings, expected_param.typ, actual_param.typ)
         for er, ar in zip(exp_fn_sig.return_types, act_fn_sig.return_types):
             if er in signature.type_vars:
                 self._bind_type_var(bindings, er, ar)
         return True
 
-    def _check_arithmetic(self, op: Op) -> None:
+    def check_arithmetic(self, op: Op) -> None:
         """Handle ADD, SUB, MUL, DIV, MOD."""
         match op.kind:
             case OpKind.ADD | OpKind.SUB:
@@ -357,13 +351,13 @@ class TypeChecker:
                 self.expect_type("int")
                 self.stack_push("int")
 
-    def _check_comparison(self, op: Op) -> None:
+    def check_comparison(self, _op: Op) -> None:
         """Handle EQ, NE, LT, LE, GT, GE."""
         self.stack_pop()
         self.stack_pop()
         self.stack_push("bool")
 
-    def _check_boolean(self, op: Op) -> None:
+    def check_boolean(self, op: Op) -> None:
         """Handle AND, OR, NOT."""
         if op.kind == OpKind.NOT:
             self.stack_pop()
@@ -372,7 +366,7 @@ class TypeChecker:
             self.stack_pop()
         self.stack_push("bool")
 
-    def _check_bitwise(self, op: Op) -> None:
+    def check_bitwise(self, op: Op) -> None:
         """Handle BIT_AND, BIT_OR, BIT_XOR, BIT_NOT, SHL, SHR."""
         if op.kind == OpKind.BIT_NOT:
             self.expect_type("int")
@@ -386,7 +380,7 @@ class TypeChecker:
             self.expect_type("int")
             self.stack_push("int")
 
-    def _check_stack_ops(self, op: Op) -> None:
+    def check_stack_ops(self, op: Op) -> None:
         """Handle DROP, DUP, SWAP, OVER, ROT."""
         match op.kind:
             case OpKind.DROP:
@@ -422,30 +416,20 @@ class TypeChecker:
                 self.stack_push(t1, first_origin)
                 self.stack_push(t3, third_origin)
 
-    def _check_memory(self, op: Op) -> None:
+    def check_memory(self, op: Op) -> None:
         """Handle LOAD/STORE variants and HEAP_ALLOC."""
         match op.kind:
-            case (
-                OpKind.LOAD8
-                | OpKind.LOAD16
-                | OpKind.LOAD32
-                | OpKind.LOAD64
-            ):
+            case OpKind.LOAD8 | OpKind.LOAD16 | OpKind.LOAD32 | OpKind.LOAD64:
                 self.expect_type("ptr")
                 self.stack_push("int")
-            case (
-                OpKind.STORE8
-                | OpKind.STORE16
-                | OpKind.STORE32
-                | OpKind.STORE64
-            ):
+            case OpKind.STORE8 | OpKind.STORE16 | OpKind.STORE32 | OpKind.STORE64:
                 self.expect_type("ptr")
                 self.stack_pop()
             case OpKind.HEAP_ALLOC:
                 self.expect_type("int")
                 self.stack_push("ptr")
 
-    def _check_assignment(self, op: Op, function: Function | None) -> None:
+    def check_assignment(self, op: Op, function: Function | None) -> None:
         """Handle ASSIGN_VARIABLE, ASSIGN_INCREMENT, ASSIGN_DECREMENT."""
         if op.kind in (OpKind.ASSIGN_DECREMENT, OpKind.ASSIGN_INCREMENT):
             self.expect_type("int")
@@ -455,9 +439,7 @@ class TypeChecker:
         assert isinstance(variable_name, str), "Expected variable name"
 
         stack_type = self.stack_peek()
-        effective_type = (
-            op.type_annotation if op.type_annotation else stack_type
-        )
+        effective_type = op.type_annotation if op.type_annotation else stack_type
 
         if op.type_annotation:
             annotation = op.type_annotation
@@ -494,8 +476,7 @@ class TypeChecker:
 
         if local_variable:
             if not local_variable.typ or (
-                local_variable.typ == ANY_TYPE
-                and effective_type != ANY_TYPE
+                local_variable.typ == ANY_TYPE and effective_type != ANY_TYPE
             ):
                 local_variable.typ = effective_type
 
@@ -517,13 +498,10 @@ class TypeChecker:
         # Global variable
         global_variable = GLOBAL_VARIABLES.get(variable_name)
         if global_variable:
-            assert isinstance(
-                global_variable, Variable
-            ), "Valid global variable"
+            assert isinstance(global_variable, Variable), "Valid global variable"
 
             if not global_variable.typ or (
-                global_variable.typ == ANY_TYPE
-                and effective_type != ANY_TYPE
+                global_variable.typ == ANY_TYPE and effective_type != ANY_TYPE
             ):
                 global_variable.typ = effective_type
 
@@ -539,11 +517,9 @@ class TypeChecker:
             self.expect_type(effective_type)
             return
 
-        raise AssertionError(
-            f"Variable `{variable_name}` is not defined"
-        )
+        raise AssertionError(f"Variable `{variable_name}` is not defined")
 
-    def _check_push(self, op: Op, function: Function | None) -> None:
+    def check_push(self, op: Op, function: Function | None) -> None:
         """Handle PUSH_VARIABLE, PUSH_CAPTURE."""
         if op.kind == OpKind.PUSH_CAPTURE:
             capture_name = op.value
@@ -591,9 +567,7 @@ class TypeChecker:
         # Global variable
         global_variable = GLOBAL_VARIABLES.get(variable_name)
         if global_variable:
-            assert (
-                global_variable.typ
-            ), "Global variable type should be defined"
+            assert global_variable.typ, "Global variable type should be defined"
             self.stack_push(global_variable.typ)
             return
 
@@ -603,7 +577,7 @@ class TypeChecker:
             op.location,
         )
 
-    def _check_if_block(self, op: Op) -> bool:
+    def check_if_block(self, op: Op) -> bool:
         """Handle IF_START through IF_END. Returns True if caller should continue."""
         match op.kind:
             case OpKind.IF_START:
@@ -639,10 +613,7 @@ class TypeChecker:
                 branched = self.branched_stacks[-1]
                 before, after = branched.before, branched.after
 
-                if (
-                    branched.current_branch_label
-                    and branched.current_branch_location
-                ):
+                if branched.current_branch_label and branched.current_branch_location:
                     branched.branch_records.append(
                         (
                             branched.current_branch_label,
@@ -660,9 +631,7 @@ class TypeChecker:
 
                 if self.stack == before == after:
                     return True
-                unified_cur_after = _stacks_compatible(
-                    self.stack, after
-                )
+                unified_cur_after = _stacks_compatible(self.stack, after)
                 if unified_cur_after is not None and before != after:
                     branched.after = unified_cur_after
                     self.stack = before.copy()
@@ -683,10 +652,7 @@ class TypeChecker:
             case OpKind.IF_END:
                 branched = self.branched_stacks.pop()
 
-                if (
-                    branched.current_branch_label
-                    and branched.current_branch_location
-                ):
+                if branched.current_branch_label and branched.current_branch_location:
                     branched.branch_records.append(
                         (
                             branched.current_branch_label,
@@ -697,23 +663,13 @@ class TypeChecker:
 
                 if self.stack == branched.before == branched.after:
                     return True
-                unified_cur_after = _stacks_compatible(
-                    self.stack, branched.after
-                )
-                if (
-                    unified_cur_after is not None
-                    and branched.default_present
-                ):
+                unified_cur_after = _stacks_compatible(self.stack, branched.after)
+                if unified_cur_after is not None and branched.default_present:
                     self.stack = unified_cur_after
                     self.stack_origins = branched.after_origins.copy()
                     return True
-                unified_cur_before = _stacks_compatible(
-                    self.stack, branched.before
-                )
-                if (
-                    unified_cur_before is not None
-                    and not branched.default_present
-                ):
+                unified_cur_before = _stacks_compatible(self.stack, branched.before)
+                if unified_cur_before is not None and not branched.default_present:
                     self.stack = unified_cur_before
                     self.stack_origins = branched.before_origins.copy()
                     return True
@@ -725,7 +681,7 @@ class TypeChecker:
                 )
         return False
 
-    def _check_while_block(self, op: Op) -> None:
+    def check_while_block(self, op: Op) -> None:
         """Handle WHILE_START through WHILE_END."""
         match op.kind:
             case OpKind.WHILE_START:
@@ -734,9 +690,7 @@ class TypeChecker:
                 )
             case OpKind.WHILE_CONDITION:
                 self.expect_type("bool")
-                assert (
-                    len(self.branched_stacks) > 0
-                ), "While block stack state is saved"
+                assert len(self.branched_stacks) > 0, "While block stack state is saved"
                 branched = self.branched_stacks[-1]
                 branched.condition_present = True
                 if self.stack != branched.before:
@@ -748,9 +702,7 @@ class TypeChecker:
                         got=str(self.stack),
                     )
             case OpKind.WHILE_BREAK | OpKind.WHILE_CONTINUE:
-                assert (
-                    len(self.branched_stacks) > 0
-                ), "While block stack state is saved"
+                assert len(self.branched_stacks) > 0, "While block stack state is saved"
                 branched = self.branched_stacks[-1]
                 if self.stack != branched.after:
                     raise_error(
@@ -771,7 +723,7 @@ class TypeChecker:
                         got=str(self.stack),
                     )
 
-    def _check_function_ops(
+    def check_function_ops(
         self,
         op: Op,
         ops: list[Op],
@@ -782,9 +734,7 @@ class TypeChecker:
         match op.kind:
             case OpKind.FN_CALL:
                 function_name = op.value
-                assert isinstance(
-                    function_name, str
-                ), "Expected function name"
+                assert isinstance(function_name, str), "Expected function name"
                 global_function = GLOBAL_FUNCTIONS.get(function_name)
                 assert global_function, "Expected function"
                 _ensure_typechecked(global_function)
@@ -809,18 +759,12 @@ class TypeChecker:
                 fn_ptr = self.expect_type(fn_ptr)
                 assert isinstance(fn_ptr, str), "Function pointer type"
                 if fn_ptr != fn_symmetrical:
-                    self.apply_signature(
-                        Signature.from_str(fn_ptr[3:-1]), "exec"
-                    )
+                    self.apply_signature(Signature.from_str(fn_ptr[3:-1]), "exec")
             case OpKind.FN_PUSH:
-                assert isinstance(
-                    op.value, str
-                ), "Expected identifier name"
+                assert isinstance(op.value, str), "Expected identifier name"
                 function_name = op.value
                 global_function = GLOBAL_FUNCTIONS.get(function_name)
-                assert isinstance(
-                    global_function, Function
-                ), "Expected function"
+                assert isinstance(global_function, Function), "Expected function"
                 _ensure_typechecked(global_function)
                 self.stack_push(f"fn[{global_function.signature}]")
             case OpKind.FN_RETURN:
@@ -840,7 +784,7 @@ class TypeChecker:
                     self.stack_origins = branched.before_origins.copy()
         return op_index
 
-    def _check_literals(self, op: Op, function: Function | None) -> None:
+    def check_literals(self, op: Op, function: Function | None) -> None:
         """Handle literal push ops."""
         match op.kind:
             case OpKind.PUSH_INT:
@@ -881,7 +825,7 @@ class TypeChecker:
                     self.expect_type("str")
                 self.stack_push("str")
 
-    def _check_io(self, op: Op) -> None:
+    def check_io(self, op: Op) -> None:
         """Handle PRINT."""
         typ = self.stack_pop()
         if typ == "str":
@@ -895,7 +839,7 @@ class TypeChecker:
         else:
             op.kind = OpKind.PRINT_INT
 
-    def _check_syscalls(self, op: Op) -> None:
+    def check_syscalls(self, op: Op) -> None:
         """Handle SYSCALL0 through SYSCALL6."""
         arg_count = int(op.kind.name[-1])
         self.expect_type("int")
@@ -903,23 +847,19 @@ class TypeChecker:
             self.stack_pop()
         self.stack_push("int")
 
-    def _check_struct_new(self, op: Op) -> None:
+    def check_struct_new(self, op: Op) -> None:
         """Handle STRUCT_NEW."""
         struct = op.value
         assert isinstance(struct, Struct), "Expected struct"
         member_types = " ".join(m.typ for m in struct.members)
-        self.current_op_context = (
-            f"`{struct.name}` ({member_types} -> {struct.name})"
-        )
+        self.current_op_context = f"`{struct.name}` ({member_types} -> {struct.name})"
         for member in struct.members:
-            self.current_expect_context = (
-                f"member `{member.name}` of `{struct.name}`"
-            )
+            self.current_expect_context = f"member `{member.name}` of `{struct.name}`"
             self.expect_type(member.typ)
         self.current_expect_context = None
         self.stack_push(struct.name)
 
-    def _check_method_call(
+    def check_method_call(
         self,
         op: Op,
         ops: list[Op],
@@ -945,13 +885,9 @@ class TypeChecker:
                         continue
                     hidden_var = f"__trait_{receiver}_{method_name}"
                     self.stack_pop()
-                    resolved_sig = _resolve_trait_sig(
-                        trait_method.signature, receiver
-                    )
+                    resolved_sig = _resolve_trait_sig(trait_method.signature, receiver)
                     self.stack_push(receiver)
-                    self.apply_signature(
-                        resolved_sig, f"{receiver}::{method_name}"
-                    )
+                    self.apply_signature(resolved_sig, f"{receiver}::{method_name}")
                     op.kind = OpKind.PUSH_VARIABLE
                     op.value = hidden_var
                     exec_op = Op(
@@ -1262,7 +1198,9 @@ def _inject_trait_fn_ptrs(
     satisfaction, and inserts FN_PUSH ops before the call. Returns the
     number of ops inserted.
     """
-    from casa.parser import resolve_identifiers as _resolve
+    from casa.parser import (
+        resolve_identifiers as _resolve,
+    )  # pylint: disable=reimported
 
     bindings: dict[str, str] = {}
 
@@ -1420,96 +1358,103 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
         else:
             tc.current_op_context = None
         match op.kind:
-            case (
-                OpKind.ADD | OpKind.SUB | OpKind.DIV
-                | OpKind.MOD | OpKind.MUL
-            ):
-                tc._check_arithmetic(op)
-            case (
-                OpKind.EQ | OpKind.NE | OpKind.LT
-                | OpKind.LE | OpKind.GT | OpKind.GE
-            ):
-                tc._check_comparison(op)
+            case OpKind.ADD | OpKind.SUB | OpKind.DIV | OpKind.MOD | OpKind.MUL:
+                tc.check_arithmetic(op)
+            case OpKind.EQ | OpKind.NE | OpKind.LT | OpKind.LE | OpKind.GT | OpKind.GE:
+                tc.check_comparison(op)
             case OpKind.AND | OpKind.OR | OpKind.NOT:
-                tc._check_boolean(op)
+                tc.check_boolean(op)
             case (
-                OpKind.BIT_AND | OpKind.BIT_OR | OpKind.BIT_XOR
-                | OpKind.BIT_NOT | OpKind.SHL | OpKind.SHR
+                OpKind.BIT_AND
+                | OpKind.BIT_OR
+                | OpKind.BIT_XOR
+                | OpKind.BIT_NOT
+                | OpKind.SHL
+                | OpKind.SHR
             ):
-                tc._check_bitwise(op)
+                tc.check_bitwise(op)
+            case OpKind.DROP | OpKind.DUP | OpKind.SWAP | OpKind.OVER | OpKind.ROT:
+                tc.check_stack_ops(op)
             case (
-                OpKind.DROP | OpKind.DUP | OpKind.SWAP
-                | OpKind.OVER | OpKind.ROT
+                OpKind.LOAD8
+                | OpKind.LOAD16
+                | OpKind.LOAD32
+                | OpKind.LOAD64
+                | OpKind.STORE8
+                | OpKind.STORE16
+                | OpKind.STORE32
+                | OpKind.STORE64
+                | OpKind.HEAP_ALLOC
             ):
-                tc._check_stack_ops(op)
+                tc.check_memory(op)
             case (
-                OpKind.LOAD8 | OpKind.LOAD16 | OpKind.LOAD32
-                | OpKind.LOAD64 | OpKind.STORE8 | OpKind.STORE16
-                | OpKind.STORE32 | OpKind.STORE64 | OpKind.HEAP_ALLOC
-            ):
-                tc._check_memory(op)
-            case (
-                OpKind.ASSIGN_VARIABLE | OpKind.ASSIGN_INCREMENT
+                OpKind.ASSIGN_VARIABLE
+                | OpKind.ASSIGN_INCREMENT
                 | OpKind.ASSIGN_DECREMENT
             ):
-                tc._check_assignment(op, function)
+                tc.check_assignment(op, function)
             case OpKind.PUSH_VARIABLE | OpKind.PUSH_CAPTURE:
-                tc._check_push(op, function)
+                tc.check_push(op, function)
             case (
-                OpKind.IF_START | OpKind.IF_CONDITION
-                | OpKind.IF_ELIF | OpKind.IF_ELSE | OpKind.IF_END
+                OpKind.IF_START
+                | OpKind.IF_CONDITION
+                | OpKind.IF_ELIF
+                | OpKind.IF_ELSE
+                | OpKind.IF_END
             ):
-                tc._check_if_block(op)
+                tc.check_if_block(op)
             case (
-                OpKind.WHILE_START | OpKind.WHILE_CONDITION
-                | OpKind.WHILE_BREAK | OpKind.WHILE_CONTINUE
+                OpKind.WHILE_START
+                | OpKind.WHILE_CONDITION
+                | OpKind.WHILE_BREAK
+                | OpKind.WHILE_CONTINUE
                 | OpKind.WHILE_END
             ):
-                tc._check_while_block(op)
+                tc.check_while_block(op)
+            case OpKind.FN_CALL | OpKind.FN_EXEC | OpKind.FN_PUSH | OpKind.FN_RETURN:
+                op_index = tc.check_function_ops(op, ops, op_index, function)
             case (
-                OpKind.FN_CALL | OpKind.FN_EXEC
-                | OpKind.FN_PUSH | OpKind.FN_RETURN
+                OpKind.PUSH_INT
+                | OpKind.PUSH_STR
+                | OpKind.PUSH_BOOL
+                | OpKind.PUSH_CHAR
+                | OpKind.PUSH_NONE
+                | OpKind.SOME
+                | OpKind.PUSH_ARRAY
+                | OpKind.FSTRING_CONCAT
             ):
-                op_index = tc._check_function_ops(
-                    op, ops, op_index, function
-                )
-            case (
-                OpKind.PUSH_INT | OpKind.PUSH_STR | OpKind.PUSH_BOOL
-                | OpKind.PUSH_CHAR | OpKind.PUSH_NONE | OpKind.SOME
-                | OpKind.PUSH_ARRAY | OpKind.FSTRING_CONCAT
-            ):
-                tc._check_literals(op, function)
+                tc.check_literals(op, function)
             case OpKind.PRINT:
-                tc._check_io(op)
+                tc.check_io(op)
             case (
-                OpKind.SYSCALL0 | OpKind.SYSCALL1 | OpKind.SYSCALL2
-                | OpKind.SYSCALL3 | OpKind.SYSCALL4 | OpKind.SYSCALL5
+                OpKind.SYSCALL0
+                | OpKind.SYSCALL1
+                | OpKind.SYSCALL2
+                | OpKind.SYSCALL3
+                | OpKind.SYSCALL4
+                | OpKind.SYSCALL5
                 | OpKind.SYSCALL6
             ):
-                tc._check_syscalls(op)
+                tc.check_syscalls(op)
             case OpKind.STRUCT_NEW:
-                tc._check_struct_new(op)
+                tc.check_struct_new(op)
             case OpKind.METHOD_CALL:
-                op_index = tc._check_method_call(
-                    op, ops, op_index, function
-                )
+                op_index = tc.check_method_call(op, ops, op_index, function)
             case OpKind.TYPE_CAST:
                 tc.stack_pop()
                 tc.stack_push(op.value)
             case OpKind.INCLUDE_FILE:
                 pass
             case OpKind.IDENTIFIER:
-                raise AssertionError(
-                    "Identifiers should be resolved by the parser"
-                )
+                raise AssertionError("Identifiers should be resolved by the parser")
             case (
-                OpKind.PRINT_BOOL | OpKind.PRINT_CHAR
-                | OpKind.PRINT_CSTR | OpKind.PRINT_INT
+                OpKind.PRINT_BOOL
+                | OpKind.PRINT_CHAR
+                | OpKind.PRINT_CSTR
+                | OpKind.PRINT_INT
                 | OpKind.PRINT_STR
             ):
-                assert False, (
-                    "PRINT variants are resolved by the type checker"
-                )
+                assert False, "PRINT variants are resolved by the type checker"
             case _:
                 assert_never(op.kind)
 
