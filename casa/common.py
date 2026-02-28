@@ -139,7 +139,9 @@ Delimiter._MAPPING = {  # type: ignore
     "(": Delimiter.OPEN_PAREN,
     ")": Delimiter.CLOSE_PAREN,
 }
-assert len(Delimiter._MAPPING) == len(Delimiter), "Exhaustive handling for `Delimiter`"  # type: ignore
+assert len(Delimiter._MAPPING) == len(Delimiter), (  # type: ignore
+    "Exhaustive handling for `Delimiter`"
+)
 
 
 class Operator(Enum):
@@ -699,13 +701,15 @@ class Inst:
             ):
                 if len(self.args) != 1 or not isinstance(self.args[0], int):
                     raise TypeError(
-                        f"`{self.kind}` requires one parameter of type `int`\nArguments: {self.args}"
+                        f"`{self.kind}` requires one int param\n"
+                        f"Arguments: {self.args}"
                     )
             # One parameter of type `str`
             case InstKind.FN_CALL | InstKind.FN_PUSH:
                 if len(self.args) != 1 or not isinstance(self.args[0], str):
                     raise TypeError(
-                        f"`{self.kind}` requires one parameter of type `str`\nArguments: {self.args}"
+                        f"`{self.kind}` requires one str param\n"
+                        f"Arguments: {self.args}"
                     )
 
 
@@ -987,6 +991,8 @@ def resolve_trait_sig(sig: "Signature", type_var: str) -> "Signature":
 
 @dataclass
 class Function:
+    """A parsed function with ops, signature, and compilation state."""
+
     name: str
     ops: list[Op]
     location: Location
