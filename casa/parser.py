@@ -1050,6 +1050,21 @@ def get_op_literal(token: Token) -> Op:
     raise ValueError(f"Token `{token.value}` is not a literal")
 
 
+def _parse_compound_assign(
+    cursor: Cursor[Token],
+    token: Token,
+    op_kind: OpKind,
+    function_name: str,
+) -> Op:
+    """Parse a compound assignment operator (+= or -=)."""
+    next_token = expect_token(cursor, kind=TokenKind.IDENTIFIER)
+    identifier = token_to_op(next_token, cursor, function_name)
+    assert identifier, "Expected identifier"
+    variable_name = identifier.value
+    assert isinstance(variable_name, str), "Expected variable name"
+    return Op(variable_name, op_kind, token.location)
+
+
 def get_op_operator(token: Token, cursor: Cursor[Token], function_name: str) -> Op:
     assert len(Operator) == 23, "Exhaustive handling for `Operator`"
 
@@ -1088,23 +1103,13 @@ def get_op_operator(token: Token, cursor: Cursor[Token], function_name: str) -> 
                 type_annotation=type_annotation,
             )
         case Operator.ASSIGN_DECREMENT:
-            next_token = expect_token(cursor, kind=TokenKind.IDENTIFIER)
-            identifier = token_to_op(next_token, cursor, function_name)
-            assert identifier, "Expected identifier"
-
-            variable_name = identifier.value
-            assert isinstance(variable_name, str), "Expected variable name"
-
-            return Op(variable_name, OpKind.ASSIGN_DECREMENT, token.location)
+            return _parse_compound_assign(
+                cursor, token, OpKind.ASSIGN_DECREMENT, function_name
+            )
         case Operator.ASSIGN_INCREMENT:
-            next_token = expect_token(cursor, kind=TokenKind.IDENTIFIER)
-            identifier = token_to_op(next_token, cursor, function_name)
-            assert identifier, "Expected identifier"
-
-            variable_name = identifier.value
-            assert isinstance(variable_name, str), "Expected variable name"
-
-            return Op(variable_name, OpKind.ASSIGN_INCREMENT, identifier.location)
+            return _parse_compound_assign(
+                cursor, token, OpKind.ASSIGN_INCREMENT, function_name
+            )
         case Operator.DIVISION:
             return Op(operator, OpKind.DIV, token.location)
         case Operator.EQ:
