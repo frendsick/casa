@@ -352,7 +352,7 @@ class TestTypeSatisfiesTrait:
         fn = Function(
             name="test_fn",
             ops=[],
-            location=None,  # type: ignore[arg-type]
+            location=None,
             signature=Signature(
                 parameters=[],
                 return_types=[],
@@ -369,7 +369,7 @@ class TestTypeSatisfiesTrait:
         fn = Function(
             name="test_fn",
             ops=[],
-            location=None,  # type: ignore[arg-type]
+            location=None,
             signature=Signature(
                 parameters=[],
                 return_types=[],
@@ -388,7 +388,7 @@ class TestTypeSatisfiesTrait:
         fn = Function(
             name="test_fn",
             ops=[],
-            location=None,  # type: ignore[arg-type]
+            location=None,
             signature=Signature(
                 parameters=[],
                 return_types=[],

@@ -1,3 +1,5 @@
+"""Tokenizer for the Casa programming language."""
+
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -29,6 +31,8 @@ ESCAPE_SEQUENCES = {
 
 @dataclass(slots=True)
 class Lexer:
+    """Tokenizes a source string into a list of Tokens."""
+
     cursor: Cursor[str]
     file: Path
     errors: list[CasaError] = field(default_factory=list)
@@ -39,6 +43,7 @@ class Lexer:
         self._source = self.cursor.sequence
 
     def lex(self) -> list[Token]:
+        """Lex the entire source into a token list."""
         tokens: list[Token] = []
         while not self.cursor.is_finished():
             self.skip_whitespace()
@@ -58,9 +63,11 @@ class Lexer:
         return tokens
 
     def current_location(self, span_length: int) -> Location:
+        """Return a Location at the current cursor position."""
         return Location(self.file, Span(self.cursor.position, span_length))
 
     def peek_word(self) -> str | None:
+        """Peek at the next whitespace-delimited word without consuming it."""
         if self.cursor.is_finished():
             return None
 
@@ -84,9 +91,11 @@ class Lexer:
         return word or None
 
     def startswith(self, prefix: str) -> bool:
+        """Check if the remaining source starts with the given prefix."""
         return self._source.startswith(prefix, self.cursor.position)
 
     def skip_whitespace(self):
+        """Advance the cursor past any whitespace."""
         seq = self._source
         pos = self.cursor.position
         while pos < len(seq) and seq[pos].isspace():
@@ -94,6 +103,7 @@ class Lexer:
         self.cursor.position = pos
 
     def skip_line(self):
+        """Advance the cursor to the end of the current line."""
         idx = self._source.find("\n", self.cursor.position)
         if idx != -1:
             self.cursor.position = idx + 1
@@ -101,6 +111,7 @@ class Lexer:
             self.cursor.position = len(self._source)
 
     def lex_integer_literal(self) -> Token:
+        """Lex a sequence of digits into an integer literal token."""
         seq = self._source
         start = self.cursor.position
         pos = start
@@ -114,6 +125,7 @@ class Lexer:
         return Token(seq[start:pos], TokenKind.LITERAL, location)
 
     def parse_fstring(self) -> list[Token]:
+        """Parse an f-string into a list of tokens."""
         start = self.cursor.position
         start_loc = self.current_location(2)
         self.cursor.position += 2  # skip f"
@@ -214,6 +226,7 @@ class Lexer:
         return tokens
 
     def parse_token(self) -> Token | None:
+        """Parse a single token at the current position."""
         match c := self.cursor.peek():
             case None:
                 return None
@@ -230,11 +243,13 @@ class Lexer:
                 return self.lex_multichar_token()
 
     def lex_token(self, char: str, token_kind: TokenKind) -> Token:
+        """Consume a single character and return it as a token."""
         token = Token(char, token_kind, self.current_location(1))
         self.cursor.position += 1
         return token
 
     def lex_multichar_token(self) -> Token | None:
+        """Lex a multi-character token (string, keyword, operator, identifier)."""
         original_position = self.cursor.position
         if self.startswith('"'):
             string_literal = self.parse_string_literal()
@@ -285,6 +300,7 @@ class Lexer:
         return Token(value, TokenKind.IDENTIFIER, location)
 
     def parse_escape_sequence(self) -> str | None:
+        """Parse a backslash escape sequence and return the resolved character."""
         next_char = self.cursor.pop()
         if next_char is None:
             return None
@@ -301,6 +317,7 @@ class Lexer:
         return ""
 
     def parse_string_literal(self) -> str:
+        """Parse a double-quoted string literal."""
         start = self.cursor.position
         assert self.cursor.pop() == '"', 'String literal starts with `"`'
 
@@ -332,6 +349,7 @@ class Lexer:
         return string_literal
 
     def parse_char_literal(self) -> Token:
+        """Parse a single-quoted character literal."""
         start = self.cursor.position
         assert self.cursor.pop() == "'", "Char literal starts with `'`"
 
@@ -399,10 +417,12 @@ class Lexer:
 
 
 def is_negative_integer_literal(value: str) -> bool:
+    """Check if a string represents a negative integer literal."""
     return len(value) > 1 and value[0] == "-" and value[1:].isdigit()
 
 
 def lex_file(file: Path) -> list[Token]:
+    """Read a file and lex it into tokens."""
     with open(file, "r", encoding="utf-8") as code_file:
         code = code_file.read()
     SOURCE_CACHE[file] = code

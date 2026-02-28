@@ -1,3 +1,5 @@
+"""Stack-based type inference and checking for the Casa compiler."""
+
 from dataclasses import dataclass, field
 from collections.abc import Iterable
 from typing import assert_never
@@ -38,6 +40,8 @@ from casa.parser import resolve_identifiers
 
 @dataclass
 class BranchedStack:
+    """Tracks stack state across conditional and loop branches."""
+
     before: list[Type]
     after: list[Type]
     before_origins: list[Location | None]
@@ -73,6 +77,8 @@ class BranchedStack:
 
 @dataclass
 class TypeChecker:
+    """Simulates the stack symbolically to infer and verify types."""
+
     ops: list[Op]
     stack: list[Type] = field(default_factory=list)
     stack_origins: list[Location | None] = field(default_factory=list)
@@ -91,15 +97,18 @@ class TypeChecker:
     current_expect_context: str | None = None
 
     def stack_push(self, typ: Type, origin: Location | None = None):
+        """Push a type onto the symbolic stack."""
         self.stack.append(typ)
         self.stack_origins.append(origin or self.current_location)
 
     def stack_peek(self) -> Type:
+        """Return the top type without popping."""
         if not self.stack:
             return ANY_TYPE
         return self.stack[-1]
 
     def stack_pop(self) -> Type:
+        """Pop and return the top type from the symbolic stack."""
         if not self.stack:
             self.parameters.append(Parameter(ANY_TYPE))
             self.last_pop_origin = None
@@ -108,6 +117,7 @@ class TypeChecker:
         return self.stack.pop()
 
     def expect_type(self, expected: Type) -> Type:
+        """Pop and verify the top type matches expected."""
         if not self.stack:
             self.parameters.append(Parameter(expected))
             self.last_pop_origin = None
@@ -138,14 +148,16 @@ class TypeChecker:
             act_params = extract_generic_params(typ)
             if exp_params and act_params and len(exp_params) == len(act_params):
                 if all(
-                    ep == ANY_TYPE or ap == ANY_TYPE or ep == ap
-                    for ep, ap in zip(exp_params, act_params)
+                    expected_param == ANY_TYPE
+                    or actual_param == ANY_TYPE
+                    or expected_param == actual_param
+                    for expected_param, actual_param in zip(exp_params, act_params)
                 ):
                     return expected
             else:
                 exp_inner = extract_generic_inner(expected)
                 act_inner = extract_generic_inner(typ)
-                if exp_inner == ANY_TYPE or act_inner == ANY_TYPE:
+                if ANY_TYPE in (exp_inner, act_inner):
                     return expected
         # Match fn[sig] types using Signature.matches (handles ANY_TYPE)
         exp_sig_str = extract_fn_signature_str(expected)
@@ -204,6 +216,7 @@ class TypeChecker:
             )
 
     def apply_signature(self, signature: Signature, name: str | None = None):
+        """Pop parameters and push return types according to a signature."""
         self.current_op_context = f"`{name}` ({signature})" if name else None
 
         if not signature.type_vars:
@@ -257,9 +270,9 @@ class TypeChecker:
         if actual_base == generic_base:
             act_params = extract_generic_params(actual)
             if act_params and len(act_params) == len(exp_params):
-                for ep, ap in zip(exp_params, act_params):
-                    if ep in signature.type_vars:
-                        self._bind_type_var(bindings, ep, ap)
+                for expected_param, actual_param in zip(exp_params, act_params):
+                    if expected_param in signature.type_vars:
+                        self._bind_type_var(bindings, expected_param, actual_param)
                 return True
             raise_error(
                 ErrorKind.TYPE_MISMATCH,
@@ -268,7 +281,7 @@ class TypeChecker:
                 expected=f"`{expected.typ}`",
                 got=f"`{actual}`",
             )
-        if actual == generic_base or actual == ANY_TYPE:
+        if actual in (generic_base, ANY_TYPE):
             for ep in exp_params:
                 if ep in signature.type_vars:
                     self._bind_type_var(bindings, ep, ANY_TYPE)
@@ -292,14 +305,16 @@ class TypeChecker:
         Returns True if this parameter was handled.
         """
         fn_sig_str = extract_fn_signature_str(expected.typ)
-        if not fn_sig_str or not any(tv in fn_sig_str for tv in signature.type_vars):
+        if not fn_sig_str or not any(
+            type_var in fn_sig_str for type_var in signature.type_vars
+        ):
             return False
 
         actual = self.stack_pop()
         if actual == ANY_TYPE:
-            for tv in signature.type_vars:
-                if tv in fn_sig_str:
-                    self._bind_type_var(bindings, tv, ANY_TYPE)
+            for type_var in signature.type_vars:
+                if type_var in fn_sig_str:
+                    self._bind_type_var(bindings, type_var, ANY_TYPE)
             return True
         if not is_fn_type(actual):
             raise_error(
@@ -314,13 +329,613 @@ class TypeChecker:
             return True
         exp_fn_sig = Signature.from_str(fn_sig_str)
         act_fn_sig = Signature.from_str(actual_sig_str)
-        for ep, ap in zip(exp_fn_sig.parameters, act_fn_sig.parameters):
-            if ep.typ in signature.type_vars:
-                self._bind_type_var(bindings, ep.typ, ap.typ)
+        for expected_param, actual_param in zip(
+            exp_fn_sig.parameters, act_fn_sig.parameters
+        ):
+            if expected_param.typ in signature.type_vars:
+                self._bind_type_var(bindings, expected_param.typ, actual_param.typ)
         for er, ar in zip(exp_fn_sig.return_types, act_fn_sig.return_types):
             if er in signature.type_vars:
                 self._bind_type_var(bindings, er, ar)
         return True
+
+    def check_arithmetic(self, op: Op) -> None:
+        """Handle ADD, SUB, MUL, DIV, MOD."""
+        match op.kind:
+            case OpKind.ADD | OpKind.SUB:
+                self.expect_type("int")
+                t1 = self.stack_pop()
+                self.stack_push(t1)
+            case OpKind.DIV | OpKind.MOD | OpKind.MUL:
+                self.expect_type("int")
+                self.expect_type("int")
+                self.stack_push("int")
+
+    def check_comparison(self) -> None:
+        """Handle EQ, NE, LT, LE, GT, GE."""
+        self.stack_pop()
+        self.stack_pop()
+        self.stack_push("bool")
+
+    def check_boolean(self, op: Op) -> None:
+        """Handle AND, OR, NOT."""
+        if op.kind == OpKind.NOT:
+            self.stack_pop()
+        else:
+            self.stack_pop()
+            self.stack_pop()
+        self.stack_push("bool")
+
+    def check_bitwise(self, op: Op) -> None:
+        """Handle BIT_AND, BIT_OR, BIT_XOR, BIT_NOT, SHL, SHR."""
+        if op.kind == OpKind.BIT_NOT:
+            self.expect_type("int")
+            self.stack_push("int")
+        elif op.kind in (OpKind.SHL, OpKind.SHR):
+            self.expect_type("int")
+            t1 = self.stack_pop()
+            self.stack_push(t1)
+        else:
+            self.expect_type("int")
+            self.expect_type("int")
+            self.stack_push("int")
+
+    def check_stack_ops(self, op: Op) -> None:
+        """Handle DROP, DUP, SWAP, OVER, ROT."""
+        match op.kind:
+            case OpKind.DROP:
+                self.stack_pop()
+            case OpKind.DUP:
+                t1 = self.stack_pop()
+                origin = self.last_pop_origin
+                self.stack_push(t1, origin)
+                self.stack_push(t1, origin)
+            case OpKind.SWAP:
+                t1 = self.stack_pop()
+                first_origin = self.last_pop_origin
+                t2 = self.stack_pop()
+                second_origin = self.last_pop_origin
+                self.stack_push(t1, first_origin)
+                self.stack_push(t2, second_origin)
+            case OpKind.OVER:
+                t1 = self.stack_pop()
+                first_origin = self.last_pop_origin
+                t2 = self.stack_pop()
+                second_origin = self.last_pop_origin
+                self.stack_push(t2, second_origin)
+                self.stack_push(t1, first_origin)
+                self.stack_push(t2, second_origin)
+            case OpKind.ROT:
+                t1 = self.stack_pop()
+                first_origin = self.last_pop_origin
+                t2 = self.stack_pop()
+                second_origin = self.last_pop_origin
+                t3 = self.stack_pop()
+                third_origin = self.last_pop_origin
+                self.stack_push(t2, second_origin)
+                self.stack_push(t1, first_origin)
+                self.stack_push(t3, third_origin)
+
+    def check_memory(self, op: Op) -> None:
+        """Handle LOAD/STORE variants and HEAP_ALLOC."""
+        match op.kind:
+            case OpKind.LOAD8 | OpKind.LOAD16 | OpKind.LOAD32 | OpKind.LOAD64:
+                self.expect_type("ptr")
+                self.stack_push("int")
+            case OpKind.STORE8 | OpKind.STORE16 | OpKind.STORE32 | OpKind.STORE64:
+                self.expect_type("ptr")
+                self.stack_pop()
+            case OpKind.HEAP_ALLOC:
+                self.expect_type("int")
+                self.stack_push("ptr")
+
+    def check_assignment(self, op: Op, function: Function | None) -> None:
+        """Handle ASSIGN_VARIABLE, ASSIGN_INCREMENT, ASSIGN_DECREMENT."""
+        if op.kind in (OpKind.ASSIGN_DECREMENT, OpKind.ASSIGN_INCREMENT):
+            self.expect_type("int")
+            return
+
+        variable_name = op.value
+        assert isinstance(variable_name, str), "Expected variable name"
+
+        stack_type = self.stack_peek()
+        effective_type = op.type_annotation if op.type_annotation else stack_type
+
+        if op.type_annotation:
+            annotation = op.type_annotation
+            if annotation == ANY_TYPE:
+                WARNINGS.append(
+                    CasaWarning(
+                        WarningKind.LOSSY_TYPE_ANNOTATION,
+                        f"Type annotation `any` discards type information from `{stack_type}`",
+                        op.location,
+                    )
+                )
+            elif (
+                extract_generic_base(stack_type) is not None
+                and extract_generic_base(annotation) is None
+                and extract_generic_base(stack_type) == annotation
+            ):
+                WARNINGS.append(
+                    CasaWarning(
+                        WarningKind.LOSSY_TYPE_ANNOTATION,
+                        f"Type annotation `{annotation}` discards type"
+                        f" parameter from `{stack_type}`",
+                        op.location,
+                    )
+                )
+                effective_type = stack_type
+
+        # Local variable (shadows global with same name)
+        local_variable = None
+        if function:
+            for variable in function.variables:
+                if variable.name == variable_name:
+                    local_variable = variable
+                    break
+
+        if local_variable:
+            if not local_variable.typ or (
+                local_variable.typ == ANY_TYPE and effective_type != ANY_TYPE
+            ):
+                local_variable.typ = effective_type
+
+            if (
+                local_variable.typ not in (effective_type, ANY_TYPE)
+                and effective_type != ANY_TYPE
+            ):
+                raise_error(
+                    ErrorKind.INVALID_VARIABLE,
+                    f"Cannot override local variable `{local_variable.name}`"
+                    f" of type `{local_variable.typ}`"
+                    f" with other type `{effective_type}`",
+                    op.location,
+                )
+
+            self.expect_type(effective_type)
+            return
+
+        # Global variable
+        global_variable = GLOBAL_VARIABLES.get(variable_name)
+        if global_variable:
+            assert isinstance(global_variable, Variable), "Valid global variable"
+
+            if not global_variable.typ or (
+                global_variable.typ == ANY_TYPE and effective_type != ANY_TYPE
+            ):
+                global_variable.typ = effective_type
+
+            if global_variable.typ not in (effective_type, ANY_TYPE):
+                raise_error(
+                    ErrorKind.INVALID_VARIABLE,
+                    f"Cannot override global variable `{global_variable.name}`"
+                    f" of type `{global_variable.typ}`"
+                    f" with other type `{effective_type}`",
+                    op.location,
+                )
+
+            self.expect_type(effective_type)
+            return
+
+        raise AssertionError(f"Variable `{variable_name}` is not defined")
+
+    def check_push(self, op: Op, function: Function | None) -> None:
+        """Handle PUSH_VARIABLE, PUSH_CAPTURE."""
+        if op.kind == OpKind.PUSH_CAPTURE:
+            capture_name = op.value
+            assert isinstance(op.value, str), "Expected variable name"
+            assert isinstance(function, Function), "Expected function"
+
+            if capture_name not in function.captures:
+                raise_error(
+                    ErrorKind.UNDEFINED_NAME,
+                    f"Function `{function.name}` does not have capture `{capture_name}`",
+                    op.location,
+                )
+
+            index = function.captures.index(capture_name)
+            capture = function.captures[index]
+
+            if capture.typ:
+                self.stack_push(capture.typ)
+                return
+
+            if global_variable := GLOBAL_VARIABLES.get(capture.name):
+                assert global_variable.typ, "Variable type"
+                capture.typ = global_variable.typ
+                self.stack_push(global_variable.typ)
+                return
+
+            raise AssertionError(
+                f"Capture `{capture.name}` has not been type checked before its usage"
+            )
+
+        variable_name = op.value
+        assert isinstance(variable_name, str), "Expected variable name"
+
+        # Local variable (shadows global with same name)
+        if function:
+            for variable in function.variables:
+                if variable == variable_name:
+                    if not variable.typ:
+                        raise AssertionError(
+                            f"Variable `{variable.name}` has not been type checked before its usage"
+                        )
+                    self.stack_push(variable.typ)
+                    return
+
+        # Global variable
+        global_variable = GLOBAL_VARIABLES.get(variable_name)
+        if global_variable:
+            assert global_variable.typ, "Global variable type should be defined"
+            self.stack_push(global_variable.typ)
+            return
+
+        raise_error(
+            ErrorKind.UNDEFINED_NAME,
+            f"Variable `{variable_name}` is not defined",
+            op.location,
+        )
+
+    def check_if_block(self, op: Op) -> None:
+        """Handle IF_START through IF_END."""
+        match op.kind:
+            case OpKind.IF_START:
+                bs = BranchedStack(self.stack, self.stack_origins)
+                bs.if_location = op.location
+                self.branched_stacks.append(bs)
+            case OpKind.IF_CONDITION:
+                self.expect_type("bool")
+
+                assert len(self.branched_stacks) > 0, "If block stack state is saved"
+                branched = self.branched_stacks[-1]
+
+                if not branched.condition_present:
+                    branched.condition_present = True
+                    branched.before = self.stack.copy()
+                    branched.before_origins = self.stack_origins.copy()
+                    branched.after = branched.before
+                    branched.after_origins = branched.before_origins
+                    branched.current_branch_label = "if"
+                    branched.current_branch_location = branched.if_location
+                    return
+
+                if self.stack != branched.before:
+                    raise_error(
+                        ErrorKind.STACK_MISMATCH,
+                        "Stack state changed across branch",
+                        op.location,
+                        expected=str(branched.before),
+                        got=str(self.stack),
+                    )
+            case OpKind.IF_ELIF | OpKind.IF_ELSE:
+                assert self.branched_stacks, "If block stack state is saved"
+                branched = self.branched_stacks[-1]
+                before, after = branched.before, branched.after
+
+                if branched.current_branch_label and branched.current_branch_location:
+                    branched.branch_records.append(
+                        (
+                            branched.current_branch_label,
+                            self.stack.copy(),
+                            branched.current_branch_location,
+                        )
+                    )
+
+                if op.kind is OpKind.IF_ELSE:
+                    branched.default_present = True
+                    branched.current_branch_label = "else"
+                else:
+                    branched.current_branch_label = "elif"
+                branched.current_branch_location = op.location
+
+                if self.stack == before == after:
+                    return
+                unified_cur_after = _stacks_compatible(self.stack, after)
+                if unified_cur_after is not None and before != after:
+                    branched.after = unified_cur_after
+                    self.stack = before.copy()
+                    self.stack_origins = branched.before_origins.copy()
+                    return
+                if before == after:
+                    branched.after = self.stack.copy()
+                    branched.after_origins = self.stack_origins.copy()
+                    self.stack = before.copy()
+                    self.stack_origins = branched.before_origins.copy()
+                    return
+                raise_error(
+                    ErrorKind.STACK_MISMATCH,
+                    "Branches have incompatible stack effects",
+                    op.location,
+                    notes=_branch_mismatch_notes(branched),
+                )
+            case OpKind.IF_END:
+                branched = self.branched_stacks.pop()
+
+                if branched.current_branch_label and branched.current_branch_location:
+                    branched.branch_records.append(
+                        (
+                            branched.current_branch_label,
+                            self.stack.copy(),
+                            branched.current_branch_location,
+                        )
+                    )
+
+                if self.stack == branched.before == branched.after:
+                    return
+                unified_cur_after = _stacks_compatible(self.stack, branched.after)
+                if unified_cur_after is not None and branched.default_present:
+                    self.stack = unified_cur_after
+                    self.stack_origins = branched.after_origins.copy()
+                    return
+                unified_cur_before = _stacks_compatible(self.stack, branched.before)
+                if unified_cur_before is not None and not branched.default_present:
+                    self.stack = unified_cur_before
+                    self.stack_origins = branched.before_origins.copy()
+                    return
+                raise_error(
+                    ErrorKind.STACK_MISMATCH,
+                    "Branches have incompatible stack effects",
+                    op.location,
+                    notes=_branch_mismatch_notes(branched),
+                )
+
+    def check_while_block(self, op: Op) -> None:
+        """Handle WHILE_START through WHILE_END."""
+        match op.kind:
+            case OpKind.WHILE_START:
+                self.branched_stacks.append(
+                    BranchedStack(self.stack, self.stack_origins)
+                )
+            case OpKind.WHILE_CONDITION:
+                self.expect_type("bool")
+                assert len(self.branched_stacks) > 0, "While block stack state is saved"
+                branched = self.branched_stacks[-1]
+                branched.condition_present = True
+                if self.stack != branched.before:
+                    raise_error(
+                        ErrorKind.STACK_MISMATCH,
+                        "Stack state changed in loop",
+                        op.location,
+                        expected=str(branched.before),
+                        got=str(self.stack),
+                    )
+            case OpKind.WHILE_BREAK | OpKind.WHILE_CONTINUE:
+                assert len(self.branched_stacks) > 0, "While block stack state is saved"
+                branched = self.branched_stacks[-1]
+                if self.stack != branched.after:
+                    raise_error(
+                        ErrorKind.STACK_MISMATCH,
+                        "Stack state changed in loop",
+                        op.location,
+                        expected=str(branched.after),
+                        got=str(self.stack),
+                    )
+            case OpKind.WHILE_END:
+                branched = self.branched_stacks.pop()
+                if branched.after != self.stack:
+                    raise_error(
+                        ErrorKind.STACK_MISMATCH,
+                        "Stack state changed in loop",
+                        op.location,
+                        expected=str(branched.after),
+                        got=str(self.stack),
+                    )
+
+    def check_function_ops(
+        self,
+        op: Op,
+        ops: list[Op],
+        op_index: int,
+        function: Function | None,
+    ) -> int:
+        """Handle FN_CALL, FN_EXEC, FN_PUSH, FN_RETURN. Returns updated op_index."""
+        match op.kind:
+            case OpKind.FN_CALL:
+                function_name = op.value
+                assert isinstance(function_name, str), "Expected function name"
+                global_function = GLOBAL_FUNCTIONS.get(function_name)
+                assert global_function, "Expected function"
+                _ensure_typechecked(global_function)
+                assert global_function.signature, "Signature is defined"
+                fn_sig = global_function.signature
+                if fn_sig.trait_bounds:
+                    injected = _inject_trait_fn_ptrs(
+                        self,
+                        fn_sig,
+                        ops,
+                        op_index,
+                        op.location,
+                        function,
+                    )
+                    op_index += injected
+                self.apply_signature(fn_sig, function_name)
+            case OpKind.FN_EXEC:
+                fn_symmetrical = "fn"
+                fn_ptr = self.stack_peek()
+                if fn_ptr == ANY_TYPE:
+                    fn_ptr = "fn"
+                fn_ptr = self.expect_type(fn_ptr)
+                assert isinstance(fn_ptr, str), "Function pointer type"
+                if fn_ptr != fn_symmetrical:
+                    self.apply_signature(Signature.from_str(fn_ptr[3:-1]), "exec")
+            case OpKind.FN_PUSH:
+                assert isinstance(op.value, str), "Expected identifier name"
+                function_name = op.value
+                global_function = GLOBAL_FUNCTIONS.get(function_name)
+                assert isinstance(global_function, Function), "Expected function"
+                _ensure_typechecked(global_function)
+                self.stack_push(f"fn[{global_function.signature}]")
+            case OpKind.FN_RETURN:
+                if self.return_types is None:
+                    self.return_types = self.stack.copy()
+                if self.return_types != self.stack:
+                    raise_error(
+                        ErrorKind.TYPE_MISMATCH,
+                        "Invalid return types",
+                        op.location,
+                        expected=str(self.return_types),
+                        got=str(self.stack),
+                    )
+                if self.branched_stacks:
+                    branched = self.branched_stacks[-1]
+                    self.stack = branched.before.copy()
+                    self.stack_origins = branched.before_origins.copy()
+        return op_index
+
+    def check_literals(self, op: Op, function: Function | None) -> None:
+        """Handle literal push ops."""
+        match op.kind:
+            case OpKind.PUSH_INT:
+                self.stack_push("int")
+            case OpKind.PUSH_STR:
+                self.stack_push("str")
+            case OpKind.PUSH_BOOL:
+                self.stack_push("bool")
+            case OpKind.PUSH_CHAR:
+                self.stack_push("char")
+            case OpKind.PUSH_NONE:
+                self.stack_push("option")
+            case OpKind.SOME:
+                t1 = self.stack_pop()
+                self.stack_push(f"option[{t1}]")
+            case OpKind.PUSH_ARRAY:
+                items = op.value
+                assert isinstance(items, list)
+                if not items:
+                    self.stack_push("array[any]")
+                    return
+                first_type = _infer_literal_type(items[0], function)
+                for item in items[1:]:
+                    item_type = _infer_literal_type(item, function)
+                    if item_type != first_type:
+                        raise_error(
+                            ErrorKind.TYPE_MISMATCH,
+                            "Array literal has mixed element types",
+                            op.location,
+                            expected=f"`{first_type}`",
+                            got=f"`{item_type}`",
+                        )
+                self.stack_push(f"array[{first_type}]")
+            case OpKind.FSTRING_CONCAT:
+                count = op.value
+                assert isinstance(count, int)
+                for _ in range(count):
+                    self.expect_type("str")
+                self.stack_push("str")
+
+    def check_io(self, op: Op) -> None:
+        """Handle PRINT."""
+        typ = self.stack_pop()
+        if typ == "str":
+            op.kind = OpKind.PRINT_STR
+        elif typ == "bool":
+            op.kind = OpKind.PRINT_BOOL
+        elif typ == "char":
+            op.kind = OpKind.PRINT_CHAR
+        elif typ == "cstr":
+            op.kind = OpKind.PRINT_CSTR
+        else:
+            op.kind = OpKind.PRINT_INT
+
+    def check_syscalls(self, op: Op) -> None:
+        """Handle SYSCALL0 through SYSCALL6."""
+        arg_count = int(op.kind.name[-1])
+        self.expect_type("int")
+        for _ in range(arg_count):
+            self.stack_pop()
+        self.stack_push("int")
+
+    def check_struct_new(self, op: Op) -> None:
+        """Handle STRUCT_NEW."""
+        struct = op.value
+        assert isinstance(struct, Struct), "Expected struct"
+        member_types = " ".join(m.typ for m in struct.members)
+        self.current_op_context = f"`{struct.name}` ({member_types} -> {struct.name})"
+        for member in struct.members:
+            self.current_expect_context = f"member `{member.name}` of `{struct.name}`"
+            self.expect_type(member.typ)
+        self.current_expect_context = None
+        self.stack_push(struct.name)
+
+    def check_method_call(
+        self,
+        op: Op,
+        ops: list[Op],
+        op_index: int,
+        function: Function | None,
+    ) -> int:
+        """Handle METHOD_CALL. Returns updated op_index."""
+        method_name = op.value
+        assert isinstance(method_name, str), "Expected method name"
+        receiver = self.stack_peek()
+
+        if (
+            function
+            and function.signature
+            and function.signature.trait_bounds
+            and receiver in function.signature.trait_bounds
+        ):
+            trait_name = function.signature.trait_bounds[receiver]
+            trait = GLOBAL_TRAITS.get(trait_name)
+            if trait:
+                for trait_method in trait.methods:
+                    if trait_method.name != method_name:
+                        continue
+                    hidden_var = f"__trait_{receiver}_{method_name}"
+                    self.stack_pop()
+                    resolved_sig = _resolve_trait_sig(trait_method.signature, receiver)
+                    self.stack_push(receiver)
+                    self.apply_signature(resolved_sig, f"{receiver}::{method_name}")
+                    op.kind = OpKind.PUSH_VARIABLE
+                    op.value = hidden_var
+                    exec_op = Op(
+                        Intrinsic.EXEC,
+                        OpKind.FN_EXEC,
+                        op.location,
+                    )
+                    ops.insert(op_index, exec_op)
+                    op_index += 1
+                    return op_index
+                raise_error(
+                    ErrorKind.UNDEFINED_NAME,
+                    f"Method `{method_name}` not found in trait `{trait_name}`",
+                    op.location,
+                )
+
+        function_name = f"{receiver}::{method_name}"
+        global_function = GLOBAL_FUNCTIONS.get(function_name)
+        receiver_base = extract_generic_base(receiver)
+        if not global_function and receiver_base:
+            function_name = f"{receiver_base}::{method_name}"
+            global_function = GLOBAL_FUNCTIONS.get(function_name)
+        if not global_function:
+            raise_error(
+                ErrorKind.UNDEFINED_NAME,
+                f"Method `{function_name}` does not exist",
+                op.location,
+            )
+
+        if not global_function.is_typechecked:
+            global_function.ops = resolve_identifiers(
+                global_function.ops, global_function
+            )
+            global_function.is_used = True
+        _ensure_typechecked(global_function)
+
+        assert global_function.signature, "Signature is defined"
+        fn_sig = global_function.signature
+
+        if fn_sig.trait_bounds:
+            injected = _inject_trait_fn_ptrs(
+                self, fn_sig, ops, op_index, op.location, function
+            )
+            op_index += injected
+
+        self.apply_signature(fn_sig, function_name)
+        op.value = function_name
+        op.kind = OpKind.FN_CALL
+        return op_index
 
 
 def _resolve_return_type(return_type: Type, bindings: dict[str, Type]) -> Type:
@@ -334,10 +949,10 @@ def _resolve_return_type(return_type: Type, bindings: dict[str, Type]) -> Type:
             resolved = [bindings.get(p, p) for p in ret_params]
             return f"{generic_base}[{' '.join(resolved)}]"
     fn_sig_str = extract_fn_signature_str(return_type)
-    if fn_sig_str and any(tv in fn_sig_str for tv in bindings):
+    if fn_sig_str and any(type_var in fn_sig_str for type_var in bindings):
         resolved_sig = fn_sig_str
-        for tv, bound in bindings.items():
-            resolved_sig = resolved_sig.replace(tv, bound)
+        for type_var, bound in bindings.items():
+            resolved_sig = resolved_sig.replace(type_var, bound)
         return f"fn[{resolved_sig}]"
     return return_type
 
@@ -359,8 +974,6 @@ def _check_passthrough_params(
 
     if n_inferred > n_declared:
         return None
-
-    n_unused = n_declared - n_inferred
 
     # The body pops from the top of the stack. First-declared params are on
     # top, so the first n_inferred declared params must match the inferred.
@@ -565,9 +1178,9 @@ def _bind_generic_params(
     act_params = extract_generic_params(actual_type)
     if not exp_params or not act_params:
         return
-    for ep, ap in zip(exp_params, act_params):
-        if ep in type_vars and ep not in bindings:
-            bindings[ep] = ap
+    for expected_param, actual_param in zip(exp_params, act_params):
+        if expected_param in type_vars and expected_param not in bindings:
+            bindings[expected_param] = actual_param
 
 
 def _inject_trait_fn_ptrs(
@@ -584,7 +1197,9 @@ def _inject_trait_fn_ptrs(
     satisfaction, and inserts FN_PUSH ops before the call. Returns the
     number of ops inserted.
     """
-    from casa.parser import resolve_identifiers as _resolve
+    from casa.parser import (  # pylint: disable=reimported,import-outside-toplevel
+        resolve_identifiers as _resolve,
+    )
 
     bindings: dict[str, str] = {}
 
@@ -692,19 +1307,19 @@ def type_satisfies_trait(
             return True
     for method in trait.methods:
         fn_name = f"{type_name}::{method.name}"
-        fn = GLOBAL_FUNCTIONS.get(fn_name)
-        if not fn:
+        trait_fn = GLOBAL_FUNCTIONS.get(fn_name)
+        if not trait_fn:
             return False
-        if not fn.signature:
+        if not trait_fn.signature:
             return False
         # Check signature matches with self type replaced by type_name
         resolved = resolve_trait_sig(method.signature, type_name)
-        if len(fn.signature.parameters) != len(resolved.parameters):
+        if len(trait_fn.signature.parameters) != len(resolved.parameters):
             return False
-        if len(fn.signature.return_types) != len(resolved.return_types):
+        if len(trait_fn.signature.return_types) != len(resolved.return_types):
             return False
         for actual_param, expected_param in zip(
-            fn.signature.parameters, resolved.parameters
+            trait_fn.signature.parameters, resolved.parameters
         ):
             if (
                 actual_param.typ != expected_param.typ
@@ -713,7 +1328,7 @@ def type_satisfies_trait(
             ):
                 return False
         for actual_ret, expected_ret in zip(
-            fn.signature.return_types, resolved.return_types
+            trait_fn.signature.return_types, resolved.return_types
         ):
             if (
                 actual_ret != expected_ret
@@ -725,6 +1340,7 @@ def type_satisfies_trait(
 
 
 def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature:
+    """Type-check a list of ops and return the inferred signature."""
     assert len(OpKind) == 79, "Exhaustive handling for `OpKind`"
 
     tc = TypeChecker(ops=ops)
@@ -741,637 +1357,74 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
         else:
             tc.current_op_context = None
         match op.kind:
-            case OpKind.ADD:
-                tc.expect_type("int")
-                t1 = tc.stack_pop()
-                tc.stack_push(t1)
-            case OpKind.AND:
-                tc.stack_pop()
-                tc.stack_pop()
-                tc.stack_push("bool")
-            case OpKind.DIV:
-                tc.expect_type("int")
-                tc.expect_type("int")
-                tc.stack_push("int")
-            case OpKind.ASSIGN_DECREMENT:
-                tc.expect_type("int")
-            case OpKind.ASSIGN_INCREMENT:
-                tc.expect_type("int")
-            case OpKind.ASSIGN_VARIABLE:
-                variable_name = op.value
-                assert isinstance(variable_name, str), "Expected variable name"
-
-                stack_type = tc.stack_peek()
-                effective_type = (
-                    op.type_annotation if op.type_annotation else stack_type
-                )
-
-                if op.type_annotation:
-                    annotation = op.type_annotation
-                    if annotation == ANY_TYPE:
-                        WARNINGS.append(
-                            CasaWarning(
-                                WarningKind.LOSSY_TYPE_ANNOTATION,
-                                f"Type annotation `any` discards type information from `{stack_type}`",
-                                op.location,
-                            )
-                        )
-                    elif (
-                        extract_generic_base(stack_type) is not None
-                        and extract_generic_base(annotation) is None
-                        and extract_generic_base(stack_type) == annotation
-                    ):
-                        WARNINGS.append(
-                            CasaWarning(
-                                WarningKind.LOSSY_TYPE_ANNOTATION,
-                                f"Type annotation `{annotation}` discards type parameter from `{stack_type}`",
-                                op.location,
-                            )
-                        )
-                        effective_type = stack_type
-
-                # Local variable (shadows global with same name)
-                local_variable = None
-                if function:
-                    for variable in function.variables:
-                        if variable.name == variable_name:
-                            local_variable = variable
-                            break
-
-                if local_variable:
-                    if not local_variable.typ or (
-                        local_variable.typ == ANY_TYPE and effective_type != ANY_TYPE
-                    ):
-                        local_variable.typ = effective_type
-
-                    if (
-                        local_variable.typ not in (effective_type, ANY_TYPE)
-                        and effective_type != ANY_TYPE
-                    ):
-                        raise_error(
-                            ErrorKind.INVALID_VARIABLE,
-                            f"Cannot override local variable `{local_variable.name}` of type `{local_variable.typ}` with other type `{effective_type}`",
-                            op.location,
-                        )
-
-                    tc.expect_type(effective_type)
-                    continue
-
-                # Global variable
-                global_variable = GLOBAL_VARIABLES.get(variable_name)
-                if global_variable:
-                    assert isinstance(
-                        global_variable, Variable
-                    ), "Valid global variable"
-
-                    if not global_variable.typ or (
-                        global_variable.typ == ANY_TYPE and effective_type != ANY_TYPE
-                    ):
-                        global_variable.typ = effective_type
-
-                    if global_variable.typ not in (effective_type, ANY_TYPE):
-                        raise_error(
-                            ErrorKind.INVALID_VARIABLE,
-                            f"Cannot override global variable `{global_variable.name}` of type `{global_variable.typ}` with other type `{effective_type}`",
-                            op.location,
-                        )
-
-                    tc.expect_type(effective_type)
-                    continue
-
-                raise AssertionError(f"Variable `{variable_name}` is not defined")
-            case OpKind.DROP:
-                tc.stack_pop()
-            case OpKind.DUP:
-                t1 = tc.stack_pop()
-                origin = tc.last_pop_origin
-                tc.stack_push(t1, origin)
-                tc.stack_push(t1, origin)
-            case OpKind.EQ:
-                tc.stack_pop()
-                tc.stack_pop()
-                tc.stack_push("bool")
-            case OpKind.FSTRING_CONCAT:
-                count = op.value
-                assert isinstance(count, int)
-                for _ in range(count):
-                    tc.expect_type("str")
-                tc.stack_push("str")
-            case OpKind.FN_CALL:
-                function_name = op.value
-                assert isinstance(function_name, str), "Expected function name"
-
-                global_function = GLOBAL_FUNCTIONS.get(function_name)
-                assert global_function, "Expected function"
-
-                _ensure_typechecked(global_function)
-
-                assert global_function.signature, "Signature is defined"
-                fn_sig = global_function.signature
-
-                # Auto-inject trait fn pointers if needed
-                if fn_sig.trait_bounds:
-                    injected = _inject_trait_fn_ptrs(
-                        tc, fn_sig, ops, op_index, op.location, function
-                    )
-                    op_index += injected
-
-                tc.apply_signature(fn_sig, function_name)
-            case OpKind.FN_EXEC:
-                # Lambdas from other functions are typed as `any`
-                fn_symmetrical = "fn"
-                fn_ptr = tc.stack_peek()
-                if fn_ptr == ANY_TYPE:
-                    fn_ptr = "fn"
-
-                fn_ptr = tc.expect_type(fn_ptr)
-                assert isinstance(fn_ptr, str), "Function pointer type"
-
-                if fn_ptr == fn_symmetrical:
-                    continue
-
-                tc.apply_signature(Signature.from_str(fn_ptr[3:-1]), "exec")
-            case OpKind.FN_RETURN:
-                if tc.return_types is None:
-                    tc.return_types = tc.stack.copy()
-
-                if tc.return_types != tc.stack:
-                    raise_error(
-                        ErrorKind.TYPE_MISMATCH,
-                        "Invalid return types",
-                        op.location,
-                        expected=str(tc.return_types),
-                        got=str(tc.stack),
-                    )
-
-                if tc.branched_stacks:
-                    branched = tc.branched_stacks[-1]
-                    tc.stack = branched.before.copy()
-                    tc.stack_origins = branched.before_origins.copy()
-            case OpKind.FN_PUSH:
-                assert isinstance(op.value, str), "Expected identifier name"
-                function_name = op.value
-                assert isinstance(function_name, str), "Expected function name"
-                global_function = GLOBAL_FUNCTIONS.get(function_name)
-                assert isinstance(global_function, Function), "Expected function"
-
-                _ensure_typechecked(global_function)
-                tc.stack_push(f"fn[{global_function.signature}]")
-            case OpKind.GE:
-                tc.stack_pop()
-                tc.stack_pop()
-                tc.stack_push("bool")
-            case OpKind.GT:
-                tc.stack_pop()
-                tc.stack_pop()
-                tc.stack_push("bool")
-            case OpKind.HEAP_ALLOC:
-                tc.expect_type("int")
-                tc.stack_push("ptr")
-            case OpKind.IDENTIFIER:
-                raise AssertionError("Identifiers should be resolved by the parser")
-            case OpKind.IF_CONDITION:
-                tc.expect_type("bool")
-
-                assert len(tc.branched_stacks) > 0, "If block stack state is saved"
-                branched = tc.branched_stacks[-1]
-
-                # First condition is run anyways
-                if not branched.condition_present:
-                    branched.condition_present = True
-                    branched.before = tc.stack.copy()
-                    branched.before_origins = tc.stack_origins.copy()
-                    branched.after = branched.before
-                    branched.after_origins = branched.before_origins
-                    branched.current_branch_label = "if"
-                    branched.current_branch_location = branched.if_location
-                    continue
-
-                if tc.stack != branched.before:
-                    raise_error(
-                        ErrorKind.STACK_MISMATCH,
-                        "Stack state changed across branch",
-                        op.location,
-                        expected=str(branched.before),
-                        got=str(tc.stack),
-                    )
-            case OpKind.IF_ELIF | OpKind.IF_ELSE:
-                assert tc.branched_stacks, "If block stack state is saved"
-                branched = tc.branched_stacks[-1]
-                before, after = branched.before, branched.after
-
-                # Record the branch that just ended
-                if branched.current_branch_label and branched.current_branch_location:
-                    branched.branch_records.append(
-                        (
-                            branched.current_branch_label,
-                            tc.stack.copy(),
-                            branched.current_branch_location,
-                        )
-                    )
-
-                if op.kind is OpKind.IF_ELSE:
-                    branched.default_present = True
-                    branched.current_branch_label = "else"
-                else:
-                    branched.current_branch_label = "elif"
-                branched.current_branch_location = op.location
-
-                if tc.stack == before == after:
-                    continue
-                unified_cur_after = _stacks_compatible(tc.stack, after)
-                if unified_cur_after is not None and before != after:
-                    branched.after = unified_cur_after
-                    tc.stack = before.copy()
-                    tc.stack_origins = branched.before_origins.copy()
-                    continue
-                if before == after:
-                    branched.after = tc.stack.copy()
-                    branched.after_origins = tc.stack_origins.copy()
-                    tc.stack = before.copy()
-                    tc.stack_origins = branched.before_origins.copy()
-                    continue
-                raise_error(
-                    ErrorKind.STACK_MISMATCH,
-                    "Branches have incompatible stack effects",
-                    op.location,
-                    notes=_branch_mismatch_notes(branched),
-                )
-            case OpKind.IF_END:
-                branched = tc.branched_stacks.pop()
-
-                # Record the last branch
-                if branched.current_branch_label and branched.current_branch_location:
-                    branched.branch_records.append(
-                        (
-                            branched.current_branch_label,
-                            tc.stack.copy(),
-                            branched.current_branch_location,
-                        )
-                    )
-
-                if tc.stack == branched.before == branched.after:
-                    continue
-                unified_cur_after = _stacks_compatible(tc.stack, branched.after)
-                if unified_cur_after is not None and branched.default_present:
-                    tc.stack = unified_cur_after
-                    tc.stack_origins = branched.after_origins.copy()
-                    continue
-                unified_cur_before = _stacks_compatible(tc.stack, branched.before)
-                if unified_cur_before is not None and not branched.default_present:
-                    tc.stack = unified_cur_before
-                    tc.stack_origins = branched.before_origins.copy()
-                    continue
-                raise_error(
-                    ErrorKind.STACK_MISMATCH,
-                    "Branches have incompatible stack effects",
-                    op.location,
-                    notes=_branch_mismatch_notes(branched),
-                )
-            case OpKind.IF_START:
-                bs = BranchedStack(tc.stack, tc.stack_origins)
-                bs.if_location = op.location
-                tc.branched_stacks.append(bs)
-            case OpKind.INCLUDE_FILE:
-                pass
-            case OpKind.LE:
-                tc.stack_pop()
-                tc.stack_pop()
-                tc.stack_push("bool")
-            case OpKind.LOAD8 | OpKind.LOAD16 | OpKind.LOAD32 | OpKind.LOAD64:
-                tc.expect_type("ptr")
-                tc.stack_push("int")
-            case OpKind.LT:
-                tc.stack_pop()
-                tc.stack_pop()
-                tc.stack_push("bool")
-            case OpKind.METHOD_CALL:
-                method_name = op.value
-                assert isinstance(method_name, str), "Expected method name"
-
-                receiver = tc.stack_peek()
-
-                # Trait method call on a type variable
-                if (
-                    function
-                    and function.signature
-                    and function.signature.trait_bounds
-                    and receiver in function.signature.trait_bounds
-                ):
-                    trait_name = function.signature.trait_bounds[receiver]
-                    trait = GLOBAL_TRAITS.get(trait_name)
-                    if trait:
-                        for tm in trait.methods:
-                            if tm.name == method_name:
-                                hidden_var = f"__trait_{receiver}_{method_name}"
-                                # Pop the receiver
-                                tc.stack_pop()
-                                # Build signature with self type replaced
-                                resolved_sig = _resolve_trait_sig(
-                                    tm.signature, receiver
-                                )
-                                # Push receiver back and apply sig
-                                tc.stack_push(receiver)
-                                tc.apply_signature(
-                                    resolved_sig, f"{receiver}::{method_name}"
-                                )
-                                # Rewrite op to push hidden fn ptr + exec
-                                op.kind = OpKind.PUSH_VARIABLE
-                                op.value = hidden_var
-                                exec_op = Op(
-                                    Intrinsic.EXEC,
-                                    OpKind.FN_EXEC,
-                                    op.location,
-                                )
-                                ops.insert(op_index, exec_op)
-                                op_index += 1
-                                break
-                        else:
-                            raise_error(
-                                ErrorKind.UNDEFINED_NAME,
-                                f"Method `{method_name}` not found in trait `{trait_name}`",
-                                op.location,
-                            )
-                        continue
-
-                function_name = f"{receiver}::{method_name}"
-
-                global_function = GLOBAL_FUNCTIONS.get(function_name)
-                receiver_base = extract_generic_base(receiver)
-                if not global_function and receiver_base:
-                    function_name = f"{receiver_base}::{method_name}"
-                    global_function = GLOBAL_FUNCTIONS.get(function_name)
-                if not global_function:
-                    raise_error(
-                        ErrorKind.UNDEFINED_NAME,
-                        f"Method `{function_name}` does not exist",
-                        op.location,
-                    )
-
-                if not global_function.is_typechecked:
-                    global_function.ops = resolve_identifiers(
-                        global_function.ops, global_function
-                    )
-                    global_function.is_used = True
-                _ensure_typechecked(global_function)
-
-                assert global_function.signature, "Signature is defined"
-                fn_sig = global_function.signature
-
-                # Auto-inject trait fn pointers for method calls too
-                if fn_sig.trait_bounds:
-                    injected = _inject_trait_fn_ptrs(
-                        tc, fn_sig, ops, op_index, op.location, function
-                    )
-                    op_index += injected
-
-                tc.apply_signature(fn_sig, function_name)
-
-                op.value = function_name
-                op.kind = OpKind.FN_CALL
-            case OpKind.MOD:
-                tc.expect_type("int")
-                tc.expect_type("int")
-                tc.stack_push("int")
-            case OpKind.MUL:
-                tc.expect_type("int")
-                tc.expect_type("int")
-                tc.stack_push("int")
-            case OpKind.NE:
-                tc.stack_pop()
-                tc.stack_pop()
-                tc.stack_push("bool")
-            case OpKind.BIT_NOT:
-                tc.expect_type("int")
-                tc.stack_push("int")
-            case OpKind.NOT:
-                tc.stack_pop()
-                tc.stack_push("bool")
-            case OpKind.OR:
-                tc.stack_pop()
-                tc.stack_pop()
-                tc.stack_push("bool")
-            case OpKind.OVER:
-                t1 = tc.stack_pop()
-                o1 = tc.last_pop_origin
-                t2 = tc.stack_pop()
-                o2 = tc.last_pop_origin
-                tc.stack_push(t2, o2)
-                tc.stack_push(t1, o1)
-                tc.stack_push(t2, o2)
-            case OpKind.PRINT:
-                typ = tc.stack_pop()
-                if typ == "str":
-                    op.kind = OpKind.PRINT_STR
-                elif typ == "bool":
-                    op.kind = OpKind.PRINT_BOOL
-                elif typ == "char":
-                    op.kind = OpKind.PRINT_CHAR
-                elif typ == "cstr":
-                    op.kind = OpKind.PRINT_CSTR
-                else:
-                    op.kind = OpKind.PRINT_INT
+            case OpKind.ADD | OpKind.SUB | OpKind.DIV | OpKind.MOD | OpKind.MUL:
+                tc.check_arithmetic(op)
+            case OpKind.EQ | OpKind.NE | OpKind.LT | OpKind.LE | OpKind.GT | OpKind.GE:
+                tc.check_comparison()
+            case OpKind.AND | OpKind.OR | OpKind.NOT:
+                tc.check_boolean(op)
             case (
-                OpKind.PRINT_BOOL
-                | OpKind.PRINT_CHAR
-                | OpKind.PRINT_CSTR
-                | OpKind.PRINT_INT
-                | OpKind.PRINT_STR
+                OpKind.BIT_AND
+                | OpKind.BIT_OR
+                | OpKind.BIT_XOR
+                | OpKind.BIT_NOT
+                | OpKind.SHL
+                | OpKind.SHR
             ):
-                assert False, "PRINT variants are resolved by the type checker"
-            case OpKind.PUSH_ARRAY:
-                items = op.value
-                assert isinstance(items, list)
-                if not items:
-                    tc.stack_push("array[any]")
-                    continue
-                first_type = _infer_literal_type(items[0], function)
-                for item in items[1:]:
-                    item_type = _infer_literal_type(item, function)
-                    if item_type != first_type:
-                        raise_error(
-                            ErrorKind.TYPE_MISMATCH,
-                            "Array literal has mixed element types",
-                            op.location,
-                            expected=f"`{first_type}`",
-                            got=f"`{item_type}`",
-                        )
-                tc.stack_push(f"array[{first_type}]")
-            case OpKind.PUSH_BOOL:
-                tc.stack_push("bool")
-            case OpKind.PUSH_CAPTURE:
-                capture_name = op.value
-                assert isinstance(op.value, str), "Expected variable name"
-                assert isinstance(function, Function), "Expected function"
-
-                if capture_name not in function.captures:
-                    raise_error(
-                        ErrorKind.UNDEFINED_NAME,
-                        f"Function `{function.name}` does not have capture `{capture_name}`",
-                        op.location,
-                    )
-
-                index = function.captures.index(capture_name)
-                capture = function.captures[index]
-
-                if capture.typ:
-                    tc.stack_push(capture.typ)
-                    continue
-
-                if global_variable := GLOBAL_VARIABLES.get(capture.name):
-                    assert global_variable.typ, "Variable type"
-                    capture.typ = global_variable.typ
-                    tc.stack_push(global_variable.typ)
-                    continue
-
-                raise AssertionError(
-                    f"Capture `{capture.name}` has not been type checked before its usage"
-                )
-            case OpKind.PUSH_CHAR:
-                tc.stack_push("char")
-            case OpKind.PUSH_INT:
-                tc.stack_push("int")
-            case OpKind.PUSH_NONE:
-                tc.stack_push("option")
-            case OpKind.PUSH_STR:
-                tc.stack_push("str")
-            case OpKind.PUSH_VARIABLE:
-                variable_name = op.value
-                assert isinstance(variable_name, str), "Expected variable name"
-
-                # Local variable (shadows global with same name)
-                local_found = False
-                if function:
-                    for variable in function.variables:
-                        if variable == variable_name:
-                            if not variable.typ:
-                                raise AssertionError(
-                                    f"Variable `{variable.name}` has not been type checked before its usage"
-                                )
-                            tc.stack_push(variable.typ)
-                            local_found = True
-                            break
-                if local_found:
-                    continue
-
-                # Global variable
-                global_variable = GLOBAL_VARIABLES.get(variable_name)
-                if global_variable:
-                    assert global_variable.typ, "Global variable type should be defined"
-                    tc.stack_push(global_variable.typ)
-                    continue
-
-                raise_error(
-                    ErrorKind.UNDEFINED_NAME,
-                    f"Variable `{variable_name}` is not defined",
-                    op.location,
-                )
-            case OpKind.ROT:
-                t1 = tc.stack_pop()
-                o1 = tc.last_pop_origin
-                t2 = tc.stack_pop()
-                o2 = tc.last_pop_origin
-                t3 = tc.stack_pop()
-                o3 = tc.last_pop_origin
-                tc.stack_push(t2, o2)
-                tc.stack_push(t1, o1)
-                tc.stack_push(t3, o3)
-            case OpKind.BIT_AND | OpKind.BIT_OR | OpKind.BIT_XOR:
-                tc.expect_type("int")
-                tc.expect_type("int")
-                tc.stack_push("int")
-            case OpKind.SHL | OpKind.SHR:
-                tc.expect_type("int")
-                t1 = tc.stack_pop()
-                tc.stack_push(t1)
-            case OpKind.SOME:
-                t1 = tc.stack_pop()
-                tc.stack_push(f"option[{t1}]")
-            case OpKind.STORE8 | OpKind.STORE16 | OpKind.STORE32 | OpKind.STORE64:
-                tc.expect_type("ptr")
-                tc.stack_pop()
-            case OpKind.STRUCT_NEW:
-                struct = op.value
-                assert isinstance(struct, Struct), "Expected struct"
-
-                member_types = " ".join(m.typ for m in struct.members)
-                tc.current_op_context = (
-                    f"`{struct.name}` ({member_types} -> {struct.name})"
-                )
-                for member in struct.members:
-                    tc.current_expect_context = (
-                        f"member `{member.name}` of `{struct.name}`"
-                    )
-                    tc.expect_type(member.typ)
-                tc.current_expect_context = None
-                tc.stack_push(struct.name)
-            case OpKind.SUB:
-                tc.expect_type("int")
-                t1 = tc.stack_pop()
-                tc.stack_push(t1)
-            case OpKind.SWAP:
-                t1 = tc.stack_pop()
-                o1 = tc.last_pop_origin
-                t2 = tc.stack_pop()
-                o2 = tc.last_pop_origin
-                tc.stack_push(t1, o1)
-                tc.stack_push(t2, o2)
-            case OpKind.TYPE_CAST:
-                cast_type = op.value
-                assert isinstance(cast_type, str), "Expected cast type"
-                tc.stack_pop()
-                tc.stack_push(cast_type)
-            case OpKind.WHILE_BREAK:
-                assert len(tc.branched_stacks) > 0, "While block stack state is saved"
-                branched = tc.branched_stacks[-1]
-
-                if tc.stack != branched.after:
-                    raise_error(
-                        ErrorKind.STACK_MISMATCH,
-                        "Stack state changed in loop",
-                        op.location,
-                        expected=str(branched.after),
-                        got=str(tc.stack),
-                    )
-            case OpKind.WHILE_CONDITION:
-                tc.expect_type("bool")
-
-                assert len(tc.branched_stacks) > 0, "While block stack state is saved"
-                branched = tc.branched_stacks[-1]
-                branched.condition_present = True
-
-                if tc.stack != branched.before:
-                    raise_error(
-                        ErrorKind.STACK_MISMATCH,
-                        "Stack state changed in loop",
-                        op.location,
-                        expected=str(branched.before),
-                        got=str(tc.stack),
-                    )
-            case OpKind.WHILE_END:
-                branched = tc.branched_stacks.pop()
-                if branched.after != tc.stack:
-                    raise_error(
-                        ErrorKind.STACK_MISMATCH,
-                        "Stack state changed in loop",
-                        op.location,
-                        expected=str(branched.after),
-                        got=str(tc.stack),
-                    )
-            case OpKind.WHILE_CONTINUE:
-                assert len(tc.branched_stacks) > 0, "While block stack state is saved"
-                branched = tc.branched_stacks[-1]
-
-                if tc.stack != branched.after:
-                    raise_error(
-                        ErrorKind.STACK_MISMATCH,
-                        "Stack state changed in loop",
-                        op.location,
-                        expected=str(branched.after),
-                        got=str(tc.stack),
-                    )
-            case OpKind.WHILE_START:
-                tc.branched_stacks.append(BranchedStack(tc.stack, tc.stack_origins))
+                tc.check_bitwise(op)
+            case OpKind.DROP | OpKind.DUP | OpKind.SWAP | OpKind.OVER | OpKind.ROT:
+                tc.check_stack_ops(op)
+            case (
+                OpKind.LOAD8
+                | OpKind.LOAD16
+                | OpKind.LOAD32
+                | OpKind.LOAD64
+                | OpKind.STORE8
+                | OpKind.STORE16
+                | OpKind.STORE32
+                | OpKind.STORE64
+                | OpKind.HEAP_ALLOC
+            ):
+                tc.check_memory(op)
+            case (
+                OpKind.ASSIGN_VARIABLE
+                | OpKind.ASSIGN_INCREMENT
+                | OpKind.ASSIGN_DECREMENT
+            ):
+                tc.check_assignment(op, function)
+            case OpKind.PUSH_VARIABLE | OpKind.PUSH_CAPTURE:
+                tc.check_push(op, function)
+            case (
+                OpKind.IF_START
+                | OpKind.IF_CONDITION
+                | OpKind.IF_ELIF
+                | OpKind.IF_ELSE
+                | OpKind.IF_END
+            ):
+                tc.check_if_block(op)
+            case (
+                OpKind.WHILE_START
+                | OpKind.WHILE_CONDITION
+                | OpKind.WHILE_BREAK
+                | OpKind.WHILE_CONTINUE
+                | OpKind.WHILE_END
+            ):
+                tc.check_while_block(op)
+            case OpKind.FN_CALL | OpKind.FN_EXEC | OpKind.FN_PUSH | OpKind.FN_RETURN:
+                op_index = tc.check_function_ops(op, ops, op_index, function)
+            case (
+                OpKind.PUSH_INT
+                | OpKind.PUSH_STR
+                | OpKind.PUSH_BOOL
+                | OpKind.PUSH_CHAR
+                | OpKind.PUSH_NONE
+                | OpKind.SOME
+                | OpKind.PUSH_ARRAY
+                | OpKind.FSTRING_CONCAT
+            ):
+                tc.check_literals(op, function)
+            case OpKind.PRINT:
+                tc.check_io(op)
             case (
                 OpKind.SYSCALL0
                 | OpKind.SYSCALL1
@@ -1381,11 +1434,26 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 | OpKind.SYSCALL5
                 | OpKind.SYSCALL6
             ):
-                arg_count = int(op.kind.name[-1])
-                tc.expect_type("int")
-                for _ in range(arg_count):
-                    tc.stack_pop()
-                tc.stack_push("int")
+                tc.check_syscalls(op)
+            case OpKind.STRUCT_NEW:
+                tc.check_struct_new(op)
+            case OpKind.METHOD_CALL:
+                op_index = tc.check_method_call(op, ops, op_index, function)
+            case OpKind.TYPE_CAST:
+                tc.stack_pop()
+                tc.stack_push(op.value)
+            case OpKind.INCLUDE_FILE:
+                pass
+            case OpKind.IDENTIFIER:
+                raise AssertionError("Identifiers should be resolved by the parser")
+            case (
+                OpKind.PRINT_BOOL
+                | OpKind.PRINT_CHAR
+                | OpKind.PRINT_CSTR
+                | OpKind.PRINT_INT
+                | OpKind.PRINT_STR
+            ):
+                assert False, "PRINT variants are resolved by the type checker"
             case _:
                 assert_never(op.kind)
 
@@ -1414,9 +1482,9 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                         param_tvs.add(gp)
             fn_sig_str = extract_fn_signature_str(p.typ)
             if fn_sig_str:
-                for tv in function.signature.type_vars:
-                    if tv in fn_sig_str:
-                        param_tvs.add(tv)
+                for type_var in function.signature.type_vars:
+                    if type_var in fn_sig_str:
+                        param_tvs.add(type_var)
         ret_only = {
             r
             for r in function.signature.return_types
@@ -1426,7 +1494,8 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
             names = ", ".join(sorted(ret_only))
             raise_error(
                 ErrorKind.TYPE_MISMATCH,
-                f"Type variable(s) `{names}` appear in return types but not in parameters of `{function.name}`",
+                f"Type variable(s) `{names}` appear in return types"
+                f" but not in parameters of `{function.name}`",
                 fn_location,
             )
 
@@ -1462,22 +1531,22 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
 def type_check_functions(functions: Iterable[Function]):
     """Typecheck the given functions, collecting all errors."""
     all_errors: list[CasaError] = []
-    for fn in list(functions):
-        if fn.is_typechecked:
+    for function in list(functions):
+        if function.is_typechecked:
             continue
-        # Skip lambda functions — they are typechecked as part of their
+        # Skip lambda functions -- they are typechecked as part of their
         # parent function when it is resolved and typechecked.
-        if fn.name.startswith("lambda__"):
+        if function.name.startswith("lambda__"):
             continue
-        fn.is_typechecked = True
-        if not fn.is_used:
-            fn.ops = resolve_identifiers(fn.ops, fn)
+        function.is_typechecked = True
+        if not function.is_used:
+            function.ops = resolve_identifiers(function.ops, function)
         try:
-            signature = type_check_ops(fn.ops, fn)
+            signature = type_check_ops(function.ops, function)
         except CasaErrorCollection as exc:
             all_errors.extend(exc.errors)
             continue
-        if not fn.signature:
-            fn.signature = signature
+        if not function.signature:
+            function.signature = signature
     if all_errors:
         raise CasaErrorCollection(all_errors)

@@ -1,3 +1,5 @@
+"""Shared types, enums, and data structures used across the Casa compiler."""
+
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
@@ -7,6 +9,8 @@ T = TypeVar("T")
 
 
 class TokenKind(Enum):
+    """Classification of lexer tokens."""
+
     DELIMITER = auto()
     EOF = auto()
     FSTRING_END = auto()
@@ -22,6 +26,8 @@ class TokenKind(Enum):
 
 
 class Intrinsic(Enum):
+    """Built-in stack, memory, IO, and syscall operations."""
+
     # Stack
     DROP = auto()
     DUP = auto()
@@ -56,12 +62,15 @@ class Intrinsic(Enum):
 
     @classmethod
     def from_lowercase(cls, value: str) -> Self | None:
+        """Look up an intrinsic by its lowercase source name."""
         if not value.islower():
             return None
         return cls.__members__.get(value.upper())
 
 
 class Keyword(Enum):
+    """Reserved language keywords."""
+
     # Functions
     FN = auto()
     IMPL = auto()
@@ -90,12 +99,15 @@ class Keyword(Enum):
 
     @classmethod
     def from_lowercase(cls, value: str) -> Self | None:
+        """Look up a keyword by its lowercase source name."""
         if not value.islower():
             return None
         return cls.__members__.get(value.upper())
 
 
 class Delimiter(Enum):
+    """Punctuation and bracket delimiters."""
+
     ARROW = auto()
     COMMA = auto()
     COLON = auto()
@@ -110,10 +122,11 @@ class Delimiter(Enum):
 
     @classmethod
     def from_str(cls, value: str) -> Self | None:
-        return cls._MAPPING.get(value)  # type: ignore
+        """Look up a delimiter by its source string."""
+        return _DELIMITER_SOURCE_MAP.get(value)
 
 
-Delimiter._MAPPING = {  # type: ignore
+_DELIMITER_SOURCE_MAP: dict[str, Delimiter] = {
     "->": Delimiter.ARROW,
     ",": Delimiter.COMMA,
     ":": Delimiter.COLON,
@@ -126,10 +139,14 @@ Delimiter._MAPPING = {  # type: ignore
     "(": Delimiter.OPEN_PAREN,
     ")": Delimiter.CLOSE_PAREN,
 }
-assert len(Delimiter._MAPPING) == len(Delimiter), "Exhaustive handling for `Delimiter`"  # type: ignore
+assert len(_DELIMITER_SOURCE_MAP) == len(
+    Delimiter
+), "Exhaustive handling for `Delimiter`"
 
 
 class Operator(Enum):
+    """Arithmetic, bitwise, boolean, comparison, and assignment operators."""
+
     # Arithmetic
     PLUS = auto()
     MINUS = auto()
@@ -167,10 +184,11 @@ class Operator(Enum):
 
     @classmethod
     def from_str(cls, value: str) -> Self | None:
-        return cls._MAPPING.get(value)  # type: ignore
+        """Look up an operator by its source string."""
+        return _OPERATOR_SOURCE_MAP.get(value)
 
 
-Operator._MAPPING = {  # type: ignore
+_OPERATOR_SOURCE_MAP: dict[str, Operator] = {
     # Arithmetic
     "+": Operator.PLUS,
     "-": Operator.MINUS,
@@ -201,29 +219,37 @@ Operator._MAPPING = {  # type: ignore
     "-=": Operator.ASSIGN_DECREMENT,
     "+=": Operator.ASSIGN_INCREMENT,
 }
-assert len(Operator._MAPPING) == len(Operator), "Exhaustive handling for `Operator`"  # type: ignore
+assert len(_OPERATOR_SOURCE_MAP) == len(Operator), "Exhaustive handling for `Operator`"
 
 
 @dataclass
 class Span:
+    """Byte offset and length within a source file."""
+
     offset: int
     length: int
 
 
 @dataclass
 class Location:
+    """Source file path paired with a span."""
+
     file: Path
     span: Span
 
 
 @dataclass
 class Token:
+    """A lexed token with its value, kind, and source location."""
+
     value: str
     kind: TokenKind
     location: Location
 
 
 class OpKind(Enum):
+    """Parsed operation kinds in the op tree."""
+
     # Stack
     DROP = auto()
     DUP = auto()
@@ -344,6 +370,8 @@ class OpKind(Enum):
 
 @dataclass
 class Op:
+    """A single parsed operation with its value and source location."""
+
     value: Any
     kind: OpKind
     location: Location
@@ -472,6 +500,8 @@ class Op:
 
 
 class InstKind(Enum):
+    """Bytecode instruction kinds."""
+
     # Stack
     DROP = auto()
     DUP = auto()
@@ -571,6 +601,8 @@ class InstKind(Enum):
 
 @dataclass
 class Inst:
+    """A single bytecode instruction with optional arguments."""
+
     kind: InstKind
     args: list = field(default_factory=list)
     location: Location | None = None
@@ -669,13 +701,15 @@ class Inst:
             ):
                 if len(self.args) != 1 or not isinstance(self.args[0], int):
                     raise TypeError(
-                        f"`{self.kind}` requires one parameter of type `int`\nArguments: {self.args}"
+                        f"`{self.kind}` requires one int param\n"
+                        f"Arguments: {self.args}"
                     )
             # One parameter of type `str`
             case InstKind.FN_CALL | InstKind.FN_PUSH:
                 if len(self.args) != 1 or not isinstance(self.args[0], str):
                     raise TypeError(
-                        f"`{self.kind}` requires one parameter of type `str`\nArguments: {self.args}"
+                        f"`{self.kind}` requires one str param\n"
+                        f"Arguments: {self.args}"
                     )
 
 
@@ -686,6 +720,8 @@ Type = str
 
 @dataclass
 class Program:
+    """Complete compiled program with bytecodes, strings, and variable counts."""
+
     bytecode: Bytecode  # Global scope instructions
     functions: dict[str, Bytecode]  # Function name -> bytecode
     strings: list[str]  # String table (index = string ID)
@@ -795,6 +831,8 @@ def extract_fn_signature_str(typ: str) -> str | None:
 
 @dataclass
 class Parameter:
+    """A typed function parameter with an optional name."""
+
     typ: Type
     name: str | None = None
 
@@ -806,26 +844,30 @@ class Parameter:
 
 @dataclass
 class Signature:
+    """Function signature with parameters, return types, and optional generic bounds."""
+
     parameters: list[Parameter]
     return_types: list[Type]
     type_vars: set[str] = field(default_factory=set)
     trait_bounds: dict[str, str] = field(default_factory=dict)
 
     @classmethod
-    def from_str(cls, repr: str) -> Self:
+    def from_str(cls, sig_str: str) -> Self:
+        """Parse a signature from its string representation."""
+
         def split_on_arrow(tokens: list[str]) -> tuple[list[str], list[str]]:
             """Split token list on '->' at bracket depth 0."""
             for i, tok in enumerate(tokens):
                 if tok == "->":
                     return tokens[:i], tokens[i + 1 :]
-            raise ValueError(f"Invalid signature: {repr}")
+            raise ValueError(f"Invalid signature: {sig_str}")
 
         def parse_type_list(tokens: list[str]) -> list[Type]:
             if len(tokens) == 1 and tokens[0] == "None":
                 return []
             return list(tokens)
 
-        tokens = split_type_tokens(repr)
+        tokens = split_type_tokens(sig_str)
         param_tokens, return_tokens = split_on_arrow(tokens)
         parameters = [Parameter(p) for p in parse_type_list(param_tokens)]
         return_types = parse_type_list(return_tokens)
@@ -837,6 +879,7 @@ class Signature:
         return f"{parameters} -> {return_types}"
 
     def matches(self, other: Self) -> bool:
+        """Check if this signature is compatible with another, respecting any types."""
         if len(self.parameters) != len(other.parameters) or len(
             self.return_types
         ) != len(other.return_types):
@@ -862,6 +905,8 @@ class Signature:
 
 @dataclass
 class Variable:
+    """A named variable with an optional resolved type."""
+
     name: str
     typ: Type | None = None  # Resolved during type checking
 
@@ -878,6 +923,8 @@ class Variable:
 
 @dataclass
 class Member:
+    """A struct field with a name and type."""
+
     name: str
     typ: Type
 
@@ -894,6 +941,8 @@ class Member:
 
 @dataclass
 class Struct:
+    """A user-defined struct type with named members."""
+
     name: str
     members: list[Member]
     location: Location
@@ -901,12 +950,16 @@ class Struct:
 
 @dataclass
 class TraitMethod:
+    """A method declaration inside a trait definition."""
+
     name: str
     signature: Signature
 
 
 @dataclass
 class Trait:
+    """A trait definition with required method signatures."""
+
     name: str
     methods: list[TraitMethod]
     location: Location
@@ -938,9 +991,11 @@ def resolve_trait_sig(sig: "Signature", type_var: str) -> "Signature":
 
 @dataclass
 class Function:
+    """A parsed function with ops, signature, and compilation state."""
+
     name: str
     ops: list[Op]
-    location: Location
+    location: Location | None
     # Missing signature will be inferred during type checking
     signature: Signature | None = None
     # Bytecode will be compiled if the function is used
@@ -951,28 +1006,47 @@ class Function:
     captures: list[Variable] = field(default_factory=list)
 
 
-GLOBAL_FUNCTIONS: OrderedDict[str, Function] = OrderedDict()
-GLOBAL_STRUCTS: OrderedDict[str, Struct] = OrderedDict()
-GLOBAL_TRAITS: OrderedDict[str, Trait] = OrderedDict()
-GLOBAL_VARIABLES: OrderedDict[str, Variable] = OrderedDict()
 GLOBAL_SCOPE_LABEL = "_start"
-INCLUDED_FILES: set[Path] = set()
+
+
+@dataclass
+class CompilationContext:
+    """Groups all mutable compilation state. Module-level globals alias the default instance."""
+
+    functions: OrderedDict[str, Function] = field(default_factory=OrderedDict)
+    structs: OrderedDict[str, Struct] = field(default_factory=OrderedDict)
+    traits: OrderedDict[str, Trait] = field(default_factory=OrderedDict)
+    variables: OrderedDict[str, Variable] = field(default_factory=OrderedDict)
+    included_files: set[Path] = field(default_factory=set)
+
+
+_DEFAULT_CONTEXT = CompilationContext()
+GLOBAL_FUNCTIONS = _DEFAULT_CONTEXT.functions
+GLOBAL_STRUCTS = _DEFAULT_CONTEXT.structs
+GLOBAL_TRAITS = _DEFAULT_CONTEXT.traits
+GLOBAL_VARIABLES = _DEFAULT_CONTEXT.variables
+INCLUDED_FILES = _DEFAULT_CONTEXT.included_files
 
 
 @dataclass
 class Cursor(Generic[T]):
+    """Position-tracked iterator over a sequence."""
+
     sequence: Sequence[T]
     position: int = 0
 
     def is_finished(self) -> bool:
+        """Return True if the cursor has consumed all elements."""
         return self.position >= len(self.sequence)
 
     def peek(self) -> T | None:
+        """Return the current element without advancing, or None if finished."""
         if self.is_finished():
             return None
         return self.sequence[self.position]
 
     def pop(self) -> T | None:
+        """Return the current element and advance, or None if finished."""
         x = self.peek()
         if x is not None:
             self.position += 1

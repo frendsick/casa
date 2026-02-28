@@ -1,3 +1,5 @@
+"""x86-64 GNU assembly emitter for the Casa compiler."""
+
 from typing import assert_never
 
 from casa.common import Bytecode, Inst, InstKind, Program
@@ -9,6 +11,8 @@ HEAP_SIZE = 1048576
 
 
 class Emitter:
+    """Generates x86-64 GNU assembly from a bytecode program."""
+
     def __init__(self, program: Program):
         self.program = program
         self._label_counter = 0
@@ -29,26 +33,27 @@ class Emitter:
         return name.replace("::", "__")
 
     @staticmethod
-    def _escape_string(s: str) -> str:
+    def _escape_string(string: str) -> str:
         result = []
-        for c in s:
-            if c == "\\":
+        for char in string:
+            if char == "\\":
                 result.append("\\\\")
-            elif c == '"':
+            elif char == '"':
                 result.append('\\"')
-            elif c == "\n":
+            elif char == "\n":
                 result.append("\\n")
-            elif c == "\t":
+            elif char == "\t":
                 result.append("\\t")
-            elif c == "\0":
+            elif char == "\0":
                 result.append("\\0")
-            elif c == "\r":
+            elif char == "\r":
                 result.append("\\r")
             else:
-                result.append(c)
+                result.append(char)
         return "".join(result)
 
     def emit(self) -> str:
+        """Generate the full assembly source string."""
         self._emit_bss()
         self._emit_data()
         self._emit_text()
@@ -56,9 +61,9 @@ class Emitter:
 
     def _emit_bss(self) -> None:
         self._line(".section .bss")
-        p = self.program
-        self._line(f"globals: .skip {p.globals_count * 8}")
-        self._line(f"constants: .skip {p.constants_count * 8}")
+        program = self.program
+        self._line(f"globals: .skip {program.globals_count * 8}")
+        self._line(f"constants: .skip {program.constants_count * 8}")
         self._line(f"return_stack: .skip {RETURN_STACK_SIZE}")
         self._line(f"heap: .skip {HEAP_SIZE}")
         self._line("heap_ptr: .skip 8")
@@ -216,11 +221,9 @@ class Emitter:
         self._indent("movzbq %al, %rax")
         self._indent("movq %rax, (%rsp)")
 
-    def _emit_inst(self, inst: Inst, is_global: bool) -> None:
-        assert len(InstKind) == 66, "Exhaustive handling for `InstKind`"
-        kind = inst.kind
-        match kind:
-            # === Stack ===
+    def _emit_stack_ops(self, inst: Inst) -> None:
+        """Emit stack manipulation instructions."""
+        match inst.kind:
             case InstKind.PUSH:
                 val = inst.int_arg
                 if INT32_MIN <= val <= INT32_MAX:
@@ -231,6 +234,8 @@ class Emitter:
             case InstKind.PUSH_STR:
                 self._indent(f"leaq str_{inst.int_arg}(%rip), %rax")
                 self._indent("pushq %rax")
+            case InstKind.PUSH_CHAR:
+                self._indent(f"pushq ${inst.int_arg}")
             case InstKind.DROP:
                 self._indent("addq $8, %rsp")
             case InstKind.DUP:
@@ -250,7 +255,9 @@ class Emitter:
                 self._indent("pushq %rax")
                 self._indent("pushq %rcx")
 
-            # === Arithmetic ===
+    def _emit_arithmetic(self, inst: Inst) -> None:
+        """Emit arithmetic, bitwise, boolean, and comparison instructions."""
+        match inst.kind:
             case InstKind.ADD:
                 self._indent("popq %rax")
                 self._indent("addq %rax, (%rsp)")
@@ -273,16 +280,12 @@ class Emitter:
                 self._indent("cqto")
                 self._indent("idivq %rbx")
                 self._indent("pushq %rdx")
-
-            # === Bitshift ===
             case InstKind.SHL:
                 self._indent("popq %rcx")
                 self._indent("shlq %cl, (%rsp)")
             case InstKind.SHR:
                 self._indent("popq %rcx")
                 self._indent("sarq %cl, (%rsp)")
-
-            # === Bitwise ===
             case InstKind.BIT_AND:
                 self._indent("popq %rax")
                 self._indent("andq %rax, (%rsp)")
@@ -294,8 +297,6 @@ class Emitter:
                 self._indent("xorq %rax, (%rsp)")
             case InstKind.BIT_NOT:
                 self._indent("notq (%rsp)")
-
-            # === Boolean ===
             case InstKind.AND:
                 self._indent("popq %rax")
                 self._indent("testq %rax, %rax")
@@ -316,8 +317,6 @@ class Emitter:
                 self._indent("sete %al")
                 self._indent("movzbq %al, %rax")
                 self._indent("movq %rax, (%rsp)")
-
-            # === Comparison ===
             case InstKind.EQ:
                 self._emit_comparison("sete")
             case InstKind.NE:
@@ -331,7 +330,9 @@ class Emitter:
             case InstKind.GE:
                 self._emit_comparison("setge")
 
-            # === Control flow ===
+    def _emit_control_flow(self, inst: Inst, is_global: bool) -> None:
+        """Emit control flow, function, and variable storage instructions."""
+        match inst.kind:
             case InstKind.LABEL:
                 self._line(f".L{inst.int_arg}:")
             case InstKind.JUMP:
@@ -340,8 +341,6 @@ class Emitter:
                 self._indent("popq %rax")
                 self._indent("testq %rax, %rax")
                 self._indent(f"jz .L{inst.int_arg}")
-
-            # === Globals ===
             case InstKind.GLOBALS_INIT:
                 pass
             case InstKind.GLOBAL_GET:
@@ -352,20 +351,18 @@ class Emitter:
                 idx = inst.int_arg
                 self._indent("popq %rax")
                 self._indent(f"movq %rax, globals+{idx * 8}(%rip)")
-
-            # === Locals (on return stack via %r14) ===
             case InstKind.LOCALS_INIT:
-                n = inst.int_arg
-                if n > 0:
+                count = inst.int_arg
+                if count > 0:
                     self._indent("movq %r14, %rdi")
-                    self._indent(f"movq ${n}, %rcx")
+                    self._indent(f"movq ${count}, %rcx")
                     self._indent("xorq %rax, %rax")
                     self._indent("rep stosq")
-                    self._indent(f"addq ${n * 8}, %r14")
+                    self._indent(f"addq ${count * 8}, %r14")
             case InstKind.LOCALS_UNINIT:
-                n = inst.int_arg
-                if n > 0:
-                    self._indent(f"subq ${n * 8}, %r14")
+                count = inst.int_arg
+                if count > 0:
+                    self._indent(f"subq ${count * 8}, %r14")
             case InstKind.LOCAL_GET:
                 idx = inst.int_arg
                 offset = (idx + 1) * 8
@@ -376,8 +373,6 @@ class Emitter:
                 offset = (idx + 1) * 8
                 self._indent("popq %rax")
                 self._indent(f"movq %rax, -{offset}(%r14)")
-
-            # === Constants (closure captures) ===
             case InstKind.CONSTANT_LOAD:
                 idx = inst.int_arg
                 self._indent(f"movq constants+{idx * 8}(%rip), %rax")
@@ -386,8 +381,40 @@ class Emitter:
                 idx = inst.int_arg
                 self._indent("popq %rax")
                 self._indent(f"movq %rax, constants+{idx * 8}(%rip)")
+            case InstKind.FN_CALL:
+                name = inst.str_arg
+                label = self._sanitize_name(name)
+                uid = self._uid()
+                self._indent(f"leaq .Lret_{uid}(%rip), %rax")
+                self._indent("movq %rax, (%r14)")
+                self._indent("addq $8, %r14")
+                self._indent(f"jmp fn_{label}")
+                self._line(f".Lret_{uid}:")
+            case InstKind.FN_EXEC:
+                uid = self._uid()
+                self._indent(f"leaq .Lret_{uid}(%rip), %rax")
+                self._indent("movq %rax, (%r14)")
+                self._indent("addq $8, %r14")
+                self._indent("popq %rax")
+                self._indent("jmpq *%rax")
+                self._line(f".Lret_{uid}:")
+            case InstKind.FN_PUSH:
+                name = inst.str_arg
+                label = self._sanitize_name(name)
+                self._indent(f"leaq fn_{label}(%rip), %rax")
+                self._indent("pushq %rax")
+            case InstKind.FN_RETURN:
+                if is_global:
+                    self._indent("movq $60, %rax")
+                    self._indent("xorq %rdi, %rdi")
+                    self._indent("syscall")
+                else:
+                    self._indent("subq $8, %r14")
+                    self._indent("jmpq *(%r14)")
 
-            # === Memory (heap) ===
+    def _emit_memory(self, inst: Inst) -> None:
+        """Emit memory (heap) instructions."""
+        match inst.kind:
             case InstKind.HEAP_ALLOC:
                 self._indent("popq %rax")
                 self._indent("leaq heap(%rip), %rbx")
@@ -429,39 +456,9 @@ class Emitter:
                 self._indent("popq %rbx")
                 self._indent("movq %rbx, (%rax)")
 
-            # === Functions ===
-            case InstKind.FN_CALL:
-                name = inst.str_arg
-                label = self._sanitize_name(name)
-                uid = self._uid()
-                self._indent(f"leaq .Lret_{uid}(%rip), %rax")
-                self._indent("movq %rax, (%r14)")
-                self._indent("addq $8, %r14")
-                self._indent(f"jmp fn_{label}")
-                self._line(f".Lret_{uid}:")
-            case InstKind.FN_EXEC:
-                uid = self._uid()
-                self._indent(f"leaq .Lret_{uid}(%rip), %rax")
-                self._indent("movq %rax, (%r14)")
-                self._indent("addq $8, %r14")
-                self._indent("popq %rax")
-                self._indent("jmpq *%rax")
-                self._line(f".Lret_{uid}:")
-            case InstKind.FN_PUSH:
-                name = inst.str_arg
-                label = self._sanitize_name(name)
-                self._indent(f"leaq fn_{label}(%rip), %rax")
-                self._indent("pushq %rax")
-            case InstKind.FN_RETURN:
-                if is_global:
-                    self._indent("movq $60, %rax")
-                    self._indent("xorq %rdi, %rdi")
-                    self._indent("syscall")
-                else:
-                    self._indent("subq $8, %r14")
-                    self._indent("jmpq *(%r14)")
-
-            # === IO ===
+    def _emit_io_ops(self, inst: Inst) -> None:
+        """Emit IO and f-string instructions."""
+        match inst.kind:
             case InstKind.PRINT_INT:
                 uid = self._uid()
                 self._indent("popq %rdi")
@@ -493,9 +490,6 @@ class Emitter:
                 self._indent("addq $8, %r14")
                 self._indent("jmp print_str")
                 self._line(f".Lprint_done_{uid}:")
-            case InstKind.PUSH_CHAR:
-                val = inst.int_arg
-                self._indent(f"pushq ${val}")
             case InstKind.PRINT_CHAR:
                 self._indent("popq %rax")
                 self._indent("movb %al, -1(%rsp)")
@@ -520,8 +514,6 @@ class Emitter:
                 self._indent("movq $1, %rdi")
                 self._indent("movq $1, %rax")
                 self._indent("syscall")
-
-            # === F-strings ===
             case InstKind.FSTRING_CONCAT:
                 uid = self._uid()
                 count = inst.int_arg
@@ -532,22 +524,107 @@ class Emitter:
                 self._indent("jmp str_concat")
                 self._line(f".Lconcat_done_{uid}:")
 
-            # === Syscalls ===
-            case InstKind.SYSCALL0:
-                self._emit_syscall(0)
-            case InstKind.SYSCALL1:
-                self._emit_syscall(1)
-            case InstKind.SYSCALL2:
-                self._emit_syscall(2)
-            case InstKind.SYSCALL3:
-                self._emit_syscall(3)
-            case InstKind.SYSCALL4:
-                self._emit_syscall(4)
-            case InstKind.SYSCALL5:
-                self._emit_syscall(5)
-            case InstKind.SYSCALL6:
-                self._emit_syscall(6)
+    def _emit_syscall_ops(self, inst: Inst) -> None:
+        """Emit syscall instructions."""
+        SYSCALL_ARG_COUNTS = {
+            InstKind.SYSCALL0: 0,
+            InstKind.SYSCALL1: 1,
+            InstKind.SYSCALL2: 2,
+            InstKind.SYSCALL3: 3,
+            InstKind.SYSCALL4: 4,
+            InstKind.SYSCALL5: 5,
+            InstKind.SYSCALL6: 6,
+        }
+        self._emit_syscall(SYSCALL_ARG_COUNTS[inst.kind])
 
+    def _emit_inst(self, inst: Inst, is_global: bool) -> None:
+        assert len(InstKind) == 66, "Exhaustive handling for `InstKind`"
+        kind = inst.kind
+        match kind:
+            case (
+                InstKind.PUSH
+                | InstKind.PUSH_STR
+                | InstKind.PUSH_CHAR
+                | InstKind.DROP
+                | InstKind.DUP
+                | InstKind.SWAP
+                | InstKind.OVER
+                | InstKind.ROT
+            ):
+                self._emit_stack_ops(inst)
+            case (
+                InstKind.ADD
+                | InstKind.SUB
+                | InstKind.MUL
+                | InstKind.DIV
+                | InstKind.MOD
+                | InstKind.SHL
+                | InstKind.SHR
+                | InstKind.BIT_AND
+                | InstKind.BIT_OR
+                | InstKind.BIT_XOR
+                | InstKind.BIT_NOT
+                | InstKind.AND
+                | InstKind.OR
+                | InstKind.NOT
+                | InstKind.EQ
+                | InstKind.NE
+                | InstKind.LT
+                | InstKind.LE
+                | InstKind.GT
+                | InstKind.GE
+            ):
+                self._emit_arithmetic(inst)
+            case (
+                InstKind.LABEL
+                | InstKind.JUMP
+                | InstKind.JUMP_NE
+                | InstKind.GLOBALS_INIT
+                | InstKind.GLOBAL_GET
+                | InstKind.GLOBAL_SET
+                | InstKind.LOCALS_INIT
+                | InstKind.LOCALS_UNINIT
+                | InstKind.LOCAL_GET
+                | InstKind.LOCAL_SET
+                | InstKind.CONSTANT_LOAD
+                | InstKind.CONSTANT_STORE
+                | InstKind.FN_CALL
+                | InstKind.FN_EXEC
+                | InstKind.FN_PUSH
+                | InstKind.FN_RETURN
+            ):
+                self._emit_control_flow(inst, is_global)
+            case (
+                InstKind.HEAP_ALLOC
+                | InstKind.LOAD8
+                | InstKind.LOAD16
+                | InstKind.LOAD32
+                | InstKind.LOAD64
+                | InstKind.STORE8
+                | InstKind.STORE16
+                | InstKind.STORE32
+                | InstKind.STORE64
+            ):
+                self._emit_memory(inst)
+            case (
+                InstKind.PRINT_INT
+                | InstKind.PRINT_BOOL
+                | InstKind.PRINT_STR
+                | InstKind.PRINT_CHAR
+                | InstKind.PRINT_CSTR
+                | InstKind.FSTRING_CONCAT
+            ):
+                self._emit_io_ops(inst)
+            case (
+                InstKind.SYSCALL0
+                | InstKind.SYSCALL1
+                | InstKind.SYSCALL2
+                | InstKind.SYSCALL3
+                | InstKind.SYSCALL4
+                | InstKind.SYSCALL5
+                | InstKind.SYSCALL6
+            ):
+                self._emit_syscall_ops(inst)
             case _:
                 assert_never(kind)
 
@@ -561,5 +638,6 @@ class Emitter:
 
 
 def emit_program(program: Program) -> str:
+    """Emit a complete assembly source string from a bytecode program."""
     emitter = Emitter(program)
     return emitter.emit()

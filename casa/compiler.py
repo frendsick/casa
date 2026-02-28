@@ -1,3 +1,5 @@
+"""Assembler and linker integration for producing x86_64 binaries."""
+
 import os
 import pathlib
 import subprocess
@@ -5,6 +7,7 @@ import sys
 
 
 def run_cmd(cmd: list[str]) -> None:
+    """Run a shell command and exit on failure."""
     result = subprocess.run(cmd, capture_output=True, check=False)
     if result.returncode != 0:
         print(result.stderr.decode(), file=sys.stderr)
@@ -12,6 +15,7 @@ def run_cmd(cmd: list[str]) -> None:
 
 
 def compile_binary(asm_source: str, output_name: str, keep_asm: bool) -> None:
+    """Assemble and link an assembly source string into an executable."""
     asm_file = f"{output_name}.s"
     obj_file = f"{output_name}.o"
 

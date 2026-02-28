@@ -1,3 +1,5 @@
+"""Op tree builder and identifier resolution for the Casa compiler."""
+
 from pathlib import Path
 from typing import assert_never
 
@@ -61,12 +63,30 @@ INTRINSIC_TO_OPKIND = {
 }
 
 
+def _parse_fstring_expr(
+    cursor: Cursor[Token],
+    function_name: str,
+) -> list[Op]:
+    """Parse the expression inside an f-string interpolation block."""
+    expr_ops: list[Op] = []
+    while (
+        expr_token := cursor.pop()
+    ) and expr_token.kind != TokenKind.FSTRING_EXPR_END:
+        if expr_token.kind == TokenKind.FSTRING_START:
+            handle_fstring(expr_token, cursor, function_name, expr_ops)
+            continue
+        if op := token_to_op(expr_token, cursor, function_name):
+            expr_ops.append(op)
+    return expr_ops
+
+
 def handle_fstring(
     start_token: Token,
     cursor: Cursor[Token],
     function_name: str,
     ops: list[Op],
 ) -> None:
+    """Parse an f-string into concatenated string and expression ops."""
     part_count = 0
     while token := cursor.pop():
         match token.kind:
@@ -74,13 +94,7 @@ def handle_fstring(
                 ops.append(Op(token.value, OpKind.PUSH_STR, token.location))
                 part_count += 1
             case TokenKind.FSTRING_EXPR_START:
-                expr_ops: list[Op] = []
-                while (t := cursor.pop()) and t.kind != TokenKind.FSTRING_EXPR_END:
-                    if t.kind == TokenKind.FSTRING_START:
-                        handle_fstring(t, cursor, function_name, expr_ops)
-                        continue
-                    if op := token_to_op(t, cursor, function_name):
-                        expr_ops.append(op)
+                expr_ops = _parse_fstring_expr(cursor, function_name)
                 lambda_name = f"lambda__{function_name}_o{token.location.span.offset}"
                 lambda_fn = Function(lambda_name, expr_ops, token.location)
                 GLOBAL_FUNCTIONS[lambda_name] = lambda_fn
@@ -97,6 +111,7 @@ def handle_fstring(
 
 
 def parse_ops(tokens: list[Token]) -> list[Op]:
+    """Parse a flat token list into a list of ops."""
     cursor = Cursor(sequence=tokens)
     ops: list[Op] = []
     while token := cursor.pop():
@@ -151,10 +166,108 @@ def _resolve_trait_method_sig(sig: Signature, type_var: str) -> Signature:
     return resolve_trait_sig(sig, type_var)
 
 
+def _gather_captures(
+    lambda_function: Function,
+    function: Function | None,
+) -> None:
+    """Gather captured variables for a lambda function from enclosing scopes."""
+    for op in lambda_function.ops:
+        if op.kind != OpKind.IDENTIFIER:
+            continue
+        captured = False
+        if function:
+            for local_variable in function.variables:
+                if op.value == local_variable.name:
+                    lambda_function.captures.append(local_variable)
+                    captured = True
+                    break
+        if not captured:
+            for global_variable in GLOBAL_VARIABLES.values():
+                if global_variable.name == op.value:
+                    lambda_function.captures.append(global_variable)
+                    break
+
+
+def _resolve_fn_ref(
+    identifier: str,
+    op: Op,
+    function: Function | None,
+    errors: list[CasaError],
+) -> bool:
+    """Resolve a function reference (&name). Returns True if handled."""
+    function_name = identifier[1:]
+    if not function_name:
+        errors.append(
+            CasaError(
+                ErrorKind.SYNTAX,
+                "Expected function name after `&`",
+                op.location,
+            )
+        )
+        return True
+    # Check trait bound reference: &K::method
+    trait_var = _resolve_trait_ref(function_name, function)
+    if trait_var:
+        op.kind = OpKind.PUSH_VARIABLE
+        op.value = trait_var
+        return True
+    global_function = GLOBAL_FUNCTIONS.get(function_name)
+    if not global_function:
+        errors.append(
+            CasaError(
+                ErrorKind.UNDEFINED_NAME,
+                f"Function `{function_name}` is not defined",
+                op.location,
+            )
+        )
+        return True
+    op.kind = OpKind.FN_PUSH
+    op.value = function_name
+    _mark_used_and_resolve(global_function)
+    return True
+
+
+def _create_member_accessor(
+    struct_name: str,
+    member_name: str,
+    member_type: str,
+    member_index: int,
+    location: Location,
+) -> tuple[Function, Function]:
+    """Create getter and setter functions for a struct member."""
+    offset = member_index * 8
+
+    # Getter
+    getter_name = f"{struct_name}::{member_name}"
+    getter_ops: list[Op] = [
+        Op("ptr", OpKind.TYPE_CAST, location),
+        Op(offset, OpKind.PUSH_INT, location),
+        Op(Operator.PLUS, OpKind.ADD, location),
+        Op(Intrinsic.LOAD64, OpKind.LOAD64, location),
+        Op(member_type, OpKind.TYPE_CAST, location),
+    ]
+    getter_params = [Parameter(struct_name)]
+    getter_signature = Signature(getter_params, [member_type])
+    getter = Function(getter_name, getter_ops, location, getter_signature)
+
+    # Setter
+    setter_name = f"{struct_name}::set_{member_name}"
+    setter_ops: list[Op] = [
+        Op("ptr", OpKind.TYPE_CAST, location),
+        Op(offset, OpKind.PUSH_INT, location),
+        Op(Operator.PLUS, OpKind.ADD, location),
+        Op(Intrinsic.STORE64, OpKind.STORE64, location),
+    ]
+    setter_params = [Parameter(struct_name), Parameter(member_type)]
+    setter_signature = Signature(setter_params, [])
+    setter = Function(setter_name, setter_ops, location, setter_signature)
+
+    return getter, setter
+
+
 def _resolve_trait_ref(
     name: str,
     function: Function | None,
-    location: Location,
 ) -> str | None:
     """Check if name is a trait-bound method call like K::hash.
 
@@ -183,6 +296,7 @@ def resolve_identifiers(
     ops: list[Op],
     function: Function | None = None,
 ) -> list[Op]:
+    """Resolve raw identifiers into typed ops like FN_CALL, PUSH_VARIABLE, etc."""
     errors: list[CasaError] = []
     index = 0
     while index < len(ops):
@@ -219,25 +333,7 @@ def resolve_identifiers(
                     continue
 
                 lambda_function.is_used = True
-
-                # Gather captures for the lambda function
-                # Local variables shadow globals with the same name
-                for op in lambda_function.ops:
-                    if op.kind != OpKind.IDENTIFIER:
-                        continue
-                    captured = False
-                    if function:
-                        for local_variable in function.variables:
-                            if op.value == local_variable.name:
-                                lambda_function.captures.append(local_variable)
-                                captured = True
-                                break
-                    if not captured:
-                        for global_variable in GLOBAL_VARIABLES.values():
-                            if global_variable.name == op.value:
-                                lambda_function.captures.append(global_variable)
-                                break
-
+                _gather_captures(lambda_function, function)
                 lambda_function.ops = resolve_identifiers(
                     lambda_function.ops, lambda_function
                 )
@@ -251,39 +347,11 @@ def resolve_identifiers(
 
                 # Function reference: &name pushes a function as a value
                 if identifier.startswith("&"):
-                    function_name = identifier[1:]
-                    if not function_name:
-                        errors.append(
-                            CasaError(
-                                ErrorKind.SYNTAX,
-                                "Expected function name after `&`",
-                                op.location,
-                            )
-                        )
-                        continue
-                    # Check trait bound reference: &K::method
-                    trait_var = _resolve_trait_ref(function_name, function, op.location)
-                    if trait_var:
-                        op.kind = OpKind.PUSH_VARIABLE
-                        op.value = trait_var
-                        continue
-                    global_function = GLOBAL_FUNCTIONS.get(function_name)
-                    if not global_function:
-                        errors.append(
-                            CasaError(
-                                ErrorKind.UNDEFINED_NAME,
-                                f"Function `{function_name}` is not defined",
-                                op.location,
-                            )
-                        )
-                        continue
-                    op.kind = OpKind.FN_PUSH
-                    op.value = function_name
-                    _mark_used_and_resolve(global_function)
+                    _resolve_fn_ref(identifier, op, function, errors)
                     continue
 
                 # Check trait bound call: K::method -> push var + exec
-                trait_var = _resolve_trait_ref(identifier, function, op.location)
+                trait_var = _resolve_trait_ref(identifier, function)
                 if trait_var:
                     op.kind = OpKind.PUSH_VARIABLE
                     op.value = trait_var
@@ -292,7 +360,6 @@ def resolve_identifiers(
                     index += 1
                     continue
 
-                # Check different identifiers
                 # Local variables shadow globals with the same name
                 if function and identifier in function.variables:
                     op.kind = OpKind.PUSH_VARIABLE
@@ -342,6 +409,7 @@ def token_to_op(
     cursor: Cursor[Token],
     function_name: str = GLOBAL_SCOPE_LABEL,
 ) -> Op | None:
+    """Convert a single token into its corresponding op."""
     assert len(TokenKind) == 12, "Exhaustive handling for `TokenKind`"
 
     match token.kind:
@@ -378,6 +446,7 @@ def get_op_delimiter(
     cursor: Cursor[Token],
     function_name: str,
 ) -> Op | None:
+    """Convert a delimiter token into its op."""
     assert len(Delimiter) == 11, "Exhaustive handling for `Delimiter`"
 
     delimiter = Delimiter.from_str(token.value)
@@ -421,6 +490,7 @@ def get_op_delimiter(
 
 
 def expect_delimiter(cursor: Cursor[Token], expected: Delimiter) -> Delimiter | None:
+    """Consume and return the expected delimiter, or None if not found."""
     token = cursor.peek()
     if not token:
         return None
@@ -434,6 +504,7 @@ def expect_delimiter(cursor: Cursor[Token], expected: Delimiter) -> Delimiter | 
 
 
 def parse_block_ops(cursor: Cursor[Token], function_name: str) -> list[Op]:
+    """Parse a brace-delimited block of ops."""
     open_brace = cursor.pop()
     if not open_brace or open_brace.value != "{":
         loc = open_brace.location if open_brace else None
@@ -458,45 +529,139 @@ def parse_block_ops(cursor: Cursor[Token], function_name: str) -> list[Op]:
 
 
 def get_op_array(cursor: Cursor[Token]) -> Op:
+    """Parse an array literal from bracket-delimited tokens."""
     open_bracket = expect_token(cursor, value="[")
 
     array_items = []
     while not expect_delimiter(cursor, Delimiter.CLOSE_BRACKET):
         next_tok = cursor.peek()
         if next_tok and next_tok.value == "[":
-            # Nested array literal
-            op = get_op_array(cursor)
-        else:
-            value_token = cursor.pop()
-            if not value_token or value_token.kind not in (
-                TokenKind.LITERAL,
-                TokenKind.IDENTIFIER,
-            ):
-                got = f"`{value_token.kind.name}`" if value_token else "nothing"
-                raise_error(
-                    ErrorKind.UNEXPECTED_TOKEN,
-                    "Unexpected token in array literal",
-                    value_token.location if value_token else None,
-                    expected="literal or identifier",
-                    got=got,
-                )
-            item_op = token_to_op(value_token, cursor)
-            assert item_op is not None, "Array item token always produces an Op"
-            op = item_op
-        array_items.append(op)
-
-        if expect_delimiter(cursor, Delimiter.COMMA):
+            array_items.append(get_op_array(cursor))
+            expect_delimiter(cursor, Delimiter.COMMA)
             continue
+
+        value_token = cursor.pop()
+        if not value_token or value_token.kind not in (
+            TokenKind.LITERAL,
+            TokenKind.IDENTIFIER,
+        ):
+            got = f"`{value_token.kind.name}`" if value_token else "nothing"
+            raise_error(
+                ErrorKind.UNEXPECTED_TOKEN,
+                "Unexpected token in array literal",
+                value_token.location if value_token else None,
+                expected="literal or identifier",
+                got=got,
+            )
+        item_op = token_to_op(value_token, cursor)
+        assert item_op is not None, "Array item token always produces an Op"
+        array_items.append(item_op)
+        expect_delimiter(cursor, Delimiter.COMMA)
 
     return Op(array_items, OpKind.PUSH_ARRAY, open_bracket.location)
 
 
 def get_op_intrinsic(token: Token) -> Op:
-    assert len(INTRINSIC_TO_OPKIND) == len(Intrinsic), "Exhaustive handling for `Intrinsic`"  # fmt: skip
+    """Convert an intrinsic token into its op."""
+    assert len(INTRINSIC_TO_OPKIND) == len(
+        Intrinsic
+    ), "Exhaustive handling for `Intrinsic`"
 
     intrinsic = Intrinsic.from_lowercase(token.value)
     assert intrinsic, f"Token `{token.value}` is not an intrinsic"
     return Op(intrinsic, INTRINSIC_TO_OPKIND[intrinsic], token.location)
+
+
+def _require_global_scope(function_name: str, what: str, location: Location) -> None:
+    """Raise an error if not in global scope."""
+    if function_name != GLOBAL_SCOPE_LABEL:
+        raise_error(
+            ErrorKind.INVALID_SCOPE,
+            f"{what} should be defined in the global scope",
+            location,
+        )
+
+
+def _handle_keyword_fn(token: Token, cursor: Cursor[Token], function_name: str) -> None:
+    """Handle the `fn` keyword: parse and register a function definition."""
+    _require_global_scope(function_name, "Functions", token.location)
+    cursor.position -= 1
+    function = parse_function(cursor)
+    if GLOBAL_FUNCTIONS.get(function.name):
+        raise_error(
+            ErrorKind.DUPLICATE_NAME,
+            f"Identifier `{function.name}` is already defined",
+            function.location,
+        )
+    GLOBAL_FUNCTIONS[function.name] = function
+
+
+def _handle_keyword_struct(
+    token: Token, cursor: Cursor[Token], function_name: str
+) -> None:
+    """Handle the `struct` keyword: parse and register a struct definition."""
+    _require_global_scope(function_name, "Structs", token.location)
+    cursor.position -= 1
+    struct = parse_struct(cursor)
+    GLOBAL_STRUCTS[struct.name] = struct
+    for member in struct.members:
+        if member.name in GLOBAL_FUNCTIONS:
+            raise_error(
+                ErrorKind.DUPLICATE_NAME,
+                f"Function `{member.name}` already exists",
+                struct.location,
+            )
+
+
+def _handle_keyword_trait(
+    token: Token, cursor: Cursor[Token], function_name: str
+) -> None:
+    """Handle the `trait` keyword: parse and register a trait definition."""
+    _require_global_scope(function_name, "Traits", token.location)
+    cursor.position -= 1
+    trait = parse_trait(cursor)
+    if trait.name in GLOBAL_TRAITS:
+        raise_error(
+            ErrorKind.DUPLICATE_NAME,
+            f"Trait `{trait.name}` is already defined",
+            trait.location,
+        )
+    GLOBAL_TRAITS[trait.name] = trait
+
+
+def _handle_keyword_include(token: Token, cursor: Cursor[Token]) -> Op:
+    """Handle the `include` keyword: parse the include path."""
+    string_literal = expect_token(cursor, kind=TokenKind.LITERAL)
+    literal_op = get_op_literal(string_literal)
+    if literal_op.kind != OpKind.PUSH_STR:
+        raise_error(
+            ErrorKind.UNEXPECTED_TOKEN,
+            "Unexpected token for include path",
+            string_literal.location,
+            expected="string literal",
+            got=f"`{string_literal.value}`",
+        )
+    assert isinstance(literal_op.value, str), "Included file path"
+    included_path = Path(literal_op.value)
+    if not included_path.is_absolute():
+        token_path = token.location.file.parent
+        included_path = token_path / included_path
+    return Op(included_path.resolve(), OpKind.INCLUDE_FILE, string_literal.location)
+
+
+SIMPLE_KEYWORD_OPS = {
+    Keyword.BREAK: OpKind.WHILE_BREAK,
+    Keyword.CONTINUE: OpKind.WHILE_CONTINUE,
+    Keyword.DO: OpKind.WHILE_CONDITION,
+    Keyword.DONE: OpKind.WHILE_END,
+    Keyword.ELIF: OpKind.IF_ELIF,
+    Keyword.ELSE: OpKind.IF_ELSE,
+    Keyword.FI: OpKind.IF_END,
+    Keyword.IF: OpKind.IF_START,
+    Keyword.RETURN: OpKind.FN_RETURN,
+    Keyword.THEN: OpKind.IF_CONDITION,
+    Keyword.WHILE: OpKind.WHILE_START,
+}
 
 
 def get_op_keyword(
@@ -504,125 +669,34 @@ def get_op_keyword(
     cursor: Cursor[Token],
     function_name: str,
 ) -> Op | None:
+    """Convert a keyword token into its op, parsing any nested blocks."""
     assert len(Keyword) == 16, "Exhaustive handling for `Keyword"
 
     keyword = Keyword.from_lowercase(token.value)
     assert keyword, f"Token `{token.value}` is not a keyword"
 
+    if keyword in SIMPLE_KEYWORD_OPS:
+        return Op(keyword, SIMPLE_KEYWORD_OPS[keyword], token.location)
+
     match keyword:
-        case Keyword.BREAK:
-            return Op(keyword, OpKind.WHILE_BREAK, token.location)
-        case Keyword.CONTINUE:
-            return Op(keyword, OpKind.WHILE_CONTINUE, token.location)
-        case Keyword.DO:
-            return Op(keyword, OpKind.WHILE_CONDITION, token.location)
-        case Keyword.DONE:
-            return Op(keyword, OpKind.WHILE_END, token.location)
-        case Keyword.ELIF:
-            return Op(keyword, OpKind.IF_ELIF, token.location)
-        case Keyword.ELSE:
-            return Op(keyword, OpKind.IF_ELSE, token.location)
         case Keyword.FN:
-            if function_name != GLOBAL_SCOPE_LABEL:
-                raise_error(
-                    ErrorKind.INVALID_SCOPE,
-                    "Functions should be defined in the global scope",
-                    token.location,
-                )
-
-            cursor.position -= 1
-            function = parse_function(cursor)
-            if GLOBAL_FUNCTIONS.get(function.name):
-                raise_error(
-                    ErrorKind.DUPLICATE_NAME,
-                    f"Identifier `{function.name}` is already defined",
-                    function.location,
-                )
-
-            GLOBAL_FUNCTIONS[function.name] = function
+            _handle_keyword_fn(token, cursor, function_name)
             return None
-        case Keyword.FI:
-            return Op(keyword, OpKind.IF_END, token.location)
-        case Keyword.IF:
-            return Op(keyword, OpKind.IF_START, token.location)
         case Keyword.IMPL:
-            if function_name != GLOBAL_SCOPE_LABEL:
-                raise_error(
-                    ErrorKind.INVALID_SCOPE,
-                    "Implementation blocks should be defined in the global scope",
-                    token.location,
-                )
-
+            _require_global_scope(
+                function_name, "Implementation blocks", token.location
+            )
             cursor.position -= 1
             parse_impl_block(cursor)
             return None
         case Keyword.INCLUDE:
-            string_literal = expect_token(cursor, kind=TokenKind.LITERAL)
-            literal_op = get_op_literal(string_literal)
-            if literal_op.kind != OpKind.PUSH_STR:
-                raise_error(
-                    ErrorKind.UNEXPECTED_TOKEN,
-                    "Unexpected token for include path",
-                    string_literal.location,
-                    expected="string literal",
-                    got=f"`{string_literal.value}`",
-                )
-            assert isinstance(literal_op.value, str), "Included file path"
-
-            included_path = Path(literal_op.value)
-            if not included_path.is_absolute():
-                token_path = token.location.file.parent
-                included_path = token_path / included_path
-            return Op(
-                included_path.resolve(),
-                OpKind.INCLUDE_FILE,
-                string_literal.location,
-            )
-        case Keyword.RETURN:
-            return Op(keyword, OpKind.FN_RETURN, token.location)
+            return _handle_keyword_include(token, cursor)
         case Keyword.STRUCT:
-            if function_name != GLOBAL_SCOPE_LABEL:
-                raise_error(
-                    ErrorKind.INVALID_SCOPE,
-                    "Structs should be defined in the global scope",
-                    token.location,
-                )
-
-            cursor.position -= 1
-
-            struct = parse_struct(cursor)
-            GLOBAL_STRUCTS[struct.name] = struct
-
-            for member in struct.members:
-                if member.name in GLOBAL_FUNCTIONS:
-                    raise_error(
-                        ErrorKind.DUPLICATE_NAME,
-                        f"Function `{member.name}` already exists",
-                        struct.location,
-                    )
+            _handle_keyword_struct(token, cursor, function_name)
             return None
         case Keyword.TRAIT:
-            if function_name != GLOBAL_SCOPE_LABEL:
-                raise_error(
-                    ErrorKind.INVALID_SCOPE,
-                    "Traits should be defined in the global scope",
-                    token.location,
-                )
-
-            cursor.position -= 1
-            trait = parse_trait(cursor)
-            if trait.name in GLOBAL_TRAITS:
-                raise_error(
-                    ErrorKind.DUPLICATE_NAME,
-                    f"Trait `{trait.name}` is already defined",
-                    trait.location,
-                )
-            GLOBAL_TRAITS[trait.name] = trait
+            _handle_keyword_trait(token, cursor, function_name)
             return None
-        case Keyword.THEN:
-            return Op(keyword, OpKind.IF_CONDITION, token.location)
-        case Keyword.WHILE:
-            return Op(keyword, OpKind.WHILE_START, token.location)
         case _:
             assert_never(keyword)
 
@@ -677,6 +751,7 @@ def parse_type(cursor: Cursor[Token]) -> Type:
 
 
 def get_op_type_cast(cursor: Cursor[Token]) -> Op:
+    """Parse a parenthesized type cast expression."""
     open_paren = expect_token(cursor, value="(")
     cast_type = parse_type(cursor)
     close_paren = expect_token(cursor, value=")")
@@ -689,6 +764,7 @@ def get_op_type_cast(cursor: Cursor[Token]) -> Op:
 
 
 def parse_impl_block(cursor: Cursor[Token]):
+    """Parse an impl block and register its methods as namespaced functions."""
     expect_token(cursor, value="impl")
     impl_type = parse_type(cursor)
 
@@ -708,6 +784,7 @@ def parse_impl_block(cursor: Cursor[Token]):
 
 
 def parse_struct(cursor: Cursor[Token]) -> Struct:
+    """Parse a struct definition and auto-generate getter and setter functions."""
     expect_token(cursor, value="struct")
     struct_name = expect_token(cursor, kind=TokenKind.IDENTIFIER)
 
@@ -727,54 +804,31 @@ def parse_struct(cursor: Cursor[Token]) -> Struct:
             )
 
         expect_token(cursor, value=":")
-
         member_type_str = parse_type(cursor)
 
-        # Getter
-        getter_name = f"{struct_name.value}::{member_name.value}"
-        if getter_name in GLOBAL_FUNCTIONS:
-            raise_error(
-                ErrorKind.DUPLICATE_NAME,
-                f"Function `{getter_name}` is already defined",
-                member_name.location,
-            )
-        member_location = member_name.location
-        getter_ops: list[Op] = []
-        getter_ops.append(Op("ptr", OpKind.TYPE_CAST, member_location))
-        getter_ops.append(Op(len(members) * 8, OpKind.PUSH_INT, member_location))
-        getter_ops.append(Op(Operator.PLUS, OpKind.ADD, member_location))
-        getter_ops.append(Op(Intrinsic.LOAD64, OpKind.LOAD64, member_location))
-        getter_ops.append(Op(member_type_str, OpKind.TYPE_CAST, member_location))
-        getter_params = [Parameter(struct_name.value)]
-        getter_signature = Signature(getter_params, [member_type_str])
-        getter = Function(getter_name, getter_ops, member_location, getter_signature)
-        GLOBAL_FUNCTIONS[getter_name] = getter
+        getter, setter = _create_member_accessor(
+            struct_name.value,
+            member_name.value,
+            member_type_str,
+            len(members),
+            member_name.location,
+        )
+        for accessor in (getter, setter):
+            if accessor.name in GLOBAL_FUNCTIONS:
+                raise_error(
+                    ErrorKind.DUPLICATE_NAME,
+                    f"Function `{accessor.name}` is already defined",
+                    member_name.location,
+                )
+            GLOBAL_FUNCTIONS[accessor.name] = accessor
 
-        # Setter
-        setter_name = f"{struct_name.value}::set_{member_name.value}"
-        if setter_name in GLOBAL_FUNCTIONS:
-            raise_error(
-                ErrorKind.DUPLICATE_NAME,
-                f"Function `{setter_name}` is already defined",
-                member_name.location,
-            )
-        setter_ops: list[Op] = []
-        setter_ops.append(Op("ptr", OpKind.TYPE_CAST, member_location))
-        setter_ops.append(Op(len(members) * 8, OpKind.PUSH_INT, member_location))
-        setter_ops.append(Op(Operator.PLUS, OpKind.ADD, member_location))
-        setter_ops.append(Op(Intrinsic.STORE64, OpKind.STORE64, member_location))
-        setter_params = [Parameter(struct_name.value), Parameter(member_type_str)]
-        setter_signature = Signature(setter_params, [])
-        setter = Function(setter_name, setter_ops, member_location, setter_signature)
-        GLOBAL_FUNCTIONS[setter_name] = setter
-
-        # Add to members list
         members.append(Member(member_name.value, member_type_str))
 
     return Struct(struct_name.value, members, struct_name.location)
 
 
 def parse_trait(cursor: Cursor[Token]) -> Trait:
+    """Parse a trait definition with its method signatures."""
     expect_token(cursor, value="trait")
     trait_name = expect_token(cursor, kind=TokenKind.IDENTIFIER)
 
@@ -840,8 +894,8 @@ def parse_trait_method_signature(cursor: Cursor[Token]) -> Signature:
     next_token = cursor.peek()
     if next_token and next_token.value == "->":
         cursor.pop()
-        while cursor.peek():
-            if cursor.peek().value in ("fn", "}"):  # type: ignore[union-attr]
+        while token := cursor.peek():
+            if token.value in ("fn", "}"):
                 break
             return_types.append(parse_type(cursor))
 
@@ -851,6 +905,7 @@ def parse_trait_method_signature(cursor: Cursor[Token]) -> Signature:
 def parse_type_vars(
     cursor: Cursor[Token],
 ) -> tuple[set[str], dict[str, str]]:
+    """Parse bracketed type variables and optional trait bounds."""
     expect_token(cursor, value="[")
     type_vars: set[str] = set()
     trait_bounds: dict[str, str] = {}
@@ -902,6 +957,7 @@ def parse_type_vars(
 
 
 def parse_function(cursor: Cursor[Token]) -> Function:
+    """Parse a function definition with optional type parameters and signature."""
     expect_token(cursor, value="fn")
     name = expect_token(cursor, kind=TokenKind.IDENTIFIER)
 
@@ -950,6 +1006,7 @@ def parse_function(cursor: Cursor[Token]) -> Function:
 
 
 def parse_signature(cursor: Cursor[Token]) -> Signature:
+    """Parse a function signature with parameters and return types."""
     parameters = parse_parameters(cursor)
     return_types = []
 
@@ -970,6 +1027,7 @@ def parse_signature(cursor: Cursor[Token]) -> Signature:
 
 
 def parse_parameters(cursor: Cursor[Token]) -> list[Parameter]:
+    """Parse function parameters as name:type pairs."""
     parameters: list[Parameter] = []
     while name_or_type := cursor.pop():
         if name_or_type.value in ("->", "{"):
@@ -1012,9 +1070,10 @@ def parse_parameters(cursor: Cursor[Token]) -> list[Parameter]:
 
 
 def parse_return_types(cursor: Cursor[Token]) -> list[Type]:
+    """Parse return types after the arrow in a function signature."""
     return_types: list[Type] = []
-    while cursor.peek():
-        if cursor.peek().value == "{":  # type: ignore[union-attr]
+    while token := cursor.peek():
+        if token.value == "{":
             return return_types
         return_types.append(parse_type(cursor))
     raise_error(
@@ -1026,6 +1085,7 @@ def parse_return_types(cursor: Cursor[Token]) -> list[Type]:
 
 
 def get_op_literal(token: Token) -> Op:
+    """Convert a literal token into a push op for its value."""
     value = token.value
     if value == "true":
         return Op(True, OpKind.PUSH_BOOL, token.location)
@@ -1044,7 +1104,23 @@ def get_op_literal(token: Token) -> Op:
     raise ValueError(f"Token `{token.value}` is not a literal")
 
 
+def _parse_compound_assign(
+    cursor: Cursor[Token],
+    token: Token,
+    op_kind: OpKind,
+    function_name: str,
+) -> Op:
+    """Parse a compound assignment operator (+= or -=)."""
+    next_token = expect_token(cursor, kind=TokenKind.IDENTIFIER)
+    identifier = token_to_op(next_token, cursor, function_name)
+    assert identifier, "Expected identifier"
+    variable_name = identifier.value
+    assert isinstance(variable_name, str), "Expected variable name"
+    return Op(variable_name, op_kind, token.location)
+
+
 def get_op_operator(token: Token, cursor: Cursor[Token], function_name: str) -> Op:
+    """Convert an operator token into its op, handling assignments and lambdas."""
     assert len(Operator) == 23, "Exhaustive handling for `Operator`"
 
     operator = Operator.from_str(token.value)
@@ -1082,23 +1158,13 @@ def get_op_operator(token: Token, cursor: Cursor[Token], function_name: str) -> 
                 type_annotation=type_annotation,
             )
         case Operator.ASSIGN_DECREMENT:
-            next_token = expect_token(cursor, kind=TokenKind.IDENTIFIER)
-            identifier = token_to_op(next_token, cursor, function_name)
-            assert identifier, "Expected identifier"
-
-            variable_name = identifier.value
-            assert isinstance(variable_name, str), "Expected variable name"
-
-            return Op(variable_name, OpKind.ASSIGN_DECREMENT, token.location)
+            return _parse_compound_assign(
+                cursor, token, OpKind.ASSIGN_DECREMENT, function_name
+            )
         case Operator.ASSIGN_INCREMENT:
-            next_token = expect_token(cursor, kind=TokenKind.IDENTIFIER)
-            identifier = token_to_op(next_token, cursor, function_name)
-            assert identifier, "Expected identifier"
-
-            variable_name = identifier.value
-            assert isinstance(variable_name, str), "Expected variable name"
-
-            return Op(variable_name, OpKind.ASSIGN_INCREMENT, identifier.location)
+            return _parse_compound_assign(
+                cursor, token, OpKind.ASSIGN_INCREMENT, function_name
+            )
         case Operator.DIVISION:
             return Op(operator, OpKind.DIV, token.location)
         case Operator.EQ:
@@ -1138,6 +1204,7 @@ def expect_token(
     value: str | None = None,
     kind: TokenKind | None = None,
 ) -> Token:
+    """Consume the next token, raising an error if it does not match."""
     next_token = cursor.pop()
     if not next_token or next_token.kind == TokenKind.EOF:
         expected = f"`{value}`" if value else (f"{kind.name}" if kind else "token")
