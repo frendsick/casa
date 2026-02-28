@@ -159,7 +159,7 @@ class TypeChecker:
             else:
                 exp_inner = extract_generic_inner(expected)
                 act_inner = extract_generic_inner(typ)
-                if exp_inner == ANY_TYPE or act_inner == ANY_TYPE:
+                if ANY_TYPE in (exp_inner, act_inner):
                     return expected
         # Match fn[sig] types using Signature.matches (handles ANY_TYPE)
         exp_sig_str = extract_fn_signature_str(expected)
@@ -285,7 +285,7 @@ class TypeChecker:
                 expected=f"`{expected.typ}`",
                 got=f"`{actual}`",
             )
-        if actual == generic_base or actual == ANY_TYPE:
+        if actual in (generic_base, ANY_TYPE):
             for ep in exp_params:
                 if ep in signature.type_vars:
                     self._bind_type_var(bindings, ep, ANY_TYPE)
@@ -477,7 +477,8 @@ class TypeChecker:
                 WARNINGS.append(
                     CasaWarning(
                         WarningKind.LOSSY_TYPE_ANNOTATION,
-                        f"Type annotation `{annotation}` discards type parameter from `{stack_type}`",
+                        f"Type annotation `{annotation}` discards type"
+                        f" parameter from `{stack_type}`",
                         op.location,
                     )
                 )
@@ -504,7 +505,9 @@ class TypeChecker:
             ):
                 raise_error(
                     ErrorKind.INVALID_VARIABLE,
-                    f"Cannot override local variable `{local_variable.name}` of type `{local_variable.typ}` with other type `{effective_type}`",
+                    f"Cannot override local variable `{local_variable.name}`"
+                    f" of type `{local_variable.typ}`"
+                    f" with other type `{effective_type}`",
                     op.location,
                 )
 
@@ -527,7 +530,9 @@ class TypeChecker:
             if global_variable.typ not in (effective_type, ANY_TYPE):
                 raise_error(
                     ErrorKind.INVALID_VARIABLE,
-                    f"Cannot override global variable `{global_variable.name}` of type `{global_variable.typ}` with other type `{effective_type}`",
+                    f"Cannot override global variable `{global_variable.name}`"
+                    f" of type `{global_variable.typ}`"
+                    f" with other type `{effective_type}`",
                     op.location,
                 )
 
@@ -836,7 +841,7 @@ class TypeChecker:
         return op_index
 
     def _check_literals(self, op: Op, function: Function | None) -> None:
-        """Handle PUSH_INT, PUSH_STR, PUSH_BOOL, PUSH_CHAR, PUSH_NONE, SOME, PUSH_ARRAY, FSTRING_CONCAT."""
+        """Handle literal push ops."""
         match op.kind:
             case OpKind.PUSH_INT:
                 self.stack_push("int")
@@ -1034,8 +1039,6 @@ def _check_passthrough_params(
 
     if n_inferred > n_declared:
         return None
-
-    n_unused = n_declared - n_inferred
 
     # The body pops from the top of the stack. First-declared params are on
     # top, so the first n_inferred declared params must match the inferred.
@@ -1400,6 +1403,7 @@ def type_satisfies_trait(
 
 
 def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature:
+    """Type-check a list of ops and return the inferred signature."""
     assert len(OpKind) == 79, "Exhaustive handling for `OpKind`"
 
     tc = TypeChecker(ops=ops)
@@ -1546,7 +1550,8 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
             names = ", ".join(sorted(ret_only))
             raise_error(
                 ErrorKind.TYPE_MISMATCH,
-                f"Type variable(s) `{names}` appear in return types but not in parameters of `{function.name}`",
+                f"Type variable(s) `{names}` appear in return types"
+                f" but not in parameters of `{function.name}`",
                 fn_location,
             )
 

@@ -86,6 +86,7 @@ def handle_fstring(
     function_name: str,
     ops: list[Op],
 ) -> None:
+    """Parse an f-string into concatenated string and expression ops."""
     part_count = 0
     while token := cursor.pop():
         match token.kind:
@@ -110,6 +111,7 @@ def handle_fstring(
 
 
 def parse_ops(tokens: list[Token]) -> list[Op]:
+    """Parse a flat token list into a list of ops."""
     cursor = Cursor(sequence=tokens)
     ops: list[Op] = []
     while token := cursor.pop():
@@ -295,6 +297,7 @@ def resolve_identifiers(
     ops: list[Op],
     function: Function | None = None,
 ) -> list[Op]:
+    """Resolve raw identifiers into typed ops like FN_CALL, PUSH_VARIABLE, etc."""
     errors: list[CasaError] = []
     index = 0
     while index < len(ops):
@@ -407,6 +410,7 @@ def token_to_op(
     cursor: Cursor[Token],
     function_name: str = GLOBAL_SCOPE_LABEL,
 ) -> Op | None:
+    """Convert a single token into its corresponding op."""
     assert len(TokenKind) == 12, "Exhaustive handling for `TokenKind`"
 
     match token.kind:
@@ -443,6 +447,7 @@ def get_op_delimiter(
     cursor: Cursor[Token],
     function_name: str,
 ) -> Op | None:
+    """Convert a delimiter token into its op."""
     assert len(Delimiter) == 11, "Exhaustive handling for `Delimiter`"
 
     delimiter = Delimiter.from_str(token.value)
@@ -486,6 +491,7 @@ def get_op_delimiter(
 
 
 def expect_delimiter(cursor: Cursor[Token], expected: Delimiter) -> Delimiter | None:
+    """Consume and return the expected delimiter, or None if not found."""
     token = cursor.peek()
     if not token:
         return None
@@ -499,6 +505,7 @@ def expect_delimiter(cursor: Cursor[Token], expected: Delimiter) -> Delimiter | 
 
 
 def parse_block_ops(cursor: Cursor[Token], function_name: str) -> list[Op]:
+    """Parse a brace-delimited block of ops."""
     open_brace = cursor.pop()
     if not open_brace or open_brace.value != "{":
         loc = open_brace.location if open_brace else None
@@ -523,6 +530,7 @@ def parse_block_ops(cursor: Cursor[Token], function_name: str) -> list[Op]:
 
 
 def get_op_array(cursor: Cursor[Token]) -> Op:
+    """Parse an array literal from bracket-delimited tokens."""
     open_bracket = expect_token(cursor, value="[")
 
     array_items = []
@@ -547,7 +555,9 @@ def get_op_array(cursor: Cursor[Token]) -> Op:
                 got=got,
             )
         item_op = token_to_op(value_token, cursor)
-        assert item_op is not None, "Array item token always produces an Op"
+        assert item_op is not None, (
+            "Array item token always produces an Op"
+        )
         array_items.append(item_op)
         expect_delimiter(cursor, Delimiter.COMMA)
 
@@ -555,7 +565,10 @@ def get_op_array(cursor: Cursor[Token]) -> Op:
 
 
 def get_op_intrinsic(token: Token) -> Op:
-    assert len(INTRINSIC_TO_OPKIND) == len(Intrinsic), "Exhaustive handling for `Intrinsic`"  # fmt: skip
+    """Convert an intrinsic token into its op."""
+    assert len(INTRINSIC_TO_OPKIND) == len(Intrinsic), (
+        "Exhaustive handling for `Intrinsic`"
+    )
 
     intrinsic = Intrinsic.from_lowercase(token.value)
     assert intrinsic, f"Token `{token.value}` is not an intrinsic"
@@ -651,6 +664,7 @@ def get_op_keyword(
     cursor: Cursor[Token],
     function_name: str,
 ) -> Op | None:
+    """Convert a keyword token into its op, parsing any nested blocks."""
     assert len(Keyword) == 16, "Exhaustive handling for `Keyword"
 
     keyword = Keyword.from_lowercase(token.value)
@@ -730,6 +744,7 @@ def parse_type(cursor: Cursor[Token]) -> Type:
 
 
 def get_op_type_cast(cursor: Cursor[Token]) -> Op:
+    """Parse a parenthesized type cast expression."""
     open_paren = expect_token(cursor, value="(")
     cast_type = parse_type(cursor)
     close_paren = expect_token(cursor, value=")")
@@ -742,6 +757,7 @@ def get_op_type_cast(cursor: Cursor[Token]) -> Op:
 
 
 def parse_impl_block(cursor: Cursor[Token]):
+    """Parse an impl block and register its methods as namespaced functions."""
     expect_token(cursor, value="impl")
     impl_type = parse_type(cursor)
 
@@ -761,6 +777,7 @@ def parse_impl_block(cursor: Cursor[Token]):
 
 
 def parse_struct(cursor: Cursor[Token]) -> Struct:
+    """Parse a struct definition and auto-generate getter and setter functions."""
     expect_token(cursor, value="struct")
     struct_name = expect_token(cursor, kind=TokenKind.IDENTIFIER)
 
@@ -804,6 +821,7 @@ def parse_struct(cursor: Cursor[Token]) -> Struct:
 
 
 def parse_trait(cursor: Cursor[Token]) -> Trait:
+    """Parse a trait definition with its method signatures."""
     expect_token(cursor, value="trait")
     trait_name = expect_token(cursor, kind=TokenKind.IDENTIFIER)
 
@@ -880,6 +898,7 @@ def parse_trait_method_signature(cursor: Cursor[Token]) -> Signature:
 def parse_type_vars(
     cursor: Cursor[Token],
 ) -> tuple[set[str], dict[str, str]]:
+    """Parse bracketed type variables and optional trait bounds."""
     expect_token(cursor, value="[")
     type_vars: set[str] = set()
     trait_bounds: dict[str, str] = {}
@@ -931,6 +950,7 @@ def parse_type_vars(
 
 
 def parse_function(cursor: Cursor[Token]) -> Function:
+    """Parse a function definition with optional type parameters and signature."""
     expect_token(cursor, value="fn")
     name = expect_token(cursor, kind=TokenKind.IDENTIFIER)
 
@@ -979,6 +999,7 @@ def parse_function(cursor: Cursor[Token]) -> Function:
 
 
 def parse_signature(cursor: Cursor[Token]) -> Signature:
+    """Parse a function signature with parameters and return types."""
     parameters = parse_parameters(cursor)
     return_types = []
 
@@ -999,6 +1020,7 @@ def parse_signature(cursor: Cursor[Token]) -> Signature:
 
 
 def parse_parameters(cursor: Cursor[Token]) -> list[Parameter]:
+    """Parse function parameters as name:type pairs."""
     parameters: list[Parameter] = []
     while name_or_type := cursor.pop():
         if name_or_type.value in ("->", "{"):
@@ -1041,6 +1063,7 @@ def parse_parameters(cursor: Cursor[Token]) -> list[Parameter]:
 
 
 def parse_return_types(cursor: Cursor[Token]) -> list[Type]:
+    """Parse return types after the arrow in a function signature."""
     return_types: list[Type] = []
     while cursor.peek():
         if cursor.peek().value == "{":  # type: ignore[union-attr]
@@ -1055,6 +1078,7 @@ def parse_return_types(cursor: Cursor[Token]) -> list[Type]:
 
 
 def get_op_literal(token: Token) -> Op:
+    """Convert a literal token into a push op for its value."""
     value = token.value
     if value == "true":
         return Op(True, OpKind.PUSH_BOOL, token.location)
@@ -1089,6 +1113,7 @@ def _parse_compound_assign(
 
 
 def get_op_operator(token: Token, cursor: Cursor[Token], function_name: str) -> Op:
+    """Convert an operator token into its op, handling assignments and lambdas."""
     assert len(Operator) == 23, "Exhaustive handling for `Operator`"
 
     operator = Operator.from_str(token.value)
@@ -1172,6 +1197,7 @@ def expect_token(
     value: str | None = None,
     kind: TokenKind | None = None,
 ) -> Token:
+    """Consume the next token, raising an error if it does not match."""
     next_token = cursor.pop()
     if not next_token or next_token.kind == TokenKind.EOF:
         expected = f"`{value}`" if value else (f"{kind.name}" if kind else "token")

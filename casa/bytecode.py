@@ -465,7 +465,9 @@ class Compiler:
             if var in GLOBAL_VARIABLES and var.name not in param_names:
                 raise_error(
                     ErrorKind.UNDEFINED_NAME,
-                    f"Function `{function.name}` assigns a global variable `{var.name}` before it is initialized within the global scope",
+                    f"Function `{function.name}` assigns global"
+                    f" variable `{var.name}` before it is"
+                    " initialized within the global scope",
                     op.location,
                 )
         if self.function != function:
@@ -510,7 +512,10 @@ class Compiler:
                     raise AssertionError(
                         f"Identifier `{op.value}` should be resolved by the parser"
                     )
-                case OpKind.IF_CONDITION | OpKind.IF_ELIF | OpKind.IF_ELSE | OpKind.IF_END | OpKind.IF_START:
+                case (
+                    OpKind.IF_CONDITION | OpKind.IF_ELIF
+                    | OpKind.IF_ELSE | OpKind.IF_END | OpKind.IF_START
+                ):
                     self._compile_if_block(op, bytecode)
                 case OpKind.INCLUDE_FILE | OpKind.TYPE_CAST:
                     pass
@@ -564,7 +569,11 @@ class Compiler:
                     self._compile_some(op, bytecode)
                 case OpKind.STRUCT_NEW:
                     self._compile_struct_new(op, bytecode)
-                case OpKind.WHILE_BREAK | OpKind.WHILE_CONDITION | OpKind.WHILE_CONTINUE | OpKind.WHILE_END | OpKind.WHILE_START:
+                case (
+                    OpKind.WHILE_BREAK | OpKind.WHILE_CONDITION
+                    | OpKind.WHILE_CONTINUE | OpKind.WHILE_END
+                    | OpKind.WHILE_START
+                ):
                     self._compile_while_block(op, bytecode)
 
         if self.locals_count > 0:
@@ -609,6 +618,7 @@ class Compiler:
         target_kinds: list[OpKind] | None = None,
         reverse: bool = False,
     ) -> LabelId | None:
+        """Search for a matching block boundary and return its label."""
         START_KINDS = [OpKind.IF_START, OpKind.WHILE_START]
         END_KINDS = [OpKind.IF_END, OpKind.WHILE_END]
         assert start_kind in START_KINDS, f"Invalid start for block: {start_kind}"
