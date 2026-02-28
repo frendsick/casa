@@ -191,6 +191,7 @@ class WarningKind(Enum):
     """Categories of compiler warnings."""
 
     UNUSED_PARAMETER = auto()
+    LOSSY_TYPE_ANNOTATION = auto()
 
 
 @dataclass

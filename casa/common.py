@@ -347,6 +347,7 @@ class Op:
     value: Any
     kind: OpKind
     location: Location
+    type_annotation: str | None = None
 
     def __post_init__(self):
         assert len(OpKind) == 79, "Exhaustive handling for `OpKind`"
