@@ -960,6 +960,17 @@ INCLUDED_FILES: set[Path] = set()
 
 
 @dataclass
+class CompilationContext:
+    """Holds all mutable state for a single compilation run."""
+
+    functions: OrderedDict[str, Function] = field(default_factory=OrderedDict)
+    structs: OrderedDict[str, Struct] = field(default_factory=OrderedDict)
+    traits: OrderedDict[str, Trait] = field(default_factory=OrderedDict)
+    variables: OrderedDict[str, Variable] = field(default_factory=OrderedDict)
+    included_files: set[Path] = field(default_factory=set)
+
+
+@dataclass
 class Cursor(Generic[T]):
     sequence: Sequence[T]
     position: int = 0
