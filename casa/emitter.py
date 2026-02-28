@@ -1,3 +1,5 @@
+"""x86-64 GNU assembly emitter for the Casa compiler."""
+
 from typing import assert_never
 
 from casa.common import Bytecode, Inst, InstKind, Program
@@ -9,6 +11,8 @@ HEAP_SIZE = 1048576
 
 
 class Emitter:
+    """Generates x86-64 GNU assembly from a bytecode program."""
+
     def __init__(self, program: Program):
         self.program = program
         self._label_counter = 0
@@ -49,6 +53,7 @@ class Emitter:
         return "".join(result)
 
     def emit(self) -> str:
+        """Generate the full assembly source string."""
         self._emit_bss()
         self._emit_data()
         self._emit_text()
@@ -580,5 +585,6 @@ class Emitter:
 
 
 def emit_program(program: Program) -> str:
+    """Emit a complete assembly source string from a bytecode program."""
     emitter = Emitter(program)
     return emitter.emit()

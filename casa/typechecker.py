@@ -1,3 +1,5 @@
+"""Stack-based type inference and checking for the Casa compiler."""
+
 from dataclasses import dataclass, field
 from collections.abc import Iterable
 from typing import assert_never
@@ -38,6 +40,8 @@ from casa.parser import resolve_identifiers
 
 @dataclass
 class BranchedStack:
+    """Tracks stack state across conditional and loop branches."""
+
     before: list[Type]
     after: list[Type]
     before_origins: list[Location | None]
@@ -73,6 +77,8 @@ class BranchedStack:
 
 @dataclass
 class TypeChecker:
+    """Simulates the stack symbolically to infer and verify types."""
+
     ops: list[Op]
     stack: list[Type] = field(default_factory=list)
     stack_origins: list[Location | None] = field(default_factory=list)
@@ -91,15 +97,18 @@ class TypeChecker:
     current_expect_context: str | None = None
 
     def stack_push(self, typ: Type, origin: Location | None = None):
+        """Push a type onto the symbolic stack."""
         self.stack.append(typ)
         self.stack_origins.append(origin or self.current_location)
 
     def stack_peek(self) -> Type:
+        """Return the top type without popping."""
         if not self.stack:
             return ANY_TYPE
         return self.stack[-1]
 
     def stack_pop(self) -> Type:
+        """Pop and return the top type from the symbolic stack."""
         if not self.stack:
             self.parameters.append(Parameter(ANY_TYPE))
             self.last_pop_origin = None
@@ -108,6 +117,7 @@ class TypeChecker:
         return self.stack.pop()
 
     def expect_type(self, expected: Type) -> Type:
+        """Pop and verify the top type matches expected."""
         if not self.stack:
             self.parameters.append(Parameter(expected))
             self.last_pop_origin = None
@@ -208,6 +218,7 @@ class TypeChecker:
             )
 
     def apply_signature(self, signature: Signature, name: str | None = None):
+        """Pop parameters and push return types according to a signature."""
         self.current_op_context = f"`{name}` ({signature})" if name else None
 
         if not signature.type_vars:

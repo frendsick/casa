@@ -1,3 +1,5 @@
+"""Op-to-Inst bytecode lowering for the Casa compiler."""
+
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import assert_never
@@ -76,12 +78,14 @@ _label_counter = 0
 
 
 def new_label() -> LabelId:
+    """Allocate and return a fresh label ID."""
     global _label_counter
     _label_counter += 1
     return _label_counter
 
 
 def reset_labels():
+    """Reset the label counter to zero."""
     global _label_counter
     _label_counter = 0
 
@@ -91,6 +95,7 @@ _op_label_map: dict[int, LabelId] = {}
 
 
 def op_to_label(op: Op) -> LabelId:
+    """Return a stable label for an op, allocating one on first access."""
     op_id = id(op)
     if op_id not in _op_label_map:
         _op_label_map[op_id] = new_label()
@@ -98,6 +103,7 @@ def op_to_label(op: Op) -> LabelId:
 
 
 def compile_bytecode(ops: list[Op]) -> Program:
+    """Compile a list of ops into a bytecode program."""
     reset_labels()
     _op_label_map.clear()
 
@@ -124,6 +130,8 @@ def compile_bytecode(ops: list[Op]) -> Program:
 
 @dataclass
 class Compiler:
+    """Lowers a list of ops into bytecode instructions."""
+
     ops: list[Op]
     function: Function | None = None
     locals_count: int = 0
@@ -471,6 +479,7 @@ class Compiler:
             function.bytecode = fn_compiler.compile()
 
     def compile(self) -> Bytecode:
+        """Lower all ops to bytecode instructions."""
         assert len(InstKind) == 66, "Exhaustive handling for `InstructionKind"
         assert len(OpKind) == 79, "Exhaustive handling for `OpKind`"
 

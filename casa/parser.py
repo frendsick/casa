@@ -1,3 +1,5 @@
+"""Op tree builder and identifier resolution for the Casa compiler."""
+
 from pathlib import Path
 from typing import assert_never
 
