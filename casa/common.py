@@ -91,8 +91,13 @@ class Keyword(Enum):
     FI = auto()
 
     # Data types
+    ENUM = auto()
     STRUCT = auto()
     TRAIT = auto()
+
+    # Match
+    END = auto()
+    MATCH = auto()
 
     # Include files
     INCLUDE = auto()
@@ -110,6 +115,7 @@ class Delimiter(Enum):
 
     ARROW = auto()
     COMMA = auto()
+    FAT_ARROW = auto()
     COLON = auto()
     DOT = auto()
     HASHTAG = auto()
@@ -129,6 +135,7 @@ class Delimiter(Enum):
 _DELIMITER_SOURCE_MAP: dict[str, Delimiter] = {
     "->": Delimiter.ARROW,
     ",": Delimiter.COMMA,
+    "=>": Delimiter.FAT_ARROW,
     ":": Delimiter.COLON,
     ".": Delimiter.DOT,
     "#": Delimiter.HASHTAG,
@@ -352,6 +359,14 @@ class OpKind(Enum):
     PUSH_CAPTURE = auto()
     PUSH_VARIABLE = auto()
 
+    # Enums
+    PUSH_ENUM_VARIANT = auto()
+
+    # Match
+    MATCH_START = auto()
+    MATCH_ARM = auto()
+    MATCH_END = auto()
+
     # Structs
     STRUCT_NEW = auto()
 
@@ -378,7 +393,7 @@ class Op:
     type_annotation: str | None = None
 
     def __post_init__(self):
-        assert len(OpKind) == 79, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 83, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires Python `None`
@@ -446,6 +461,12 @@ class Op:
             ):
                 if not isinstance(self.value, Intrinsic):
                     raise TypeError(f"`{self.kind}` requires value of type `Intrinsic`")
+            # Requires `EnumVariant`
+            case OpKind.PUSH_ENUM_VARIANT | OpKind.MATCH_ARM:
+                if not isinstance(self.value, EnumVariant):
+                    raise TypeError(
+                        f"`{self.kind}` requires value of type `EnumVariant`"
+                    )
             # Requires `Keyword`
             case (
                 OpKind.FN_RETURN
@@ -454,6 +475,8 @@ class Op:
                 | OpKind.IF_ELIF
                 | OpKind.IF_ELSE
                 | OpKind.IF_END
+                | OpKind.MATCH_START
+                | OpKind.MATCH_END
                 | OpKind.WHILE_START
                 | OpKind.WHILE_CONDITION
                 | OpKind.WHILE_BREAK
@@ -939,6 +962,32 @@ class Member:
         return False
 
 
+MATCH_WILDCARD = "_"
+
+
+@dataclass
+class EnumVariant:
+    """A single variant of an enum type."""
+
+    enum_name: str
+    variant_name: str
+    ordinal: int
+
+    @property
+    def is_wildcard(self) -> bool:
+        """Check if this variant is a wildcard pattern."""
+        return self.variant_name == MATCH_WILDCARD
+
+
+@dataclass
+class CasaEnum:
+    """A user-defined enum type with named variants."""
+
+    name: str
+    variants: list[str]
+    location: Location
+
+
 @dataclass
 class Struct:
     """A user-defined struct type with named members."""
@@ -1013,6 +1062,7 @@ GLOBAL_SCOPE_LABEL = "_start"
 class CompilationContext:
     """Groups all mutable compilation state. Module-level globals alias the default instance."""
 
+    enums: OrderedDict[str, CasaEnum] = field(default_factory=OrderedDict)
     functions: OrderedDict[str, Function] = field(default_factory=OrderedDict)
     structs: OrderedDict[str, Struct] = field(default_factory=OrderedDict)
     traits: OrderedDict[str, Trait] = field(default_factory=OrderedDict)
@@ -1021,6 +1071,7 @@ class CompilationContext:
 
 
 _DEFAULT_CONTEXT = CompilationContext()
+GLOBAL_ENUMS = _DEFAULT_CONTEXT.enums
 GLOBAL_FUNCTIONS = _DEFAULT_CONTEXT.functions
 GLOBAL_STRUCTS = _DEFAULT_CONTEXT.structs
 GLOBAL_TRAITS = _DEFAULT_CONTEXT.traits

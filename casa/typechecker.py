@@ -6,9 +6,12 @@ from typing import assert_never
 
 from casa.common import (
     ANY_TYPE,
+    GLOBAL_ENUMS,
     GLOBAL_FUNCTIONS,
     GLOBAL_TRAITS,
     GLOBAL_VARIABLES,
+    MATCH_WILDCARD,
+    EnumVariant,
     Function,
     Intrinsic,
     Location,
@@ -53,6 +56,7 @@ class BranchedStack:
     current_branch_label: str | None
     current_branch_location: Location | None
     if_location: Location | None
+    if_location_enum_name: str | None
 
     def __init__(
         self,
@@ -73,6 +77,7 @@ class BranchedStack:
         self.current_branch_label = None
         self.current_branch_location = None
         self.if_location = None
+        self.if_location_enum_name = None
 
 
 @dataclass
@@ -351,10 +356,25 @@ class TypeChecker:
                 self.expect_type("int")
                 self.stack_push("int")
 
-    def check_comparison(self) -> None:
+    def check_comparison(self, op: Op) -> None:
         """Handle EQ, NE, LT, LE, GT, GE."""
-        self.stack_pop()
-        self.stack_pop()
+        t1 = self.stack_pop()
+        t2 = self.stack_pop()
+        t1_is_enum = t1 in GLOBAL_ENUMS
+        t2_is_enum = t2 in GLOBAL_ENUMS
+        if t1_is_enum or t2_is_enum:
+            if t1 != t2:
+                raise_error(
+                    ErrorKind.TYPE_MISMATCH,
+                    f"Cannot compare `{t2}` with `{t1}`",
+                    self.current_location,
+                )
+            if op.kind not in (OpKind.EQ, OpKind.NE):
+                raise_error(
+                    ErrorKind.TYPE_MISMATCH,
+                    f"Enum type `{t1}` only supports `==` and `!=` comparison",
+                    self.current_location,
+                )
         self.stack_push("bool")
 
     def check_boolean(self, op: Op) -> None:
@@ -835,6 +855,8 @@ class TypeChecker:
             op.kind = OpKind.PRINT_CHAR
         elif typ == "cstr":
             op.kind = OpKind.PRINT_CSTR
+        elif typ in GLOBAL_ENUMS:
+            op.kind = OpKind.PRINT_INT
         else:
             op.kind = OpKind.PRINT_INT
 
@@ -845,6 +867,175 @@ class TypeChecker:
         for _ in range(arg_count):
             self.stack_pop()
         self.stack_push("int")
+
+    def check_enum_variant(self, op: Op) -> None:
+        """Handle PUSH_ENUM_VARIANT."""
+        variant = op.value
+        assert isinstance(variant, EnumVariant)
+        self.stack_push(variant.enum_name)
+
+    def check_match(self, op: Op) -> None:
+        """Handle MATCH_START, MATCH_ARM, MATCH_END."""
+        match op.kind:
+            case OpKind.MATCH_START:
+                typ = self.stack_pop()
+                if typ not in GLOBAL_ENUMS:
+                    raise_error(
+                        ErrorKind.TYPE_MISMATCH,
+                        f"Match requires an enum type, got `{typ}`",
+                        op.location,
+                    )
+                bs = BranchedStack(self.stack, self.stack_origins)
+                bs.if_location = op.location
+                bs.if_location_enum_name = typ
+                bs.default_present = True
+                self.branched_stacks.append(bs)
+            case OpKind.MATCH_ARM:
+                variant = op.value
+                assert isinstance(variant, EnumVariant)
+                assert self.branched_stacks, "Match block stack state is saved"
+                branched = self.branched_stacks[-1]
+
+                enum_name = branched.if_location_enum_name
+                assert enum_name is not None
+
+                # Check for arms after wildcard
+                wildcard_key = f"__covered:{MATCH_WILDCARD}"
+                has_wildcard = (
+                    any(
+                        label == wildcard_key for label, _, _ in branched.branch_records
+                    )
+                    or branched.current_branch_label == wildcard_key
+                )
+
+                if has_wildcard:
+                    raise_error(
+                        ErrorKind.SYNTAX,
+                        "Match arms after wildcard `_` are unreachable",
+                        op.location,
+                    )
+
+                if variant.is_wildcard:
+                    covered_key = wildcard_key
+                else:
+                    if variant.enum_name != enum_name:
+                        raise_error(
+                            ErrorKind.TYPE_MISMATCH,
+                            f"Match arm variant `{variant.enum_name}::{variant.variant_name}`"
+                            f" does not belong to enum `{enum_name}`",
+                            op.location,
+                        )
+
+                    covered_key = f"__covered:{variant.variant_name}"
+                    # Check for duplicate: in branch_records or the current label
+                    for label, _, _ in branched.branch_records:
+                        if label == covered_key:
+                            raise_error(
+                                ErrorKind.DUPLICATE_NAME,
+                                f"Duplicate match arm for"
+                                f" `{variant.enum_name}::{variant.variant_name}`",
+                                op.location,
+                            )
+                    if branched.current_branch_label == covered_key:
+                        raise_error(
+                            ErrorKind.DUPLICATE_NAME,
+                            f"Duplicate match arm for `{variant.enum_name}::{variant.variant_name}`",
+                            op.location,
+                        )
+
+                # Handle branch state like elif
+                if branched.condition_present:
+                    # Record the PREVIOUS arm's stack state
+                    if branched.current_branch_location:
+                        prev_covered = branched.current_branch_label
+                        if prev_covered and prev_covered.startswith("__covered:"):
+                            branched.branch_records.append(
+                                (
+                                    prev_covered,
+                                    self.stack.copy(),
+                                    branched.current_branch_location,
+                                )
+                            )
+                    if self.stack == branched.before == branched.after:
+                        pass
+                    else:
+                        unified = _stacks_compatible(self.stack, branched.after)
+                        if unified is not None and branched.before != branched.after:
+                            branched.after = unified
+                        elif branched.before == branched.after:
+                            branched.after = self.stack.copy()
+                            branched.after_origins = self.stack_origins.copy()
+                        else:
+                            raise_error(
+                                ErrorKind.STACK_MISMATCH,
+                                "Match arms have incompatible stack effects",
+                                op.location,
+                                notes=_branch_mismatch_notes(branched),
+                            )
+                    self.stack = branched.before.copy()
+                    self.stack_origins = branched.before_origins.copy()
+                else:
+                    branched.condition_present = True
+                    branched.before = self.stack.copy()
+                    branched.before_origins = self.stack_origins.copy()
+                    branched.after = branched.before
+                    branched.after_origins = branched.before_origins
+
+                branched.current_branch_label = covered_key
+                branched.current_branch_location = op.location
+
+            case OpKind.MATCH_END:
+                assert self.branched_stacks, "Match block stack state is saved"
+                branched = self.branched_stacks.pop()
+
+                # Record last arm
+                if (
+                    branched.current_branch_label
+                    and branched.current_branch_label.startswith("__covered:")
+                    and branched.current_branch_location
+                ):
+                    branched.branch_records.append(
+                        (
+                            branched.current_branch_label,
+                            self.stack.copy(),
+                            branched.current_branch_location,
+                        )
+                    )
+
+                # Extract enum name from if_location metadata
+                enum_name = branched.if_location_enum_name
+                assert enum_name is not None
+                casa_enum = GLOBAL_ENUMS[enum_name]
+                covered = {
+                    label.split(":", 1)[1]
+                    for label, _, _ in branched.branch_records
+                    if label.startswith("__covered:")
+                }
+                has_wildcard = MATCH_WILDCARD in covered
+                if not has_wildcard:
+                    missing = [v for v in casa_enum.variants if v not in covered]
+                    if missing:
+                        names = ", ".join(f"`{enum_name}::{v}`" for v in missing)
+                        raise_error(
+                            ErrorKind.TYPE_MISMATCH,
+                            f"Non-exhaustive match, missing arms: {names}",
+                            op.location,
+                        )
+
+                # Apply final stack state
+                unified = _stacks_compatible(self.stack, branched.after)
+                if unified is not None:
+                    self.stack = unified
+                    self.stack_origins = branched.after_origins.copy()
+                elif self.stack == branched.before == branched.after:
+                    pass
+                else:
+                    raise_error(
+                        ErrorKind.STACK_MISMATCH,
+                        "Match arms have incompatible stack effects",
+                        op.location,
+                        notes=_branch_mismatch_notes(branched),
+                    )
 
     def check_struct_new(self, op: Op) -> None:
         """Handle STRUCT_NEW."""
@@ -1341,7 +1532,7 @@ def type_satisfies_trait(
 
 def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature:
     """Type-check a list of ops and return the inferred signature."""
-    assert len(OpKind) == 79, "Exhaustive handling for `OpKind`"
+    assert len(OpKind) == 83, "Exhaustive handling for `OpKind`"
 
     tc = TypeChecker(ops=ops)
     op_index = 0
@@ -1360,7 +1551,7 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
             case OpKind.ADD | OpKind.SUB | OpKind.DIV | OpKind.MOD | OpKind.MUL:
                 tc.check_arithmetic(op)
             case OpKind.EQ | OpKind.NE | OpKind.LT | OpKind.LE | OpKind.GT | OpKind.GE:
-                tc.check_comparison()
+                tc.check_comparison(op)
             case OpKind.AND | OpKind.OR | OpKind.NOT:
                 tc.check_boolean(op)
             case (
@@ -1435,6 +1626,10 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 | OpKind.SYSCALL6
             ):
                 tc.check_syscalls(op)
+            case OpKind.PUSH_ENUM_VARIANT:
+                tc.check_enum_variant(op)
+            case OpKind.MATCH_START | OpKind.MATCH_ARM | OpKind.MATCH_END:
+                tc.check_match(op)
             case OpKind.STRUCT_NEW:
                 tc.check_struct_new(op)
             case OpKind.METHOD_CALL:
