@@ -99,62 +99,7 @@ class TestEnumParsing:
 # Match arm: bare variant hint
 # ---------------------------------------------------------------------------
 class TestMatchBareVariantHint:
-    def test_bare_variant_error_contains_hint(self):
-        with pytest.raises(CasaErrorCollection) as exc_info:
-            parse_string(
-                "enum Color { Red Green Blue }\n"
-                "Color::Green match\n"
-                "    Color::Red => 1\n"
-                "    Green => 2\n"
-                "    Color::Blue => 3\n"
-                "end\n"
-            )
-        error = exc_info.value.errors[0]
-        assert error.kind == ErrorKind.UNEXPECTED_TOKEN
-        assert "Did you mean `Color::Green`?" in error.message
-
-    def test_bare_variant_from_wrong_enum_no_hint(self):
-        """Bare variant from a different enum is not recognized as an arm boundary."""
-        with pytest.raises(CasaErrorCollection) as exc_info:
-            resolve_string(
-                "enum Shape { Circle Square }\n"
-                "enum Color { Red Green Blue }\n"
-                "Color::Red match\n"
-                "    Color::Red => 1\n"
-                "    Circle => 2\n"
-                "    _ => 3\n"
-                "end\n"
-            )
-        error = exc_info.value.errors[0]
-        assert error.kind == ErrorKind.UNDEFINED_NAME
-
-    def test_bare_variant_second_arm(self):
-        with pytest.raises(CasaErrorCollection) as exc_info:
-            parse_string(
-                "enum Color { Red Green Blue }\n"
-                "Color::Red match\n"
-                "    Color::Red => 1\n"
-                "    Green => 2\n"
-                "    Color::Blue => 3\n"
-                "end\n"
-            )
-        error = exc_info.value.errors[0]
-        assert "Did you mean `Color::Green`?" in error.message
-
-    def test_non_variant_identifier_no_hint(self):
-        with pytest.raises(CasaErrorCollection) as exc_info:
-            parse_string(
-                "enum Color { Red Green Blue }\n"
-                "Color::Red match\n"
-                "    foo => 1\n"
-                "    _ => 2\n"
-                "end\n"
-            )
-        error = exc_info.value.errors[0]
-        assert error.kind == ErrorKind.UNEXPECTED_TOKEN
-        assert "Did you mean" not in error.message
-
-    def test_non_identifier_token_no_hint(self):
+    def test_non_identifier_token_rejected_by_parser(self):
         with pytest.raises(CasaErrorCollection) as exc_info:
             parse_string(
                 "enum Color { Red Green Blue }\n"
@@ -164,34 +109,20 @@ class TestMatchBareVariantHint:
                 "end\n"
             )
         error = exc_info.value.errors[0]
-        assert "Did you mean" not in error.message
+        assert error.kind == ErrorKind.UNEXPECTED_TOKEN
 
-    def test_dynamic_example_uses_matched_enum(self):
-        """After parsing a valid arm, the example in error uses the matched enum."""
-        with pytest.raises(CasaErrorCollection) as exc_info:
-            parse_string(
-                "enum Color { Red Green Blue }\n"
-                "Color::Red match\n"
-                "    Color::Red => 1\n"
-                "    Green => 2\n"
-                "    Color::Blue => 3\n"
-                "end\n"
-            )
-        error = exc_info.value.errors[0]
-        assert "e.g. `Color::Red`" in error.message
-
-    def test_dynamic_example_fallback_without_prior_arm(self):
-        """When no valid arm has been parsed yet, use a generic example."""
-        with pytest.raises(CasaErrorCollection) as exc_info:
-            parse_string(
-                "enum Color { Red Green Blue }\n"
-                "Color::Red match\n"
-                "    foo => 1\n"
-                "    _ => 2\n"
-                "end\n"
-            )
-        error = exc_info.value.errors[0]
-        assert "e.g. `Enum::Variant`" in error.message
+    def test_bare_identifier_parsed_as_match_arm(self):
+        """Bare identifiers are parsed as match arms and deferred to type checker."""
+        ops = parse_string(
+            "enum Color { Red Green Blue }\n"
+            "Color::Red match\n"
+            "    Red => 1\n"
+            "    Color::Green => 2\n"
+            "    Color::Blue => 3\n"
+            "end\n"
+        )
+        arm_ops = find_ops(ops, OpKind.MATCH_ARM)
+        assert len(arm_ops) == 3
 
     def test_qualified_variant_still_works(self):
         ops = parse_string(

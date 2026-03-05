@@ -872,6 +872,7 @@ class TypeChecker:
         """Handle PUSH_ENUM_VARIANT."""
         variant = op.value
         assert isinstance(variant, EnumVariant)
+        assert variant.enum_name is not None
         self.stack_push(variant.enum_name)
 
     def check_match(self, op: Op) -> None:
@@ -917,6 +918,24 @@ class TypeChecker:
 
                 if variant.is_wildcard:
                     covered_key = wildcard_key
+                elif variant.enum_name is None:
+                    # Bare variant name without enum qualifier
+                    casa_enum = GLOBAL_ENUMS[enum_name]
+                    assert casa_enum.variants
+                    if variant.variant_name in casa_enum.variants:
+                        raise_error(
+                            ErrorKind.TYPE_MISMATCH,
+                            f"Unqualified enum variant `{variant.variant_name}`."
+                            f" Did you mean `{enum_name}::{variant.variant_name}`?",
+                            op.location,
+                        )
+                    raise_error(
+                        ErrorKind.TYPE_MISMATCH,
+                        f"Expected qualified enum variant"
+                        f" (e.g. `{enum_name}::{casa_enum.variants[0]}`) or `_`,"
+                        f" got `{variant.variant_name}`",
+                        op.location,
+                    )
                 else:
                     if variant.enum_name != enum_name:
                         raise_error(
