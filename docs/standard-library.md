@@ -279,9 +279,9 @@ list.length print       # 3
 
 ### `List::slice`
 
-Returns an `array[T]` view into the list's data from index `start` (inclusive) to `end` (exclusive). This is a zero-copy operation. Prints an error and exits if the range is out of bounds.
+Returns an `array[T]` view into the list's data from index `start` (inclusive) to `stop` (exclusive). This is a zero-copy operation. Prints an error and exits if the range is out of bounds.
 
-**Signature:** `List::slice[T] self:List[T] start:int end:int -> array[T]`
+**Signature:** `List::slice[T] self:List[T] start:int stop:int -> array[T]`
 
 **Stack effect:** `List[T] int int -> array[T]`
 
