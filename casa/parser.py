@@ -690,7 +690,7 @@ def _handle_keyword_enum(
     GLOBAL_ENUMS[casa_enum.name] = casa_enum
 
 
-def _is_match_arm_boundary(cursor: Cursor[Token]) -> bool:
+def _is_match_arm_boundary(cursor: Cursor[Token], matched_enum_name: str) -> bool:
     """Check if current position looks like a match arm pattern (Ident::Ident => or _ =>)."""
     pos = cursor.position
     seq = cursor.sequence
@@ -701,10 +701,27 @@ def _is_match_arm_boundary(cursor: Cursor[Token]) -> bool:
         return True
     if pos + 2 >= len(seq):
         return False
-    if token.kind != TokenKind.IDENTIFIER or "::" not in token.value:
+    if token.kind != TokenKind.IDENTIFIER:
         return False
     next_token = seq[pos + 1]
-    return next_token.value == "=>"
+    if next_token.value != "=>":
+        return False
+    # Qualified variant (Enum::Variant =>) or bare variant from the matched enum
+    if "::" in token.value:
+        return True
+    if matched_enum_name:
+        casa_enum = GLOBAL_ENUMS.get(matched_enum_name)
+        if casa_enum and token.value in casa_enum.variants:
+            return True
+    return False
+
+
+def _match_arm_example(matched_enum_name: str) -> str:
+    """Return an example like `Color::Red` for error messages."""
+    casa_enum = GLOBAL_ENUMS.get(matched_enum_name)
+    if casa_enum and casa_enum.variants:
+        return f"{casa_enum.name}::{casa_enum.variants[0]}"
+    return "Enum::Variant"
 
 
 def _handle_keyword_match(
@@ -713,6 +730,7 @@ def _handle_keyword_match(
     """Handle the `match` keyword: parse a match block into ops."""
     ops: list[Op] = []
     ops.append(Op(Keyword.MATCH, OpKind.MATCH_START, token.location))
+    matched_enum_name = ""
 
     # Parse arms until `end`
     while True:
@@ -727,9 +745,15 @@ def _handle_keyword_match(
             variant = EnumVariant("", MATCH_WILDCARD, -1)
             ops.append(Op(variant, OpKind.MATCH_ARM, arm_token.location))
         elif arm_token.kind != TokenKind.IDENTIFIER or "::" not in arm_token.value:
+            hint = ""
+            if arm_token.kind == TokenKind.IDENTIFIER and matched_enum_name:
+                casa_enum = GLOBAL_ENUMS.get(matched_enum_name)
+                if casa_enum and arm_token.value in casa_enum.variants:
+                    hint = f". Did you mean `{casa_enum.name}::{arm_token.value}`?"
+            example = _match_arm_example(matched_enum_name)
             raise_error(
                 ErrorKind.UNEXPECTED_TOKEN,
-                "Expected enum variant pattern (e.g. `Color::Red`) or `_`",
+                f"Expected enum variant pattern (e.g. `{example}`) or `_`{hint}",
                 arm_token.location,
                 expected="enum variant or `_`",
                 got=f"`{arm_token.value}`",
@@ -756,11 +780,12 @@ def _handle_keyword_match(
                 )
             ordinal = casa_enum.variants.index(variant_name)
             variant = EnumVariant(enum_name, variant_name, ordinal)
+            matched_enum_name = enum_name
             ops.append(Op(variant, OpKind.MATCH_ARM, arm_token.location))
 
         # Parse arm body until next arm or `end`
         while not cursor.is_finished():
-            if _is_match_arm_boundary(cursor):
+            if _is_match_arm_boundary(cursor, matched_enum_name):
                 break
             next_token = cursor.peek()
             if next_token and next_token.value == "end":
