@@ -969,7 +969,7 @@ MATCH_WILDCARD = "_"
 class EnumVariant:
     """A single variant of an enum type."""
 
-    enum_name: str
+    enum_name: str | None
     variant_name: str
     ordinal: int
 
