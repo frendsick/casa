@@ -306,6 +306,20 @@ struct Point {
 
 See [Structs and Methods](structs-and-methods.md) for details.
 
+### User-Defined Enums
+
+Enum names are types. After defining an enum, its name can be used as a type. Variants are accessed with `EnumName::VariantName`.
+
+```casa
+enum Color { Red Green Blue }
+
+Color::Red = c    # c has type Color
+```
+
+Enum values support `==` and `!=` comparison (same enum type only). Printing outputs the ordinal. Pattern matching is done with `match`/`end`.
+
+See [Enums](enums.md) for details.
+
 ## Type Variables (Generics)
 
 Type variables let functions declare type relationships between inputs and outputs. They are declared in square brackets after the function name and are resolved to concrete types at each call site.

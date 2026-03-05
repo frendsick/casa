@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import pytest
 
 from casa.common import (
+    GLOBAL_ENUMS,
     GLOBAL_FUNCTIONS,
     GLOBAL_STRUCTS,
     GLOBAL_TRAITS,
@@ -31,6 +32,7 @@ TEST_FILE = Path("test.casa")
 
 def _clear_globals():
     """Reset all module-level mutable state to a clean slate."""
+    GLOBAL_ENUMS.clear()
     GLOBAL_FUNCTIONS.clear()
     GLOBAL_STRUCTS.clear()
     GLOBAL_TRAITS.clear()

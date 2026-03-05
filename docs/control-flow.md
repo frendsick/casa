@@ -153,6 +153,60 @@ The stack state must be identical:
 
 The type checker enforces that loops do not accumulate or consume stack values across iterations.
 
+## Match
+
+Casa has exhaustive pattern matching on enum types using `match`/`end`.
+
+### Syntax
+
+```
+<enum_value> match
+    EnumName::Variant1 => <body>
+    EnumName::Variant2 => <body>
+    ...
+end
+```
+
+The `match` keyword pops an enum value from the stack. Each arm specifies a variant pattern followed by `=>` and a body. The block is closed with `end`.
+
+### Basic Example
+
+```casa
+enum Color { Red Green Blue }
+
+Color::Green match
+    Color::Red => "red" print
+    Color::Green => "green" print
+    Color::Blue => "blue" print
+end
+```
+
+### Exhaustiveness
+
+All variants of the enum must be covered. Missing a variant is a compile-time error. Duplicate arms are also rejected. A wildcard `_ =>` arm can be used to match all remaining variants:
+
+```casa
+color match
+    Color::Red => "red" print
+    _ => "other" print
+end
+```
+
+### Match as Expression
+
+Match arms can leave values on the stack. All arms must produce the same stack effect:
+
+```casa
+Color::Blue match
+    Color::Red => 0
+    Color::Green => 1
+    Color::Blue => 2
+end
+print    # 2
+```
+
+See [Enums](enums.md) for full details on enum types and match.
+
 ## Nested Control Flow
 
 Conditionals and loops can be freely nested:

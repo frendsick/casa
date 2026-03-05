@@ -14,6 +14,7 @@ Casa compiles to x86-64 Linux executables via GNU assembly. It features static t
 - **Structs and methods** — user-defined types with auto-generated accessors and `impl` blocks
 - **String interpolation** — f-strings with embedded expressions (`f"hello {name}"`)
 - **Compiles to native code** — generates x86-64 assembly with `ld` and `as`
+- **Enums and match** — enum types with exhaustive pattern matching
 - **Traits** — structural trait system with bounded polymorphism (`trait`, `Hashable`)
 - **Standard library** — generic `List[T]`, `Map[K V]`, `Set[K]`, arrays with `map`/`filter`/`reduce`, type conversions, and memory utilities
 
@@ -65,9 +66,10 @@ source → lex → parse → resolve → type check → bytecode → emit asm �
 |----------|--------|
 | [Types and Literals](docs/types-and-literals.md) | Primitive types, composite types, literals, type casting, comments |
 | [Operators](docs/operators.md) | Arithmetic, bitshift, bitwise, comparison, boolean, assignment |
-| [Control Flow](docs/control-flow.md) | Conditionals (`if`/`elif`/`else`/`fi`), loops (`while`/`do`/`done`) |
+| [Control Flow](docs/control-flow.md) | Conditionals (`if`/`elif`/`else`/`fi`), loops (`while`/`do`/`done`), match (`match`/`end`) |
 | [Functions and Lambdas](docs/functions-and-lambdas.md) | Functions, lambdas, closures, variables, stack intrinsics, IO, memory |
 | [Structs and Methods](docs/structs-and-methods.md) | Struct definition, accessors, `impl` blocks, dot/arrow syntax |
+| [Enums](docs/enums.md) | Enum types, variant constructors, exhaustive `match` |
 | [Traits](docs/traits.md) | Trait definitions, structural satisfaction, trait bounds, `Hashable` |
 | [Standard Library](docs/standard-library.md) | `include`, `memcpy`, arrays (`map`, `filter`, `reduce`), `option[T]`, `List[T]`, `Map[K V]`, `Set[K]`, string methods, C string methods, file I/O, character classification, type conversions |
 | [Errors](docs/errors.md) | Error kinds, diagnostics format, multi-error collection |
@@ -87,6 +89,7 @@ source → lex → parse → resolve → type check → bytecode → emit asm �
 | [vec.casa](examples/vec.casa) | Generic `List[T]` with push, pop, get, set, slice |
 | [hash_map.casa](examples/hash_map.casa) | `Map[K V]` and `Set[K]` with the `Hashable` trait |
 | [type_annotations.casa](examples/type_annotations.casa) | Type annotations on variable assignments (`= name:type`) |
+| [enum.casa](examples/enum.casa) | Enum types with `match` pattern matching |
 
 More examples: [examples](./examples/)
 

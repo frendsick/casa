@@ -9,6 +9,7 @@ from casa.common import (
     GLOBAL_VARIABLES,
     Bytecode,
     Cursor,
+    EnumVariant,
     Function,
     Inst,
     InstKind,
@@ -435,6 +436,50 @@ class Compiler:
         # Push array to the stack
         bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_list]))
 
+    def _compile_match_block(self, op: Op, bytecode: list[Inst]) -> None:
+        """Compile MATCH_START, MATCH_ARM, MATCH_END ops."""
+        match op.kind:
+            case OpKind.MATCH_START:
+                pass
+            case OpKind.MATCH_ARM:
+                variant = op.value
+                assert isinstance(variant, EnumVariant)
+
+                end_label = self._require_matching_label(
+                    op,
+                    OpKind.MATCH_START,
+                    OpKind.MATCH_END,
+                    "`match` arm without matching `end`",
+                )
+                is_first = id(op) not in _op_label_map
+
+                if not is_first:
+                    # End of previous arm body: jump to end, then label for this arm
+                    bytecode.append(self.inst(InstKind.JUMP, args=[end_label]))
+                    bytecode.append(
+                        self.inst(InstKind.LABEL, args=[_op_label_map[id(op)]])
+                    )
+
+                next_arm = self.find_matching_label(
+                    op=op,
+                    start_kind=OpKind.MATCH_START,
+                    end_kind=OpKind.MATCH_END,
+                    target_kinds=[OpKind.MATCH_ARM],
+                )
+                is_last = next_arm is None
+                if is_last:
+                    bytecode.append(self.inst(InstKind.DROP))
+                else:
+                    bytecode.append(self.inst(InstKind.DUP))
+                    bytecode.append(self.inst(InstKind.PUSH, args=[variant.ordinal]))
+                    bytecode.append(self.inst(InstKind.EQ))
+                    bytecode.append(self.inst(InstKind.JUMP_NE, args=[next_arm]))
+                    bytecode.append(self.inst(InstKind.DROP))
+
+            case OpKind.MATCH_END:
+                end_label = op_to_label(op)
+                bytecode.append(self.inst(InstKind.LABEL, args=[end_label]))
+
     def _compile_some(self, bytecode: list[Inst]) -> None:
         """Compile SOME op -- wraps top of stack in an option."""
         local_ptr = self.locals_count
@@ -500,7 +545,7 @@ class Compiler:
     def compile(self) -> Bytecode:
         """Lower all ops to bytecode instructions."""
         assert len(InstKind) == 66, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 79, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 83, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
         bytecode: list[Inst] = []
@@ -543,6 +588,12 @@ class Compiler:
                     self._compile_if_block(op, bytecode)
                 case OpKind.INCLUDE_FILE | OpKind.TYPE_CAST:
                     pass
+                case OpKind.PUSH_ENUM_VARIANT:
+                    variant = op.value
+                    assert isinstance(variant, EnumVariant)
+                    bytecode.append(self.inst(InstKind.PUSH, args=[variant.ordinal]))
+                case OpKind.MATCH_START | OpKind.MATCH_ARM | OpKind.MATCH_END:
+                    self._compile_match_block(op, bytecode)
                 case OpKind.METHOD_CALL:
                     raise AssertionError(
                         "Method call should be transpiled to function call during type checking"
@@ -647,8 +698,8 @@ class Compiler:
         reverse: bool = False,
     ) -> LabelId | None:
         """Search for a matching block boundary and return its label."""
-        START_KINDS = [OpKind.IF_START, OpKind.WHILE_START]
-        END_KINDS = [OpKind.IF_END, OpKind.WHILE_END]
+        START_KINDS = [OpKind.IF_START, OpKind.WHILE_START, OpKind.MATCH_START]
+        END_KINDS = [OpKind.IF_END, OpKind.WHILE_END, OpKind.MATCH_END]
         assert start_kind in START_KINDS, f"Invalid start for block: {start_kind}"
         assert end_kind in END_KINDS, f"Invalid end for block: {end_kind}"
 
@@ -672,10 +723,10 @@ class Compiler:
             elif other_op.kind in END_KINDS:
                 depth -= direction
 
-            if depth < START_DEPTH and (
-                (op.kind in START_KINDS and not reverse)
-                or (op.kind in END_KINDS and reverse)
-            ):
-                return None
+            if depth < START_DEPTH:
+                is_boundary_op = op.kind in START_KINDS or op.kind in END_KINDS
+                hit_enclosing_end = other_op.kind == end_kind
+                if is_boundary_op or hit_enclosing_end:
+                    return None
 
         return None

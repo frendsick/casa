@@ -80,9 +80,12 @@ class Lexer:
                 break
             if char.isspace():
                 break
-            if word == "->":
+            if word in ("->", "=>"):
                 break
             if word.endswith("->"):
+                word = word[:-2]
+                break
+            if word.endswith("=>"):
                 word = word[:-2]
                 break
             word += char

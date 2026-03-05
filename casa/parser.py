@@ -5,14 +5,18 @@ from typing import assert_never
 
 from casa.common import (
     BUILTIN_TYPES,
+    GLOBAL_ENUMS,
     GLOBAL_FUNCTIONS,
     GLOBAL_SCOPE_LABEL,
     GLOBAL_STRUCTS,
     GLOBAL_TRAITS,
     GLOBAL_VARIABLES,
     INCLUDED_FILES,
+    MATCH_WILDCARD,
+    CasaEnum,
     Cursor,
     Delimiter,
+    EnumVariant,
     Function,
     Intrinsic,
     Keyword,
@@ -75,8 +79,7 @@ def _parse_fstring_expr(
         if expr_token.kind == TokenKind.FSTRING_START:
             handle_fstring(expr_token, cursor, function_name, expr_ops)
             continue
-        if op := token_to_op(expr_token, cursor, function_name):
-            expr_ops.append(op)
+        _append_op_result(expr_ops, token_to_op(expr_token, cursor, function_name))
     return expr_ops
 
 
@@ -118,8 +121,7 @@ def parse_ops(tokens: list[Token]) -> list[Op]:
         if token.kind == TokenKind.FSTRING_START:
             handle_fstring(token, cursor, GLOBAL_SCOPE_LABEL, ops)
             continue
-        if op := token_to_op(token, cursor):
-            ops.append(op)
+        _append_op_result(ops, token_to_op(token, cursor))
     return ops
 
 
@@ -350,6 +352,27 @@ def resolve_identifiers(
                     _resolve_fn_ref(identifier, op, function, errors)
                     continue
 
+                # Enum variant: EnumName::Variant
+                if "::" in identifier:
+                    parts = identifier.split("::", 1)
+                    casa_enum = GLOBAL_ENUMS.get(parts[0])
+                    if casa_enum:
+                        variant_name = parts[1]
+                        if variant_name not in casa_enum.variants:
+                            errors.append(
+                                CasaError(
+                                    ErrorKind.UNDEFINED_NAME,
+                                    f"Variant `{variant_name}` is not defined"
+                                    f" in enum `{casa_enum.name}`",
+                                    op.location,
+                                )
+                            )
+                            continue
+                        ordinal = casa_enum.variants.index(variant_name)
+                        op.kind = OpKind.PUSH_ENUM_VARIANT
+                        op.value = EnumVariant(casa_enum.name, variant_name, ordinal)
+                        continue
+
                 # Check trait bound call: K::method -> push var + exec
                 trait_var = _resolve_trait_ref(identifier, function)
                 if trait_var:
@@ -378,6 +401,10 @@ def resolve_identifiers(
                     op.kind = OpKind.STRUCT_NEW
                     op.value = struct
                     continue
+                if casa_enum := GLOBAL_ENUMS.get(identifier):
+                    op.kind = OpKind.PUSH_INT
+                    op.value = len(casa_enum.variants)
+                    continue
 
                 errors.append(
                     CasaError(
@@ -404,11 +431,21 @@ def resolve_identifiers(
     return ops
 
 
+def _append_op_result(ops: list[Op], result: "Op | list[Op] | None") -> None:
+    """Append a token_to_op result (single op, list, or None) to the ops list."""
+    if result is None:
+        return
+    if isinstance(result, list):
+        ops.extend(result)
+    else:
+        ops.append(result)
+
+
 def token_to_op(
     token: Token,
     cursor: Cursor[Token],
     function_name: str = GLOBAL_SCOPE_LABEL,
-) -> Op | None:
+) -> Op | list[Op] | None:
     """Convert a single token into its corresponding op."""
     assert len(TokenKind) == 12, "Exhaustive handling for `TokenKind`"
 
@@ -447,7 +484,7 @@ def get_op_delimiter(
     function_name: str,
 ) -> Op | None:
     """Convert a delimiter token into its op."""
-    assert len(Delimiter) == 11, "Exhaustive handling for `Delimiter`"
+    assert len(Delimiter) == 12, "Exhaustive handling for `Delimiter`"
 
     delimiter = Delimiter.from_str(token.value)
     match delimiter:
@@ -463,6 +500,8 @@ def get_op_delimiter(
         case Delimiter.DOT:
             method = expect_token(cursor, kind=TokenKind.IDENTIFIER)
             return Op(method.value, OpKind.METHOD_CALL, method.location)
+        case Delimiter.FAT_ARROW:
+            return None
         case Delimiter.HASHTAG:
             return None
         # Lambda function
@@ -523,8 +562,7 @@ def parse_block_ops(cursor: Cursor[Token], function_name: str) -> list[Op]:
         if token.kind == TokenKind.FSTRING_START:
             handle_fstring(token, cursor, function_name, ops)
             continue
-        if op := token_to_op(token, cursor, function_name):
-            ops.append(op)
+        _append_op_result(ops, token_to_op(token, cursor, function_name))
     raise_error(ErrorKind.UNMATCHED_BLOCK, "Unclosed block", open_brace.location)
 
 
@@ -534,8 +572,8 @@ def get_op_array(cursor: Cursor[Token]) -> Op:
 
     array_items = []
     while not expect_delimiter(cursor, Delimiter.CLOSE_BRACKET):
-        next_tok = cursor.peek()
-        if next_tok and next_tok.value == "[":
+        next_token = cursor.peek()
+        if next_token and next_token.value == "[":
             array_items.append(get_op_array(cursor))
             expect_delimiter(cursor, Delimiter.COMMA)
             continue
@@ -554,7 +592,7 @@ def get_op_array(cursor: Cursor[Token]) -> Op:
                 got=got,
             )
         item_op = token_to_op(value_token, cursor)
-        assert item_op is not None, "Array item token always produces an Op"
+        assert isinstance(item_op, Op), "Array item token always produces an Op"
         array_items.append(item_op)
         expect_delimiter(cursor, Delimiter.COMMA)
 
@@ -594,6 +632,148 @@ def _handle_keyword_fn(token: Token, cursor: Cursor[Token], function_name: str) 
             function.location,
         )
     GLOBAL_FUNCTIONS[function.name] = function
+
+
+def parse_enum(cursor: Cursor[Token]) -> CasaEnum:
+    """Parse an enum definition."""
+    expect_token(cursor, value="enum")
+    name = expect_token(cursor, kind=TokenKind.IDENTIFIER)
+    expect_token(cursor, value="{")
+    variants: list[str] = []
+    while True:
+        variant_token = expect_token(cursor)
+        if variant_token.value == "}":
+            break
+        if variant_token.kind != TokenKind.IDENTIFIER:
+            raise_error(
+                ErrorKind.UNEXPECTED_TOKEN,
+                "Unexpected token in enum definition",
+                variant_token.location,
+                expected="identifier",
+                got=f"`{variant_token.value}`",
+            )
+        if variant_token.value in variants:
+            raise_error(
+                ErrorKind.DUPLICATE_NAME,
+                f"Duplicate variant `{variant_token.value}` in enum",
+                variant_token.location,
+            )
+        variants.append(variant_token.value)
+    if not variants:
+        raise_error(
+            ErrorKind.SYNTAX,
+            "Enum must have at least one variant",
+            name.location,
+        )
+    return CasaEnum(name.value, variants, name.location)
+
+
+def _handle_keyword_enum(
+    token: Token, cursor: Cursor[Token], function_name: str
+) -> None:
+    """Handle the `enum` keyword: parse and register an enum definition."""
+    _require_global_scope(function_name, "Enums", token.location)
+    cursor.position -= 1
+    casa_enum = parse_enum(cursor)
+    if casa_enum.name in GLOBAL_ENUMS:
+        raise_error(
+            ErrorKind.DUPLICATE_NAME,
+            f"Enum `{casa_enum.name}` is already defined",
+            casa_enum.location,
+        )
+    if casa_enum.name in GLOBAL_STRUCTS:
+        raise_error(
+            ErrorKind.DUPLICATE_NAME,
+            f"Identifier `{casa_enum.name}` is already defined as a struct",
+            casa_enum.location,
+        )
+    GLOBAL_ENUMS[casa_enum.name] = casa_enum
+
+
+def _is_match_arm_boundary(cursor: Cursor[Token]) -> bool:
+    """Check if current position looks like a match arm pattern (Ident::Ident => or _ =>)."""
+    pos = cursor.position
+    seq = cursor.sequence
+    if pos + 1 >= len(seq):
+        return False
+    token = seq[pos]
+    if token.value == MATCH_WILDCARD and seq[pos + 1].value == "=>":
+        return True
+    if pos + 2 >= len(seq):
+        return False
+    if token.kind != TokenKind.IDENTIFIER or "::" not in token.value:
+        return False
+    next_token = seq[pos + 1]
+    return next_token.value == "=>"
+
+
+def _handle_keyword_match(
+    token: Token, cursor: Cursor[Token], function_name: str
+) -> list[Op]:
+    """Handle the `match` keyword: parse a match block into ops."""
+    ops: list[Op] = []
+    ops.append(Op(Keyword.MATCH, OpKind.MATCH_START, token.location))
+
+    # Parse arms until `end`
+    while True:
+        arm_token = expect_token(cursor)
+        if arm_token.value == "end":
+            ops.append(Op(Keyword.END, OpKind.MATCH_END, arm_token.location))
+            break
+
+        # Wildcard arm: _ =>
+        if arm_token.value == MATCH_WILDCARD:
+            expect_token(cursor, value="=>")
+            variant = EnumVariant("", MATCH_WILDCARD, -1)
+            ops.append(Op(variant, OpKind.MATCH_ARM, arm_token.location))
+        elif arm_token.kind != TokenKind.IDENTIFIER or "::" not in arm_token.value:
+            raise_error(
+                ErrorKind.UNEXPECTED_TOKEN,
+                "Expected enum variant pattern (e.g. `Color::Red`) or `_`",
+                arm_token.location,
+                expected="enum variant or `_`",
+                got=f"`{arm_token.value}`",
+            )
+        else:
+            # Parse the => delimiter
+            expect_token(cursor, value="=>")
+
+            # Resolve the variant
+            parts = arm_token.value.split("::", 1)
+            enum_name, variant_name = parts[0], parts[1]
+            casa_enum = GLOBAL_ENUMS.get(enum_name)
+            if not casa_enum:
+                raise_error(
+                    ErrorKind.UNDEFINED_NAME,
+                    f"Enum `{enum_name}` is not defined",
+                    arm_token.location,
+                )
+            if variant_name not in casa_enum.variants:
+                raise_error(
+                    ErrorKind.UNDEFINED_NAME,
+                    f"Variant `{variant_name}` is not defined in enum `{enum_name}`",
+                    arm_token.location,
+                )
+            ordinal = casa_enum.variants.index(variant_name)
+            variant = EnumVariant(enum_name, variant_name, ordinal)
+            ops.append(Op(variant, OpKind.MATCH_ARM, arm_token.location))
+
+        # Parse arm body until next arm or `end`
+        while not cursor.is_finished():
+            if _is_match_arm_boundary(cursor):
+                break
+            next_token = cursor.peek()
+            if next_token and next_token.value == "end":
+                break
+            body_token = cursor.pop()
+            if body_token is None:
+                break
+            if body_token.kind == TokenKind.FSTRING_START:
+                handle_fstring(body_token, cursor, function_name, ops)
+                continue
+            _append_op_result(ops, token_to_op(body_token, cursor, function_name))
+
+    return ops
 
 
 def _handle_keyword_struct(
@@ -668,9 +848,9 @@ def get_op_keyword(
     token: Token,
     cursor: Cursor[Token],
     function_name: str,
-) -> Op | None:
+) -> Op | list[Op] | None:
     """Convert a keyword token into its op, parsing any nested blocks."""
-    assert len(Keyword) == 16, "Exhaustive handling for `Keyword"
+    assert len(Keyword) == 19, "Exhaustive handling for `Keyword"
 
     keyword = Keyword.from_lowercase(token.value)
     assert keyword, f"Token `{token.value}` is not a keyword"
@@ -679,6 +859,15 @@ def get_op_keyword(
         return Op(keyword, SIMPLE_KEYWORD_OPS[keyword], token.location)
 
     match keyword:
+        case Keyword.END:
+            raise_error(
+                ErrorKind.UNMATCHED_BLOCK,
+                "`end` without matching `match`",
+                token.location,
+            )
+        case Keyword.ENUM:
+            _handle_keyword_enum(token, cursor, function_name)
+            return None
         case Keyword.FN:
             _handle_keyword_fn(token, cursor, function_name)
             return None
@@ -691,6 +880,8 @@ def get_op_keyword(
             return None
         case Keyword.INCLUDE:
             return _handle_keyword_include(token, cursor)
+        case Keyword.MATCH:
+            return _handle_keyword_match(token, cursor, function_name)
         case Keyword.STRUCT:
             _handle_keyword_struct(token, cursor, function_name)
             return None
@@ -931,6 +1122,12 @@ def parse_type_vars(
                     f"Type variable `{token.value}` shadows struct type `{token.value}`",
                     token.location,
                 )
+            if token.value in GLOBAL_ENUMS:
+                raise_error(
+                    ErrorKind.DUPLICATE_NAME,
+                    f"Type variable `{token.value}` shadows enum type `{token.value}`",
+                    token.location,
+                )
             type_vars.add(token.value)
             # Check for trait bound: K: Hashable
             next_tok = cursor.peek()
@@ -1113,7 +1310,7 @@ def _parse_compound_assign(
     """Parse a compound assignment operator (+= or -=)."""
     next_token = expect_token(cursor, kind=TokenKind.IDENTIFIER)
     identifier = token_to_op(next_token, cursor, function_name)
-    assert identifier, "Expected identifier"
+    assert isinstance(identifier, Op), "Expected identifier"
     variable_name = identifier.value
     assert isinstance(variable_name, str), "Expected variable name"
     return Op(variable_name, op_kind, token.location)
@@ -1140,7 +1337,7 @@ def get_op_operator(token: Token, cursor: Cursor[Token], function_name: str) -> 
         case Operator.ASSIGN:
             next_token = expect_token(cursor, kind=TokenKind.IDENTIFIER)
             identifier = token_to_op(next_token, cursor, function_name)
-            assert identifier, "Expected identifier"
+            assert isinstance(identifier, Op), "Expected identifier"
 
             variable_name = identifier.value
             assert isinstance(variable_name, str), "Expected variable name"
