@@ -23,8 +23,11 @@ ALL_KEYWORDS = [
     "elif",
     "else",
     "fi",
+    "end",
+    "enum",
     "struct",
     "trait",
+    "match",
     "include",
 ]
 assert len(ALL_KEYWORDS) == len(Keyword)
@@ -750,7 +753,7 @@ def test_operator_from_str_returns_none_for_unknown():
 # ---------------------------------------------------------------------------
 def test_delimiter_from_str_consistent_with_enum():
     """Every Delimiter enum member has a from_str mapping."""
-    all_strings = ["->", ",", ":", ".", "#", "{", "}", "[", "]", "(", ")"]
+    all_strings = ["->", ",", "=>", ":", ".", "#", "{", "}", "[", "]", "(", ")"]
     assert len(all_strings) == len(Delimiter)
     for s in all_strings:
         assert Delimiter.from_str(s) is not None
