@@ -57,6 +57,7 @@ INTRINSIC_TO_OPKIND = {
     Intrinsic.STORE32: OpKind.STORE32,
     Intrinsic.STORE64: OpKind.STORE64,
     Intrinsic.SWAP: OpKind.SWAP,
+    Intrinsic.TYPEOF: OpKind.TYPEOF,
     Intrinsic.SYSCALL0: OpKind.SYSCALL0,
     Intrinsic.SYSCALL1: OpKind.SYSCALL1,
     Intrinsic.SYSCALL2: OpKind.SYSCALL2,

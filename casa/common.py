@@ -47,6 +47,7 @@ class Intrinsic(Enum):
     STORE64 = auto()
     # IO
     PRINT = auto()
+    TYPEOF = auto()
 
     # Functions
     EXEC = auto()
@@ -271,6 +272,7 @@ class OpKind(Enum):
     PRINT_CSTR = auto()
     PRINT_INT = auto()
     PRINT_STR = auto()
+    TYPEOF = auto()
 
     # Memory
     HEAP_ALLOC = auto()
@@ -393,7 +395,7 @@ class Op:
     type_annotation: str | None = None
 
     def __post_init__(self):
-        assert len(OpKind) == 83, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 84, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires Python `None`
@@ -446,6 +448,7 @@ class Op:
                 | OpKind.PRINT_INT
                 | OpKind.PRINT_STR
                 | OpKind.ROT
+                | OpKind.TYPEOF
                 | OpKind.STORE8
                 | OpKind.STORE16
                 | OpKind.STORE32
