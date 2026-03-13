@@ -860,6 +860,11 @@ class TypeChecker:
         else:
             op.kind = OpKind.PRINT_INT
 
+    def check_typeof(self, op: Op) -> None:
+        """Handle TYPEOF."""
+        typ = self.stack_pop()
+        op.type_annotation = typ
+
     def check_syscalls(self, op: Op) -> None:
         """Handle SYSCALL0 through SYSCALL6."""
         arg_count = int(op.kind.name[-1])
@@ -1551,7 +1556,7 @@ def type_satisfies_trait(
 
 def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature:
     """Type-check a list of ops and return the inferred signature."""
-    assert len(OpKind) == 83, "Exhaustive handling for `OpKind`"
+    assert len(OpKind) == 84, "Exhaustive handling for `OpKind`"
 
     tc = TypeChecker(ops=ops)
     op_index = 0
@@ -1635,6 +1640,8 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 tc.check_literals(op, function)
             case OpKind.PRINT:
                 tc.check_io(op)
+            case OpKind.TYPEOF:
+                tc.check_typeof(op)
             case (
                 OpKind.SYSCALL0
                 | OpKind.SYSCALL1

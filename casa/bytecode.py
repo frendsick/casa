@@ -545,7 +545,7 @@ class Compiler:
     def compile(self) -> Bytecode:
         """Lower all ops to bytecode instructions."""
         assert len(InstKind) == 66, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 83, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 84, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
         bytecode: list[Inst] = []
@@ -602,6 +602,13 @@ class Compiler:
                     assert (
                         False
                     ), "PRINT should be resolved to a PRINT variant by the type checker"
+                case OpKind.TYPEOF:
+                    type_name = op.type_annotation
+                    assert isinstance(type_name, str), "typeof requires type_annotation"
+                    string_index = self.intern_string(type_name)
+                    bytecode.append(self.inst(InstKind.DROP))
+                    bytecode.append(self.inst(InstKind.PUSH_STR, args=[string_index]))
+                    bytecode.append(self.inst(InstKind.PRINT_STR))
                 case OpKind.PUSH_ARRAY:
                     self._compile_push_array(op, bytecode)
                 case OpKind.PUSH_BOOL:

@@ -60,6 +60,7 @@ ALL_INTRINSICS = [
     "store32",
     "store64",
     "print",
+    "typeof",
     "exec",
     "syscall0",
     "syscall1",
