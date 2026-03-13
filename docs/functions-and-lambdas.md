@@ -341,6 +341,20 @@ true print                  # true
 "Hello" print "\n" print    # Hello followed by a newline
 ```
 
+### `typeof`
+
+Consumes the top of the stack and prints its type name to stdout.
+
+**Stack effect:** `a -> None`
+
+Works with all types: `int`, `bool`, `str`, `char`, `ptr`, `array`, `fn`, structs, and enums.
+
+```casa
+42 typeof                   # int
+true typeof                 # bool
+"hello" typeof              # str
+```
+
 ## Memory Intrinsics
 
 Low-level byte-addressed memory access for building data structures. All load/store intrinsics use absolute addressing.
