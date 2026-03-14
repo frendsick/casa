@@ -57,8 +57,12 @@ Jump to the definition of a symbol under the cursor. Supported symbols:
 | Struct constructor | Struct definition |
 | Enum variant | Enum definition |
 | Type cast `(TypeName)` | Struct or enum definition |
+| Qualified name `Type::method` (cursor on type) | Struct or enum definition |
+| Qualified name `Type::method` (cursor on method) | Method definition |
 
 Works across files. If a function or struct is defined in an included file, the editor will open that file.
+
+For qualified names like `Point::get_x`, the server checks where the cursor falls relative to the `::` separator. Clicking on `Point` navigates to the struct definition, while clicking on `get_x` navigates to the method definition.
 
 ### Hover
 
@@ -71,8 +75,11 @@ Hover over a symbol to see type and signature information in a code block.
 | Struct constructor | `struct Name { field: type, ... }` |
 | Enum variant | `EnumName::VariantName` |
 | Integer, string, bool, or char literal | Type and value (e.g. `(int) 42`) |
-| Assignment | `= name` |
-| Operator or intrinsic | Name and stack effect (e.g. `+: int int -> int`) |
+| Assignment | `= name: type` (with inferred type) |
+| Operator | Name and stack effect (e.g. `+: int int -> int`) |
+| Intrinsic | Name and stack effect (e.g. `drop: any -> None`) |
+
+All operators and intrinsics show their stack effects on hover, including arithmetic, comparison, boolean, bitwise, stack manipulation, memory, syscall, and IO operations.
 
 ### Completion
 
@@ -86,7 +93,60 @@ Trigger completion to get context-aware suggestions. The server provides the fol
 | Local variables | Variables from the function the cursor is inside, with types |
 | Global variables | All global variables with types |
 | Keywords | All Casa keywords (`fn`, `if`, `while`, `struct`, `enum`, etc.) |
-| Intrinsics | All intrinsics (`drop`, `dup`, `swap`, `alloc`, `print`, etc.) |
+| Intrinsics | All intrinsics (`drop`, `dup`, `swap`, `alloc`, `print`, etc.), shown as keywords |
+
+#### Dot-triggered method completion
+
+Typing `.` after a variable triggers method completion. The server looks up the variable's type and offers all methods defined for that type.
+
+For example, after `p.` where `p` is a `Point`, the server offers `get_x`, `set_x`, etc. from the `Point` impl block. Method completions use the short name (e.g. `get_x` not `Point::get_x`) and appear with `Method` kind.
+
+This works for generic types too. If `items` is a `List[int]`, typing `items.` shows methods from `List::*`.
+
+Dot-triggered completion only works when the receiver is a simple variable reference, not for chained method calls or complex expressions.
+
+### Find References
+
+Find all references to a symbol across the codebase. Supported symbols:
+
+| Symbol | Found references |
+|--------|-----------------|
+| Function | All call sites and `&references`, plus the definition |
+| Variable | All usages and assignments (local variables search only the containing function) |
+| Struct | All constructor usages and type casts |
+| Enum | All variant usages |
+
+The `include_declaration` context flag controls whether the definition itself is included in the results.
+
+### Rename
+
+Rename a symbol and all its references across the file. Supported symbols:
+
+| Symbol | Renamed locations |
+|--------|-----------------|
+| Function | Definition and all call sites |
+| Variable | Assignment and all usage sites |
+
+For assignment operators (`=`, `+=`, `-=`), the rename correctly targets only the variable name portion of the span, not the operator prefix.
+
+### Semantic Tokens
+
+The server provides full semantic token highlighting. Each token is classified into one of the following types:
+
+| Token type | Colored elements |
+|------------|-----------------|
+| `function` | Function calls, `&references`, function definition names |
+| `variable` | Variable reads, captures, assignments |
+| `string` | String literals |
+| `number` | Integer and character literals |
+| `keyword` | `fn`, `if`, `while`, `match`, `true`, `false`, `none`, `some`, `exec`, `return`, `break`, `continue` |
+| `operator` | Arithmetic, comparison, boolean, and bitwise operators |
+| `type` | Type casts `(TypeName)` |
+| `enumMember` | Enum variant references |
+| `struct` | Struct constructors |
+| `macro` | Intrinsics (`drop`, `dup`, `swap`, `alloc`, `print`, `load8`, `store64`, `syscall3`, `typeof`, etc.) |
+
+Intrinsics are highlighted as `macro` to visually distinguish them from user-defined functions. The `fn` keyword before function definitions is highlighted as a keyword.
 
 ## Editor Configuration
 
@@ -138,4 +198,5 @@ args = ["casa_ls.py"]
 - Diagnostics update on open and save, not on every keystroke
 - The server resets all compiler state between runs, so each diagnostics pass is a full recompilation
 - Completion does not filter by prefix or context (the editor handles filtering)
-- No rename, find references, or code actions
+- Dot-triggered method completion only works for simple variable references
+- No code actions
