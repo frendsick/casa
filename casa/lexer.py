@@ -298,7 +298,12 @@ class Lexer:
                     )
                 )
                 return Token(value, TokenKind.IDENTIFIER, location)
-            return Token(f"{value}::{method.value}", TokenKind.IDENTIFIER, location)
+            full_value = f"{value}::{method.value}"
+            full_location = Location(
+                location.file,
+                Span(location.span.offset, len(full_value)),
+            )
+            return Token(full_value, TokenKind.IDENTIFIER, full_location)
 
         return Token(value, TokenKind.IDENTIFIER, location)
 
