@@ -281,6 +281,45 @@ def _extract_word_before(source: str, offset: int) -> str:
     return source[start + 1 : end]
 
 
+def _extract_chain_before(source: str, offset: int) -> list[str]:
+    """Extract a dotted chain before offset, e.g. 'test.hash' -> ['test', 'hash']."""
+    parts: list[str] = []
+    pos = offset
+    while pos > 0:
+        word = _extract_word_before(source, pos)
+        if not word:
+            break
+        parts.append(word)
+        pos -= len(word)
+        if pos > 0 and source[pos - 1] == ".":
+            pos -= 1
+        else:
+            break
+    parts.reverse()
+    return parts
+
+
+def _resolve_chain_type(
+    parts: list[str], state: DocumentState, offset: int
+) -> str | None:
+    """Resolve the type at the end of a method chain like ['test', 'hash']."""
+    if not parts:
+        return None
+    containing_fn = find_containing_function(state, offset)
+    current_type = resolve_variable_type(parts[0], containing_fn, state)
+    if not current_type:
+        current_type = _infer_literal_type(parts[0])
+    if not current_type:
+        return None
+    for method_name in parts[1:]:
+        base_type = extract_generic_base(current_type) or current_type
+        fn_def = state.functions.get(f"{base_type}::{method_name}")
+        if not fn_def or not fn_def.signature or not fn_def.signature.return_types:
+            return None
+        current_type = fn_def.signature.return_types[0]
+    return current_type
+
+
 def _handle_triggered_completion(
     state: DocumentState, offset: int
 ) -> list[types.CompletionItem]:
@@ -299,11 +338,8 @@ def _handle_triggered_completion(
 
     # . triggered: suggest methods for the receiver type
     if source[pos] == ".":
-        receiver_name = _extract_word_before(source, pos)
-        containing_fn = find_containing_function(state, offset)
-        receiver_type = resolve_variable_type(receiver_name, containing_fn, state)
-        if not receiver_type:
-            receiver_type = _infer_literal_type(receiver_name)
+        chain = _extract_chain_before(source, pos)
+        receiver_type = _resolve_chain_type(chain, state, offset)
         if receiver_type:
             return _methods_for_type(receiver_type, state)
 
