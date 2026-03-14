@@ -28,7 +28,8 @@ The server runs the full compiler pipeline (lex, parse, resolve, type check) on 
 | Event | Action |
 |-------|--------|
 | File opened | Diagnostics published |
-| File saved | Diagnostics refreshed |
+| File changed | Diagnostics refreshed from buffer content |
+| File saved | Diagnostics refreshed from disk |
 
 Errors appear with severity **Error** and warnings with severity **Warning**. All diagnostics include the source location (line, column, span) so the editor can underline the problematic code.
 
@@ -196,7 +197,7 @@ args = ["casa_ls.py"]
 
 ## Limitations
 
-- Diagnostics update on open and save, not on every keystroke
+- Diagnostics update on open, change, and save
 - The server resets all compiler state between runs, so each diagnostics pass is a full recompilation
 - Completion does not filter by prefix or context (the editor handles filtering)
 - Dot-triggered method completion only works for simple variable references

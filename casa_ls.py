@@ -37,7 +37,7 @@ from casa.error import (
     CasaWarning,
     offset_to_line_col,
 )
-from casa.lexer import lex_file
+from casa.lexer import lex_file, lex_source
 from casa.parser import parse_ops, resolve_identifiers
 from casa.typechecker import OP_STACK_EFFECTS, type_check_functions, type_check_ops
 
@@ -129,7 +129,9 @@ def casa_warning_to_diagnostic(warning: CasaWarning) -> types.Diagnostic:
     )
 
 
-def run_pipeline(file_path: Path) -> tuple[DocumentState, list[CasaError]]:
+def run_pipeline(
+    file_path: Path, source: str | None = None
+) -> tuple[DocumentState, list[CasaError]]:
     """Run the Casa compiler pipeline and return document state with any errors."""
     clear_compilation_state()
     ops: list[Op] = []
@@ -137,7 +139,10 @@ def run_pipeline(file_path: Path) -> tuple[DocumentState, list[CasaError]]:
 
     # Run each pipeline stage independently to preserve partial state on errors
     try:
-        tokens = lex_file(file_path)
+        if source is not None:
+            tokens = lex_source(source, file_path)
+        else:
+            tokens = lex_file(file_path)
     except CasaErrorCollection as exc:
         errors = exc.errors
         tokens = None
@@ -178,10 +183,10 @@ def run_pipeline(file_path: Path) -> tuple[DocumentState, list[CasaError]]:
     return state, errors
 
 
-def run_diagnostics(server: LanguageServer, uri: str):
+def run_diagnostics(server: LanguageServer, uri: str, source: str | None = None):
     """Run the Casa compiler pipeline and publish diagnostics."""
     file_path = Path(unquote(urlparse(uri).path)).resolve()
-    state, errors = run_pipeline(file_path)
+    state, errors = run_pipeline(file_path, source=source)
     document_states[uri] = state
 
     diagnostics: list[types.Diagnostic] = []
@@ -663,6 +668,14 @@ server = LanguageServer("casa-language-server", "v0.1.0")
 def did_open(params: types.DidOpenTextDocumentParams):
     """Publish diagnostics when a file is opened."""
     run_diagnostics(server, params.text_document.uri)
+
+
+@server.feature(types.TEXT_DOCUMENT_DID_CHANGE)
+def did_change(params: types.DidChangeTextDocumentParams):
+    """Publish diagnostics when file content changes."""
+    if params.content_changes:
+        source = params.content_changes[-1].text
+        run_diagnostics(server, params.text_document.uri, source=source)
 
 
 @server.feature(types.TEXT_DOCUMENT_DID_SAVE)

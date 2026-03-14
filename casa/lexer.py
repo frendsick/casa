@@ -433,6 +433,11 @@ def lex_file(file: Path) -> list[Token]:
     """Read a file and lex it into tokens."""
     with open(file, "r", encoding="utf-8") as code_file:
         code = code_file.read()
+    return lex_source(code, file)
+
+
+def lex_source(code: str, file: Path) -> list[Token]:
+    """Lex source code string into tokens."""
     SOURCE_CACHE[file] = code
     lexer = Lexer(file=file, cursor=Cursor(sequence=code))
     return lexer.lex()
