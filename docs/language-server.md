@@ -147,7 +147,7 @@ The server provides full semantic token highlighting. Each token is classified i
 | `variable` | Variable reads, captures, assignments |
 | `string` | String literals |
 | `number` | Integer and character literals |
-| `keyword` | `fn`, `if`, `while`, `match`, `true`, `false`, `none`, `some`, `exec`, `return`, `break`, `continue` |
+| `keyword` | `fn`, `if`, `while`, `match`, `true`, `false`, `none`, `some`, `ok`, `error`, `exec`, `return`, `break`, `continue` |
 | `operator` | Arithmetic, comparison, boolean, and bitwise operators |
 | `type` | Type casts `(TypeName)` |
 | `enumMember` | Enum variant references |

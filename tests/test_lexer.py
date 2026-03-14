@@ -69,6 +69,10 @@ ALL_INTRINSICS = [
     "syscall4",
     "syscall5",
     "syscall6",
+    "none",
+    "some",
+    "ok",
+    "error",
 ]
 assert len(ALL_INTRINSICS) == len(Intrinsic)
 
@@ -887,17 +891,17 @@ def test_lex_multiple_comment_lines():
 # ---------------------------------------------------------------------------
 # Option[T] literals (none / some)
 # ---------------------------------------------------------------------------
-def test_lex_none_literal():
-    """none is recognized as a LITERAL token."""
+def test_lex_none_intrinsic():
+    """none is recognized as an INTRINSIC token."""
     tokens = lex_string("none")
-    assert tokens[0].kind == TokenKind.LITERAL
+    assert tokens[0].kind == TokenKind.INTRINSIC
     assert tokens[0].value == "none"
 
 
-def test_lex_some_literal():
-    """some is recognized as a LITERAL token."""
+def test_lex_some_intrinsic():
+    """some is recognized as an INTRINSIC token."""
     tokens = lex_string("some")
-    assert tokens[0].kind == TokenKind.LITERAL
+    assert tokens[0].kind == TokenKind.INTRINSIC
     assert tokens[0].value == "some"
 
 
@@ -930,7 +934,7 @@ def test_lex_none_in_expression():
     tokens = lex_string("none print")
     non_eof = [t for t in tokens if t.kind != TokenKind.EOF]
     assert len(non_eof) == 2
-    assert non_eof[0].kind == TokenKind.LITERAL
+    assert non_eof[0].kind == TokenKind.INTRINSIC
     assert non_eof[0].value == "none"
     assert non_eof[1].kind == TokenKind.INTRINSIC
 
@@ -942,7 +946,7 @@ def test_lex_some_in_expression():
     assert len(non_eof) == 2
     assert non_eof[0].kind == TokenKind.LITERAL
     assert non_eof[0].value == "42"
-    assert non_eof[1].kind == TokenKind.LITERAL
+    assert non_eof[1].kind == TokenKind.INTRINSIC
     assert non_eof[1].value == "some"
 
 

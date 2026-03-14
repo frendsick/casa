@@ -49,6 +49,12 @@ class Intrinsic(Enum):
     PRINT = auto()
     TYPEOF = auto()
 
+    # Value constructors
+    NONE = auto()
+    SOME = auto()
+    OK = auto()
+    ERROR = auto()
+
     # Functions
     EXEC = auto()
 
@@ -302,6 +308,8 @@ class OpKind(Enum):
     PUSH_NONE = auto()
     PUSH_STR = auto()
     SOME = auto()
+    OK = auto()
+    ERROR = auto()
 
     # Arithmetic
     ADD = auto()
@@ -395,13 +403,12 @@ class Op:
     type_annotation: str | None = None
 
     def __post_init__(self):
-        assert len(OpKind) == 84, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 86, "Exhaustive handling for `OpKind`"
 
         match self.kind:
-            # Requires Python `None`
-            case OpKind.PUSH_NONE | OpKind.SOME:
-                if self.value is not None:
-                    raise TypeError(f"`{self.kind}` requires value of type `NoneType`")
+            # Value constructors (no value validation needed)
+            case OpKind.PUSH_NONE | OpKind.SOME | OpKind.OK | OpKind.ERROR:
+                pass
             # Requires `bool`
             case OpKind.PUSH_BOOL:
                 if not isinstance(self.value, bool):
@@ -766,6 +773,7 @@ BUILTIN_TYPES: set[str] = {
     "array",
     "any",
     "option",
+    "result",
 }
 
 

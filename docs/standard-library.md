@@ -172,6 +172,75 @@ Returns the contained value, or a default if the option is empty.
 0 none .unwrap_or print       # 0
 ```
 
+## Result
+
+Methods for working with `result[T E]` values. Method calls on any `result[T E]` receiver are resolved to `result::method`.
+
+### `result::is_ok`
+
+Returns `true` if the result contains a success value.
+
+**Signature:** `result::is_ok self:result -> bool`
+
+**Stack effect:** `result -> bool`
+
+```casa
+42 ok .is_ok print           # 1
+"error" error .is_ok print   # 0
+```
+
+### `result::is_error`
+
+Returns `true` if the result contains an error value.
+
+**Signature:** `result::is_error self:result -> bool`
+
+**Stack effect:** `result -> bool`
+
+```casa
+42 ok .is_error print          # 0
+"error" error .is_error print  # 1
+```
+
+### `result::unwrap`
+
+Extracts the success value. Prints an error and exits with code 60 if called on an `error` result.
+
+**Signature:** `result::unwrap[T E] self:result[T E] -> T`
+
+**Stack effect:** `result[T E] -> T`
+
+```casa
+42 ok .unwrap print          # 42
+"error" error .unwrap        # error: called unwrap on error
+```
+
+### `result::unwrap_error`
+
+Extracts the error value. Prints an error and exits with code 60 if called on an `ok` result.
+
+**Signature:** `result::unwrap_error[T E] self:result[T E] -> E`
+
+**Stack effect:** `result[T E] -> E`
+
+```casa
+"error" error .unwrap_error print   # error
+42 ok .unwrap_error                 # error: called unwrap_error on ok
+```
+
+### `result::unwrap_or`
+
+Returns the success value, or a default if the result is an error.
+
+**Signature:** `result::unwrap_or[T E] self:result[T E] default:T -> T`
+
+**Stack effect:** `result[T E] T -> T`
+
+```casa
+0 42 ok .unwrap_or print              # 42
+0 "error" error .unwrap_or print      # 0
+```
+
 ## `List[T]`
 
 A generic dynamic list that grows automatically when items are pushed. The type parameter `T` tracks the element type at compile time.
