@@ -737,7 +737,7 @@ class TestCompletion:
         assert "Point" in labels
 
     def test_includes_enums(self, tmp_path):
-        """Completion list includes defined enum variants."""
+        """Completion list includes enum type names."""
         source_file = tmp_path / "comp_enum.casa"
         source = "enum Color { Red Green Blue }\nColor::Red print"
         source_file.write_text(source)
@@ -748,9 +748,7 @@ class TestCompletion:
 
         result = text_document_completion(_make_completion_params(uri, 1, 0))
         labels = [item.label for item in result.items]
-        assert "Color::Red" in labels
-        assert "Color::Green" in labels
-        assert "Color::Blue" in labels
+        assert "Color" in labels
 
     def test_keywords_without_document_state(self):
         """Keywords and intrinsics are available even without document state."""
@@ -1522,3 +1520,340 @@ class TestGoToDefinitionEnumVariant:
         # Should go to "Color" in the enum definition (line 0, col 5)
         assert result.range.start.line == 0
         assert result.range.start.character == 5
+
+
+class TestFindVariableDefinitionReassigned:
+    """Tests for find_variable_definition() with reassigned variables."""
+
+    def test_returns_last_assignment_before_usage(self, tmp_path):
+        """When a variable is reassigned, return the most recent assignment before usage_offset."""
+        source_file = tmp_path / "reassign.casa"
+        source = "1 = x\n2 = x\nx print"
+        source_file.write_text(source)
+
+        state, _ = run_pipeline(source_file)
+        # usage_offset pointing after the second assignment should return the second assignment
+        usage_offset = source.index("x print")
+        location = find_variable_definition("x", None, state, usage_offset=usage_offset)
+
+        assert location is not None
+        # The second "= x" is on line 1, so the definition should point to line 1
+        assert location.range.start.line == 1
+
+    def test_returns_first_assignment_when_usage_before_reassignment(self, tmp_path):
+        """When usage_offset is before the reassignment, return the first assignment."""
+        source_file = tmp_path / "reassign_early.casa"
+        source = "1 = x\nx print\n2 = x"
+        source_file.write_text(source)
+
+        state, _ = run_pipeline(source_file)
+        # usage_offset pointing to the first usage (before reassignment)
+        usage_offset = source.index("x print")
+        location = find_variable_definition("x", None, state, usage_offset=usage_offset)
+
+        assert location is not None
+        # Should point to line 0 (first assignment)
+        assert location.range.start.line == 0
+
+    def test_falls_back_to_first_assignment_without_usage_offset(self, tmp_path):
+        """Without usage_offset, falls back to first assignment for backward compat."""
+        source_file = tmp_path / "reassign_nooffset.casa"
+        source = "1 = x\n2 = x\nx print"
+        source_file.write_text(source)
+
+        state, _ = run_pipeline(source_file)
+        location = find_variable_definition("x", None, state)
+
+        assert location is not None
+        # Default (usage_offset=0) should return first assignment
+        assert location.range.start.line == 0
+
+    def test_reassigned_local_variable_in_function(self, tmp_path):
+        """Reassigned local variable inside a function returns latest before usage."""
+        source_file = tmp_path / "reassign_local.casa"
+        source = "fn foo {\n    1 = x\n    2 = x\n    x print\n}\nfoo"
+        source_file.write_text(source)
+
+        state, _ = run_pipeline(source_file)
+        func = state.functions.get("foo")
+        # usage_offset pointing to "x print" inside the function
+        usage_offset = source.index("x print")
+        location = find_variable_definition("x", func, state, usage_offset=usage_offset)
+
+        assert location is not None
+        # Should point to line 2 (second assignment: "2 = x")
+        assert location.range.start.line == 2
+
+
+class TestInferLiteralType:
+    """Tests for _infer_literal_type() helper."""
+
+    def test_integer_literal(self):
+        from casa_ls import _infer_literal_type
+
+        assert _infer_literal_type("42") == "int"
+
+    def test_zero(self):
+        from casa_ls import _infer_literal_type
+
+        assert _infer_literal_type("0") == "int"
+
+    def test_negative_number(self):
+        from casa_ls import _infer_literal_type
+
+        # Negative numbers are digits with a minus prefix
+        result = _infer_literal_type("-5")
+        # Could be "int" or None depending on implementation
+        assert result in ("int", None)
+
+    def test_true_literal(self):
+        from casa_ls import _infer_literal_type
+
+        assert _infer_literal_type("true") == "bool"
+
+    def test_false_literal(self):
+        from casa_ls import _infer_literal_type
+
+        assert _infer_literal_type("false") == "bool"
+
+    def test_identifier_returns_none(self):
+        from casa_ls import _infer_literal_type
+
+        assert _infer_literal_type("foo") is None
+
+    def test_empty_string_returns_none(self):
+        from casa_ls import _infer_literal_type
+
+        assert _infer_literal_type("") is None
+
+
+class TestDotCompletionPrimitives:
+    """Tests for dot-triggered completion on primitive types."""
+
+    def _make_state_with_int_methods(self, valid_source, typing_source, source_file):
+        """Create a DocumentState with int:: methods, simulating mid-typing."""
+        source_file.write_text(valid_source)
+        state, _ = run_pipeline(source_file)
+        state.source = typing_source
+        state.functions["int::hash"] = Function(
+            name="int::hash",
+            ops=[],
+            location=None,
+            signature=Signature(
+                parameters=[Parameter("self", "int")],
+                return_types=["int"],
+            ),
+        )
+        state.functions["int::eq"] = Function(
+            name="int::eq",
+            ops=[],
+            location=None,
+            signature=Signature(
+                parameters=[Parameter("self", "int"), Parameter("other", "int")],
+                return_types=["bool"],
+            ),
+        )
+        return state
+
+    def test_dot_completion_after_int_variable(self, tmp_path):
+        """Dot-triggered completion after an int variable shows int methods."""
+        source_file = tmp_path / "comp_int_dot.casa"
+        state = self._make_state_with_int_methods(
+            "69 = num", "69 = num\nnum.", source_file
+        )
+        uri = f"file://{source_file}"
+        document_states[uri] = state
+
+        params = types.CompletionParams(
+            text_document=types.TextDocumentIdentifier(uri=uri),
+            position=types.Position(line=1, character=4),
+            context=types.CompletionContext(
+                trigger_kind=types.CompletionTriggerKind.TriggerCharacter,
+                trigger_character=".",
+            ),
+        )
+        result = text_document_completion(params)
+        labels = [item.label for item in result.items]
+        assert "hash" in labels
+        assert "eq" in labels
+
+    def test_dot_completion_after_int_literal(self, tmp_path):
+        """Dot-triggered completion after a bare int literal shows int methods."""
+        source_file = tmp_path / "comp_literal_dot.casa"
+        state = self._make_state_with_int_methods("69", "69.", source_file)
+        uri = f"file://{source_file}"
+        document_states[uri] = state
+
+        params = types.CompletionParams(
+            text_document=types.TextDocumentIdentifier(uri=uri),
+            position=types.Position(line=0, character=3),
+            context=types.CompletionContext(
+                trigger_kind=types.CompletionTriggerKind.TriggerCharacter,
+                trigger_character=".",
+            ),
+        )
+        result = text_document_completion(params)
+        labels = [item.label for item in result.items]
+        assert "hash" in labels
+        assert "eq" in labels
+
+
+class TestQualifiedCompletion:
+    """Tests for :: triggered completion."""
+
+    def test_enum_variants_after_double_colon(self, tmp_path):
+        """Typing :: after an enum name shows its variants."""
+        source_file = tmp_path / "comp_qual_enum.casa"
+        # Compile with valid source to get enum registered
+        source_file.write_text("enum Color { Red Green Blue }\nColor::Red")
+        state, _ = run_pipeline(source_file)
+        # Simulate user typing Color:: (incomplete)
+        state.source = "enum Color { Red Green Blue }\nColor::"
+        uri = f"file://{source_file}"
+        document_states[uri] = state
+
+        params = types.CompletionParams(
+            text_document=types.TextDocumentIdentifier(uri=uri),
+            position=types.Position(line=1, character=7),
+            context=types.CompletionContext(
+                trigger_kind=types.CompletionTriggerKind.TriggerCharacter,
+                trigger_character=":",
+            ),
+        )
+        result = text_document_completion(params)
+        labels = [item.label for item in result.items]
+        assert "Red" in labels
+        assert "Green" in labels
+        assert "Blue" in labels
+
+    def test_methods_after_double_colon(self, tmp_path):
+        """Typing :: after a type name shows its methods."""
+        source_file = tmp_path / "comp_qual_method.casa"
+        source_file.write_text("69 = num")
+        state, _ = run_pipeline(source_file)
+        # Simulate user typing int:: and inject a method
+        state.source = "69 = num\nint::"
+        state.functions["int::hash"] = Function(
+            name="int::hash",
+            ops=[],
+            location=None,
+            signature=Signature(
+                parameters=[Parameter("self", "int")],
+                return_types=["int"],
+            ),
+        )
+        uri = f"file://{source_file}"
+        document_states[uri] = state
+
+        params = types.CompletionParams(
+            text_document=types.TextDocumentIdentifier(uri=uri),
+            position=types.Position(line=1, character=5),
+            context=types.CompletionContext(
+                trigger_kind=types.CompletionTriggerKind.TriggerCharacter,
+                trigger_character=":",
+            ),
+        )
+        result = text_document_completion(params)
+        labels = [item.label for item in result.items]
+        assert "hash" in labels
+
+    def test_single_colon_returns_empty(self, tmp_path):
+        """Single : trigger (e.g. type annotation) returns empty list."""
+        source_file = tmp_path / "comp_single_colon.casa"
+        source = "69 = num:"
+        source_file.write_text(source)
+
+        state, _ = run_pipeline(source_file)
+        uri = f"file://{source_file}"
+        document_states[uri] = state
+
+        params = types.CompletionParams(
+            text_document=types.TextDocumentIdentifier(uri=uri),
+            position=types.Position(line=0, character=9),
+            context=types.CompletionContext(
+                trigger_kind=types.CompletionTriggerKind.TriggerCharacter,
+                trigger_character=":",
+            ),
+        )
+        result = text_document_completion(params)
+        assert result.items == []
+
+
+class TestChainCompletion:
+    """Tests for method chain dot completion."""
+
+    def _make_state_with_int_methods(self, valid_source, typing_source, source_file):
+        """Create a DocumentState with int:: methods, simulating mid-typing."""
+        source_file.write_text(valid_source)
+        state, _ = run_pipeline(source_file)
+        state.source = typing_source
+        state.functions["int::hash"] = Function(
+            name="int::hash",
+            ops=[],
+            location=None,
+            signature=Signature(
+                parameters=[Parameter("self", "int")],
+                return_types=["int"],
+            ),
+        )
+        state.functions["int::eq"] = Function(
+            name="int::eq",
+            ops=[],
+            location=None,
+            signature=Signature(
+                parameters=[Parameter("self", "int"), Parameter("other", "int")],
+                return_types=["bool"],
+            ),
+        )
+        return state
+
+    def test_chain_completion(self, tmp_path):
+        """Dot after a method call resolves the return type."""
+        source_file = tmp_path / "comp_chain.casa"
+        state = self._make_state_with_int_methods(
+            "69 = test", "69 = test\ntest.hash.", source_file
+        )
+        uri = f"file://{source_file}"
+        document_states[uri] = state
+
+        params = types.CompletionParams(
+            text_document=types.TextDocumentIdentifier(uri=uri),
+            position=types.Position(line=1, character=10),
+            context=types.CompletionContext(
+                trigger_kind=types.CompletionTriggerKind.TriggerCharacter,
+                trigger_character=".",
+            ),
+        )
+        result = text_document_completion(params)
+        labels = [item.label for item in result.items]
+        assert "hash" in labels
+        assert "eq" in labels
+
+    def test_chain_void_method_returns_empty(self, tmp_path):
+        """Dot after a void method returns no completions."""
+        source_file = tmp_path / "comp_chain_void.casa"
+        state = self._make_state_with_int_methods(
+            "69 = test", "69 = test\ntest.no_return.", source_file
+        )
+        state.functions["int::no_return"] = Function(
+            name="int::no_return",
+            ops=[],
+            location=None,
+            signature=Signature(
+                parameters=[Parameter("self", "int")],
+                return_types=[],
+            ),
+        )
+        uri = f"file://{source_file}"
+        document_states[uri] = state
+
+        params = types.CompletionParams(
+            text_document=types.TextDocumentIdentifier(uri=uri),
+            position=types.Position(line=1, character=15),
+            context=types.CompletionContext(
+                trigger_kind=types.CompletionTriggerKind.TriggerCharacter,
+                trigger_character=".",
+            ),
+        )
+        result = text_document_completion(params)
+        assert result.items == []

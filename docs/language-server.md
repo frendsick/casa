@@ -28,7 +28,8 @@ The server runs the full compiler pipeline (lex, parse, resolve, type check) on 
 | Event | Action |
 |-------|--------|
 | File opened | Diagnostics published |
-| File saved | Diagnostics refreshed |
+| File changed | Diagnostics refreshed from buffer content |
+| File saved | Diagnostics refreshed from disk |
 
 Errors appear with severity **Error** and warnings with severity **Warning**. All diagnostics include the source location (line, column, span) so the editor can underline the problematic code.
 
@@ -53,7 +54,7 @@ Jump to the definition of a symbol under the cursor. Supported symbols:
 | Symbol | Target |
 |--------|--------|
 | Function call or `&reference` | Function declaration |
-| Variable | First assignment of that variable (local first, then global) |
+| Variable | Most recent assignment before usage (local first, then global) |
 | Struct constructor | Struct definition |
 | Enum variant `Enum::Variant` (cursor on enum) | Enum definition |
 | Enum variant `Enum::Variant` (cursor on variant) | Variant definition in enum body |
@@ -104,7 +105,13 @@ For example, after `p.` where `p` is a `Point`, the server offers `get_x`, `set_
 
 This works for generic types too. If `items` is a `List[int]`, typing `items.` shows methods from `List::*`.
 
-Dot-triggered completion only works when the receiver is a simple variable reference, not for chained method calls or complex expressions.
+Method chaining is supported. For example, `test.hash.` resolves `test` to its type, looks up the return type of `hash`, and offers methods for that return type.
+
+#### Qualified name completion
+
+Typing `::` after a type name triggers qualified name completion. The server suggests enum variants and methods for that type.
+
+For example, after `Color::` the server offers `Red`, `Green`, `Blue` (enum variants) and any methods from `Color`'s impl block. After `str::` it offers string methods like `length`, `at`, `concat`, etc.
 
 ### Find References
 
@@ -196,8 +203,8 @@ args = ["casa_ls.py"]
 
 ## Limitations
 
-- Diagnostics update on open and save, not on every keystroke
+- Diagnostics update on open, change, and save
 - The server resets all compiler state between runs, so each diagnostics pass is a full recompilation
 - Completion does not filter by prefix or context (the editor handles filtering)
-- Dot-triggered method completion only works for simple variable references
+- Dot-triggered method completion works for variables, literals, and method chains but not for arbitrary expressions
 - No code actions

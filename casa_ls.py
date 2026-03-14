@@ -37,7 +37,7 @@ from casa.error import (
     CasaWarning,
     offset_to_line_col,
 )
-from casa.lexer import lex_file
+from casa.lexer import lex_file, lex_source
 from casa.parser import parse_ops, resolve_identifiers
 from casa.typechecker import OP_STACK_EFFECTS, type_check_functions, type_check_ops
 
@@ -129,7 +129,9 @@ def casa_warning_to_diagnostic(warning: CasaWarning) -> types.Diagnostic:
     )
 
 
-def run_pipeline(file_path: Path) -> tuple[DocumentState, list[CasaError]]:
+def run_pipeline(
+    file_path: Path, source: str | None = None
+) -> tuple[DocumentState, list[CasaError]]:
     """Run the Casa compiler pipeline and return document state with any errors."""
     clear_compilation_state()
     ops: list[Op] = []
@@ -137,7 +139,10 @@ def run_pipeline(file_path: Path) -> tuple[DocumentState, list[CasaError]]:
 
     # Run each pipeline stage independently to preserve partial state on errors
     try:
-        tokens = lex_file(file_path)
+        if source is not None:
+            tokens = lex_source(source, file_path)
+        else:
+            tokens = lex_file(file_path)
     except CasaErrorCollection as exc:
         errors = exc.errors
         tokens = None
@@ -178,11 +183,23 @@ def run_pipeline(file_path: Path) -> tuple[DocumentState, list[CasaError]]:
     return state, errors
 
 
-def run_diagnostics(server: LanguageServer, uri: str):
+def run_diagnostics(
+    server: LanguageServer,
+    uri: str,
+    source: str | None = None,
+    update_state: bool = True,
+):
     """Run the Casa compiler pipeline and publish diagnostics."""
     file_path = Path(unquote(urlparse(uri).path)).resolve()
-    state, errors = run_pipeline(file_path)
-    document_states[uri] = state
+    state, errors = run_pipeline(file_path, source=source)
+    if update_state:
+        document_states[uri] = state
+    else:
+        old_state = document_states.get(uri)
+        if old_state:
+            old_state.source = state.source
+        else:
+            document_states[uri] = state
 
     diagnostics: list[types.Diagnostic] = []
     for error in errors:
@@ -264,6 +281,80 @@ def _extract_word_before(source: str, offset: int) -> str:
     return source[start + 1 : end]
 
 
+def _extract_chain_before(source: str, offset: int) -> list[str]:
+    """Extract a dotted chain before offset, e.g. 'test.hash' -> ['test', 'hash']."""
+    parts: list[str] = []
+    pos = offset
+    while pos > 0:
+        word = _extract_word_before(source, pos)
+        if not word:
+            break
+        parts.append(word)
+        pos -= len(word)
+        if pos > 0 and source[pos - 1] == ".":
+            pos -= 1
+        else:
+            break
+    parts.reverse()
+    return parts
+
+
+def _resolve_chain_type(
+    parts: list[str], state: DocumentState, offset: int
+) -> str | None:
+    """Resolve the type at the end of a method chain like ['test', 'hash']."""
+    if not parts:
+        return None
+    containing_fn = find_containing_function(state, offset)
+    current_type = resolve_variable_type(parts[0], containing_fn, state)
+    if not current_type:
+        current_type = _infer_literal_type(parts[0])
+    if not current_type:
+        return None
+    for method_name in parts[1:]:
+        base_type = extract_generic_base(current_type) or current_type
+        fn_def = state.functions.get(f"{base_type}::{method_name}")
+        if not fn_def or not fn_def.signature or not fn_def.signature.return_types:
+            return None
+        current_type = fn_def.signature.return_types[0]
+    return current_type
+
+
+def _handle_triggered_completion(
+    state: DocumentState, offset: int
+) -> list[types.CompletionItem]:
+    """Handle dot and :: triggered completion."""
+    source = state.source
+    pos = offset - 1
+    if pos < 0:
+        return []
+
+    # :: triggered: suggest enum variants and methods for the type
+    if pos >= 1 and source[pos - 1 : pos + 1] == "::":
+        type_name = _extract_word_before(source, pos - 1)
+        if type_name:
+            return _members_for_qualified(type_name, state)
+        return []
+
+    # . triggered: suggest methods for the receiver type
+    if source[pos] == ".":
+        chain = _extract_chain_before(source, pos)
+        receiver_type = _resolve_chain_type(chain, state, offset)
+        if receiver_type:
+            return _methods_for_type(receiver_type, state)
+
+    return []
+
+
+def _infer_literal_type(name: str) -> str | None:
+    """Infer the type of a literal value from its textual representation."""
+    if name and name.isdigit():
+        return "int"
+    if name in ("true", "false"):
+        return "bool"
+    return None
+
+
 def resolve_variable_type(
     name: str, func: Function | None, state: DocumentState
 ) -> str | None:
@@ -303,6 +394,24 @@ def _methods_for_type(
     return items
 
 
+def _members_for_qualified(
+    type_name: str, state: DocumentState
+) -> list[types.CompletionItem]:
+    """Return completion items for Type:: (methods and enum variants)."""
+    items: list[types.CompletionItem] = []
+    enum = state.enums.get(type_name)
+    if enum:
+        for variant in enum.variants:
+            items.append(
+                types.CompletionItem(
+                    label=variant,
+                    kind=types.CompletionItemKind.EnumMember,
+                )
+            )
+    items.extend(_methods_for_type(type_name, state))
+    return items
+
+
 def find_containing_function(state: DocumentState, offset: int) -> Function | None:
     """Find which function the cursor is inside."""
     for func in state.functions.values():
@@ -320,18 +429,32 @@ def find_containing_function(state: DocumentState, offset: int) -> Function | No
 
 
 def find_variable_definition(
-    name: str, function: Function | None, state: DocumentState
+    name: str,
+    function: Function | None,
+    state: DocumentState,
+    usage_offset: int = 0,
 ) -> types.Location | None:
-    """Find the first ASSIGN_VARIABLE op with the given name."""
+    """Find the most recent ASSIGN_VARIABLE op before usage_offset."""
+    best: Op | None = None
+
     if function:
         for op in function.ops:
             if op.kind == OpKind.ASSIGN_VARIABLE and op.value == name:
-                return casa_location_to_lsp(op.location)
+                if op.location.span.offset < usage_offset:
+                    best = op
+                elif best is None:
+                    best = op
 
-    for op in state.ops:
-        if op.kind == OpKind.ASSIGN_VARIABLE and op.value == name:
-            return casa_location_to_lsp(op.location)
+    if best is None:
+        for op in state.ops:
+            if op.kind == OpKind.ASSIGN_VARIABLE and op.value == name:
+                if op.location.span.offset < usage_offset:
+                    best = op
+                elif best is None:
+                    best = op
 
+    if best is not None:
+        return casa_location_to_lsp(best.location)
     return None
 
 
@@ -642,6 +765,14 @@ def did_open(params: types.DidOpenTextDocumentParams):
     run_diagnostics(server, params.text_document.uri)
 
 
+@server.feature(types.TEXT_DOCUMENT_DID_CHANGE)
+def did_change(params: types.DidChangeTextDocumentParams):
+    """Publish diagnostics when file content changes."""
+    uri = params.text_document.uri
+    document = server.workspace.get_text_document(uri)
+    run_diagnostics(server, uri, source=document.source, update_state=False)
+
+
 @server.feature(types.TEXT_DOCUMENT_DID_SAVE)
 def did_save(params: types.DidSaveTextDocumentParams):
     """Publish diagnostics when a file is saved."""
@@ -685,7 +816,9 @@ def text_document_definition(
             return casa_location_to_lsp(fn_def.location)
 
     elif op.kind in (OpKind.PUSH_VARIABLE, OpKind.PUSH_CAPTURE):
-        return find_variable_definition(op.value, func, state)
+        return find_variable_definition(
+            op.value, func, state, op.location.span.offset
+        )
 
     elif op.kind == OpKind.STRUCT_NEW:
         struct = op.value
@@ -822,7 +955,7 @@ def text_document_hover(params: types.HoverParams) -> types.Hover | None:
 
 @server.feature(
     types.TEXT_DOCUMENT_COMPLETION,
-    types.CompletionOptions(trigger_characters=["."]),
+    types.CompletionOptions(trigger_characters=[".", ":"]),
 )
 def text_document_completion(
     params: types.CompletionParams,
@@ -832,25 +965,22 @@ def text_document_completion(
     state = document_states.get(uri)
     items: list[types.CompletionItem] = []
 
-    # Dot-triggered method completion
-    if state and params.context and params.context.trigger_character == ".":
+    if state and params.context and params.context.trigger_character in (".", ":"):
         offset = position_to_offset(
             state.source, params.position.line, params.position.character
         )
-        dot_pos = offset - 1
-        if dot_pos >= 0 and state.source[dot_pos] == ".":
-            receiver_name = _extract_word_before(state.source, dot_pos)
-            containing_fn = find_containing_function(state, offset)
-            receiver_type = resolve_variable_type(receiver_name, containing_fn, state)
-            if receiver_type:
-                method_items = _methods_for_type(receiver_type, state)
-                if method_items:
-                    return types.CompletionList(is_incomplete=False, items=method_items)
+        triggered_items = _handle_triggered_completion(state, offset)
+        if triggered_items:
+            return types.CompletionList(is_incomplete=False, items=triggered_items)
+        # Don't fall through to general list on trigger characters
+        return types.CompletionList(is_incomplete=False, items=[])
 
     if state:
-        # Functions (skip internal names)
+        # Functions (skip internal names and qualified methods)
         for name, fn_def in state.functions.items():
             if name.startswith("lambda__") or name.startswith("__"):
+                continue
+            if "::" in name:
                 continue
             detail = repr(fn_def.signature) if fn_def.signature else None
             items.append(
@@ -872,15 +1002,14 @@ def text_document_completion(
                 )
             )
 
-        # Enum variants
-        for name, enum in state.enums.items():
-            for variant in enum.variants:
-                items.append(
-                    types.CompletionItem(
-                        label=f"{name}::{variant}",
-                        kind=types.CompletionItemKind.EnumMember,
-                    )
+        # Enums (type names only, variants available via ::)
+        for name in state.enums:
+            items.append(
+                types.CompletionItem(
+                    label=name,
+                    kind=types.CompletionItemKind.Enum,
                 )
+            )
 
         # Local variables from containing function
         offset = position_to_offset(

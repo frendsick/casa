@@ -1047,8 +1047,11 @@ class TypeChecker:
                         )
 
                 # Apply final stack state
-                unified = _stacks_compatible(self.stack, branched.after)
-                if unified is not None:
+                # Identity check: after is the same object as before when only
+                # one arm ran (wildcard-only match), so accept current stack
+                if branched.before is branched.after:
+                    pass
+                elif (unified := _stacks_compatible(self.stack, branched.after)) is not None:
                     self.stack = unified
                     self.stack_origins = branched.after_origins.copy()
                 elif self.stack == branched.before == branched.after:

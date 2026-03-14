@@ -399,6 +399,16 @@ class TestMatchExhaustiveness:
                 "end\n"
             )
 
+    def test_wildcard_only_match_with_stack_effect(self):
+        """A match with only a wildcard arm that pushes a value should type check."""
+        sig = typecheck_string(
+            "enum Color { Red Green Blue }\n"
+            "Color::Red match\n"
+            "    _ => 42\n"
+            "end\n"
+        )
+        assert sig.return_types == ["int"]
+
 
 # ---------------------------------------------------------------------------
 # Match inside functions
