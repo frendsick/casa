@@ -577,6 +577,13 @@ class Compiler:
                     assert isinstance(count, int)
                     bytecode.append(self.inst(InstKind.FSTRING_CONCAT, args=[count]))
                 case OpKind.FN_CALL | OpKind.FN_PUSH:
+                    if op.kind == OpKind.FN_PUSH:
+                        fn = GLOBAL_FUNCTIONS.get(op.value)
+                        if fn and fn.has_deferred_methods:
+                            # Deferred lambda: push dummy, real calls are
+                            # specialized at each exec site
+                            bytecode.append(self.inst(InstKind.PUSH, args=[0]))
+                            continue
                     self._compile_function_ops(op, bytecode)
                 case OpKind.IDENTIFIER:
                     raise AssertionError(
