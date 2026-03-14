@@ -323,7 +323,7 @@ def test_typecheck_fn_call_stack_effect():
 def test_typecheck_method_call_resolution():
     code = """
     struct Pair { x: int y: int }
-    42 99 Pair .x
+    42 99 Pair.x
     """
     ops = resolve_string(code)
     from casa.typechecker import type_check_ops
@@ -558,7 +558,7 @@ def test_typecheck_generic_in_impl_block():
     impl Box {
         fn apply[T] self:Box T -> T { }
     }
-    42 99 Box .apply
+    42 99 Box.apply
     """
     sig = typecheck_string(code)
     assert sig.return_types == ["int"]
@@ -772,7 +772,7 @@ def test_typecheck_str_to_str():
 
 def test_typecheck_ptr_to_str():
     """ptr::to_str returns str."""
-    sig = typecheck_string(STD_INCLUDE + "10 alloc .to_str")
+    sig = typecheck_string(STD_INCLUDE + "10 alloc.to_str")
     assert sig.return_types == ["str"]
 
 
@@ -1003,28 +1003,28 @@ def test_signature_from_str_fn_type_multi_param():
 # ---------------------------------------------------------------------------
 def test_typecheck_map_returns_array_int():
     """map with fn[int -> int] on array[int] returns array[int]."""
-    code = STD_INCLUDE + "{ 2 * } [1, 2, 3] .map"
+    code = STD_INCLUDE + "{ 2 * } [1, 2, 3].map"
     sig = typecheck_string(code)
     assert sig.return_types == ["array[int]"]
 
 
 def test_typecheck_map_type_transform():
     """map with fn[int -> bool] on array[int] returns array[bool]."""
-    code = STD_INCLUDE + "{ 0 > } [1, 2, 3] .map"
+    code = STD_INCLUDE + "{ 0 > } [1, 2, 3].map"
     sig = typecheck_string(code)
     assert sig.return_types == ["array[bool]"]
 
 
 def test_typecheck_filter_returns_array_int():
     """filter with fn[int -> bool] on array[int] returns array[int]."""
-    code = STD_INCLUDE + "{ 1 > } [1, 2, 3] .filter"
+    code = STD_INCLUDE + "{ 1 > } [1, 2, 3].filter"
     sig = typecheck_string(code)
     assert sig.return_types == ["array[int]"]
 
 
 def test_typecheck_reduce_returns_int():
     """reduce with fn[int int -> int] on array[int] returns int."""
-    code = STD_INCLUDE + "{ + } 0 [1, 2, 3] .reduce"
+    code = STD_INCLUDE + "{ + } 0 [1, 2, 3].reduce"
     sig = typecheck_string(code)
     assert sig.return_types == ["int"]
 
@@ -1032,8 +1032,8 @@ def test_typecheck_reduce_returns_int():
 def test_typecheck_map_then_filter():
     """Chaining map then filter preserves array type."""
     code = STD_INCLUDE + """
-    { 2 * } [1, 2, 3] .map = mapped
-    { 4 > } mapped .filter
+    { 2 * } [1, 2, 3].map = mapped
+    { 4 > } mapped.filter
     """
     sig = typecheck_string(code)
     assert sig.return_types == ["array[int]"]
@@ -1041,7 +1041,7 @@ def test_typecheck_map_then_filter():
 
 def test_typecheck_map_str_array():
     """map on array[str] with any->any identity returns array[any]."""
-    code = STD_INCLUDE + '{ dup drop } ["a", "b", "c"] .map'
+    code = STD_INCLUDE + '{ dup drop } ["a", "b", "c"].map'
     sig = typecheck_string(code)
     assert sig.return_types == ["array[any]"]
 
@@ -1142,42 +1142,42 @@ def test_typecheck_signature_matches_different_typed_options():
 
 def test_typecheck_option_is_some():
     """is_some on option[int] returns bool."""
-    code = STD_INCLUDE + "42 some .is_some"
+    code = STD_INCLUDE + "42 some.is_some"
     sig = typecheck_string(code)
     assert sig.return_types == ["bool"]
 
 
 def test_typecheck_option_is_none():
     """is_none on option[int] returns bool."""
-    code = STD_INCLUDE + "42 some .is_none"
+    code = STD_INCLUDE + "42 some.is_none"
     sig = typecheck_string(code)
     assert sig.return_types == ["bool"]
 
 
 def test_typecheck_none_is_some():
     """is_some on none returns bool."""
-    code = STD_INCLUDE + "none .is_some"
+    code = STD_INCLUDE + "none.is_some"
     sig = typecheck_string(code)
     assert sig.return_types == ["bool"]
 
 
 def test_typecheck_none_is_none():
     """is_none on none returns bool."""
-    code = STD_INCLUDE + "none .is_none"
+    code = STD_INCLUDE + "none.is_none"
     sig = typecheck_string(code)
     assert sig.return_types == ["bool"]
 
 
 def test_typecheck_option_unwrap():
     """unwrap on option[int] returns int."""
-    code = STD_INCLUDE + "42 some .unwrap"
+    code = STD_INCLUDE + "42 some.unwrap"
     sig = typecheck_string(code)
     assert sig.return_types == ["int"]
 
 
 def test_typecheck_option_unwrap_or():
     """unwrap_or on option[int] with int default returns int."""
-    code = STD_INCLUDE + "0 42 some .unwrap_or"
+    code = STD_INCLUDE + "0 42 some.unwrap_or"
     sig = typecheck_string(code)
     assert sig.return_types == ["int"]
 

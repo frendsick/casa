@@ -406,7 +406,7 @@ class TestTraitMethodCallDotSyntax:
     def test_dot_hash_on_bounded_type_var(self):
         """Calling .hash on a trait-bounded type variable should typecheck."""
         typecheck_string(
-            HASHABLE_TRAIT + "fn get_hash[K: Hashable] k:K -> int { k .hash }\n"
+            HASHABLE_TRAIT + "fn get_hash[K: Hashable] k:K -> int { k.hash }\n"
         )
         fn = GLOBAL_FUNCTIONS["get_hash"]
         assert fn.signature is not None
@@ -414,7 +414,7 @@ class TestTraitMethodCallDotSyntax:
     def test_dot_eq_on_bounded_type_var(self):
         """Calling .eq on a trait-bounded type variable should typecheck."""
         typecheck_string(
-            HASHABLE_TRAIT + "fn are_eq[K: Hashable] a:K b:K -> bool { b a .eq }\n"
+            HASHABLE_TRAIT + "fn are_eq[K: Hashable] a:K b:K -> bool { b a.eq }\n"
         )
         fn = GLOBAL_FUNCTIONS["are_eq"]
         assert fn.signature is not None
@@ -478,7 +478,7 @@ class TestTraitAutoInjection:
             + "    fn hash self:MyType -> int { self MyType::val }\n"
             + "    fn eq self:MyType other:MyType -> bool { self MyType::val other MyType::val == }\n"
             + "}\n"
-            + "fn get_hash[K: Hashable] k:K -> int { k .hash }\n"
+            + "fn get_hash[K: Hashable] k:K -> int { k.hash }\n"
             + "42 MyType = m\n"
             + "m get_hash\n"
         )
@@ -489,7 +489,7 @@ class TestTraitAutoInjection:
         code = (
             HASHABLE_TRAIT
             + HASHABLE_IMPL_STR
-            + "fn get_hash[K: Hashable] k:K -> int { k .hash }\n"
+            + "fn get_hash[K: Hashable] k:K -> int { k.hash }\n"
             + '"hello" get_hash\n'
         )
         typecheck_string(code)
@@ -499,7 +499,7 @@ class TestTraitAutoInjection:
         code = (
             HASHABLE_TRAIT
             + HASHABLE_IMPL_INT
-            + "fn get_hash[K: Hashable] k:K -> int { k .hash }\n"
+            + "fn get_hash[K: Hashable] k:K -> int { k.hash }\n"
             + "42 get_hash\n"
         )
         typecheck_string(code)
@@ -509,7 +509,7 @@ class TestTraitAutoInjection:
         code = (
             HASHABLE_TRAIT
             + "struct NoHash { val: int }\n"
-            + "fn get_hash[K: Hashable] k:K -> int { k .hash }\n"
+            + "fn get_hash[K: Hashable] k:K -> int { k.hash }\n"
             + "42 NoHash = m\n"
             + "m get_hash\n"
         )
@@ -595,7 +595,7 @@ class TestMapSetIntegration:
             STD_INCLUDE
             + "Map::new (Map[str int]) = m\n"
             + '"hello" 42 m.set = m\n'
-            + '"hello" m.get .unwrap print\n'
+            + '"hello" m.get.unwrap print\n'
         )
         assert output == "42"
 
@@ -604,7 +604,7 @@ class TestMapSetIntegration:
             STD_INCLUDE
             + "Map::new (Map[int str]) = m\n"
             + '1 "hello" m.set = m\n'
-            + "1 m.get .unwrap print\n"
+            + "1 m.get.unwrap print\n"
         )
         assert output == "hello"
 
@@ -677,7 +677,7 @@ class TestMapSetIntegration:
             + "Map::new (Map[str int]) = m\n"
             + '"a" 1 m.set = m\n'
             + '"a" 99 m.set = m\n'
-            + '"a" m.get .unwrap print\n'
+            + '"a" m.get.unwrap print\n'
             + "m.length print\n"
         )
         assert output == "991"

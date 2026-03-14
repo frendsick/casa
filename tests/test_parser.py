@@ -295,7 +295,7 @@ def test_parse_type_cast():
 # ---------------------------------------------------------------------------
 def test_parse_dot_method_call():
     # .name produces a METHOD_CALL op
-    ops = parse_string("x .name")
+    ops = parse_string("x.name")
     method_ops = find_ops(ops, OpKind.METHOD_CALL)
     assert len(method_ops) == 1
     assert method_ops[0].value == "name"
@@ -303,7 +303,7 @@ def test_parse_dot_method_call():
 
 def test_parse_arrow_setter():
     # ->name produces a METHOD_CALL with set_ prefix
-    ops = parse_string("42 x ->name")
+    ops = parse_string("42 x->name")
     method_ops = find_ops(ops, OpKind.METHOD_CALL)
     assert len(method_ops) == 1
     assert method_ops[0].value == "set_name"

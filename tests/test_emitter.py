@@ -401,7 +401,7 @@ def test_emit_exit_syscall():
 def test_emit_sanitized_names():
     code = """
     struct Foo { x: int }
-    42 Foo .x
+    42 Foo.x
     """
     asm = emit_string(code)
     assert "fn_Foo__x" in asm
@@ -455,7 +455,7 @@ def test_emit_str_to_str():
 
 def test_emit_ptr_to_str():
     """ptr::to_str compiles and emits the function label."""
-    asm = emit_string(STD_INCLUDE + "10 alloc .to_str")
+    asm = emit_string(STD_INCLUDE + "10 alloc.to_str")
     assert "fn_ptr__to_str" in asm
 
 
@@ -483,25 +483,25 @@ def test_emit_some():
 
 def test_emit_option_is_some():
     """option::is_some emits correct function label."""
-    asm = emit_string(STD_INCLUDE + "42 some .is_some")
+    asm = emit_string(STD_INCLUDE + "42 some.is_some")
     assert "fn_option__is_some" in asm
 
 
 def test_emit_option_is_none():
     """option::is_none emits correct function label."""
-    asm = emit_string(STD_INCLUDE + "42 some .is_none")
+    asm = emit_string(STD_INCLUDE + "42 some.is_none")
     assert "fn_option__is_none" in asm
 
 
 def test_emit_option_unwrap():
     """option::unwrap emits correct function label."""
-    asm = emit_string(STD_INCLUDE + "42 some .unwrap")
+    asm = emit_string(STD_INCLUDE + "42 some.unwrap")
     assert "fn_option__unwrap" in asm
 
 
 def test_emit_option_unwrap_or():
     """option::unwrap_or emits correct function label."""
-    asm = emit_string(STD_INCLUDE + "0 42 some .unwrap_or")
+    asm = emit_string(STD_INCLUDE + "0 42 some.unwrap_or")
     assert "fn_option__unwrap_or" in asm
 
 
