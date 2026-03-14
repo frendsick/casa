@@ -989,6 +989,7 @@ class CasaEnum:
     name: str
     variants: list[str]
     location: Location
+    variant_locations: dict[str, Location] | None = None
 
 
 @dataclass
