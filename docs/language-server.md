@@ -107,6 +107,12 @@ This works for generic types too. If `items` is a `List[int]`, typing `items.` s
 
 Dot-triggered completion only works when the receiver is a simple variable reference, not for chained method calls or complex expressions.
 
+#### Qualified name completion
+
+Typing `::` after a type name triggers qualified name completion. The server suggests enum variants and methods for that type.
+
+For example, after `Color::` the server offers `Red`, `Green`, `Blue` (enum variants) and any methods from `Color`'s impl block. After `str::` it offers string methods like `length`, `at`, `concat`, etc.
+
 ### Find References
 
 Find all references to a symbol across the codebase. Supported symbols:

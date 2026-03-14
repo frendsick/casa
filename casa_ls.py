@@ -281,6 +281,35 @@ def _extract_word_before(source: str, offset: int) -> str:
     return source[start + 1 : end]
 
 
+def _handle_triggered_completion(
+    state: DocumentState, offset: int
+) -> list[types.CompletionItem]:
+    """Handle dot and :: triggered completion."""
+    source = state.source
+    pos = offset - 1
+    if pos < 0:
+        return []
+
+    # :: triggered: suggest enum variants and methods for the type
+    if pos >= 1 and source[pos - 1 : pos + 1] == "::":
+        type_name = _extract_word_before(source, pos - 1)
+        if type_name:
+            return _members_for_qualified(type_name, state)
+        return []
+
+    # . triggered: suggest methods for the receiver type
+    if source[pos] == ".":
+        receiver_name = _extract_word_before(source, pos)
+        containing_fn = find_containing_function(state, offset)
+        receiver_type = resolve_variable_type(receiver_name, containing_fn, state)
+        if not receiver_type:
+            receiver_type = _infer_literal_type(receiver_name)
+        if receiver_type:
+            return _methods_for_type(receiver_type, state)
+
+    return []
+
+
 def _infer_literal_type(name: str) -> str | None:
     """Infer the type of a literal value from its textual representation."""
     if name and name.isdigit():
@@ -326,6 +355,24 @@ def _methods_for_type(
                 detail=detail,
             )
         )
+    return items
+
+
+def _members_for_qualified(
+    type_name: str, state: DocumentState
+) -> list[types.CompletionItem]:
+    """Return completion items for Type:: (methods and enum variants)."""
+    items: list[types.CompletionItem] = []
+    enum = state.enums.get(type_name)
+    if enum:
+        for variant in enum.variants:
+            items.append(
+                types.CompletionItem(
+                    label=variant,
+                    kind=types.CompletionItemKind.EnumMember,
+                )
+            )
+    items.extend(_methods_for_type(type_name, state))
     return items
 
 
@@ -872,7 +919,7 @@ def text_document_hover(params: types.HoverParams) -> types.Hover | None:
 
 @server.feature(
     types.TEXT_DOCUMENT_COMPLETION,
-    types.CompletionOptions(trigger_characters=["."]),
+    types.CompletionOptions(trigger_characters=[".", ":"]),
 )
 def text_document_completion(
     params: types.CompletionParams,
@@ -882,22 +929,13 @@ def text_document_completion(
     state = document_states.get(uri)
     items: list[types.CompletionItem] = []
 
-    # Dot-triggered method completion
-    if state and params.context and params.context.trigger_character == ".":
+    if state and params.context and params.context.trigger_character in (".", ":"):
         offset = position_to_offset(
             state.source, params.position.line, params.position.character
         )
-        dot_pos = offset - 1
-        if dot_pos >= 0 and state.source[dot_pos] == ".":
-            receiver_name = _extract_word_before(state.source, dot_pos)
-            containing_fn = find_containing_function(state, offset)
-            receiver_type = resolve_variable_type(receiver_name, containing_fn, state)
-            if not receiver_type:
-                receiver_type = _infer_literal_type(receiver_name)
-            if receiver_type:
-                method_items = _methods_for_type(receiver_type, state)
-                if method_items:
-                    return types.CompletionList(is_incomplete=False, items=method_items)
+        triggered_items = _handle_triggered_completion(state, offset)
+        if triggered_items:
+            return types.CompletionList(is_incomplete=False, items=triggered_items)
 
     if state:
         # Functions (skip internal names)
