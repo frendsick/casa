@@ -7,6 +7,8 @@ from unittest.mock import MagicMock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytest
+
+pygls = pytest.importorskip("pygls", reason="pygls not installed")
 from lsprotocol import types
 
 from casa.bytecode import _op_label_map
