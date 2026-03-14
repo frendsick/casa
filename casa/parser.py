@@ -494,6 +494,10 @@ def token_to_op(
             assert_never(token.kind)
 
 
+_RECEIVER_TOKEN_KINDS = {TokenKind.IDENTIFIER, TokenKind.LITERAL, TokenKind.KEYWORD}
+_CLOSING_DELIMITERS = {")", "]", "}"}
+
+
 def _has_whitespace_before_receiver(token: Token, cursor: Cursor[Token]) -> bool:
     """Check if the dot/arrow token has whitespace after a receiver token.
 
@@ -506,13 +510,10 @@ def _has_whitespace_before_receiver(token: Token, cursor: Cursor[Token]) -> bool
     if cursor.position - 2 < 0:
         return False
     prev = cursor.sequence[cursor.position - 2]
-    receiver_kinds = {TokenKind.IDENTIFIER, TokenKind.LITERAL, TokenKind.KEYWORD}
-    is_closing_delim = prev.kind == TokenKind.DELIMITER and prev.value in {
-        ")",
-        "]",
-        "}",
-    }
-    if prev.kind not in receiver_kinds and not is_closing_delim:
+    is_closing_delim = (
+        prev.kind == TokenKind.DELIMITER and prev.value in _CLOSING_DELIMITERS
+    )
+    if prev.kind not in _RECEIVER_TOKEN_KINDS and not is_closing_delim:
         return False
     return (
         prev.location.span.offset + prev.location.span.length

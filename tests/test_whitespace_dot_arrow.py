@@ -4,7 +4,7 @@ import pytest
 
 from casa.common import GLOBAL_FUNCTIONS, OpKind
 from casa.error import CasaErrorCollection, ErrorKind
-from tests.conftest import parse_string, resolve_string, typecheck_string
+from tests.conftest import parse_string
 
 
 # ---------------------------------------------------------------------------
