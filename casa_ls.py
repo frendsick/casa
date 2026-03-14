@@ -3,6 +3,7 @@
 
 import logging
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 from lsprotocol import types
 from pygls.lsp.server import LanguageServer
@@ -29,6 +30,11 @@ from casa.parser import parse_ops, resolve_identifiers
 from casa.typechecker import type_check_functions, type_check_ops
 
 logger = logging.getLogger(__name__)
+
+ZERO_RANGE = types.Range(
+    start=types.Position(line=0, character=0),
+    end=types.Position(line=0, character=0),
+)
 
 
 def clear_compilation_state():
@@ -64,10 +70,7 @@ def casa_error_to_diagnostic(error: CasaError) -> types.Diagnostic:
             source, error.location.span.offset, error.location.span.length
         )
     else:
-        diag_range = types.Range(
-            start=types.Position(line=0, character=0),
-            end=types.Position(line=0, character=0),
-        )
+        diag_range = ZERO_RANGE
     message = error.message
     if error.expected:
         message += f"\nExpected: {error.expected}"
@@ -89,10 +92,7 @@ def casa_warning_to_diagnostic(warning: CasaWarning) -> types.Diagnostic:
             source, warning.location.span.offset, warning.location.span.length
         )
     else:
-        diag_range = types.Range(
-            start=types.Position(line=0, character=0),
-            end=types.Position(line=0, character=0),
-        )
+        diag_range = ZERO_RANGE
     return types.Diagnostic(
         range=diag_range,
         message=warning.message,
@@ -104,7 +104,7 @@ def casa_warning_to_diagnostic(warning: CasaWarning) -> types.Diagnostic:
 def run_diagnostics(server: LanguageServer, uri: str):
     """Run the Casa compiler pipeline and publish diagnostics."""
     clear_compilation_state()
-    file_path = Path(uri.replace("file://", "")).resolve()
+    file_path = Path(unquote(urlparse(uri).path)).resolve()
     diagnostics: list[types.Diagnostic] = []
     try:
         tokens = lex_file(file_path)
