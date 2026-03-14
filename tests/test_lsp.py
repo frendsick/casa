@@ -1344,6 +1344,37 @@ class TestRename:
         # Assignment + usage of count
         assert len(edits) >= 2
 
+    def test_go_to_definition_uses_unsaved_included_file(self, tmp_path):
+        """Go-to-definition should resolve symbols from unsaved included files."""
+        # Create the included file with a function
+        lib_file = tmp_path / "lib.casa"
+        lib_file.write_text("fn helper { 42 print }")
+
+        # Create the main file that includes lib
+        main_file = tmp_path / "main.casa"
+        main_file.write_text(f'include "{lib_file}"\nhelper')
+
+        mock_server = MagicMock()
+        lib_uri = f"file://{lib_file}"
+        main_uri = f"file://{main_file}"
+
+        # Open both files
+        run_diagnostics(mock_server, main_uri)
+        run_diagnostics(mock_server, lib_uri)
+
+        # Simulate unsaved change to lib: rename helper to greet
+        new_lib_source = "fn greet { 42 print }"
+        run_diagnostics(mock_server, lib_uri, source=new_lib_source)
+
+        # Update main to call greet (unsaved)
+        new_main_source = f'include "{lib_file}"\ngreet'
+        run_diagnostics(mock_server, main_uri, source=new_main_source)
+
+        # Go-to-definition on 'greet' in main should find it in lib
+        result = text_document_definition(_make_definition_params(main_uri, 1, 0))
+        assert result is not None
+        assert lib_uri in result.uri
+
 
 class TestSemanticTokens:
     """Tests for semantic tokens functionality."""

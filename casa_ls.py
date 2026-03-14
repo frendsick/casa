@@ -134,6 +134,12 @@ def run_pipeline(
 ) -> tuple[DocumentState, list[CasaError]]:
     """Run the Casa compiler pipeline and return document state with any errors."""
     clear_compilation_state()
+
+    # Pre-populate SOURCE_CACHE with in-memory sources from open documents
+    # so that included files use unsaved editor content
+    for uri, state in document_states.items():
+        if state.source and state.file_path.resolve() != file_path:
+            SOURCE_CACHE[state.file_path.resolve()] = state.source
     ops: list[Op] = []
     errors: list[CasaError] = []
 
