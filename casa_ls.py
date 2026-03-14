@@ -187,7 +187,11 @@ def run_diagnostics(server: LanguageServer, uri: str, source: str | None = None)
     """Run the Casa compiler pipeline and publish diagnostics."""
     file_path = Path(unquote(urlparse(uri).path)).resolve()
     state, errors = run_pipeline(file_path, source=source)
-    document_states[uri] = state
+    old_state = document_states.get(uri)
+    if state.ops or state.functions or not old_state:
+        document_states[uri] = state
+    elif old_state:
+        old_state.source = state.source
 
     diagnostics: list[types.Diagnostic] = []
     for error in errors:
