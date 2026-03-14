@@ -189,22 +189,22 @@ Returns `true` if the result contains a success value.
 "error" error .is_ok print   # 0
 ```
 
-### `result::is_err`
+### `result::is_error`
 
 Returns `true` if the result contains an error value.
 
-**Signature:** `result::is_err self:result -> bool`
+**Signature:** `result::is_error self:result -> bool`
 
 **Stack effect:** `result -> bool`
 
 ```casa
-42 ok .is_err print          # 0
-"error" error .is_err print  # 1
+42 ok .is_error print          # 0
+"error" error .is_error print  # 1
 ```
 
 ### `result::unwrap`
 
-Extracts the success value. Prints an error and exits with code 60 if called on an `Err`.
+Extracts the success value. Prints an error and exits with code 60 if called on an `error` result.
 
 **Signature:** `result::unwrap[T E] self:result[T E] -> T`
 
@@ -212,20 +212,20 @@ Extracts the success value. Prints an error and exits with code 60 if called on 
 
 ```casa
 42 ok .unwrap print          # 42
-"error" error .unwrap        # error: called unwrap on Err
+"error" error .unwrap        # error: called unwrap on error
 ```
 
-### `result::unwrap_err`
+### `result::unwrap_error`
 
-Extracts the error value. Prints an error and exits with code 60 if called on an `Ok`.
+Extracts the error value. Prints an error and exits with code 60 if called on an `ok` result.
 
-**Signature:** `result::unwrap_err[T E] self:result[T E] -> E`
+**Signature:** `result::unwrap_error[T E] self:result[T E] -> E`
 
 **Stack effect:** `result[T E] -> E`
 
 ```casa
-"error" error .unwrap_err print   # error
-42 ok .unwrap_err                 # error: called unwrap_err on Ok
+"error" error .unwrap_error print   # error
+42 ok .unwrap_error                 # error: called unwrap_error on ok
 ```
 
 ### `result::unwrap_or`

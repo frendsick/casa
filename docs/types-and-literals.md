@@ -293,7 +293,7 @@ See [Standard Library -- Option](standard-library.md#option) for `is_some`, `is_
 
 ### `result[T E]`
 
-Result type representing either a success value (`Ok`) or an error value (`Err`). Built with the `ok` and `error` constructors.
+Result type representing either a success value (`ok`) or an error value (`error`). Built with the `ok` and `error` constructors.
 
 `ok` wraps the top-of-stack value into a result. The resulting type is `result[T any]` where `T` is the type of the wrapped value.
 
@@ -308,7 +308,7 @@ Result type representing either a success value (`Ok`) or an error value (`Err`)
 "not found" error # type: result[any str]
 ```
 
-At runtime, a result is heap-allocated as 16 bytes: `[tag, value]` where each field is 8 bytes. The tag is `1` for `Ok` and `0` for `Err`.
+At runtime, a result is heap-allocated as 16 bytes: `[tag, value]` where each field is 8 bytes. The tag is `1` for `ok` and `0` for `error`.
 
 Results stored in variables retain their type:
 
@@ -342,7 +342,7 @@ fn divide dividend:int divisor:int -> result[int str] {
 }
 ```
 
-See [Standard Library -- Result](standard-library.md#result) for `is_ok`, `is_err`, `unwrap`, `unwrap_err`, and `unwrap_or`.
+See [Standard Library -- Result](standard-library.md#result) for `is_ok`, `is_error`, `unwrap`, `unwrap_error`, and `unwrap_or`.
 
 ### User-Defined Structs
 

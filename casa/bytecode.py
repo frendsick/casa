@@ -481,7 +481,7 @@ class Compiler:
                 bytecode.append(self.inst(InstKind.LABEL, args=[end_label]))
 
     def _compile_tagged_wrapper(self, tag: int, bytecode: list[Inst]) -> None:
-        """Compile a tagged heap wrapper (used by some/ok/err)."""
+        """Compile a tagged heap wrapper (used by some/ok/error)."""
         local_ptr = self.locals_count
         self.locals_count += 1
         bytecode.append(self.inst(InstKind.PUSH, args=[16]))
