@@ -46,6 +46,48 @@ Got: str
 
 See [Errors](errors.md) for the full list of error kinds and their descriptions.
 
+### Go to Definition
+
+Jump to the definition of a symbol under the cursor. Supported symbols:
+
+| Symbol | Target |
+|--------|--------|
+| Function call or `&reference` | Function declaration |
+| Variable | First assignment of that variable (local first, then global) |
+| Struct constructor | Struct definition |
+| Enum variant | Enum definition |
+| Type cast `(TypeName)` | Struct or enum definition |
+
+Works across files. If a function or struct is defined in an included file, the editor will open that file.
+
+### Hover
+
+Hover over a symbol to see type and signature information in a code block.
+
+| Symbol | Displayed info |
+|--------|---------------|
+| Function call or `&reference` | `fn name param:type -> return_type` |
+| Variable | `name: type` |
+| Struct constructor | `struct Name { field: type, ... }` |
+| Enum variant | `EnumName::VariantName` |
+| Integer, string, bool, or char literal | Type and value (e.g. `(int) 42`) |
+| Assignment | `= name` |
+| Operator or intrinsic | Name and stack effect (e.g. `+: int int -> int`) |
+
+### Completion
+
+Trigger completion to get context-aware suggestions. The server provides the following completion items:
+
+| Kind | Items |
+|------|-------|
+| Functions | All user-defined functions (excluding internal lambdas) with signatures |
+| Structs | Struct names with member details |
+| Enum variants | All `EnumName::Variant` entries |
+| Local variables | Variables from the function the cursor is inside, with types |
+| Global variables | All global variables with types |
+| Keywords | All Casa keywords (`fn`, `if`, `while`, `struct`, `enum`, etc.) |
+| Intrinsics | All intrinsics (`drop`, `dup`, `swap`, `alloc`, `print`, etc.) |
+
 ## Editor Configuration
 
 ### Neovim (nvim-lspconfig)
@@ -93,6 +135,7 @@ args = ["casa_ls.py"]
 
 ## Limitations
 
-- No completion, hover, or go-to-definition (diagnostics only)
 - Diagnostics update on open and save, not on every keystroke
 - The server resets all compiler state between runs, so each diagnostics pass is a full recompilation
+- Completion does not filter by prefix or context (the editor handles filtering)
+- No rename, find references, or code actions
