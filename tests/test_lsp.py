@@ -1321,6 +1321,29 @@ class TestRename:
         # Definition + 2 call sites in the new (unsaved) source
         assert len(edits) >= 3
 
+    def test_rename_works_with_errors_in_unsaved_source(self, tmp_path):
+        """Rename should work even when unsaved source has errors."""
+        source_file = tmp_path / "rename_errors.casa"
+        original = "1 = count\ncount print"
+        source_file.write_text(original)
+
+        uri = f"file://{source_file}"
+        mock_server = MagicMock()
+        run_diagnostics(mock_server, uri)
+
+        # Simulate did_change with an undefined variable (error in source)
+        new_source = "1 = count\nundefined_var print\ncount print"
+        run_diagnostics(mock_server, uri, source=new_source)
+
+        # Rename 'count' should still work despite the error
+        result = text_document_rename(_make_rename_params(uri, 0, 4, "total"))
+        assert result is not None
+        assert isinstance(result, types.WorkspaceEdit)
+        assert uri in result.changes
+        edits = result.changes[uri]
+        # Assignment + usage of count
+        assert len(edits) >= 2
+
 
 class TestSemanticTokens:
     """Tests for semantic tokens functionality."""

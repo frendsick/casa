@@ -158,6 +158,7 @@ def run_pipeline(
             ops = resolve_identifiers(parsed)
         except CasaErrorCollection as exc:
             errors.extend(exc.errors)
+            ops = parsed  # Use partially resolved ops for LSP features
         except Exception:
             logger.exception("Unexpected error during parse for %s", file_path)
 
