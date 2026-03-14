@@ -187,19 +187,11 @@ def run_diagnostics(
     server: LanguageServer,
     uri: str,
     source: str | None = None,
-    update_state: bool = True,
 ):
     """Run the Casa compiler pipeline and publish diagnostics."""
     file_path = Path(unquote(urlparse(uri).path)).resolve()
     state, errors = run_pipeline(file_path, source=source)
-    if update_state:
-        document_states[uri] = state
-    else:
-        old_state = document_states.get(uri)
-        if old_state:
-            old_state.source = state.source
-        else:
-            document_states[uri] = state
+    document_states[uri] = state
 
     diagnostics: list[types.Diagnostic] = []
     for error in errors:
@@ -770,7 +762,7 @@ def did_change(params: types.DidChangeTextDocumentParams):
     """Publish diagnostics when file content changes."""
     uri = params.text_document.uri
     document = server.workspace.get_text_document(uri)
-    run_diagnostics(server, uri, source=document.source, update_state=False)
+    run_diagnostics(server, uri, source=document.source)
 
 
 @server.feature(types.TEXT_DOCUMENT_DID_SAVE)
@@ -816,9 +808,7 @@ def text_document_definition(
             return casa_location_to_lsp(fn_def.location)
 
     elif op.kind in (OpKind.PUSH_VARIABLE, OpKind.PUSH_CAPTURE):
-        return find_variable_definition(
-            op.value, func, state, op.location.span.offset
-        )
+        return find_variable_definition(op.value, func, state, op.location.span.offset)
 
     elif op.kind == OpKind.STRUCT_NEW:
         struct = op.value

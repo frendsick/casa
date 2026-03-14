@@ -1296,6 +1296,31 @@ class TestRename:
         # Should have edits for assignment + 2 usages
         assert len(edits) >= 3
 
+    def test_rename_works_after_unsaved_change(self, tmp_path):
+        """Rename should work on in-memory source without saving the file."""
+        source_file = tmp_path / "rename_unsaved.casa"
+        original = "fn greet { 42 print }\ngreet"
+        source_file.write_text(original)
+
+        # Initial state from file
+        state, _ = run_pipeline(source_file)
+        uri = f"file://{source_file}"
+        document_states[uri] = state
+
+        # Simulate did_change: new source with an extra call, not saved to disk
+        new_source = "fn greet { 42 print }\ngreet\ngreet"
+        mock_server = MagicMock()
+        run_diagnostics(mock_server, uri, source=new_source)
+
+        # Rename should find all references in the updated source
+        result = text_document_rename(_make_rename_params(uri, 1, 0, "hello"))
+        assert result is not None
+        assert isinstance(result, types.WorkspaceEdit)
+        assert uri in result.changes
+        edits = result.changes[uri]
+        # Definition + 2 call sites in the new (unsaved) source
+        assert len(edits) >= 3
+
 
 class TestSemanticTokens:
     """Tests for semantic tokens functionality."""
