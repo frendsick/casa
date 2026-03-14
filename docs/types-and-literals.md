@@ -97,7 +97,7 @@ Invalid escape sequences (e.g. `\q`) produce a compile-time `SYNTAX` error.
 Null-terminated C string type. There is no literal syntax for `cstr`. Create one from a `str` using `str::as_cstr` (see [Standard Library](standard-library.md#stras_cstr)). The `cstr` points directly to the byte data (no length prefix), terminated by a null byte.
 
 ```casa
-"hello" .as_cstr print    # hello
+"hello".as_cstr print    # hello
 ```
 
 Convert to `str` with `cstr::to_str` (see [Standard Library](standard-library.md#cstrto_str)).
@@ -281,7 +281,7 @@ fn check opt:option -> bool { true }
 
 ```casa
 fn safe_head arr:array[int] -> option[int] {
-    if 0 arr .length > then
+    if 0 arr.length > then
         0 arr array::nth some
     else
         none

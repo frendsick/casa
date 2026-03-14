@@ -337,7 +337,7 @@ Integers are printed as decimal numbers. Booleans are printed as `true` or `fals
 true print                  # true
 "Hello" print               # Hello
 'A' print                   # A
-"Hello" .as_cstr print      # Hello
+"Hello".as_cstr print       # Hello
 "Hello" print "\n" print    # Hello followed by a newline
 ```
 

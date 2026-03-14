@@ -129,8 +129,8 @@ Returns `true` if the option contains a value.
 **Stack effect:** `option -> bool`
 
 ```casa
-42 some .is_some print    # 1
-none .is_some print       # 0
+42 some.is_some print    # 1
+none.is_some print       # 0
 ```
 
 ### `option::is_none`
@@ -142,8 +142,8 @@ Returns `true` if the option is empty.
 **Stack effect:** `option -> bool`
 
 ```casa
-42 some .is_none print    # 0
-none .is_none print       # 1
+42 some.is_none print    # 0
+none.is_none print       # 1
 ```
 
 ### `option::unwrap`
@@ -155,8 +155,8 @@ Extracts the contained value. Prints an error and exits with code 60 if called o
 **Stack effect:** `option[T] -> T`
 
 ```casa
-42 some .unwrap print     # 42
-none .unwrap              # error: called unwrap on None
+42 some.unwrap print     # 42
+none.unwrap              # error: called unwrap on None
 ```
 
 ### `option::unwrap_or`
@@ -168,8 +168,8 @@ Returns the contained value, or a default if the option is empty.
 **Stack effect:** `option[T] T -> T`
 
 ```casa
-0 42 some .unwrap_or print    # 42
-0 none .unwrap_or print       # 0
+0 42 some.unwrap_or print    # 42
+0 none.unwrap_or print       # 0
 ```
 
 ## `List[T]`
@@ -386,7 +386,7 @@ Returns a `cstr` pointing to the string's byte data (skipping the 8-byte length 
 **Stack effect:** `str -> cstr`
 
 ```casa
-"hello" .as_cstr print    # hello
+"hello".as_cstr print    # hello
 ```
 
 ### `str::eq`
@@ -478,7 +478,7 @@ Converts a null-terminated C string to a `str`. Scans for the null byte to deter
 **Stack effect:** `cstr -> str`
 
 ```casa
-"hello" .as_cstr .to_str print    # hello
+"hello".as_cstr.to_str print    # hello
 ```
 
 ## File I/O
@@ -807,8 +807,8 @@ Looks up a key and returns `option[V]`. Returns `some` with the value if found, 
 **Stack effect:** `Map[K V] K -> option[V]`
 
 ```casa
-"hello" m.get .unwrap print    # prints the value for "hello"
-"missing" m.get .is_none print # 1
+"hello" m.get.unwrap print    # prints the value for "hello"
+"missing" m.get.is_none print # 1
 ```
 
 ### `Map::has`
@@ -887,8 +887,8 @@ Map::new (Map[str int]) = m
 "three" 3 m.set = m
 
 # Look up values
-"one" m.get .unwrap print      # 1
-"two" m.get .unwrap print      # 2
+"one" m.get.unwrap print      # 1
+"two" m.get.unwrap print      # 2
 
 # Check membership
 "one" m.has print              # true
@@ -896,7 +896,7 @@ Map::new (Map[str int]) = m
 
 # Update a value
 "one" 42 m.set = m
-"one" m.get .unwrap print      # 42
+"one" m.get.unwrap print      # 42
 
 # Delete a key
 "two" m.delete = m
@@ -905,7 +905,7 @@ m.length print                 # 2
 # Integer keys work too
 Map::new (Map[int str]) = m2
 1 "hello" m2.set = m2
-1 m2.get .unwrap print         # hello
+1 m2.get.unwrap print         # hello
 ```
 
 See [`examples/hash_map.casa`](../examples/hash_map.casa) for a full program.
