@@ -500,10 +500,8 @@ class TypeChecker:
             ):
                 local_variable.typ = effective_type
 
-            if (
-                local_variable.typ not in (effective_type, ANY_TYPE)
-                and effective_type != ANY_TYPE
-            ):
+            unified = _unify_type(local_variable.typ, effective_type)
+            if unified is None:
                 raise_error(
                     ErrorKind.INVALID_VARIABLE,
                     f"Cannot override local variable `{local_variable.name}`"
@@ -511,6 +509,7 @@ class TypeChecker:
                     f" with other type `{effective_type}`",
                     op.location,
                 )
+            local_variable.typ = unified
 
             self.expect_type(effective_type)
             return
@@ -525,7 +524,8 @@ class TypeChecker:
             ):
                 global_variable.typ = effective_type
 
-            if global_variable.typ not in (effective_type, ANY_TYPE):
+            unified = _unify_type(global_variable.typ, effective_type)
+            if unified is None:
                 raise_error(
                     ErrorKind.INVALID_VARIABLE,
                     f"Cannot override global variable `{global_variable.name}`"
@@ -533,6 +533,7 @@ class TypeChecker:
                     f" with other type `{effective_type}`",
                     op.location,
                 )
+            global_variable.typ = unified
 
             self.expect_type(effective_type)
             return
