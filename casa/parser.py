@@ -37,8 +37,14 @@ from casa.common import (
     Variable,
     resolve_trait_sig,
 )
-from casa.error import CasaError, CasaErrorCollection, ErrorKind, raise_error
-from casa.lexer import is_negative_integer_literal, lex_file
+from casa.error import (
+    SOURCE_CACHE,
+    CasaError,
+    CasaErrorCollection,
+    ErrorKind,
+    raise_error,
+)
+from casa.lexer import is_negative_integer_literal, lex_file, lex_source
 
 INTRINSIC_TO_OPKIND = {
     Intrinsic.ALLOC: OpKind.HEAP_ALLOC,
@@ -436,8 +442,12 @@ def resolve_identifiers(
                 if included_file not in INCLUDED_FILES:
                     INCLUDED_FILES.add(included_file)
 
-                    # Include the ops from included file
-                    included_tokens = lex_file(included_file)
+                    # Use in-memory source if available (e.g. unsaved LSP buffer)
+                    cached_source = SOURCE_CACHE.get(included_file)
+                    if cached_source is not None:
+                        included_tokens = lex_source(cached_source, included_file)
+                    else:
+                        included_tokens = lex_file(included_file)
                     included_ops = parse_ops(included_tokens)
                     ops = ops[:index] + included_ops + ops[index:]
 

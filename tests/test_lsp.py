@@ -1296,6 +1296,85 @@ class TestRename:
         # Should have edits for assignment + 2 usages
         assert len(edits) >= 3
 
+    def test_rename_works_after_unsaved_change(self, tmp_path):
+        """Rename should work on in-memory source without saving the file."""
+        source_file = tmp_path / "rename_unsaved.casa"
+        original = "fn greet { 42 print }\ngreet"
+        source_file.write_text(original)
+
+        # Initial state from file
+        state, _ = run_pipeline(source_file)
+        uri = f"file://{source_file}"
+        document_states[uri] = state
+
+        # Simulate did_change: new source with an extra call, not saved to disk
+        new_source = "fn greet { 42 print }\ngreet\ngreet"
+        mock_server = MagicMock()
+        run_diagnostics(mock_server, uri, source=new_source)
+
+        # Rename should find all references in the updated source
+        result = text_document_rename(_make_rename_params(uri, 1, 0, "hello"))
+        assert result is not None
+        assert isinstance(result, types.WorkspaceEdit)
+        assert uri in result.changes
+        edits = result.changes[uri]
+        # Definition + 2 call sites in the new (unsaved) source
+        assert len(edits) >= 3
+
+    def test_rename_works_with_errors_in_unsaved_source(self, tmp_path):
+        """Rename should work even when unsaved source has errors."""
+        source_file = tmp_path / "rename_errors.casa"
+        original = "1 = count\ncount print"
+        source_file.write_text(original)
+
+        uri = f"file://{source_file}"
+        mock_server = MagicMock()
+        run_diagnostics(mock_server, uri)
+
+        # Simulate did_change with an undefined variable (error in source)
+        new_source = "1 = count\nundefined_var print\ncount print"
+        run_diagnostics(mock_server, uri, source=new_source)
+
+        # Rename 'count' should still work despite the error
+        result = text_document_rename(_make_rename_params(uri, 0, 4, "total"))
+        assert result is not None
+        assert isinstance(result, types.WorkspaceEdit)
+        assert uri in result.changes
+        edits = result.changes[uri]
+        # Assignment + usage of count
+        assert len(edits) >= 2
+
+    def test_go_to_definition_uses_unsaved_included_file(self, tmp_path):
+        """Go-to-definition should resolve symbols from unsaved included files."""
+        # Create the included file with a function
+        lib_file = tmp_path / "lib.casa"
+        lib_file.write_text("fn helper { 42 print }")
+
+        # Create the main file that includes lib
+        main_file = tmp_path / "main.casa"
+        main_file.write_text(f'include "{lib_file}"\nhelper')
+
+        mock_server = MagicMock()
+        lib_uri = f"file://{lib_file}"
+        main_uri = f"file://{main_file}"
+
+        # Open both files
+        run_diagnostics(mock_server, main_uri)
+        run_diagnostics(mock_server, lib_uri)
+
+        # Simulate unsaved change to lib: rename helper to greet
+        new_lib_source = "fn greet { 42 print }"
+        run_diagnostics(mock_server, lib_uri, source=new_lib_source)
+
+        # Update main to call greet (unsaved)
+        new_main_source = f'include "{lib_file}"\ngreet'
+        run_diagnostics(mock_server, main_uri, source=new_main_source)
+
+        # Go-to-definition on 'greet' in main should find it in lib
+        result = text_document_definition(_make_definition_params(main_uri, 1, 0))
+        assert result is not None
+        assert lib_uri in result.uri
+
 
 class TestSemanticTokens:
     """Tests for semantic tokens functionality."""
