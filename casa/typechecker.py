@@ -1085,6 +1085,32 @@ class TypeChecker:
         self.current_expect_context = None
         self.stack_push(struct.name)
 
+    @staticmethod
+    def _find_method_by_name(
+        method_name: str, location: Location
+    ) -> tuple[Function | None, str]:
+        """Search all global functions for a method matching ::method_name.
+
+        Used when the receiver type is 'any' (e.g. inside lambdas where the
+        stack type is unknown). Returns the function and its qualified name if
+        exactly one match is found, otherwise raises an error for ambiguity.
+        """
+        suffix = f"::{method_name}"
+        matches: list[tuple[str, Function]] = []
+        for name, func in GLOBAL_FUNCTIONS.items():
+            if name.endswith(suffix) and not name.startswith("lambda__"):
+                matches.append((name, func))
+        if len(matches) == 1:
+            return matches[0][1], matches[0][0]
+        if len(matches) > 1:
+            candidates = ", ".join(name for name, _ in matches)
+            raise_error(
+                ErrorKind.UNDEFINED_NAME,
+                f"Ambiguous method `.{method_name}`, candidates: {candidates}",
+                location,
+            )
+        return None, f"any::{method_name}"
+
     def check_method_call(
         self,
         op: Op,
@@ -1136,6 +1162,10 @@ class TypeChecker:
         if not global_function and receiver_base:
             function_name = f"{receiver_base}::{method_name}"
             global_function = GLOBAL_FUNCTIONS.get(function_name)
+        if not global_function and receiver == ANY_TYPE:
+            global_function, function_name = self._find_method_by_name(
+                method_name, op.location
+            )
         if not global_function:
             raise_error(
                 ErrorKind.UNDEFINED_NAME,

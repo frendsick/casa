@@ -160,7 +160,7 @@ Advances the cursor while the predicate returns `true` for the current character
 
 ```casa
 "   hello" Cursor::new = cursor
-&char::is_space cursor.skip_while
+{ .is_space } cursor.skip_while
 cursor.peek .unwrap print    # h
 ```
 
@@ -174,8 +174,8 @@ Collects characters while the predicate returns `true`, returning them as a subs
 
 ```casa
 "abc123" Cursor::new = cursor
-&char::is_alpha cursor.take_while print    # abc
-&char::is_digit cursor.take_while print    # 123
+{ .is_alpha } cursor.take_while print    # abc
+{ .is_digit } cursor.take_while print    # 123
 ```
 
 ### `Cursor::save`
@@ -316,8 +316,8 @@ include "../lib/parser.casa"
 
 # Parse integers and identifiers from input
 "abc123" Cursor::new = cursor
-&char::is_alpha cursor.take_while = letters
-&char::is_digit cursor.take_while = digits
+{ .is_alpha } cursor.take_while = letters
+{ .is_digit } cursor.take_while = digits
 letters print    # abc
 digits print     # 123
 
@@ -326,7 +326,7 @@ digits print     # 123
 cursor2.save = pos
 &is_ident_char cursor2.take_while print    # test
 pos cursor2.restore
-&char::is_alpha cursor2.take_while print   # test
+{ .is_alpha } cursor2.take_while print   # test
 ```
 
 See [`examples/parser.casa`](../examples/parser.casa) for a full program demonstrating all parser library features.
