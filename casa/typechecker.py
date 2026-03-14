@@ -786,11 +786,7 @@ class TypeChecker:
                 if fn_ptr == ANY_TYPE:
                     fn_ptr = "fn"
                 # Specialize deferred method lambdas at call site
-                specialized = _try_specialize_deferred_exec(
-                    self, fn_ptr, ops, op_index, op
-                )
-                if specialized:
-                    fn_ptr = specialized
+                _try_specialize_deferred_exec(self, fn_ptr, ops, op_index, op)
                 fn_ptr = self.expect_type(fn_ptr)
                 assert isinstance(fn_ptr, str), "Function pointer type"
                 if fn_ptr != fn_symmetrical:
