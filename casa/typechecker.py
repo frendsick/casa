@@ -1543,6 +1543,22 @@ def _try_specialize_deferred_exec(
         _ensure_typechecked(clone)
         existing = clone
 
+    # Verify the clone's parameter type matches the concrete argument type
+    if existing.signature.parameters:
+        expected_param = existing.signature.parameters[0].typ
+        if (
+            expected_param != concrete_type
+            and expected_param != ANY_TYPE
+            and concrete_type != ANY_TYPE
+        ):
+            raise_error(
+                ErrorKind.TYPE_MISMATCH,
+                f"Type mismatch in deferred method call",
+                exec_op.location,
+                expected=f"`{expected_param}`",
+                got=f"`{concrete_type}`",
+            )
+
     # Replace the push op to push the clone directly
     prev_op_idx = op_index - 2
     if prev_op_idx >= 0:
@@ -1554,7 +1570,11 @@ def _try_specialize_deferred_exec(
     # The original deferred lambda should not be compiled
     source_lambda.is_used = False
 
-    return f"fn[{existing.signature}]"
+    # Update the stack so the concrete fn type is used by apply_signature
+    concrete_fn_type = f"fn[{existing.signature}]"
+    tc.stack[-1] = concrete_fn_type
+
+    return concrete_fn_type
 
 
 def _find_deferred_lambda_source(
