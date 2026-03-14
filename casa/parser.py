@@ -114,15 +114,30 @@ def handle_fstring(
         ops.append(Op(part_count, OpKind.FSTRING_CONCAT, start_token.location))
 
 
-def parse_ops(tokens: list[Token]) -> list[Op]:
-    """Parse a flat token list into a list of ops."""
+def parse_ops(
+    tokens: list[Token],
+    resilient: bool = False,
+    errors_out: list[CasaError] | None = None,
+) -> list[Op]:
+    """Parse a flat token list into a list of ops.
+
+    When resilient is True, syntax errors are collected instead of raised,
+    and partial results are returned. Collected errors are appended to
+    errors_out if provided.
+    """
     cursor = Cursor(sequence=tokens)
     ops: list[Op] = []
     while token := cursor.pop():
-        if token.kind == TokenKind.FSTRING_START:
-            handle_fstring(token, cursor, GLOBAL_SCOPE_LABEL, ops)
-            continue
-        _append_op_result(ops, token_to_op(token, cursor))
+        try:
+            if token.kind == TokenKind.FSTRING_START:
+                handle_fstring(token, cursor, GLOBAL_SCOPE_LABEL, ops)
+                continue
+            _append_op_result(ops, token_to_op(token, cursor))
+        except CasaErrorCollection as exc:
+            if not resilient:
+                raise
+            if errors_out is not None:
+                errors_out.extend(exc.errors)
     return ops
 
 
@@ -641,6 +656,7 @@ def parse_enum(cursor: Cursor[Token]) -> CasaEnum:
     name = expect_token(cursor, kind=TokenKind.IDENTIFIER)
     expect_token(cursor, value="{")
     variants: list[str] = []
+    variant_locations: dict[str, Location] = {}
     while True:
         variant_token = expect_token(cursor)
         if variant_token.value == "}":
@@ -660,13 +676,14 @@ def parse_enum(cursor: Cursor[Token]) -> CasaEnum:
                 variant_token.location,
             )
         variants.append(variant_token.value)
+        variant_locations[variant_token.value] = variant_token.location
     if not variants:
         raise_error(
             ErrorKind.SYNTAX,
             "Enum must have at least one variant",
             name.location,
         )
-    return CasaEnum(name.value, variants, name.location)
+    return CasaEnum(name.value, variants, name.location, variant_locations)
 
 
 def _handle_keyword_enum(
