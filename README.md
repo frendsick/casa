@@ -71,7 +71,7 @@ source → lex → parse → resolve → type check → bytecode → emit asm �
 | [Structs and Methods](docs/structs-and-methods.md) | Struct definition, accessors, `impl` blocks, dot/arrow syntax |
 | [Enums](docs/enums.md) | Enum types, variant constructors, exhaustive `match` |
 | [Traits](docs/traits.md) | Trait definitions, structural satisfaction, trait bounds, `Hashable` |
-| [Standard Library](docs/standard-library.md) | `include`, `memcpy`, arrays (`map`, `filter`, `reduce`), `option[T]`, `List[T]`, `Map[K V]`, `Set[K]`, string methods, C string methods, file I/O, character classification, type conversions |
+| [Standard Library](docs/standard-library.md) | `include`, `memcpy`, arrays (`map`, `filter`, `reduce`), `option[T]`, `result[T E]`, `List[T]`, `Map[K V]`, `Set[K]`, string methods, C string methods, file I/O, character classification, type conversions |
 | [Errors](docs/errors.md) | Error kinds, diagnostics format, multi-error collection |
 | [Language Server](docs/language-server.md) | LSP setup, editor configuration, diagnostics |
 

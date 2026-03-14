@@ -291,6 +291,59 @@ fn safe_head arr:array[int] -> option[int] {
 
 See [Standard Library -- Option](standard-library.md#option) for `is_some`, `is_none`, `unwrap`, and `unwrap_or`.
 
+### `result[T E]`
+
+Result type representing either a success value (`Ok`) or an error value (`Err`). Built with the `ok` and `error` constructors.
+
+`ok` wraps the top-of-stack value into a result. The resulting type is `result[T any]` where `T` is the type of the wrapped value.
+
+**Stack effect:** `T -> result[T any]`
+
+`error` wraps the top-of-stack value into an error result. The resulting type is `result[any E]` where `E` is the type of the error value.
+
+**Stack effect:** `E -> result[any E]`
+
+```casa
+42 ok            # type: result[int any]
+"not found" error # type: result[any str]
+```
+
+At runtime, a result is heap-allocated as 16 bytes: `[tag, value]` where each field is 8 bytes. The tag is `1` for `Ok` and `0` for `Err`.
+
+Results stored in variables retain their type:
+
+```casa
+42 ok = x                    # x has type result[int any]
+"not found" error = y        # y has type result[any str]
+```
+
+Type annotations can narrow the type to specify both type parameters:
+
+```casa
+42 ok = x:result[int str]    # x has type result[int str]
+```
+
+A bare `result` type matches any `result[T E]` in function signatures, similar to how bare `option` matches any `option[T]`:
+
+```casa
+fn check res:result -> bool { true }
+42 ok check    # works: result[int any] matches bare result
+```
+
+`ok` and `error` can appear in different branches of a conditional. The type checker unifies them to the more specific `result[T E]`:
+
+```casa
+fn divide dividend:int divisor:int -> result[int str] {
+    if 0 divisor == then
+        "division by zero" error
+    else
+        dividend divisor / ok
+    fi
+}
+```
+
+See [Standard Library -- Result](standard-library.md#result) for `is_ok`, `is_err`, `unwrap`, `unwrap_err`, and `unwrap_or`.
+
 ### User-Defined Structs
 
 Struct names are types. After defining a struct, its name can be used as a type.
