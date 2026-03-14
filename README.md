@@ -72,6 +72,7 @@ source → lex → parse → resolve → type check → bytecode → emit asm �
 | [Enums](docs/enums.md) | Enum types, variant constructors, exhaustive `match` |
 | [Traits](docs/traits.md) | Trait definitions, structural satisfaction, trait bounds, `Hashable` |
 | [Standard Library](docs/standard-library.md) | `include`, `memcpy`, arrays (`map`, `filter`, `reduce`), `option[T]`, `result[T E]`, `List[T]`, `Map[K V]`, `Set[K]`, string methods, C string methods, file I/O, character classification, type conversions |
+| [Parser Library](docs/parser.md) | `Cursor`, `ParseError`, cursor scanning methods, `parse_int`, `parse_identifier`, `parse_quoted_string`, `parse_char_literal`, helper functions |
 | [Errors](docs/errors.md) | Error kinds, diagnostics format, multi-error collection |
 | [Language Server](docs/language-server.md) | LSP setup, editor configuration, diagnostics |
 
@@ -91,6 +92,7 @@ source → lex → parse → resolve → type check → bytecode → emit asm �
 | [hash_map.casa](examples/hash_map.casa) | `Map[K V]` and `Set[K]` with the `Hashable` trait |
 | [type_annotations.casa](examples/type_annotations.casa) | Type annotations on variable assignments (`= name:type`) |
 | [enum.casa](examples/enum.casa) | Enum types with `match` pattern matching |
+| [parser.casa](examples/parser.casa) | Cursor-based text scanning and parsing |
 
 More examples: [examples](./examples/)
 
