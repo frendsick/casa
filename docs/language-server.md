@@ -53,7 +53,7 @@ Jump to the definition of a symbol under the cursor. Supported symbols:
 | Symbol | Target |
 |--------|--------|
 | Function call or `&reference` | Function declaration |
-| Variable | First assignment of that variable (local first, then global) |
+| Variable | Most recent assignment before usage (local first, then global) |
 | Struct constructor | Struct definition |
 | Enum variant `Enum::Variant` (cursor on enum) | Enum definition |
 | Enum variant `Enum::Variant` (cursor on variant) | Variant definition in enum body |

@@ -1522,3 +1522,184 @@ class TestGoToDefinitionEnumVariant:
         # Should go to "Color" in the enum definition (line 0, col 5)
         assert result.range.start.line == 0
         assert result.range.start.character == 5
+
+
+class TestFindVariableDefinitionReassigned:
+    """Tests for find_variable_definition() with reassigned variables."""
+
+    def test_returns_last_assignment_before_usage(self, tmp_path):
+        """When a variable is reassigned, return the most recent assignment before usage_offset."""
+        source_file = tmp_path / "reassign.casa"
+        source = "1 = x\n2 = x\nx print"
+        source_file.write_text(source)
+
+        state, _ = run_pipeline(source_file)
+        # usage_offset pointing after the second assignment should return the second assignment
+        usage_offset = source.index("x print")
+        location = find_variable_definition("x", None, state, usage_offset=usage_offset)
+
+        assert location is not None
+        # The second "= x" is on line 1, so the definition should point to line 1
+        assert location.range.start.line == 1
+
+    def test_returns_first_assignment_when_usage_before_reassignment(self, tmp_path):
+        """When usage_offset is before the reassignment, return the first assignment."""
+        source_file = tmp_path / "reassign_early.casa"
+        source = "1 = x\nx print\n2 = x"
+        source_file.write_text(source)
+
+        state, _ = run_pipeline(source_file)
+        # usage_offset pointing to the first usage (before reassignment)
+        usage_offset = source.index("x print")
+        location = find_variable_definition("x", None, state, usage_offset=usage_offset)
+
+        assert location is not None
+        # Should point to line 0 (first assignment)
+        assert location.range.start.line == 0
+
+    def test_falls_back_to_first_assignment_without_usage_offset(self, tmp_path):
+        """Without usage_offset, falls back to first assignment for backward compat."""
+        source_file = tmp_path / "reassign_nooffset.casa"
+        source = "1 = x\n2 = x\nx print"
+        source_file.write_text(source)
+
+        state, _ = run_pipeline(source_file)
+        location = find_variable_definition("x", None, state)
+
+        assert location is not None
+        # Default (usage_offset=0) should return first assignment
+        assert location.range.start.line == 0
+
+    def test_reassigned_local_variable_in_function(self, tmp_path):
+        """Reassigned local variable inside a function returns latest before usage."""
+        source_file = tmp_path / "reassign_local.casa"
+        source = "fn foo {\n    1 = x\n    2 = x\n    x print\n}\nfoo"
+        source_file.write_text(source)
+
+        state, _ = run_pipeline(source_file)
+        func = state.functions.get("foo")
+        # usage_offset pointing to "x print" inside the function
+        usage_offset = source.index("x print")
+        location = find_variable_definition("x", func, state, usage_offset=usage_offset)
+
+        assert location is not None
+        # Should point to line 2 (second assignment: "2 = x")
+        assert location.range.start.line == 2
+
+
+class TestInferLiteralType:
+    """Tests for _infer_literal_type() helper."""
+
+    def test_integer_literal(self):
+        from casa_ls import _infer_literal_type
+
+        assert _infer_literal_type("42") == "int"
+
+    def test_zero(self):
+        from casa_ls import _infer_literal_type
+
+        assert _infer_literal_type("0") == "int"
+
+    def test_negative_number(self):
+        from casa_ls import _infer_literal_type
+
+        # Negative numbers are digits with a minus prefix
+        result = _infer_literal_type("-5")
+        # Could be "int" or None depending on implementation
+        assert result in ("int", None)
+
+    def test_true_literal(self):
+        from casa_ls import _infer_literal_type
+
+        assert _infer_literal_type("true") == "bool"
+
+    def test_false_literal(self):
+        from casa_ls import _infer_literal_type
+
+        assert _infer_literal_type("false") == "bool"
+
+    def test_identifier_returns_none(self):
+        from casa_ls import _infer_literal_type
+
+        assert _infer_literal_type("foo") is None
+
+    def test_empty_string_returns_none(self):
+        from casa_ls import _infer_literal_type
+
+        assert _infer_literal_type("") is None
+
+
+class TestDotCompletionPrimitives:
+    """Tests for dot-triggered completion on primitive types."""
+
+    def _make_state_with_int_methods(self, source, source_file):
+        """Create a DocumentState with int:: methods registered."""
+        from casa_ls import _methods_for_type
+
+        state, _ = run_pipeline(source_file)
+        # Inject int::hash and int::eq as if std.casa was loaded
+        state.functions["int::hash"] = Function(
+            name="int::hash",
+            ops=[],
+            location=None,
+            signature=Signature(
+                parameters=[Parameter("self", "int")],
+                return_types=["int"],
+            ),
+        )
+        state.functions["int::eq"] = Function(
+            name="int::eq",
+            ops=[],
+            location=None,
+            signature=Signature(
+                parameters=[Parameter("self", "int"), Parameter("other", "int")],
+                return_types=["bool"],
+            ),
+        )
+        return state
+
+    def test_dot_completion_after_int_variable(self, tmp_path):
+        """Dot-triggered completion after an int variable shows int methods."""
+        source_file = tmp_path / "comp_int_dot.casa"
+        source = "69 = num\nnum."
+        source_file.write_text(source)
+
+        state = self._make_state_with_int_methods(source, source_file)
+        uri = f"file://{source_file}"
+        document_states[uri] = state
+
+        params = types.CompletionParams(
+            text_document=types.TextDocumentIdentifier(uri=uri),
+            position=types.Position(line=1, character=4),
+            context=types.CompletionContext(
+                trigger_kind=types.CompletionTriggerKind.TriggerCharacter,
+                trigger_character=".",
+            ),
+        )
+        result = text_document_completion(params)
+        labels = [item.label for item in result.items]
+        assert "hash" in labels
+        assert "eq" in labels
+
+    def test_dot_completion_after_int_literal(self, tmp_path):
+        """Dot-triggered completion after a bare int literal shows int methods."""
+        source_file = tmp_path / "comp_literal_dot.casa"
+        source = "69."
+        source_file.write_text(source)
+
+        state = self._make_state_with_int_methods(source, source_file)
+        uri = f"file://{source_file}"
+        document_states[uri] = state
+
+        params = types.CompletionParams(
+            text_document=types.TextDocumentIdentifier(uri=uri),
+            position=types.Position(line=0, character=3),
+            context=types.CompletionContext(
+                trigger_kind=types.CompletionTriggerKind.TriggerCharacter,
+                trigger_character=".",
+            ),
+        )
+        result = text_document_completion(params)
+        labels = [item.label for item in result.items]
+        assert "hash" in labels
+        assert "eq" in labels

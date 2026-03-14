@@ -264,6 +264,15 @@ def _extract_word_before(source: str, offset: int) -> str:
     return source[start + 1 : end]
 
 
+def _infer_literal_type(name: str) -> str | None:
+    """Infer the type of a literal value from its textual representation."""
+    if name and name.isdigit():
+        return "int"
+    if name in ("true", "false"):
+        return "bool"
+    return None
+
+
 def resolve_variable_type(
     name: str, func: Function | None, state: DocumentState
 ) -> str | None:
@@ -320,18 +329,32 @@ def find_containing_function(state: DocumentState, offset: int) -> Function | No
 
 
 def find_variable_definition(
-    name: str, function: Function | None, state: DocumentState
+    name: str,
+    function: Function | None,
+    state: DocumentState,
+    usage_offset: int = 0,
 ) -> types.Location | None:
-    """Find the first ASSIGN_VARIABLE op with the given name."""
+    """Find the most recent ASSIGN_VARIABLE op before usage_offset."""
+    best: Op | None = None
+
     if function:
         for op in function.ops:
             if op.kind == OpKind.ASSIGN_VARIABLE and op.value == name:
-                return casa_location_to_lsp(op.location)
+                if op.location.span.offset < usage_offset:
+                    best = op
+                elif best is None:
+                    best = op
 
-    for op in state.ops:
-        if op.kind == OpKind.ASSIGN_VARIABLE and op.value == name:
-            return casa_location_to_lsp(op.location)
+    if best is None:
+        for op in state.ops:
+            if op.kind == OpKind.ASSIGN_VARIABLE and op.value == name:
+                if op.location.span.offset < usage_offset:
+                    best = op
+                elif best is None:
+                    best = op
 
+    if best is not None:
+        return casa_location_to_lsp(best.location)
     return None
 
 
@@ -685,7 +708,9 @@ def text_document_definition(
             return casa_location_to_lsp(fn_def.location)
 
     elif op.kind in (OpKind.PUSH_VARIABLE, OpKind.PUSH_CAPTURE):
-        return find_variable_definition(op.value, func, state)
+        return find_variable_definition(
+            op.value, func, state, op.location.span.offset
+        )
 
     elif op.kind == OpKind.STRUCT_NEW:
         struct = op.value
@@ -842,6 +867,8 @@ def text_document_completion(
             receiver_name = _extract_word_before(state.source, dot_pos)
             containing_fn = find_containing_function(state, offset)
             receiver_type = resolve_variable_type(receiver_name, containing_fn, state)
+            if not receiver_type:
+                receiver_type = _infer_literal_type(receiver_name)
             if receiver_type:
                 method_items = _methods_for_type(receiver_type, state)
                 if method_items:
