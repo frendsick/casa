@@ -255,6 +255,54 @@ def find_op_at_position(
     return best
 
 
+def _extract_word_before(source: str, offset: int) -> str:
+    """Extract the identifier immediately before the given offset."""
+    end = offset
+    start = end - 1
+    while start >= 0 and (source[start].isalnum() or source[start] == "_"):
+        start -= 1
+    return source[start + 1 : end]
+
+
+def resolve_variable_type(
+    name: str, func: Function | None, state: DocumentState
+) -> str | None:
+    """Look up a variable's type from the containing function or global scope."""
+    if func:
+        for var in func.variables:
+            if var.name == name and var.typ:
+                return var.typ
+        for var in func.captures:
+            if var.name == name and var.typ:
+                return var.typ
+    global_var = state.variables.get(name)
+    if global_var and global_var.typ:
+        return global_var.typ
+    return None
+
+
+def _methods_for_type(
+    receiver_type: str, state: DocumentState
+) -> list[types.CompletionItem]:
+    """Return completion items for methods available on the given type."""
+    base_type = extract_generic_base(receiver_type) or receiver_type
+    prefix = f"{base_type}::"
+    items: list[types.CompletionItem] = []
+    for name, fn_def in state.functions.items():
+        if not name.startswith(prefix):
+            continue
+        method_name = name[len(prefix) :]
+        detail = repr(fn_def.signature) if fn_def.signature else None
+        items.append(
+            types.CompletionItem(
+                label=method_name,
+                kind=types.CompletionItemKind.Method,
+                detail=detail,
+            )
+        )
+    return items
+
+
 def find_containing_function(state: DocumentState, offset: int) -> Function | None:
     """Find which function the cursor is inside."""
     for func in state.functions.values():
@@ -361,16 +409,9 @@ def format_hover(op: Op, state: DocumentState, func: Function | None) -> str | N
 
     if op.kind in (OpKind.PUSH_VARIABLE, OpKind.PUSH_CAPTURE):
         var_name = op.value
-        if func:
-            for var in func.variables:
-                if var.name == var_name and var.typ:
-                    return f"{var_name}: {var.typ}"
-            for var in func.captures:
-                if var.name == var_name and var.typ:
-                    return f"{var_name}: {var.typ}"
-        global_var = state.variables.get(var_name)
-        if global_var and global_var.typ:
-            return f"{var_name}: {global_var.typ}"
+        var_type = resolve_variable_type(var_name, func, state)
+        if var_type:
+            return f"{var_name}: {var_type}"
         return var_name
 
     if op.kind == OpKind.STRUCT_NEW:
@@ -393,13 +434,9 @@ def format_hover(op: Op, state: DocumentState, func: Function | None) -> str | N
 
     if op.kind == OpKind.ASSIGN_VARIABLE:
         var_name = op.value
-        if func:
-            for var in func.variables:
-                if var.name == var_name and var.typ:
-                    return f"= {var_name}: {var.typ}"
-        global_var = state.variables.get(var_name)
-        if global_var and global_var.typ:
-            return f"= {var_name}: {global_var.typ}"
+        var_type = resolve_variable_type(var_name, func, state)
+        if var_type:
+            return f"= {var_name}: {var_type}"
         return f"= {var_name}"
 
     if op.kind in OP_STACK_EFFECTS:
@@ -802,53 +839,13 @@ def text_document_completion(
         )
         dot_pos = offset - 1
         if dot_pos >= 0 and state.source[dot_pos] == ".":
-            word_end = dot_pos
-            word_start = word_end - 1
-            while word_start >= 0 and (
-                state.source[word_start].isalnum() or state.source[word_start] == "_"
-            ):
-                word_start -= 1
-            word_start += 1
-            receiver_name = state.source[word_start:word_end]
-            if receiver_name:
-                receiver_type = None
-                containing_fn = find_containing_function(state, offset)
-                if containing_fn:
-                    for var in containing_fn.variables:
-                        if var.name == receiver_name and var.typ:
-                            receiver_type = var.typ
-                            break
-                    if not receiver_type:
-                        for var in containing_fn.captures:
-                            if var.name == receiver_name and var.typ:
-                                receiver_type = var.typ
-                                break
-                if not receiver_type:
-                    global_var = state.variables.get(receiver_name)
-                    if global_var and global_var.typ:
-                        receiver_type = global_var.typ
-
-                if receiver_type:
-                    base_type = extract_generic_base(receiver_type) or receiver_type
-                    prefix = f"{base_type}::"
-                    method_items: list[types.CompletionItem] = []
-                    for name, fn_def in state.functions.items():
-                        if name.startswith(prefix):
-                            method_name = name[len(prefix) :]
-                            detail = (
-                                repr(fn_def.signature) if fn_def.signature else None
-                            )
-                            method_items.append(
-                                types.CompletionItem(
-                                    label=method_name,
-                                    kind=types.CompletionItemKind.Method,
-                                    detail=detail,
-                                )
-                            )
-                    if method_items:
-                        return types.CompletionList(
-                            is_incomplete=False, items=method_items
-                        )
+            receiver_name = _extract_word_before(state.source, dot_pos)
+            containing_fn = find_containing_function(state, offset)
+            receiver_type = resolve_variable_type(receiver_name, containing_fn, state)
+            if receiver_type:
+                method_items = _methods_for_type(receiver_type, state)
+                if method_items:
+                    return types.CompletionList(is_incomplete=False, items=method_items)
 
     if state:
         # Functions (skip internal names)
