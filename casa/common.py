@@ -302,6 +302,8 @@ class OpKind(Enum):
     PUSH_NONE = auto()
     PUSH_STR = auto()
     SOME = auto()
+    OK = auto()
+    ERR = auto()
 
     # Arithmetic
     ADD = auto()
@@ -395,11 +397,11 @@ class Op:
     type_annotation: str | None = None
 
     def __post_init__(self):
-        assert len(OpKind) == 84, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 86, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires Python `None`
-            case OpKind.PUSH_NONE | OpKind.SOME:
+            case OpKind.PUSH_NONE | OpKind.SOME | OpKind.OK | OpKind.ERR:
                 if self.value is not None:
                     raise TypeError(f"`{self.kind}` requires value of type `NoneType`")
             # Requires `bool`
@@ -766,6 +768,7 @@ BUILTIN_TYPES: set[str] = {
     "array",
     "any",
     "option",
+    "result",
 }
 
 

@@ -480,8 +480,8 @@ class Compiler:
                 end_label = op_to_label(op)
                 bytecode.append(self.inst(InstKind.LABEL, args=[end_label]))
 
-    def _compile_some(self, bytecode: list[Inst]) -> None:
-        """Compile SOME op -- wraps top of stack in an option."""
+    def _compile_tagged_wrapper(self, tag: int, bytecode: list[Inst]) -> None:
+        """Compile a tagged heap wrapper (used by some/ok/err)."""
         local_ptr = self.locals_count
         self.locals_count += 1
         bytecode.append(self.inst(InstKind.PUSH, args=[16]))
@@ -492,12 +492,16 @@ class Compiler:
         bytecode.append(self.inst(InstKind.PUSH, args=[8]))
         bytecode.append(self.inst(InstKind.ADD))
         bytecode.append(self.inst(InstKind.STORE64))
-        # Store tag=1 at byte offset 0
-        bytecode.append(self.inst(InstKind.PUSH, args=[1]))
+        # Store tag at byte offset 0
+        bytecode.append(self.inst(InstKind.PUSH, args=[tag]))
         bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_ptr]))
         bytecode.append(self.inst(InstKind.STORE64))
         # Push ptr
         bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_ptr]))
+
+    def _compile_some(self, bytecode: list[Inst]) -> None:
+        """Compile SOME op -- wraps top of stack in an option."""
+        self._compile_tagged_wrapper(1, bytecode)
 
     def _compile_struct_new(self, op: Op, bytecode: list[Inst]) -> None:
         """Compile STRUCT_NEW op."""
@@ -545,7 +549,7 @@ class Compiler:
     def compile(self) -> Bytecode:
         """Lower all ops to bytecode instructions."""
         assert len(InstKind) == 66, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 84, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 86, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
         bytecode: list[Inst] = []
@@ -649,6 +653,10 @@ class Compiler:
                     bytecode.append(self.inst(get_kind, args=[index]))
                 case OpKind.SOME:
                     self._compile_some(bytecode)
+                case OpKind.OK:
+                    self._compile_tagged_wrapper(1, bytecode)
+                case OpKind.ERR:
+                    self._compile_tagged_wrapper(0, bytecode)
                 case OpKind.STRUCT_NEW:
                     self._compile_struct_new(op, bytecode)
                 case (

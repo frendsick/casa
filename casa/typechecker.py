@@ -819,6 +819,12 @@ class TypeChecker:
             case OpKind.SOME:
                 t1 = self.stack_pop()
                 self.stack_push(f"option[{t1}]")
+            case OpKind.OK:
+                t1 = self.stack_pop()
+                self.stack_push(f"result[{t1} any]")
+            case OpKind.ERR:
+                t1 = self.stack_pop()
+                self.stack_push(f"result[any {t1}]")
             case OpKind.PUSH_ARRAY:
                 items = op.value
                 assert isinstance(items, list)
@@ -1051,7 +1057,9 @@ class TypeChecker:
                 # one arm ran (wildcard-only match), so accept current stack
                 if branched.before is branched.after:
                     pass
-                elif (unified := _stacks_compatible(self.stack, branched.after)) is not None:
+                elif (
+                    unified := _stacks_compatible(self.stack, branched.after)
+                ) is not None:
                     self.stack = unified
                     self.stack_origins = branched.after_origins.copy()
                 elif self.stack == branched.before == branched.after:
@@ -1249,6 +1257,8 @@ OP_STACK_EFFECTS: dict[OpKind, tuple[str, str]] = {
     OpKind.PRINT_CHAR: ("print", "any -> None"),
     OpKind.PRINT_CSTR: ("print", "any -> None"),
     OpKind.SOME: ("some", "any -> option[any]"),
+    OpKind.OK: ("ok", "any -> result[any any]"),
+    OpKind.ERR: ("error", "any -> result[any any]"),
     OpKind.FN_EXEC: ("exec", "fn[sig] -> ..."),
     OpKind.TYPEOF: ("typeof", "any -> str"),
     OpKind.ASSIGN_DECREMENT: ("-=", "int -> None"),
@@ -1283,6 +1293,8 @@ def _infer_literal_type(op: Op, function: Function | None = None) -> str:
             return "int"
         case OpKind.PUSH_NONE:
             return "option"
+        case OpKind.OK | OpKind.ERR:
+            return "result"
         case OpKind.PUSH_STR:
             return "str"
         case OpKind.PUSH_BOOL:
@@ -1583,7 +1595,7 @@ def type_satisfies_trait(
 
 def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature:
     """Type-check a list of ops and return the inferred signature."""
-    assert len(OpKind) == 84, "Exhaustive handling for `OpKind`"
+    assert len(OpKind) == 86, "Exhaustive handling for `OpKind`"
 
     tc = TypeChecker(ops=ops)
     op_index = 0
@@ -1661,6 +1673,8 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 | OpKind.PUSH_CHAR
                 | OpKind.PUSH_NONE
                 | OpKind.SOME
+                | OpKind.OK
+                | OpKind.ERR
                 | OpKind.PUSH_ARRAY
                 | OpKind.FSTRING_CONCAT
             ):
