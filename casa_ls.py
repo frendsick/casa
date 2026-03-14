@@ -685,11 +685,9 @@ def did_open(params: types.DidOpenTextDocumentParams):
 @server.feature(types.TEXT_DOCUMENT_DID_CHANGE)
 def did_change(params: types.DidChangeTextDocumentParams):
     """Publish diagnostics when file content changes."""
-    if params.content_changes:
-        source = params.content_changes[-1].text
-        run_diagnostics(
-            server, params.text_document.uri, source=source, update_state=False
-        )
+    uri = params.text_document.uri
+    document = server.workspace.get_text_document(uri)
+    run_diagnostics(server, uri, source=document.source, update_state=False)
 
 
 @server.feature(types.TEXT_DOCUMENT_DID_SAVE)
