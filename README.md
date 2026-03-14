@@ -73,6 +73,7 @@ source → lex → parse → resolve → type check → bytecode → emit asm �
 | [Traits](docs/traits.md) | Trait definitions, structural satisfaction, trait bounds, `Hashable` |
 | [Standard Library](docs/standard-library.md) | `include`, `memcpy`, arrays (`map`, `filter`, `reduce`), `option[T]`, `List[T]`, `Map[K V]`, `Set[K]`, string methods, C string methods, file I/O, character classification, type conversions |
 | [Errors](docs/errors.md) | Error kinds, diagnostics format, multi-error collection |
+| [Language Server](docs/language-server.md) | LSP setup, editor configuration, diagnostics |
 
 ## Examples
 
@@ -92,6 +93,48 @@ source → lex → parse → resolve → type check → bytecode → emit asm �
 | [enum.casa](examples/enum.casa) | Enum types with `match` pattern matching |
 
 More examples: [examples](./examples/)
+
+## Editor Integration
+
+Casa ships with an LSP language server that provides real-time error and warning diagnostics. It runs the compiler pipeline on every file open and save, reporting issues back to the editor.
+
+### Setup
+
+Install the Python LSP framework in the project virtualenv:
+
+```sh
+.venv/bin/pip install pygls
+```
+
+### Running the Language Server
+
+The server communicates over stdio:
+
+```sh
+.venv/bin/python casa_ls.py
+```
+
+Point your editor's LSP client at this command. For example, in Neovim with `nvim-lspconfig`:
+
+```lua
+require('lspconfig.configs').casa = {
+  default_config = {
+    cmd = { '.venv/bin/python', 'casa_ls.py' },
+    filetypes = { 'casa' },
+    root_dir = function(fname)
+      return vim.fs.dirname(fname)
+    end,
+  },
+}
+require('lspconfig').casa.setup({})
+```
+
+### Supported Features
+
+| Feature | Trigger |
+|---------|---------|
+| Error diagnostics | File open, file save |
+| Warning diagnostics | File open, file save |
 
 ## Testing
 
