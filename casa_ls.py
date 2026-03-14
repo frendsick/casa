@@ -183,15 +183,23 @@ def run_pipeline(
     return state, errors
 
 
-def run_diagnostics(server: LanguageServer, uri: str, source: str | None = None):
+def run_diagnostics(
+    server: LanguageServer,
+    uri: str,
+    source: str | None = None,
+    update_state: bool = True,
+):
     """Run the Casa compiler pipeline and publish diagnostics."""
     file_path = Path(unquote(urlparse(uri).path)).resolve()
     state, errors = run_pipeline(file_path, source=source)
-    old_state = document_states.get(uri)
-    if state.ops or state.functions or not old_state:
+    if update_state:
         document_states[uri] = state
-    elif old_state:
-        old_state.source = state.source
+    else:
+        old_state = document_states.get(uri)
+        if old_state:
+            old_state.source = state.source
+        else:
+            document_states[uri] = state
 
     diagnostics: list[types.Diagnostic] = []
     for error in errors:
@@ -679,7 +687,9 @@ def did_change(params: types.DidChangeTextDocumentParams):
     """Publish diagnostics when file content changes."""
     if params.content_changes:
         source = params.content_changes[-1].text
-        run_diagnostics(server, params.text_document.uri, source=source)
+        run_diagnostics(
+            server, params.text_document.uri, source=source, update_state=False
+        )
 
 
 @server.feature(types.TEXT_DOCUMENT_DID_SAVE)
