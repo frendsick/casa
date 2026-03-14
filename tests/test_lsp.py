@@ -737,7 +737,7 @@ class TestCompletion:
         assert "Point" in labels
 
     def test_includes_enums(self, tmp_path):
-        """Completion list includes defined enum variants."""
+        """Completion list includes enum type names."""
         source_file = tmp_path / "comp_enum.casa"
         source = "enum Color { Red Green Blue }\nColor::Red print"
         source_file.write_text(source)
@@ -748,9 +748,7 @@ class TestCompletion:
 
         result = text_document_completion(_make_completion_params(uri, 1, 0))
         labels = [item.label for item in result.items]
-        assert "Color::Red" in labels
-        assert "Color::Green" in labels
-        assert "Color::Blue" in labels
+        assert "Color" in labels
 
     def test_keywords_without_document_state(self):
         """Keywords and intrinsics are available even without document state."""

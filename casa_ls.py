@@ -938,9 +938,11 @@ def text_document_completion(
             return types.CompletionList(is_incomplete=False, items=triggered_items)
 
     if state:
-        # Functions (skip internal names)
+        # Functions (skip internal names and qualified methods)
         for name, fn_def in state.functions.items():
             if name.startswith("lambda__") or name.startswith("__"):
+                continue
+            if "::" in name:
                 continue
             detail = repr(fn_def.signature) if fn_def.signature else None
             items.append(
@@ -962,15 +964,14 @@ def text_document_completion(
                 )
             )
 
-        # Enum variants
-        for name, enum in state.enums.items():
-            for variant in enum.variants:
-                items.append(
-                    types.CompletionItem(
-                        label=f"{name}::{variant}",
-                        kind=types.CompletionItemKind.EnumMember,
-                    )
+        # Enums (type names only, variants available via ::)
+        for name in state.enums:
+            items.append(
+                types.CompletionItem(
+                    label=name,
+                    kind=types.CompletionItemKind.Enum,
                 )
+            )
 
         # Local variables from containing function
         offset = position_to_offset(
