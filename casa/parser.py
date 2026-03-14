@@ -494,6 +494,32 @@ def token_to_op(
             assert_never(token.kind)
 
 
+def _has_whitespace_before_receiver(token: Token, cursor: Cursor[Token]) -> bool:
+    """Check if the dot/arrow token has whitespace after a receiver token.
+
+    Returns True (error) only when the previous token looks like a receiver
+    (identifier, literal, keyword, or closing delimiter) and is not adjacent.
+    Returns False (no error) when the previous token is an intrinsic, operator,
+    or opening delimiter, since those indicate the dot operates on the implicit
+    stack top rather than a specific receiver.
+    """
+    if cursor.position - 2 < 0:
+        return False
+    prev = cursor.sequence[cursor.position - 2]
+    receiver_kinds = {TokenKind.IDENTIFIER, TokenKind.LITERAL, TokenKind.KEYWORD}
+    is_closing_delim = prev.kind == TokenKind.DELIMITER and prev.value in {
+        ")",
+        "]",
+        "}",
+    }
+    if prev.kind not in receiver_kinds and not is_closing_delim:
+        return False
+    return (
+        prev.location.span.offset + prev.location.span.length
+        != token.location.span.offset
+    )
+
+
 def get_op_delimiter(
     token: Token,
     cursor: Cursor[Token],
@@ -507,6 +533,12 @@ def get_op_delimiter(
         case None:
             return None
         case Delimiter.ARROW:
+            if _has_whitespace_before_receiver(token, cursor):
+                raise_error(
+                    ErrorKind.SYNTAX,
+                    "Unexpected whitespace before `->` in setter syntax",
+                    token.location,
+                )
             member = expect_token(cursor, kind=TokenKind.IDENTIFIER)
             return Op(f"set_{member.value}", OpKind.METHOD_CALL, member.location)
         case Delimiter.COLON:
@@ -514,6 +546,12 @@ def get_op_delimiter(
         case Delimiter.COMMA:
             return None
         case Delimiter.DOT:
+            if _has_whitespace_before_receiver(token, cursor):
+                raise_error(
+                    ErrorKind.SYNTAX,
+                    "Unexpected whitespace before `.`",
+                    token.location,
+                )
             method = expect_token(cursor, kind=TokenKind.IDENTIFIER)
             return Op(method.value, OpKind.METHOD_CALL, method.location)
         case Delimiter.FAT_ARROW:
