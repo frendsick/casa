@@ -55,7 +55,8 @@ Jump to the definition of a symbol under the cursor. Supported symbols:
 | Function call or `&reference` | Function declaration |
 | Variable | First assignment of that variable (local first, then global) |
 | Struct constructor | Struct definition |
-| Enum variant | Enum definition |
+| Enum variant `Enum::Variant` (cursor on enum) | Enum definition |
+| Enum variant `Enum::Variant` (cursor on variant) | Variant definition in enum body |
 | Type cast `(TypeName)` | Struct or enum definition |
 | Qualified name `Type::method` (cursor on type) | Struct or enum definition |
 | Qualified name `Type::method` (cursor on method) | Method definition |
