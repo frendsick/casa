@@ -1383,3 +1383,127 @@ def test_typecheck_str_concat():
     """str::concat returns str."""
     sig = typecheck_string(STD_INCLUDE + '"hello" " world" str::concat')
     assert sig.return_types == ["str"]
+
+
+# ---------------------------------------------------------------------------
+# Return type unification
+# ---------------------------------------------------------------------------
+def test_typecheck_return_type_unification_ok_and_error():
+    """Return types with ok (result[T any]) and error (result[any E]) unify."""
+    code = """
+    struct MyErr { msg: str }
+    fn try_it x:int -> result[int MyErr] {
+        if 0 x == then
+            "zero" MyErr error
+            return
+        fi
+        x ok
+    }
+    5 try_it
+    """
+    sig = typecheck_string(code)
+    assert sig.return_types == ["result[int MyErr]"]
+
+
+def test_typecheck_return_type_unification_multiple_returns():
+    """Multiple return statements with different any positions unify."""
+    code = """
+    struct ParseErr { msg: str pos: int }
+    fn parse x:int -> result[str ParseErr] {
+        if 0 x == then
+            x "bad" ParseErr error
+            return
+        fi
+        if 10 x > then
+            x "too big" ParseErr error
+            return
+        fi
+        "good" ok
+    }
+    5 parse
+    """
+    sig = typecheck_string(code)
+    assert sig.return_types == ["result[str ParseErr]"]
+
+
+def test_typecheck_return_type_unification_mismatch():
+    """Incompatible return types across return paths produce an error."""
+    code = """
+    fn bad x:int -> int {
+        if 0 x == then
+            "hello"
+            return
+        fi
+        42
+    }
+    5 bad
+    """
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        typecheck_string(code)
+    assert exc_info.value.errors[0].kind == ErrorKind.TYPE_MISMATCH
+
+
+# ---------------------------------------------------------------------------
+# Deferred method lambdas
+# ---------------------------------------------------------------------------
+def test_typecheck_deferred_method_unique():
+    """Lambda with unambiguous method resolves automatically."""
+    code = STD_INCLUDE + """
+    { .is_space } = pred
+    ' ' pred exec
+    """
+    sig = typecheck_string(code)
+    assert sig.return_types == ["bool"]
+
+
+def test_typecheck_deferred_method_multi_type():
+    """Lambda with method on multiple types defers and specializes."""
+    code = STD_INCLUDE + """
+    { .hash } = hasher
+    42 hasher exec
+    """
+    sig = typecheck_string(code)
+    assert sig.return_types == ["int"]
+
+
+def test_typecheck_deferred_method_different_return_types_error():
+    """Deferred method with different return types produces ambiguity error."""
+    code = """
+    impl int { fn thing int -> int { drop 1 } }
+    impl bool { fn thing bool -> bool { drop true } }
+    { .thing } = f
+    """
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        typecheck_string(code)
+    assert exc_info.value.errors[0].kind == ErrorKind.UNDEFINED_NAME
+
+
+def test_typecheck_deferred_method_nonexistent():
+    """Lambda with nonexistent method produces error."""
+    code = '{ .nonexistent_method } = f'
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        typecheck_string(code)
+    assert exc_info.value.errors[0].kind == ErrorKind.UNDEFINED_NAME
+
+
+def test_typecheck_deferred_method_param_mismatch():
+    """Deferred method with wrong parameter type produces error at call site."""
+    code = """
+    impl int { fn thing int -> int { drop 1 } }
+    impl char { fn thing bool -> int { drop 2 } }
+    { .thing } = f
+    'a' f exec
+    """
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        typecheck_string(code)
+    assert exc_info.value.errors[0].kind == ErrorKind.TYPE_MISMATCH
+
+
+def test_typecheck_deferred_method_chain():
+    """Chained deferred methods resolve correctly."""
+    code = STD_INCLUDE + """
+    { .length .hash } = len_hash
+    "hello" len_hash exec
+    """
+    sig = typecheck_string(code)
+    assert sig.return_types == ["int"]

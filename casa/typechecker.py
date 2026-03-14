@@ -805,7 +805,8 @@ class TypeChecker:
             case OpKind.FN_RETURN:
                 if self.return_types is None:
                     self.return_types = self.stack.copy()
-                if self.return_types != self.stack:
+                unified = _stacks_compatible(self.return_types, self.stack)
+                if unified is None:
                     raise_error(
                         ErrorKind.TYPE_MISMATCH,
                         "Invalid return types",
@@ -813,6 +814,7 @@ class TypeChecker:
                         expected=str(self.return_types),
                         got=str(self.stack),
                     )
+                self.return_types = unified
                 if self.branched_stacks:
                     branched = self.branched_stacks[-1]
                     self.stack = branched.before.copy()
@@ -1940,14 +1942,18 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
 
     fn_location = function.location if function else None
 
-    if tc.return_types and tc.return_types != tc.stack:
-        raise_error(
-            ErrorKind.TYPE_MISMATCH,
-            "Invalid return types",
-            fn_location,
-            expected=str(tc.return_types),
-            got=str(tc.stack),
-        )
+    if tc.return_types:
+        unified = _stacks_compatible(tc.return_types, tc.stack)
+        if unified is None:
+            raise_error(
+                ErrorKind.TYPE_MISMATCH,
+                "Invalid return types",
+                fn_location,
+                expected=str(tc.return_types),
+                got=str(tc.stack),
+            )
+        tc.return_types = unified
+        tc.stack = unified
 
     inferred_signature = Signature(tc.parameters, tc.stack)
 
