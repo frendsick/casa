@@ -655,7 +655,7 @@ class Compiler:
                     self._compile_some(bytecode)
                 case OpKind.OK:
                     self._compile_tagged_wrapper(1, bytecode)
-                case OpKind.ERR:
+                case OpKind.ERROR:
                     self._compile_tagged_wrapper(0, bytecode)
                 case OpKind.STRUCT_NEW:
                     self._compile_struct_new(op, bytecode)

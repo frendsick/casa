@@ -303,7 +303,7 @@ class OpKind(Enum):
     PUSH_STR = auto()
     SOME = auto()
     OK = auto()
-    ERR = auto()
+    ERROR = auto()
 
     # Arithmetic
     ADD = auto()
@@ -401,7 +401,7 @@ class Op:
 
         match self.kind:
             # Requires Python `None`
-            case OpKind.PUSH_NONE | OpKind.SOME | OpKind.OK | OpKind.ERR:
+            case OpKind.PUSH_NONE | OpKind.SOME | OpKind.OK | OpKind.ERROR:
                 if self.value is not None:
                     raise TypeError(f"`{self.kind}` requires value of type `NoneType`")
             # Requires `bool`

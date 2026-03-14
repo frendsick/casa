@@ -822,7 +822,7 @@ class TypeChecker:
             case OpKind.OK:
                 t1 = self.stack_pop()
                 self.stack_push(f"result[{t1} any]")
-            case OpKind.ERR:
+            case OpKind.ERROR:
                 t1 = self.stack_pop()
                 self.stack_push(f"result[any {t1}]")
             case OpKind.PUSH_ARRAY:
@@ -1258,7 +1258,7 @@ OP_STACK_EFFECTS: dict[OpKind, tuple[str, str]] = {
     OpKind.PRINT_CSTR: ("print", "any -> None"),
     OpKind.SOME: ("some", "any -> option[any]"),
     OpKind.OK: ("ok", "any -> result[any any]"),
-    OpKind.ERR: ("error", "any -> result[any any]"),
+    OpKind.ERROR: ("error", "any -> result[any any]"),
     OpKind.FN_EXEC: ("exec", "fn[sig] -> ..."),
     OpKind.TYPEOF: ("typeof", "any -> str"),
     OpKind.ASSIGN_DECREMENT: ("-=", "int -> None"),
@@ -1293,7 +1293,7 @@ def _infer_literal_type(op: Op, function: Function | None = None) -> str:
             return "int"
         case OpKind.PUSH_NONE:
             return "option"
-        case OpKind.OK | OpKind.ERR:
+        case OpKind.OK | OpKind.ERROR:
             return "result"
         case OpKind.PUSH_STR:
             return "str"
@@ -1674,7 +1674,7 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 | OpKind.PUSH_NONE
                 | OpKind.SOME
                 | OpKind.OK
-                | OpKind.ERR
+                | OpKind.ERROR
                 | OpKind.PUSH_ARRAY
                 | OpKind.FSTRING_CONCAT
             ):

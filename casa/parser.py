@@ -1325,7 +1325,7 @@ def get_op_literal(token: Token) -> Op:
     if value == "ok":
         return Op(None, OpKind.OK, token.location)
     if value == "error":
-        return Op(None, OpKind.ERR, token.location)
+        return Op(None, OpKind.ERROR, token.location)
     if value.isdigit() or is_negative_integer_literal(value):
         return Op(int(value), OpKind.PUSH_INT, token.location)
     if value.startswith("'") and value.endswith("'") and len(value) == 3:
