@@ -618,16 +618,16 @@ def test_parse_some():
 
 
 def test_parse_none_value():
-    """PUSH_NONE op has value None."""
+    """PUSH_NONE op has Intrinsic.NONE as value."""
     ops = parse_string("none")
-    assert ops[0].value is None
+    assert ops[0].value == Intrinsic.NONE
 
 
 def test_parse_some_value():
-    """SOME op has value None (sentinel)."""
+    """SOME op has Intrinsic.SOME as value."""
     ops = parse_string("42 some")
     some_ops = find_ops(ops, OpKind.SOME)
-    assert some_ops[0].value is None
+    assert some_ops[0].value == Intrinsic.SOME
 
 
 def test_parse_none_in_function():

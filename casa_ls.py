@@ -681,6 +681,8 @@ OP_TOKEN_TYPE: dict[OpKind, int] = {
     OpKind.PUSH_BOOL: 4,
     OpKind.PUSH_NONE: 4,
     OpKind.SOME: 4,
+    OpKind.OK: 4,
+    OpKind.ERROR: 4,
     OpKind.FN_EXEC: 4,
     OpKind.IF_START: 4,
     OpKind.IF_CONDITION: 4,

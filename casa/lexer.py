@@ -276,8 +276,6 @@ class Lexer:
             return Token(value, TokenKind.LITERAL, location)
         if value in ("true", "false"):
             return Token(value, TokenKind.LITERAL, location)
-        if value in ("none", "some", "ok", "error"):
-            return Token(value, TokenKind.LITERAL, location)
         if Delimiter.from_str(value):
             return Token(value, TokenKind.DELIMITER, location)
         if Intrinsic.from_lowercase(value):

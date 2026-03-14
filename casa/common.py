@@ -49,6 +49,12 @@ class Intrinsic(Enum):
     PRINT = auto()
     TYPEOF = auto()
 
+    # Value constructors
+    NONE = auto()
+    SOME = auto()
+    OK = auto()
+    ERROR = auto()
+
     # Functions
     EXEC = auto()
 
@@ -400,10 +406,9 @@ class Op:
         assert len(OpKind) == 86, "Exhaustive handling for `OpKind`"
 
         match self.kind:
-            # Requires Python `None`
+            # Value constructors (no value validation needed)
             case OpKind.PUSH_NONE | OpKind.SOME | OpKind.OK | OpKind.ERROR:
-                if self.value is not None:
-                    raise TypeError(f"`{self.kind}` requires value of type `NoneType`")
+                pass
             # Requires `bool`
             case OpKind.PUSH_BOOL:
                 if not isinstance(self.value, bool):
