@@ -100,6 +100,10 @@ class TypeChecker:
     current_op_context: str | None = None
     # Which parameter mismatched (for error expected line)
     current_expect_context: str | None = None
+    # Maps variable names to lambda function names for deferred method lambdas
+    deferred_lambda_vars: dict[str, str] = field(default_factory=dict)
+    # Tracks the last pushed deferred lambda name for assignment tracking
+    last_deferred_lambda: str | None = None
 
     def stack_push(self, typ: Type, origin: Location | None = None):
         """Push a type onto the symbolic stack."""
@@ -458,6 +462,11 @@ class TypeChecker:
         variable_name = op.value
         assert isinstance(variable_name, str), "Expected variable name"
 
+        # Track deferred lambda variable assignments
+        if self.last_deferred_lambda:
+            self.deferred_lambda_vars[variable_name] = self.last_deferred_lambda
+            self.last_deferred_lambda = None
+
         stack_type = self.stack_peek()
         effective_type = op.type_annotation if op.type_annotation else stack_type
 
@@ -776,6 +785,8 @@ class TypeChecker:
                 fn_ptr = self.stack_peek()
                 if fn_ptr == ANY_TYPE:
                     fn_ptr = "fn"
+                # Specialize deferred method lambdas at call site
+                _try_specialize_deferred_exec(self, fn_ptr, ops, op_index, op)
                 fn_ptr = self.expect_type(fn_ptr)
                 assert isinstance(fn_ptr, str), "Function pointer type"
                 if fn_ptr != fn_symmetrical:
@@ -787,10 +798,15 @@ class TypeChecker:
                 assert isinstance(global_function, Function), "Expected function"
                 _ensure_typechecked(global_function)
                 self.stack_push(f"fn[{global_function.signature}]")
+                if global_function.has_deferred_methods:
+                    self.last_deferred_lambda = function_name
+                else:
+                    self.last_deferred_lambda = None
             case OpKind.FN_RETURN:
                 if self.return_types is None:
                     self.return_types = self.stack.copy()
-                if self.return_types != self.stack:
+                unified = _stacks_compatible(self.return_types, self.stack)
+                if unified is None:
                     raise_error(
                         ErrorKind.TYPE_MISMATCH,
                         "Invalid return types",
@@ -798,6 +814,7 @@ class TypeChecker:
                         expected=str(self.return_types),
                         got=str(self.stack),
                     )
+                self.return_types = unified
                 if self.branched_stacks:
                     branched = self.branched_stacks[-1]
                     self.stack = branched.before.copy()
@@ -1085,6 +1102,30 @@ class TypeChecker:
         self.current_expect_context = None
         self.stack_push(struct.name)
 
+    DEFERRED_METHOD = "DEFERRED"
+
+    @staticmethod
+    def _find_method_by_name(
+        method_name: str, location: Location
+    ) -> tuple[Function | None, str, str | None]:
+        """Search all global functions for a method matching ::method_name.
+
+        Used when the receiver type is 'any' (e.g. inside lambdas where the
+        stack type is unknown). Returns (function, name, deferred_return_type).
+        When exactly one match is found, returns it directly. When multiple
+        matches share a common return type, returns a deferred sentinel.
+        """
+        suffix = f"::{method_name}"
+        matches: list[tuple[str, Function]] = []
+        for name, func in GLOBAL_FUNCTIONS.items():
+            if name.endswith(suffix) and not name.startswith("lambda__"):
+                matches.append((name, func))
+        if len(matches) == 1:
+            return matches[0][1], matches[0][0], None
+        if len(matches) > 1:
+            return _defer_ambiguous_method(matches, method_name, location)
+        return None, f"any::{method_name}", None
+
     def check_method_call(
         self,
         op: Op,
@@ -1136,6 +1177,20 @@ class TypeChecker:
         if not global_function and receiver_base:
             function_name = f"{receiver_base}::{method_name}"
             global_function = GLOBAL_FUNCTIONS.get(function_name)
+        if not global_function and receiver == ANY_TYPE:
+            global_function, function_name, deferred_ret = self._find_method_by_name(
+                method_name, op.location
+            )
+            if not global_function and function_name == self.DEFERRED_METHOD:
+                # Deferred method: receiver is any, multiple candidates with
+                # common return type. Leave as METHOD_CALL for specialization.
+                assert deferred_ret is not None
+                op.deferred_return_type = deferred_ret
+                self.stack_pop()
+                self.stack_push(deferred_ret)
+                if function:
+                    function.has_deferred_methods = True
+                return op_index
         if not global_function:
             raise_error(
                 ErrorKind.UNDEFINED_NAME,
@@ -1406,6 +1461,171 @@ def _ensure_typechecked(global_function: Function) -> None:
     signature = type_check_ops(global_function.ops, global_function)
     if not global_function.signature:
         global_function.signature = signature
+
+
+def _defer_ambiguous_method(
+    matches: list[tuple[str, Function]],
+    method_name: str,
+    location: Location,
+) -> tuple[Function | None, str, str | None]:
+    """Handle ambiguous method lookup by checking for a common return type.
+
+    If all candidates share the same return type, the method is deferred for
+    monomorphization at each call site. Returns (None, DEFERRED, return_type).
+    Otherwise, reports an ambiguity error.
+    """
+    for _, func in matches:
+        if not func.is_typechecked:
+            func.ops = resolve_identifiers(func.ops, func)
+            func.is_used = True
+        _ensure_typechecked(func)
+
+    return_types: set[str] = set()
+    for _, func in matches:
+        if func.signature:
+            for ret in func.signature.return_types:
+                return_types.add(ret)
+
+    if len(return_types) == 1:
+        common_ret = return_types.pop()
+        return None, TypeChecker.DEFERRED_METHOD, common_ret
+
+    candidates = ", ".join(name for name, _ in matches)
+    raise_error(
+        ErrorKind.UNDEFINED_NAME,
+        f"Ambiguous method `.{method_name}`, candidates: {candidates}",
+        location,
+    )
+    return None, f"any::{method_name}", None
+
+
+def _try_specialize_deferred_exec(
+    tc: TypeChecker,
+    fn_ptr: str,
+    ops: list[Op],
+    op_index: int,
+    exec_op: Op,
+) -> str | None:
+    """Specialize a deferred method lambda at an exec call site.
+
+    When a lambda has deferred (unresolved) methods and is called via exec,
+    this creates a monomorphized clone with the method resolved for the
+    concrete argument type. Returns the specialized fn type, or None.
+    """
+    if not isinstance(fn_ptr, str) or not fn_ptr.startswith("fn["):
+        return None
+    if ANY_TYPE not in fn_ptr:
+        return None
+
+    # Find the source lambda
+    source_lambda_name = _find_deferred_lambda_source(tc, ops, op_index)
+    if not source_lambda_name:
+        return None
+
+    source_lambda = GLOBAL_FUNCTIONS.get(source_lambda_name)
+    if not source_lambda or not source_lambda.has_deferred_methods:
+        return None
+
+    # Determine the concrete argument type from the stack
+    # Stack: [..., arg, fn_ptr]. fn_ptr is at top, arg is below.
+    if len(tc.stack) < 2:
+        return None
+    concrete_type = tc.stack[-2]
+    if concrete_type == ANY_TYPE:
+        return None
+
+    # Create or reuse a specialized clone
+    clone_name = f"{source_lambda_name}__spec_{concrete_type}"
+    existing = GLOBAL_FUNCTIONS.get(clone_name)
+    if not existing:
+        clone = _clone_and_specialize_lambda(source_lambda, clone_name, concrete_type)
+        if not clone:
+            return None
+        GLOBAL_FUNCTIONS[clone_name] = clone
+        _ensure_typechecked(clone)
+        existing = clone
+
+    # Verify the clone's parameter type matches the concrete argument type
+    if existing.signature.parameters:
+        expected_param = existing.signature.parameters[0].typ
+        if (
+            expected_param != concrete_type
+            and expected_param != ANY_TYPE
+            and concrete_type != ANY_TYPE
+        ):
+            raise_error(
+                ErrorKind.TYPE_MISMATCH,
+                f"Type mismatch in deferred method call",
+                exec_op.location,
+                expected=f"`{expected_param}`",
+                got=f"`{concrete_type}`",
+            )
+
+    # Replace the push op to push the clone directly
+    prev_op_idx = op_index - 2
+    if prev_op_idx >= 0:
+        prev_op = ops[prev_op_idx]
+        if prev_op.kind in (OpKind.PUSH_VARIABLE, OpKind.FN_PUSH, OpKind.PUSH_CAPTURE):
+            prev_op.kind = OpKind.FN_PUSH
+            prev_op.value = clone_name
+
+    # The original deferred lambda should not be compiled
+    source_lambda.is_used = False
+
+    # Update the stack so the concrete fn type is used by apply_signature
+    concrete_fn_type = f"fn[{existing.signature}]"
+    tc.stack[-1] = concrete_fn_type
+
+    return concrete_fn_type
+
+
+def _find_deferred_lambda_source(
+    tc: TypeChecker, ops: list[Op], op_index: int
+) -> str | None:
+    """Find the source lambda name for the fn pointer about to be exec'd."""
+    prev_op_idx = op_index - 2
+    if prev_op_idx < 0:
+        return None
+    prev_op = ops[prev_op_idx]
+    if prev_op.kind == OpKind.FN_PUSH:
+        return prev_op.value if isinstance(prev_op.value, str) else None
+    if prev_op.kind in (OpKind.PUSH_VARIABLE, OpKind.PUSH_CAPTURE):
+        var_name = prev_op.value
+        if isinstance(var_name, str):
+            return tc.deferred_lambda_vars.get(var_name)
+    return None
+
+
+def _clone_and_specialize_lambda(
+    source: Function, clone_name: str, concrete_type: str
+) -> Function | None:
+    """Clone a lambda and resolve deferred METHOD_CALL ops for concrete_type."""
+    import copy
+
+    cloned_ops = copy.deepcopy(source.ops)
+    for cloned_op in cloned_ops:
+        if cloned_op.kind != OpKind.METHOD_CALL:
+            continue
+        if cloned_op.deferred_return_type is None:
+            continue
+        method_name = cloned_op.value
+        assert isinstance(method_name, str)
+        # Resolve the method for the concrete type
+        fn_name = f"{concrete_type}::{method_name}"
+        resolved = GLOBAL_FUNCTIONS.get(fn_name)
+        base = extract_generic_base(concrete_type)
+        if not resolved and base:
+            fn_name = f"{base}::{method_name}"
+            resolved = GLOBAL_FUNCTIONS.get(fn_name)
+        if not resolved:
+            return None
+        cloned_op.kind = OpKind.FN_CALL
+        cloned_op.value = fn_name
+        cloned_op.deferred_return_type = None
+
+    clone = Function(clone_name, cloned_ops, source.location)
+    clone.is_used = True
+    return clone
 
 
 def _resolve_trait_sig(sig: Signature, type_var: str) -> Signature:
@@ -1722,14 +1942,18 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
 
     fn_location = function.location if function else None
 
-    if tc.return_types and tc.return_types != tc.stack:
-        raise_error(
-            ErrorKind.TYPE_MISMATCH,
-            "Invalid return types",
-            fn_location,
-            expected=str(tc.return_types),
-            got=str(tc.stack),
-        )
+    if tc.return_types:
+        unified = _stacks_compatible(tc.return_types, tc.stack)
+        if unified is None:
+            raise_error(
+                ErrorKind.TYPE_MISMATCH,
+                "Invalid return types",
+                fn_location,
+                expected=str(tc.return_types),
+                got=str(tc.stack),
+            )
+        tc.return_types = unified
+        tc.stack = unified
 
     inferred_signature = Signature(tc.parameters, tc.stack)
 

@@ -414,7 +414,7 @@ class Compiler:
         bytecode.append(self.inst(InstKind.LABEL, args=[start_label]))
         bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_index]))
         bytecode.append(self.inst(InstKind.PUSH, args=[(list_len + 2) * 8]))
-        bytecode.append(self.inst(InstKind.GE))
+        bytecode.append(self.inst(InstKind.GT))
         bytecode.append(self.inst(InstKind.JUMP_NE, args=[end_label]))
 
         # list index + store64
@@ -577,6 +577,13 @@ class Compiler:
                     assert isinstance(count, int)
                     bytecode.append(self.inst(InstKind.FSTRING_CONCAT, args=[count]))
                 case OpKind.FN_CALL | OpKind.FN_PUSH:
+                    if op.kind == OpKind.FN_PUSH:
+                        fn = GLOBAL_FUNCTIONS.get(op.value)
+                        if fn and fn.has_deferred_methods:
+                            # Deferred lambda: push dummy, real calls are
+                            # specialized at each exec site
+                            bytecode.append(self.inst(InstKind.PUSH, args=[0]))
+                            continue
                     self._compile_function_ops(op, bytecode)
                 case OpKind.IDENTIFIER:
                     raise AssertionError(

@@ -401,6 +401,7 @@ class Op:
     kind: OpKind
     location: Location
     type_annotation: str | None = None
+    deferred_return_type: str | None = None
 
     def __post_init__(self):
         assert len(OpKind) == 86, "Exhaustive handling for `OpKind`"
@@ -1065,6 +1066,7 @@ class Function:
     is_typechecked: bool = False
     variables: list[Variable] = field(default_factory=list)
     captures: list[Variable] = field(default_factory=list)
+    has_deferred_methods: bool = False
 
 
 GLOBAL_SCOPE_LABEL = "_start"
