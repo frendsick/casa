@@ -105,7 +105,7 @@ For example, after `p.` where `p` is a `Point`, the server offers `get_x`, `set_
 
 This works for generic types too. If `items` is a `List[int]`, typing `items.` shows methods from `List::*`.
 
-Dot-triggered completion only works when the receiver is a simple variable reference, not for chained method calls or complex expressions.
+Method chaining is supported. For example, `test.hash.` resolves `test` to its type, looks up the return type of `hash`, and offers methods for that return type.
 
 #### Qualified name completion
 
@@ -206,5 +206,5 @@ args = ["casa_ls.py"]
 - Diagnostics update on open, change, and save
 - The server resets all compiler state between runs, so each diagnostics pass is a full recompilation
 - Completion does not filter by prefix or context (the editor handles filtering)
-- Dot-triggered method completion only works for simple variable references
+- Dot-triggered method completion works for variables, literals, and method chains but not for arbitrary expressions
 - No code actions

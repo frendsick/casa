@@ -972,6 +972,8 @@ def text_document_completion(
         triggered_items = _handle_triggered_completion(state, offset)
         if triggered_items:
             return types.CompletionList(is_incomplete=False, items=triggered_items)
+        # Don't fall through to general list on trigger characters
+        return types.CompletionList(is_incomplete=False, items=[])
 
     if state:
         # Functions (skip internal names and qualified methods)

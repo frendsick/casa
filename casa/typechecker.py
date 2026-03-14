@@ -1047,6 +1047,8 @@ class TypeChecker:
                         )
 
                 # Apply final stack state
+                # Identity check: after is the same object as before when only
+                # one arm ran (wildcard-only match), so accept current stack
                 if branched.before is branched.after:
                     pass
                 elif (unified := _stacks_compatible(self.stack, branched.after)) is not None:
