@@ -1337,6 +1337,8 @@ OP_STACK_EFFECTS: dict[OpKind, tuple[str, str]] = {
     OpKind.SYSCALL4: ("syscall4", "any any any any int -> int"),
     OpKind.SYSCALL5: ("syscall5", "any any any any any int -> int"),
     OpKind.SYSCALL6: ("syscall6", "any any any any any any int -> int"),
+    OpKind.ARGC: ("argc", "None -> int"),
+    OpKind.ARGV: ("argv", "None -> ptr"),
 }
 
 
@@ -1816,7 +1818,7 @@ def type_satisfies_trait(
 
 def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature:
     """Type-check a list of ops and return the inferred signature."""
-    assert len(OpKind) == 86, "Exhaustive handling for `OpKind`"
+    assert len(OpKind) == 88, "Exhaustive handling for `OpKind`"
 
     tc = TypeChecker(ops=ops)
     op_index = 0
@@ -1914,6 +1916,10 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 | OpKind.SYSCALL6
             ):
                 tc.check_syscalls(op)
+            case OpKind.ARGC:
+                tc.stack_push("int")
+            case OpKind.ARGV:
+                tc.stack_push("ptr")
             case OpKind.PUSH_ENUM_VARIANT:
                 tc.check_enum_variant(op)
             case OpKind.MATCH_START | OpKind.MATCH_ARM | OpKind.MATCH_END:

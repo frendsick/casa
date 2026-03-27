@@ -75,6 +75,8 @@ INTRINSIC_TO_OPKIND = {
     Intrinsic.SOME: OpKind.SOME,
     Intrinsic.OK: OpKind.OK,
     Intrinsic.ERROR: OpKind.ERROR,
+    Intrinsic.ARGC: OpKind.ARGC,
+    Intrinsic.ARGV: OpKind.ARGV,
 }
 
 

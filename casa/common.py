@@ -67,6 +67,10 @@ class Intrinsic(Enum):
     SYSCALL5 = auto()
     SYSCALL6 = auto()
 
+    # Command-line arguments
+    ARGC = auto()
+    ARGV = auto()
+
     @classmethod
     def from_lowercase(cls, value: str) -> Self | None:
         """Look up an intrinsic by its lowercase source name."""
@@ -389,6 +393,10 @@ class OpKind(Enum):
     # F-strings
     FSTRING_CONCAT = auto()
 
+    # Command-line arguments
+    ARGC = auto()
+    ARGV = auto()
+
     # Identifiers should be resolved by the parser
     IDENTIFIER = auto()
 
@@ -404,7 +412,7 @@ class Op:
     deferred_return_type: str | None = None
 
     def __post_init__(self):
-        assert len(OpKind) == 86, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 88, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Value constructors (no value validation needed)
@@ -469,6 +477,8 @@ class Op:
                 | OpKind.SYSCALL4
                 | OpKind.SYSCALL5
                 | OpKind.SYSCALL6
+                | OpKind.ARGC
+                | OpKind.ARGV
             ):
                 if not isinstance(self.value, Intrinsic):
                     raise TypeError(f"`{self.kind}` requires value of type `Intrinsic`")
@@ -632,6 +642,10 @@ class InstKind(Enum):
     SYSCALL5 = auto()
     SYSCALL6 = auto()
 
+    # Command-line arguments
+    ARGC = auto()
+    ARGV = auto()
+
 
 @dataclass
 class Inst:
@@ -656,7 +670,7 @@ class Inst:
         return self.args[0]
 
     def __post_init__(self):
-        assert len(InstKind) == 66, "Exhaustive handling for `InstructionKind`"
+        assert len(InstKind) == 68, "Exhaustive handling for `InstructionKind`"
 
         match self.kind:
             # Should not have a parameter
@@ -709,6 +723,8 @@ class Inst:
                 | InstKind.SYSCALL4
                 | InstKind.SYSCALL5
                 | InstKind.SYSCALL6
+                | InstKind.ARGC
+                | InstKind.ARGV
             ):
                 if self.args:
                     raise TypeError(
