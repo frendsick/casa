@@ -263,9 +263,19 @@ def _create_member_accessor(
     member_type: str,
     member_index: int,
     location: Location,
+    *,
+    type_vars: list[str] | None = None,
 ) -> tuple[Function, Function]:
     """Create getter and setter functions for a struct member."""
     offset = member_index * 8
+
+    # Parameterize the struct name when the struct has type vars
+    if type_vars:
+        param_struct_type = f"{struct_name}[{' '.join(type_vars)}]"
+        sig_type_vars = set(type_vars)
+    else:
+        param_struct_type = struct_name
+        sig_type_vars = set()
 
     # Getter
     getter_name = f"{struct_name}::{member_name}"
@@ -276,8 +286,8 @@ def _create_member_accessor(
         Op(Intrinsic.LOAD64, OpKind.LOAD64, location),
         Op(member_type, OpKind.TYPE_CAST, location),
     ]
-    getter_params = [Parameter(struct_name)]
-    getter_signature = Signature(getter_params, [member_type])
+    getter_params = [Parameter(param_struct_type)]
+    getter_signature = Signature(getter_params, [member_type], type_vars=sig_type_vars)
     getter = Function(getter_name, getter_ops, location, getter_signature)
 
     # Setter
@@ -288,8 +298,8 @@ def _create_member_accessor(
         Op(Operator.PLUS, OpKind.ADD, location),
         Op(Intrinsic.STORE64, OpKind.STORE64, location),
     ]
-    setter_params = [Parameter(struct_name), Parameter(member_type)]
-    setter_signature = Signature(setter_params, [])
+    setter_params = [Parameter(param_struct_type), Parameter(member_type)]
+    setter_signature = Signature(setter_params, [], type_vars=sig_type_vars)
     setter = Function(setter_name, setter_ops, location, setter_signature)
 
     return getter, setter
@@ -1015,6 +1025,21 @@ def parse_struct(cursor: Cursor[Token]) -> Struct:
     expect_token(cursor, value="struct")
     struct_name = expect_token(cursor, kind=TokenKind.IDENTIFIER)
 
+    # Parse optional type parameters: struct Foo[T] { ... }
+    # Trait bounds are not allowed on structs — they belong on impl blocks.
+    type_vars: list[str] = []
+    next_token = cursor.peek()
+    if next_token and next_token.value == "[":
+        type_vars_set, trait_bounds = parse_type_vars(cursor)
+        if trait_bounds:
+            raise_error(
+                ErrorKind.UNEXPECTED_TOKEN,
+                "Trait bounds are not allowed on struct definitions. "
+                "Use `impl[K: Bound] StructName[K]` instead",
+                struct_name.location,
+            )
+        type_vars = sorted(type_vars_set)
+
     members: list[Member] = []
     expect_token(cursor, value="{")
     while True:
@@ -1039,6 +1064,7 @@ def parse_struct(cursor: Cursor[Token]) -> Struct:
             member_type_str,
             len(members),
             member_name.location,
+            type_vars=type_vars or None,
         )
         for accessor in (getter, setter):
             if accessor.name in GLOBAL_FUNCTIONS:
@@ -1051,7 +1077,12 @@ def parse_struct(cursor: Cursor[Token]) -> Struct:
 
         members.append(Member(member_name.value, member_type_str))
 
-    return Struct(struct_name.value, members, struct_name.location)
+    return Struct(
+        struct_name.value,
+        members,
+        struct_name.location,
+        type_vars=type_vars,
+    )
 
 
 def parse_trait(cursor: Cursor[Token]) -> Trait:

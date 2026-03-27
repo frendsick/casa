@@ -1095,12 +1095,29 @@ class TypeChecker:
         struct = op.value
         assert isinstance(struct, Struct), "Expected struct"
         member_types = " ".join(m.typ for m in struct.members)
-        self.current_op_context = f"`{struct.name}` ({member_types} -> {struct.name})"
-        for member in struct.members:
-            self.current_expect_context = f"member `{member.name}` of `{struct.name}`"
-            self.expect_type(member.typ)
-        self.current_expect_context = None
-        self.stack_push(struct.name)
+
+        if not struct.type_vars:
+            self.current_op_context = (
+                f"`{struct.name}` ({member_types} -> {struct.name})"
+            )
+            for member in struct.members:
+                self.current_expect_context = (
+                    f"member `{member.name}` of `{struct.name}`"
+                )
+                self.expect_type(member.typ)
+            self.current_expect_context = None
+            self.stack_push(struct.name)
+            return
+
+        # Generic struct: bind type vars from actual stack types
+        param_struct_type = f"{struct.name}[{' '.join(struct.type_vars)}]"
+        params = [Parameter(m.typ) for m in struct.members]
+        sig = Signature(
+            params,
+            [param_struct_type],
+            type_vars=set(struct.type_vars),
+        )
+        self.apply_signature(sig, struct.name)
 
     DEFERRED_METHOD = "DEFERRED"
 

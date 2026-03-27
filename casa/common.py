@@ -1024,6 +1024,7 @@ class Struct:
     name: str
     members: list[Member]
     location: Location
+    type_vars: list[str] = field(default_factory=list)
 
 
 @dataclass
