@@ -7,7 +7,9 @@ from casa.common import Bytecode, Inst, InstKind, Program
 INT32_MIN = -(1 << 31)
 INT32_MAX = (1 << 31) - 1
 RETURN_STACK_SIZE = 65536
-HEAP_SIZE = 1048576
+# 64 MB — large enough for self-hosting compiler intermediates.
+# BSS is demand-paged so only touched pages consume physical memory.
+HEAP_SIZE = 67108864
 
 
 class Emitter:
