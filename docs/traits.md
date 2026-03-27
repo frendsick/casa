@@ -57,12 +57,13 @@ impl Point {
 
 ## Trait Bounds
 
-Functions declare trait bounds on type variables using the `K: TraitName` syntax inside square brackets. Multiple type variables are separated by commas.
+Functions and `impl` blocks declare trait bounds on type variables using the `K: TraitName` syntax inside square brackets. Multiple type variables are separated by commas.
+
+### On Functions
 
 ```casa
-fn get[K: Hashable, V] self:Map[K V] key:K -> option[V] {
-    key K::hash self.capacity % = idx
-    ...
+fn example[K: Hashable] key:K -> int {
+    key K::hash
 }
 ```
 
@@ -71,10 +72,29 @@ Here `K` must satisfy `Hashable`. The compiler verifies this at every call site 
 Type variables without bounds have no restrictions:
 
 ```casa
-fn keys[K V] self:Map[K V] -> List[K] { ... }
+fn identity[T] x:T -> T { x }
 ```
 
-Here `K` and `V` can be any type.
+### On `impl` Blocks
+
+`impl` blocks can declare trait bounds that are inherited by all methods. This avoids repeating the same bounds on every method. See [Structs and Methods](structs-and-methods.md) for details.
+
+```casa
+impl[K: Hashable, V] Map[K V] {
+    fn get self:Map[K V] key:K -> option[V] {
+        key K::hash self.capacity % = idx
+        ...
+    }
+}
+```
+
+Trait bounds belong on `impl` blocks, not on struct definitions. Structs only declare bare type parameters:
+
+```casa
+struct Set[K] { map: Map[K int] }       # correct
+# struct Set[K: Hashable] { ... }       # error
+impl[K: Hashable] Set[K] { ... }        # bounds go here
+```
 
 ## Calling Trait Methods
 

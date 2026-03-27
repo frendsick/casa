@@ -839,13 +839,17 @@ struct Map {
     size:     int
     capacity: int
 }
+
+impl[K: Hashable, V] Map[K V] { ... }
 ```
+
+All Map methods are defined in an `impl` block with `K: Hashable` and `V` type parameters. Individual methods inherit these bounds.
 
 ### `Map::new`
 
 Creates an empty map with an initial capacity of 16.
 
-**Signature:** `Map::new[K: Hashable, V] -> Map[K V]`
+**Signature:** `Map::new -> Map[K V]`
 
 **Stack effect:** `-> Map[K V]`
 
@@ -859,9 +863,9 @@ The type cast `(Map[str int])` tells the compiler the concrete types for `K` and
 
 Returns the number of key-value pairs in the map.
 
-**Signature:** `Map::length self:Map -> int`
+**Signature:** `Map::length self:Map[K V] -> int`
 
-**Stack effect:** `Map -> int`
+**Stack effect:** `Map[K V] -> int`
 
 ```casa
 m.length print    # 0
@@ -871,7 +875,7 @@ m.length print    # 0
 
 Looks up a key and returns `option[V]`. Returns `some` with the value if found, `none` otherwise.
 
-**Signature:** `Map::get[K: Hashable, V] self:Map[K V] key:K -> option[V]`
+**Signature:** `Map::get self:Map[K V] key:K -> option[V]`
 
 **Stack effect:** `Map[K V] K -> option[V]`
 
@@ -884,7 +888,7 @@ Looks up a key and returns `option[V]`. Returns `some` with the value if found, 
 
 Returns `true` if the key exists in the map.
 
-**Signature:** `Map::has[K: Hashable, V] self:Map[K V] key:K -> bool`
+**Signature:** `Map::has self:Map[K V] key:K -> bool`
 
 **Stack effect:** `Map[K V] K -> bool`
 
@@ -896,7 +900,7 @@ Returns `true` if the key exists in the map.
 
 Inserts or updates a key-value pair. Returns the updated map. Automatically resizes at 75% load factor.
 
-**Signature:** `Map::set[K: Hashable, V] self:Map[K V] value:V key:K -> Map[K V]`
+**Signature:** `Map::set self:Map[K V] value:V key:K -> Map[K V]`
 
 **Stack effect:** `Map[K V] V K -> Map[K V]`
 
@@ -910,7 +914,7 @@ Note: the key is on top of the stack, the value is below it, and the map is belo
 
 Removes a key from the map. Returns the updated map. If the key does not exist, the map is returned unchanged.
 
-**Signature:** `Map::delete[K: Hashable, V] self:Map[K V] key:K -> Map[K V]`
+**Signature:** `Map::delete self:Map[K V] key:K -> Map[K V]`
 
 **Stack effect:** `Map[K V] K -> Map[K V]`
 
@@ -920,9 +924,9 @@ Removes a key from the map. Returns the updated map. If the key does not exist, 
 
 ### `Map::keys`
 
-Returns a `List[K]` of all keys in the map. Does not require `Hashable` bound.
+Returns a `List[K]` of all keys in the map.
 
-**Signature:** `Map::keys[K V] self:Map[K V] -> List[K]`
+**Signature:** `Map::keys self:Map[K V] -> List[K]`
 
 **Stack effect:** `Map[K V] -> List[K]`
 
@@ -932,9 +936,9 @@ m.keys = key_list
 
 ### `Map::values`
 
-Returns a `List[V]` of all values in the map. Does not require `Hashable` bound.
+Returns a `List[V]` of all values in the map.
 
-**Signature:** `Map::values[K V] self:Map[K V] -> List[V]`
+**Signature:** `Map::values self:Map[K V] -> List[V]`
 
 **Stack effect:** `Map[K V] -> List[V]`
 
@@ -986,16 +990,20 @@ A generic hash set backed by a `Map[K int]`. Keys must satisfy the `Hashable` tr
 ### Definition
 
 ```casa
-struct Set {
-    map: Map
+struct Set[K] {
+    map: Map[K int]
 }
+
+impl[K: Hashable] Set[K] { ... }
 ```
+
+Set uses a struct-level type parameter `K` with a typed `Map[K int]` field. All methods are in an `impl` block with the `K: Hashable` bound.
 
 ### `Set::new`
 
 Creates an empty set.
 
-**Signature:** `Set::new[K: Hashable] -> Set[K]`
+**Signature:** `Set::new -> Set[K]`
 
 **Stack effect:** `-> Set[K]`
 
@@ -1007,9 +1015,9 @@ Set::new (Set[str]) = s
 
 Returns the number of elements in the set.
 
-**Signature:** `Set::length self:Set -> int`
+**Signature:** `Set::length self:Set[K] -> int`
 
-**Stack effect:** `Set -> int`
+**Stack effect:** `Set[K] -> int`
 
 ```casa
 s.length print    # 0
@@ -1019,7 +1027,7 @@ s.length print    # 0
 
 Returns `true` if the element is in the set.
 
-**Signature:** `Set::has[K: Hashable] self:Set[K] key:K -> bool`
+**Signature:** `Set::has self:Set[K] key:K -> bool`
 
 **Stack effect:** `Set[K] K -> bool`
 
@@ -1031,7 +1039,7 @@ Returns `true` if the element is in the set.
 
 Adds an element to the set. Returns the updated set. Adding a duplicate has no effect.
 
-**Signature:** `Set::add[K: Hashable] self:Set[K] key:K -> Set[K]`
+**Signature:** `Set::add self:Set[K] key:K -> Set[K]`
 
 **Stack effect:** `Set[K] K -> Set[K]`
 
@@ -1043,7 +1051,7 @@ Adds an element to the set. Returns the updated set. Adding a duplicate has no e
 
 Removes an element from the set. Returns the updated set. If the element does not exist, the set is returned unchanged.
 
-**Signature:** `Set::remove[K: Hashable] self:Set[K] key:K -> Set[K]`
+**Signature:** `Set::remove self:Set[K] key:K -> Set[K]`
 
 **Stack effect:** `Set[K] K -> Set[K]`
 
@@ -1053,9 +1061,9 @@ Removes an element from the set. Returns the updated set. If the element does no
 
 ### `Set::to_list`
 
-Returns a `List[K]` of all elements in the set. Does not require `Hashable` bound.
+Returns a `List[K]` of all elements in the set.
 
-**Signature:** `Set::to_list[K] self:Set[K] -> List[K]`
+**Signature:** `Set::to_list self:Set[K] -> List[K]`
 
 **Stack effect:** `Set[K] -> List[K]`
 
@@ -1087,3 +1095,156 @@ s.length print         # 2
 ```
 
 See [`examples/hash_map.casa`](../examples/hash_map.casa) for a full program using both Map and Set.
+
+## Stderr Output
+
+### `eprint`
+
+Writes a string to stderr (file descriptor 2).
+
+**Signature:** `eprint msg:str`
+
+**Stack effect:** `str -> None`
+
+```casa
+"warning: something happened\n" eprint
+```
+
+### `eprintln`
+
+Writes a string followed by a newline to stderr.
+
+**Signature:** `eprintln msg:str`
+
+**Stack effect:** `str -> None`
+
+```casa
+"error: file not found" eprintln
+```
+
+## Command-Line Arguments
+
+### `argc`
+
+Pushes the number of command-line arguments onto the stack.
+
+**Stack effect:** `-> int`
+
+```casa
+argc print    # prints the argument count
+```
+
+### `argv`
+
+Pushes a pointer to the argument array onto the stack.
+
+**Stack effect:** `-> ptr`
+
+### `get_arg`
+
+Returns the nth command-line argument as a string (zero-indexed). Prints an error to stderr and exits if the index is out of bounds.
+
+**Signature:** `get_arg n:int -> str`
+
+**Stack effect:** `int -> str`
+
+```casa
+0 get_arg print    # prints the program name
+1 get_arg print    # prints the first argument
+```
+
+## `StringBuilder`
+
+A mutable string builder backed by `List[char]`. Useful for efficiently constructing strings from many parts.
+
+### Definition
+
+```casa
+struct StringBuilder {
+    chars: List[char]
+}
+```
+
+### `StringBuilder::new`
+
+Creates an empty `StringBuilder`.
+
+**Signature:** `StringBuilder::new -> StringBuilder`
+
+**Stack effect:** `-> StringBuilder`
+
+```casa
+StringBuilder::new = sb
+```
+
+### `StringBuilder::append`
+
+Appends a string to the builder.
+
+**Signature:** `StringBuilder::append self:StringBuilder s:str`
+
+**Stack effect:** `StringBuilder str -> None`
+
+```casa
+"hello " sb.append
+"world" sb.append
+```
+
+### `StringBuilder::append_char`
+
+Appends a single character to the builder.
+
+**Signature:** `StringBuilder::append_char self:StringBuilder c:char`
+
+**Stack effect:** `StringBuilder char -> None`
+
+```casa
+'!' sb.append_char
+```
+
+### `StringBuilder::build`
+
+Converts the builder's contents into a string.
+
+**Signature:** `StringBuilder::build self:StringBuilder -> str`
+
+**Stack effect:** `StringBuilder -> str`
+
+```casa
+sb.build print    # hello world!
+```
+
+### `StringBuilder::length`
+
+Returns the number of characters in the builder.
+
+**Signature:** `StringBuilder::length self:StringBuilder -> int`
+
+**Stack effect:** `StringBuilder -> int`
+
+## Process Execution
+
+### `run_command`
+
+Executes an external command using fork/execve/wait4. Takes a `List[str]` where the first element is the executable path and the remaining elements are arguments. Returns the child process exit code.
+
+**Signature:** `run_command args:List[str] -> int`
+
+**Stack effect:** `List[str] -> int`
+
+```casa
+List::new (List[str]) = args
+"/bin/echo" args.push
+"hello" args.push
+args run_command = exit_code
+```
+
+Prints an error to stderr and exits if fork fails. If execve fails (command not found), the child process exits with code 1.
+
+### `chars_to_str`
+
+Converts a `List[char]` to a `str`. Used internally by `StringBuilder::build`.
+
+**Signature:** `chars_to_str chars:List[char] -> str`
+
+**Stack effect:** `List[char] -> str`
