@@ -77,6 +77,42 @@ person.name print                  # John Doe (dot on variable)
 "Jane Doe" person->name    # same as: "Jane Doe" person Person::set_name
 ```
 
+## Generic Structs
+
+Structs can have type parameters. These are declared in square brackets after the struct name.
+
+```casa
+struct Box[T] {
+    value: T
+}
+```
+
+Generic structs infer their type parameters from the values on the stack:
+
+```casa
+42 Box          # inferred as Box[int]
+"hello" Box     # inferred as Box[str]
+```
+
+Auto-generated getters and setters are parameterized automatically:
+
+```casa
+42 Box .value print    # 42 — getter returns int
+```
+
+Struct-level type parameters can be used in field types:
+
+```casa
+struct Pair[A B] {
+    first: A
+    second: B
+}
+
+true 42 Pair    # Pair[int bool] — first=42 (top), second=true
+```
+
+Trait bounds are not allowed on struct definitions. Use `impl`-level bounds instead (see below).
+
 ## `impl` Blocks
 
 Add methods to a type with `impl`:
@@ -129,6 +165,32 @@ impl Person {
     }
 }
 ```
+
+### `impl` with Type Parameters
+
+`impl` blocks can declare type parameters with trait bounds. These are inherited by all methods in the block, so individual methods do not need to redeclare them.
+
+```casa
+struct Set[K] {
+    map: Map[K int]
+}
+
+impl[K: Hashable] Set[K] {
+    fn new -> Set[K] { ... }
+    fn has self:Set[K] key:K -> bool { ... }
+    fn add self:Set[K] key:K -> Set[K] { ... }
+}
+```
+
+All methods in this block inherit the `K: Hashable` bound. Methods can still declare additional type parameters of their own:
+
+```casa
+impl[K: Hashable] Set[K] {
+    fn convert[V] self:Set[K] -> List[V] { ... }
+}
+```
+
+Here `K: Hashable` comes from the `impl` block and `V` is the method's own type parameter.
 
 ## `impl` on Built-In Types
 

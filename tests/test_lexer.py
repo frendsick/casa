@@ -73,6 +73,8 @@ ALL_INTRINSICS = [
     "some",
     "ok",
     "error",
+    "argc",
+    "argv",
 ]
 assert len(ALL_INTRINSICS) == len(Intrinsic)
 

@@ -7,7 +7,9 @@ from casa.common import Bytecode, Inst, InstKind, Program
 INT32_MIN = -(1 << 31)
 INT32_MAX = (1 << 31) - 1
 RETURN_STACK_SIZE = 65536
-HEAP_SIZE = 1048576
+# 64 MB — large enough for self-hosting compiler intermediates.
+# BSS is demand-paged so only touched pages consume physical memory.
+HEAP_SIZE = 67108864
 
 
 class Emitter:
@@ -67,6 +69,8 @@ class Emitter:
         self._line(f"return_stack: .skip {RETURN_STACK_SIZE}")
         self._line(f"heap: .skip {HEAP_SIZE}")
         self._line("heap_ptr: .skip 8")
+        self._line("__argc: .skip 8")
+        self._line("__argv: .skip 8")
         self._line("print_buf: .skip 32")
         self._line("")
 
@@ -204,6 +208,10 @@ class Emitter:
         self._line(".globl _start")
         self._line("_start:")
         self._indent("leaq return_stack(%rip), %r14")
+        self._indent("movq (%rsp), %rax")
+        self._indent("movq %rax, __argc(%rip)")
+        self._indent("leaq 8(%rsp), %rax")
+        self._indent("movq %rax, __argv(%rip)")
         self._emit_bytecode(self.program.bytecode, is_global=True)
         self._indent("movq $60, %rax")
         self._indent("xorq %rdi, %rdi")
@@ -538,7 +546,7 @@ class Emitter:
         self._emit_syscall(SYSCALL_ARG_COUNTS[inst.kind])
 
     def _emit_inst(self, inst: Inst, is_global: bool) -> None:
-        assert len(InstKind) == 66, "Exhaustive handling for `InstKind`"
+        assert len(InstKind) == 68, "Exhaustive handling for `InstKind`"
         kind = inst.kind
         match kind:
             case (
@@ -625,6 +633,12 @@ class Emitter:
                 | InstKind.SYSCALL6
             ):
                 self._emit_syscall_ops(inst)
+            case InstKind.ARGC:
+                self._indent("movq __argc(%rip), %rax")
+                self._indent("pushq %rax")
+            case InstKind.ARGV:
+                self._indent("movq __argv(%rip), %rax")
+                self._indent("pushq %rax")
             case _:
                 assert_never(kind)
 

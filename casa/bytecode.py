@@ -72,6 +72,8 @@ DIRECT_OP_TO_INST: dict[OpKind, InstKind] = {
     OpKind.SYSCALL4: InstKind.SYSCALL4,
     OpKind.SYSCALL5: InstKind.SYSCALL5,
     OpKind.SYSCALL6: InstKind.SYSCALL6,
+    OpKind.ARGC: InstKind.ARGC,
+    OpKind.ARGV: InstKind.ARGV,
 }
 
 _label_counter = [0]
@@ -548,8 +550,8 @@ class Compiler:
 
     def compile(self) -> Bytecode:
         """Lower all ops to bytecode instructions."""
-        assert len(InstKind) == 66, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 86, "Exhaustive handling for `OpKind`"
+        assert len(InstKind) == 68, "Exhaustive handling for `InstructionKind"
+        assert len(OpKind) == 88, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
         bytecode: list[Inst] = []
