@@ -1003,12 +1003,26 @@ def get_op_type_cast(cursor: Cursor[Token]) -> Op:
 def parse_impl_block(cursor: Cursor[Token]):
     """Parse an impl block and register its methods as namespaced functions."""
     expect_token(cursor, value="impl")
+
+    # Parse optional type parameters: impl[K: Hashable] Set[K] { ... }
+    impl_type_vars: set[str] = set()
+    impl_trait_bounds: dict[str, str] = {}
+    next_token = cursor.peek()
+    if next_token and next_token.value == "[":
+        impl_type_vars, impl_trait_bounds = parse_type_vars(cursor)
+
     impl_type = parse_type(cursor)
+    # Use the base type name (without type params) for method namespacing
+    impl_base_type = impl_type.split("[")[0] if "[" in impl_type else impl_type
 
     expect_token(cursor, value="{")
     while (fn := cursor.peek()) and fn.value == "fn":
-        function = parse_function(cursor)
-        function.name = f"{impl_type}::{function.name}"
+        function = parse_function(
+            cursor,
+            inherited_type_vars=impl_type_vars or None,
+            inherited_trait_bounds=impl_trait_bounds or None,
+        )
+        function.name = f"{impl_base_type}::{function.name}"
         if GLOBAL_FUNCTIONS.get(function.name):
             raise_error(
                 ErrorKind.DUPLICATE_NAME,
@@ -1220,7 +1234,12 @@ def parse_type_vars(
     raise_error(ErrorKind.SYNTAX, "Expected `]` to close type parameters")
 
 
-def parse_function(cursor: Cursor[Token]) -> Function:
+def parse_function(
+    cursor: Cursor[Token],
+    *,
+    inherited_type_vars: set[str] | None = None,
+    inherited_trait_bounds: dict[str, str] | None = None,
+) -> Function:
     """Parse a function definition with optional type parameters and signature."""
     expect_token(cursor, value="fn")
     name = expect_token(cursor, kind=TokenKind.IDENTIFIER)
@@ -1231,6 +1250,12 @@ def parse_function(cursor: Cursor[Token]) -> Function:
     next_token = cursor.peek()
     if next_token and next_token.value == "[":
         type_vars, trait_bounds = parse_type_vars(cursor)
+
+    # Merge inherited type vars/bounds from impl block
+    if inherited_type_vars:
+        type_vars |= inherited_type_vars
+    if inherited_trait_bounds:
+        trait_bounds = {**inherited_trait_bounds, **trait_bounds}
 
     signature = parse_signature(cursor)
     signature.type_vars = type_vars
