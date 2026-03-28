@@ -327,6 +327,33 @@ class TestBracedMatchArm:
             parse_string(code)
         assert exc_info.value.errors[0].kind == ErrorKind.UNMATCHED_BLOCK
 
+    def test_multiline_unbraced_arm_raises(self):
+        code = (
+            COLOR_ENUM + "Color::Red match\n"
+            '    Color::Red => "red" print\n'
+            '        "\\n" print\n'
+            "    Color::Green => 2\n"
+            "    Color::Blue => 3\n"
+            "end\n"
+        )
+        with pytest.raises(CasaErrorCollection) as exc_info:
+            parse_string(code)
+        assert exc_info.value.errors[0].kind == ErrorKind.SYNTAX
+        assert "requires" in exc_info.value.errors[0].message
+
+    def test_single_line_arm_body_on_next_line_is_valid(self):
+        code = (
+            COLOR_ENUM + "Color::Red match\n"
+            "    Color::Red =>\n"
+            "        1\n"
+            "    Color::Green => 2\n"
+            "    Color::Blue => 3\n"
+            "end\n"
+        )
+        ops = parse_string(code)
+        arm_ops = find_ops(ops, OpKind.MATCH_ARM)
+        assert len(arm_ops) == 3
+
 
 # ---------------------------------------------------------------------------
 # Identifier resolution: Color::Red -> PUSH_ENUM_VARIANT
