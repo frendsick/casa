@@ -24,6 +24,9 @@ from tests.conftest import (
 CASA_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 COLOR_ENUM = "enum Color { Red Green Blue }\n"
 DIRECTION_ENUM = "enum Direction { North South East West }\n"
+SHAPE_ENUM = "enum Shape { Circle(int) Rectangle(int int) Point }\n"
+OPTION_ENUM = "enum Option[T] { None Some(T) }\n"
+RESULT_ENUM = "enum Result[T E] { Error(E) Ok(T) }\n"
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +96,55 @@ class TestEnumParsing:
     def test_parse_enum_unclosed_block_raises(self):
         with pytest.raises(CasaErrorCollection):
             parse_string("enum Color { Red Green Blue")
+
+    def test_parse_enum_with_inner_types(self):
+        parse_string(SHAPE_ENUM)
+        shape = GLOBAL_ENUMS["Shape"]
+        assert shape.variant_types["Circle"] == ["int"]
+        assert shape.variant_types["Rectangle"] == ["int", "int"]
+        assert shape.variant_types["Point"] == []
+
+    def test_parse_enum_has_inner_values(self):
+        parse_string(SHAPE_ENUM)
+        assert GLOBAL_ENUMS["Shape"].has_inner_values is True
+
+    def test_parse_plain_enum_no_inner_values(self):
+        parse_string(COLOR_ENUM)
+        assert GLOBAL_ENUMS["Color"].has_inner_values is False
+
+    def test_parse_generic_enum_type_vars(self):
+        parse_string(OPTION_ENUM)
+        assert GLOBAL_ENUMS["Option"].type_vars == ["T"]
+
+    def test_parse_generic_enum_two_type_vars(self):
+        parse_string(RESULT_ENUM)
+        assert GLOBAL_ENUMS["Result"].type_vars == ["T", "E"]
+
+    def test_parse_generic_enum_type_var_order_preserved(self):
+        parse_string("enum Pair[A B] { Left(A) Right(B) }\n")
+        assert GLOBAL_ENUMS["Pair"].type_vars == ["A", "B"]
+
+    def test_parse_empty_inner_types_raises(self):
+        with pytest.raises(CasaErrorCollection):
+            parse_string("enum Bad { Variant() }\n")
+
+    def test_parse_duplicate_type_var_raises(self):
+        with pytest.raises(CasaErrorCollection):
+            parse_string("enum Bad[T T] { A(T) }\n")
+
+    def test_parse_match_destructuring_bindings(self):
+        ops = resolve_string(
+            SHAPE_ENUM
+            + "10 Shape::Circle match\n"
+            + "    Shape::Circle(radius) => radius\n"
+            + "    Shape::Rectangle(width height) => width\n"
+            + "    Shape::Point => 0\n"
+            + "end\n"
+        )
+        arm_ops = find_ops(ops, OpKind.MATCH_ARM)
+        assert arm_ops[0].value.bindings == ["radius"]
+        assert arm_ops[1].value.bindings == ["width", "height"]
+        assert arm_ops[2].value.bindings == []
 
 
 # ---------------------------------------------------------------------------
@@ -443,6 +495,82 @@ class TestMatchInFunction:
 
 
 # ---------------------------------------------------------------------------
+# Type checking: inner values and generics
+# ---------------------------------------------------------------------------
+class TestEnumInnerValuesTypeChecking:
+    def test_data_variant_pops_inner_and_pushes_enum(self):
+        sig = typecheck_string(SHAPE_ENUM + "10 Shape::Circle")
+        assert sig.return_types == ["Shape"]
+
+    def test_data_variant_two_inner_values(self):
+        sig = typecheck_string(SHAPE_ENUM + "3 4 Shape::Rectangle")
+        assert sig.return_types == ["Shape"]
+
+    def test_no_data_variant_in_data_enum(self):
+        sig = typecheck_string(SHAPE_ENUM + "Shape::Point")
+        assert sig.return_types == ["Shape"]
+
+    def test_generic_some_pushes_option_int(self):
+        sig = typecheck_string(OPTION_ENUM + "42 Option::Some")
+        assert sig.return_types == ["Option[int]"]
+
+    def test_generic_some_pushes_option_str(self):
+        sig = typecheck_string(OPTION_ENUM + '"hello" Option::Some')
+        assert sig.return_types == ["Option[str]"]
+
+    def test_generic_none_pushes_option_t(self):
+        sig = typecheck_string(OPTION_ENUM + "Option::None")
+        assert sig.return_types == ["Option[T]"]
+
+    def test_result_ok_pushes_result(self):
+        sig = typecheck_string(RESULT_ENUM + "42 Result::Ok")
+        assert sig.return_types == ["Result[int E]"]
+
+    def test_result_error_pushes_result(self):
+        sig = typecheck_string(RESULT_ENUM + '"oops" Result::Error')
+        assert sig.return_types == ["Result[T str]"]
+
+    def test_data_enum_wrong_inner_type_raises(self):
+        with pytest.raises(CasaErrorCollection):
+            typecheck_string(SHAPE_ENUM + '"hello" Shape::Circle')
+
+    def test_match_destructuring_binding_types(self):
+        sig = typecheck_string(
+            OPTION_ENUM
+            + "42 Option::Some match\n"
+            + "    Option::Some(value) => value\n"
+            + "    Option::None => 0\n"
+            + "end\n"
+        )
+        assert sig.return_types == ["int"]
+
+    def test_match_destructuring_wrong_binding_count_raises(self):
+        with pytest.raises(CasaErrorCollection):
+            typecheck_string(
+                SHAPE_ENUM
+                + "10 Shape::Circle match\n"
+                + "    Shape::Circle(a b) => a\n"
+                + "    Shape::Rectangle(w h) => w\n"
+                + "    Shape::Point => 0\n"
+                + "end\n"
+            )
+
+    def test_data_enum_comparison(self):
+        sig = typecheck_string(
+            SHAPE_ENUM + "Shape::Point Shape::Point =="
+        )
+        assert sig.return_types == ["bool"]
+
+    def test_generic_enum_in_function_return(self):
+        sig = typecheck_string(
+            OPTION_ENUM
+            + "fn wrap x:int -> Option[int] { x Option::Some }\n"
+            + "42 wrap\n"
+        )
+        assert sig.return_types == ["Option[int]"]
+
+
+# ---------------------------------------------------------------------------
 # Bytecode: PUSH_ENUM_VARIANT compiles to PUSH(ordinal)
 # ---------------------------------------------------------------------------
 def find_insts(program: Program, kind: InstKind, in_functions: bool = False):
@@ -488,6 +616,25 @@ class TestEnumBytecode:
     def test_enum_print_compiles_to_print_int(self):
         program = compile_string(COLOR_ENUM + "Color::Red print\n")
         assert len(find_insts(program, InstKind.PRINT_INT)) >= 1
+
+    def test_data_enum_variant_compiles_to_heap_alloc(self):
+        program = compile_string(SHAPE_ENUM + "10 Shape::Circle\n")
+        assert len(find_insts(program, InstKind.HEAP_ALLOC)) >= 1
+
+    def test_data_enum_stores_ordinal(self):
+        program = compile_string(SHAPE_ENUM + "10 Shape::Circle\n")
+        assert len(find_insts(program, InstKind.STORE64)) >= 1
+
+    def test_data_enum_match_loads_ordinal(self):
+        program = compile_string(
+            SHAPE_ENUM
+            + "10 Shape::Circle match\n"
+            + "    Shape::Circle(r) => r drop\n"
+            + "    Shape::Rectangle(w h) => w drop\n"
+            + "    Shape::Point => 0 drop\n"
+            + "end\n"
+        )
+        assert len(find_insts(program, InstKind.LOAD64)) >= 1
 
 
 # ---------------------------------------------------------------------------
@@ -653,3 +800,100 @@ class TestEnumEndToEnd:
             + "Direction::West print\n"
         )
         assert output == "03"
+
+    def test_data_enum_match_destructure(self, run_casa):
+        output = run_casa(
+            SHAPE_ENUM
+            + "10 Shape::Circle match\n"
+            + "    Shape::Circle(radius) => radius print\n"
+            + "    Shape::Rectangle(width height) => width height * print\n"
+            + '    Shape::Point => "point" print\n'
+            + "end\n"
+        )
+        assert output == "10"
+
+    def test_data_enum_match_second_arm(self, run_casa):
+        output = run_casa(
+            SHAPE_ENUM
+            + "3 4 Shape::Rectangle match\n"
+            + "    Shape::Circle(radius) => radius print\n"
+            + "    Shape::Rectangle(width height) => width height * print\n"
+            + '    Shape::Point => "point" print\n'
+            + "end\n"
+        )
+        assert output == "12"
+
+    def test_data_enum_match_no_data_arm(self, run_casa):
+        output = run_casa(
+            SHAPE_ENUM
+            + "Shape::Point match\n"
+            + "    Shape::Circle(radius) => radius print\n"
+            + "    Shape::Rectangle(width height) => width height * print\n"
+            + '    Shape::Point => "point" print\n'
+            + "end\n"
+        )
+        assert output == "point"
+
+    def test_generic_enum_some(self, run_casa):
+        output = run_casa(
+            OPTION_ENUM
+            + "42 Option::Some match\n"
+            + "    Option::Some(value) => value print\n"
+            + '    Option::None => "none" print\n'
+            + "end\n"
+        )
+        assert output == "42"
+
+    def test_generic_enum_none(self, run_casa):
+        output = run_casa(
+            OPTION_ENUM
+            + "Option::None match\n"
+            + '    Option::Some(value) => "some" print\n'
+            + '    Option::None => "none" print\n'
+            + "end\n"
+        )
+        assert output == "none"
+
+    def test_result_ok_destructure(self, run_casa):
+        output = run_casa(
+            RESULT_ENUM
+            + "5 Result::Ok match\n"
+            + "    Result::Error(err) => err print\n"
+            + "    Result::Ok(val) => val print\n"
+            + "end\n"
+        )
+        assert output == "5"
+
+    def test_result_error_destructure(self, run_casa):
+        output = run_casa(
+            RESULT_ENUM
+            + '"oops" Result::Error match\n'
+            + "    Result::Error(err) => err print\n"
+            + '    Result::Ok(val) => "ok" print\n'
+            + "end\n"
+        )
+        assert output == "oops"
+
+    def test_data_enum_wildcard(self, run_casa):
+        output = run_casa(
+            SHAPE_ENUM
+            + "Shape::Point match\n"
+            + "    Shape::Circle(radius) => radius print\n"
+            + '    _ => "other" print\n'
+            + "end\n"
+        )
+        assert output == "other"
+
+    def test_data_enum_eq(self, run_casa):
+        output = run_casa(
+            SHAPE_ENUM
+            + "Shape::Point Shape::Point == print\n"
+        )
+        assert output == "true"
+
+    def test_data_enum_ne(self, run_casa):
+        output = run_casa(
+            SHAPE_ENUM
+            + "10 Shape::Circle Shape::Point != print\n"
+        )
+        assert output == "true"
