@@ -106,7 +106,7 @@ Color::Blue print    # 2
 
 ## Match Statement
 
-The `match` keyword provides exhaustive pattern matching on enum values. It consumes the enum value from the stack and executes the matching arm.
+The `match` keyword provides exhaustive pattern matching on enum values. It consumes the enum value from the stack and executes the matching arm. Match also works with literal types (`bool`, `int`, `char`, `str`) — see [Control Flow](control-flow.md#match) for details.
 
 ### Syntax
 

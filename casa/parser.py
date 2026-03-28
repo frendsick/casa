@@ -20,6 +20,7 @@ from casa.common import (
     Function,
     Intrinsic,
     Keyword,
+    LiteralPattern,
     Location,
     Member,
     Op,
@@ -959,6 +960,8 @@ def _is_match_arm_boundary(cursor: Cursor[Token]) -> bool:
     token = seq[pos]
     if token.value == MATCH_WILDCARD and seq[pos + 1].value == "=>":
         return True
+    if token.kind == TokenKind.LITERAL and seq[pos + 1].value == "=>":
+        return True
     if token.kind != TokenKind.IDENTIFIER:
         return False
     next_value = seq[pos + 1].value
@@ -1027,6 +1030,26 @@ def _parse_struct_match_pattern(
     return StructPattern(name_token.value, bindings)
 
 
+def _parse_literal_match_pattern(token: Token) -> LiteralPattern:
+    """Parse a literal value into a LiteralPattern for a match arm."""
+    value = token.value
+    if value == "true":
+        return LiteralPattern(True, "bool", "true")
+    if value == "false":
+        return LiteralPattern(False, "bool", "false")
+    if value.isdigit() or is_negative_integer_literal(value):
+        return LiteralPattern(int(value), "int", value)
+    if value.startswith("'") and value.endswith("'") and len(value) == 3:
+        return LiteralPattern(ord(value[1]), "char", value)
+    if value.startswith('"') and value.endswith('"'):
+        return LiteralPattern(value[1:-1], "str", value)
+    raise_error(
+        ErrorKind.UNEXPECTED_TOKEN,
+        f"Unsupported literal in match arm: `{value}`",
+        token.location,
+    )
+
+
 def _handle_keyword_match(
     token: Token, cursor: Cursor[Token], function_name: str
 ) -> list[Op]:
@@ -1046,12 +1069,16 @@ def _handle_keyword_match(
             expect_token(cursor, value="=>")
             variant = EnumVariant(None, MATCH_WILDCARD, -1)
             ops.append(Op(variant, OpKind.MATCH_ARM, arm_token.location))
+        elif arm_token.kind == TokenKind.LITERAL:
+            expect_token(cursor, value="=>")
+            literal_pattern = _parse_literal_match_pattern(arm_token)
+            ops.append(Op(literal_pattern, OpKind.MATCH_ARM, arm_token.location))
         elif arm_token.kind != TokenKind.IDENTIFIER:
             raise_error(
                 ErrorKind.UNEXPECTED_TOKEN,
                 "Expected match pattern or `_`",
                 arm_token.location,
-                expected="enum variant, struct pattern, or `_`",
+                expected="enum variant, struct pattern, literal, or `_`",
                 got=f"`{arm_token.value}`",
             )
         elif (next_token := cursor.peek()) and next_token.value == "{":

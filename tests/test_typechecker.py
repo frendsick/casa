@@ -1239,7 +1239,10 @@ def test_typecheck_option_some_if_none_else():
 
 def test_typecheck_option_mixed_elif():
     """Multiple elif branches mixing Option::None and Option::Some are compatible."""
-    code = OPTION_ENUM + "if true then Option::None elif false then 42 Option::Some else 99 Option::Some fi"
+    code = (
+        OPTION_ENUM
+        + "if true then Option::None elif false then 42 Option::Some else 99 Option::Some fi"
+    )
     sig = typecheck_string(code)
     assert sig.return_types == ["Option[int]"]
 
@@ -1296,6 +1299,67 @@ def test_typecheck_char_comparison_gt():
     """Char > comparison returns bool."""
     sig = typecheck_string("'z' 'a' >")
     assert sig.return_types == ["bool"]
+
+
+def test_typecheck_str_eq():
+    """String == comparison returns bool."""
+    sig = typecheck_string('"hello" "world" ==')
+    assert sig.return_types == ["bool"]
+
+
+def test_typecheck_str_ne():
+    """String != comparison returns bool."""
+    sig = typecheck_string('"hello" "world" !=')
+    assert sig.return_types == ["bool"]
+
+
+def test_typecheck_str_lt_raises():
+    """String < comparison is not supported."""
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        typecheck_string('"hello" "world" <')
+    error = exc_info.value.errors[0]
+    assert error.kind == ErrorKind.TYPE_MISMATCH
+    assert "str" in error.message
+
+
+def test_typecheck_str_gt_raises():
+    """String > comparison is not supported."""
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        typecheck_string('"hello" "world" >')
+    error = exc_info.value.errors[0]
+    assert error.kind == ErrorKind.TYPE_MISMATCH
+
+
+def test_typecheck_str_le_raises():
+    """String <= comparison is not supported."""
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        typecheck_string('"hello" "world" <=')
+    error = exc_info.value.errors[0]
+    assert error.kind == ErrorKind.TYPE_MISMATCH
+
+
+def test_typecheck_str_ge_raises():
+    """String >= comparison is not supported."""
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        typecheck_string('"hello" "world" >=')
+    error = exc_info.value.errors[0]
+    assert error.kind == ErrorKind.TYPE_MISMATCH
+
+
+def test_typecheck_str_eq_int_raises():
+    """Comparing str with int is a type error."""
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        typecheck_string('"hello" 42 ==')
+    error = exc_info.value.errors[0]
+    assert error.kind == ErrorKind.TYPE_MISMATCH
+
+
+def test_typecheck_int_eq_str_raises():
+    """Comparing int with str is a type error."""
+    with pytest.raises(CasaErrorCollection) as exc_info:
+        typecheck_string('42 "hello" ==')
+    error = exc_info.value.errors[0]
+    assert error.kind == ErrorKind.TYPE_MISMATCH
 
 
 def test_typecheck_print_resolves_to_print_char():
@@ -1484,7 +1548,7 @@ def test_typecheck_deferred_method_different_return_types_error():
 
 def test_typecheck_deferred_method_nonexistent():
     """Lambda with nonexistent method produces error."""
-    code = '{ .nonexistent_method } = f'
+    code = "{ .nonexistent_method } = f"
     with pytest.raises(CasaErrorCollection) as exc_info:
         typecheck_string(code)
     assert exc_info.value.errors[0].kind == ErrorKind.UNDEFINED_NAME
