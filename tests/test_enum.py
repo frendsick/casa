@@ -224,6 +224,111 @@ class TestMatchParsing:
 
 
 # ---------------------------------------------------------------------------
+# Braced match arm bodies
+# ---------------------------------------------------------------------------
+class TestBracedMatchArm:
+    def test_braced_arm_produces_correct_ops(self):
+        code = (
+            COLOR_ENUM + "Color::Red match\n"
+            "    Color::Red => { 1 }\n"
+            "    Color::Green => { 2 }\n"
+            "    Color::Blue => { 3 }\n"
+            "end\n"
+        )
+        ops = parse_string(code)
+        arm_ops = find_ops(ops, OpKind.MATCH_ARM)
+        assert len(arm_ops) == 3
+
+    def test_braced_arm_multiline_body(self):
+        code = (
+            COLOR_ENUM + "Color::Red match\n"
+            "    Color::Red => {\n"
+            '        "red" print\n'
+            '        "\\n" print\n'
+            "    }\n"
+            '    Color::Green => "green"\n'
+            '    Color::Blue => "blue"\n'
+            "end\n"
+        )
+        ops = parse_string(code)
+        arm_ops = find_ops(ops, OpKind.MATCH_ARM)
+        assert len(arm_ops) == 3
+        push_str_ops = find_ops(ops, OpKind.PUSH_STR)
+        assert any(op.value == "red" for op in push_str_ops)
+
+    def test_mixed_braced_and_unbraced_arms(self):
+        code = (
+            COLOR_ENUM + "Color::Green match\n"
+            "    Color::Red => 0\n"
+            "    Color::Green => {\n"
+            "        1\n"
+            "    }\n"
+            "    Color::Blue => 2\n"
+            "end\n"
+        )
+        ops = parse_string(code)
+        push_int_ops = find_ops(ops, OpKind.PUSH_INT)
+        values = [op.value for op in push_int_ops]
+        assert 0 in values
+        assert 1 in values
+        assert 2 in values
+
+    def test_braced_arm_as_expression(self):
+        code = (
+            COLOR_ENUM + "fn color_code c:Color -> int {\n"
+            "    c match\n"
+            "        Color::Red => { 0 }\n"
+            "        Color::Green => { 1 }\n"
+            "        Color::Blue => { 2 }\n"
+            "    end\n"
+            "}\n"
+        )
+        typecheck_string(code)
+
+    def test_braced_arm_with_destructuring(self):
+        code = (
+            SHAPE_ENUM + "10 Shape::Circle match\n"
+            "    Shape::Circle(radius) => {\n"
+            '        "r=" print\n'
+            "        radius print\n"
+            "    }\n"
+            "    Shape::Rectangle(width height) => {\n"
+            "        width height * print\n"
+            "    }\n"
+            '    Shape::Point => "point" print\n'
+            "end\n"
+        )
+        ops = parse_string(code)
+        arm_ops = find_ops(ops, OpKind.MATCH_ARM)
+        assert len(arm_ops) == 3
+
+    def test_empty_braced_arm_body(self):
+        code = (
+            COLOR_ENUM + "Color::Red match\n"
+            "    Color::Red => {}\n"
+            "    Color::Green => {}\n"
+            "    Color::Blue => {}\n"
+            "end\n"
+        )
+        ops = parse_string(code)
+        arm_ops = find_ops(ops, OpKind.MATCH_ARM)
+        assert len(arm_ops) == 3
+
+    def test_unclosed_brace_in_arm_raises(self):
+        code = (
+            COLOR_ENUM + "Color::Red match\n"
+            "    Color::Red => {\n"
+            "        1\n"
+            "    Color::Green => 2\n"
+            "    Color::Blue => 3\n"
+            "end\n"
+        )
+        with pytest.raises(CasaErrorCollection) as exc_info:
+            parse_string(code)
+        assert exc_info.value.errors[0].kind == ErrorKind.UNMATCHED_BLOCK
+
+
+# ---------------------------------------------------------------------------
 # Identifier resolution: Color::Red -> PUSH_ENUM_VARIANT
 # ---------------------------------------------------------------------------
 class TestEnumResolution:
@@ -832,6 +937,22 @@ class TestEnumEndToEnd:
             + "end\n"
         )
         assert output == "point"
+
+    def test_braced_arm_end_to_end(self, run_casa):
+        output = run_casa(
+            SHAPE_ENUM
+            + "10 Shape::Circle match\n"
+            + "    Shape::Circle(radius) => {\n"
+            + '        "r=" print\n'
+            + "        radius print\n"
+            + "    }\n"
+            + "    Shape::Rectangle(width height) => {\n"
+            + "        width height * print\n"
+            + "    }\n"
+            + '    Shape::Point => "point" print\n'
+            + "end\n"
+        )
+        assert output == "r=10"
 
     def test_generic_enum_some(self, run_casa):
         output = run_casa(

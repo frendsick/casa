@@ -1120,20 +1120,26 @@ def _handle_keyword_match(
             variant = EnumVariant(enum_name, variant_name, -1, bindings)
             ops.append(Op(variant, OpKind.MATCH_ARM, arm_token.location))
 
-        # Parse arm body until next arm or `end`
-        while not cursor.is_finished():
-            if _is_match_arm_boundary(cursor):
-                break
-            next_token = cursor.peek()
-            if next_token and next_token.value == "end":
-                break
-            body_token = cursor.pop()
-            if body_token is None:
-                break
-            if body_token.kind == TokenKind.FSTRING_START:
-                handle_fstring(body_token, cursor, function_name, ops)
-                continue
-            _append_op_result(ops, token_to_op(body_token, cursor, function_name))
+        # Parse arm body
+        peeked = cursor.peek()
+        if peeked and peeked.value == "{":
+            # Brace-delimited arm body for multiline arms
+            ops.extend(parse_block_ops(cursor, function_name))
+        else:
+            # Single-line arm body: parse until next arm or `end`
+            while not cursor.is_finished():
+                if _is_match_arm_boundary(cursor):
+                    break
+                next_token = cursor.peek()
+                if next_token and next_token.value == "end":
+                    break
+                body_token = cursor.pop()
+                if body_token is None:
+                    break
+                if body_token.kind == TokenKind.FSTRING_START:
+                    handle_fstring(body_token, cursor, function_name, ops)
+                    continue
+                _append_op_result(ops, token_to_op(body_token, cursor, function_name))
 
     return ops
 
