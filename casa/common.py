@@ -49,12 +49,6 @@ class Intrinsic(Enum):
     PRINT = auto()
     TYPEOF = auto()
 
-    # Value constructors
-    NONE = auto()
-    SOME = auto()
-    OK = auto()
-    ERROR = auto()
-
     # Functions
     EXEC = auto()
 
@@ -309,11 +303,7 @@ class OpKind(Enum):
     PUSH_BOOL = auto()
     PUSH_CHAR = auto()
     PUSH_INT = auto()
-    PUSH_NONE = auto()
     PUSH_STR = auto()
-    SOME = auto()
-    OK = auto()
-    ERROR = auto()
 
     # Arithmetic
     ADD = auto()
@@ -413,12 +403,9 @@ class Op:
     deferred_return_type: str | None = None
 
     def __post_init__(self):
-        assert len(OpKind) == 89, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 85, "Exhaustive handling for `OpKind`"
 
         match self.kind:
-            # Value constructors (no value validation needed)
-            case OpKind.PUSH_NONE | OpKind.SOME | OpKind.OK | OpKind.ERROR:
-                pass
             # Requires `bool`
             case OpKind.PUSH_BOOL:
                 if not isinstance(self.value, bool):
@@ -803,8 +790,6 @@ BUILTIN_TYPES: set[str] = {
     "ptr",
     "array",
     "any",
-    "option",
-    "result",
 }
 
 
@@ -1014,6 +999,7 @@ class EnumVariant:
     enum_name: str | None
     variant_name: str
     ordinal: int
+    bindings: list[str] = field(default_factory=list)
 
     @property
     def is_wildcard(self) -> bool:
@@ -1050,6 +1036,13 @@ class CasaEnum:
     variants: list[str]
     location: Location
     variant_locations: dict[str, Location] | None = None
+    variant_types: dict[str, list[str]] = field(default_factory=dict)
+    type_vars: list[str] = field(default_factory=list)
+
+    @property
+    def has_inner_values(self) -> bool:
+        """Check if any variant carries inner values."""
+        return any(types for types in self.variant_types.values())
 
 
 @dataclass
