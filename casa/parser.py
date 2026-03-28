@@ -73,10 +73,6 @@ INTRINSIC_TO_OPKIND = {
     Intrinsic.SYSCALL4: OpKind.SYSCALL4,
     Intrinsic.SYSCALL5: OpKind.SYSCALL5,
     Intrinsic.SYSCALL6: OpKind.SYSCALL6,
-    Intrinsic.NONE: OpKind.PUSH_NONE,
-    Intrinsic.SOME: OpKind.SOME,
-    Intrinsic.OK: OpKind.OK,
-    Intrinsic.ERROR: OpKind.ERROR,
     Intrinsic.ARGC: OpKind.ARGC,
     Intrinsic.ARGV: OpKind.ARGV,
 }
@@ -462,6 +458,40 @@ def resolve_identifiers(
                                 function.variables.append(variable)
                         else:
                             GLOBAL_VARIABLES[var_name] = variable
+                elif isinstance(op.value, EnumVariant):
+                    variant = op.value
+                    # Resolve deferred enum variant (ordinal == -1)
+                    if variant.enum_name and variant.ordinal == -1:
+                        casa_enum = GLOBAL_ENUMS.get(variant.enum_name)
+                        if not casa_enum:
+                            errors.append(
+                                CasaError(
+                                    ErrorKind.UNDEFINED_NAME,
+                                    f"Enum `{variant.enum_name}` is not defined",
+                                    op.location,
+                                )
+                            )
+                        elif variant.variant_name not in casa_enum.variants:
+                            errors.append(
+                                CasaError(
+                                    ErrorKind.UNDEFINED_NAME,
+                                    f"Variant `{variant.variant_name}` is not "
+                                    f"defined in enum `{variant.enum_name}`",
+                                    op.location,
+                                )
+                            )
+                        else:
+                            variant.ordinal = casa_enum.variants.index(
+                                variant.variant_name
+                            )
+                    if variant.bindings:
+                        for var_name in variant.bindings:
+                            variable = Variable(var_name)
+                            if function:
+                                if variable not in function.variables:
+                                    function.variables.append(variable)
+                            else:
+                                GLOBAL_VARIABLES[var_name] = variable
             case OpKind.INCLUDE_FILE:
                 included_file = op.value
                 assert isinstance(included_file, Path), "Expected included file path"
@@ -816,9 +846,23 @@ def parse_enum(cursor: Cursor[Token]) -> CasaEnum:
     """Parse an enum definition."""
     expect_token(cursor, value="enum")
     name = expect_token(cursor, kind=TokenKind.IDENTIFIER)
+
+    # Parse optional type parameters: enum Option[T] { ... }
+    type_vars: list[str] = []
+    next_token = cursor.peek()
+    if next_token and next_token.value == "[":
+        type_vars, trait_bounds = parse_type_vars(cursor)
+        if trait_bounds:
+            raise_error(
+                ErrorKind.UNEXPECTED_TOKEN,
+                "Trait bounds are not allowed on enum definitions",
+                name.location,
+            )
+
     expect_token(cursor, value="{")
     variants: list[str] = []
     variant_locations: dict[str, Location] = {}
+    variant_types: dict[str, list[str]] = {}
     while True:
         variant_token = expect_token(cursor)
         if variant_token.value == "}":
@@ -839,13 +883,49 @@ def parse_enum(cursor: Cursor[Token]) -> CasaEnum:
             )
         variants.append(variant_token.value)
         variant_locations[variant_token.value] = variant_token.location
+
+        # Parse optional inner types: Variant(type1 type2 ...)
+        inner_types: list[str] = []
+        peeked = cursor.peek()
+        if peeked and peeked.value == "(":
+            cursor.pop()  # consume (
+            while True:
+                inner_tok = cursor.peek()
+                if not inner_tok:
+                    raise_error(
+                        ErrorKind.UNEXPECTED_TOKEN,
+                        "Unexpected end of input in variant inner types",
+                        variant_token.location,
+                        expected="`)`",
+                        got="end of input",
+                    )
+                if inner_tok.value == ")":
+                    cursor.pop()  # consume )
+                    break
+                inner_types.append(parse_type(cursor))
+            if not inner_types:
+                raise_error(
+                    ErrorKind.SYNTAX,
+                    "Variant inner types cannot be empty."
+                    " Remove the parentheses for a variant without inner values",
+                    variant_token.location,
+                )
+        variant_types[variant_token.value] = inner_types
+
     if not variants:
         raise_error(
             ErrorKind.SYNTAX,
             "Enum must have at least one variant",
             name.location,
         )
-    return CasaEnum(name.value, variants, name.location, variant_locations)
+    return CasaEnum(
+        name.value,
+        variants,
+        name.location,
+        variant_locations,
+        variant_types=variant_types,
+        type_vars=type_vars,
+    )
 
 
 def _handle_keyword_enum(
@@ -886,6 +966,13 @@ def _is_match_arm_boundary(cursor: Cursor[Token]) -> bool:
         return True
     if next_value == "{" and token.value in GLOBAL_STRUCTS:
         return True
+    # EnumName::Variant(bindings) => pattern
+    if next_value == "(" and "::" in token.value:
+        scan = pos + 2
+        while scan < len(seq) and seq[scan].value != ")":
+            scan += 1
+        if scan + 1 < len(seq) and seq[scan + 1].value == "=>":
+            return True
     return False
 
 
@@ -977,27 +1064,33 @@ def _handle_keyword_match(
             variant = EnumVariant(None, arm_token.value, -1)
             ops.append(Op(variant, OpKind.MATCH_ARM, arm_token.location))
         else:
-            # Parse the => delimiter
-            expect_token(cursor, value="=>")
-
-            # Resolve the variant
+            # Store raw enum::variant, defer resolution to resolve_identifiers
             parts = arm_token.value.split("::", 1)
             enum_name, variant_name = parts[0], parts[1]
-            casa_enum = GLOBAL_ENUMS.get(enum_name)
-            if not casa_enum:
-                raise_error(
-                    ErrorKind.UNDEFINED_NAME,
-                    f"Enum `{enum_name}` is not defined",
-                    arm_token.location,
-                )
-            if variant_name not in casa_enum.variants:
-                raise_error(
-                    ErrorKind.UNDEFINED_NAME,
-                    f"Variant `{variant_name}` is not defined in enum `{enum_name}`",
-                    arm_token.location,
-                )
-            ordinal = casa_enum.variants.index(variant_name)
-            variant = EnumVariant(enum_name, variant_name, ordinal)
+
+            # Parse optional bindings: EnumName::Variant(binding1 binding2) =>
+            bindings: list[str] = []
+            peeked = cursor.peek()
+            if peeked and peeked.value == "(":
+                cursor.pop()  # consume (
+                while True:
+                    inner_tok = cursor.peek()
+                    if not inner_tok:
+                        raise_error(
+                            ErrorKind.UNEXPECTED_TOKEN,
+                            "Unexpected end of input in match arm bindings",
+                            arm_token.location,
+                            expected="`)`",
+                            got="end of input",
+                        )
+                    if inner_tok.value == ")":
+                        cursor.pop()  # consume )
+                        break
+                    binding_tok = expect_token(cursor, kind=TokenKind.IDENTIFIER)
+                    bindings.append(binding_tok.value)
+
+            expect_token(cursor, value="=>")
+            variant = EnumVariant(enum_name, variant_name, -1, bindings)
             ops.append(Op(variant, OpKind.MATCH_ARM, arm_token.location))
 
         # Parse arm body until next arm or `end`
@@ -1201,7 +1294,7 @@ def parse_impl_block(cursor: Cursor[Token]):
     expect_token(cursor, value="impl")
 
     # Parse optional type parameters: impl[K: Hashable] Set[K] { ... }
-    impl_type_vars: set[str] = set()
+    impl_type_vars: list[str] = []
     impl_trait_bounds: dict[str, str] = {}
     next_token = cursor.peek()
     if next_token and next_token.value == "[":
@@ -1215,7 +1308,7 @@ def parse_impl_block(cursor: Cursor[Token]):
     while (fn := cursor.peek()) and fn.value == "fn":
         function = parse_function(
             cursor,
-            inherited_type_vars=impl_type_vars or None,
+            inherited_type_vars=set(impl_type_vars) if impl_type_vars else None,
             inherited_trait_bounds=impl_trait_bounds or None,
         )
         function.name = f"{impl_base_type}::{function.name}"
@@ -1240,7 +1333,7 @@ def parse_struct(cursor: Cursor[Token]) -> Struct:
     type_vars: list[str] = []
     next_token = cursor.peek()
     if next_token and next_token.value == "[":
-        type_vars_set, trait_bounds = parse_type_vars(cursor)
+        type_vars, trait_bounds = parse_type_vars(cursor)
         if trait_bounds:
             raise_error(
                 ErrorKind.UNEXPECTED_TOKEN,
@@ -1248,7 +1341,6 @@ def parse_struct(cursor: Cursor[Token]) -> Struct:
                 "Use `impl[K: Bound] StructName[K]` instead",
                 struct_name.location,
             )
-        type_vars = sorted(type_vars_set)
 
     members: list[Member] = []
     expect_token(cursor, value="{")
@@ -1372,10 +1464,11 @@ def parse_trait_method_signature(cursor: Cursor[Token]) -> Signature:
 
 def parse_type_vars(
     cursor: Cursor[Token],
-) -> tuple[set[str], dict[str, str]]:
+) -> tuple[list[str], dict[str, str]]:
     """Parse bracketed type variables and optional trait bounds."""
     expect_token(cursor, value="[")
-    type_vars: set[str] = set()
+    type_vars: list[str] = []
+    seen_vars: set[str] = set()
     trait_bounds: dict[str, str] = {}
     while token := cursor.pop():
         if token.value == "]":
@@ -1405,7 +1498,14 @@ def parse_type_vars(
                     f"Type variable `{token.value}` shadows enum type `{token.value}`",
                     token.location,
                 )
-            type_vars.add(token.value)
+            if token.value in seen_vars:
+                raise_error(
+                    ErrorKind.DUPLICATE_NAME,
+                    f"Duplicate type variable `{token.value}`",
+                    token.location,
+                )
+            type_vars.append(token.value)
+            seen_vars.add(token.value)
             # Check for trait bound: K: Hashable
             next_tok = cursor.peek()
             if next_tok and next_tok.value == ":":
@@ -1441,7 +1541,7 @@ def parse_function(
     name = expect_token(cursor, kind=TokenKind.IDENTIFIER)
 
     # Parse optional type parameters: fn name[T1 T2] or fn name[K: Hashable, V]
-    type_vars: set[str] = set()
+    type_vars: list[str] = []
     trait_bounds: dict[str, str] = {}
     next_token = cursor.peek()
     if next_token and next_token.value == "[":
@@ -1449,12 +1549,14 @@ def parse_function(
 
     # Merge inherited type vars/bounds from impl block
     if inherited_type_vars:
-        type_vars |= inherited_type_vars
+        for tv in inherited_type_vars:
+            if tv not in type_vars:
+                type_vars.append(tv)
     if inherited_trait_bounds:
         trait_bounds = {**inherited_trait_bounds, **trait_bounds}
 
     signature = parse_signature(cursor)
-    signature.type_vars = type_vars
+    signature.type_vars = set(type_vars)
     signature.trait_bounds = trait_bounds
 
     ops: list[Op] = []
