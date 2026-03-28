@@ -171,7 +171,7 @@ The `match` keyword pops a value from the stack. Each arm specifies a pattern fo
 
 ### Block Arm Bodies
 
-When an arm body contains multiple statements, wrap it in `{}`:
+Multiline arm bodies require `{}`:
 
 ```casa
 circle match
@@ -188,7 +188,7 @@ circle match
 end
 ```
 
-Single-expression arms do not need braces. Braced and unbraced arms can be mixed freely.
+Single-line arms do not need braces. Braced and unbraced arms can be mixed freely.
 
 ### Enum Matching
 
