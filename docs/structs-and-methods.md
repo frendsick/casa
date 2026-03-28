@@ -11,9 +11,29 @@ struct Person {
 }
 ```
 
-## Instantiation
+## Struct Literals
 
-Push fields onto the stack in reverse declaration order (last declared field deepest, first declared field on top), then call the struct name. Fields are popped from the top in declaration order.
+Construct a struct with named fields inside braces. Fields can appear in any order. All fields must be specified.
+
+```casa
+Person { name: "John Doe" age: 18 } = person
+```
+
+Field order does not matter:
+
+```casa
+Person { age: 18 name: "John Doe" } = person
+```
+
+Each field value is an arbitrary expression:
+
+```casa
+Person { name: first_name " " str::concat last_name str::concat age: birth_year current_year swap - } = person
+```
+
+## Stack-Based Instantiation
+
+Alternatively, push fields onto the stack in reverse declaration order (last declared field deepest, first declared field on top), then call the struct name.
 
 **Stack effect:** `fieldN ... field2 field1 -> StructName`
 
@@ -21,7 +41,7 @@ Push fields onto the stack in reverse declaration order (last declared field dee
 18 "John Doe" Person = person
 ```
 
-Here `18` (`age`, last declared) is pushed first and sits deepest. `"John Doe"` (`name`, first declared) is pushed second and sits on top. The struct constructor pops fields in declaration order: `name` first (from top), then `age`.
+Here `18` (`age`, last declared) is pushed first and sits deepest. `"John Doe"` (`name`, first declared) is pushed second and sits on top.
 
 ## Auto-Generated Accessors
 
@@ -222,7 +242,7 @@ impl Person {
 }
 
 # Instantiate
-18 "John Doe" Person = person
+Person { name: "John Doe" age: 18 } = person
 
 # Getters
 person.name print       # John Doe
@@ -238,6 +258,32 @@ person.age print        # 19
 ```
 
 See [`examples/struct.casa`](../examples/struct.casa).
+
+## Struct Destructuring in Match
+
+Structs can be destructured in `match` expressions. Each arm binds struct fields to local variables.
+
+```casa
+person match
+    Person { name: n age: a } => n print a print
+end
+```
+
+Partial destructuring is allowed — you do not need to bind every field:
+
+```casa
+person match
+    Person { name: n } => n print
+end
+```
+
+A single struct pattern arm is exhaustive (structs have one shape). A wildcard `_` arm is also valid:
+
+```casa
+person match
+    _ => "any person" print
+end
+```
 
 ## Traits
 
