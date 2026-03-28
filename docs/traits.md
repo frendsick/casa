@@ -81,7 +81,7 @@ fn identity[T] x:T -> T { x }
 
 ```casa
 impl[K: Hashable, V] Map[K V] {
-    fn get self:Map[K V] key:K -> option[V] {
+    fn get self:Map[K V] key:K -> Option[V] {
         key K::hash self.capacity % = idx
         ...
     }

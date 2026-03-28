@@ -67,15 +67,15 @@ fi
 
 The first branch pushes an `int`, the second pushes a `str` — the type checker rejects this.
 
-Compatible types are allowed across branches. For example, `none` (bare `option`) and `some` (`option[T]`) can appear in different branches. The type checker unifies them to the more specific type:
+Compatible types are allowed across branches. For example, `Option::None` (bare `Option`) and `Option::Some` (`Option[T]`) can appear in different branches. The type checker unifies them to the more specific type:
 
 ```casa
 if condition then
-    none           # option
+    Option::None           # Option
 else
-    42 some        # option[int]
+    42 Option::Some        # Option[int]
 fi
-# result type: option[int]
+# result type: Option[int]
 ```
 
 The same applies to bare `array` and `array[T]`, and to `any` with any concrete type.

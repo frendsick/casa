@@ -243,22 +243,26 @@ fn apply f:fn[int -> int] x:int -> int {
 
 See [Functions and Lambdas](functions-and-lambdas.md#lambdas) for details.
 
-### `option[T]`
+### `Option[T]`
 
-Optional type representing a value that may or may not be present. Built with the `some` and `none` constructors.
-
-`none` pushes an empty option with bare type `option`. It is compatible with any `option[T]`.
-
-**Stack effect:** `-> option`
-
-`some` wraps the top-of-stack value into an option. The resulting type is `option[T]` where `T` is the type of the wrapped value.
-
-**Stack effect:** `T -> option[T]`
+Optional type representing a value that may or may not be present. `Option` is an enum defined in `lib/std.casa`:
 
 ```casa
-42 some          # type: option[int]
-"hello" some     # type: option[str]
-none             # type: option (compatible with any option[T])
+enum Option[T] { None Some(T) }
+```
+
+`Option::None` pushes an empty option with bare type `Option`. It is compatible with any `Option[T]`.
+
+**Stack effect:** `-> Option`
+
+`Option::Some` wraps the top-of-stack value into an option. The resulting type is `Option[T]` where `T` is the type of the wrapped value.
+
+**Stack effect:** `T -> Option[T]`
+
+```casa
+42 Option::Some          # type: Option[int]
+"hello" Option::Some     # type: Option[str]
+Option::None             # type: Option (compatible with any Option[T])
 ```
 
 At runtime, an option is heap-allocated as 16 bytes: `[tag, value]` where each field is 8 bytes. The tag is `1` for `Some` and `0` for `None`.
@@ -266,78 +270,82 @@ At runtime, an option is heap-allocated as 16 bytes: `[tag, value]` where each f
 Options stored in variables retain their type:
 
 ```casa
-42 some = x      # x has type option[int]
-none = y         # y has type option (bare)
+42 Option::Some = x      # x has type Option[int]
+Option::None = y         # y has type Option (bare)
 ```
 
-A bare `option` type matches any `option[T]` in function signatures, similar to how bare `array` matches any `array[T]`:
+A bare `Option` type matches any `Option[T]` in function signatures, similar to how bare `array` matches any `array[T]`:
 
 ```casa
-fn check opt:option -> bool { true }
-42 some check    # works: option[int] matches bare option
+fn check opt:Option -> bool { true }
+42 Option::Some check    # works: Option[int] matches bare Option
 ```
 
-`none` and `some` can appear in different branches of a conditional. The type checker unifies them to the more specific `option[T]`:
+`Option::None` and `Option::Some` can appear in different branches of a conditional. The type checker unifies them to the more specific `Option[T]`:
 
 ```casa
-fn safe_head arr:array[int] -> option[int] {
+fn safe_head arr:array[int] -> Option[int] {
     if 0 arr .length > then
-        0 arr array::nth some
+        0 arr array::nth Option::Some
     else
-        none
+        Option::None
     fi
 }
 ```
 
 See [Standard Library -- Option](standard-library.md#option) for `is_some`, `is_none`, `unwrap`, and `unwrap_or`.
 
-### `result[T E]`
+### `Result[T E]`
 
-Result type representing either a success value (`ok`) or an error value (`error`). Built with the `ok` and `error` constructors.
-
-`ok` wraps the top-of-stack value into a result. The resulting type is `result[T any]` where `T` is the type of the wrapped value.
-
-**Stack effect:** `T -> result[T any]`
-
-`error` wraps the top-of-stack value into an error result. The resulting type is `result[any E]` where `E` is the type of the error value.
-
-**Stack effect:** `E -> result[any E]`
+Result type representing either a success value (`Result::Ok`) or an error value (`Result::Error`). `Result` is an enum defined in `lib/std.casa`:
 
 ```casa
-42 ok            # type: result[int any]
-"not found" error # type: result[any str]
+enum Result[T E] { Error(E) Ok(T) }
 ```
 
-At runtime, a result is heap-allocated as 16 bytes: `[tag, value]` where each field is 8 bytes. The tag is `1` for `ok` and `0` for `error`.
+`Result::Ok` wraps the top-of-stack value into a result. The resulting type is `Result[T any]` where `T` is the type of the wrapped value.
+
+**Stack effect:** `T -> Result[T any]`
+
+`Result::Error` wraps the top-of-stack value into an error result. The resulting type is `Result[any E]` where `E` is the type of the error value.
+
+**Stack effect:** `E -> Result[any E]`
+
+```casa
+42 Result::Ok            # type: Result[int any]
+"not found" Result::Error # type: Result[any str]
+```
+
+At runtime, a result is heap-allocated as 16 bytes: `[tag, value]` where each field is 8 bytes. The tag is `1` for `Ok` and `0` for `Error`.
 
 Results stored in variables retain their type:
 
 ```casa
-42 ok = x                    # x has type result[int any]
-"not found" error = y        # y has type result[any str]
+42 Result::Ok = x                    # x has type Result[int any]
+"not found" Result::Error = y        # y has type Result[any str]
 ```
 
 Type annotations can narrow the type to specify both type parameters:
 
 ```casa
-42 ok = x:result[int str]    # x has type result[int str]
+42 Result::Ok = x:Result[int str]    # x has type Result[int str]
 ```
 
-A bare `result` type matches any `result[T E]` in function signatures, similar to how bare `option` matches any `option[T]`:
+A bare `Result` type matches any `Result[T E]` in function signatures, similar to how bare `Option` matches any `Option[T]`:
 
 ```casa
-fn check res:result -> bool { true }
-42 ok check    # works: result[int any] matches bare result
+fn check res:Result -> bool { true }
+42 Result::Ok check    # works: Result[int any] matches bare Result
 ```
 
-`ok` and `error` can appear in different branches of a conditional. The type checker unifies them to the more specific `result[T E]`:
+`Result::Ok` and `Result::Error` can appear in different branches of a conditional. The type checker unifies them to the more specific `Result[T E]`:
 
 ```casa
-fn divide dividend:int divisor:int -> result[int str] {
+fn divide dividend:int divisor:int -> Result[int str] {
     if 0 divisor == then
-        "division by zero" error
+        "division by zero" Result::Error
     else
-        dividend divisor / ok
+        dividend divisor / Result::Ok
     fi
 }
 ```
