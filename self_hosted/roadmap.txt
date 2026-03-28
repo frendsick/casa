@@ -1,0 +1,474 @@
+Self-Hosted Casa Compiler — Implementation Roadmap
+====================================================
+
+Current state: The self-hosted compiler (451 lines) supports integer literals,
+the + operator, and print. The goal is to incrementally add features until the
+compiler can compile itself.
+
+Each step is bootstrappable: the compiler at step N can be compiled by the
+compiler at step N-1 (or the Python compiler for step 1).
+
+The self-hosted compiler skips type checking. The Python compiler already
+type-checks the self-hosted source, so runtime type safety is guaranteed by
+the bootstrap compiler. A type checker can be added post-bootstrap.
+
+Dependency graph:
+
+  Step 1  (Arithmetic/Stack)
+     |
+  Step 2  (Variables)
+     |
+  Step 3  (Control Flow)
+     |
+     +-- Step 4  (Strings/Chars)
+     |      |
+     |      +-- Step 12 (F-Strings)
+     |
+     +-- Step 5  (Functions)
+     |      |
+     |      +-- Step 6  (Structs)
+     |      |      |
+     |      |      +-- Step 7  (Enums/Match)
+     |      |
+     |      +-- Step 11 (Methods/Impl)
+     |      |
+     |      +-- Step 13 (Option/Result/Lambdas)
+     |
+     +-- Step 8  (Memory/Syscalls/Casts)
+     |
+     +-- Step 9  (Include)
+     |
+     +-- Step 10 (Generics)
+     |
+  Step 14 (Gap-filling)
+     |
+  Step 15 (Self-compilation)
+
+================================================================================
+
+Step 1: Arithmetic Operators and Stack Operations
+--------------------------------------------------
+Expand from only + to the full operator and intrinsic set.
+
+Features:
+  - Arithmetic: -, *, /, %
+  - Bitwise: &, |, ^, ~, <<, >>
+  - Comparison: ==, !=, <, >, <=, >=
+  - Boolean: &&, ||, !
+  - Stack intrinsics: drop, dup, swap, over, rot
+
+Changes by module:
+  - lexer: Recognize all operator characters and multi-char operators
+  - common: Add OpKind and InstKind variants for each operator/intrinsic
+  - parser: Map operator tokens to Op nodes; recognize intrinsic keywords
+  - bytecode: 1:1 OpKind-to-InstKind mappings
+  - emitter: Emit x86-64 assembly for each instruction
+
+After this step: Full calculator programs with stack manipulation.
+  Example: 3 4 * 2 + print  =>  14
+
+================================================================================
+
+Step 2: Variables
+------------------
+Add local and global variable support.
+
+Features:
+  - Variable assignment: expr = varname
+  - Variable reference: push variable value by name
+  - Compound assignment: += and -=
+  - Global variables (BSS globals area)
+  - Local variables (return stack %r14 relative)
+
+Changes by module:
+  - lexer: Recognize = as assignment (distinct from ==)
+  - common: Add OpKind (AssignVariable, PushVariable, etc.) and InstKind
+    (GlobalsInit, GlobalGet, GlobalSet, LocalsInit, LocalsUninit, LocalGet,
+    LocalSet)
+  - parser: Capture variable name after =; build variable table; resolve
+    identifiers to PushVariable
+  - bytecode: Track variable tables; emit LOCALS_INIT/UNINIT framing;
+    resolve variable names to stack indices
+  - emitter: Emit globals BSS area; emit %r14-relative local storage
+
+After this step: Stateful programs with accumulators.
+  Example: 0 = sum  1 += sum  2 += sum  sum print  =>  3
+
+================================================================================
+
+Step 3: Control Flow
+---------------------
+Add conditional and loop constructs.
+
+Features:
+  - if/then/elif/else/fi
+  - while/do/done
+  - break and continue
+
+Changes by module:
+  - lexer: Recognize keywords (if, then, elif, else, fi, while, do, done,
+    break, continue)
+  - common: Add OpKind variants (IfStart, IfElif, IfElse, IfEnd, WhileStart,
+    WhileEnd, WhileBreak, WhileContinue) and InstKind (Label, Jump, JumpNe)
+  - parser: Emit matching start/end op pairs for control flow blocks
+  - bytecode: Implement block-matching label algorithm — scan ops to find
+    corresponding end/elif/else markers and assign label IDs
+  - emitter: Emit .LN: labels, jmp .LN, and conditional jz .LN
+
+After this step: Real algorithms with branching and loops.
+  Example: FizzBuzz, Fibonacci, iterative sum
+
+================================================================================
+
+Step 4: String Literals, Char Literals, and Print Variants
+-----------------------------------------------------------
+Add string and character support. Required for processing source code and
+generating assembly output.
+
+Features:
+  - String literals ("hello") with escape sequences (\n, \t, \\, \", \0, \r)
+  - Char literals ('a', '\n')
+  - Boolean literals (true, false)
+  - print for str, bool, and char types (PrintStr, PrintBool, PrintChar)
+  - String table in .data section (length-prefixed strings)
+  - print for C-strings (PrintCstr)
+
+Changes by module:
+  - lexer: Parse double-quoted strings with escape handling; parse
+    single-quoted char literals
+  - common: Add OpKind (PushStr, PushChar, PushBool) and InstKind (PushStr,
+    PushChar, PrintStr, PrintBool, PrintChar, PrintCstr)
+  - parser: Detect string/char/bool literals and emit appropriate ops
+  - bytecode: Implement string interning table; map PushStr to string table
+    index
+  - emitter: Emit .data section with string table; emit leaq for string
+    pushes; emit print_str/print_bool/print_char code
+
+After this step: Hello world and programs with text output.
+  Example: "Hello, world!" print
+
+================================================================================
+
+Step 5: Functions
+------------------
+Add named function definitions and calls. Functions use the return stack
+(%r14) for return addresses and the data stack for parameters.
+
+Features:
+  - fn name param:type -> return_type { body }
+  - Function calls by name
+  - return keyword (early return with locals cleanup)
+  - Function-local variable scopes
+  - Function bytecode emitted as labeled blocks
+
+Changes by module:
+  - lexer: Recognize fn, return keywords; recognize : (type annotation),
+    -> (return type), { } (block delimiters)
+  - common: Add OpKind (FnDef, FnCall, FnReturn) and InstKind (FnCall,
+    FnReturn)
+  - parser: Parse function definitions — extract name, parameters, return
+    type, body; store in global function table; resolve identifiers matching
+    function names to FnCall
+  - bytecode: Compile each function into its own bytecode block; emit
+    LOCALS_INIT/UNINIT for parameters and locals
+  - emitter: Emit fn_name: labels; emit call sequences (push return addr
+    to %r14, jmp); emit FN_RETURN (pop from %r14, indirect jmp)
+
+After this step: Modular programs with helper functions and recursion.
+  Example: Recursive Fibonacci, factorials
+
+================================================================================
+
+Step 6: Structs
+----------------
+Add struct definitions, construction, field access, and field mutation.
+Structs are heap-allocated with fields at 8-byte offsets.
+
+Features:
+  - struct Name { field1: type  field2: type }
+  - Struct construction: value1 value2 StructName
+  - Field access: obj.field (compiled to ptr + offset + load64)
+  - Field mutation: value obj->field (compiled to ptr + offset + store64)
+  - Synthesized getter/setter functions (Type::field, Type::set_field)
+
+Changes by module:
+  - lexer: Recognize struct keyword, . (field access), -> (field setter)
+  - common: Add OpKind StructNew and struct definition table
+  - parser: Parse struct definitions; register in global table; synthesize
+    getter/setter functions; emit StructNew when struct name used as
+    constructor
+  - bytecode: Compile StructNew to heap alloc + store sequence
+  - emitter: No new instructions needed — struct ops use existing HEAP_ALLOC,
+    LOAD64, STORE64, ADD, PUSH
+
+After this step: Programs with data structures.
+  Example: struct Point { x: int  y: int } with construction and access
+
+================================================================================
+
+Step 7: Enums and Match Expressions
+-------------------------------------
+Add enum definitions, variant access, and pattern matching.
+
+Features:
+  - enum Name { Variant1 Variant2 ... } (variants are ordinals 0, 1, 2, ...)
+  - Variant access: EnumName::Variant pushes ordinal
+  - Match expressions: match ... Variant => body ... _ => default ... end
+  - Wildcard _ arm
+
+Changes by module:
+  - lexer: Recognize enum, match, end, => tokens
+  - common: Add OpKind (PushEnumVariant, MatchStart, MatchArm, MatchEnd)
+  - parser: Parse enum definitions; register in global table; resolve
+    EnumName::Variant to ordinal push; parse match blocks with arms
+  - bytecode: Compile match using DUP/PUSH ordinal/EQ/JUMP_NE pattern for
+    each arm, with DROP for wildcard/last arm
+  - emitter: No new instructions — match compiles to existing
+    labels/jumps/comparisons
+
+After this step: Programs with tagged unions and pattern matching.
+  Example: enum Color { Red Green Blue } with match dispatch
+
+================================================================================
+
+Step 8: Memory Intrinsics, Syscalls, and Type Casts
+-----------------------------------------------------
+Add the low-level primitives that the standard library depends on.
+
+Features:
+  - alloc intrinsic (bump allocator from BSS heap)
+  - load8/16/32/64 and store8/16/32/64
+  - syscall0 through syscall6
+  - argc, argv intrinsics
+  - Type casts: (ptr), (int), (str), (char), (bool), (cstr)
+  - Generic type casts: (List[Token]), (option[char])
+
+Changes by module:
+  - lexer: Recognize all intrinsic keywords; recognize ( ) for type casts
+  - common: Add all memory/syscall/argc/argv OpKind and InstKind variants
+  - parser: Map intrinsic tokens to ops; parse (typename) as cast ops
+  - bytecode: Direct 1:1 mapping for memory/syscall ops; type casts are
+    no-ops at bytecode level (everything is 8 bytes)
+  - emitter: Emit assembly for heap_alloc, all load/store variants, syscall
+    register setup + syscall instruction, argc/argv from BSS
+
+After this step: Programs using raw memory and system calls. Standard library
+core primitives (exit, memcpy, char classification) now work.
+
+================================================================================
+
+Step 9: Include Files
+----------------------
+Add the include directive for multi-file compilation.
+
+Features:
+  - include "path/to/file.casa" directive
+  - Recursive include processing
+  - Include-once guard (prevent double-inclusion)
+  - Path resolution relative to the including file
+
+Changes by module:
+  - lexer: Recognize include keyword; parse following string as file path
+  - common: Add included_files tracking set
+  - parser: When encountering include, read file via file::read_all, lex it,
+    parse it, and splice resulting ops into current op list
+  - bytecode: No changes — includes are resolved during parsing
+
+After this step: Multi-file programs. The compiler can include lib/std.casa
+and use List, Map, StringBuilder, file I/O, etc.
+
+================================================================================
+
+Step 10: Generics
+------------------
+Add generic type parameter syntax. Since the self-hosted compiler has no type
+checker, generics are parsed as annotations with no runtime effect — all
+values are 8-byte stack slots regardless of type.
+
+Features:
+  - Generic type annotations: List[Token], option[char], result[T E]
+  - Generic function signatures: fn get[T] self:List[T] n:int -> T
+  - impl blocks with type parameters: impl[K: Hashable, V] Map[K V]
+  - Type casts with generics: (List[Token]), (option[char])
+
+Changes by module:
+  - lexer: Recognize [ ] in type annotation contexts
+  - parser: Parse type annotations with brackets, handling nested generics;
+    parse generic function definitions; parse impl blocks with trait bounds
+  - Other modules: Minimal changes — type annotations parsed but not enforced
+
+After this step: Programs using generic types syntactically. Combined with
+Step 9, the full standard library is available.
+
+================================================================================
+
+Step 11: Method Calls and impl Blocks
+---------------------------------------
+Add method call syntax and impl blocks. The self-hosted compiler uses methods
+extensively: .push, .get, .length, .append, .build, .to_str, .at, .eq, etc.
+
+Features:
+  - Method call: obj.method translates to Type::method with obj on stack
+  - impl Type { fn method ... } blocks with qualified function names
+  - Field setter: value obj->field translates to Type::set_field
+
+Implementation strategy for method resolution without type checking:
+  Build a minimal type tracker — when = varname is seen after a struct
+  constructor or known-return-type function, record that variable's type.
+  Use this to resolve .method to Type::method. This handles the vast
+  majority of cases in the compiler source.
+
+Changes by module:
+  - lexer: Ensure . generates a method call token
+  - common: Add OpKind MethodCall
+  - parser: Parse .method as MethodCall op; parse impl Type { ... } blocks;
+    register impl functions with Type::method names; implement minimal type
+    tracking for method resolution
+
+After this step: Programs using method call syntax on standard library types.
+This is a critical milestone — the compiler source uses method calls on
+nearly every line.
+
+================================================================================
+
+Step 12: F-Strings
+-------------------
+Add f-string interpolation. The emitter uses f-strings extensively for
+assembly generation.
+
+Features:
+  - f"text {expr} more text" syntax
+  - Multiple parts concatenated via str_concat helper
+  - Nested f-strings
+  - Escape sequences within f-strings: \n, \t, \\, \", \{, \}
+
+Changes by module:
+  - lexer: Detect f" prefix; tokenize into FstringStart, FstringText,
+    FstringExprStart, FstringExprEnd, FstringEnd sequence
+  - common: Add FstringConcat OpKind and relevant token variants
+  - parser: Parse f-string tokens; text parts become PushStr; expression
+    parts are evaluated and converted via .to_str; emit FstringConcat N
+  - bytecode: Map FstringConcat to InstKind.FstringConcat
+  - emitter: Emit call to str_concat helper (already present)
+
+After this step: Programs with string interpolation. Unblocks the assembly
+emitter which uses f-strings on nearly every line.
+
+================================================================================
+
+Step 13: Option, Result, Lambdas, and Closures
+------------------------------------------------
+Add option/result value constructors, lambdas, function references, and
+closures. Required by lib/parser.casa (Cursor methods use lambdas like
+{ .is_space } with skip_while/take_while).
+
+Features:
+  - some intrinsic (option with tag=1)
+  - none intrinsic (option with tag=0)
+  - ok intrinsic (result with tag=1)
+  - error intrinsic (result with tag=0)
+  - Lambda blocks: { expr } creates anonymous function
+  - Function references: &function_name pushes function pointer
+  - exec intrinsic (indirect call through function pointer)
+  - Closure capture (lambdas capture enclosing variables)
+
+Changes by module:
+  - common: Add OpKind (Some, PushNone, Ok, Error, FnPush, FnExec) and
+    InstKind (FnPush, FnExec, ConstantLoad, ConstantStore)
+  - parser: Parse { ... } as lambda; create anonymous function entries;
+    parse &name as function reference
+  - bytecode: Compile some/none/ok/error as heap-allocated tagged wrappers;
+    compile lambda push with capture storage; compile exec as indirect jump
+  - emitter: Emit leaq fn_name(%rip) for fn_push; emit indirect call for
+    fn_exec; emit constants BSS area for captures
+
+After this step: Programs using option/result types and higher-order
+functions. Cursor methods from lib/parser.casa now work.
+
+================================================================================
+
+Step 14: Remaining Features and Gap-Filling
+---------------------------------------------
+Audit the self-hosted compiler source against the implemented feature set
+and fill any remaining gaps.
+
+Features to verify and add if missing:
+  - trait definitions (parsed but not enforced — needed for Hashable in std)
+  - Array literals ([1, 2, 3]) if used by any included library code
+  - Negative integer literals as expressions (unary minus)
+  - continue in while loops
+  - All standard library functions transitively called by the compiler
+
+Audit process:
+  - Walk every line of the self-hosted compiler source
+  - Walk every standard library function it transitively calls
+  - Verify each language construct is supported
+  - Fix any remaining gaps
+
+Key areas to check:
+  - lib/parser.casa uses lambdas with exec (Step 13)
+  - lib/std.casa Map uses impl[K: Hashable, V] trait bounds (Step 10)
+  - lib/std.casa uses array methods with generics
+
+================================================================================
+
+Step 15: Self-Compilation and Verification
+-------------------------------------------
+Compile the self-hosted compiler with itself and verify correctness.
+
+Process:
+  1. Compile with Python compiler:
+       python3 casa.py self_hosted/casa.casa -o casa_v1
+  2. Self-compile:
+       ./casa_v1 self_hosted/casa.casa -o casa_v2
+  3. Verify casa_v2 works:
+       ./casa_v2 examples/fizzbuzz.casa -o fizzbuzz && ./fizzbuzz
+  4. Compile again:
+       ./casa_v2 self_hosted/casa.casa -o casa_v3
+  5. Compare casa_v2 and casa_v3 assembly output:
+       diff casa_v2.s casa_v3.s
+  6. If identical, the compiler has reached a fixed point (full bootstrap)
+  7. If not, analyze differences and fix until convergence
+
+Verification:
+  - Run the full example test suite through the self-hosted compiler
+  - Compare assembly output between Python-compiled and self-compiled versions
+  - Test edge cases: deeply nested if/elif, large enums, complex f-strings,
+    method call chains
+
+================================================================================
+
+Recommended implementation sprints:
+
+  Sprint 1 (Foundation):  Steps 1-3
+    After: The compiler handles basic imperative programs.
+
+  Sprint 2 (Data):        Steps 4, 5, 8
+    After: The compiler handles functions with strings and memory.
+
+  Sprint 3 (Types):       Steps 6, 7, 9, 10
+    After: The compiler handles structs, enums, includes, and generics.
+
+  Sprint 4 (Integration): Steps 11, 12, 13
+    After: The compiler handles methods, f-strings, and closures.
+
+  Sprint 5 (Bootstrap):   Steps 14, 15
+    After: Self-compilation achieved.
+
+================================================================================
+
+Key design decisions:
+
+1. No type checker initially. The Python compiler type-checks the self-hosted
+   source. A type checker can be added after achieving self-compilation.
+
+2. Method resolution without type checking uses a minimal type tracker: when
+   = varname follows a struct constructor or known function, record the
+   variable's type to resolve .method calls to Type::method.
+
+3. The standard library (lib/std.casa) is compiled along with the self-hosted
+   compiler. The self-hosted compiler must handle all features used by the
+   standard library (impl blocks, trait bounds, generics, lambdas, exec).
+
+4. Assembly output should match the Python compiler's format to enable
+   diff-based correctness verification and fixed-point bootstrap detection.
