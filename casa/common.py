@@ -383,6 +383,7 @@ class OpKind(Enum):
 
     # Structs
     STRUCT_NEW = auto()
+    STRUCT_LITERAL = auto()
 
     # Types
     TYPE_CAST = auto()
@@ -412,7 +413,7 @@ class Op:
     deferred_return_type: str | None = None
 
     def __post_init__(self):
-        assert len(OpKind) == 88, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 89, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Value constructors (no value validation needed)
@@ -483,10 +484,23 @@ class Op:
                 if not isinstance(self.value, Intrinsic):
                     raise TypeError(f"`{self.kind}` requires value of type `Intrinsic`")
             # Requires `EnumVariant`
-            case OpKind.PUSH_ENUM_VARIANT | OpKind.MATCH_ARM:
+            case OpKind.PUSH_ENUM_VARIANT:
                 if not isinstance(self.value, EnumVariant):
                     raise TypeError(
                         f"`{self.kind}` requires value of type `EnumVariant`"
+                    )
+            # Requires `EnumVariant` or `StructPattern`
+            case OpKind.MATCH_ARM:
+                if not isinstance(self.value, (EnumVariant, StructPattern)):
+                    raise TypeError(
+                        f"`{self.kind}` requires value of type"
+                        " `EnumVariant` or `StructPattern`"
+                    )
+            # Requires `StructLiteral`
+            case OpKind.STRUCT_LITERAL:
+                if not isinstance(self.value, StructLiteral):
+                    raise TypeError(
+                        f"`{self.kind}` requires value of type `StructLiteral`"
                     )
             # Requires `Keyword`
             case (
@@ -1005,6 +1019,27 @@ class EnumVariant:
     def is_wildcard(self) -> bool:
         """Check if this variant is a wildcard pattern."""
         return self.variant_name == MATCH_WILDCARD
+
+
+@dataclass
+class StructLiteral:
+    """A struct construction with named fields."""
+
+    struct: "Struct"
+    field_order: list[str]
+
+
+@dataclass
+class StructPattern:
+    """A struct destructuring pattern in a match arm."""
+
+    struct_name: str
+    bindings: dict[str, str]  # field_name -> variable_name
+
+    @property
+    def is_wildcard(self) -> bool:
+        """Struct patterns are never wildcards."""
+        return False
 
 
 @dataclass

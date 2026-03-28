@@ -2,10 +2,11 @@
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import assert_never
+
 from casa.common import (
     GLOBAL_FUNCTIONS,
     GLOBAL_SCOPE_LABEL,
+    GLOBAL_STRUCTS,
     GLOBAL_VARIABLES,
     Bytecode,
     Cursor,
@@ -19,6 +20,8 @@ from casa.common import (
     OpKind,
     Program,
     Struct,
+    StructLiteral,
+    StructPattern,
     Variable,
 )
 from casa.error import ErrorKind, raise_error
@@ -444,8 +447,8 @@ class Compiler:
             case OpKind.MATCH_START:
                 pass
             case OpKind.MATCH_ARM:
-                variant = op.value
-                assert isinstance(variant, EnumVariant)
+                pattern = op.value
+                assert isinstance(pattern, (EnumVariant, StructPattern))
 
                 end_label = self._require_matching_label(
                     op,
@@ -469,11 +472,14 @@ class Compiler:
                     target_kinds=[OpKind.MATCH_ARM],
                 )
                 is_last = next_arm is None
-                if is_last:
+
+                if isinstance(pattern, StructPattern):
+                    self._compile_struct_match_arm(pattern, bytecode)
+                elif is_last:
                     bytecode.append(self.inst(InstKind.DROP))
                 else:
                     bytecode.append(self.inst(InstKind.DUP))
-                    bytecode.append(self.inst(InstKind.PUSH, args=[variant.ordinal]))
+                    bytecode.append(self.inst(InstKind.PUSH, args=[pattern.ordinal]))
                     bytecode.append(self.inst(InstKind.EQ))
                     bytecode.append(self.inst(InstKind.JUMP_NE, args=[next_arm]))
                     bytecode.append(self.inst(InstKind.DROP))
@@ -520,6 +526,64 @@ class Compiler:
                 bytecode.append(self.inst(InstKind.ADD))
             bytecode.append(self.inst(InstKind.STORE64))
 
+    def _compile_struct_match_arm(
+        self,
+        pattern: StructPattern,
+        bytecode: list[Inst],
+    ) -> None:
+        """Compile a struct destructuring match arm."""
+        struct = GLOBAL_STRUCTS[pattern.struct_name]
+        field_offsets = {m.name: i * 8 for i, m in enumerate(struct.members)}
+
+        # Extract bound fields from the struct pointer
+        for field_name, var_name in pattern.bindings.items():
+            offset = field_offsets[field_name]
+            bytecode.append(self.inst(InstKind.DUP))
+            if offset > 0:
+                bytecode.append(self.inst(InstKind.PUSH, args=[offset]))
+                bytecode.append(self.inst(InstKind.ADD))
+            bytecode.append(self.inst(InstKind.LOAD64))
+            _, set_kind, var_index = self._resolve_variable(var_name)
+            bytecode.append(self.inst(set_kind, args=[var_index]))
+
+        # Drop the struct pointer
+        bytecode.append(self.inst(InstKind.DROP))
+
+    def _compile_struct_literal(self, op: Op, bytecode: list[Inst]) -> None:
+        """Compile STRUCT_LITERAL op with named fields."""
+        literal = op.value
+        assert isinstance(literal, StructLiteral)
+        struct = literal.struct
+        member_count = len(struct.members)
+
+        # Map field names to their declaration index
+        decl_index_by_name = {m.name: i for i, m in enumerate(struct.members)}
+
+        # Store all field values into temp locals (top of stack = last in field_order)
+        temp_locals: dict[str, int] = {}
+        for field_name in reversed(literal.field_order):
+            local_idx = self.locals_count
+            self.locals_count += 1
+            temp_locals[field_name] = local_idx
+            bytecode.append(self.inst(InstKind.LOCAL_SET, args=[local_idx]))
+
+        # Allocate struct on heap
+        bytecode.append(self.inst(InstKind.PUSH, args=[member_count * 8]))
+        bytecode.append(self.inst(InstKind.HEAP_ALLOC))
+
+        # Store each field at its correct offset
+        for member in struct.members:
+            offset = decl_index_by_name[member.name] * 8
+            bytecode.append(self.inst(InstKind.DUP))
+            if offset > 0:
+                bytecode.append(self.inst(InstKind.PUSH, args=[offset]))
+                bytecode.append(self.inst(InstKind.ADD))
+            bytecode.append(
+                self.inst(InstKind.LOCAL_GET, args=[temp_locals[member.name]])
+            )
+            bytecode.append(self.inst(InstKind.SWAP))
+            bytecode.append(self.inst(InstKind.STORE64))
+
     def _compile_function(self, function: Function, op: Op) -> None:
         """Compile a function if not already compiled."""
         if function.bytecode is not None:
@@ -551,7 +615,7 @@ class Compiler:
     def compile(self) -> Bytecode:
         """Lower all ops to bytecode instructions."""
         assert len(InstKind) == 68, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 88, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 89, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
         bytecode: list[Inst] = []
@@ -668,6 +732,8 @@ class Compiler:
                     self._compile_tagged_wrapper(0, bytecode)
                 case OpKind.STRUCT_NEW:
                     self._compile_struct_new(op, bytecode)
+                case OpKind.STRUCT_LITERAL:
+                    self._compile_struct_literal(op, bytecode)
                 case (
                     OpKind.WHILE_BREAK
                     | OpKind.WHILE_CONDITION
@@ -677,7 +743,7 @@ class Compiler:
                 ):
                     self._compile_while_block(op, bytecode)
                 case _:
-                    assert_never(op.kind)
+                    raise AssertionError(f"Unhandled OpKind: {op.kind}")
 
         if self.locals_count > 0:
             bytecode.insert(0, Inst(InstKind.LOCALS_INIT, args=[self.locals_count]))

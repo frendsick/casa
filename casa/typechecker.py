@@ -8,6 +8,7 @@ from casa.common import (
     ANY_TYPE,
     GLOBAL_ENUMS,
     GLOBAL_FUNCTIONS,
+    GLOBAL_STRUCTS,
     GLOBAL_TRAITS,
     GLOBAL_VARIABLES,
     MATCH_WILDCARD,
@@ -20,6 +21,8 @@ from casa.common import (
     Parameter,
     Signature,
     Struct,
+    StructLiteral,
+    StructPattern,
     Type,
     Variable,
     extract_fn_signature_str,
@@ -56,7 +59,7 @@ class BranchedStack:
     current_branch_label: str | None
     current_branch_location: Location | None
     if_location: Location | None
-    if_location_enum_name: str | None
+    if_location_match_type: str | None
 
     def __init__(
         self,
@@ -77,7 +80,7 @@ class BranchedStack:
         self.current_branch_label = None
         self.current_branch_location = None
         self.if_location = None
-        self.if_location_enum_name = None
+        self.if_location_match_type = None
 
 
 @dataclass
@@ -904,30 +907,129 @@ class TypeChecker:
         assert variant.enum_name is not None
         self.stack_push(variant.enum_name)
 
-    def check_match(self, op: Op) -> None:
+    @staticmethod
+    def _check_duplicate_arm(
+        covered_key: str,
+        display_name: str,
+        location: Location,
+        branched: BranchedStack,
+    ) -> None:
+        """Raise an error if a match arm has already been covered."""
+        for label, _, _ in branched.branch_records:
+            if label == covered_key:
+                raise_error(
+                    ErrorKind.DUPLICATE_NAME,
+                    f"Duplicate match arm for {display_name}",
+                    location,
+                )
+        if branched.current_branch_label == covered_key:
+            raise_error(
+                ErrorKind.DUPLICATE_NAME,
+                f"Duplicate match arm for {display_name}",
+                location,
+            )
+
+    def _check_match_arm_pattern(
+        self,
+        pattern: "EnumVariant | StructPattern",
+        match_type: str,
+        location: Location,
+        branched: BranchedStack,
+    ) -> str:
+        """Validate a match arm pattern and return its covered_key."""
+        if isinstance(pattern, StructPattern):
+            if pattern.struct_name != match_type:
+                raise_error(
+                    ErrorKind.TYPE_MISMATCH,
+                    f"Struct pattern `{pattern.struct_name}`"
+                    f" does not match type `{match_type}`",
+                    location,
+                )
+            covered_key = f"__covered:{pattern.struct_name}"
+            self._check_duplicate_arm(
+                covered_key, f"`{pattern.struct_name}`", location, branched
+            )
+            return covered_key
+
+        # EnumVariant pattern
+        variant = pattern
+        if variant.is_wildcard:
+            return f"__covered:{MATCH_WILDCARD}"
+
+        if variant.enum_name is None:
+            # Bare variant name without enum qualifier
+            casa_enum = GLOBAL_ENUMS[match_type]
+            assert casa_enum.variants
+            if variant.variant_name in casa_enum.variants:
+                raise_error(
+                    ErrorKind.TYPE_MISMATCH,
+                    f"Unqualified enum variant `{variant.variant_name}`."
+                    f" Did you mean `{match_type}::{variant.variant_name}`?",
+                    location,
+                )
+            raise_error(
+                ErrorKind.TYPE_MISMATCH,
+                f"Expected qualified enum variant"
+                f" (e.g. `{match_type}::{casa_enum.variants[0]}`) or `_`,"
+                f" got `{variant.variant_name}`",
+                location,
+            )
+
+        if variant.enum_name != match_type:
+            raise_error(
+                ErrorKind.TYPE_MISMATCH,
+                f"Match arm variant `{variant.enum_name}::{variant.variant_name}`"
+                f" does not belong to enum `{match_type}`",
+                location,
+            )
+
+        covered_key = f"__covered:{variant.variant_name}"
+        self._check_duplicate_arm(
+            covered_key,
+            f"`{variant.enum_name}::{variant.variant_name}`",
+            location,
+            branched,
+        )
+        return covered_key
+
+    @staticmethod
+    def _set_struct_binding_type(
+        var_name: str, field_type: Type, function: "Function | None"
+    ) -> None:
+        """Set the type on a variable bound in a struct match pattern."""
+        if function:
+            for variable in function.variables:
+                if variable.name == var_name:
+                    variable.typ = field_type
+                    return
+        global_var = GLOBAL_VARIABLES.get(var_name)
+        if global_var:
+            global_var.typ = field_type
+
+    def check_match(self, op: Op, function: "Function | None" = None) -> None:
         """Handle MATCH_START, MATCH_ARM, MATCH_END."""
         match op.kind:
             case OpKind.MATCH_START:
                 typ = self.stack_pop()
-                if typ not in GLOBAL_ENUMS:
+                if typ not in GLOBAL_ENUMS and typ not in GLOBAL_STRUCTS:
                     raise_error(
                         ErrorKind.TYPE_MISMATCH,
-                        f"Match requires an enum type, got `{typ}`",
+                        f"Match requires an enum or struct type, got `{typ}`",
                         op.location,
                     )
                 bs = BranchedStack(self.stack, self.stack_origins)
                 bs.if_location = op.location
-                bs.if_location_enum_name = typ
+                bs.if_location_match_type = typ
                 bs.default_present = True
                 self.branched_stacks.append(bs)
             case OpKind.MATCH_ARM:
-                variant = op.value
-                assert isinstance(variant, EnumVariant)
+                pattern = op.value
+                assert isinstance(pattern, (EnumVariant, StructPattern))
                 assert self.branched_stacks, "Match block stack state is saved"
                 branched = self.branched_stacks[-1]
 
-                enum_name = branched.if_location_enum_name
-                assert enum_name is not None
+                match_type = branched.if_location_match_type
+                assert match_type is not None
 
                 # Check for arms after wildcard
                 wildcard_key = f"__covered:{MATCH_WILDCARD}"
@@ -945,51 +1047,12 @@ class TypeChecker:
                         op.location,
                     )
 
-                if variant.is_wildcard:
-                    covered_key = wildcard_key
-                elif variant.enum_name is None:
-                    # Bare variant name without enum qualifier
-                    casa_enum = GLOBAL_ENUMS[enum_name]
-                    assert casa_enum.variants
-                    if variant.variant_name in casa_enum.variants:
-                        raise_error(
-                            ErrorKind.TYPE_MISMATCH,
-                            f"Unqualified enum variant `{variant.variant_name}`."
-                            f" Did you mean `{enum_name}::{variant.variant_name}`?",
-                            op.location,
-                        )
-                    raise_error(
-                        ErrorKind.TYPE_MISMATCH,
-                        f"Expected qualified enum variant"
-                        f" (e.g. `{enum_name}::{casa_enum.variants[0]}`) or `_`,"
-                        f" got `{variant.variant_name}`",
-                        op.location,
-                    )
-                else:
-                    if variant.enum_name != enum_name:
-                        raise_error(
-                            ErrorKind.TYPE_MISMATCH,
-                            f"Match arm variant `{variant.enum_name}::{variant.variant_name}`"
-                            f" does not belong to enum `{enum_name}`",
-                            op.location,
-                        )
-
-                    covered_key = f"__covered:{variant.variant_name}"
-                    # Check for duplicate: in branch_records or the current label
-                    for label, _, _ in branched.branch_records:
-                        if label == covered_key:
-                            raise_error(
-                                ErrorKind.DUPLICATE_NAME,
-                                f"Duplicate match arm for"
-                                f" `{variant.enum_name}::{variant.variant_name}`",
-                                op.location,
-                            )
-                    if branched.current_branch_label == covered_key:
-                        raise_error(
-                            ErrorKind.DUPLICATE_NAME,
-                            f"Duplicate match arm for `{variant.enum_name}::{variant.variant_name}`",
-                            op.location,
-                        )
+                covered_key = self._check_match_arm_pattern(
+                    pattern,
+                    match_type,
+                    op.location,
+                    branched,
+                )
 
                 # Handle branch state like elif
                 if branched.condition_present:
@@ -1029,6 +1092,14 @@ class TypeChecker:
                     branched.after = branched.before
                     branched.after_origins = branched.before_origins
 
+                # For struct patterns, set types on bound variables
+                if isinstance(pattern, StructPattern):
+                    struct = GLOBAL_STRUCTS[pattern.struct_name]
+                    member_type_by_name = {m.name: m.typ for m in struct.members}
+                    for field_name, var_name in pattern.bindings.items():
+                        field_type = member_type_by_name[field_name]
+                        self._set_struct_binding_type(var_name, field_type, function)
+
                 branched.current_branch_label = covered_key
                 branched.current_branch_location = op.location
 
@@ -1050,25 +1121,35 @@ class TypeChecker:
                         )
                     )
 
-                # Extract enum name from if_location metadata
-                enum_name = branched.if_location_enum_name
-                assert enum_name is not None
-                casa_enum = GLOBAL_ENUMS[enum_name]
+                # Extract matched type from if_location metadata
+                match_type = branched.if_location_match_type
+                assert match_type is not None
                 covered = {
                     label.split(":", 1)[1]
                     for label, _, _ in branched.branch_records
                     if label.startswith("__covered:")
                 }
                 has_wildcard = MATCH_WILDCARD in covered
-                if not has_wildcard:
-                    missing = [v for v in casa_enum.variants if v not in covered]
-                    if missing:
-                        names = ", ".join(f"`{enum_name}::{v}`" for v in missing)
+
+                if match_type in GLOBAL_STRUCTS:
+                    # Struct match: one struct arm or wildcard is exhaustive
+                    if not has_wildcard and match_type not in covered:
                         raise_error(
                             ErrorKind.TYPE_MISMATCH,
-                            f"Non-exhaustive match, missing arms: {names}",
+                            f"Non-exhaustive match on struct `{match_type}`",
                             op.location,
                         )
+                else:
+                    casa_enum = GLOBAL_ENUMS[match_type]
+                    if not has_wildcard:
+                        missing = [v for v in casa_enum.variants if v not in covered]
+                        if missing:
+                            names = ", ".join(f"`{match_type}::{v}`" for v in missing)
+                            raise_error(
+                                ErrorKind.TYPE_MISMATCH,
+                                f"Non-exhaustive match, missing arms: {names}",
+                                op.location,
+                            )
 
                 # Apply final stack state
                 # Identity check: after is the same object as before when only
@@ -1112,6 +1193,37 @@ class TypeChecker:
         # Generic struct: bind type vars from actual stack types
         param_struct_type = f"{struct.name}[{' '.join(struct.type_vars)}]"
         params = [Parameter(m.typ) for m in struct.members]
+        sig = Signature(
+            params,
+            [param_struct_type],
+            type_vars=set(struct.type_vars),
+        )
+        self.apply_signature(sig, struct.name)
+
+    def check_struct_literal(self, op: Op) -> None:
+        """Handle STRUCT_LITERAL."""
+        literal = op.value
+        assert isinstance(literal, StructLiteral)
+        struct = literal.struct
+
+        if not struct.type_vars:
+            member_types = " ".join(m.typ for m in struct.members)
+            self.current_op_context = (
+                f"`{struct.name}` ({member_types} -> {struct.name})"
+            )
+            # Pop field values in reverse parse order (last pushed is on top)
+            member_type_by_name = {m.name: m.typ for m in struct.members}
+            for field_name in reversed(literal.field_order):
+                self.current_expect_context = f"field `{field_name}` of `{struct.name}`"
+                self.expect_type(member_type_by_name[field_name])
+            self.current_expect_context = None
+            self.stack_push(struct.name)
+            return
+
+        # Generic struct: build a signature with fields in parse order
+        member_type_by_name = {m.name: m.typ for m in struct.members}
+        params = [Parameter(member_type_by_name[name]) for name in literal.field_order]
+        param_struct_type = f"{struct.name}[{' '.join(struct.type_vars)}]"
         sig = Signature(
             params,
             [param_struct_type],
@@ -1565,7 +1677,7 @@ def _try_specialize_deferred_exec(
         existing = clone
 
     # Verify the clone's parameter type matches the concrete argument type
-    if existing.signature.parameters:
+    if existing.signature and existing.signature.parameters:
         expected_param = existing.signature.parameters[0].typ
         if (
             expected_param != concrete_type
@@ -1574,7 +1686,7 @@ def _try_specialize_deferred_exec(
         ):
             raise_error(
                 ErrorKind.TYPE_MISMATCH,
-                f"Type mismatch in deferred method call",
+                "Type mismatch in deferred method call",
                 exec_op.location,
                 expected=f"`{expected_param}`",
                 got=f"`{concrete_type}`",
@@ -1835,7 +1947,7 @@ def type_satisfies_trait(
 
 def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature:
     """Type-check a list of ops and return the inferred signature."""
-    assert len(OpKind) == 88, "Exhaustive handling for `OpKind`"
+    assert len(OpKind) == 89, "Exhaustive handling for `OpKind`"
 
     tc = TypeChecker(ops=ops)
     op_index = 0
@@ -1940,9 +2052,11 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
             case OpKind.PUSH_ENUM_VARIANT:
                 tc.check_enum_variant(op)
             case OpKind.MATCH_START | OpKind.MATCH_ARM | OpKind.MATCH_END:
-                tc.check_match(op)
+                tc.check_match(op, function)
             case OpKind.STRUCT_NEW:
                 tc.check_struct_new(op)
+            case OpKind.STRUCT_LITERAL:
+                tc.check_struct_literal(op)
             case OpKind.METHOD_CALL:
                 op_index = tc.check_method_call(op, ops, op_index, function)
             case OpKind.TYPE_CAST:
