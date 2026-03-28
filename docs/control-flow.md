@@ -169,6 +169,27 @@ end
 
 The `match` keyword pops a value from the stack. Each arm specifies a pattern followed by `=>` and a body. The block is closed with `end`.
 
+### Block Arm Bodies
+
+When an arm body contains multiple statements, wrap it in `{}`:
+
+```casa
+circle match
+    Shape::Circle(radius) => {
+        "Circle with radius: " print
+        radius print
+        "\n" print
+    }
+    Shape::Rectangle(width height) => {
+        width height * print
+        "\n" print
+    }
+    Shape::Point => "point\n" print
+end
+```
+
+Single-expression arms do not need braces. Braced and unbraced arms can be mixed freely.
+
 ### Enum Matching
 
 ```casa
