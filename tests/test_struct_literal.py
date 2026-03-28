@@ -272,10 +272,10 @@ p match
 end""")
         assert exc_info.value.errors[0].kind == ErrorKind.DUPLICATE_NAME
 
-    def test_match_on_non_enum_non_struct_error(self):
+    def test_match_on_unsupported_type_error(self):
         with pytest.raises(CasaErrorCollection) as exc_info:
             typecheck_string("""\
-42 match
+42 (ptr) match
     _ => 0
 end""")
         assert exc_info.value.errors[0].kind == ErrorKind.TYPE_MISMATCH

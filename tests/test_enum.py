@@ -10,6 +10,7 @@ from casa.common import (
     CasaEnum,
     EnumVariant,
     InstKind,
+    LiteralPattern,
     OpKind,
     Program,
 )
@@ -151,9 +152,9 @@ class TestEnumParsing:
 # Match arm: bare variant hint
 # ---------------------------------------------------------------------------
 class TestMatchBareVariantHint:
-    def test_non_identifier_token_rejected_by_parser(self):
+    def test_literal_in_enum_match_rejected_by_typechecker(self):
         with pytest.raises(CasaErrorCollection) as exc_info:
-            parse_string(
+            typecheck_string(
                 "enum Color { Red Green Blue }\n"
                 "Color::Red match\n"
                 "    42 => 1\n"
@@ -161,7 +162,7 @@ class TestMatchBareVariantHint:
                 "end\n"
             )
         error = exc_info.value.errors[0]
-        assert error.kind == ErrorKind.UNEXPECTED_TOKEN
+        assert error.kind == ErrorKind.TYPE_MISMATCH
 
     def test_bare_identifier_parsed_as_match_arm(self):
         """Bare identifiers are parsed as match arms and deferred to type checker."""
@@ -556,9 +557,7 @@ class TestEnumInnerValuesTypeChecking:
             )
 
     def test_data_enum_comparison(self):
-        sig = typecheck_string(
-            SHAPE_ENUM + "Shape::Point Shape::Point =="
-        )
+        sig = typecheck_string(SHAPE_ENUM + "Shape::Point Shape::Point ==")
         assert sig.return_types == ["bool"]
 
     def test_generic_enum_in_function_return(self):
@@ -885,15 +884,381 @@ class TestEnumEndToEnd:
         assert output == "other"
 
     def test_data_enum_eq(self, run_casa):
-        output = run_casa(
-            SHAPE_ENUM
-            + "Shape::Point Shape::Point == print\n"
-        )
+        output = run_casa(SHAPE_ENUM + "Shape::Point Shape::Point == print\n")
         assert output == "true"
 
     def test_data_enum_ne(self, run_casa):
-        output = run_casa(
-            SHAPE_ENUM
-            + "10 Shape::Circle Shape::Point != print\n"
-        )
+        output = run_casa(SHAPE_ENUM + "10 Shape::Circle Shape::Point != print\n")
         assert output == "true"
+
+
+# ---------------------------------------------------------------------------
+# Literal pattern matching — parsing
+# ---------------------------------------------------------------------------
+class TestLiteralMatchParsing:
+    def test_bool_literal_parsed_as_literal_pattern(self):
+        ops = parse_string("true match\n" "    true => 1\n" "    false => 0\n" "end\n")
+        arms = [op for op in ops if op.kind == OpKind.MATCH_ARM]
+        assert len(arms) == 2
+        assert isinstance(arms[0].value, LiteralPattern)
+        assert arms[0].value.typ == "bool"
+        assert arms[0].value.value is True
+        assert isinstance(arms[1].value, LiteralPattern)
+        assert arms[1].value.value is False
+
+    def test_int_literal_parsed_as_literal_pattern(self):
+        ops = parse_string("42 match\n" "    0 => 1\n" "    _ => 2\n" "end\n")
+        arms = [op for op in ops if op.kind == OpKind.MATCH_ARM]
+        assert len(arms) == 2
+        assert isinstance(arms[0].value, LiteralPattern)
+        assert arms[0].value.typ == "int"
+        assert arms[0].value.value == 0
+
+    def test_char_literal_parsed_as_literal_pattern(self):
+        ops = parse_string("'a' match\n" "    'a' => 1\n" "    _ => 2\n" "end\n")
+        arms = [op for op in ops if op.kind == OpKind.MATCH_ARM]
+        assert isinstance(arms[0].value, LiteralPattern)
+        assert arms[0].value.typ == "char"
+        assert arms[0].value.value == ord("a")
+
+    def test_str_literal_parsed_as_literal_pattern(self):
+        ops = parse_string(
+            '"hello" match\n' '    "hello" => 1\n' "    _ => 2\n" "end\n"
+        )
+        arms = [op for op in ops if op.kind == OpKind.MATCH_ARM]
+        assert isinstance(arms[0].value, LiteralPattern)
+        assert arms[0].value.typ == "str"
+        assert arms[0].value.value == "hello"
+
+    def test_negative_int_literal_parsed(self):
+        ops = parse_string("42 match\n" "    -1 => 1\n" "    _ => 2\n" "end\n")
+        arms = [op for op in ops if op.kind == OpKind.MATCH_ARM]
+        assert isinstance(arms[0].value, LiteralPattern)
+        assert arms[0].value.value == -1
+
+
+# ---------------------------------------------------------------------------
+# Literal pattern matching — type checking
+# ---------------------------------------------------------------------------
+class TestLiteralMatchTypecheck:
+    def test_bool_exhaustive_passes(self):
+        sig = typecheck_string(
+            "true match\n" "    true => 1\n" "    false => 0\n" "end\n"
+        )
+        assert sig.return_types == ["int"]
+
+    def test_bool_with_wildcard_passes(self):
+        sig = typecheck_string("true match\n" "    true => 1\n" "    _ => 0\n" "end\n")
+        assert sig.return_types == ["int"]
+
+    def test_bool_missing_arm_raises(self):
+        with pytest.raises(CasaErrorCollection) as exc_info:
+            typecheck_string("true match\n" "    true => 1\n" "end\n")
+        error = exc_info.value.errors[0]
+        assert error.kind == ErrorKind.TYPE_MISMATCH
+        assert "false" in error.message
+
+    def test_int_with_wildcard_passes(self):
+        sig = typecheck_string(
+            "42 match\n" "    0 => 1\n" "    1 => 2\n" "    _ => 3\n" "end\n"
+        )
+        assert sig.return_types == ["int"]
+
+    def test_int_without_wildcard_raises(self):
+        with pytest.raises(CasaErrorCollection) as exc_info:
+            typecheck_string("42 match\n" "    0 => 1\n" "    1 => 2\n" "end\n")
+        error = exc_info.value.errors[0]
+        assert error.kind == ErrorKind.TYPE_MISMATCH
+        assert "wildcard" in error.message
+
+    def test_char_with_wildcard_passes(self):
+        sig = typecheck_string("'a' match\n" "    'a' => 1\n" "    _ => 0\n" "end\n")
+        assert sig.return_types == ["int"]
+
+    def test_char_without_wildcard_raises(self):
+        with pytest.raises(CasaErrorCollection) as exc_info:
+            typecheck_string("'a' match\n" "    'a' => 1\n" "end\n")
+        error = exc_info.value.errors[0]
+        assert error.kind == ErrorKind.TYPE_MISMATCH
+
+    def test_str_with_wildcard_passes(self):
+        sig = typecheck_string(
+            '"hello" match\n' '    "hello" => 1\n' "    _ => 0\n" "end\n"
+        )
+        assert sig.return_types == ["int"]
+
+    def test_str_without_wildcard_raises(self):
+        with pytest.raises(CasaErrorCollection) as exc_info:
+            typecheck_string('"hello" match\n' '    "hello" => 1\n' "end\n")
+        error = exc_info.value.errors[0]
+        assert error.kind == ErrorKind.TYPE_MISMATCH
+
+    def test_type_mismatch_int_literal_in_bool_match(self):
+        with pytest.raises(CasaErrorCollection) as exc_info:
+            typecheck_string("true match\n" "    42 => 1\n" "    _ => 0\n" "end\n")
+        error = exc_info.value.errors[0]
+        assert error.kind == ErrorKind.TYPE_MISMATCH
+
+    def test_type_mismatch_bool_literal_in_int_match(self):
+        with pytest.raises(CasaErrorCollection) as exc_info:
+            typecheck_string("42 match\n" "    true => 1\n" "    _ => 0\n" "end\n")
+        error = exc_info.value.errors[0]
+        assert error.kind == ErrorKind.TYPE_MISMATCH
+
+    def test_duplicate_literal_arm_raises(self):
+        with pytest.raises(CasaErrorCollection) as exc_info:
+            typecheck_string(
+                "42 match\n" "    0 => 1\n" "    0 => 2\n" "    _ => 3\n" "end\n"
+            )
+        error = exc_info.value.errors[0]
+        assert error.kind == ErrorKind.DUPLICATE_NAME
+
+    def test_literal_arms_after_wildcard_raises(self):
+        with pytest.raises(CasaErrorCollection) as exc_info:
+            typecheck_string("42 match\n" "    _ => 1\n" "    0 => 2\n" "end\n")
+        error = exc_info.value.errors[0]
+        assert error.kind == ErrorKind.SYNTAX
+
+    def test_enum_variant_in_int_match_raises(self):
+        with pytest.raises(CasaErrorCollection) as exc_info:
+            typecheck_string(
+                COLOR_ENUM + "42 match\n" "    Color::Red => 1\n" "    _ => 2\n" "end\n"
+            )
+        error = exc_info.value.errors[0]
+        assert error.kind == ErrorKind.TYPE_MISMATCH
+
+    def test_literal_in_enum_match_raises(self):
+        with pytest.raises(CasaErrorCollection) as exc_info:
+            typecheck_string(
+                COLOR_ENUM + "Color::Red match\n" "    42 => 1\n" "    _ => 2\n" "end\n"
+            )
+        error = exc_info.value.errors[0]
+        assert error.kind == ErrorKind.TYPE_MISMATCH
+
+    def test_bare_identifier_in_literal_match_raises(self):
+        with pytest.raises(CasaErrorCollection) as exc_info:
+            typecheck_string("42 match\n" "    foo => 1\n" "    _ => 2\n" "end\n")
+        error = exc_info.value.errors[0]
+        assert error.kind == ErrorKind.TYPE_MISMATCH
+
+
+# ---------------------------------------------------------------------------
+# Literal pattern matching — bytecode
+# ---------------------------------------------------------------------------
+class TestLiteralMatchBytecode:
+    def test_int_match_compiles_dup_push_eq_pattern(self):
+        program = compile_string("42 match\n" "    0 => 1\n" "    _ => 2\n" "end\n")
+        kinds = [i.kind for i in program.bytecode]
+        assert InstKind.DUP in kinds
+        assert InstKind.EQ in kinds
+
+    def test_bool_match_compiles(self):
+        program = compile_string(
+            "true match\n" "    true => 1\n" "    false => 0\n" "end\n"
+        )
+        kinds = [i.kind for i in program.bytecode]
+        assert InstKind.DUP in kinds
+        assert InstKind.EQ in kinds
+
+    def test_str_match_compiles_str_eq(self):
+        program = compile_string(
+            '"hello" match\n' '    "hello" => 1\n' "    _ => 2\n" "end\n"
+        )
+        kinds = [i.kind for i in program.bytecode]
+        assert InstKind.STR_EQ in kinds
+
+    def test_str_eq_compiles_str_eq_inst(self):
+        program = compile_string('"hello" "world" ==\n')
+        kinds = [i.kind for i in program.bytecode]
+        assert InstKind.STR_EQ in kinds
+
+    def test_str_ne_compiles_str_eq_and_not(self):
+        program = compile_string('"hello" "world" !=\n')
+        kinds = [i.kind for i in program.bytecode]
+        assert InstKind.STR_EQ in kinds
+        assert InstKind.NOT in kinds
+
+
+# ---------------------------------------------------------------------------
+# Literal pattern matching — end-to-end
+# ---------------------------------------------------------------------------
+class TestLiteralMatchEndToEnd:
+    @pytest.fixture
+    def run_casa(self, tmp_path):
+        def _run(code: str) -> str:
+            src = tmp_path / "test.casa"
+            src.write_text(code)
+            binary = tmp_path / "test"
+            result = subprocess.run(
+                ["python3", "casa.py", str(src), "-o", str(binary)],
+                capture_output=True,
+                text=True,
+                cwd=CASA_ROOT,
+                timeout=30,
+            )
+            if result.returncode != 0:
+                pytest.fail(
+                    f"Compilation failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+                )
+            run_result = subprocess.run(
+                [str(binary)],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            return run_result.stdout
+
+        return _run
+
+    def test_bool_match(self, run_casa):
+        output = run_casa(
+            "fn check flag:bool {\n"
+            "    flag match\n"
+            '        true => "yes" print\n'
+            '        false => "no" print\n'
+            "    end\n"
+            "}\n"
+            "true check\n"
+            "false check\n"
+        )
+        assert output == "yesno"
+
+    def test_int_match(self, run_casa):
+        output = run_casa(
+            "fn describe n:int {\n"
+            "    n match\n"
+            '        0 => "zero" print\n'
+            '        1 => "one" print\n'
+            '        _ => "other" print\n'
+            "    end\n"
+            "}\n"
+            "0 describe\n"
+            "1 describe\n"
+            "99 describe\n"
+        )
+        assert output == "zerooneother"
+
+    def test_char_match(self, run_casa):
+        output = run_casa(
+            "fn check ch:char {\n"
+            "    ch match\n"
+            "        'y' => \"yes\" print\n"
+            "        'n' => \"no\" print\n"
+            '        _ => "unknown" print\n'
+            "    end\n"
+            "}\n"
+            "'y' check\n"
+            "'n' check\n"
+            "'x' check\n"
+        )
+        assert output == "yesnounknown"
+
+    def test_str_match(self, run_casa):
+        output = run_casa(
+            "fn greet name:str {\n"
+            "    name match\n"
+            '        "Alice" => "Hi Alice" print\n'
+            '        "Bob" => "Hi Bob" print\n'
+            '        _ => "Hi stranger" print\n'
+            "    end\n"
+            "}\n"
+            '"Alice" greet\n'
+            '"Bob" greet\n'
+            '"Charlie" greet\n'
+        )
+        assert output == "Hi AliceHi BobHi stranger"
+
+    def test_int_match_negative(self, run_casa):
+        output = run_casa(
+            "fn check n:int {\n"
+            "    n match\n"
+            '        -1 => "neg" print\n'
+            '        0 => "zero" print\n'
+            '        _ => "pos" print\n'
+            "    end\n"
+            "}\n"
+            "-1 check\n"
+            "0 check\n"
+            "5 check\n"
+        )
+        assert output == "negzeropos"
+
+    def test_bool_match_wildcard_only(self, run_casa):
+        output = run_casa("true match\n" '    _ => "matched" print\n' "end\n")
+        assert output == "matched"
+
+    def test_int_match_single_arm_with_wildcard(self, run_casa):
+        output = run_casa("42 match\n" '    _ => "any" print\n' "end\n")
+        assert output == "any"
+
+
+# ---------------------------------------------------------------------------
+# String equality comparison — end-to-end
+# ---------------------------------------------------------------------------
+class TestStrComparisonEndToEnd:
+    @pytest.fixture
+    def run_casa(self, tmp_path):
+        def _run(code: str) -> str:
+            src = tmp_path / "test.casa"
+            src.write_text(code)
+            binary = tmp_path / "test"
+            result = subprocess.run(
+                ["python3", "casa.py", str(src), "-o", str(binary)],
+                capture_output=True,
+                text=True,
+                cwd=CASA_ROOT,
+                timeout=30,
+            )
+            if result.returncode != 0:
+                pytest.fail(
+                    f"Compilation failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+                )
+            run_result = subprocess.run(
+                [str(binary)],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            return run_result.stdout
+
+        return _run
+
+    def test_str_eq_same_literal(self, run_casa):
+        output = run_casa('"hello" "hello" == print\n')
+        assert output == "true"
+
+    def test_str_eq_different_literal(self, run_casa):
+        output = run_casa('"hello" "world" == print\n')
+        assert output == "false"
+
+    def test_str_ne_different(self, run_casa):
+        output = run_casa('"hello" "world" != print\n')
+        assert output == "true"
+
+    def test_str_ne_same(self, run_casa):
+        output = run_casa('"hello" "hello" != print\n')
+        assert output == "false"
+
+    def test_str_eq_empty_strings(self, run_casa):
+        output = run_casa('"" "" == print\n')
+        assert output == "true"
+
+    def test_str_eq_empty_vs_nonempty(self, run_casa):
+        output = run_casa('"" "a" == print\n')
+        assert output == "false"
+
+    def test_str_eq_in_conditional(self, run_casa):
+        output = run_casa(
+            '"Alice" = name\n' 'if name "Alice" == then\n' '    "yes" print\n' "fi\n"
+        )
+        assert output == "yes"
+
+    def test_str_eq_variable_comparison(self, run_casa):
+        output = run_casa(
+            "fn check a:str b:str -> bool {\n"
+            "    a b ==\n"
+            "}\n"
+            '"hello" "hello" check print\n'
+            '"hello" "world" check print\n'
+        )
+        assert output == "truefalse"

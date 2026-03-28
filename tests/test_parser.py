@@ -606,8 +606,7 @@ def test_parse_fn_type_two_generic_vars():
 def test_parse_option_type_in_fn_signature():
     """Option[int] parses correctly as a parameter type."""
     parse_string(
-        "enum Option[T] { None Some(T) }"
-        " fn unwrap opt:Option[int] -> int { 0 }"
+        "enum Option[T] { None Some(T) }" " fn unwrap opt:Option[int] -> int { 0 }"
     )
     fn = GLOBAL_FUNCTIONS["unwrap"]
     assert fn.signature is not None

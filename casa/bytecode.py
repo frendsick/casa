@@ -17,6 +17,7 @@ from casa.common import (
     Inst,
     InstKind,
     LabelId,
+    LiteralPattern,
     Location,
     Op,
     OpKind,
@@ -450,7 +451,7 @@ class Compiler:
                 pass
             case OpKind.MATCH_ARM:
                 pattern = op.value
-                assert isinstance(pattern, (EnumVariant, StructPattern))
+                assert isinstance(pattern, (EnumVariant, StructPattern, LiteralPattern))
 
                 end_label = self._require_matching_label(
                     op,
@@ -477,6 +478,10 @@ class Compiler:
 
                 if isinstance(pattern, StructPattern):
                     self._compile_struct_match_arm(pattern, bytecode)
+                elif isinstance(pattern, LiteralPattern):
+                    self._compile_literal_match_arm(
+                        pattern, is_last, next_arm, bytecode
+                    )
                 elif (
                     isinstance(pattern, EnumVariant)
                     and pattern.enum_name
@@ -586,6 +591,32 @@ class Compiler:
         # Drop the enum pointer
         bytecode.append(self.inst(InstKind.DROP))
 
+    def _compile_literal_match_arm(
+        self,
+        pattern: LiteralPattern,
+        is_last: bool,
+        next_arm: LabelId | None,
+        bytecode: list[Inst],
+    ) -> None:
+        """Compile a literal value match arm (bool, int, char, str)."""
+        if is_last:
+            bytecode.append(self.inst(InstKind.DROP))
+            return
+        bytecode.append(self.inst(InstKind.DUP))
+        if pattern.typ == "str":
+            assert isinstance(pattern.value, str)
+            string_index = self.intern_string(pattern.value)
+            bytecode.append(self.inst(InstKind.PUSH_STR, args=[string_index]))
+            bytecode.append(self.inst(InstKind.STR_EQ))
+        elif pattern.typ == "char":
+            bytecode.append(self.inst(InstKind.PUSH, args=[pattern.value]))
+            bytecode.append(self.inst(InstKind.EQ))
+        else:
+            bytecode.append(self.inst(InstKind.PUSH, args=[int(pattern.value)]))
+            bytecode.append(self.inst(InstKind.EQ))
+        bytecode.append(self.inst(InstKind.JUMP_NE, args=[next_arm]))
+        bytecode.append(self.inst(InstKind.DROP))
+
     def _compile_struct_new(self, op: Op, bytecode: list[Inst]) -> None:
         """Compile STRUCT_NEW op."""
         struct = op.value
@@ -689,7 +720,7 @@ class Compiler:
 
     def compile(self) -> Bytecode:
         """Lower all ops to bytecode instructions."""
-        assert len(InstKind) == 68, "Exhaustive handling for `InstructionKind"
+        assert len(InstKind) == 69, "Exhaustive handling for `InstructionKind"
         assert len(OpKind) == 85, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
@@ -711,6 +742,12 @@ class Compiler:
                     and op.type_annotation in GLOBAL_ENUMS
                 ):
                     self._compile_enum_comparison(op, bytecode)
+                    continue
+                # String content comparison
+                if op.kind in (OpKind.EQ, OpKind.NE) and op.type_annotation == "str":
+                    bytecode.append(self.inst(InstKind.STR_EQ))
+                    if op.kind == OpKind.NE:
+                        bytecode.append(self.inst(InstKind.NOT))
                     continue
                 # Data-carrying enum print: load ordinal from heap
                 if op.kind == OpKind.PRINT_INT and op.type_annotation:

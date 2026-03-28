@@ -11,10 +11,12 @@ from casa.common import (
     GLOBAL_STRUCTS,
     GLOBAL_TRAITS,
     GLOBAL_VARIABLES,
+    LITERAL_MATCH_TYPES,
     MATCH_WILDCARD,
     EnumVariant,
     Function,
     Intrinsic,
+    LiteralPattern,
     Location,
     Op,
     OpKind,
@@ -399,6 +401,20 @@ class TypeChecker:
             casa_enum = GLOBAL_ENUMS[t1_enum]
             if casa_enum.has_inner_values:
                 op.type_annotation = t1_enum
+        elif t1 == "str" or t2 == "str":
+            if t1 != t2:
+                raise_error(
+                    ErrorKind.TYPE_MISMATCH,
+                    f"Cannot compare `{t2}` with `{t1}`",
+                    self.current_location,
+                )
+            if op.kind not in (OpKind.EQ, OpKind.NE):
+                raise_error(
+                    ErrorKind.TYPE_MISMATCH,
+                    "Type `str` only supports `==` and `!=` comparison",
+                    self.current_location,
+                )
+            op.type_annotation = "str"
         self.stack_push("bool")
 
     def check_boolean(self, op: Op) -> None:
@@ -979,14 +995,55 @@ class TypeChecker:
                 location,
             )
 
+    @staticmethod
+    def _check_literal_exhaustiveness(
+        typ: str,
+        covered: set[str],
+        has_wildcard: bool,
+        location: Location,
+    ) -> None:
+        """Check exhaustiveness for literal type matches."""
+        if has_wildcard:
+            return
+        if typ == "bool":
+            missing = [v for v in ("true", "false") if v not in covered]
+            if missing:
+                names = ", ".join(f"`{v}`" for v in missing)
+                raise_error(
+                    ErrorKind.TYPE_MISMATCH,
+                    f"Non-exhaustive match, missing arms: {names}",
+                    location,
+                )
+            return
+        # int, char, str have infinite/large domains — wildcard required
+        raise_error(
+            ErrorKind.TYPE_MISMATCH,
+            f"Non-exhaustive match on type `{typ}`." f" A wildcard `_` arm is required",
+            location,
+        )
+
     def _check_match_arm_pattern(
         self,
-        pattern: "EnumVariant | StructPattern",
+        pattern: "EnumVariant | StructPattern | LiteralPattern",
         match_type: str,
         location: Location,
         branched: BranchedStack,
     ) -> str:
         """Validate a match arm pattern and return its covered_key."""
+        if isinstance(pattern, LiteralPattern):
+            if pattern.typ != match_type:
+                raise_error(
+                    ErrorKind.TYPE_MISMATCH,
+                    f"Literal `{pattern.raw}` has type `{pattern.typ}`,"
+                    f" but match subject has type `{match_type}`",
+                    location,
+                )
+            covered_key = f"__covered:{pattern.raw}"
+            self._check_duplicate_arm(
+                covered_key, f"`{pattern.raw}`", location, branched
+            )
+            return covered_key
+
         if isinstance(pattern, StructPattern):
             if pattern.struct_name != match_type:
                 raise_error(
@@ -1007,6 +1064,14 @@ class TypeChecker:
             return f"__covered:{MATCH_WILDCARD}"
 
         base_match_type = self._resolve_match_type(match_type)
+
+        if base_match_type in LITERAL_MATCH_TYPES:
+            raise_error(
+                ErrorKind.TYPE_MISMATCH,
+                f"Expected `{base_match_type}` literal or `_`,"
+                f" got `{variant.variant_name}`",
+                location,
+            )
 
         if variant.enum_name is None:
             # Bare variant name without enum qualifier
@@ -1074,10 +1139,15 @@ class TypeChecker:
             case OpKind.MATCH_START:
                 typ = self.stack_pop()
                 base = self._resolve_match_type(typ)
-                if base not in GLOBAL_ENUMS and base not in GLOBAL_STRUCTS:
+                if (
+                    base not in GLOBAL_ENUMS
+                    and base not in GLOBAL_STRUCTS
+                    and base not in LITERAL_MATCH_TYPES
+                ):
                     raise_error(
                         ErrorKind.TYPE_MISMATCH,
-                        f"Match requires an enum or struct type, got `{typ}`",
+                        f"Match requires an enum, struct, or literal type,"
+                        f" got `{typ}`",
                         op.location,
                     )
                 bs = BranchedStack(self.stack, self.stack_origins)
@@ -1087,7 +1157,7 @@ class TypeChecker:
                 self.branched_stacks.append(bs)
             case OpKind.MATCH_ARM:
                 pattern = op.value
-                assert isinstance(pattern, (EnumVariant, StructPattern))
+                assert isinstance(pattern, (EnumVariant, StructPattern, LiteralPattern))
                 assert self.branched_stacks, "Match block stack state is saved"
                 branched = self.branched_stacks[-1]
 
@@ -1232,6 +1302,10 @@ class TypeChecker:
                             f"Non-exhaustive match on struct `{match_type}`",
                             op.location,
                         )
+                elif base_match_type in LITERAL_MATCH_TYPES:
+                    self._check_literal_exhaustiveness(
+                        base_match_type, covered, has_wildcard, op.location
+                    )
                 else:
                     casa_enum = GLOBAL_ENUMS[base_match_type]
                     if not has_wildcard:

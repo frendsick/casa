@@ -476,12 +476,14 @@ class Op:
                     raise TypeError(
                         f"`{self.kind}` requires value of type `EnumVariant`"
                     )
-            # Requires `EnumVariant` or `StructPattern`
+            # Requires `EnumVariant`, `StructPattern`, or `LiteralPattern`
             case OpKind.MATCH_ARM:
-                if not isinstance(self.value, (EnumVariant, StructPattern)):
+                if not isinstance(
+                    self.value, (EnumVariant, StructPattern, LiteralPattern)
+                ):
                     raise TypeError(
                         f"`{self.kind}` requires value of type"
-                        " `EnumVariant` or `StructPattern`"
+                        " `EnumVariant`, `StructPattern`, or `LiteralPattern`"
                     )
             # Requires `StructLiteral`
             case OpKind.STRUCT_LITERAL:
@@ -631,6 +633,9 @@ class InstKind(Enum):
     CONSTANT_LOAD = auto()
     CONSTANT_STORE = auto()
 
+    # Strings
+    STR_EQ = auto()
+
     # F-strings
     FSTRING_CONCAT = auto()
 
@@ -671,7 +676,7 @@ class Inst:
         return self.args[0]
 
     def __post_init__(self):
-        assert len(InstKind) == 68, "Exhaustive handling for `InstructionKind`"
+        assert len(InstKind) == 69, "Exhaustive handling for `InstructionKind`"
 
         match self.kind:
             # Should not have a parameter
@@ -715,6 +720,7 @@ class Inst:
                 | InstKind.STORE16
                 | InstKind.STORE32
                 | InstKind.STORE64
+                | InstKind.STR_EQ
                 | InstKind.SUB
                 | InstKind.SWAP
                 | InstKind.SYSCALL0
@@ -1025,6 +1031,23 @@ class StructPattern:
     @property
     def is_wildcard(self) -> bool:
         """Struct patterns are never wildcards."""
+        return False
+
+
+LITERAL_MATCH_TYPES = {"bool", "int", "char", "str"}
+
+
+@dataclass
+class LiteralPattern:
+    """A literal value pattern in a match arm (bool, int, char, str)."""
+
+    value: int | bool | str
+    typ: str  # "bool", "int", "char", "str"
+    raw: str  # Source representation for error messages
+
+    @property
+    def is_wildcard(self) -> bool:
+        """Literal patterns are never wildcards."""
         return False
 
 
