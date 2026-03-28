@@ -29,6 +29,8 @@ from casa.common import (
     Signature,
     Span,
     Struct,
+    StructLiteral,
+    StructPattern,
     Token,
     TokenKind,
     Trait,
@@ -451,6 +453,15 @@ def resolve_identifiers(
                         op.location,
                     )
                 )
+            case OpKind.MATCH_ARM:
+                if isinstance(op.value, StructPattern):
+                    for var_name in op.value.bindings.values():
+                        variable = Variable(var_name)
+                        if function:
+                            if variable not in function.variables:
+                                function.variables.append(variable)
+                        else:
+                            GLOBAL_VARIABLES[var_name] = variable
             case OpKind.INCLUDE_FILE:
                 included_file = op.value
                 assert isinstance(included_file, Path), "Expected included file path"
@@ -471,6 +482,126 @@ def resolve_identifiers(
         raise CasaErrorCollection(errors)
 
     return ops
+
+
+def _is_struct_field_boundary(cursor: Cursor[Token], member_names: set[str]) -> bool:
+    """Check if current position is a struct field like `field_name:`."""
+    pos = cursor.position
+    seq = cursor.sequence
+    if pos + 1 >= len(seq):
+        return False
+    token = seq[pos]
+    if token.kind != TokenKind.IDENTIFIER:
+        return False
+    if token.value not in member_names:
+        return False
+    return seq[pos + 1].value == ":"
+
+
+def _parse_struct_field_value(
+    cursor: Cursor[Token],
+    struct: Struct,
+    member_names: set[str],
+    function_name: str,
+    all_ops: list[Op],
+) -> None:
+    """Parse a single field's value expression in a struct literal."""
+    while not cursor.is_finished():
+        peek = cursor.peek()
+        if not peek or peek.value == "}":
+            break
+        if _is_struct_field_boundary(cursor, member_names):
+            break
+        # Check for unknown field name (identifier followed by `:`)
+        if (
+            peek.kind == TokenKind.IDENTIFIER
+            and peek.value not in member_names
+            and cursor.position + 1 < len(cursor.sequence)
+            and cursor.sequence[cursor.position + 1].value == ":"
+        ):
+            raise_error(
+                ErrorKind.UNDEFINED_NAME,
+                f"Struct `{struct.name}` has no field `{peek.value}`",
+                peek.location,
+            )
+        value_token = cursor.pop()
+        assert value_token is not None
+        if value_token.kind == TokenKind.FSTRING_START:
+            handle_fstring(value_token, cursor, function_name, all_ops)
+            continue
+        _append_op_result(all_ops, token_to_op(value_token, cursor, function_name))
+
+
+def _parse_struct_literal(
+    name_token: Token,
+    struct: Struct,
+    cursor: Cursor[Token],
+    function_name: str,
+) -> list[Op]:
+    """Parse a struct literal: StructName { field: value ... }."""
+    expect_token(cursor, value="{")
+    member_names = {m.name for m in struct.members}
+    field_order: list[str] = []
+    all_ops: list[Op] = []
+    seen_fields: set[str] = set()
+
+    while True:
+        next_tok = cursor.peek()
+        if not next_tok:
+            raise_error(
+                ErrorKind.UNEXPECTED_TOKEN,
+                "Unexpected end of input in struct literal",
+                name_token.location,
+                expected="`}`",
+                got="end of input",
+            )
+        if next_tok.value == "}":
+            cursor.pop()
+            break
+
+        # Parse field name
+        field_token = expect_token(cursor, kind=TokenKind.IDENTIFIER)
+        if field_token.value not in member_names:
+            raise_error(
+                ErrorKind.UNDEFINED_NAME,
+                f"Struct `{struct.name}` has no field `{field_token.value}`",
+                field_token.location,
+            )
+        if field_token.value in seen_fields:
+            raise_error(
+                ErrorKind.DUPLICATE_NAME,
+                f"Duplicate field `{field_token.value}` in struct literal",
+                field_token.location,
+            )
+        seen_fields.add(field_token.value)
+        field_order.append(field_token.value)
+
+        # Expect colon separator
+        expect_token(cursor, value=":")
+
+        # Parse value expression until next field boundary or `}`
+        value_start = len(all_ops)
+        _parse_struct_field_value(cursor, struct, member_names, function_name, all_ops)
+        if len(all_ops) == value_start:
+            raise_error(
+                ErrorKind.SYNTAX,
+                f"Missing value for field `{field_token.value}`" f" in struct literal",
+                field_token.location,
+            )
+
+    # Validate all fields are specified
+    missing = member_names - seen_fields
+    if missing:
+        names = ", ".join(f"`{n}`" for n in sorted(missing))
+        raise_error(
+            ErrorKind.TYPE_MISMATCH,
+            f"Missing fields in struct literal: {names}",
+            name_token.location,
+        )
+
+    literal = StructLiteral(struct, field_order)
+    all_ops.append(Op(literal, OpKind.STRUCT_LITERAL, name_token.location))
+    return all_ops
 
 
 def _append_op_result(ops: list[Op], result: "Op | list[Op] | None") -> None:
@@ -507,6 +638,11 @@ def token_to_op(
                 f"F-string token `{token.kind}` should be handled by handle_fstring"
             )
         case TokenKind.IDENTIFIER:
+            next_tok = cursor.peek()
+            if next_tok and next_tok.value == "{":
+                struct = GLOBAL_STRUCTS.get(token.value)
+                if struct:
+                    return _parse_struct_literal(token, struct, cursor, function_name)
             return Op(token.value, OpKind.IDENTIFIER, token.location)
         case TokenKind.LITERAL:
             return get_op_literal(token)
@@ -745,7 +881,63 @@ def _is_match_arm_boundary(cursor: Cursor[Token]) -> bool:
         return True
     if token.kind != TokenKind.IDENTIFIER:
         return False
-    return seq[pos + 1].value == "=>"
+    next_value = seq[pos + 1].value
+    if next_value == "=>":
+        return True
+    if next_value == "{" and token.value in GLOBAL_STRUCTS:
+        return True
+    return False
+
+
+def _parse_struct_match_pattern(
+    name_token: Token, cursor: Cursor[Token]
+) -> StructPattern:
+    """Parse a struct destructuring pattern: StructName { field: var ... } =>."""
+    expect_token(cursor, value="{")
+    struct = GLOBAL_STRUCTS.get(name_token.value)
+    if not struct:
+        raise_error(
+            ErrorKind.UNDEFINED_NAME,
+            f"Struct `{name_token.value}` is not defined",
+            name_token.location,
+        )
+    member_names = {m.name for m in struct.members}
+    bindings: dict[str, str] = {}
+
+    while True:
+        next_tok = cursor.peek()
+        if not next_tok:
+            raise_error(
+                ErrorKind.UNEXPECTED_TOKEN,
+                "Unexpected end of input in struct pattern",
+                name_token.location,
+                expected="`}`",
+                got="end of input",
+            )
+        if next_tok.value == "}":
+            cursor.pop()
+            break
+
+        field_token = expect_token(cursor, kind=TokenKind.IDENTIFIER)
+        if field_token.value not in member_names:
+            raise_error(
+                ErrorKind.UNDEFINED_NAME,
+                f"Struct `{struct.name}` has no field `{field_token.value}`",
+                field_token.location,
+            )
+        if field_token.value in bindings:
+            raise_error(
+                ErrorKind.DUPLICATE_NAME,
+                f"Duplicate field `{field_token.value}` in struct pattern",
+                field_token.location,
+            )
+
+        expect_token(cursor, value=":")
+        var_token = expect_token(cursor, kind=TokenKind.IDENTIFIER)
+        bindings[field_token.value] = var_token.value
+
+    expect_token(cursor, value="=>")
+    return StructPattern(name_token.value, bindings)
 
 
 def _handle_keyword_match(
@@ -770,11 +962,15 @@ def _handle_keyword_match(
         elif arm_token.kind != TokenKind.IDENTIFIER:
             raise_error(
                 ErrorKind.UNEXPECTED_TOKEN,
-                "Expected enum variant pattern (e.g. `Enum::Variant`) or `_`",
+                "Expected match pattern or `_`",
                 arm_token.location,
-                expected="enum variant or `_`",
+                expected="enum variant, struct pattern, or `_`",
                 got=f"`{arm_token.value}`",
             )
+        elif (next_token := cursor.peek()) and next_token.value == "{":
+            # Struct pattern: StructName { field: var ... } =>
+            pattern = _parse_struct_match_pattern(arm_token, cursor)
+            ops.append(Op(pattern, OpKind.MATCH_ARM, arm_token.location))
         elif "::" not in arm_token.value:
             # Bare identifier, defer validation to the type checker
             expect_token(cursor, value="=>")
@@ -935,7 +1131,7 @@ def get_op_keyword(
             _handle_keyword_trait(token, cursor, function_name)
             return None
         case _:
-            assert_never(keyword)
+            raise AssertionError(f"Unhandled keyword: {keyword}")
 
 
 def parse_type(cursor: Cursor[Token]) -> Type:
