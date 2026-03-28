@@ -601,71 +601,26 @@ def test_parse_fn_type_two_generic_vars():
 
 
 # ---------------------------------------------------------------------------
-# Option[T] literals (none / some)
+# Option[T] / Result[T E] enum variants
 # ---------------------------------------------------------------------------
-def test_parse_push_none():
-    """none produces OpKind.PUSH_NONE op."""
-    ops = parse_string("none")
-    assert len(ops) == 1
-    assert ops[0].kind == OpKind.PUSH_NONE
-
-
-def test_parse_some():
-    """some produces OpKind.SOME op."""
-    ops = parse_string("42 some")
-    some_ops = find_ops(ops, OpKind.SOME)
-    assert len(some_ops) == 1
-
-
-def test_parse_none_value():
-    """PUSH_NONE op has Intrinsic.NONE as value."""
-    ops = parse_string("none")
-    assert ops[0].value == Intrinsic.NONE
-
-
-def test_parse_some_value():
-    """SOME op has Intrinsic.SOME as value."""
-    ops = parse_string("42 some")
-    some_ops = find_ops(ops, OpKind.SOME)
-    assert some_ops[0].value == Intrinsic.SOME
-
-
-def test_parse_none_in_function():
-    """none can appear inside function body."""
-    parse_string("fn get_none -> { none }")
-    fn = GLOBAL_FUNCTIONS["get_none"]
-    none_ops = find_ops(fn.ops, OpKind.PUSH_NONE)
-    assert len(none_ops) == 1
-
-
-def test_parse_some_in_function():
-    """some can appear inside function body."""
-    parse_string("fn wrap a:int -> { a some }")
-    fn = GLOBAL_FUNCTIONS["wrap"]
-    some_ops = find_ops(fn.ops, OpKind.SOME)
-    assert len(some_ops) == 1
-
-
 def test_parse_option_type_in_fn_signature():
-    """option[int] parses correctly as a parameter type."""
-    parse_string("fn unwrap opt:option[int] -> int { 0 }")
+    """Option[int] parses correctly as a parameter type."""
+    parse_string(
+        "enum Option[T] { None Some(T) }"
+        " fn unwrap opt:Option[int] -> int { 0 }"
+    )
     fn = GLOBAL_FUNCTIONS["unwrap"]
     assert fn.signature is not None
-    assert [p.typ for p in fn.signature.parameters] == ["option[int]"]
+    assert [p.typ for p in fn.signature.parameters] == ["Option[int]"]
     assert fn.signature.return_types == ["int"]
 
 
-def test_parse_bare_option_type_in_fn_signature():
-    """Bare option parses correctly as a parameter type."""
-    parse_string("fn check opt:option -> bool { true }")
-    fn = GLOBAL_FUNCTIONS["check"]
-    assert fn.signature is not None
-    assert [p.typ for p in fn.signature.parameters] == ["option"]
-
-
 def test_parse_option_type_in_return_type():
-    """option[int] can appear as a return type."""
-    parse_string("fn wrap x:int -> option[int] { x some }")
+    """Option[int] can appear as a return type."""
+    parse_string(
+        "enum Option[T] { None Some(T) }"
+        " fn wrap x:int -> Option[int] { x Option::Some }"
+    )
     fn = GLOBAL_FUNCTIONS["wrap"]
     assert fn.signature is not None
-    assert fn.signature.return_types == ["option[int]"]
+    assert fn.signature.return_types == ["Option[int]"]
