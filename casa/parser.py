@@ -45,6 +45,7 @@ from casa.error import (
     CasaError,
     CasaErrorCollection,
     ErrorKind,
+    offset_to_line_col,
     raise_error,
 )
 from casa.lexer import is_negative_integer_literal, lex_file, lex_source
@@ -751,6 +752,13 @@ def expect_delimiter(cursor: Cursor[Token], expected: Delimiter) -> Delimiter | 
     return delimiter
 
 
+def _token_line(token: Token) -> int:
+    """Return the 1-based line number of a token."""
+    source = SOURCE_CACHE[token.location.file]
+    line, _, _ = offset_to_line_col(source, token.location.span.offset)
+    return line
+
+
 def parse_block_ops(cursor: Cursor[Token], function_name: str) -> list[Op]:
     """Parse a brace-delimited block of ops."""
     open_brace = cursor.pop()
@@ -1127,6 +1135,7 @@ def _handle_keyword_match(
             ops.extend(parse_block_ops(cursor, function_name))
         else:
             # Single-line arm body: parse until next arm or `end`
+            arm_line: int | None = None
             while not cursor.is_finished():
                 if _is_match_arm_boundary(cursor):
                     break
@@ -1136,6 +1145,14 @@ def _handle_keyword_match(
                 body_token = cursor.pop()
                 if body_token is None:
                     break
+                if arm_line is None:
+                    arm_line = _token_line(body_token)
+                elif _token_line(body_token) != arm_line:
+                    raise_error(
+                        ErrorKind.SYNTAX,
+                        "Multiline match arm body requires `{}` block",
+                        body_token.location,
+                    )
                 if body_token.kind == TokenKind.FSTRING_START:
                     handle_fstring(body_token, cursor, function_name, ops)
                     continue
