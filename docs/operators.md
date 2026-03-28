@@ -126,7 +126,7 @@ The `= name:type` form lets you annotate the type of a variable at assignment ti
 
 ```casa
 42 = x:int                  # explicit int annotation
-none = empty:option[int]    # narrow bare option to option[int]
+Option::None = empty:Option[int]    # narrow bare Option to Option[int]
 42 (any) = val:int          # narrow any to int
 ```
 

@@ -13,26 +13,70 @@ enum Direction { North South East West }
 
 Each variant is a distinct value of the enum type. An enum must have at least one variant. Variant names must be unique within the enum.
 
+## Variants with Inner Values
+
+Variants can carry inner values by specifying types in parentheses.
+
+```casa
+enum Shape {
+    Circle(int)
+    Rectangle(int int)
+    Point
+}
+```
+
+An enum can mix variants with and without inner values. When any variant has inner values, all variants are heap-allocated at runtime.
+
+## Generic Enums
+
+Enums can have type parameters, written in brackets after the name.
+
+```casa
+enum Option[T] { None Some(T) }
+enum Result[T E] { Error(E) Ok(T) }
+```
+
+The type parameters are resolved when constructing or matching on the enum.
+
 ## Variant Constructors
 
 Access variants using the `EnumName::VariantName` syntax.
 
-**Stack effect:** `-> EnumName`
+**Stack effect (plain):** `-> EnumName`
 
 ```casa
 Color::Red        # pushes a Color value
 Direction::North  # pushes a Direction value
 ```
 
+For variants with inner values, push the inner values onto the stack first.
+
+**Stack effect (with inner values):** `inner_values -> EnumName`
+
+```casa
+10 Shape::Circle           # pushes Shape with radius 10
+3 4 Shape::Rectangle       # pushes Shape with width 3, height 4
+Shape::Point               # pushes Shape with no inner values
+```
+
+For generic enums, the type parameters are inferred from the inner values.
+
+```casa
+42 Option::Some            # pushes Option[int]
+Option::None               # pushes Option[T] (generic)
+"hello" Option::Some       # pushes Option[str]
+```
+
 Variants can be assigned to variables:
 
 ```casa
 Color::Blue = my_color
+42 Option::Some = maybe_int
 ```
 
 ## Comparison
 
-Enum values of the same type can be compared with `==` and `!=`.
+Enum values of the same type can be compared with `==` and `!=`. For data-carrying enums, comparison checks the variant tag only (not inner values).
 
 **Stack effect:** `EnumName EnumName -> bool`
 
@@ -87,6 +131,34 @@ Color::Green match
     Color::Blue => "blue" print
 end
 # prints: green
+```
+
+### Match with Destructuring
+
+For variants with inner values, use `(bindings)` after the variant name to bind the inner values to variables.
+
+```casa
+enum Shape {
+    Circle(int)
+    Rectangle(int int)
+    Point
+}
+
+10 Shape::Circle match
+    Shape::Circle(radius) => radius print
+    Shape::Rectangle(width height) => width height * print
+    Shape::Point => "point" print
+end
+# prints: 10
+```
+
+For generic enums, the binding types are inferred from the match subject type.
+
+```casa
+42 Option::Some match
+    Option::Some(value) => value print    # value has type int
+    Option::None => "nothing" print
+end
 ```
 
 ### Exhaustiveness
