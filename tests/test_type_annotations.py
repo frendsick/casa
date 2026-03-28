@@ -46,16 +46,16 @@ class TestParserTypeAnnotation:
         assert assign_ops[0].type_annotation == "bool"
 
     def test_annotation_option_int(self):
-        """= x:option[int] produces Op with type_annotation='option[int]'."""
-        ops = parse_string("42 some = x:option[int]")
+        """= x:Option[int] produces Op with type_annotation='Option[int]'."""
+        ops = parse_string("0 = x:Option[int]")
         assign_ops = find_ops(ops, OpKind.ASSIGN_VARIABLE)
-        assert assign_ops[0].type_annotation == "option[int]"
+        assert assign_ops[0].type_annotation == "Option[int]"
 
     def test_annotation_bare_option(self):
-        """= x:option produces Op with type_annotation='option'."""
-        ops = parse_string("none = x:option")
+        """= x:Option produces Op with type_annotation='Option'."""
+        ops = parse_string("0 = x:Option")
         assign_ops = find_ops(ops, OpKind.ASSIGN_VARIABLE)
-        assert assign_ops[0].type_annotation == "option"
+        assert assign_ops[0].type_annotation == "Option"
 
     def test_annotation_generic_list(self):
         """= x:List[int] produces Op with type_annotation='List[int]'."""
@@ -155,10 +155,12 @@ class TestTypecheckerTypeAnnotation:
         sig = typecheck_string('"hello" (any) = x:str x')
         assert sig.return_types == ["str"]
 
-    def test_narrow_bare_option_to_option_int(self):
-        """Type annotation narrows bare 'option' to 'option[int]'."""
-        sig = typecheck_string("none = x:option[int] x")
-        assert sig.return_types == ["option[int]"]
+    def test_narrow_any_to_option(self):
+        """Type annotation narrows 'any' to 'Option[T]'."""
+        sig = typecheck_string(
+            "enum Option[T] { None Some(T) } Option::None (any) = x:Option[T] x"
+        )
+        assert sig.return_types == ["Option[T]"]
 
     def test_type_mismatch_raises(self):
         """Annotating str value as int raises TYPE_MISMATCH."""
@@ -194,9 +196,11 @@ class TestTypecheckerTypeAnnotation:
         assert sig.return_types == ["int"]
 
     def test_annotation_option_int_with_some(self):
-        """42 some = x:option[int] assigns x with type option[int]."""
-        sig = typecheck_string("42 some = x:option[int] x")
-        assert sig.return_types == ["option[int]"]
+        """Option::Some = x:Option[int] assigns x with type Option[int]."""
+        sig = typecheck_string(
+            "enum Option[T] { None Some(T) } 42 Option::Some = x:Option[int] x"
+        )
+        assert sig.return_types == ["Option[int]"]
 
     def test_without_annotation_still_works(self):
         """Assignment without annotation still infers type normally."""
@@ -230,12 +234,14 @@ class TestTypecheckerTypeAnnotationWarnings:
         assert "any" in WARNINGS[0].message
 
     def test_warn_bare_option_retains_type(self):
-        """Annotating option[int] as bare option warns and retains original type."""
-        sig = typecheck_string("42 some = x:option x")
+        """Annotating Option[int] as bare Option warns and retains original type."""
+        sig = typecheck_string(
+            "enum Option[T] { None Some(T) } 42 Option::Some = x:Option x"
+        )
         assert len(WARNINGS) == 1
         assert WARNINGS[0].kind == WarningKind.LOSSY_TYPE_ANNOTATION
-        assert "option" in WARNINGS[0].message
-        assert sig.return_types == ["option[int]"]
+        assert "Option" in WARNINGS[0].message
+        assert sig.return_types == ["Option[int]"]
 
     def test_warn_bare_array_retains_type(self):
         """Annotating array[int] as bare array warns and retains original type."""
@@ -250,9 +256,11 @@ class TestTypecheckerTypeAnnotationWarnings:
         typecheck_string("42 = x:int")
         assert len(WARNINGS) == 0
 
-    def test_no_warn_narrowing_option(self):
-        """No warning when narrowing bare option to option[int]."""
-        typecheck_string("none = x:option[int]")
+    def test_no_warn_matching_option(self):
+        """No warning when annotation matches Option type."""
+        typecheck_string(
+            "enum Option[T] { None Some(T) } 42 Option::Some = x:Option[int]"
+        )
         assert len(WARNINGS) == 0
 
     def test_no_warn_narrowing_any(self):

@@ -532,6 +532,33 @@ class Emitter:
                 self._indent("jmp str_concat")
                 self._line(f".Lconcat_done_{uid}:")
 
+    def _emit_str_eq(self) -> None:
+        """Emit string content equality comparison.
+
+        Stack: [str_a, str_b] -> [bool]
+        Compares lengths, then byte-by-byte content.
+        """
+        uid = self._uid()
+        # Pop both string pointers
+        self._indent("popq %rsi")  # str_b
+        self._indent("popq %rdi")  # str_a
+        # Compare lengths (stored at offset 0)
+        self._indent("movq (%rdi), %rcx")
+        self._indent("cmpq (%rsi), %rcx")
+        self._indent(f"jne .Lstreq_ne_{uid}")
+        # Lengths equal — compare data bytes (at offset 8)
+        self._indent("leaq 8(%rdi), %rdi")
+        self._indent("leaq 8(%rsi), %rsi")
+        self._indent("repe cmpsb")
+        self._indent(f"jne .Lstreq_ne_{uid}")
+        # Equal
+        self._indent("pushq $1")
+        self._indent(f"jmp .Lstreq_done_{uid}")
+        # Not equal
+        self._line(f".Lstreq_ne_{uid}:")
+        self._indent("pushq $0")
+        self._line(f".Lstreq_done_{uid}:")
+
     def _emit_syscall_ops(self, inst: Inst) -> None:
         """Emit syscall instructions."""
         SYSCALL_ARG_COUNTS = {
@@ -546,7 +573,7 @@ class Emitter:
         self._emit_syscall(SYSCALL_ARG_COUNTS[inst.kind])
 
     def _emit_inst(self, inst: Inst, is_global: bool) -> None:
-        assert len(InstKind) == 68, "Exhaustive handling for `InstKind`"
+        assert len(InstKind) == 69, "Exhaustive handling for `InstKind`"
         kind = inst.kind
         match kind:
             case (
@@ -623,6 +650,8 @@ class Emitter:
                 | InstKind.FSTRING_CONCAT
             ):
                 self._emit_io_ops(inst)
+            case InstKind.STR_EQ:
+                self._emit_str_eq()
             case (
                 InstKind.SYSCALL0
                 | InstKind.SYSCALL1

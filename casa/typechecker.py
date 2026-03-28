@@ -11,10 +11,12 @@ from casa.common import (
     GLOBAL_STRUCTS,
     GLOBAL_TRAITS,
     GLOBAL_VARIABLES,
+    LITERAL_MATCH_TYPES,
     MATCH_WILDCARD,
     EnumVariant,
     Function,
     Intrinsic,
+    LiteralPattern,
     Location,
     Op,
     OpKind,
@@ -152,16 +154,21 @@ class TypeChecker:
             return expected
         if typ == expected:
             return typ
-        # Match parameterized generics with any wildcard, e.g. option[any] with option[int]
+        # Match parameterized generics with any/type-var wildcard
         exp_base = extract_generic_base(expected)
         act_base = extract_generic_base(typ)
         if exp_base is not None and exp_base == act_base:
             exp_params = extract_generic_params(expected)
             act_params = extract_generic_params(typ)
+            type_vars: set[str] = set()
+            if exp_base in GLOBAL_ENUMS:
+                type_vars = set(GLOBAL_ENUMS[exp_base].type_vars)
             if exp_params and act_params and len(exp_params) == len(act_params):
                 if all(
                     expected_param == ANY_TYPE
                     or actual_param == ANY_TYPE
+                    or expected_param in type_vars
+                    or actual_param in type_vars
                     or expected_param == actual_param
                     for expected_param, actual_param in zip(exp_params, act_params)
                 ):
@@ -218,9 +225,14 @@ class TypeChecker:
             return
 
         bound = bindings[type_var]
-        if bound == ANY_TYPE and actual != ANY_TYPE:
+        if (bound == ANY_TYPE or _is_enum_type_var(bound)) and actual != ANY_TYPE:
             bindings[type_var] = actual
-        elif actual != bound and actual != ANY_TYPE and bound != ANY_TYPE:
+        elif (
+            actual != bound
+            and actual != ANY_TYPE
+            and bound != ANY_TYPE
+            and not _is_enum_type_var(actual)
+        ):
             raise_error(
                 ErrorKind.TYPE_MISMATCH,
                 f"Type variable `{type_var}` bound to `{bound}` but got `{actual}`",
@@ -367,9 +379,11 @@ class TypeChecker:
         """Handle EQ, NE, LT, LE, GT, GE."""
         t1 = self.stack_pop()
         t2 = self.stack_pop()
-        t1_is_enum = t1 in GLOBAL_ENUMS
-        t2_is_enum = t2 in GLOBAL_ENUMS
-        if t1_is_enum or t2_is_enum:
+        t1_base = self._resolve_match_type(t1)
+        t1_enum = t1_base if t1_base in GLOBAL_ENUMS else None
+        t2_base = self._resolve_match_type(t2)
+        t2_enum = t2_base if t2_base in GLOBAL_ENUMS else None
+        if t1_enum or t2_enum:
             if t1 != t2:
                 raise_error(
                     ErrorKind.TYPE_MISMATCH,
@@ -382,6 +396,25 @@ class TypeChecker:
                     f"Enum type `{t1}` only supports `==` and `!=` comparison",
                     self.current_location,
                 )
+            # Annotate for bytecode: data-carrying enums need heap tag comparison
+            assert t1_enum is not None
+            casa_enum = GLOBAL_ENUMS[t1_enum]
+            if casa_enum.has_inner_values:
+                op.type_annotation = t1_enum
+        elif t1 == "str" or t2 == "str":
+            if t1 != t2:
+                raise_error(
+                    ErrorKind.TYPE_MISMATCH,
+                    f"Cannot compare `{t2}` with `{t1}`",
+                    self.current_location,
+                )
+            if op.kind not in (OpKind.EQ, OpKind.NE):
+                raise_error(
+                    ErrorKind.TYPE_MISMATCH,
+                    "Type `str` only supports `==` and `!=` comparison",
+                    self.current_location,
+                )
+            op.type_annotation = "str"
         self.stack_push("bool")
 
     def check_boolean(self, op: Op) -> None:
@@ -835,17 +868,6 @@ class TypeChecker:
                 self.stack_push("bool")
             case OpKind.PUSH_CHAR:
                 self.stack_push("char")
-            case OpKind.PUSH_NONE:
-                self.stack_push("option")
-            case OpKind.SOME:
-                t1 = self.stack_pop()
-                self.stack_push(f"option[{t1}]")
-            case OpKind.OK:
-                t1 = self.stack_pop()
-                self.stack_push(f"result[{t1} any]")
-            case OpKind.ERROR:
-                t1 = self.stack_pop()
-                self.stack_push(f"result[any {t1}]")
             case OpKind.PUSH_ARRAY:
                 items = op.value
                 assert isinstance(items, list)
@@ -883,8 +905,16 @@ class TypeChecker:
         elif typ == "cstr":
             op.kind = OpKind.PRINT_CSTR
         elif typ in GLOBAL_ENUMS:
+            casa_enum = GLOBAL_ENUMS[typ]
+            if casa_enum.has_inner_values:
+                op.type_annotation = typ
             op.kind = OpKind.PRINT_INT
         else:
+            enum_base = extract_generic_base(typ)
+            if enum_base and enum_base in GLOBAL_ENUMS:
+                casa_enum = GLOBAL_ENUMS[enum_base]
+                if casa_enum.has_inner_values:
+                    op.type_annotation = enum_base
             op.kind = OpKind.PRINT_INT
 
     def check_typeof(self, op: Op) -> None:
@@ -905,7 +935,43 @@ class TypeChecker:
         variant = op.value
         assert isinstance(variant, EnumVariant)
         assert variant.enum_name is not None
-        self.stack_push(variant.enum_name)
+        casa_enum = GLOBAL_ENUMS[variant.enum_name]
+        inner_types = casa_enum.variant_types.get(variant.variant_name, [])
+
+        if not inner_types:
+            # No inner values — just push enum type
+            if casa_enum.type_vars:
+                # Generic enum variant without data (e.g., Option::None)
+                param_type = f"{casa_enum.name}[{' '.join(casa_enum.type_vars)}]"
+                self.stack_push(param_type)
+            else:
+                self.stack_push(variant.enum_name)
+            return
+
+        # Data-carrying variant: pop inner values and push enum type
+        if not casa_enum.type_vars:
+            self.current_op_context = (
+                f"`{variant.enum_name}::{variant.variant_name}`"
+                f" ({' '.join(inner_types)} -> {variant.enum_name})"
+            )
+            for inner_type in inner_types:
+                self.current_expect_context = (
+                    f"inner value of `{variant.enum_name}::{variant.variant_name}`"
+                )
+                self.expect_type(inner_type)
+            self.current_expect_context = None
+            self.stack_push(variant.enum_name)
+            return
+
+        # Generic data-carrying variant: use apply_signature to bind type vars
+        param_enum_type = f"{casa_enum.name}[{' '.join(casa_enum.type_vars)}]"
+        params = [Parameter(t) for t in inner_types]
+        sig = Signature(
+            params,
+            [param_enum_type],
+            type_vars=set(casa_enum.type_vars),
+        )
+        self.apply_signature(sig, f"{variant.enum_name}::{variant.variant_name}")
 
     @staticmethod
     def _check_duplicate_arm(
@@ -929,14 +995,55 @@ class TypeChecker:
                 location,
             )
 
+    @staticmethod
+    def _check_literal_exhaustiveness(
+        typ: str,
+        covered: set[str],
+        has_wildcard: bool,
+        location: Location,
+    ) -> None:
+        """Check exhaustiveness for literal type matches."""
+        if has_wildcard:
+            return
+        if typ == "bool":
+            missing = [v for v in ("true", "false") if v not in covered]
+            if missing:
+                names = ", ".join(f"`{v}`" for v in missing)
+                raise_error(
+                    ErrorKind.TYPE_MISMATCH,
+                    f"Non-exhaustive match, missing arms: {names}",
+                    location,
+                )
+            return
+        # int, char, str have infinite/large domains — wildcard required
+        raise_error(
+            ErrorKind.TYPE_MISMATCH,
+            f"Non-exhaustive match on type `{typ}`." f" A wildcard `_` arm is required",
+            location,
+        )
+
     def _check_match_arm_pattern(
         self,
-        pattern: "EnumVariant | StructPattern",
+        pattern: "EnumVariant | StructPattern | LiteralPattern",
         match_type: str,
         location: Location,
         branched: BranchedStack,
     ) -> str:
         """Validate a match arm pattern and return its covered_key."""
+        if isinstance(pattern, LiteralPattern):
+            if pattern.typ != match_type:
+                raise_error(
+                    ErrorKind.TYPE_MISMATCH,
+                    f"Literal `{pattern.raw}` has type `{pattern.typ}`,"
+                    f" but match subject has type `{match_type}`",
+                    location,
+                )
+            covered_key = f"__covered:{pattern.raw}"
+            self._check_duplicate_arm(
+                covered_key, f"`{pattern.raw}`", location, branched
+            )
+            return covered_key
+
         if isinstance(pattern, StructPattern):
             if pattern.struct_name != match_type:
                 raise_error(
@@ -956,30 +1063,40 @@ class TypeChecker:
         if variant.is_wildcard:
             return f"__covered:{MATCH_WILDCARD}"
 
+        base_match_type = self._resolve_match_type(match_type)
+
+        if base_match_type in LITERAL_MATCH_TYPES:
+            raise_error(
+                ErrorKind.TYPE_MISMATCH,
+                f"Expected `{base_match_type}` literal or `_`,"
+                f" got `{variant.variant_name}`",
+                location,
+            )
+
         if variant.enum_name is None:
             # Bare variant name without enum qualifier
-            casa_enum = GLOBAL_ENUMS[match_type]
+            casa_enum = GLOBAL_ENUMS[base_match_type]
             assert casa_enum.variants
             if variant.variant_name in casa_enum.variants:
                 raise_error(
                     ErrorKind.TYPE_MISMATCH,
                     f"Unqualified enum variant `{variant.variant_name}`."
-                    f" Did you mean `{match_type}::{variant.variant_name}`?",
+                    f" Did you mean `{base_match_type}::{variant.variant_name}`?",
                     location,
                 )
             raise_error(
                 ErrorKind.TYPE_MISMATCH,
                 f"Expected qualified enum variant"
-                f" (e.g. `{match_type}::{casa_enum.variants[0]}`) or `_`,"
+                f" (e.g. `{base_match_type}::{casa_enum.variants[0]}`) or `_`,"
                 f" got `{variant.variant_name}`",
                 location,
             )
 
-        if variant.enum_name != match_type:
+        if variant.enum_name != base_match_type:
             raise_error(
                 ErrorKind.TYPE_MISMATCH,
                 f"Match arm variant `{variant.enum_name}::{variant.variant_name}`"
-                f" does not belong to enum `{match_type}`",
+                f" does not belong to enum `{base_match_type}`",
                 location,
             )
 
@@ -1006,15 +1123,31 @@ class TypeChecker:
         if global_var:
             global_var.typ = field_type
 
+    @staticmethod
+    def _resolve_match_type(typ: str) -> str:
+        """Resolve a match type to the base enum/struct name for lookups."""
+        if typ in GLOBAL_ENUMS or typ in GLOBAL_STRUCTS:
+            return typ
+        base = extract_generic_base(typ)
+        if base and base in GLOBAL_ENUMS:
+            return base
+        return typ
+
     def check_match(self, op: Op, function: "Function | None" = None) -> None:
         """Handle MATCH_START, MATCH_ARM, MATCH_END."""
         match op.kind:
             case OpKind.MATCH_START:
                 typ = self.stack_pop()
-                if typ not in GLOBAL_ENUMS and typ not in GLOBAL_STRUCTS:
+                base = self._resolve_match_type(typ)
+                if (
+                    base not in GLOBAL_ENUMS
+                    and base not in GLOBAL_STRUCTS
+                    and base not in LITERAL_MATCH_TYPES
+                ):
                     raise_error(
                         ErrorKind.TYPE_MISMATCH,
-                        f"Match requires an enum or struct type, got `{typ}`",
+                        f"Match requires an enum, struct, or literal type,"
+                        f" got `{typ}`",
                         op.location,
                     )
                 bs = BranchedStack(self.stack, self.stack_origins)
@@ -1024,7 +1157,7 @@ class TypeChecker:
                 self.branched_stacks.append(bs)
             case OpKind.MATCH_ARM:
                 pattern = op.value
-                assert isinstance(pattern, (EnumVariant, StructPattern))
+                assert isinstance(pattern, (EnumVariant, StructPattern, LiteralPattern))
                 assert self.branched_stacks, "Match block stack state is saved"
                 branched = self.branched_stacks[-1]
 
@@ -1100,6 +1233,34 @@ class TypeChecker:
                         field_type = member_type_by_name[field_name]
                         self._set_struct_binding_type(var_name, field_type, function)
 
+                # For enum variant patterns with bindings, set types
+                if isinstance(pattern, EnumVariant) and pattern.bindings:
+                    base_type = self._resolve_match_type(match_type)
+                    casa_enum = GLOBAL_ENUMS[base_type]
+                    inner_types = casa_enum.variant_types.get(pattern.variant_name, [])
+                    if len(pattern.bindings) != len(inner_types):
+                        raise_error(
+                            ErrorKind.TYPE_MISMATCH,
+                            f"Variant `{pattern.enum_name}::{pattern.variant_name}`"
+                            f" has {len(inner_types)} inner value(s),"
+                            f" but {len(pattern.bindings)} binding(s) provided",
+                            op.location,
+                        )
+                    # Resolve generic type vars from match subject type
+                    type_bindings: dict[str, str] = {}
+                    if casa_enum.type_vars:
+                        params = extract_generic_params(match_type)
+                        if params:
+                            for tvar, concrete in zip(
+                                casa_enum.type_vars, params, strict=False
+                            ):
+                                type_bindings[tvar] = concrete
+                    for var_name, inner_type in zip(
+                        pattern.bindings, inner_types, strict=True
+                    ):
+                        resolved_type = type_bindings.get(inner_type, inner_type)
+                        self._set_struct_binding_type(var_name, resolved_type, function)
+
                 branched.current_branch_label = covered_key
                 branched.current_branch_location = op.location
 
@@ -1131,20 +1292,28 @@ class TypeChecker:
                 }
                 has_wildcard = MATCH_WILDCARD in covered
 
-                if match_type in GLOBAL_STRUCTS:
+                base_match_type = self._resolve_match_type(match_type)
+
+                if base_match_type in GLOBAL_STRUCTS:
                     # Struct match: one struct arm or wildcard is exhaustive
-                    if not has_wildcard and match_type not in covered:
+                    if not has_wildcard and base_match_type not in covered:
                         raise_error(
                             ErrorKind.TYPE_MISMATCH,
                             f"Non-exhaustive match on struct `{match_type}`",
                             op.location,
                         )
+                elif base_match_type in LITERAL_MATCH_TYPES:
+                    self._check_literal_exhaustiveness(
+                        base_match_type, covered, has_wildcard, op.location
+                    )
                 else:
-                    casa_enum = GLOBAL_ENUMS[match_type]
+                    casa_enum = GLOBAL_ENUMS[base_match_type]
                     if not has_wildcard:
                         missing = [v for v in casa_enum.variants if v not in covered]
                         if missing:
-                            names = ", ".join(f"`{match_type}::{v}`" for v in missing)
+                            names = ", ".join(
+                                f"`{base_match_type}::{v}`" for v in missing
+                            )
                             raise_error(
                                 ErrorKind.TYPE_MISMATCH,
                                 f"Non-exhaustive match, missing arms: {names}",
@@ -1441,9 +1610,6 @@ OP_STACK_EFFECTS: dict[OpKind, tuple[str, str]] = {
     OpKind.PRINT_BOOL: ("print", "any -> None"),
     OpKind.PRINT_CHAR: ("print", "any -> None"),
     OpKind.PRINT_CSTR: ("print", "any -> None"),
-    OpKind.SOME: ("some", "any -> option[any]"),
-    OpKind.OK: ("ok", "any -> result[any any]"),
-    OpKind.ERROR: ("error", "any -> result[any any]"),
     OpKind.FN_EXEC: ("exec", "fn[sig] -> ..."),
     OpKind.TYPEOF: ("typeof", "any -> str"),
     OpKind.ASSIGN_DECREMENT: ("-=", "int -> None"),
@@ -1478,10 +1644,6 @@ def _infer_literal_type(op: Op, function: Function | None = None) -> str:
             return "char"
         case OpKind.PUSH_INT:
             return "int"
-        case OpKind.PUSH_NONE:
-            return "option"
-        case OpKind.OK | OpKind.ERROR:
-            return "result"
         case OpKind.PUSH_STR:
             return "str"
         case OpKind.PUSH_BOOL:
@@ -1521,6 +1683,19 @@ def _format_branch_signature(before: list[Type], after: list[Type]) -> str:
     return f"`{before_str} -> {after_str}`"
 
 
+def _is_enum_type_var(typ: Type) -> bool:
+    """Check if a type is an unresolved enum type variable (e.g. T, E).
+
+    Only matches type variables that don't shadow a concrete type (struct/enum).
+    """
+    if typ in GLOBAL_STRUCTS or typ in GLOBAL_ENUMS:
+        return False
+    for casa_enum in GLOBAL_ENUMS.values():
+        if typ in casa_enum.type_vars:
+            return True
+    return False
+
+
 def _unify_type(a: Type, b: Type) -> Type | None:
     """Resolve two compatible types to the more specific one.
 
@@ -1528,9 +1703,9 @@ def _unify_type(a: Type, b: Type) -> Type | None:
     """
     if a == b:
         return a
-    if a == ANY_TYPE:
+    if a == ANY_TYPE or _is_enum_type_var(a):
         return b
-    if b == ANY_TYPE:
+    if b == ANY_TYPE or _is_enum_type_var(b):
         return a
     base_a = extract_generic_base(a)
     base_b = extract_generic_base(b)
@@ -1947,7 +2122,7 @@ def type_satisfies_trait(
 
 def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature:
     """Type-check a list of ops and return the inferred signature."""
-    assert len(OpKind) == 89, "Exhaustive handling for `OpKind`"
+    assert len(OpKind) == 85, "Exhaustive handling for `OpKind`"
 
     tc = TypeChecker(ops=ops)
     op_index = 0
@@ -2023,10 +2198,6 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 | OpKind.PUSH_STR
                 | OpKind.PUSH_BOOL
                 | OpKind.PUSH_CHAR
-                | OpKind.PUSH_NONE
-                | OpKind.SOME
-                | OpKind.OK
-                | OpKind.ERROR
                 | OpKind.PUSH_ARRAY
                 | OpKind.FSTRING_CONCAT
             ):

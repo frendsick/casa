@@ -60,11 +60,11 @@ Returns `true` if the cursor is at or past the end of the source string.
 
 ### `Cursor::peek`
 
-Returns the current character without advancing the cursor. Returns `none` at EOF.
+Returns the current character without advancing the cursor. Returns `Option::None` at EOF.
 
-**Signature:** `Cursor::peek self:Cursor -> option[char]`
+**Signature:** `Cursor::peek self:Cursor -> Option[char]`
 
-**Stack effect:** `Cursor -> option[char]`
+**Stack effect:** `Cursor -> Option[char]`
 
 ```casa
 "hello" Cursor::new .peek .unwrap print    # h
@@ -72,11 +72,11 @@ Returns the current character without advancing the cursor. Returns `none` at EO
 
 ### `Cursor::peek_at`
 
-Returns the character at `pos + offset` without advancing the cursor. Returns `none` if out of bounds.
+Returns the character at `pos + offset` without advancing the cursor. Returns `Option::None` if out of bounds.
 
-**Signature:** `Cursor::peek_at self:Cursor offset:int -> option[char]`
+**Signature:** `Cursor::peek_at self:Cursor offset:int -> Option[char]`
 
-**Stack effect:** `Cursor int -> option[char]`
+**Stack effect:** `Cursor int -> Option[char]`
 
 ```casa
 2 "hello" Cursor::new .peek_at .unwrap print    # l
@@ -84,11 +84,11 @@ Returns the character at `pos + offset` without advancing the cursor. Returns `n
 
 ### `Cursor::advance`
 
-Returns the current character and advances the cursor by one. Returns `none` at EOF.
+Returns the current character and advances the cursor by one. Returns `Option::None` at EOF.
 
-**Signature:** `Cursor::advance self:Cursor -> option[char]`
+**Signature:** `Cursor::advance self:Cursor -> Option[char]`
 
-**Stack effect:** `Cursor -> option[char]`
+**Stack effect:** `Cursor -> Option[char]`
 
 ```casa
 "hello" Cursor::new = cursor
@@ -112,11 +112,11 @@ Checks if the remaining input (from the current position) starts with the given 
 
 ### `Cursor::expect_char`
 
-Consumes the next character if it matches `expected`. Returns `ok` with the character on success, or `error` with a `ParseError` on mismatch or EOF.
+Consumes the next character if it matches `expected`. Returns `Result::Ok` with the character on success, or `Result::Error` with a `ParseError` on mismatch or EOF.
 
-**Signature:** `Cursor::expect_char self:Cursor expected:char -> result[char ParseError]`
+**Signature:** `Cursor::expect_char self:Cursor expected:char -> Result[char ParseError]`
 
-**Stack effect:** `Cursor char -> result[char ParseError]`
+**Stack effect:** `Cursor char -> Result[char ParseError]`
 
 ```casa
 "abc" Cursor::new = cursor
@@ -139,11 +139,11 @@ cursor.peek .unwrap print    # l
 
 ### `Cursor::take_string`
 
-Consumes the exact target string if the remaining input starts with it. Returns `ok` with the matched string on success, or `error` with a `ParseError` on mismatch.
+Consumes the exact target string if the remaining input starts with it. Returns `Result::Ok` with the matched string on success, or `Result::Error` with a `ParseError` on mismatch.
 
-**Signature:** `Cursor::take_string self:Cursor target:str -> result[str ParseError]`
+**Signature:** `Cursor::take_string self:Cursor target:str -> Result[str ParseError]`
 
-**Stack effect:** `Cursor str -> result[str ParseError]`
+**Stack effect:** `Cursor str -> Result[str ParseError]`
 
 ```casa
 "hello world" Cursor::new = cursor
@@ -260,11 +260,11 @@ cursor.pos print    # 3
 
 ### `parse_int`
 
-Parses an integer with optional leading `-`. Returns `error` if no digits are found. Restores cursor position on failure.
+Parses an integer with optional leading `-`. Returns `Result::Error` if no digits are found. Restores cursor position on failure.
 
-**Signature:** `parse_int cursor:Cursor -> result[int ParseError]`
+**Signature:** `parse_int cursor:Cursor -> Result[int ParseError]`
 
-**Stack effect:** `Cursor -> result[int ParseError]`
+**Stack effect:** `Cursor -> Result[int ParseError]`
 
 ```casa
 "42" Cursor::new parse_int .unwrap print      # 42
@@ -274,11 +274,11 @@ Parses an integer with optional leading `-`. Returns `error` if no digits are fo
 
 ### `parse_identifier`
 
-Parses an identifier matching `[a-zA-Z_][a-zA-Z0-9_]*`. Returns `error` if the current character is not a valid identifier start. Restores cursor position on failure.
+Parses an identifier matching `[a-zA-Z_][a-zA-Z0-9_]*`. Returns `Result::Error` if the current character is not a valid identifier start. Restores cursor position on failure.
 
-**Signature:** `parse_identifier cursor:Cursor -> result[str ParseError]`
+**Signature:** `parse_identifier cursor:Cursor -> Result[str ParseError]`
 
-**Stack effect:** `Cursor -> result[str ParseError]`
+**Stack effect:** `Cursor -> Result[str ParseError]`
 
 ```casa
 "my_var" Cursor::new parse_identifier .unwrap print    # my_var
@@ -288,25 +288,25 @@ Parses an identifier matching `[a-zA-Z_][a-zA-Z0-9_]*`. Returns `error` if the c
 
 Parses an escape sequence after the `\` has been consumed. Recognizes: `\n`, `\t`, `\\`, `\"`, `\'`, `\0`, `\r`, `\{`, `\}`.
 
-**Signature:** `parse_escape cursor:Cursor -> result[char ParseError]`
+**Signature:** `parse_escape cursor:Cursor -> Result[char ParseError]`
 
-**Stack effect:** `Cursor -> result[char ParseError]`
+**Stack effect:** `Cursor -> Result[char ParseError]`
 
 ### `parse_quoted_string`
 
 Parses a double-quoted string with escape sequences. Consumes the opening and closing `"` characters. Returns the string contents (with escapes processed).
 
-**Signature:** `parse_quoted_string cursor:Cursor -> result[str ParseError]`
+**Signature:** `parse_quoted_string cursor:Cursor -> Result[str ParseError]`
 
-**Stack effect:** `Cursor -> result[str ParseError]`
+**Stack effect:** `Cursor -> Result[str ParseError]`
 
 ### `parse_char_literal`
 
 Parses a single-quoted character literal with escape sequences. Consumes the opening and closing `'` characters. Returns the character value.
 
-**Signature:** `parse_char_literal cursor:Cursor -> result[char ParseError]`
+**Signature:** `parse_char_literal cursor:Cursor -> Result[char ParseError]`
 
-**Stack effect:** `Cursor -> result[char ParseError]`
+**Stack effect:** `Cursor -> Result[char ParseError]`
 
 ## Complete Example
 

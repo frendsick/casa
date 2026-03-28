@@ -118,127 +118,161 @@ The accumulator type and the array element type can differ.
 
 ## Option
 
-Methods for working with `option[T]` values. Method calls on any `option[T]` receiver are resolved to `option::method`.
+`Option[T]` is an enum representing a value that may or may not exist. It is defined as:
 
-### `option::is_some`
+```casa
+enum Option[T] { None Some(T) }
+```
+
+Methods are resolved via `Option::method`.
+
+### `Option::is_some`
 
 Returns `true` if the option contains a value.
 
-**Signature:** `option::is_some self:option -> bool`
+**Signature:** `Option::is_some self:Option -> bool`
 
-**Stack effect:** `option -> bool`
+**Stack effect:** `Option -> bool`
 
 ```casa
-42 some .is_some print    # 1
-none .is_some print       # 0
+42 Option::Some .is_some print       # 1
+Option::None .is_some print          # 0
 ```
 
-### `option::is_none`
+### `Option::is_none`
 
 Returns `true` if the option is empty.
 
-**Signature:** `option::is_none self:option -> bool`
+**Signature:** `Option::is_none self:Option -> bool`
 
-**Stack effect:** `option -> bool`
-
-```casa
-42 some .is_none print    # 0
-none .is_none print       # 1
-```
-
-### `option::unwrap`
-
-Extracts the contained value. Prints an error and exits with code 60 if called on `none`.
-
-**Signature:** `option::unwrap[T] self:option[T] -> T`
-
-**Stack effect:** `option[T] -> T`
+**Stack effect:** `Option -> bool`
 
 ```casa
-42 some .unwrap print     # 42
-none .unwrap              # error: called unwrap on None
+42 Option::Some .is_none print       # 0
+Option::None .is_none print          # 1
 ```
 
-### `option::unwrap_or`
+### `Option::unwrap`
+
+Extracts the contained value. Prints an error and exits with code 60 if called on `None`.
+
+**Signature:** `Option::unwrap[T] self:Option[T] -> T`
+
+**Stack effect:** `Option[T] -> T`
+
+```casa
+42 Option::Some .unwrap print        # 42
+Option::None .unwrap                 # error: called unwrap on None
+```
+
+### `Option::unwrap_or`
 
 Returns the contained value, or a default if the option is empty.
 
-**Signature:** `option::unwrap_or[T] self:option[T] default:T -> T`
+**Signature:** `Option::unwrap_or[T] self:Option[T] default:T -> T`
 
-**Stack effect:** `option[T] T -> T`
+**Stack effect:** `Option[T] T -> T`
 
 ```casa
-0 42 some .unwrap_or print    # 42
-0 none .unwrap_or print       # 0
+0 42 Option::Some .unwrap_or print   # 42
+0 Option::None .unwrap_or print      # 0
+```
+
+### Match on Option
+
+Use `match` with destructuring to handle Option values:
+
+```casa
+42 Option::Some match
+    Option::Some(value) => value print
+    Option::None => "nothing" print
+end
 ```
 
 ## Result
 
-Methods for working with `result[T E]` values. Method calls on any `result[T E]` receiver are resolved to `result::method`.
+`Result[T E]` is an enum representing success or failure. It is defined as:
 
-### `result::is_ok`
+```casa
+enum Result[T E] { Error(E) Ok(T) }
+```
+
+Methods are resolved via `Result::method`.
+
+### `Result::is_ok`
 
 Returns `true` if the result contains a success value.
 
-**Signature:** `result::is_ok self:result -> bool`
+**Signature:** `Result::is_ok self:Result -> bool`
 
-**Stack effect:** `result -> bool`
+**Stack effect:** `Result -> bool`
 
 ```casa
-42 ok .is_ok print           # 1
-"error" error .is_ok print   # 0
+42 Result::Ok .is_ok print                  # 1
+"error" Result::Error .is_ok print          # 0
 ```
 
-### `result::is_error`
+### `Result::is_error`
 
 Returns `true` if the result contains an error value.
 
-**Signature:** `result::is_error self:result -> bool`
+**Signature:** `Result::is_error self:Result -> bool`
 
-**Stack effect:** `result -> bool`
-
-```casa
-42 ok .is_error print          # 0
-"error" error .is_error print  # 1
-```
-
-### `result::unwrap`
-
-Extracts the success value. Prints an error and exits with code 60 if called on an `error` result.
-
-**Signature:** `result::unwrap[T E] self:result[T E] -> T`
-
-**Stack effect:** `result[T E] -> T`
+**Stack effect:** `Result -> bool`
 
 ```casa
-42 ok .unwrap print          # 42
-"error" error .unwrap        # error: called unwrap on error
+42 Result::Ok .is_error print               # 0
+"error" Result::Error .is_error print       # 1
 ```
 
-### `result::unwrap_error`
+### `Result::unwrap`
 
-Extracts the error value. Prints an error and exits with code 60 if called on an `ok` result.
+Extracts the success value. Prints an error and exits with code 60 if called on an `Error` result.
 
-**Signature:** `result::unwrap_error[T E] self:result[T E] -> E`
+**Signature:** `Result::unwrap[T E] self:Result[T E] -> T`
 
-**Stack effect:** `result[T E] -> E`
+**Stack effect:** `Result[T E] -> T`
 
 ```casa
-"error" error .unwrap_error print   # error
-42 ok .unwrap_error                 # error: called unwrap_error on ok
+42 Result::Ok .unwrap print                 # 42
+"error" Result::Error .unwrap               # error: called unwrap on error
 ```
 
-### `result::unwrap_or`
+### `Result::unwrap_error`
+
+Extracts the error value. Prints an error and exits with code 60 if called on an `Ok` result.
+
+**Signature:** `Result::unwrap_error[T E] self:Result[T E] -> E`
+
+**Stack effect:** `Result[T E] -> E`
+
+```casa
+"error" Result::Error .unwrap_error print   # error
+42 Result::Ok .unwrap_error                 # error: called unwrap_error on ok
+```
+
+### `Result::unwrap_or`
 
 Returns the success value, or a default if the result is an error.
 
-**Signature:** `result::unwrap_or[T E] self:result[T E] default:T -> T`
+**Signature:** `Result::unwrap_or[T E] self:Result[T E] default:T -> T`
 
-**Stack effect:** `result[T E] T -> T`
+**Stack effect:** `Result[T E] T -> T`
 
 ```casa
-0 42 ok .unwrap_or print              # 42
-0 "error" error .unwrap_or print      # 0
+0 42 Result::Ok .unwrap_or print            # 42
+0 "error" Result::Error .unwrap_or print    # 0
+```
+
+### Match on Result
+
+Use `match` with destructuring to handle Result values:
+
+```casa
+42 Result::Ok match
+    Result::Ok(value) => value print
+    Result::Error(err) => err print
+end
 ```
 
 ## `List[T]`
@@ -873,11 +907,11 @@ m.length print    # 0
 
 ### `Map::get`
 
-Looks up a key and returns `option[V]`. Returns `some` with the value if found, `none` otherwise.
+Looks up a key and returns `Option[V]`. Returns `Option::Some` with the value if found, `Option::None` otherwise.
 
-**Signature:** `Map::get self:Map[K V] key:K -> option[V]`
+**Signature:** `Map::get self:Map[K V] key:K -> Option[V]`
 
-**Stack effect:** `Map[K V] K -> option[V]`
+**Stack effect:** `Map[K V] K -> Option[V]`
 
 ```casa
 "hello" m.get .unwrap print    # prints the value for "hello"

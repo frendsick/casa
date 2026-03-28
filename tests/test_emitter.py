@@ -467,42 +467,42 @@ def test_emit_to_str_in_fstring():
 
 
 # ---------------------------------------------------------------------------
-# option[T] (none / some)
+# Option[T] (Option::None / Option::Some)
 # ---------------------------------------------------------------------------
-def test_emit_none():
-    """none generates assembly with heap_ptr reference."""
-    asm = emit_string("none")
+def test_emit_option_some():
+    """Option::Some generates assembly with heap allocation."""
+    asm = emit_string(STD_INCLUDE + "42 Option::Some")
     assert "heap_ptr" in asm
 
 
-def test_emit_some():
-    """42 some generates assembly with heap allocation."""
-    asm = emit_string("42 some")
+def test_emit_option_none():
+    """Option::None generates assembly with heap_ptr reference."""
+    asm = emit_string(STD_INCLUDE + "Option::None")
     assert "heap_ptr" in asm
 
 
 def test_emit_option_is_some():
-    """option::is_some emits correct function label."""
-    asm = emit_string(STD_INCLUDE + "42 some .is_some")
-    assert "fn_option__is_some" in asm
+    """Option::is_some emits correct function label."""
+    asm = emit_string(STD_INCLUDE + "42 Option::Some .is_some")
+    assert "fn_Option__is_some" in asm
 
 
 def test_emit_option_is_none():
-    """option::is_none emits correct function label."""
-    asm = emit_string(STD_INCLUDE + "42 some .is_none")
-    assert "fn_option__is_none" in asm
+    """Option::is_none emits correct function label."""
+    asm = emit_string(STD_INCLUDE + "42 Option::Some .is_none")
+    assert "fn_Option__is_none" in asm
 
 
 def test_emit_option_unwrap():
-    """option::unwrap emits correct function label."""
-    asm = emit_string(STD_INCLUDE + "42 some .unwrap")
-    assert "fn_option__unwrap" in asm
+    """Option::unwrap emits correct function label."""
+    asm = emit_string(STD_INCLUDE + "42 Option::Some .unwrap")
+    assert "fn_Option__unwrap" in asm
 
 
 def test_emit_option_unwrap_or():
-    """option::unwrap_or emits correct function label."""
-    asm = emit_string(STD_INCLUDE + "0 42 some .unwrap_or")
-    assert "fn_option__unwrap_or" in asm
+    """Option::unwrap_or emits correct function label."""
+    asm = emit_string(STD_INCLUDE + "0 42 Option::Some .unwrap_or")
+    assert "fn_Option__unwrap_or" in asm
 
 
 # ---------------------------------------------------------------------------

@@ -89,6 +89,15 @@ All comparison operators consume two values and push a `bool`.
 
 > **Note on stack order:** In `1 0 >`, the value `0` is on top of the stack and `1` is below. The comparison checks whether the top (`0`) is greater than the second (`1`), which is false. To check if 1 > 0, write `0 1 >` or equivalently `1 0 <`.
 
+### String comparison
+
+String `==` and `!=` compare by content (byte-by-byte), not by pointer identity. Other comparison operators (`<`, `<=`, `>`, `>=`) are not supported for strings.
+
+```casa
+"hello" "hello" == print    # true
+"hello" "world" != print    # true
+```
+
 ## Boolean
 
 | Operator | Stack Effect | Description |
@@ -126,7 +135,7 @@ The `= name:type` form lets you annotate the type of a variable at assignment ti
 
 ```casa
 42 = x:int                  # explicit int annotation
-none = empty:option[int]    # narrow bare option to option[int]
+Option::None = empty:Option[int]    # narrow bare Option to Option[int]
 42 (any) = val:int          # narrow any to int
 ```
 

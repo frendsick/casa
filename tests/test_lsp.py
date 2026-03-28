@@ -929,20 +929,6 @@ class TestHoverStackEffects:
         assert result is not None
         assert "print: any -> None" in result.contents.value
 
-    def test_some_hover(self, tmp_path):
-        """Hover over some shows its stack effect."""
-        source_file = tmp_path / "hover_some.casa"
-        source = "42 some drop"
-        source_file.write_text(source)
-
-        state, _ = run_pipeline(source_file)
-        uri = f"file://{source_file}"
-        document_states[uri] = state
-
-        result = text_document_hover(_make_hover_params(uri, 0, 3))
-        assert result is not None
-        assert "some: any -> option[any]" in result.contents.value
-
     def test_exec_hover(self, tmp_path):
         """Hover over exec shows its stack effect."""
         source_file = tmp_path / "hover_exec.casa"

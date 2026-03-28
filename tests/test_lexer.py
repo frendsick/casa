@@ -69,10 +69,6 @@ ALL_INTRINSICS = [
     "syscall4",
     "syscall5",
     "syscall6",
-    "none",
-    "some",
-    "ok",
-    "error",
     "argc",
     "argv",
 ]
@@ -891,65 +887,20 @@ def test_lex_multiple_comment_lines():
 
 
 # ---------------------------------------------------------------------------
-# Option[T] literals (none / some)
+# none / some are identifiers (no longer intrinsics)
 # ---------------------------------------------------------------------------
-def test_lex_none_intrinsic():
-    """none is recognized as an INTRINSIC token."""
+def test_lex_none_is_identifier():
+    """none is lexed as an IDENTIFIER token."""
     tokens = lex_string("none")
-    assert tokens[0].kind == TokenKind.INTRINSIC
+    assert tokens[0].kind == TokenKind.IDENTIFIER
     assert tokens[0].value == "none"
 
 
-def test_lex_some_intrinsic():
-    """some is recognized as an INTRINSIC token."""
+def test_lex_some_is_identifier():
+    """some is lexed as an IDENTIFIER token."""
     tokens = lex_string("some")
-    assert tokens[0].kind == TokenKind.INTRINSIC
+    assert tokens[0].kind == TokenKind.IDENTIFIER
     assert tokens[0].value == "some"
-
-
-def test_lex_none_is_not_keyword():
-    """none should not be lexed as a keyword."""
-    tokens = lex_string("none")
-    assert tokens[0].kind != TokenKind.KEYWORD
-
-
-def test_lex_some_is_not_keyword():
-    """some should not be lexed as a keyword."""
-    tokens = lex_string("some")
-    assert tokens[0].kind != TokenKind.KEYWORD
-
-
-def test_lex_none_is_not_identifier():
-    """none should not be lexed as an identifier."""
-    tokens = lex_string("none")
-    assert tokens[0].kind != TokenKind.IDENTIFIER
-
-
-def test_lex_some_is_not_identifier():
-    """some should not be lexed as an identifier."""
-    tokens = lex_string("some")
-    assert tokens[0].kind != TokenKind.IDENTIFIER
-
-
-def test_lex_none_in_expression():
-    """none in an expression context lexes correctly."""
-    tokens = lex_string("none print")
-    non_eof = [t for t in tokens if t.kind != TokenKind.EOF]
-    assert len(non_eof) == 2
-    assert non_eof[0].kind == TokenKind.INTRINSIC
-    assert non_eof[0].value == "none"
-    assert non_eof[1].kind == TokenKind.INTRINSIC
-
-
-def test_lex_some_in_expression():
-    """some after a value lexes correctly."""
-    tokens = lex_string("42 some")
-    non_eof = [t for t in tokens if t.kind != TokenKind.EOF]
-    assert len(non_eof) == 2
-    assert non_eof[0].kind == TokenKind.LITERAL
-    assert non_eof[0].value == "42"
-    assert non_eof[1].kind == TokenKind.INTRINSIC
-    assert non_eof[1].value == "some"
 
 
 # ---------------------------------------------------------------------------

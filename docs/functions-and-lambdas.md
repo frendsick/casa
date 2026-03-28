@@ -166,7 +166,7 @@ impl Box {
 Type variables can have trait bounds that restrict which types are accepted. Use `K: TraitName` syntax:
 
 ```casa
-fn get[K: Hashable, V] self:Map[K V] key:K -> option[V] {
+fn get[K: Hashable, V] self:Map[K V] key:K -> Option[V] {
     key K::hash self.capacity % = idx
     ...
 }
@@ -232,11 +232,11 @@ A variable's type is set on first assignment and cannot change:
 "hi" = x     # ERROR: cannot assign str to int variable
 ```
 
-The `= name:type` form annotates the variable type explicitly. The type checker verifies the stack value is compatible and uses the annotated type for the variable. This is useful for narrowing `any` or bare `option` to a concrete type:
+The `= name:type` form annotates the variable type explicitly. The type checker verifies the stack value is compatible and uses the annotated type for the variable. This is useful for narrowing `any` or bare `Option` to a concrete type:
 
 ```casa
 42 (any) = x:int            # narrow any to int
-none = empty:option[int]    # narrow bare option to option[int]
+Option::None = empty:Option[int]    # narrow bare Option to Option[int]
 ```
 
 ## Lambdas

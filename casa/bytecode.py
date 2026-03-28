@@ -4,17 +4,20 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from casa.common import (
+    GLOBAL_ENUMS,
     GLOBAL_FUNCTIONS,
     GLOBAL_SCOPE_LABEL,
     GLOBAL_STRUCTS,
     GLOBAL_VARIABLES,
     Bytecode,
+    CasaEnum,
     Cursor,
     EnumVariant,
     Function,
     Inst,
     InstKind,
     LabelId,
+    LiteralPattern,
     Location,
     Op,
     OpKind,
@@ -448,7 +451,7 @@ class Compiler:
                 pass
             case OpKind.MATCH_ARM:
                 pattern = op.value
-                assert isinstance(pattern, (EnumVariant, StructPattern))
+                assert isinstance(pattern, (EnumVariant, StructPattern, LiteralPattern))
 
                 end_label = self._require_matching_label(
                     op,
@@ -475,6 +478,16 @@ class Compiler:
 
                 if isinstance(pattern, StructPattern):
                     self._compile_struct_match_arm(pattern, bytecode)
+                elif isinstance(pattern, LiteralPattern):
+                    self._compile_literal_match_arm(
+                        pattern, is_last, next_arm, bytecode
+                    )
+                elif (
+                    isinstance(pattern, EnumVariant)
+                    and pattern.enum_name
+                    and GLOBAL_ENUMS[pattern.enum_name].has_inner_values
+                ):
+                    self._compile_enum_match_arm(pattern, is_last, next_arm, bytecode)
                 elif is_last:
                     bytecode.append(self.inst(InstKind.DROP))
                 else:
@@ -488,28 +501,121 @@ class Compiler:
                 end_label = op_to_label(op)
                 bytecode.append(self.inst(InstKind.LABEL, args=[end_label]))
 
-    def _compile_tagged_wrapper(self, tag: int, bytecode: list[Inst]) -> None:
-        """Compile a tagged heap wrapper (used by some/ok/error)."""
+    def _compile_enum_variant(
+        self,
+        variant: EnumVariant,
+        casa_enum: "CasaEnum",
+        bytecode: list[Inst],
+    ) -> None:
+        """Compile a data-carrying enum variant construction."""
+        inner_types = casa_enum.variant_types.get(variant.variant_name, [])
+        slot_count = 1 + len(inner_types)  # ordinal + inner values
+
+        # Store inner values from stack into temp locals (reverse order)
+        temp_locals: list[int] = []
+        for _ in inner_types:
+            local_idx = self.locals_count
+            self.locals_count += 1
+            temp_locals.append(local_idx)
+            bytecode.append(self.inst(InstKind.LOCAL_SET, args=[local_idx]))
+
+        # Allocate heap: slot_count * 8 bytes
         local_ptr = self.locals_count
         self.locals_count += 1
-        bytecode.append(self.inst(InstKind.PUSH, args=[16]))
+        bytecode.append(self.inst(InstKind.PUSH, args=[slot_count * 8]))
         bytecode.append(self.inst(InstKind.HEAP_ALLOC))
         bytecode.append(self.inst(InstKind.LOCAL_SET, args=[local_ptr]))
-        # Store value at byte offset 8
-        bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_ptr]))
-        bytecode.append(self.inst(InstKind.PUSH, args=[8]))
-        bytecode.append(self.inst(InstKind.ADD))
-        bytecode.append(self.inst(InstKind.STORE64))
-        # Store tag at byte offset 0
-        bytecode.append(self.inst(InstKind.PUSH, args=[tag]))
+
+        # Store ordinal at offset 0
+        bytecode.append(self.inst(InstKind.PUSH, args=[variant.ordinal]))
         bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_ptr]))
         bytecode.append(self.inst(InstKind.STORE64))
+
+        # Store inner values at offsets 8, 16, ...
+        for i, local_idx in enumerate(reversed(temp_locals)):
+            offset = (i + 1) * 8
+            bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_ptr]))
+            bytecode.append(self.inst(InstKind.PUSH, args=[offset]))
+            bytecode.append(self.inst(InstKind.ADD))
+            bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_idx]))
+            bytecode.append(self.inst(InstKind.SWAP))
+            bytecode.append(self.inst(InstKind.STORE64))
+
         # Push ptr
         bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_ptr]))
 
-    def _compile_some(self, bytecode: list[Inst]) -> None:
-        """Compile SOME op -- wraps top of stack in an option."""
-        self._compile_tagged_wrapper(1, bytecode)
+    def _compile_enum_comparison(self, op: Op, bytecode: list[Inst]) -> None:
+        """Compile comparison for data-carrying enums (compare ordinals from heap)."""
+        # Stack: [enum_ptr_a, enum_ptr_b] -> load ordinals and compare
+        local_a = self.locals_count
+        self.locals_count += 1
+        bytecode.append(self.inst(InstKind.LOCAL_SET, args=[local_a]))
+        # Load ordinal from top value (b)
+        bytecode.append(self.inst(InstKind.LOAD64))
+        # Load ordinal from saved value (a)
+        bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_a]))
+        bytecode.append(self.inst(InstKind.LOAD64))
+        # Compare ordinals
+        inst_kind = InstKind.EQ if op.kind == OpKind.EQ else InstKind.NE
+        bytecode.append(self.inst(inst_kind))
+
+    def _compile_enum_match_arm(
+        self,
+        pattern: EnumVariant,
+        is_last: bool,
+        next_arm: LabelId | None,
+        bytecode: list[Inst],
+    ) -> None:
+        """Compile a data-carrying enum match arm."""
+        assert pattern.enum_name is not None
+        casa_enum = GLOBAL_ENUMS[pattern.enum_name]
+
+        if not is_last and not pattern.is_wildcard:
+            # Compare ordinal: DUP ptr, LOAD64 tag, compare
+            bytecode.append(self.inst(InstKind.DUP))
+            bytecode.append(self.inst(InstKind.LOAD64))
+            bytecode.append(self.inst(InstKind.PUSH, args=[pattern.ordinal]))
+            bytecode.append(self.inst(InstKind.EQ))
+            bytecode.append(self.inst(InstKind.JUMP_NE, args=[next_arm]))
+
+        # Extract bindings from inner values
+        for i, var_name in enumerate(pattern.bindings):
+            offset = (i + 1) * 8
+            bytecode.append(self.inst(InstKind.DUP))
+            bytecode.append(self.inst(InstKind.PUSH, args=[offset]))
+            bytecode.append(self.inst(InstKind.ADD))
+            bytecode.append(self.inst(InstKind.LOAD64))
+            _, set_kind, var_index = self._resolve_variable(var_name)
+            bytecode.append(self.inst(set_kind, args=[var_index]))
+
+        # Drop the enum pointer
+        bytecode.append(self.inst(InstKind.DROP))
+
+    def _compile_literal_match_arm(
+        self,
+        pattern: LiteralPattern,
+        is_last: bool,
+        next_arm: LabelId | None,
+        bytecode: list[Inst],
+    ) -> None:
+        """Compile a literal value match arm (bool, int, char, str)."""
+        if is_last:
+            bytecode.append(self.inst(InstKind.DROP))
+            return
+        bytecode.append(self.inst(InstKind.DUP))
+        if pattern.typ == "str":
+            assert isinstance(pattern.value, str)
+            string_index = self.intern_string(pattern.value)
+            bytecode.append(self.inst(InstKind.PUSH_STR, args=[string_index]))
+            bytecode.append(self.inst(InstKind.STR_EQ))
+        elif pattern.typ == "char":
+            bytecode.append(self.inst(InstKind.PUSH, args=[pattern.value]))
+            bytecode.append(self.inst(InstKind.EQ))
+        else:
+            bytecode.append(self.inst(InstKind.PUSH, args=[int(pattern.value)]))
+            bytecode.append(self.inst(InstKind.EQ))
+        bytecode.append(self.inst(InstKind.JUMP_NE, args=[next_arm]))
+        bytecode.append(self.inst(InstKind.DROP))
 
     def _compile_struct_new(self, op: Op, bytecode: list[Inst]) -> None:
         """Compile STRUCT_NEW op."""
@@ -614,8 +720,8 @@ class Compiler:
 
     def compile(self) -> Bytecode:
         """Lower all ops to bytecode instructions."""
-        assert len(InstKind) == 68, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 89, "Exhaustive handling for `OpKind`"
+        assert len(InstKind) == 69, "Exhaustive handling for `InstructionKind"
+        assert len(OpKind) == 85, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
         bytecode: list[Inst] = []
@@ -629,6 +735,25 @@ class Compiler:
         while op := cursor.pop():
             self._current_loc = op.location
             if op.kind in DIRECT_OP_TO_INST:
+                # Data-carrying enum comparison: load ordinals from heap
+                if (
+                    op.kind in (OpKind.EQ, OpKind.NE)
+                    and op.type_annotation
+                    and op.type_annotation in GLOBAL_ENUMS
+                ):
+                    self._compile_enum_comparison(op, bytecode)
+                    continue
+                # String content comparison
+                if op.kind in (OpKind.EQ, OpKind.NE) and op.type_annotation == "str":
+                    bytecode.append(self.inst(InstKind.STR_EQ))
+                    if op.kind == OpKind.NE:
+                        bytecode.append(self.inst(InstKind.NOT))
+                    continue
+                # Data-carrying enum print: load ordinal from heap
+                if op.kind == OpKind.PRINT_INT and op.type_annotation:
+                    bytecode.append(self.inst(InstKind.LOAD64))
+                    bytecode.append(self.inst(InstKind.PRINT_INT))
+                    continue
                 bytecode.append(self.inst(DIRECT_OP_TO_INST[op.kind]))
                 continue
             match op.kind:
@@ -668,7 +793,14 @@ class Compiler:
                 case OpKind.PUSH_ENUM_VARIANT:
                     variant = op.value
                     assert isinstance(variant, EnumVariant)
-                    bytecode.append(self.inst(InstKind.PUSH, args=[variant.ordinal]))
+                    assert variant.enum_name is not None
+                    casa_enum = GLOBAL_ENUMS[variant.enum_name]
+                    if casa_enum.has_inner_values:
+                        self._compile_enum_variant(variant, casa_enum, bytecode)
+                    else:
+                        bytecode.append(
+                            self.inst(InstKind.PUSH, args=[variant.ordinal])
+                        )
                 case OpKind.MATCH_START | OpKind.MATCH_ARM | OpKind.MATCH_END:
                     self._compile_match_block(op, bytecode)
                 case OpKind.METHOD_CALL:
@@ -709,13 +841,6 @@ class Compiler:
                     )
                 case OpKind.PUSH_INT:
                     bytecode.append(self.inst(InstKind.PUSH, args=[op.value]))
-                case OpKind.PUSH_NONE:
-                    bytecode.append(self.inst(InstKind.PUSH, args=[16]))
-                    bytecode.append(self.inst(InstKind.HEAP_ALLOC))
-                    bytecode.append(self.inst(InstKind.DUP))
-                    bytecode.append(self.inst(InstKind.PUSH, args=[0]))
-                    bytecode.append(self.inst(InstKind.SWAP))
-                    bytecode.append(self.inst(InstKind.STORE64))
                 case OpKind.PUSH_STR:
                     string_index = self.intern_string(op.value)
                     bytecode.append(self.inst(InstKind.PUSH_STR, args=[string_index]))
@@ -724,12 +849,6 @@ class Compiler:
                     assert isinstance(variable_name, str), "Valid variable name"
                     get_kind, _, index = self._resolve_variable(variable_name)
                     bytecode.append(self.inst(get_kind, args=[index]))
-                case OpKind.SOME:
-                    self._compile_some(bytecode)
-                case OpKind.OK:
-                    self._compile_tagged_wrapper(1, bytecode)
-                case OpKind.ERROR:
-                    self._compile_tagged_wrapper(0, bytecode)
                 case OpKind.STRUCT_NEW:
                     self._compile_struct_new(op, bytecode)
                 case OpKind.STRUCT_LITERAL:

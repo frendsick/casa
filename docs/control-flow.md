@@ -67,15 +67,15 @@ fi
 
 The first branch pushes an `int`, the second pushes a `str` — the type checker rejects this.
 
-Compatible types are allowed across branches. For example, `none` (bare `option`) and `some` (`option[T]`) can appear in different branches. The type checker unifies them to the more specific type:
+Compatible types are allowed across branches. For example, `Option::None` (bare `Option`) and `Option::Some` (`Option[T]`) can appear in different branches. The type checker unifies them to the more specific type:
 
 ```casa
 if condition then
-    none           # option
+    Option::None           # Option
 else
-    42 some        # option[int]
+    42 Option::Some        # Option[int]
 fi
-# result type: option[int]
+# result type: Option[int]
 ```
 
 The same applies to bare `array` and `array[T]`, and to `any` with any concrete type.
@@ -155,21 +155,21 @@ The type checker enforces that loops do not accumulate or consume stack values a
 
 ## Match
 
-Casa has exhaustive pattern matching on enum types using `match`/`end`.
+Casa has exhaustive pattern matching using `match`/`end`. Match works with enum types, struct types, and literal types (`bool`, `int`, `char`, `str`).
 
 ### Syntax
 
 ```
-<enum_value> match
-    EnumName::Variant1 => <body>
-    EnumName::Variant2 => <body>
+<value> match
+    <pattern1> => <body>
+    <pattern2> => <body>
     ...
 end
 ```
 
-The `match` keyword pops an enum value from the stack. Each arm specifies a variant pattern followed by `=>` and a body. The block is closed with `end`.
+The `match` keyword pops a value from the stack. Each arm specifies a pattern followed by `=>` and a body. The block is closed with `end`.
 
-### Basic Example
+### Enum Matching
 
 ```casa
 enum Color { Red Green Blue }
@@ -181,9 +181,46 @@ Color::Green match
 end
 ```
 
+### Literal Matching
+
+Match on `bool`, `int`, `char`, and `str` values using literal patterns:
+
+```casa
+fn describe n:int {
+    n match
+        0 => "zero" print
+        1 => "one" print
+        _ => "other" print
+    end
+}
+
+flag match
+    true => "yes" print
+    false => "no" print
+end
+
+ch match
+    'a' => "letter a" print
+    _ => "something else" print
+end
+
+name match
+    "Alice" => "Hi Alice" print
+    "Bob" => "Hi Bob" print
+    _ => "Hi stranger" print
+end
+```
+
 ### Exhaustiveness
 
-All variants of the enum must be covered. Missing a variant is a compile-time error. Duplicate arms are also rejected. A wildcard `_ =>` arm can be used to match all remaining variants:
+All match blocks must be exhaustive:
+
+- **Enums**: All variants must be covered, or a wildcard `_` arm must be present.
+- **Bool**: Both `true` and `false` must be covered, or a wildcard `_` arm must be present.
+- **Int, char, str**: A wildcard `_` arm is always required (infinite domain).
+- **Structs**: A struct pattern or wildcard `_` arm must be present.
+
+Missing arms are a compile-time error. Duplicate arms are also rejected.
 
 ```casa
 color match
