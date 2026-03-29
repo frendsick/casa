@@ -180,11 +180,35 @@ fn emit_comparison emitter:Emitter setcc:str {
     "    movq %rax, (%rsp)\n" emitter.asm.append
 }
 
-fn emit_inst inst:Inst emitter:Emitter {
+# Sanitize a function name for use as an assembly label.
+# Replaces :: with __ for namespace separators.
+fn sanitize_name name:str -> str {
+    StringBuilder::new = result
+    0 = san_index
+    while san_index name.length > do
+        san_index name.at = san_ch
+        if san_ch ':' == san_index 1 + name.length > && then
+            san_index 1 + name.at = next_san_ch
+            if next_san_ch ':' == then
+                "__" result.append
+                2 += san_index
+            else
+                san_ch result.append_char
+                1 += san_index
+            fi
+        else
+            san_ch result.append_char
+            1 += san_index
+        fi
+    done
+    result.build
+}
+
+fn emit_inst inst:Inst emitter:Emitter is_global:bool {
     inst.kind match
         # Push
         InstKind::Push =>
-            f"    pushq ${inst.value .to_str}\n" emitter.asm.append
+            f"    pushq ${inst.value inst_int_value .to_str}\n" emitter.asm.append
         # Arithmetic
         InstKind::Add => {
             "    popq %rax\n" emitter.asm.append
@@ -296,11 +320,11 @@ fn emit_inst inst:Inst emitter:Emitter {
         }
         # Push string/char
         InstKind::PushStr => {
-            f"    leaq str_{inst.value .to_str}(%rip), %rax\n" emitter.asm.append
+            f"    leaq str_{inst.value inst_int_value .to_str}(%rip), %rax\n" emitter.asm.append
             "    pushq %rax\n" emitter.asm.append
         }
         InstKind::PushChar =>
-            f"    pushq ${inst.value .to_str}\n" emitter.asm.append
+            f"    pushq ${inst.value inst_int_value .to_str}\n" emitter.asm.append
         # Print
         InstKind::PrintInt => {
             emitter next_label = label_id
@@ -364,24 +388,87 @@ fn emit_inst inst:Inst emitter:Emitter {
         }
         # Control flow
         InstKind::Label =>
-            f".L{inst.value .to_str}:\n" emitter.asm.append
+            f".L{inst.value inst_int_value .to_str}:\n" emitter.asm.append
         InstKind::Jump =>
-            f"    jmp .L{inst.value .to_str}\n" emitter.asm.append
+            f"    jmp .L{inst.value inst_int_value .to_str}\n" emitter.asm.append
         InstKind::JumpNe => {
             "    popq %rax\n" emitter.asm.append
             "    testq %rax, %rax\n" emitter.asm.append
-            f"    jz .L{inst.value .to_str}\n" emitter.asm.append
+            f"    jz .L{inst.value inst_int_value .to_str}\n" emitter.asm.append
         }
         # Globals
         InstKind::GlobalGet => {
-            f"    movq globals+{inst.value 8 * .to_str}(%rip), %rax\n" emitter.asm.append
+            f"    movq globals+{inst.value inst_int_value 8 * .to_str}(%rip), %rax\n" emitter.asm.append
             "    pushq %rax\n" emitter.asm.append
         }
         InstKind::GlobalSet => {
             "    popq %rax\n" emitter.asm.append
-            f"    movq %rax, globals+{inst.value 8 * .to_str}(%rip)\n" emitter.asm.append
+            f"    movq %rax, globals+{inst.value inst_int_value 8 * .to_str}(%rip)\n" emitter.asm.append
+        }
+        # Locals
+        InstKind::LocalGet => {
+            inst.value inst_int_value 1 + 8 * = local_offset
+            f"    movq -{local_offset .to_str}(%r14), %rax\n" emitter.asm.append
+            "    pushq %rax\n" emitter.asm.append
+        }
+        InstKind::LocalSet => {
+            inst.value inst_int_value 1 + 8 * = local_offset
+            "    popq %rax\n" emitter.asm.append
+            f"    movq %rax, -{local_offset .to_str}(%r14)\n" emitter.asm.append
+        }
+        InstKind::LocalsInit => {
+            inst.value inst_int_value = locals_count
+            "    movq %r14, %rdi\n" emitter.asm.append
+            f"    movq ${locals_count .to_str}, %rcx\n" emitter.asm.append
+            "    xorq %rax, %rax\n" emitter.asm.append
+            "    rep stosq\n" emitter.asm.append
+            f"    addq ${locals_count 8 * .to_str}, %r14\n" emitter.asm.append
+        }
+        InstKind::LocalsUninit =>
+            f"    subq ${inst.value inst_int_value 8 * .to_str}, %r14\n" emitter.asm.append
+        # Functions
+        InstKind::FnCall => {
+            inst.value inst_str_value sanitize_name = fn_label
+            emitter next_label = ret_label
+            f"    leaq .Lret_{ret_label .to_str}(%rip), %rax\n" emitter.asm.append
+            "    movq %rax, (%r14)\n" emitter.asm.append
+            "    addq $8, %r14\n" emitter.asm.append
+            f"    jmp fn_{fn_label}\n" emitter.asm.append
+            f".Lret_{ret_label .to_str}:\n" emitter.asm.append
+        }
+        InstKind::FnReturn => {
+            if is_global then
+                "    movq $60, %rax\n" emitter.asm.append
+                "    xorq %rdi, %rdi\n" emitter.asm.append
+                "    syscall\n" emitter.asm.append
+            else
+                "    subq $8, %r14\n" emitter.asm.append
+                "    jmpq *(%r14)\n" emitter.asm.append
+            fi
         }
     end
+}
+
+fn emit_bytecode emitter:Emitter bytecode:List[Inst] is_global:bool {
+    0 = inst_index
+    while inst_index bytecode.length > do
+        is_global emitter inst_index bytecode.get emit_inst
+        1 += inst_index
+    done
+}
+
+fn emit_functions emitter:Emitter functions:Map[str List[Inst]] {
+    functions.keys = func_names
+    0 = func_index
+    while func_index func_names.length > do
+        func_index func_names.get = func_name
+        func_name functions.get .unwrap = func_bytecode
+        func_name sanitize_name = fn_label
+        f"fn_{fn_label}:\n" emitter.asm.append
+        false func_bytecode emitter emit_bytecode
+        "\n" emitter.asm.append
+        1 += func_index
+    done
 }
 
 fn emit_start emitter:Emitter program:List[Inst] {
@@ -393,11 +480,7 @@ fn emit_start emitter:Emitter program:List[Inst] {
     "    leaq 8(%rsp), %rax\n" emitter.asm.append
     "    movq %rax, __argv(%rip)\n" emitter.asm.append
 
-    0 = inst_index
-    while inst_index program.length > do
-        emitter inst_index program.get emit_inst
-        1 += inst_index
-    done
+    true program emitter emit_bytecode
 }
 
 fn emit_exit emitter:Emitter {
@@ -406,14 +489,15 @@ fn emit_exit emitter:Emitter {
     "    syscall\n" emitter.asm.append
 }
 
-fn emit_program program:List[Inst] globals_count:int label_count:int string_table:List[str] -> str {
+fn emit_program program:Program -> str {
     emitter_new = emitter
-    label_count emitter->label_count
+    program.label_count emitter->label_count
 
-    globals_count emitter emit_bss
-    string_table emitter emit_data
+    program.globals_count emitter emit_bss
+    program.strings emitter emit_data
     emitter emit_helpers
-    program emitter emit_start
+    program.functions emitter emit_functions
+    program.bytecode emitter emit_start
     emitter emit_exit
 
     emitter.asm.build

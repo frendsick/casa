@@ -2,17 +2,6 @@
 
 include "common.casa"
 
-fn find_variable variables:List[str] name:str -> Option[int] {
-    0 = index
-    while index variables.length > do
-        if name index variables.get str::eq then
-            index Option::Some return
-        fi
-        1 += index
-    done
-    Option::None
-}
-
 fn parse_operator op_value:str -> OpKind {
     op_value match
         "+"  => OpKind::Add
@@ -68,34 +57,33 @@ fn parse_intrinsic intrinsic_value:str -> OpKind {
 }
 
 fn parse_bool_or_keyword token_value:str -> Op {
-    if "true" token_value str::eq then
-        1 OpKind::PushBool Op
+    if "true" token_value == then
+        1 OpValue::Int OpKind::PushBool Op
+    elif "false" token_value == then
+        0 OpValue::Int OpKind::PushBool Op
     else
-        if "false" token_value str::eq then
-            0 OpKind::PushBool Op
-        else
-            0 token_value parse_keyword Op
-        fi
+        token_value parse_keyword
     fi
 }
 
-fn parse_keyword keyword_value:str -> OpKind {
+fn parse_keyword keyword_value:str -> Op {
     keyword_value match
-        "if"       => OpKind::IfStart
-        "then"     => OpKind::IfCondition
-        "elif"     => OpKind::IfElif
-        "else"     => OpKind::IfElse
-        "fi"       => OpKind::IfEnd
-        "while"    => OpKind::WhileStart
-        "do"       => OpKind::WhileCondition
-        "done"     => OpKind::WhileEnd
-        "break"    => OpKind::WhileBreak
-        "continue" => OpKind::WhileContinue
+        "if"       => OpValue::None OpKind::IfStart Op
+        "then"     => OpValue::None OpKind::IfCondition Op
+        "elif"     => OpValue::None OpKind::IfElif Op
+        "else"     => OpValue::None OpKind::IfElse Op
+        "fi"       => OpValue::None OpKind::IfEnd Op
+        "while"    => OpValue::None OpKind::WhileStart Op
+        "do"       => OpValue::None OpKind::WhileCondition Op
+        "done"     => OpValue::None OpKind::WhileEnd Op
+        "break"    => OpValue::None OpKind::WhileBreak Op
+        "continue" => OpValue::None OpKind::WhileContinue Op
+        "return"   => OpValue::None OpKind::FnReturn Op
         _ => {
             f"unknown keyword: {keyword_value}" eprintln
             1 exit
             # Unreachable
-            OpKind::IfStart
+            OpValue::None OpKind::IfStart Op
         }
     end
 }
@@ -103,28 +91,13 @@ fn parse_keyword keyword_value:str -> OpKind {
 fn intern_string string_table:List[str] value:str -> int {
     0 = intern_index
     while intern_index string_table.length > do
-        if value intern_index string_table.get str::eq then
+        if value intern_index string_table.get == then
             intern_index return
         fi
         1 += intern_index
     done
     value string_table.push
     string_table.length 1 -
-}
-
-fn resolve_variable variables:List[str] name:str op_kind:OpKind -> int {
-    name variables find_variable = result
-    if result.is_some then
-        result.unwrap return
-    fi
-    if op_kind OpKind::AssignVariable == then
-        name variables.push
-        variables.length 1 -
-    else
-        f"undefined variable: {name}" eprintln
-        1 exit
-        0
-    fi
 }
 
 # Infer print variant from the previous op's type.
@@ -145,60 +118,213 @@ fn dispatch_print ops:List[Op] -> OpKind {
     OpKind::PrintInt
 }
 
-fn parse tokens:List[Token] string_table:List[str] -> List[Op] int {
-    List::new (List[Op]) = ops
-    List::new (List[str]) = variables
-    0 = index
-
-    while index tokens.length > do
-        index tokens.get = token
-        1 += index
-        token.kind = kind
-
-        if kind TokenKind::Literal == then
-            0 token.value str::at = first_ch
-            if first_ch '"' == then
-                token.value 1 token.value.length 1 - str::substring string_table intern_string OpKind::PushStr Op ops.push
-            elif first_ch '\'' == then
-                token.value 1 token.value.length 1 - str::substring str_to_int OpKind::PushChar Op ops.push
-            else
-                token.value str_to_int OpKind::PushInt Op ops.push
-            fi
-        elif kind TokenKind::Operator == then
-            token.value parse_operator = op_kind
-            if op_kind OpKind::AssignVariable == op_kind OpKind::AssignIncrement == || op_kind OpKind::AssignDecrement == || then
-                index tokens.get = name_token
-                1 += index
-                if name_token.kind TokenKind::Identifier != then
-                    "expected variable name after assignment operator" eprintln
-                    1 exit
+# Skip a type annotation: consume tokens until we hit something that
+# is not part of a type (e.g. a parameter name, ->, {, or another keyword).
+# Type annotations can include identifiers and [] for generics.
+fn skip_type ctx:ParseContext index:int -> int {
+    # The first token is the type name (already consumed by caller)
+    1 += index
+    # Check for generic brackets: Type[T1 T2]
+    if index ctx.tokens.length > then
+        index ctx.tokens.get .value = next_val
+        if "[" next_val == then
+            1 += index
+            1 = bracket_depth
+            while index ctx.tokens.length > 0 bracket_depth > && do
+                index ctx.tokens.get .value = bracket_val
+                if "[" bracket_val == then
+                    1 += bracket_depth
+                elif "]" bracket_val == then
+                    bracket_depth 1 - = bracket_depth
                 fi
-                op_kind name_token.value variables resolve_variable op_kind Op ops.push
-            else
-                0 op_kind Op ops.push
-            fi
-        elif kind TokenKind::Keyword == then
-            token.value parse_bool_or_keyword ops.push
-        elif kind TokenKind::Intrinsic == then
-            if "print" token.value str::eq then
-                0 ops dispatch_print Op ops.push
-            else
-                0 token.value parse_intrinsic Op ops.push
-            fi
-        elif kind TokenKind::Identifier == then
-            token.value variables find_variable = result
-            if result.is_none then
-                f"undefined variable: {token.value}" eprintln
+                1 += index
+            done
+        fi
+    fi
+    index
+}
+
+# Parse a single token and append the resulting op(s) to ops.
+# Returns the updated index. Shared between parse and parse_function body.
+fn parse_token token:Token index:int ctx:ParseContext ops:List[Op] -> int {
+    token.kind = kind
+
+    if kind TokenKind::Literal == then
+        0 token.value str::at = first_ch
+        if first_ch '"' == then
+            token.value 1 token.value.length 1 - str::substring ctx.string_table intern_string OpValue::Int OpKind::PushStr Op ops.push
+        elif first_ch '\'' == then
+            token.value 1 token.value.length 1 - str::substring str_to_int OpValue::Int OpKind::PushChar Op ops.push
+        else
+            token.value str_to_int OpValue::Int OpKind::PushInt Op ops.push
+        fi
+    elif kind TokenKind::Operator == then
+        token.value parse_operator = op_kind
+        if op_kind OpKind::AssignVariable == op_kind OpKind::AssignIncrement == || op_kind OpKind::AssignDecrement == || then
+            index ctx.tokens.get = name_token
+            1 += index
+            if name_token.kind TokenKind::Identifier != then
+                "expected variable name after assignment operator" eprintln
                 1 exit
             fi
-            result.unwrap OpKind::PushVariable Op ops.push
-        elif kind TokenKind::Eof == then
-            break
+            name_token.value OpValue::Str op_kind Op ops.push
         else
-            "unexpected token" eprintln
+            OpValue::None op_kind Op ops.push
+        fi
+    elif kind TokenKind::Keyword == then
+        if "fn" token.value == then
+            index ctx parse_function = index
+        else
+            token.value parse_bool_or_keyword ops.push
+        fi
+    elif kind TokenKind::Intrinsic == then
+        if "print" token.value == then
+            OpValue::None ops dispatch_print Op ops.push
+        else
+            OpValue::None token.value parse_intrinsic Op ops.push
+        fi
+    elif kind TokenKind::Identifier == then
+        if token.value ctx.functions.has then
+            token.value OpValue::Str OpKind::FnCall Op ops.push
+        else
+            token.value OpValue::Str OpKind::PushVariable Op ops.push
+        fi
+    elif kind TokenKind::Delimiter == then
+        f"unexpected delimiter: {token.value}" eprintln
+        1 exit
+    elif kind TokenKind::Eof == then
+        0 drop
+    else
+        "unexpected token" eprintln
+        1 exit
+    fi
+
+    index
+}
+
+# Parse a function definition: fn name param:type param:type -> ret_type { body }
+# Stores the function in the function table and returns nothing to the main op stream.
+fn parse_function ctx:ParseContext index:int -> int {
+    # Consume function name
+    index ctx.tokens.get = name_token
+    if name_token.kind TokenKind::Identifier != then
+        "expected function name after fn" eprintln
+        1 exit
+    fi
+    name_token.value = func_name
+    1 += index
+
+    # Parse parameters and collect variable names
+    List::new (List[str]) = variables
+    while index ctx.tokens.length > do
+        index ctx.tokens.get = param_token
+
+        # Check for return type arrow
+        if param_token.kind TokenKind::Delimiter == "->" param_token.value == && then
+            1 += index
+            # Skip return type
+            index ctx skip_type = index
+            break
+        fi
+
+        # Check for body start
+        if param_token.kind TokenKind::Delimiter == "{" param_token.value == && then
+            break
+        fi
+
+        # Parameter: name:type
+        if param_token.kind TokenKind::Identifier != then
+            f"expected parameter name, got: {param_token.value}" eprintln
             1 exit
+        fi
+
+        # Check if next token is colon (type annotation)
+        1 += index
+        if index ctx.tokens.length > then
+            index ctx.tokens.get = colon_token
+            if colon_token.kind TokenKind::Delimiter == ":" colon_token.value == && then
+                1 += index
+                # Skip the type
+                index ctx skip_type = index
+            fi
+        fi
+
+        param_token.value variables.push
+    done
+
+    # Expect opening brace
+    if index ctx.tokens.length > ! then
+        f"expected \{ in function {func_name}" eprintln
+        1 exit
+    fi
+    index ctx.tokens.get = brace_token
+    if "{" brace_token.value == ! then
+        f"expected \{ in function {func_name}, got: {brace_token.value}" eprintln
+        1 exit
+    fi
+    1 += index
+
+    # Register placeholder so recursive/forward calls resolve during body parsing
+    List::new (List[Op]) = placeholder_ops
+    List::new (List[str]) = placeholder_vars
+    placeholder_vars placeholder_ops func_name Function = placeholder
+    func_name placeholder ctx.functions.set drop
+
+    # Parse body ops until matching closing brace
+    List::new (List[Op]) = body_ops
+
+    # Emit assignment ops to capture parameters from the data stack
+    0 = param_emit_index
+    while param_emit_index variables.length > do
+        param_emit_index variables.get OpValue::Str OpKind::AssignVariable Op body_ops.push
+        1 += param_emit_index
+    done
+
+    1 = brace_depth
+    while index ctx.tokens.length > 0 brace_depth > && do
+        index ctx.tokens.get = body_token
+
+        # Track brace nesting for delimiters
+        if body_token.kind TokenKind::Delimiter == then
+            if "{" body_token.value == then
+                1 += brace_depth
+            elif "}" body_token.value == then
+                brace_depth 1 - = brace_depth
+                if 0 brace_depth == then
+                    1 += index
+                    break
+                fi
+            fi
+            1 += index
+        elif body_token.kind TokenKind::Eof == then
+            f"unexpected end of file in function {func_name}" eprintln
+            1 exit
+        else
+            1 += index
+            body_ops ctx index body_token parse_token = index
         fi
     done
 
-    ops variables.length
+    variables body_ops func_name Function = function
+    func_name function ctx.functions.set drop
+
+    index
+}
+
+fn parse ctx:ParseContext -> List[Op] {
+    List::new (List[Op]) = ops
+    0 = index
+
+    while index ctx.tokens.length > do
+        index ctx.tokens.get = token
+        1 += index
+
+        if token.kind TokenKind::Eof == then
+            break
+        fi
+
+        ops ctx index token parse_token = index
+    done
+
+    ops
 }
