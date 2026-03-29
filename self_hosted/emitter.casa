@@ -30,8 +30,42 @@ fn emit_bss emitter:Emitter globals_count:int {
     "\n" emitter.asm.append
 }
 
-fn emit_data emitter:Emitter {
+fn escape_for_asm value:str -> str {
+    StringBuilder::new = result
+    0 = efa_index
+    while efa_index value.length > do
+        efa_index value.at = efa_ch
+        if efa_ch '\\' == then
+            "\\\\" result.append
+        elif efa_ch '"' == then
+            "\\\"" result.append
+        elif efa_ch '\n' == then
+            "\\n" result.append
+        elif efa_ch '\t' == then
+            "\\t" result.append
+        elif efa_ch '\0' == then
+            "\\0" result.append
+        elif efa_ch '\r' == then
+            "\\r" result.append
+        else
+            efa_ch result.append_char
+        fi
+        1 += efa_index
+    done
+    result.build
+}
+
+fn emit_data emitter:Emitter string_table:List[str] {
     ".section .data\n" emitter.asm.append
+    0 = str_index
+    while str_index string_table.length > do
+        str_index string_table.get = str_value
+        ".align 8\n" emitter.asm.append
+        f"str_{str_index .to_str}:\n" emitter.asm.append
+        f".quad {str_value.length .to_str}\n" emitter.asm.append
+        f".asciz \"{str_value escape_for_asm}\"\n" emitter.asm.append
+        1 += str_index
+    done
     "bool_true: .ascii \"true\"\n" emitter.asm.append
     "bool_false: .ascii \"false\"\n" emitter.asm.append
     "\n" emitter.asm.append
@@ -260,6 +294,13 @@ fn emit_inst inst:Inst emitter:Emitter {
             "    pushq %rax\n" emitter.asm.append
             "    pushq %rcx\n" emitter.asm.append
         }
+        # Push string/char
+        InstKind::PushStr => {
+            f"    leaq str_{inst.value .to_str}(%rip), %rax\n" emitter.asm.append
+            "    pushq %rax\n" emitter.asm.append
+        }
+        InstKind::PushChar =>
+            f"    pushq ${inst.value .to_str}\n" emitter.asm.append
         # Print
         InstKind::PrintInt => {
             emitter next_label = label_id
@@ -269,6 +310,57 @@ fn emit_inst inst:Inst emitter:Emitter {
             "    addq $8, %r14\n" emitter.asm.append
             "    jmp print_int\n" emitter.asm.append
             f".Lprint_done_{label_id .to_str}:\n" emitter.asm.append
+        }
+        InstKind::PrintStr => {
+            emitter next_label = label_id
+            "    popq %rdi\n" emitter.asm.append
+            f"    leaq .Lprint_done_{label_id .to_str}(%rip), %rax\n" emitter.asm.append
+            "    movq %rax, (%r14)\n" emitter.asm.append
+            "    addq $8, %r14\n" emitter.asm.append
+            "    jmp print_str\n" emitter.asm.append
+            f".Lprint_done_{label_id .to_str}:\n" emitter.asm.append
+        }
+        InstKind::PrintBool => {
+            emitter next_label = label_id
+            "    popq %rax\n" emitter.asm.append
+            "    testq %rax, %rax\n" emitter.asm.append
+            f"    jz .Lpb_false_{label_id .to_str}\n" emitter.asm.append
+            "    leaq bool_true(%rip), %rsi\n" emitter.asm.append
+            "    movq $4, %rdx\n" emitter.asm.append
+            f"    jmp .Lpb_write_{label_id .to_str}\n" emitter.asm.append
+            f".Lpb_false_{label_id .to_str}:\n" emitter.asm.append
+            "    leaq bool_false(%rip), %rsi\n" emitter.asm.append
+            "    movq $5, %rdx\n" emitter.asm.append
+            f".Lpb_write_{label_id .to_str}:\n" emitter.asm.append
+            "    movq $1, %rdi\n" emitter.asm.append
+            "    movq $1, %rax\n" emitter.asm.append
+            "    syscall\n" emitter.asm.append
+        }
+        InstKind::PrintChar => {
+            "    popq %rax\n" emitter.asm.append
+            "    movb %al, -1(%rsp)\n" emitter.asm.append
+            "    leaq -1(%rsp), %rsi\n" emitter.asm.append
+            "    movq $1, %rdx\n" emitter.asm.append
+            "    movq $1, %rdi\n" emitter.asm.append
+            "    movq $1, %rax\n" emitter.asm.append
+            "    syscall\n" emitter.asm.append
+        }
+        InstKind::PrintCstr => {
+            emitter next_label = label_id
+            "    popq %rsi\n" emitter.asm.append
+            "    movq %rsi, %rdi\n" emitter.asm.append
+            f".Lpc_scan_{label_id .to_str}:\n" emitter.asm.append
+            "    cmpb $0, (%rsi)\n" emitter.asm.append
+            f"    je .Lpc_done_{label_id .to_str}\n" emitter.asm.append
+            "    incq %rsi\n" emitter.asm.append
+            f"    jmp .Lpc_scan_{label_id .to_str}\n" emitter.asm.append
+            f".Lpc_done_{label_id .to_str}:\n" emitter.asm.append
+            "    movq %rsi, %rdx\n" emitter.asm.append
+            "    subq %rdi, %rdx\n" emitter.asm.append
+            "    movq %rdi, %rsi\n" emitter.asm.append
+            "    movq $1, %rdi\n" emitter.asm.append
+            "    movq $1, %rax\n" emitter.asm.append
+            "    syscall\n" emitter.asm.append
         }
         # Control flow
         InstKind::Label =>
@@ -314,12 +406,12 @@ fn emit_exit emitter:Emitter {
     "    syscall\n" emitter.asm.append
 }
 
-fn emit_program program:List[Inst] globals_count:int label_count:int -> str {
+fn emit_program program:List[Inst] globals_count:int label_count:int string_table:List[str] -> str {
     emitter_new = emitter
     label_count emitter->label_count
 
     globals_count emitter emit_bss
-    emitter emit_data
+    string_table emitter emit_data
     emitter emit_helpers
     program emitter emit_start
     emitter emit_exit
