@@ -2,6 +2,136 @@
 
 include "common.casa"
 
+# ---------------------------------------------------------------------------
+# Label management
+# ---------------------------------------------------------------------------
+
+struct LabelState {
+    labels: List[int]
+    count:  int
+}
+
+fn make_label_state ops:List[Op] -> LabelState {
+    List::new (List[int]) = labels
+    0 = init_index
+    while init_index ops.length > do
+        0 labels.push
+        1 += init_index
+    done
+    0 labels LabelState
+}
+
+# Label 0 is reserved as a sentinel for "unassigned".
+# Labels are assigned starting from 1.
+fn get_label state:LabelState op_index:int -> int {
+    op_index state.labels.get = existing
+    if existing 0 != then
+        existing
+    else
+        state.count 1 + state->count
+        state.count op_index state.labels.set
+        state.count
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Block-matching searches
+# ---------------------------------------------------------------------------
+
+# Find the next IfElif, IfElse, or IfEnd at nesting depth 0.
+# Only tracks if/fi nesting — while blocks are transparent.
+fn find_if_branch_target state:LabelState from_index:int ops:List[Op] -> int {
+    from_index 1 + = search_index
+    1 = depth
+    while search_index ops.length > do
+        search_index ops.get .kind = search_kind
+        if depth 1 == then
+            if search_kind OpKind::IfElif == search_kind OpKind::IfElse == || search_kind OpKind::IfEnd == || then
+                search_index state get_label return
+            fi
+        fi
+        if search_kind OpKind::IfStart == then
+            1 += depth
+        elif search_kind OpKind::IfEnd == then
+            depth 1 - = depth
+        fi
+        1 += search_index
+    done
+    "unmatched if block: missing fi" eprintln
+    1 exit
+    0
+}
+
+# Find matching IfEnd at nesting depth 0.
+# Only tracks if/fi nesting — while blocks are transparent.
+fn find_if_end state:LabelState from_index:int ops:List[Op] -> int {
+    from_index 1 + = search_index
+    1 = depth
+    while search_index ops.length > do
+        search_index ops.get .kind = search_kind
+        if depth 1 == search_kind OpKind::IfEnd == && then
+            search_index state get_label return
+        fi
+        if search_kind OpKind::IfStart == then
+            1 += depth
+        elif search_kind OpKind::IfEnd == then
+            depth 1 - = depth
+        fi
+        1 += search_index
+    done
+    "unmatched if block: missing fi" eprintln
+    1 exit
+    0
+}
+
+# Find matching WhileEnd at nesting depth 0.
+# Only tracks while/done nesting — if blocks are transparent.
+fn find_while_end state:LabelState from_index:int ops:List[Op] -> int {
+    from_index 1 + = search_index
+    1 = depth
+    while search_index ops.length > do
+        search_index ops.get .kind = search_kind
+        if depth 1 == search_kind OpKind::WhileEnd == && then
+            search_index state get_label return
+        fi
+        if search_kind OpKind::WhileStart == then
+            1 += depth
+        elif search_kind OpKind::WhileEnd == then
+            depth 1 - = depth
+        fi
+        1 += search_index
+    done
+    "unmatched while block: missing done" eprintln
+    1 exit
+    0
+}
+
+# Find matching WhileStart at nesting depth 0 (backward search).
+# Only tracks while/done nesting — if blocks are transparent.
+fn find_while_start state:LabelState from_index:int ops:List[Op] -> int {
+    from_index 1 - = search_index
+    1 = depth
+    while 0 search_index >= do
+        search_index ops.get .kind = search_kind
+        if depth 1 == search_kind OpKind::WhileStart == && then
+            search_index state get_label return
+        fi
+        if search_kind OpKind::WhileEnd == then
+            1 += depth
+        elif search_kind OpKind::WhileStart == then
+            depth 1 - = depth
+        fi
+        search_index 1 - = search_index
+    done
+    "unmatched while block: missing while" eprintln
+    1 exit
+    0
+}
+
+# ---------------------------------------------------------------------------
+# Direct op-to-inst mapping (non-control-flow ops)
+# ---------------------------------------------------------------------------
+
 fn op_to_inst op:Op -> Inst {
     op.kind match
         OpKind::PushInt => op.value InstKind::Push Inst
@@ -33,36 +163,75 @@ fn op_to_inst op:Op -> Inst {
         OpKind::PrintInt => 0 InstKind::PrintInt Inst
         OpKind::AssignVariable => op.value InstKind::GlobalSet Inst
         OpKind::PushVariable => op.value InstKind::GlobalGet Inst
-        OpKind::AssignIncrement => {
-            "unexpected compound assignment in op_to_inst" eprintln
+        _ => {
+            "unexpected op in op_to_inst" eprintln
             1 exit
-            0 InstKind::GlobalGet Inst
-        }
-        OpKind::AssignDecrement => {
-            "unexpected compound assignment in op_to_inst" eprintln
-            1 exit
-            0 InstKind::GlobalGet Inst
+            0 InstKind::Drop Inst
         }
     end
 }
 
-fn compile_bytecode ops:List[Op] -> List[Inst] {
+# ---------------------------------------------------------------------------
+# Bytecode compilation
+# ---------------------------------------------------------------------------
+
+fn compile_bytecode ops:List[Op] -> List[Inst] int {
     List::new (List[Inst]) = bytecode
+    ops make_label_state = state
     0 = op_index
 
     while op_index ops.length > do
         op_index ops.get = current_op
         current_op.kind = op_kind
 
+        # Compound assignment expansion
         if op_kind OpKind::AssignIncrement == then
             current_op.value InstKind::GlobalGet Inst bytecode.push
             0 InstKind::Add Inst bytecode.push
             current_op.value InstKind::GlobalSet Inst bytecode.push
+
         elif op_kind OpKind::AssignDecrement == then
             current_op.value InstKind::GlobalGet Inst bytecode.push
             0 InstKind::Swap Inst bytecode.push
             0 InstKind::Add Inst bytecode.push
             current_op.value InstKind::GlobalSet Inst bytecode.push
+
+        # If blocks
+        # IfStart is a structural marker only; no instructions emitted
+        elif op_kind OpKind::IfStart == then
+            0 drop
+
+        elif op_kind OpKind::IfCondition == then
+            ops op_index state find_if_branch_target InstKind::JumpNe Inst bytecode.push
+
+        elif op_kind OpKind::IfElif == then
+            ops op_index state find_if_end InstKind::Jump Inst bytecode.push
+            op_index state get_label InstKind::Label Inst bytecode.push
+
+        elif op_kind OpKind::IfElse == then
+            ops op_index state find_if_end InstKind::Jump Inst bytecode.push
+            op_index state get_label InstKind::Label Inst bytecode.push
+
+        elif op_kind OpKind::IfEnd == then
+            op_index state get_label InstKind::Label Inst bytecode.push
+
+        # While blocks
+        elif op_kind OpKind::WhileStart == then
+            op_index state get_label InstKind::Label Inst bytecode.push
+
+        elif op_kind OpKind::WhileCondition == then
+            ops op_index state find_while_end InstKind::JumpNe Inst bytecode.push
+
+        elif op_kind OpKind::WhileBreak == then
+            ops op_index state find_while_end InstKind::Jump Inst bytecode.push
+
+        elif op_kind OpKind::WhileContinue == then
+            ops op_index state find_while_start InstKind::Jump Inst bytecode.push
+
+        elif op_kind OpKind::WhileEnd == then
+            ops op_index state find_while_start InstKind::Jump Inst bytecode.push
+            op_index state get_label InstKind::Label Inst bytecode.push
+
         else
             current_op op_to_inst bytecode.push
         fi
@@ -70,5 +239,5 @@ fn compile_bytecode ops:List[Op] -> List[Inst] {
         1 += op_index
     done
 
-    bytecode
+    bytecode state.count
 }

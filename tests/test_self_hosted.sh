@@ -184,6 +184,112 @@ tmp_rot="/tmp/casa_sh_rot.casa"
 echo '1 2 3 rot print drop drop' > "$tmp_rot"
 run_test "rot" "$tmp_rot" "1"
 
+# Variables
+tmp_var="/tmp/casa_sh_var.casa"
+echo '10 = x x print' > "$tmp_var"
+run_test "variable" "$tmp_var" "10"
+
+tmp_var_inc="/tmp/casa_sh_var_inc.casa"
+echo '5 = x 3 += x x print' > "$tmp_var_inc"
+run_test "variable_increment" "$tmp_var_inc" "8"
+
+# If/fi
+tmp_if="/tmp/casa_sh_if.casa"
+echo '1 if 1 == then 42 print fi' > "$tmp_if"
+run_test "if_true" "$tmp_if" "42"
+
+tmp_if_false="/tmp/casa_sh_if_false.casa"
+echo '0 if 1 == then 42 print fi' > "$tmp_if_false"
+run_test "if_false" "$tmp_if_false" ""
+
+# If/else/fi
+tmp_ifelse="/tmp/casa_sh_ifelse.casa"
+printf '1 if 1 == then 10 print else 20 print fi' > "$tmp_ifelse"
+run_test "if_else_true" "$tmp_ifelse" "10"
+
+tmp_ifelse2="/tmp/casa_sh_ifelse2.casa"
+printf '0 if 1 == then 10 print else 20 print fi' > "$tmp_ifelse2"
+run_test "if_else_false" "$tmp_ifelse2" "20"
+
+# Elif chain
+tmp_elif="/tmp/casa_sh_elif.casa"
+cat > "$tmp_elif" << 'CASA'
+3 = x
+if x 1 == then
+    10 print
+elif x 2 == then
+    20 print
+elif x 3 == then
+    30 print
+else
+    40 print
+fi
+CASA
+run_test "elif_chain" "$tmp_elif" "30"
+
+# While loop
+tmp_while="/tmp/casa_sh_while.casa"
+cat > "$tmp_while" << 'CASA'
+0 = i
+while i 5 < do
+    i print
+    i 1 + = i
+done
+CASA
+run_test "while_loop" "$tmp_while" "01234"
+
+# Break
+tmp_break="/tmp/casa_sh_break.casa"
+cat > "$tmp_break" << 'CASA'
+0 = i
+while i 10 < do
+    if i 3 == then break fi
+    i print
+    i 1 + = i
+done
+CASA
+run_test "break" "$tmp_break" "012"
+
+# Continue
+tmp_continue="/tmp/casa_sh_continue.casa"
+cat > "$tmp_continue" << 'CASA'
+0 = i
+while i 5 < do
+    i 1 + = i
+    if i 3 == then continue fi
+    i print
+done
+CASA
+run_test "continue" "$tmp_continue" "1245"
+
+# Nested if in while
+tmp_nested_if="/tmp/casa_sh_nested_if.casa"
+cat > "$tmp_nested_if" << 'CASA'
+0 = i
+while i 6 < do
+    if i 2 % 0 == then
+        i print
+    fi
+    i 1 + = i
+done
+CASA
+run_test "nested_if_in_while" "$tmp_nested_if" "024"
+
+# Nested while in while
+tmp_nested_while="/tmp/casa_sh_nested_while.casa"
+cat > "$tmp_nested_while" << 'CASA'
+0 = i
+while i 3 < do
+    0 = j
+    while j 2 < do
+        i j + print
+        j 1 + = j
+    done
+    i 1 + = i
+done
+CASA
+run_test "nested_while" "$tmp_nested_while" "011223"
+
 # Clean up
 rm -f "$COMPILER"
 rm -f "$tmp_add" "$tmp_neg" "$tmp_zero" "$tmp_single" "$tmp_chain"
@@ -192,6 +298,10 @@ rm -f "$tmp_band" "$tmp_bor" "$tmp_bxor" "$tmp_bnot" "$tmp_shl" "$tmp_shr"
 rm -f "$tmp_eq" "$tmp_eq2" "$tmp_ne" "$tmp_lt" "$tmp_gt" "$tmp_le" "$tmp_ge"
 rm -f "$tmp_and" "$tmp_and2" "$tmp_or" "$tmp_not" "$tmp_not2"
 rm -f "$tmp_drop" "$tmp_dup" "$tmp_swap" "$tmp_over" "$tmp_rot"
+rm -f "$tmp_var" "$tmp_var_inc"
+rm -f "$tmp_if" "$tmp_if_false" "$tmp_ifelse" "$tmp_ifelse2" "$tmp_elif"
+rm -f "$tmp_while" "$tmp_break" "$tmp_continue"
+rm -f "$tmp_nested_if" "$tmp_nested_while"
 
 echo
 echo "Summary: $pass passed, $fail failed"
