@@ -987,9 +987,8 @@ class Compiler:
                 depth -= direction
 
             if depth < START_DEPTH:
-                is_boundary_op = op.kind in START_KINDS or op.kind in END_KINDS
-                hit_enclosing_end = other_op.kind == end_kind
-                if is_boundary_op or hit_enclosing_end:
+                stop_kind = start_kind if reverse else end_kind
+                if other_op.kind == stop_kind:
                     return None
 
         return None
