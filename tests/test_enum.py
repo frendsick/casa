@@ -1410,3 +1410,284 @@ class TestStrComparisonEndToEnd:
             '"hello" "world" check print\n'
         )
         assert output == "truefalse"
+
+
+# ---------------------------------------------------------------------------
+# `is` keyword - parsing
+# ---------------------------------------------------------------------------
+class TestIsCheckParsing:
+    def test_plain_enum_is_check(self):
+        ops = resolve_string(COLOR_ENUM + "Color::Red = c\nc Color::Red is\n")
+        is_ops = find_ops(ops, OpKind.IS_CHECK)
+        assert len(is_ops) == 1
+        variant = is_ops[0].value
+        assert isinstance(variant, EnumVariant)
+        assert variant.enum_name == "Color"
+        assert variant.variant_name == "Red"
+        assert variant.bindings == []
+
+    def test_is_check_with_bindings(self):
+        ops = resolve_string(
+            SHAPE_ENUM
+            + "10 Shape::Circle = s\n"
+            + "if s Shape::Circle(r) is then\nr print\nfi\n"
+        )
+        is_ops = find_ops(ops, OpKind.IS_CHECK)
+        assert len(is_ops) == 1
+        variant = is_ops[0].value
+        assert variant.bindings == ["r"]
+
+    def test_is_check_multiple_bindings(self):
+        ops = resolve_string(
+            SHAPE_ENUM
+            + "3 4 Shape::Rectangle = s\n"
+            + "if s Shape::Rectangle(w h) is then\nw print\nfi\n"
+        )
+        is_ops = find_ops(ops, OpKind.IS_CHECK)
+        assert len(is_ops) == 1
+        assert is_ops[0].value.bindings == ["w", "h"]
+
+    def test_is_check_resolves_ordinal(self):
+        ops = resolve_string(COLOR_ENUM + "Color::Blue = c\nc Color::Blue is\n")
+        is_ops = find_ops(ops, OpKind.IS_CHECK)
+        assert is_ops[0].value.ordinal == 2
+
+    def test_bare_is_keyword_error(self):
+        with pytest.raises(CasaErrorCollection) as exc_info:
+            resolve_string(COLOR_ENUM + "Color::Red = c\nc is\n")
+        assert exc_info.value.errors[0].kind == ErrorKind.SYNTAX
+
+
+# ---------------------------------------------------------------------------
+# `is` keyword - type checking
+# ---------------------------------------------------------------------------
+class TestIsCheckTypeChecking:
+    def test_is_pushes_bool(self):
+        sig = typecheck_string(COLOR_ENUM + "Color::Red = c\nc Color::Red is\n")
+        assert sig.return_types == ["bool"]
+
+    def test_is_type_mismatch(self):
+        with pytest.raises(CasaErrorCollection) as exc_info:
+            typecheck_string(
+                COLOR_ENUM + DIRECTION_ENUM + "Color::Red = c\nc Direction::North is\n"
+            )
+        assert exc_info.value.errors[0].kind == ErrorKind.TYPE_MISMATCH
+
+    def test_is_non_enum_type(self):
+        with pytest.raises(CasaErrorCollection) as exc_info:
+            typecheck_string(COLOR_ENUM + "42 = n\nn Color::Red is\n")
+        assert exc_info.value.errors[0].kind == ErrorKind.TYPE_MISMATCH
+
+    def test_is_bindings_outside_if_error(self):
+        with pytest.raises(CasaErrorCollection) as exc_info:
+            typecheck_string(
+                SHAPE_ENUM + "10 Shape::Circle = s\ns Shape::Circle(r) is\n"
+            )
+        assert exc_info.value.errors[0].kind == ErrorKind.SYNTAX
+
+    def test_is_wrong_binding_count(self):
+        with pytest.raises(CasaErrorCollection) as exc_info:
+            typecheck_string(
+                SHAPE_ENUM
+                + "10 Shape::Circle = s\n"
+                + "if s Shape::Circle(a b) is then\na print\nfi\n"
+            )
+        assert exc_info.value.errors[0].kind == ErrorKind.TYPE_MISMATCH
+
+    def test_is_bindings_on_plain_variant(self):
+        with pytest.raises(CasaErrorCollection) as exc_info:
+            typecheck_string(
+                COLOR_ENUM
+                + "Color::Red = c\n"
+                + "if c Color::Red(x) is then\nx print\nfi\n"
+            )
+        assert exc_info.value.errors[0].kind == ErrorKind.TYPE_MISMATCH
+
+    def test_is_bindings_in_while_condition_error(self):
+        with pytest.raises(CasaErrorCollection) as exc_info:
+            typecheck_string(
+                SHAPE_ENUM
+                + "10 Shape::Circle = s\n"
+                + "while s Shape::Circle(r) is do\nr print\ndone\n"
+            )
+        assert exc_info.value.errors[0].kind == ErrorKind.SYNTAX
+
+    def test_is_generic_enum(self):
+        sig = typecheck_string(OPTION_ENUM + "42 Option::Some = m\nm Option::Some is\n")
+        assert sig.return_types == ["bool"]
+
+    def test_is_generic_with_bindings(self):
+        typecheck_string(
+            OPTION_ENUM
+            + "42 Option::Some = m\n"
+            + "if m Option::Some(v) is then\nv print\nfi\n"
+        )
+
+
+# ---------------------------------------------------------------------------
+# `is` keyword - bytecode
+# ---------------------------------------------------------------------------
+class TestIsCheckBytecode:
+    def test_plain_enum_bytecode(self):
+        program = compile_string(COLOR_ENUM + "Color::Red = c\nc Color::Red is\n")
+        inst_kinds = [i.kind for i in program.bytecode]
+        # Should contain PUSH (ordinal) + EQ for plain enum
+        assert InstKind.EQ in inst_kinds
+
+    def test_data_carrying_no_bindings_bytecode(self):
+        program = compile_string(
+            SHAPE_ENUM + "10 Shape::Circle = s\ns Shape::Circle is\n"
+        )
+        inst_kinds = [i.kind for i in program.bytecode]
+        # Should contain LOAD64 (read ordinal from heap) + PUSH + EQ
+        assert InstKind.LOAD64 in inst_kinds
+        assert InstKind.EQ in inst_kinds
+
+
+# ---------------------------------------------------------------------------
+# `is` keyword - end to end
+# ---------------------------------------------------------------------------
+class TestIsCheckEndToEnd:
+    @pytest.fixture
+    def run_casa(self, tmp_path):
+        def _run(code: str) -> str:
+            src = tmp_path / "test.casa"
+            src.write_text(code)
+            binary = tmp_path / "test"
+            result = subprocess.run(
+                ["python3", "casa.py", str(src), "-o", str(binary)],
+                capture_output=True,
+                text=True,
+                cwd=CASA_ROOT,
+                timeout=30,
+            )
+            if result.returncode != 0:
+                pytest.fail(
+                    f"Compilation failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+                )
+            run_result = subprocess.run(
+                [str(binary)],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            return run_result.stdout
+
+        return _run
+
+    def test_plain_enum_is_true(self, run_casa):
+        output = run_casa(COLOR_ENUM + "Color::Red = c\nc Color::Red is print\n")
+        assert output == "true"
+
+    def test_plain_enum_is_false(self, run_casa):
+        output = run_casa(COLOR_ENUM + "Color::Red = c\nc Color::Blue is print\n")
+        assert output == "false"
+
+    def test_data_carrying_is_true(self, run_casa):
+        output = run_casa(
+            SHAPE_ENUM + "10 Shape::Circle = s\ns Shape::Circle is print\n"
+        )
+        assert output == "true"
+
+    def test_data_carrying_is_false(self, run_casa):
+        output = run_casa(
+            SHAPE_ENUM + "10 Shape::Circle = s\ns Shape::Rectangle is print\n"
+        )
+        assert output == "false"
+
+    def test_is_with_bindings_if(self, run_casa):
+        output = run_casa(
+            SHAPE_ENUM
+            + "10 Shape::Circle = s\n"
+            + "if s Shape::Circle(r) is then\n"
+            + "    r print\n"
+            + "fi\n"
+        )
+        assert output == "10"
+
+    def test_is_with_bindings_elif(self, run_casa):
+        output = run_casa(
+            SHAPE_ENUM
+            + "3 4 Shape::Rectangle = s\n"
+            + "if s Shape::Circle(r) is then\n"
+            + '    "circle" print\n'
+            + "elif s Shape::Rectangle(w h) is then\n"
+            + "    w h * print\n"
+            + "fi\n"
+        )
+        assert output == "12"
+
+    def test_is_with_bindings_no_match(self, run_casa):
+        output = run_casa(
+            SHAPE_ENUM
+            + "Shape::Point = s\n"
+            + "if s Shape::Circle(r) is then\n"
+            + '    "circle" print\n'
+            + "else\n"
+            + '    "other" print\n'
+            + "fi\n"
+        )
+        assert output == "other"
+
+    def test_is_generic_enum(self, run_casa):
+        output = run_casa(
+            OPTION_ENUM
+            + "42 Option::Some = m\n"
+            + "if m Option::Some(v) is then\n"
+            + "    v print\n"
+            + "fi\n"
+        )
+        assert output == "42"
+
+    def test_is_generic_none(self, run_casa):
+        output = run_casa(
+            OPTION_ENUM + "Option::None = m\n" + "m Option::Some is print\n"
+        )
+        assert output == "false"
+
+    def test_is_in_function(self, run_casa):
+        output = run_casa(
+            SHAPE_ENUM
+            + "fn get_radius s:Shape -> int {\n"
+            + "    if s Shape::Circle(r) is then\n"
+            + "        r return\n"
+            + "    fi\n"
+            + "    0\n"
+            + "}\n"
+            + "10 Shape::Circle get_radius print\n"
+            + "Shape::Point get_radius print\n"
+        )
+        assert output == "100"
+
+    def test_is_multiple_bindings(self, run_casa):
+        output = run_casa(
+            SHAPE_ENUM
+            + "3 4 Shape::Rectangle = s\n"
+            + "if s Shape::Rectangle(w h) is then\n"
+            + '    w print " " print h print\n'
+            + "fi\n"
+        )
+        assert output == "3 4"
+
+    def test_is_no_data_variant_on_data_enum_true(self, run_casa):
+        output = run_casa(SHAPE_ENUM + "Shape::Point = p\np Shape::Point is print\n")
+        assert output == "true"
+
+    def test_is_no_data_variant_on_data_enum_false(self, run_casa):
+        output = run_casa(
+            SHAPE_ENUM + "10 Shape::Circle = s\ns Shape::Point is print\n"
+        )
+        assert output == "false"
+
+    def test_is_without_bindings_in_function(self, run_casa):
+        output = run_casa(
+            OPTION_ENUM
+            + "fn is_some o:Option[int] -> bool { o Option::Some is }\n"
+            + "42 Option::Some is_some print\n"
+            + "Option::None is_some print\n"
+        )
+        assert output == "truefalse"
+
+    def test_is_plain_enum_without_bindings_in_while(self, run_casa):
+        output = run_casa(COLOR_ENUM + "Color::Red = c\n" + "c Color::Red is print\n")
+        assert output == "true"

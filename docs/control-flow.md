@@ -82,6 +82,28 @@ The same applies to bare `array` and `array[T]`, and to `any` with any concrete 
 
 If there is no `else` branch, the `if`/`elif` branches must not change the stack at all (since the "no match" path leaves the stack unchanged).
 
+### Variant Checking with `is`
+
+The `is` keyword can be used in `if`/`elif` conditions to check and destructure enum variants. See [Enums — Variant Checking with `is`](enums.md#variant-checking-with-is) for details.
+
+```casa
+enum Shape {
+    Circle(int)
+    Rectangle(int int)
+    Point
+}
+
+10 Shape::Circle = shape
+
+if shape Shape::Circle(radius) is then
+    "radius=" print
+    radius print
+elif shape Shape::Rectangle(w h) is then
+    "area=" print
+    w h * print
+fi
+```
+
 ## Loops
 
 Casa has `while`/`do`/`done` loops with `break` and `continue`.

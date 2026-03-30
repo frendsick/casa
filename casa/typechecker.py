@@ -109,6 +109,8 @@ class TypeChecker:
     deferred_lambda_vars: dict[str, str] = field(default_factory=dict)
     # Tracks the last pushed deferred lambda name for assignment tracking
     last_deferred_lambda: str | None = None
+    # True when processing ops between IF_START/IF_ELIF and IF_CONDITION (then)
+    in_branch_condition: bool = False
 
     def stack_push(self, typ: Type, origin: Location | None = None):
         """Push a type onto the symbolic stack."""
@@ -650,7 +652,9 @@ class TypeChecker:
                 bs = BranchedStack(self.stack, self.stack_origins)
                 bs.if_location = op.location
                 self.branched_stacks.append(bs)
+                self.in_branch_condition = True
             case OpKind.IF_CONDITION:
+                self.in_branch_condition = False
                 self.expect_type("bool")
 
                 assert len(self.branched_stacks) > 0, "If block stack state is saved"
@@ -691,8 +695,10 @@ class TypeChecker:
                 if op.kind is OpKind.IF_ELSE:
                     branched.default_present = True
                     branched.current_branch_label = "else"
+                    self.in_branch_condition = False
                 else:
                     branched.current_branch_label = "elif"
+                    self.in_branch_condition = True
                 branched.current_branch_location = op.location
 
                 if self.stack == before == after:
@@ -972,6 +978,68 @@ class TypeChecker:
             type_vars=set(casa_enum.type_vars),
         )
         self.apply_signature(sig, f"{variant.enum_name}::{variant.variant_name}")
+
+    def check_is(self, op: Op, function: "Function | None" = None) -> None:
+        """Handle IS_CHECK: pop enum, push bool, optionally bind inner values."""
+        variant = op.value
+        assert isinstance(variant, EnumVariant)
+        assert variant.enum_name is not None
+
+        # Pop the enum value
+        typ = self.stack_pop()
+        base_type = self._resolve_match_type(typ)
+
+        # Validate the variant belongs to the correct enum
+        if base_type not in GLOBAL_ENUMS:
+            raise_error(
+                ErrorKind.TYPE_MISMATCH,
+                f"`is` requires an enum type, got `{typ}`",
+                op.location,
+            )
+
+        casa_enum = GLOBAL_ENUMS[base_type]
+        if variant.enum_name != casa_enum.name:
+            raise_error(
+                ErrorKind.TYPE_MISMATCH,
+                f"Cannot check `{variant.enum_name}::{variant.variant_name}`"
+                f" on value of type `{typ}`",
+                op.location,
+            )
+
+        if variant.bindings:
+            # Bindings only allowed in if/elif conditions
+            if not self.in_branch_condition:
+                raise_error(
+                    ErrorKind.SYNTAX,
+                    "`is` with bindings is only allowed in `if`/`elif` conditions",
+                    op.location,
+                )
+
+            inner_types = casa_enum.variant_types.get(variant.variant_name, [])
+            if len(variant.bindings) != len(inner_types):
+                raise_error(
+                    ErrorKind.TYPE_MISMATCH,
+                    f"Variant `{variant.enum_name}::{variant.variant_name}`"
+                    f" has {len(inner_types)} inner value(s),"
+                    f" but {len(variant.bindings)} binding(s) provided",
+                    op.location,
+                )
+
+            # Resolve generic type vars from the concrete enum type
+            type_bindings: dict[str, str] = {}
+            if casa_enum.type_vars:
+                params = extract_generic_params(typ)
+                if params:
+                    for tvar, concrete in zip(
+                        casa_enum.type_vars, params, strict=False
+                    ):
+                        type_bindings[tvar] = concrete
+
+            for var_name, inner_type in zip(variant.bindings, inner_types, strict=True):
+                resolved_type = type_bindings.get(inner_type, inner_type)
+                self._set_struct_binding_type(var_name, resolved_type, function)
+
+        self.stack_push("bool")
 
     @staticmethod
     def _check_duplicate_arm(
@@ -2122,7 +2190,7 @@ def type_satisfies_trait(
 
 def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature:
     """Type-check a list of ops and return the inferred signature."""
-    assert len(OpKind) == 85, "Exhaustive handling for `OpKind`"
+    assert len(OpKind) == 86, "Exhaustive handling for `OpKind`"
 
     tc = TypeChecker(ops=ops)
     op_index = 0
@@ -2222,6 +2290,8 @@ def type_check_ops(ops: list[Op], function: Function | None = None) -> Signature
                 tc.stack_push("ptr")
             case OpKind.PUSH_ENUM_VARIANT:
                 tc.check_enum_variant(op)
+            case OpKind.IS_CHECK:
+                tc.check_is(op, function)
             case OpKind.MATCH_START | OpKind.MATCH_ARM | OpKind.MATCH_END:
                 tc.check_match(op, function)
             case OpKind.STRUCT_NEW:
