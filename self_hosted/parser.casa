@@ -196,6 +196,10 @@ fn parse_token token:Token index:int ctx:ParseContext ops:List[Op] -> int {
             index ctx parse_struct = index
         elif "enum" token.value == then
             index ctx parse_enum = index
+        elif "impl" token.value == then
+            index ctx parse_impl = index
+        elif "trait" token.value == then
+            index ctx parse_trait = index
         elif "match" token.value == then
             index ctx ops parse_match = index
         else
@@ -231,8 +235,9 @@ fn parse_token token:Token index:int ctx:ParseContext ops:List[Op] -> int {
         elif "[" token.value ==
              "]" token.value == ||
              ")" token.value == ||
+             "," token.value == ||
         then
-            # Stray brackets/parens from type annotations — skip silently.
+            # Stray brackets/parens/commas from type annotations — skip silently.
             # This is intentionally permissive: without a type checker,
             # we cannot distinguish annotation tokens from real errors.
         else
@@ -260,6 +265,9 @@ fn parse_function ctx:ParseContext index:int -> int {
     fi
     name_token.value = func_name
     1 += index
+
+    # Skip optional generic type parameters: fn name[T1 T2] ...
+    index ctx skip_generic_brackets = index
 
     # Parse parameters and collect variable names
     List::new (List[str]) = variables
@@ -552,11 +560,134 @@ fn parse_enum ctx:ParseContext index:int -> int {
         fi
         variant_token.value variants.push
         1 += index
+
+        # Skip optional variant data type: Some(T), Error(E), Ok(T)
+        if index ctx.tokens.length > then
+            if "(" index ctx.tokens.get .value == then
+                0 = paren_depth
+                while index ctx.tokens.length > do
+                    index ctx.tokens.get .value = paren_val
+                    if "(" paren_val == then
+                        1 += paren_depth
+                    elif ")" paren_val == then
+                        paren_depth 1 - = paren_depth
+                    fi
+                    1 += index
+                    if 0 paren_depth == then break fi
+                done
+            fi
+        fi
     done
 
     # Register enum definition
     variants enum_name EnumDef = enum_def
     enum_name enum_def ctx.enums.set drop
+
+    index
+}
+
+# Parse an impl block: impl[K: Hashable, V] Map[K V] { fn method ... }
+# Registers each method as TypeName::method_name in the function table.
+fn parse_impl ctx:ParseContext index:int -> int {
+    # Skip optional generic brackets: impl[K: Hashable, V]
+    index ctx skip_generic_brackets = index
+
+    # Read the type name for method namespacing
+    if index ctx.tokens.length > ! then
+        "expected type name after impl" eprintln
+        1 exit
+    fi
+    index ctx.tokens.get = type_token
+    if type_token.kind TokenKind::Identifier != then
+        f"expected type name after impl, got: {type_token.value}" eprintln
+        1 exit
+    fi
+    type_token.value = impl_type_name
+    1 += index
+
+    # Skip optional generic brackets after type name: Map[K V]
+    index ctx skip_generic_brackets = index
+
+    # Expect opening brace
+    if index ctx.tokens.length > ! then
+        f"expected \{ in impl {impl_type_name}" eprintln
+        1 exit
+    fi
+    if "{" index ctx.tokens.get .value != then
+        f"expected \{ in impl {impl_type_name}, got: {index ctx.tokens.get .value}" eprintln
+        1 exit
+    fi
+    1 += index
+
+    # Parse methods until closing brace
+    while index ctx.tokens.length > do
+        index ctx.tokens.get = impl_token
+
+        if impl_token.kind TokenKind::Delimiter == "}" impl_token.value == && then
+            1 += index
+            break
+        fi
+
+        if impl_token.kind TokenKind::Keyword == "fn" impl_token.value == && then
+            # Peek at the method name before parsing.
+            # parse_function registers under the bare name; we rename it
+            # to TypeName::method_name afterward. The bare name entry is
+            # transient and gets deleted immediately.
+            index 1 + ctx.tokens.get .value = method_name
+            1 += index
+
+            index ctx parse_function = index
+
+            f"{impl_type_name}::{method_name}" = qualified_name
+            method_name ctx.functions.get .unwrap = method_func
+            qualified_name method_func ctx.functions.set drop
+            method_name ctx.functions.delete drop
+        else
+            f"expected fn in impl {impl_type_name}, got: {impl_token.value}" eprintln
+            1 exit
+        fi
+    done
+
+    index
+}
+
+# Parse a trait definition: trait Name { fn method ... }
+# Traits are purely for the Python type checker and have no runtime effect.
+fn parse_trait ctx:ParseContext index:int -> int {
+    # Consume trait name
+    if index ctx.tokens.length > ! then
+        "expected trait name after trait" eprintln
+        1 exit
+    fi
+    index ctx.tokens.get = trait_name_token
+    if trait_name_token.kind TokenKind::Identifier != then
+        f"expected trait name after trait, got: {trait_name_token.value}" eprintln
+        1 exit
+    fi
+    1 += index
+
+    # Expect opening brace
+    if index ctx.tokens.length > ! then
+        f"expected \{ in trait {trait_name_token.value}" eprintln
+        1 exit
+    fi
+    if "{" index ctx.tokens.get .value != then
+        f"expected \{ in trait {trait_name_token.value}, got: {index ctx.tokens.get .value}" eprintln
+        1 exit
+    fi
+    1 += index
+
+    # Skip all tokens until matching closing brace
+    1 = brace_depth
+    while index ctx.tokens.length > 0 brace_depth > && do
+        index ctx.tokens.get .value = brace_val
+        if "{" brace_val == then
+            1 += brace_depth
+        elif "}" brace_val == then
+            brace_depth 1 - = brace_depth
+        fi
+        1 += index
+    done
 
     index
 }
