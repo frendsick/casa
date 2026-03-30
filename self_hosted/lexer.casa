@@ -34,6 +34,7 @@ fn make_keyword_set -> Set[str] {
     "match" keywords.add drop
     "end" keywords.add drop
     "_" keywords.add drop
+    "include" keywords.add drop
     keywords
 }
 
@@ -294,4 +295,153 @@ fn lex source:str -> List[Token] {
 
     "" TokenKind::Eof Token tokens.push
     tokens
+}
+
+# Return the directory portion of a file path, or "." if no / found.
+fn dirname path:str -> str {
+    path.length 1 - = search_index
+    while 0 search_index >= do
+        if search_index path str::at '/' == then
+            path 0 search_index str::substring return
+        fi
+        search_index 1 - = search_index
+    done
+    "."
+}
+
+# Process a single path component: skip ".", pop on "..", otherwise push.
+fn process_path_component parts:List[str] component:str {
+    if ".." component == then
+        if 0 parts.length > then
+            parts.pop drop
+        fi
+    elif "." component != then
+        component parts.push
+    fi
+}
+
+# Normalize a file path by resolving . and .. components.
+fn normalize_path path:str -> str {
+    List::new (List[str]) = parts
+    false = is_absolute
+    if 0 path.length > then
+        if 0 path str::at '/' == then
+            true = is_absolute
+        fi
+    fi
+
+    0 = start
+    0 = pos
+    while pos path.length > do
+        if pos path str::at '/' == then
+            if start pos > then
+                path start pos start - str::substring parts process_path_component
+            fi
+            pos 1 + = start
+        fi
+        1 += pos
+    done
+
+    # Handle last component after final /
+    if start pos > then
+        path start pos start - str::substring parts process_path_component
+    fi
+
+    # Join parts with /
+    "" = result
+    0 = join_index
+    while join_index parts.length > do
+        if 0 join_index > then
+            f"{result}/{join_index parts.get}" = result
+        else
+            join_index parts.get = result
+        fi
+        1 += join_index
+    done
+
+    if is_absolute then
+        f"/{result}" = result
+    fi
+    result
+}
+
+# Append all tokens from source to destination, skipping EOF tokens.
+fn append_tokens_without_eof destination:List[Token] source:List[Token] {
+    0 = copy_index
+    while copy_index source.length > do
+        copy_index source.get = copy_token
+        if copy_token.kind TokenKind::Eof != then
+            copy_token destination.push
+        fi
+        1 += copy_index
+    done
+}
+
+# Read a file, lex it, and recursively resolve include directives.
+# Returns a flat token list with all includes inlined.
+fn lex_file file_path:str included_files:Set[str] -> List[Token] {
+    file_path normalize_path = normalized_path
+
+    # Include-once guard
+    if normalized_path included_files.has then
+        List::new (List[Token]) = empty_tokens
+        "" TokenKind::Eof Token empty_tokens.push
+        empty_tokens return
+    fi
+    normalized_path included_files.add drop
+
+    # Read and lex the file
+    file_path file::read_all = source
+    source lex = tokens
+
+    # Get directory of this file for resolving relative includes
+    file_path dirname = base_dir
+
+    # Scan tokens and resolve include directives
+    List::new (List[Token]) = result
+    0 = token_index
+    while token_index tokens.length > do
+        token_index tokens.get = current_token
+
+        if current_token.kind TokenKind::Keyword == "include" current_token.value == && then
+            # Skip the include keyword and read the path literal
+            1 += token_index
+            if token_index tokens.length > then
+                token_index tokens.get = path_token
+                1 += token_index
+
+                if path_token.kind TokenKind::Literal != then
+                    "expected string literal after include" eprintln
+                    1 exit
+                fi
+                if 0 path_token.value str::at '"' != then
+                    "include path must be a string literal" eprintln
+                    1 exit
+                fi
+
+                # Extract path from string literal (strip leading " prefix)
+                path_token.value 1 path_token.value.length 1 - str::substring = include_path
+
+                # Resolve relative to base_dir and normalize
+                f"{base_dir}/{include_path}" normalize_path = resolved_path
+
+                # Recursively process the included file
+                included_files resolved_path lex_file = included_tokens
+
+                # Append included tokens (skip EOF)
+                included_tokens result append_tokens_without_eof
+            else
+                "expected file path after include" eprintln
+                1 exit
+            fi
+        elif current_token.kind TokenKind::Eof != then
+            current_token result.push
+            1 += token_index
+        else
+            1 += token_index
+        fi
+    done
+
+    "" TokenKind::Eof Token result.push
+    result
 }
