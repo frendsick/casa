@@ -986,7 +986,9 @@ class Compiler:
             elif other_op.kind in END_KINDS:
                 depth -= direction
 
-            if depth < START_DEPTH and other_op.kind == start_kind:
-                return None
+            if depth < START_DEPTH:
+                stop_kind = start_kind if reverse else end_kind
+                if other_op.kind == stop_kind:
+                    return None
 
         return None
