@@ -290,6 +290,192 @@ done
 CASA
 run_test "nested_while" "$tmp_nested_while" "011223"
 
+# -------------------------------------------------------
+# Structs
+# -------------------------------------------------------
+
+tmp_struct="/tmp/casa_sh_struct.casa"
+cat > "$tmp_struct" << 'CASA'
+struct Point {
+    x: int
+    y: int
+}
+20 10 Point = p
+p Point::x print
+p Point::y print
+CASA
+run_test "struct_construct_access" "$tmp_struct" "1020"
+
+tmp_struct_set="/tmp/casa_sh_struct_set.casa"
+cat > "$tmp_struct_set" << 'CASA'
+struct Pair {
+    a: int
+    b: int
+}
+2 1 Pair = pair
+pair Pair::a print
+42 pair Pair::set_b
+pair Pair::b print
+CASA
+run_test "struct_setter" "$tmp_struct_set" "142"
+
+tmp_struct_three="/tmp/casa_sh_struct_three.casa"
+cat > "$tmp_struct_three" << 'CASA'
+struct Triple {
+    x: int
+    y: int
+    z: int
+}
+30 20 10 Triple = t
+t Triple::x print
+t Triple::y print
+t Triple::z print
+CASA
+run_test "struct_three_fields" "$tmp_struct_three" "102030"
+
+# -------------------------------------------------------
+# Enums
+# -------------------------------------------------------
+
+tmp_enum="/tmp/casa_sh_enum.casa"
+cat > "$tmp_enum" << 'CASA'
+enum Color { Red Green Blue }
+Color::Red print
+Color::Green print
+Color::Blue print
+CASA
+run_test "enum_variants" "$tmp_enum" "012"
+
+tmp_enum_eq="/tmp/casa_sh_enum_eq.casa"
+cat > "$tmp_enum_eq" << 'CASA'
+enum Dir { North South East West }
+Dir::South = d
+if d Dir::South == then 1 print else 0 print fi
+if d Dir::North == then 1 print else 0 print fi
+CASA
+run_test "enum_compare" "$tmp_enum_eq" "10"
+
+# -------------------------------------------------------
+# Match
+# -------------------------------------------------------
+
+tmp_match="/tmp/casa_sh_match.casa"
+cat > "$tmp_match" << 'CASA'
+enum Color { Red Green Blue }
+Color::Green = c
+c match
+    Color::Red => 1 print
+    Color::Green => 2 print
+    Color::Blue => 3 print
+end
+CASA
+run_test "match_enum" "$tmp_match" "2"
+
+tmp_match_wild="/tmp/casa_sh_match_wild.casa"
+cat > "$tmp_match_wild" << 'CASA'
+enum Color { Red Green Blue }
+Color::Blue = c
+c match
+    Color::Red => 1 print
+    _ => 9 print
+end
+CASA
+run_test "match_wildcard" "$tmp_match_wild" "9"
+
+tmp_match_brace="/tmp/casa_sh_match_brace.casa"
+cat > "$tmp_match_brace" << 'CASA'
+enum Op { Add Sub Mul }
+Op::Mul = op
+10 = a
+3 = b
+op match
+    Op::Add => { a b + print }
+    Op::Sub => { a b - print }
+    Op::Mul => { a b * print }
+end
+CASA
+run_test "match_braced_body" "$tmp_match_brace" "30"
+
+tmp_match_fn="/tmp/casa_sh_match_fn.casa"
+cat > "$tmp_match_fn" << 'CASA'
+enum Fruit { Apple Banana Cherry }
+fn describe fruit:Fruit {
+    fruit match
+        Fruit::Apple => 1 print
+        Fruit::Banana => 2 print
+        Fruit::Cherry => 3 print
+    end
+}
+Fruit::Banana describe
+Fruit::Cherry describe
+Fruit::Apple describe
+CASA
+run_test "match_in_function" "$tmp_match_fn" "231"
+
+tmp_match_first="/tmp/casa_sh_match_first.casa"
+cat > "$tmp_match_first" << 'CASA'
+enum Color { Red Green Blue }
+Color::Red = c
+c match
+    Color::Red => 1 print
+    Color::Green => 2 print
+    Color::Blue => 3 print
+end
+CASA
+run_test "match_first_arm" "$tmp_match_first" "1"
+
+tmp_match_last="/tmp/casa_sh_match_last.casa"
+cat > "$tmp_match_last" << 'CASA'
+enum Color { Red Green Blue }
+Color::Blue = c
+c match
+    Color::Red => 1 print
+    Color::Green => 2 print
+    Color::Blue => 3 print
+end
+CASA
+run_test "match_last_arm" "$tmp_match_last" "3"
+
+tmp_nested_match="/tmp/casa_sh_nested_match.casa"
+cat > "$tmp_nested_match" << 'CASA'
+enum Outer { A B }
+enum Inner { X Y }
+Outer::B = o
+Inner::X = i
+o match
+    Outer::A => {
+        i match
+            Inner::X => 1 print
+            Inner::Y => 2 print
+        end
+    }
+    Outer::B => {
+        i match
+            Inner::X => 3 print
+            Inner::Y => 4 print
+        end
+    }
+end
+CASA
+run_test "nested_match" "$tmp_nested_match" "3"
+
+tmp_struct_fn="/tmp/casa_sh_struct_fn.casa"
+cat > "$tmp_struct_fn" << 'CASA'
+struct Rect {
+    w: int
+    h: int
+}
+fn area rect:Rect -> int {
+    rect Rect::w rect Rect::h *
+}
+fn make_rect -> Rect {
+    4 3 Rect
+}
+make_rect = r
+r area print
+CASA
+run_test "struct_in_function" "$tmp_struct_fn" "12"
+
 # Clean up
 rm -f "$COMPILER"
 rm -f "$tmp_add" "$tmp_neg" "$tmp_zero" "$tmp_single" "$tmp_chain"
@@ -302,6 +488,11 @@ rm -f "$tmp_var" "$tmp_var_inc"
 rm -f "$tmp_if" "$tmp_if_false" "$tmp_ifelse" "$tmp_ifelse2" "$tmp_elif"
 rm -f "$tmp_while" "$tmp_break" "$tmp_continue"
 rm -f "$tmp_nested_if" "$tmp_nested_while"
+rm -f "$tmp_struct" "$tmp_struct_set" "$tmp_struct_three"
+rm -f "$tmp_enum" "$tmp_enum_eq"
+rm -f "$tmp_match" "$tmp_match_wild" "$tmp_match_brace" "$tmp_match_fn"
+rm -f "$tmp_match_first" "$tmp_match_last" "$tmp_nested_match"
+rm -f "$tmp_struct_fn"
 
 echo
 echo "Summary: $pass passed, $fail failed"

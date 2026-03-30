@@ -174,6 +174,12 @@ fn parse_token token:Token index:int ctx:ParseContext ops:List[Op] -> int {
     elif kind TokenKind::Keyword == then
         if "fn" token.value == then
             index ctx parse_function = index
+        elif "struct" token.value == then
+            index ctx parse_struct = index
+        elif "enum" token.value == then
+            index ctx parse_enum = index
+        elif "match" token.value == then
+            index ctx ops parse_match = index
         else
             token.value parse_bool_or_keyword ops.push
         fi
@@ -186,8 +192,10 @@ fn parse_token token:Token index:int ctx:ParseContext ops:List[Op] -> int {
     elif kind TokenKind::Identifier == then
         if token.value ctx.functions.has then
             token.value OpValue::Str OpKind::FnCall Op ops.push
+        elif token.value ctx.structs.has then
+            token.value ctx.structs.get .unwrap .member_names.length OpValue::Int OpKind::StructNew Op ops.push
         else
-            token.value OpValue::Str OpKind::PushVariable Op ops.push
+            token.value ctx resolve_identifier ops.push
         fi
     elif kind TokenKind::Delimiter == then
         f"unexpected delimiter: {token.value}" eprintln
@@ -307,6 +315,337 @@ fn parse_function ctx:ParseContext index:int -> int {
 
     variables body_ops func_name Function = function
     func_name function ctx.functions.set drop
+
+    index
+}
+
+# Resolve an identifier that is not a function or struct name.
+# Checks for EnumName::Variant pattern, otherwise treats as variable.
+fn resolve_identifier ctx:ParseContext token_value:str -> Op {
+    token_value "::" str::find = colon_pos
+    if 0 colon_pos >= then
+        token_value 0 colon_pos str::substring = enum_name
+        token_value colon_pos 2 + token_value.length colon_pos - 2 - str::substring = variant_name
+        if enum_name ctx.enums.has then
+            enum_name ctx.enums.get .unwrap .variants = variant_list
+            0 = variant_index
+            while variant_index variant_list.length > do
+                if variant_name variant_index variant_list.get == then
+                    variant_index OpValue::Int OpKind::PushEnumVariant Op return
+                fi
+                1 += variant_index
+            done
+            f"unknown variant: {token_value}" eprintln
+            1 exit
+        else
+            f"unknown type in qualified name: {token_value}" eprintln
+            1 exit
+        fi
+    fi
+    token_value OpValue::Str OpKind::PushVariable Op
+}
+
+# Skip optional generic brackets [T1 T2] if present at the current index.
+fn skip_generic_brackets ctx:ParseContext index:int -> int {
+    if index ctx.tokens.length > ! then index return fi
+    index ctx.tokens.get .value = maybe_bracket
+    if "[" maybe_bracket == ! then index return fi
+    1 += index
+    1 = bracket_depth
+    while index ctx.tokens.length > 0 bracket_depth > && do
+        index ctx.tokens.get .value = bracket_val
+        if "[" bracket_val == then
+            1 += bracket_depth
+        elif "]" bracket_val == then
+            bracket_depth 1 - = bracket_depth
+        fi
+        1 += index
+    done
+    index
+}
+
+# Parse a struct definition: struct Name { field1: type1  field2: type2 }
+# Registers the struct and synthesizes getter/setter functions.
+fn parse_struct ctx:ParseContext index:int -> int {
+    # Consume struct name
+    index ctx.tokens.get = name_token
+    if name_token.kind TokenKind::Identifier != then
+        "expected struct name after struct" eprintln
+        1 exit
+    fi
+    name_token.value = struct_name
+    1 += index
+
+    index ctx skip_generic_brackets = index
+
+    # Expect opening brace
+    if index ctx.tokens.length > ! then
+        f"expected \{ in struct {struct_name}" eprintln
+        1 exit
+    fi
+    index ctx.tokens.get = brace_token
+    if "{" brace_token.value == ! then
+        f"expected \{ in struct {struct_name}, got: {brace_token.value}" eprintln
+        1 exit
+    fi
+    1 += index
+
+    # Parse fields: name: type pairs until closing brace
+    List::new (List[str]) = member_names
+    while index ctx.tokens.length > do
+        index ctx.tokens.get = field_token
+
+        if field_token.kind TokenKind::Delimiter == "}" field_token.value == && then
+            1 += index
+            break
+        fi
+
+        if field_token.kind TokenKind::Identifier != then
+            f"expected field name in struct {struct_name}, got: {field_token.value}" eprintln
+            1 exit
+        fi
+        field_token.value member_names.push
+        1 += index
+
+        # Expect colon and type
+        if index ctx.tokens.length > then
+            index ctx.tokens.get = colon_token
+            if colon_token.kind TokenKind::Delimiter == ":" colon_token.value == && then
+                1 += index
+                index ctx skip_type = index
+            fi
+        fi
+    done
+
+    # Register struct definition
+    member_names struct_name StructDef = struct_def
+    struct_name struct_def ctx.structs.set drop
+
+    # Synthesize getter and setter functions for each field
+    0 = field_index
+    while field_index member_names.length > do
+        field_index member_names.get = field_name
+        field_index 8 * = offset
+
+        # Getter: StructName::field_name
+        # Takes struct ptr on stack, returns field value
+        # Ops: AssignVariable("self"), PushVariable("self"), [PushInt(offset), Add], Load64
+        List::new (List[Op]) = getter_ops
+        "self" OpValue::Str OpKind::AssignVariable Op getter_ops.push
+        "self" OpValue::Str OpKind::PushVariable Op getter_ops.push
+        if 0 offset > then
+            offset OpValue::Int OpKind::PushInt Op getter_ops.push
+            OpValue::None OpKind::Add Op getter_ops.push
+        fi
+        OpValue::None OpKind::Load64 Op getter_ops.push
+
+        List::new (List[str]) = getter_vars
+        "self" getter_vars.push
+        getter_vars getter_ops f"{struct_name}::{field_name}" Function = getter_func
+        f"{struct_name}::{field_name}" getter_func ctx.functions.set drop
+
+        # Setter: StructName::set_field_name
+        # Takes value and struct ptr on stack (value pushed first, then ptr)
+        # Ops: AssignVariable("self"), AssignVariable("value"),
+        #      PushVariable("value"), PushVariable("self"), [PushInt(offset), Add], Store64
+        List::new (List[Op]) = setter_ops
+        "self" OpValue::Str OpKind::AssignVariable Op setter_ops.push
+        "value" OpValue::Str OpKind::AssignVariable Op setter_ops.push
+        "value" OpValue::Str OpKind::PushVariable Op setter_ops.push
+        "self" OpValue::Str OpKind::PushVariable Op setter_ops.push
+        if 0 offset > then
+            offset OpValue::Int OpKind::PushInt Op setter_ops.push
+            OpValue::None OpKind::Add Op setter_ops.push
+        fi
+        OpValue::None OpKind::Store64 Op setter_ops.push
+
+        List::new (List[str]) = setter_vars
+        "self" setter_vars.push
+        "value" setter_vars.push
+        setter_vars setter_ops f"{struct_name}::set_{field_name}" Function = setter_func
+        f"{struct_name}::set_{field_name}" setter_func ctx.functions.set drop
+
+        1 += field_index
+    done
+
+    index
+}
+
+# Parse an enum definition: enum Name { Variant1 Variant2 ... }
+# Registers the enum with variant ordinals.
+fn parse_enum ctx:ParseContext index:int -> int {
+    # Consume enum name
+    index ctx.tokens.get = name_token
+    if name_token.kind TokenKind::Identifier != then
+        "expected enum name after enum" eprintln
+        1 exit
+    fi
+    name_token.value = enum_name
+    1 += index
+
+    index ctx skip_generic_brackets = index
+
+    # Expect opening brace
+    if index ctx.tokens.length > ! then
+        f"expected \{ in enum {enum_name}" eprintln
+        1 exit
+    fi
+    index ctx.tokens.get = brace_token
+    if "{" brace_token.value == ! then
+        f"expected \{ in enum {enum_name}, got: {brace_token.value}" eprintln
+        1 exit
+    fi
+    1 += index
+
+    # Parse variant names until closing brace
+    List::new (List[str]) = variants
+    while index ctx.tokens.length > do
+        index ctx.tokens.get = variant_token
+
+        if variant_token.kind TokenKind::Delimiter == "}" variant_token.value == && then
+            1 += index
+            break
+        fi
+
+        if variant_token.kind TokenKind::Identifier != then
+            f"expected variant name in enum {enum_name}, got: {variant_token.value}" eprintln
+            1 exit
+        fi
+        variant_token.value variants.push
+        1 += index
+    done
+
+    # Register enum definition
+    variants enum_name EnumDef = enum_def
+    enum_name enum_def ctx.enums.set drop
+
+    index
+}
+
+# Check if the current token starts a new match arm pattern or the end keyword.
+fn is_match_arm_boundary ctx:ParseContext index:int -> bool {
+    index ctx.tokens.get = check_token
+    if check_token.kind TokenKind::Keyword == then
+        if "end" check_token.value == "_" check_token.value == || then
+            true return
+        fi
+    elif check_token.kind TokenKind::Identifier == then
+        if index 1 + ctx.tokens.length > then
+            index 1 + ctx.tokens.get .value = maybe_arrow
+            if "=>" maybe_arrow == then true return fi
+        fi
+    fi
+    false
+}
+
+# Update brace depth for a delimiter token. Returns the new depth.
+fn update_brace_depth token_value:str depth:int -> int {
+    if "{" token_value == then depth 1 +
+    elif "}" token_value == then depth 1 -
+    else depth
+    fi
+}
+
+# Parse a braced match arm body: { ... }
+# The opening { has already been consumed.
+fn parse_match_braced_body ops:List[Op] ctx:ParseContext index:int -> int {
+    1 = brace_depth
+    while index ctx.tokens.length > 0 brace_depth > && do
+        index ctx.tokens.get = body_token
+        if body_token.kind TokenKind::Eof == then
+            "unexpected end of file in match arm" eprintln
+            1 exit
+        elif body_token.kind TokenKind::Delimiter == then
+            brace_depth body_token.value update_brace_depth = brace_depth
+            if 0 brace_depth == then index 1 + return fi
+            1 += index
+        else
+            1 += index
+            ops ctx index body_token parse_token = index
+        fi
+    done
+    index
+}
+
+# Parse an unbraced match arm body: tokens until next arm pattern or end.
+fn parse_match_unbraced_body ops:List[Op] ctx:ParseContext index:int -> int {
+    while index ctx.tokens.length > do
+        index ctx.tokens.get = body_token
+
+        if body_token.kind TokenKind::Eof == then
+            "unexpected end of file in match arm" eprintln
+            1 exit
+        fi
+
+        index ctx is_match_arm_boundary = at_boundary
+        if at_boundary then break fi
+
+        1 += index
+        ops ctx index body_token parse_token = index
+    done
+    index
+}
+
+# Consume a => delimiter token and return the updated index.
+fn expect_match_arrow ctx:ParseContext index:int pattern_name:str -> int {
+    index ctx.tokens.get = arrow_token
+    if "=>" arrow_token.value == ! then
+        f"expected => after {pattern_name}" eprintln
+        1 exit
+    fi
+    index 1 +
+}
+
+# Parse a match expression: match ... Variant => body ... _ => body ... end
+# Emits MatchStart, MatchArm (per arm), and MatchEnd ops.
+fn parse_match ops:List[Op] ctx:ParseContext index:int -> int {
+    OpValue::None OpKind::MatchStart Op ops.push
+
+    while index ctx.tokens.length > do
+        index ctx.tokens.get = arm_token
+
+        # Check for end keyword
+        if arm_token.kind TokenKind::Keyword == "end" arm_token.value == && then
+            1 += index
+            OpValue::None OpKind::MatchEnd Op ops.push
+            break
+        fi
+
+        # Parse arm pattern and =>
+        if arm_token.kind TokenKind::Keyword == "_" arm_token.value == && then
+            1 += index
+            "_" index ctx expect_match_arrow = index
+            # Wildcard sentinel: ordinal -1
+            0 1 - OpValue::Int OpKind::MatchArm Op ops.push
+        elif arm_token.kind TokenKind::Identifier == then
+            arm_token.value ctx resolve_identifier = arm_op
+            if arm_op.kind OpKind::PushEnumVariant != then
+                f"expected enum variant in match arm, got: {arm_token.value}" eprintln
+                1 exit
+            fi
+            1 += index
+            arm_token.value index ctx expect_match_arrow = index
+            arm_op.value OpKind::MatchArm Op ops.push
+        else
+            f"unexpected token in match: {arm_token.value}" eprintln
+            1 exit
+        fi
+
+        # Parse arm body
+        if index ctx.tokens.length > then
+            index ctx.tokens.get = body_start
+            if body_start.kind TokenKind::Delimiter == "{" body_start.value == && then
+                index 1 + ctx ops parse_match_braced_body = index
+            else
+                index ctx ops parse_match_unbraced_body = index
+            fi
+        fi
+    done
+
+    if index ctx.tokens.length > ! then
+        "unexpected end of file in match block: missing end" eprintln
+        1 exit
+    fi
 
     index
 }

@@ -129,6 +129,77 @@ fn find_while_start state:LabelState from_index:int ops:List[Op] -> int {
 }
 
 # ---------------------------------------------------------------------------
+# Match block searches
+# ---------------------------------------------------------------------------
+
+# Find matching MatchEnd at nesting depth 0.
+fn find_match_end state:LabelState from_index:int ops:List[Op] -> int {
+    from_index 1 + = search_index
+    1 = depth
+    while search_index ops.length > do
+        search_index ops.get .kind = search_kind
+        if depth 1 == search_kind OpKind::MatchEnd == && then
+            search_index state get_label return
+        fi
+        if search_kind OpKind::MatchStart == then
+            1 += depth
+        elif search_kind OpKind::MatchEnd == then
+            depth 1 - = depth
+        fi
+        1 += search_index
+    done
+    "unmatched match block: missing end" eprintln
+    1 exit
+    0
+}
+
+# Find the next MatchArm or MatchEnd at nesting depth 0.
+fn find_next_match_arm state:LabelState from_index:int ops:List[Op] -> int {
+    from_index 1 + = search_index
+    1 = depth
+    while search_index ops.length > do
+        search_index ops.get .kind = search_kind
+        if depth 1 == then
+            if search_kind OpKind::MatchArm == search_kind OpKind::MatchEnd == || then
+                search_index state get_label return
+            fi
+        fi
+        if search_kind OpKind::MatchStart == then
+            1 += depth
+        elif search_kind OpKind::MatchEnd == then
+            depth 1 - = depth
+        fi
+        1 += search_index
+    done
+    "unmatched match block: missing end" eprintln
+    1 exit
+    0
+}
+
+# Check if this is the last arm before MatchEnd (no more MatchArm ops at same depth).
+fn is_last_match_arm from_index:int ops:List[Op] -> bool {
+    from_index 1 + = search_index
+    1 = depth
+    while search_index ops.length > do
+        search_index ops.get .kind = search_kind
+        if depth 1 == then
+            if search_kind OpKind::MatchArm == then
+                false return
+            elif search_kind OpKind::MatchEnd == then
+                true return
+            fi
+        fi
+        if search_kind OpKind::MatchStart == then
+            1 += depth
+        elif search_kind OpKind::MatchEnd == then
+            depth 1 - = depth
+        fi
+        1 += search_index
+    done
+    true
+}
+
+# ---------------------------------------------------------------------------
 # Variable resolution
 # ---------------------------------------------------------------------------
 
@@ -201,6 +272,9 @@ fn op_to_inst op:Op -> Inst {
         OpKind::PrintBool => InstValue::None InstKind::PrintBool Inst
         OpKind::PrintChar => InstValue::None InstKind::PrintChar Inst
         OpKind::PrintCstr => InstValue::None InstKind::PrintCstr Inst
+        OpKind::HeapAlloc => InstValue::None InstKind::HeapAlloc Inst
+        OpKind::Load64    => InstValue::None InstKind::Load64 Inst
+        OpKind::Store64   => InstValue::None InstKind::Store64 Inst
         _ => {
             "unexpected op in op_to_inst" eprintln
             1 exit
@@ -305,6 +379,56 @@ fn compile_ops ops:List[Op] func_variables:List[str] global_variables:List[str] 
 
         elif op_kind OpKind::WhileEnd == then
             ops op_index state find_while_start InstValue::Int InstKind::Jump Inst bytecode.push
+            op_index state get_label InstValue::Int InstKind::Label Inst bytecode.push
+
+        # Struct construction
+        elif op_kind OpKind::StructNew == then
+            current_op.value op_int_value = member_count
+            member_count 8 * InstValue::Int InstKind::Push Inst bytecode.push
+            InstValue::None InstKind::HeapAlloc Inst bytecode.push
+            0 = field_index
+            while field_index member_count > do
+                InstValue::None InstKind::Swap Inst bytecode.push
+                InstValue::None InstKind::Over Inst bytecode.push
+                if 0 field_index > then
+                    field_index 8 * InstValue::Int InstKind::Push Inst bytecode.push
+                    InstValue::None InstKind::Add Inst bytecode.push
+                fi
+                InstValue::None InstKind::Store64 Inst bytecode.push
+                1 += field_index
+            done
+
+        # Enum variant push
+        elif op_kind OpKind::PushEnumVariant == then
+            current_op.value op_int_value InstValue::Int InstKind::Push Inst bytecode.push
+
+        # Match blocks
+        elif op_kind OpKind::MatchStart == then
+            0 drop
+
+        elif op_kind OpKind::MatchArm == then
+            current_op.value op_int_value = ordinal
+
+            # If this arm has a label (assigned by previous arm's JumpNe), emit jump-to-end + label
+            op_index state.labels.get = my_label
+            if 0 my_label != then
+                ops op_index state find_match_end InstValue::Int InstKind::Jump Inst bytecode.push
+                my_label InstValue::Int InstKind::Label Inst bytecode.push
+            fi
+
+            # Wildcard (ordinal == -1) or last arm: just drop the matched value
+            ops op_index is_last_match_arm = is_last
+            if 0 1 - ordinal == is_last || then
+                InstValue::None InstKind::Drop Inst bytecode.push
+            else
+                InstValue::None InstKind::Dup Inst bytecode.push
+                ordinal InstValue::Int InstKind::Push Inst bytecode.push
+                InstValue::None InstKind::Eq Inst bytecode.push
+                ops op_index state find_next_match_arm InstValue::Int InstKind::JumpNe Inst bytecode.push
+                InstValue::None InstKind::Drop Inst bytecode.push
+            fi
+
+        elif op_kind OpKind::MatchEnd == then
             op_index state get_label InstValue::Int InstKind::Label Inst bytecode.push
 
         else
