@@ -3,6 +3,7 @@
 import pytest
 
 from casa.common import InstKind, Program
+from casa.error import CasaErrorCollection
 from tests.conftest import compile_string
 
 
@@ -260,6 +261,27 @@ def test_bytecode_if_control_flow():
     assert len(labels) >= 1
     jumps_ne = find_insts(program, InstKind.JUMP_NE)
     assert len(jumps_ne) >= 1
+
+
+def test_bytecode_nested_elif_in_elif():
+    """Nested if/elif/else/fi inside an elif branch must compile without error."""
+    code = (
+        "1 = x "
+        "if 0 x == then "
+        "    if 0 x == then 10 drop else 20 drop fi "
+        "elif 1 x == then "
+        "    if 0 x == then 30 drop elif 1 x == then 40 drop else 50 drop fi "
+        "fi"
+    )
+    program = compile_string(code)
+    labels = find_insts(program, InstKind.LABEL)
+    assert len(labels) >= 4
+
+
+def test_bytecode_elif_after_else_rejected():
+    """Actual elif after else must still be rejected."""
+    with pytest.raises(CasaErrorCollection):
+        compile_string("if true then 1 drop else 2 drop elif false then 3 drop fi")
 
 
 # ---------------------------------------------------------------------------
