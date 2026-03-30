@@ -94,6 +94,62 @@ Color::Red Direction::North ==
 
 Comparing an enum value with a non-enum type (e.g. `int`) is also a compile-time error.
 
+## Variant Checking with `is`
+
+The `is` keyword checks whether an enum value is a specific variant. It consumes the enum value and pushes a `bool`.
+
+**Stack effect:** `EnumName -> bool`
+
+```casa
+Color::Red = color
+color Color::Red is print     # true
+color Color::Blue is print    # false
+```
+
+### Destructuring with `is`
+
+Inside `if`/`elif` conditions, `is` can destructure inner values into bindings. The bindings are available in the corresponding `then`-block.
+
+```casa
+enum Shape {
+    Circle(int)
+    Rectangle(int int)
+    Point
+}
+
+10 Shape::Circle = shape
+
+if shape Shape::Circle(radius) is then
+    radius print
+fi
+```
+
+Use `elif` to check multiple variants:
+
+```casa
+if shape Shape::Circle(r) is then
+    r print
+elif shape Shape::Rectangle(w h) is then
+    w h * print
+fi
+```
+
+For generic enums, binding types are inferred from the concrete enum type:
+
+```casa
+42 Option::Some = maybe
+if maybe Option::Some(value) is then
+    value print    # value has type int
+fi
+```
+
+Using `is` with bindings outside of `if`/`elif` conditions is a compile-time error:
+
+```casa
+# ERROR: `is` with bindings is only allowed in `if`/`elif` conditions
+shape Shape::Circle(r) is
+```
+
 ## Printing
 
 Printing an enum value outputs its ordinal (0-based index in the declaration order).

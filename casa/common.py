@@ -104,6 +104,9 @@ class Keyword(Enum):
     END = auto()
     MATCH = auto()
 
+    # Variant check
+    IS = auto()
+
     # Include files
     INCLUDE = auto()
 
@@ -365,6 +368,7 @@ class OpKind(Enum):
 
     # Enums
     PUSH_ENUM_VARIANT = auto()
+    IS_CHECK = auto()
 
     # Match
     MATCH_START = auto()
@@ -403,7 +407,7 @@ class Op:
     deferred_return_type: str | None = None
 
     def __post_init__(self):
-        assert len(OpKind) == 85, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 86, "Exhaustive handling for `OpKind`"
 
         match self.kind:
             # Requires `bool`
@@ -471,7 +475,7 @@ class Op:
                 if not isinstance(self.value, Intrinsic):
                     raise TypeError(f"`{self.kind}` requires value of type `Intrinsic`")
             # Requires `EnumVariant`
-            case OpKind.PUSH_ENUM_VARIANT:
+            case OpKind.PUSH_ENUM_VARIANT | OpKind.IS_CHECK:
                 if not isinstance(self.value, EnumVariant):
                     raise TypeError(
                         f"`{self.kind}` requires value of type `EnumVariant`"

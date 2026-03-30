@@ -559,6 +559,58 @@ class Compiler:
         inst_kind = InstKind.EQ if op.kind == OpKind.EQ else InstKind.NE
         bytecode.append(self.inst(inst_kind))
 
+    def _compile_is_check(self, op: Op, bytecode: list[Inst]) -> None:
+        """Compile IS_CHECK: variant check that pushes bool, optionally extracts bindings."""
+        variant = op.value
+        assert isinstance(variant, EnumVariant)
+        assert variant.enum_name is not None
+        casa_enum = GLOBAL_ENUMS[variant.enum_name]
+
+        if not casa_enum.has_inner_values:
+            # Plain enum: stack has ordinal, compare directly
+            bytecode.append(self.inst(InstKind.PUSH, args=[variant.ordinal]))
+            bytecode.append(self.inst(InstKind.EQ))
+            return
+
+        if not variant.bindings:
+            # Data-carrying enum, no bindings: load ordinal and compare
+            bytecode.append(self.inst(InstKind.LOAD64))
+            bytecode.append(self.inst(InstKind.PUSH, args=[variant.ordinal]))
+            bytecode.append(self.inst(InstKind.EQ))
+            return
+
+        # Data-carrying enum with bindings: save ptr, check ordinal,
+        # conditionally extract bindings
+        temp_ptr = self.locals_count
+        self.locals_count += 1
+
+        skip_bindings = new_label()
+
+        # Save the enum pointer
+        bytecode.append(self.inst(InstKind.LOCAL_SET, args=[temp_ptr]))
+
+        # Load ordinal and compare
+        bytecode.append(self.inst(InstKind.LOCAL_GET, args=[temp_ptr]))
+        bytecode.append(self.inst(InstKind.LOAD64))
+        bytecode.append(self.inst(InstKind.PUSH, args=[variant.ordinal]))
+        bytecode.append(self.inst(InstKind.EQ))
+
+        # Duplicate bool: one for binding extraction check, one stays on stack
+        bytecode.append(self.inst(InstKind.DUP))
+        bytecode.append(self.inst(InstKind.JUMP_NE, args=[skip_bindings]))
+
+        # Extract bindings from inner values
+        for i, var_name in enumerate(variant.bindings):
+            offset = (i + 1) * 8
+            bytecode.append(self.inst(InstKind.LOCAL_GET, args=[temp_ptr]))
+            bytecode.append(self.inst(InstKind.PUSH, args=[offset]))
+            bytecode.append(self.inst(InstKind.ADD))
+            bytecode.append(self.inst(InstKind.LOAD64))
+            _, set_kind, var_index = self._resolve_variable(var_name)
+            bytecode.append(self.inst(set_kind, args=[var_index]))
+
+        bytecode.append(self.inst(InstKind.LABEL, args=[skip_bindings]))
+
     def _compile_enum_match_arm(
         self,
         pattern: EnumVariant,
@@ -721,7 +773,7 @@ class Compiler:
     def compile(self) -> Bytecode:
         """Lower all ops to bytecode instructions."""
         assert len(InstKind) == 69, "Exhaustive handling for `InstructionKind"
-        assert len(OpKind) == 85, "Exhaustive handling for `OpKind`"
+        assert len(OpKind) == 86, "Exhaustive handling for `OpKind`"
 
         cursor = Cursor(sequence=self.ops)
         bytecode: list[Inst] = []
@@ -801,6 +853,8 @@ class Compiler:
                         bytecode.append(
                             self.inst(InstKind.PUSH, args=[variant.ordinal])
                         )
+                case OpKind.IS_CHECK:
+                    self._compile_is_check(op, bytecode)
                 case OpKind.MATCH_START | OpKind.MATCH_ARM | OpKind.MATCH_END:
                     self._compile_match_block(op, bytecode)
                 case OpKind.METHOD_CALL:

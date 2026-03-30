@@ -332,6 +332,44 @@ def _resolve_trait_ref(
     return None
 
 
+def _resolve_enum_variant(
+    variant: EnumVariant,
+    op: Op,
+    function: "Function | None",
+    errors: list[CasaError],
+) -> None:
+    """Resolve a deferred enum variant ordinal and register its bindings as variables."""
+    if variant.enum_name and variant.ordinal == -1:
+        casa_enum = GLOBAL_ENUMS.get(variant.enum_name)
+        if not casa_enum:
+            errors.append(
+                CasaError(
+                    ErrorKind.UNDEFINED_NAME,
+                    f"Enum `{variant.enum_name}` is not defined",
+                    op.location,
+                )
+            )
+        elif variant.variant_name not in casa_enum.variants:
+            errors.append(
+                CasaError(
+                    ErrorKind.UNDEFINED_NAME,
+                    f"Variant `{variant.variant_name}` is not "
+                    f"defined in enum `{variant.enum_name}`",
+                    op.location,
+                )
+            )
+        else:
+            variant.ordinal = casa_enum.variants.index(variant.variant_name)
+    if variant.bindings:
+        for var_name in variant.bindings:
+            variable = Variable(var_name)
+            if function:
+                if variable not in function.variables:
+                    function.variables.append(variable)
+            else:
+                GLOBAL_VARIABLES[var_name] = variable
+
+
 def resolve_identifiers(
     ops: list[Op],
     function: Function | None = None,
@@ -461,39 +499,10 @@ def resolve_identifiers(
                         else:
                             GLOBAL_VARIABLES[var_name] = variable
                 elif isinstance(op.value, EnumVariant):
-                    variant = op.value
-                    # Resolve deferred enum variant (ordinal == -1)
-                    if variant.enum_name and variant.ordinal == -1:
-                        casa_enum = GLOBAL_ENUMS.get(variant.enum_name)
-                        if not casa_enum:
-                            errors.append(
-                                CasaError(
-                                    ErrorKind.UNDEFINED_NAME,
-                                    f"Enum `{variant.enum_name}` is not defined",
-                                    op.location,
-                                )
-                            )
-                        elif variant.variant_name not in casa_enum.variants:
-                            errors.append(
-                                CasaError(
-                                    ErrorKind.UNDEFINED_NAME,
-                                    f"Variant `{variant.variant_name}` is not "
-                                    f"defined in enum `{variant.enum_name}`",
-                                    op.location,
-                                )
-                            )
-                        else:
-                            variant.ordinal = casa_enum.variants.index(
-                                variant.variant_name
-                            )
-                    if variant.bindings:
-                        for var_name in variant.bindings:
-                            variable = Variable(var_name)
-                            if function:
-                                if variable not in function.variables:
-                                    function.variables.append(variable)
-                            else:
-                                GLOBAL_VARIABLES[var_name] = variable
+                    _resolve_enum_variant(op.value, op, function, errors)
+            case OpKind.IS_CHECK:
+                assert isinstance(op.value, EnumVariant)
+                _resolve_enum_variant(op.value, op, function, errors)
             case OpKind.INCLUDE_FILE:
                 included_file = op.value
                 assert isinstance(included_file, Path), "Expected included file path"
@@ -675,6 +684,10 @@ def token_to_op(
                 struct = GLOBAL_STRUCTS.get(token.value)
                 if struct:
                     return _parse_struct_literal(token, struct, cursor, function_name)
+            if "::" in token.value:
+                is_op = _try_parse_is_check(token, cursor)
+                if is_op:
+                    return is_op
             return Op(token.value, OpKind.IDENTIFIER, token.location)
         case TokenKind.LITERAL:
             return get_op_literal(token)
@@ -959,6 +972,55 @@ def _handle_keyword_enum(
     GLOBAL_ENUMS[casa_enum.name] = casa_enum
 
 
+def _try_parse_is_check(token: Token, cursor: Cursor[Token]) -> Op | None:
+    """Try to parse an `is` check: `Enum::Variant is` or `Enum::Variant(bindings) is`.
+
+    Returns an IS_CHECK op if `is` follows, otherwise returns None without consuming tokens.
+    """
+    saved_position = cursor.position
+    peeked = cursor.peek()
+    if not peeked:
+        return None
+
+    bindings: list[str] = []
+
+    if peeked.value == "(":
+        # Parse potential bindings: Enum::Variant(a b) is
+        cursor.pop()  # consume (
+        while True:
+            inner_tok = cursor.peek()
+            if not inner_tok:
+                # Unexpected end — not an is-check, restore
+                cursor.position = saved_position
+                return None
+            if inner_tok.value == ")":
+                cursor.pop()  # consume )
+                if not bindings:
+                    # Empty parens: Enum::Variant() — not an is-check
+                    cursor.position = saved_position
+                    return None
+                break
+            if inner_tok.kind != TokenKind.IDENTIFIER:
+                # Not bindings — restore and let normal parsing handle it
+                cursor.position = saved_position
+                return None
+            cursor.pop()
+            bindings.append(inner_tok.value)
+
+    # Check if next token is `is`
+    next_tok = cursor.peek()
+    if not next_tok or next_tok.value != "is":
+        cursor.position = saved_position
+        return None
+
+    cursor.pop()  # consume `is`
+
+    parts = token.value.split("::", 1)
+    enum_name, variant_name = parts[0], parts[1]
+    variant = EnumVariant(enum_name, variant_name, -1, bindings)
+    return Op(variant, OpKind.IS_CHECK, token.location)
+
+
 def _is_match_arm_boundary(cursor: Cursor[Token]) -> bool:
     """Check if current position looks like a match arm pattern (Ident => or _ =>)."""
     pos = cursor.position
@@ -1235,7 +1297,7 @@ def get_op_keyword(
     function_name: str,
 ) -> Op | list[Op] | None:
     """Convert a keyword token into its op, parsing any nested blocks."""
-    assert len(Keyword) == 19, "Exhaustive handling for `Keyword"
+    assert len(Keyword) == 20, "Exhaustive handling for `Keyword"
 
     keyword = Keyword.from_lowercase(token.value)
     assert keyword, f"Token `{token.value}` is not a keyword"
@@ -1265,6 +1327,12 @@ def get_op_keyword(
             return None
         case Keyword.INCLUDE:
             return _handle_keyword_include(token, cursor)
+        case Keyword.IS:
+            raise_error(
+                ErrorKind.SYNTAX,
+                "`is` requires a preceding enum variant (e.g. `value Enum::Variant is`)",
+                token.location,
+            )
         case Keyword.MATCH:
             return _handle_keyword_match(token, cursor, function_name)
         case Keyword.STRUCT:
