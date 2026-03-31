@@ -166,6 +166,43 @@ fn skip_type ctx:ParseContext index:int -> int {
     index
 }
 
+# Resolve an identifier that is not a function or struct name.
+# Checks for EnumName::Variant pattern, otherwise treats as variable.
+fn resolve_identifier ctx:ParseContext token_value:str -> Op {
+    token_value "::" str::find = colon_pos
+    if 0 colon_pos >= then
+        token_value 0 colon_pos str::substring = enum_name
+        token_value colon_pos 2 + token_value.length colon_pos - 2 - str::substring = variant_name
+        if enum_name ctx.enums.has then
+            enum_name ctx.enums.get .unwrap = enum_def
+            0 = variant_index
+            while variant_index enum_def.variants.length > do
+                if variant_name variant_index enum_def.variants.get == then
+                    variant_index enum_def.variant_inner_counts.get = inner_count
+                    if enum_def.has_inner_values then
+                        # Data-carrying enum: encode ordinal:inner_count
+                        f"{variant_index .to_str}:{inner_count .to_str}" OpValue::Str OpKind::PushEnumVariant Op return
+                    else
+                        # Simple enum: just push ordinal
+                        variant_index OpValue::Int OpKind::PushEnumVariant Op return
+                    fi
+                fi
+                1 += variant_index
+            done
+            f"unknown variant: {token_value}" eprintln
+            1 exit
+        elif token_value ctx.functions.has then
+            # Qualified function call (e.g. Type::method or trait method K::hash)
+            token_value OpValue::Str OpKind::FnCall Op return
+        else
+            # Treat as function call for unresolved qualified names
+            # (e.g. trait-bound calls like K::hash in generic code)
+            token_value OpValue::Str OpKind::FnCall Op return
+        fi
+    fi
+    token_value OpValue::Str OpKind::PushVariable Op
+}
+
 # Parse a lambda block: { body }
 # The opening { has already been consumed. Parses body ops, registers an
 # anonymous function, gathers captures, and emits a FnPush op.
@@ -233,6 +270,133 @@ fn parse_lambda ops:List[Op] ctx:ParseContext index:int -> int {
     index
 }
 
+# Try to parse an is-check pattern after an enum variant identifier.
+# Pattern: EnumVariant(binding1 binding2) is  OR  EnumVariant is
+# Returns true/false, the IsCheck op, and the (possibly advanced) index.
+fn try_parse_is_check ctx:ParseContext ops:List[Op] index:int token_value:str -> bool Op int {
+    # Must contain :: to be an enum variant
+    token_value "::" str::find = colon_pos
+    if 0 colon_pos >= ! then
+        false OpValue::None OpKind::IsCheck Op index return
+    fi
+    token_value 0 colon_pos str::substring = enum_name
+    token_value colon_pos 2 + token_value.length colon_pos - 2 - str::substring = variant_name
+    if enum_name ctx.enums.has ! then
+        false OpValue::None OpKind::IsCheck Op index return
+    fi
+    enum_name ctx.enums.get .unwrap = enum_def
+
+    # Find variant ordinal
+    0 1 - = ordinal
+    0 = variant_search
+    while variant_search enum_def.variants.length > do
+        if variant_name variant_search enum_def.variants.get == then
+            variant_search = ordinal
+        fi
+        1 += variant_search
+    done
+    if 0 ordinal < then
+        false OpValue::None OpKind::IsCheck Op index return
+    fi
+
+    # Save index for backtracking
+    index = saved_index
+    List::new (List[str]) = bindings
+
+    # Check for optional (bindings) pattern
+    if index ctx.tokens.length > then
+        if "(" index ctx.tokens.get .value == then
+            1 += index
+            while index ctx.tokens.length > do
+                index ctx.tokens.get = binding_token
+                if ")" binding_token.value == then
+                    1 += index
+                    break
+                fi
+                if binding_token.kind TokenKind::Identifier != then
+                    saved_index = index
+                    false OpValue::None OpKind::IsCheck Op index return
+                fi
+                binding_token.value bindings.push
+                1 += index
+            done
+            if 0 bindings.length == then
+                saved_index = index
+                false OpValue::None OpKind::IsCheck Op index return
+            fi
+        fi
+    fi
+
+    # Check for "is" token
+    if index ctx.tokens.length > then
+        index ctx.tokens.get = is_token
+        if "is" is_token.value == then
+            1 += index
+
+            # Build encoded string: "ordinal:has_inner:binding1,binding2,..."
+            "0" = has_inner_str
+            if enum_def.has_inner_values then "1" = has_inner_str fi
+
+            "" = bindings_str
+            0 = bind_index
+            while bind_index bindings.length > do
+                if 0 bind_index > then
+                    f"{bindings_str},{bind_index bindings.get}" = bindings_str
+                else
+                    bind_index bindings.get = bindings_str
+                fi
+                1 += bind_index
+            done
+
+            f"{ordinal .to_str}:{has_inner_str}:{bindings_str}" = is_info
+
+            # Register binding variables with inferred types from receiver
+            # Infer receiver type from ops (expression_type may be corrupted)
+            # Infer receiver type and extract generic type args inline
+            ops ctx infer_receiver_from_ops = is_receiver_type
+            List::new (List[str]) = receiver_args
+            is_receiver_type "[" str::find = is_bracket_pos
+            if 0 is_bracket_pos >= then
+                is_bracket_pos 1 + = is_inner_start
+                is_receiver_type.length 1 - = is_inner_end
+                if is_inner_start is_inner_end > then
+                    is_inner_end is_inner_start - = is_inner_len
+                    is_receiver_type is_inner_start is_inner_len str::substring = is_inner
+                    # Split on spaces (simple, no nested generics)
+                    0 = is_sp_start
+                    0 = is_sp_pos
+                    while is_sp_pos is_inner.length > do
+                        if is_sp_pos is_inner str::at ' ' == then
+                            if is_sp_start is_sp_pos > then
+                                is_inner is_sp_start is_sp_pos is_sp_start - str::substring receiver_args.push
+                            fi
+                            is_sp_pos 1 + = is_sp_start
+                        fi
+                        1 += is_sp_pos
+                    done
+                    if is_sp_start is_sp_pos > then
+                        is_inner is_sp_start is_sp_pos is_sp_start - str::substring receiver_args.push
+                    fi
+                fi
+            fi
+            0 = reg_index
+            while reg_index bindings.length > do
+                "" = bind_type
+                if reg_index receiver_args.length > then
+                    reg_index receiver_args.get = bind_type
+                fi
+                bind_type reg_index bindings.get ctx.variable_types.set drop
+                1 += reg_index
+            done
+
+            true is_info OpValue::Str OpKind::IsCheck Op index return
+        fi
+    fi
+
+    # No "is" found, backtrack
+    false OpValue::None OpKind::IsCheck Op saved_index return
+}
+
 # Parse a single token and append the resulting op(s) to ops.
 # Returns the updated index. Shared between parse and parse_function body.
 fn parse_token token:Token index:int ctx:ParseContext ops:List[Op] -> int {
@@ -262,7 +426,18 @@ fn parse_token token:Token index:int ctx:ParseContext ops:List[Op] -> int {
             name_token.value OpValue::Str op_kind Op ops.push
             # Track variable type on assignment
             if op_kind OpKind::AssignVariable == then
-                name_token.value ctx.expression_type ctx.variable_types.set drop
+                ctx.expression_type = assign_type
+                # When expression_type is empty, use pending_type from multi-return functions
+                if "" assign_type == then
+                    if "" ctx.pending_type != then
+                        ctx.pending_type = assign_type
+                        "" ctx->pending_type
+                    elif 2 ops.length >= then
+                        # Infer from the op before the assignment
+                        ops.length 2 - ops.get ctx infer_type_from_op = assign_type
+                    fi
+                fi
+                name_token.value assign_type ctx.variable_types.set drop
             fi
             "" ctx->expression_type
         else
@@ -291,7 +466,7 @@ fn parse_token token:Token index:int ctx:ParseContext ops:List[Op] -> int {
                  op_kind OpKind::Or == ||
                  op_kind OpKind::Not == ||
             then
-                "bool" ctx->expression_type
+                "int" ctx->expression_type
             else
                 "" ctx->expression_type
             fi
@@ -341,30 +516,48 @@ fn parse_token token:Token index:int ctx:ParseContext ops:List[Op] -> int {
         elif token.value ctx.functions.has then
             token.value OpValue::Str OpKind::FnCall Op ops.push
             token.value ctx update_expression_type
+            # Set pending_type for multi-return functions
+            if token.value ctx.secondary_types.has then
+                token.value ctx.secondary_types.get .unwrap ctx->pending_type
+            fi
         elif token.value ctx.structs.has then
             token.value ctx.structs.get .unwrap .member_names.length OpValue::Int OpKind::StructNew Op ops.push
             token.value ctx->expression_type
         else
-            token.value ctx resolve_identifier = resolved_op
-            resolved_op ops.push
-            # Track expression type for variables
-            if resolved_op.kind OpKind::PushVariable == then
-                resolved_op.value op_str_value = var_name
-                if var_name ctx.variable_types.has then
-                    var_name ctx.variable_types.get .unwrap ctx->expression_type
+            # Try is-check first for enum variant identifiers
+            false = is_check_handled
+            token.value "::" str::find = is_check_colon
+            if 0 is_check_colon >= then
+                token.value index ops ctx try_parse_is_check = index = is_op = is_found
+                if is_found then
+                    is_op ops.push
+                    "bool" ctx->expression_type
+                    true = is_check_handled
+                else
+                fi
+            fi
+            if is_check_handled ! then
+                token.value ctx resolve_identifier = resolved_op
+                resolved_op ops.push
+                # Track expression type for variables
+                if resolved_op.kind OpKind::PushVariable == then
+                    resolved_op.value op_str_value = var_name
+                    if var_name ctx.variable_types.has then
+                        var_name ctx.variable_types.get .unwrap ctx->expression_type
+                    else
+                        "" ctx->expression_type
+                    fi
+                elif resolved_op.kind OpKind::PushEnumVariant == then
+                    # Track enum name for method resolution (e.g. Option::Some .unwrap)
+                    token.value "::" str::find = enum_colon_pos
+                    if 0 enum_colon_pos >= then
+                        token.value 0 enum_colon_pos str::substring ctx->expression_type
+                    else
+                        "" ctx->expression_type
+                    fi
                 else
                     "" ctx->expression_type
                 fi
-            elif resolved_op.kind OpKind::PushEnumVariant == then
-                # Track enum name for method resolution (e.g. Option::Some .unwrap)
-                token.value "::" str::find = enum_colon_pos
-                if 0 enum_colon_pos >= then
-                    token.value 0 enum_colon_pos str::substring ctx->expression_type
-                else
-                    "" ctx->expression_type
-                fi
-            else
-                "" ctx->expression_type
             fi
         fi
     elif kind TokenKind::Delimiter == then
@@ -372,34 +565,35 @@ fn parse_token token:Token index:int ctx:ParseContext ops:List[Op] -> int {
             # Method call: resolve .method_name to Type::method_name
             index ctx.tokens.get .value = method_name
             1 += index
-            method_name ctx resolve_method_call = qualified_name
+            method_name ops ctx resolve_method_call = qualified_name
             qualified_name OpValue::Str OpKind::FnCall Op ops.push
         elif "->" token.value == then
             # Field setter: resolve ->field to Type::set_field
             index ctx.tokens.get .value = setter_field
             1 += index
-            f"set_{setter_field}" ctx resolve_method_call = qualified_name
+            f"set_{setter_field}" ops ctx resolve_method_call = qualified_name
             qualified_name OpValue::Str OpKind::FnCall Op ops.push
         elif "(" token.value == then
-            # Type cast: capture type name for expression tracking, skip rest
+            # Type cast: read full type name including generics for expression tracking
+            "" = cast_type_name
             if index ctx.tokens.length > then
-                index ctx.tokens.get .value = cast_type_name
-            else
-                "" = cast_type_name
+                index ctx read_type_string = cast_end_index = cast_type_name
+                # Skip remaining tokens until closing paren
+                1 = paren_depth
+                while
+                    cast_end_index ctx.tokens.length >
+                    0 paren_depth > &&
+                do
+                    cast_end_index ctx.tokens.get .value = paren_val
+                    if "(" paren_val == then
+                        1 += paren_depth
+                    elif ")" paren_val == then
+                        paren_depth 1 - = paren_depth
+                    fi
+                    1 += cast_end_index
+                done
+                cast_end_index = index
             fi
-            1 = paren_depth
-            while
-                index ctx.tokens.length >
-                0 paren_depth > &&
-            do
-                index ctx.tokens.get .value = paren_val
-                if "(" paren_val == then
-                    1 += paren_depth
-                elif ")" paren_val == then
-                    paren_depth 1 - = paren_depth
-                fi
-                1 += index
-            done
             cast_type_name ctx->expression_type
         elif "{" token.value == then
             # Lambda block: { body }
@@ -450,10 +644,18 @@ fn parse_function ctx:ParseContext index:int -> int {
         if param_token.kind TokenKind::Delimiter == "->" param_token.value == && then
             1 += index
             # Read all return types until opening brace (keeps last = top-of-stack type)
+            "" = first_return_type
             while index ctx.tokens.length > do
                 if "{" index ctx.tokens.get .value == then break fi
                 index ctx read_type_string = index = return_type_str
+                if "" first_return_type == then
+                    return_type_str = first_return_type
+                fi
             done
+            # For multi-return functions, store the secondary (first) return type
+            if first_return_type return_type_str != then
+                first_return_type func_name ctx.secondary_types.set drop
+            fi
             break
         fi
 
@@ -551,43 +753,6 @@ fn parse_function ctx:ParseContext index:int -> int {
     func_name function ctx.functions.set drop
 
     index
-}
-
-# Resolve an identifier that is not a function or struct name.
-# Checks for EnumName::Variant pattern, otherwise treats as variable.
-fn resolve_identifier ctx:ParseContext token_value:str -> Op {
-    token_value "::" str::find = colon_pos
-    if 0 colon_pos >= then
-        token_value 0 colon_pos str::substring = enum_name
-        token_value colon_pos 2 + token_value.length colon_pos - 2 - str::substring = variant_name
-        if enum_name ctx.enums.has then
-            enum_name ctx.enums.get .unwrap = enum_def
-            0 = variant_index
-            while variant_index enum_def.variants.length > do
-                if variant_name variant_index enum_def.variants.get == then
-                    variant_index enum_def.variant_inner_counts.get = inner_count
-                    if enum_def.has_inner_values then
-                        # Data-carrying enum: encode ordinal:inner_count
-                        f"{variant_index .to_str}:{inner_count .to_str}" OpValue::Str OpKind::PushEnumVariant Op return
-                    else
-                        # Simple enum: just push ordinal
-                        variant_index OpValue::Int OpKind::PushEnumVariant Op return
-                    fi
-                fi
-                1 += variant_index
-            done
-            f"unknown variant: {token_value}" eprintln
-            1 exit
-        elif token_value ctx.functions.has then
-            # Qualified function call (e.g. Type::method or trait method K::hash)
-            token_value OpValue::Str OpKind::FnCall Op return
-        else
-            # Treat as function call for unresolved qualified names
-            # (e.g. trait-bound calls like K::hash in generic code)
-            token_value OpValue::Str OpKind::FnCall Op return
-        fi
-    fi
-    token_value OpValue::Str OpKind::PushVariable Op
 }
 
 # Skip optional generic brackets [T1 T2] if present at the current index.
@@ -845,43 +1010,58 @@ fn resolve_generic_return ctx:ParseContext return_type:str -> str {
 
 # Search all registered functions for one matching *::method_name.
 # Returns true and the qualified name if exactly one match found.
-fn search_all_methods ctx:ParseContext method_name:str -> bool str {
-    ctx.functions.keys = func_names
-    f"::{method_name}" = suffix
-    "" = found_name
-    0 = match_count
-    0 = search_index
-    while search_index func_names.length > do
-        search_index func_names.get = func_name
-        if func_name suffix str::ends_with then
-            func_name = found_name
-            1 += match_count
+# Infer receiver type from the last op in the ops list.
+fn infer_type_from_op ctx:ParseContext op:Op -> str {
+    if op.kind OpKind::PushVariable == then
+        op.value op_str_value = infer_var_name
+        if infer_var_name ctx.variable_types.has then
+            infer_var_name ctx.variable_types.get .unwrap return
         fi
-        1 += search_index
-    done
-    if 1 match_count == then
-        found_name ctx update_expression_type
-        true found_name
-    else
-        false ""
+    elif op.kind OpKind::FnCall == then
+        op.value op_str_value = infer_fn_name
+        if infer_fn_name ctx.functions.has then
+            infer_fn_name ctx.functions.get .unwrap .return_type = infer_ret
+            infer_ret ctx resolve_generic_return return
+        fi
+    elif op.kind OpKind::PushStr == then
+        "str" return
+    elif op.kind OpKind::PushInt == then
+        "int" return
+    elif op.kind OpKind::PushChar == then
+        "char" return
+    elif op.kind OpKind::PushBool == then
+        "bool" return
     fi
+    ""
+}
+
+# Infer receiver type from the last op in the ops list.
+fn infer_receiver_from_ops ctx:ParseContext ops:List[Op] -> str {
+    if 0 ops.length == then "" return fi
+    ops.length 1 - ops.get ctx infer_type_from_op
 }
 
 # Resolve a method call using the current expression type.
 # Tries direct type resolution first, then fallback search.
-fn resolve_method_call ctx:ParseContext method_name:str -> str {
+fn resolve_method_call ctx:ParseContext ops:List[Op] method_name:str -> str {
     ctx.expression_type = receiver_type
+    # When expression_type is empty or a type parameter, try to infer from the last op
+    if "" receiver_type == 3 receiver_type.length > ! || then
+        ops ctx infer_receiver_from_ops = inferred_type
+        if "" inferred_type != then
+            inferred_type = receiver_type
+            receiver_type ctx->expression_type
+        fi
+    fi
 
-    # Strategy 1: Known receiver type
+    # Strategy 1: Known receiver type — direct resolution
     if "" receiver_type != then
-        # Try with base type
         receiver_type extract_base_type = base_type
         f"{base_type}::{method_name}" = qualified
         if qualified ctx.functions.has then
             qualified ctx update_expression_type
             qualified return
         fi
-        # Try with full receiver type (e.g. "str::length")
         f"{receiver_type}::{method_name}" = full_qualified
         if full_qualified ctx.functions.has then
             full_qualified ctx update_expression_type
@@ -889,21 +1069,44 @@ fn resolve_method_call ctx:ParseContext method_name:str -> str {
         fi
     fi
 
-    # Strategy 2: Fallback search all functions
-    method_name ctx search_all_methods = found_name = found
-    if found then found_name return fi
-
-    # Last resort: for common methods like .to_str, try known types
-    if "to_str" method_name == "" receiver_type == && then
-        # Default to str::to_str (identity on strings, works as no-op)
-        "str::to_str" = fallback_name
-        if fallback_name ctx.functions.has then
-            fallback_name ctx update_expression_type
-            fallback_name return
+    # Strategy 2: Search all functions for unique match
+    ctx.functions.keys = search_names
+    f"::{method_name}" = search_suffix
+    "" = search_found
+    0 = search_count
+    0 = search_idx
+    while search_idx search_names.length > do
+        search_idx search_names.get = search_name
+        if search_name search_suffix str::ends_with then
+            if 0 search_count == then
+                search_name = search_found
+            fi
+            1 += search_count
         fi
+        1 += search_idx
+    done
+    if 1 search_count == then
+        search_found ctx update_expression_type
+        search_found return
+    fi
+    # Multiple matches: use ops-based inference to disambiguate
+    if 0 search_count > then
+        ops ctx infer_receiver_from_ops = multi_inferred
+        if "" multi_inferred != then
+            multi_inferred extract_base_type = multi_base
+            f"{multi_base}::{method_name}" = multi_qualified
+            if multi_qualified ctx.functions.has then
+                multi_qualified ctx update_expression_type
+                multi_qualified return
+            fi
+        fi
+        # Ambiguous and inference failed: pick first match
+        # Safe for .kind/.value (same struct offsets), .length (Lists)
+        search_found ctx update_expression_type
+        search_found return
     fi
 
-    f"cannot resolve method: .{method_name} (receiver type: {receiver_type})\n" eprintln
+    f"cannot resolve method: .{method_name} (receiver type: {receiver_type}) in {ctx.current_function}\n" eprintln
     1 exit
     ""
 }
@@ -1231,7 +1434,7 @@ fn is_match_arm_boundary ctx:ParseContext index:int -> bool {
         if "end" check_token.value == "_" check_token.value == || then
             true return
         fi
-    elif check_token.kind TokenKind::Identifier == then
+    elif check_token.kind TokenKind::Identifier == check_token.kind TokenKind::Literal == || then
         if index 1 + ctx.tokens.length > then
             index 1 + ctx.tokens.get .value = maybe_arrow
             if "=>" maybe_arrow == then true return fi
@@ -1241,13 +1444,6 @@ fn is_match_arm_boundary ctx:ParseContext index:int -> bool {
 }
 
 # Update brace depth for a delimiter token. Returns the new depth.
-fn update_brace_depth token_value:str depth:int -> int {
-    if "{" token_value == then depth 1 +
-    elif "}" token_value == then depth 1 -
-    else depth
-    fi
-}
-
 # Parse a braced match arm body: { ... }
 # The opening { has already been consumed.
 fn parse_match_braced_body ops:List[Op] ctx:ParseContext index:int -> int {
@@ -1342,6 +1538,23 @@ fn parse_match ops:List[Op] ctx:ParseContext index:int -> int {
             1 += index
             arm_token.value index ctx expect_match_arrow = index
             arm_op.value OpKind::MatchArm Op ops.push
+        elif arm_token.kind TokenKind::Literal == then
+            # Literal match arm: string, char, or int
+            1 += index
+            arm_token.value index ctx expect_match_arrow = index
+            0 arm_token.value str::at = first_lit_ch
+            if first_lit_ch '"' == then
+                # String literal: intern and encode as "s:index"
+                arm_token.value 1 arm_token.value.length 1 - str::substring ctx.string_table intern_string = str_idx
+                f"s:{str_idx .to_str}" OpValue::Str OpKind::MatchArm Op ops.push
+            elif first_lit_ch '\'' == then
+                # Char literal: encode as "c:ordinal"
+                arm_token.value 1 arm_token.value.length 1 - str::substring str_to_int = char_val
+                f"c:{char_val .to_str}" OpValue::Str OpKind::MatchArm Op ops.push
+            else
+                # Int literal: encode as "i:value"
+                f"i:{arm_token.value}" OpValue::Str OpKind::MatchArm Op ops.push
+            fi
         else
             f"unexpected token in match: {arm_token.value}" eprintln
             1 exit
