@@ -1,0 +1,676 @@
+# Stack-based type checker for the Casa compiler.
+#
+# Processes the op tree after parsing and resolves MethodCall ops to FnCall ops
+# using symbolic stack type inference. Also tracks types for all operations.
+
+include "common.casa"
+
+# ---------------------------------------------------------------------------
+# Data structures
+# ---------------------------------------------------------------------------
+
+struct BranchState {
+    before: List[str]
+}
+
+struct TypeCheckerState {
+    stack:            List[str]
+    functions:        Map[str Function]
+    structs:          Map[str StructDef]
+    enums:            Map[str EnumDef]
+    variable_types:   Map[str str]
+    branch_stacks:    List[BranchState]
+    current_function: str
+}
+
+# ---------------------------------------------------------------------------
+# Stack helpers
+# ---------------------------------------------------------------------------
+
+fn tc_push state:TypeCheckerState typ:str {
+    typ state.stack.push
+}
+
+fn tc_pop state:TypeCheckerState -> str {
+    if 0 state.stack.length == then
+        "any"
+    else
+        state.stack.pop
+    fi
+}
+
+fn tc_peek state:TypeCheckerState -> str {
+    if 0 state.stack.length == then
+        "any"
+    else
+        state.stack.length 1 - state.stack.get
+    fi
+}
+
+fn copy_str_list source:List[str] -> List[str] {
+    List::new (List[str]) = result
+    0 = copy_index
+    while copy_index source.length > do
+        copy_index source.get result.push
+        1 += copy_index
+    done
+    result
+}
+
+# ---------------------------------------------------------------------------
+# Enum inner value helpers
+# ---------------------------------------------------------------------------
+
+# Parse a data-carrying enum variant's inner count and pop that many values.
+# Enum info format: "ordinal:inner_count" (e.g., "0:1" for Some(T)).
+fn tc_parse_enum_inner_count enum_info:str -> int {
+    enum_info ":" str::find = colon_pos
+    if 0 colon_pos > ! then 0 return fi
+    enum_info colon_pos 1 + enum_info.length colon_pos - 1 - str::substring = inner_str
+    inner_str ":" str::find = second_colon
+    if 0 second_colon >= then
+        inner_str second_colon 1 + inner_str.length second_colon - 1 - str::substring str_to_int
+    else
+        inner_str str_to_int
+    fi
+}
+
+fn tc_pop_enum_inner_values state:TypeCheckerState op:Op {
+    if op.value OpValue::Str(enum_info) is then
+        enum_info tc_parse_enum_inner_count = inner_count
+        0 = inner_pop_index
+        while inner_pop_index inner_count > do
+            state tc_pop drop
+            1 += inner_pop_index
+        done
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Branch tracking
+# ---------------------------------------------------------------------------
+
+fn tc_save_branch state:TypeCheckerState {
+    state.stack copy_str_list BranchState state.branch_stacks.push
+}
+
+fn tc_restore_branch state:TypeCheckerState {
+    if 0 state.branch_stacks.length == then return fi
+    state.branch_stacks.length 1 - state.branch_stacks.get = branch
+    branch.before copy_str_list = restored
+    # Clear and restore stack
+    while 0 state.stack.length > do
+        state.stack.pop drop
+    done
+    0 = restore_index
+    while restore_index restored.length > do
+        restore_index restored.get state.stack.push
+        1 += restore_index
+    done
+}
+
+fn tc_pop_branch state:TypeCheckerState {
+    if 0 state.branch_stacks.length == then return fi
+    state tc_restore_branch
+    state.branch_stacks.pop drop
+}
+
+# ---------------------------------------------------------------------------
+# Generic type resolution
+# ---------------------------------------------------------------------------
+
+# Look up a type parameter name in type_params and return the corresponding type arg.
+# Returns "" if not found.
+fn tc_find_type_param type_params:List[str] type_args:List[str] return_type:str -> str {
+    0 = param_index
+    while param_index type_params.length > do
+        if return_type param_index type_params.get == param_index type_args.length > && then
+            param_index type_args.get return
+        fi
+        1 += param_index
+    done
+    ""
+}
+
+# Extract the first generic type argument from a receiver type string.
+# E.g., "List[Token]" -> "Token", "Map[str int]" -> "str"
+fn tc_extract_first_type_arg receiver_type:str bracket_pos:int -> str {
+    bracket_pos 1 + = fallback_start
+    fallback_start = fallback_end
+    while fallback_end receiver_type.length > do
+        fallback_end receiver_type str::at = fallback_ch
+        if fallback_ch ' ' == fallback_ch ']' == || then break fi
+        1 += fallback_end
+    done
+    if fallback_start fallback_end > then
+        receiver_type fallback_start fallback_end fallback_start - str::substring return
+    fi
+    ""
+}
+
+fn tc_resolve_return_type state:TypeCheckerState receiver_type:str return_type:str -> str {
+    if "" return_type == then "" return fi
+
+    receiver_type extract_base_type = base_type
+
+    if base_type state.structs.has then
+        base_type state.structs.get .unwrap = struct_def
+        struct_def.type_params = type_params
+
+        if 0 type_params.length > then
+            receiver_type extract_type_args = type_args
+
+            # Direct match: return type is a type param
+            return_type type_args type_params tc_find_type_param = direct_result
+            if "" direct_result != then direct_result return fi
+
+            # Composite match: return type contains type params
+            return_type = resolved
+            0 = sub_index
+            while sub_index type_params.length > do
+                sub_index type_params.get = sub_param
+                if sub_index type_args.length > then
+                    sub_index type_args.get = sub_arg
+                    sub_param sub_arg resolved substitute_type_param = resolved
+                fi
+                1 += sub_index
+            done
+            if resolved return_type != then resolved return fi
+        fi
+    fi
+
+    # Fallback: short type variable name with receiver generic args
+    receiver_type "[" str::find = fallback_bracket
+    if 0 fallback_bracket >= 0 return_type.length > && 3 return_type.length > ! && then
+        fallback_bracket receiver_type tc_extract_first_type_arg = fallback_result
+        if "" fallback_result != then fallback_result return fi
+    fi
+
+    return_type
+}
+
+# ---------------------------------------------------------------------------
+# Function signature application
+# ---------------------------------------------------------------------------
+
+fn tc_apply_fn_signature state:TypeCheckerState receiver_type:str target_fn:Function {
+    # Pop parameters from stack
+    target_fn.param_types.length = param_count
+    0 = pop_index
+    while pop_index param_count > do
+        state tc_pop drop
+        1 += pop_index
+    done
+
+    # Push return type (resolved for generics)
+    if "" target_fn.return_type != then
+        target_fn.return_type receiver_type state tc_resolve_return_type state tc_push
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Method disambiguation
+# ---------------------------------------------------------------------------
+
+# Check if a qualified function name has the given type prefix.
+# E.g., "List::push" has prefix "List".
+fn tc_fn_has_type_prefix fn_name:str base_type:str -> bool {
+    fn_name "::" str::find = colon_pos
+    if 0 colon_pos >= then
+        fn_name 0 colon_pos str::substring base_type ==
+    else
+        false
+    fi
+}
+
+# Search all function names for a unique match with the given base type prefix.
+# Returns the qualified name if found, "" otherwise.
+fn tc_disambiguate_method all_fn_names:List[str] search_suffix:str base_type:str -> str {
+    0 = retry_index
+    while retry_index all_fn_names.length > do
+        retry_index all_fn_names.get = retry_name
+        if retry_name search_suffix str::ends_with then
+            if retry_name base_type tc_fn_has_type_prefix then
+                retry_name return
+            fi
+        fi
+        1 += retry_index
+    done
+    ""
+}
+
+# ---------------------------------------------------------------------------
+# MethodCall resolution
+# ---------------------------------------------------------------------------
+
+fn tc_check_method_call state:TypeCheckerState ops:List[Op] op_index:int {
+    op_index ops.get = op
+    op.value op_str_value = method_name
+    state tc_peek = receiver_type
+    receiver_type extract_base_type = base_type
+
+    # Strategy 1: Direct type resolution (BaseType::method)
+    f"{base_type}::{method_name}" = qualified
+    if qualified state.functions.has then
+        qualified state.functions.get .unwrap = target_fn
+        target_fn receiver_type state tc_apply_fn_signature
+        qualified OpValue::Str OpKind::FnCall Op op_index ops.set
+        return
+    fi
+
+    # Strategy 2: Full receiver type (ReceiverType::method)
+    if base_type receiver_type != then
+        f"{receiver_type}::{method_name}" = full_qualified
+        if full_qualified state.functions.has then
+            full_qualified state.functions.get .unwrap = target_fn
+            target_fn receiver_type state tc_apply_fn_signature
+            full_qualified OpValue::Str OpKind::FnCall Op op_index ops.set
+            return
+        fi
+    fi
+
+    # Strategy 3: Search all functions for unique ::method_name suffix
+    state.functions.keys = all_fn_names
+    f"::{method_name}" = search_suffix
+    "" = found_name
+    0 = match_count
+    0 = search_index
+    while search_index all_fn_names.length > do
+        search_index all_fn_names.get = fn_name
+        if fn_name search_suffix str::ends_with then
+            if 0 match_count == then
+                fn_name = found_name
+            fi
+            1 += match_count
+        fi
+        1 += search_index
+    done
+    if 1 match_count == then
+        found_name state.functions.get .unwrap = target_fn
+        target_fn receiver_type state tc_apply_fn_signature
+        found_name OpValue::Str OpKind::FnCall Op op_index ops.set
+        return
+    fi
+
+    # Multiple matches: try to disambiguate using receiver type
+    if 0 match_count > then
+        base_type search_suffix all_fn_names tc_disambiguate_method = disambiguated
+        if "" disambiguated != then
+            disambiguated state.functions.get .unwrap = target_fn
+            target_fn receiver_type state tc_apply_fn_signature
+            disambiguated OpValue::Str OpKind::FnCall Op op_index ops.set
+            return
+        fi
+        # Fallback: pick first match (safe for same-struct-offset methods)
+        found_name state.functions.get .unwrap = target_fn
+        target_fn receiver_type state tc_apply_fn_signature
+        found_name OpValue::Str OpKind::FnCall Op op_index ops.set
+        return
+    fi
+
+    f"cannot resolve method: .{method_name} (receiver type: {receiver_type}) in {state.current_function}\n" eprintln
+    1 exit
+}
+
+# ---------------------------------------------------------------------------
+# FnCall type checking
+# ---------------------------------------------------------------------------
+
+fn tc_check_fn_call state:TypeCheckerState op:Op {
+    op.value op_str_value = fn_name
+
+    if fn_name state.functions.has then
+        fn_name state.functions.get .unwrap = target_fn
+
+        # Determine receiver type for generic resolution
+        "" = fn_receiver_type
+        if 0 target_fn.param_types.length > then
+            0 target_fn.param_types.get = first_param_type
+            # If the first param type matches a struct, use the actual stack type
+            first_param_type extract_base_type = first_base
+            if first_base state.structs.has then
+                state tc_peek = fn_receiver_type
+            fi
+        fi
+
+        target_fn fn_receiver_type state tc_apply_fn_signature
+    else
+        # Unknown function: could be forward ref or trait method
+        # Push "any" as return type to keep stack tracking going
+        "any" state tc_push
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Main op dispatch
+# ---------------------------------------------------------------------------
+
+fn type_check_ops state:TypeCheckerState ops:List[Op] {
+    0 = op_index
+    while op_index ops.length > do
+        op_index ops.get = current_op
+        current_op.kind = op_kind
+
+        # Literals
+        if op_kind OpKind::PushInt == then
+            "int" state tc_push
+        elif op_kind OpKind::PushStr == then
+            "str" state tc_push
+        elif op_kind OpKind::PushChar == then
+            "char" state tc_push
+        elif op_kind OpKind::PushBool == then
+            "int" state tc_push
+
+        # Arithmetic: pop 2, push int
+        elif op_kind OpKind::Add ==
+             op_kind OpKind::Sub == ||
+             op_kind OpKind::Mul == ||
+             op_kind OpKind::Div == ||
+             op_kind OpKind::Mod == ||
+             op_kind OpKind::BitAnd == ||
+             op_kind OpKind::BitOr == ||
+             op_kind OpKind::BitXor == ||
+             op_kind OpKind::Shl == ||
+             op_kind OpKind::Shr == ||
+        then
+            state tc_pop drop
+            state tc_pop drop
+            "int" state tc_push
+
+        # Unary ops: pop 1, push int
+        elif op_kind OpKind::BitNot ==
+             op_kind OpKind::Not == ||
+        then
+            state tc_pop drop
+            "int" state tc_push
+
+        # Comparison: pop 2, push int (bool)
+        elif op_kind OpKind::Eq ==
+             op_kind OpKind::Ne == ||
+             op_kind OpKind::Lt == ||
+             op_kind OpKind::Gt == ||
+             op_kind OpKind::Le == ||
+             op_kind OpKind::Ge == ||
+             op_kind OpKind::And == ||
+             op_kind OpKind::Or == ||
+        then
+            state tc_pop drop
+            state tc_pop drop
+            "int" state tc_push
+
+        # Stack manipulation
+        elif op_kind OpKind::Drop == then
+            state tc_pop drop
+        elif op_kind OpKind::Dup == then
+            state tc_peek state tc_push
+        elif op_kind OpKind::Swap == then
+            state tc_pop = swap_a
+            state tc_pop = swap_b
+            swap_a state tc_push
+            swap_b state tc_push
+        elif op_kind OpKind::Over == then
+            state tc_pop = over_a
+            state tc_pop = over_b
+            over_b state tc_push
+            over_a state tc_push
+            over_b state tc_push
+        elif op_kind OpKind::Rot == then
+            state tc_pop = rot_a
+            state tc_pop = rot_b
+            state tc_pop = rot_c
+            rot_b state tc_push
+            rot_a state tc_push
+            rot_c state tc_push
+
+        # Print: pop 1
+        elif op_kind OpKind::PrintInt ==
+             op_kind OpKind::PrintStr == ||
+             op_kind OpKind::PrintBool == ||
+             op_kind OpKind::PrintChar == ||
+             op_kind OpKind::PrintCstr == ||
+        then
+            state tc_pop drop
+
+        # Variable assignment: pop 1, store type
+        elif op_kind OpKind::AssignVariable == then
+            state tc_pop = assign_type
+            current_op.value op_str_value = assign_name
+            assign_name assign_type state.variable_types.set drop
+
+        # Compound assignment: pop 1
+        elif op_kind OpKind::AssignIncrement ==
+             op_kind OpKind::AssignDecrement == ||
+        then
+            state tc_pop drop
+
+        # Variable push: look up type
+        elif op_kind OpKind::PushVariable == then
+            current_op.value op_str_value = push_var_name
+            if push_var_name state.variable_types.has then
+                push_var_name state.variable_types.get .unwrap state tc_push
+            else
+                "any" state tc_push
+            fi
+
+        # If/elif/else/fi branching
+        elif op_kind OpKind::IfStart == then
+            state tc_save_branch
+        elif op_kind OpKind::IfCondition == then
+            state tc_pop drop
+        elif op_kind OpKind::IfElif ==
+             op_kind OpKind::IfElse == ||
+        then
+            state tc_restore_branch
+        elif op_kind OpKind::IfEnd == then
+            state tc_pop_branch
+
+        # While loops
+        elif op_kind OpKind::WhileStart == then
+            state tc_save_branch
+        elif op_kind OpKind::WhileCondition == then
+            state tc_pop drop
+        elif op_kind OpKind::WhileBreak ==
+             op_kind OpKind::WhileContinue == ||
+        then
+            # No stack effect
+        elif op_kind OpKind::WhileEnd == then
+            state tc_pop_branch
+
+        # Function call
+        elif op_kind OpKind::FnCall == then
+            current_op state tc_check_fn_call
+
+        # Function return
+        elif op_kind OpKind::FnReturn == then
+            # No stack tracking needed
+
+        # Memory operations
+        elif op_kind OpKind::Alloc ==
+             op_kind OpKind::HeapAlloc == ||
+        then
+            state tc_pop drop
+            "ptr" state tc_push
+        elif op_kind OpKind::Load8 ==
+             op_kind OpKind::Load16 == ||
+             op_kind OpKind::Load32 == ||
+             op_kind OpKind::Load64 == ||
+        then
+            state tc_pop drop
+            "int" state tc_push
+        elif op_kind OpKind::Store8 ==
+             op_kind OpKind::Store16 == ||
+             op_kind OpKind::Store32 == ||
+             op_kind OpKind::Store64 == ||
+        then
+            state tc_pop drop
+            state tc_pop drop
+
+        # Syscalls: pop (N+1) args (N data + syscall number), push int
+        elif op_kind OpKind::Syscall0 == then
+            state tc_pop drop
+            "int" state tc_push
+        elif op_kind OpKind::Syscall1 == then
+            state tc_pop drop
+            state tc_pop drop
+            "int" state tc_push
+        elif op_kind OpKind::Syscall2 == then
+            state tc_pop drop
+            state tc_pop drop
+            state tc_pop drop
+            "int" state tc_push
+        elif op_kind OpKind::Syscall3 == then
+            state tc_pop drop
+            state tc_pop drop
+            state tc_pop drop
+            state tc_pop drop
+            "int" state tc_push
+        elif op_kind OpKind::Syscall4 == then
+            state tc_pop drop
+            state tc_pop drop
+            state tc_pop drop
+            state tc_pop drop
+            state tc_pop drop
+            "int" state tc_push
+        elif op_kind OpKind::Syscall5 == then
+            state tc_pop drop
+            state tc_pop drop
+            state tc_pop drop
+            state tc_pop drop
+            state tc_pop drop
+            state tc_pop drop
+            "int" state tc_push
+        elif op_kind OpKind::Syscall6 == then
+            state tc_pop drop
+            state tc_pop drop
+            state tc_pop drop
+            state tc_pop drop
+            state tc_pop drop
+            state tc_pop drop
+            state tc_pop drop
+            "int" state tc_push
+
+        # Argc/Argv
+        elif op_kind OpKind::Argc == then
+            "int" state tc_push
+        elif op_kind OpKind::Argv == then
+            "ptr" state tc_push
+
+        # Type cast: pop 1, push "any"
+        elif op_kind OpKind::TypeCast == then
+            state tc_pop drop
+            "any" state tc_push
+
+        # Struct construction: pop N members, push struct type
+        elif op_kind OpKind::StructNew == then
+            current_op.value op_str_value = struct_name
+            if struct_name state.structs.has then
+                struct_name state.structs.get .unwrap .member_names.length = tc_member_count
+                0 = tc_member_index
+                while tc_member_index tc_member_count > do
+                    state tc_pop drop
+                    1 += tc_member_index
+                done
+            fi
+            struct_name state tc_push
+
+        # Enum variant: push int (ordinal)
+        elif op_kind OpKind::PushEnumVariant == then
+            current_op state tc_pop_enum_inner_values
+            "int" state tc_push
+
+        # Match expressions: pop matched value before saving state
+        elif op_kind OpKind::MatchStart == then
+            state tc_pop drop
+            state tc_save_branch
+        elif op_kind OpKind::MatchArm == then
+            state tc_restore_branch
+        elif op_kind OpKind::MatchEnd == then
+            state tc_pop_branch
+
+        # Function push (lambda or &name reference)
+        elif op_kind OpKind::FnPush == then
+            "fn" state tc_push
+
+        # Function exec (indirect call)
+        elif op_kind OpKind::FnExec == then
+            state tc_pop drop
+            "any" state tc_push
+
+        # Capture push
+        elif op_kind OpKind::PushCapture == then
+            "any" state tc_push
+
+        # F-string concatenation: pop N parts, push str
+        elif op_kind OpKind::FstringConcat == then
+            current_op.value op_int_value = fstr_count
+            0 = fstr_index
+            while fstr_index fstr_count > do
+                state tc_pop drop
+                1 += fstr_index
+            done
+            "str" state tc_push
+
+        # Is-check: pop value, push bool
+        elif op_kind OpKind::IsCheck == then
+            state tc_pop drop
+            "int" state tc_push
+
+        # MethodCall: resolve to FnCall
+        elif op_kind OpKind::MethodCall == then
+            op_index ops state tc_check_method_call
+
+        fi
+
+        1 += op_index
+    done
+}
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+fn type_check ops:List[Op] functions:Map[str Function] structs:Map[str StructDef] enums:Map[str EnumDef] {
+    # Type check global ops
+    List::new (List[str]) = global_stack
+    List::new (List[BranchState]) = global_branches
+    Map::new (Map[str str]) = global_var_types
+    "__global__" global_branches global_var_types enums structs functions global_stack TypeCheckerState = global_state
+    ops global_state type_check_ops
+
+    # Type check each function body
+    functions.keys = fn_names
+    0 = fn_index
+    while fn_index fn_names.length > do
+        fn_index fn_names.get = fn_name
+        fn_name functions.get .unwrap = func
+
+        # Create fresh state for this function
+        List::new (List[str]) = fn_stack
+        List::new (List[BranchState]) = fn_branches
+        Map::new (Map[str str]) = fn_var_types
+
+        # Push parameter types onto stack in reverse order
+        # (first param = top of stack, last param = bottom)
+        func.param_types.length 1 - = rev_index
+        while 0 rev_index >= do
+            rev_index func.param_types.get fn_stack.push
+            rev_index 1 - = rev_index
+        done
+
+        # Initialize variable types from parameter declarations
+        0 = param_init_index
+        while param_init_index func.param_types.length > do
+            if param_init_index func.variables.length > then
+                param_init_index func.variables.get = param_var_name
+                param_init_index func.param_types.get = param_var_type
+                param_var_name param_var_type fn_var_types.set drop
+            fi
+            1 += param_init_index
+        done
+
+        fn_name fn_branches fn_var_types enums structs functions fn_stack TypeCheckerState = fn_state
+        func.ops fn_state type_check_ops
+
+        1 += fn_index
+    done
+}
