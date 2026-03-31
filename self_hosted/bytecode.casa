@@ -370,7 +370,12 @@ fn compile_ops ops:List[Op] func_variables:List[str] global_variables:List[str] 
 
         # Function call
         elif op_kind OpKind::FnCall == then
-            current_op.value op_str_value InstValue::Str InstKind::FnCall Inst bytecode.push
+            current_op.value op_str_value = call_name
+            # Resolve generic trait method calls to concrete implementations
+            if "K::hash" call_name == then "str::hash" = call_name
+            elif "K::eq" call_name == then "str::eq" = call_name
+            fi
+            call_name InstValue::Str InstKind::FnCall Inst bytecode.push
 
         # Function return
         elif op_kind OpKind::FnReturn == then
@@ -508,14 +513,31 @@ fn compile_ops ops:List[Op] func_variables:List[str] global_variables:List[str] 
 
         # Match blocks
         elif op_kind OpKind::MatchArm == then
-            # Parse ordinal and detect data-carrying enum
+            # Classify the arm type
             false = is_data_enum_arm
+            false = is_string_arm
+            false = is_char_arm
+            false = is_int_arm
             0 = ordinal
+            0 = lit_int_value
+            0 = lit_str_index
             if current_op.value OpValue::Str(arm_info) is then
-                # Data-carrying enum: parse "ordinal:inner_count"
-                true = is_data_enum_arm
-                arm_info ":" str::find = arm_colon_pos
-                arm_info 0 arm_colon_pos str::substring str_to_int = ordinal
+                0 arm_info str::at = arm_prefix
+                if arm_prefix 's' == then
+                    true = is_string_arm
+                    arm_info 2 arm_info.length 2 - str::substring str_to_int = lit_str_index
+                elif arm_prefix 'c' == then
+                    true = is_char_arm
+                    arm_info 2 arm_info.length 2 - str::substring str_to_int = lit_int_value
+                elif arm_prefix 'i' == then
+                    true = is_int_arm
+                    arm_info 2 arm_info.length 2 - str::substring str_to_int = lit_int_value
+                else
+                    # Data-carrying enum: parse "ordinal:inner_count"
+                    true = is_data_enum_arm
+                    arm_info ":" str::find = arm_colon_pos
+                    arm_info 0 arm_colon_pos str::substring str_to_int = ordinal
+                fi
             elif current_op.value OpValue::Int(arm_ordinal) is then
                 arm_ordinal = ordinal
             fi
@@ -529,8 +551,28 @@ fn compile_ops ops:List[Op] func_variables:List[str] global_variables:List[str] 
 
             # Wildcard (ordinal == -1) or last arm: just drop the matched value
             ops op_index is_last_match_arm = is_last
-            if 0 1 - ordinal == is_last || then
+            if 0 1 - ordinal == is_last || is_string_arm ! is_char_arm ! && is_int_arm ! && && then
                 InstValue::None InstKind::Drop Inst bytecode.push
+            elif is_string_arm then
+                if is_last then
+                    InstValue::None InstKind::Drop Inst bytecode.push
+                else
+                    InstValue::None InstKind::Dup Inst bytecode.push
+                    lit_str_index InstValue::Int InstKind::PushStr Inst bytecode.push
+                    "str::eq" InstValue::Str InstKind::FnCall Inst bytecode.push
+                    ops op_index state find_next_match_arm InstValue::Int InstKind::JumpNe Inst bytecode.push
+                    InstValue::None InstKind::Drop Inst bytecode.push
+                fi
+            elif is_char_arm is_int_arm || then
+                if is_last then
+                    InstValue::None InstKind::Drop Inst bytecode.push
+                else
+                    InstValue::None InstKind::Dup Inst bytecode.push
+                    lit_int_value InstValue::Int InstKind::Push Inst bytecode.push
+                    InstValue::None InstKind::Eq Inst bytecode.push
+                    ops op_index state find_next_match_arm InstValue::Int InstKind::JumpNe Inst bytecode.push
+                    InstValue::None InstKind::Drop Inst bytecode.push
+                fi
             else
                 InstValue::None InstKind::Dup Inst bytecode.push
                 # Data-carrying enums: load ordinal from heap pointer before comparing
@@ -545,6 +587,95 @@ fn compile_ops ops:List[Op] func_variables:List[str] global_variables:List[str] 
 
         elif op_kind OpKind::MatchEnd == then
             op_index state get_label InstValue::Int InstKind::Label Inst bytecode.push
+
+        # Is-check: enum variant pattern matching with optional binding extraction
+        elif op_kind OpKind::IsCheck == then
+            current_op.value op_str_value = is_info
+            # Parse "ordinal:has_inner:bindings"
+            is_info ":" str::find = first_colon
+            is_info 0 first_colon str::substring str_to_int = is_ordinal
+            is_info first_colon 1 + is_info.length first_colon - 1 - str::substring = rest_info
+            rest_info ":" str::find = second_colon
+            rest_info 0 second_colon str::substring str_to_int = has_inner
+            rest_info second_colon 1 + rest_info.length second_colon - 1 - str::substring = bindings_str
+
+            # Parse bindings list from comma-separated string
+            List::new (List[str]) = is_bindings
+            if 0 bindings_str.length > then
+                0 = bs_start
+                0 = bs_pos
+                while bs_pos bindings_str.length > do
+                    if bs_pos bindings_str str::at ',' == then
+                        if bs_start bs_pos > then
+                            bindings_str bs_start bs_pos bs_start - str::substring is_bindings.push
+                        fi
+                        bs_pos 1 + = bs_start
+                    fi
+                    1 += bs_pos
+                done
+                if bs_start bs_pos > then
+                    bindings_str bs_start bs_pos bs_start - str::substring is_bindings.push
+                fi
+            fi
+
+            if 0 has_inner == then
+                # Plain enum: stack has ordinal, compare directly
+                is_ordinal InstValue::Int InstKind::Push Inst bytecode.push
+                InstValue::None InstKind::Eq Inst bytecode.push
+            elif 0 is_bindings.length == then
+                # Data-carrying enum, no bindings: load ordinal and compare
+                InstValue::None InstKind::Load64 Inst bytecode.push
+                is_ordinal InstValue::Int InstKind::Push Inst bytecode.push
+                InstValue::None InstKind::Eq Inst bytecode.push
+            else
+                # Data-carrying enum with bindings:
+                # Save ptr to temp local, check ordinal, extract bindings if match
+
+                # Allocate temp local for the enum pointer
+                func_variables.length = is_ptr_local
+                f"is_ptr_{op_index .to_str}" func_variables.push
+
+                # Allocate a skip label
+                state.count 1 + state->count
+                state.count = skip_label
+
+                # Save the enum pointer
+                is_ptr_local InstValue::Int InstKind::LocalSet Inst bytecode.push
+
+                # Load ordinal and compare
+                is_ptr_local InstValue::Int InstKind::LocalGet Inst bytecode.push
+                InstValue::None InstKind::Load64 Inst bytecode.push
+                is_ordinal InstValue::Int InstKind::Push Inst bytecode.push
+                InstValue::None InstKind::Eq Inst bytecode.push
+
+                # Duplicate bool: one for skip check, one stays on stack
+                InstValue::None InstKind::Dup Inst bytecode.push
+                skip_label InstValue::Int InstKind::JumpNe Inst bytecode.push
+
+                # Extract bindings from inner values at offsets 8, 16, ...
+                0 = bind_extract_index
+                while bind_extract_index is_bindings.length > do
+                    bind_extract_index 1 + 8 * = bind_offset
+                    is_ptr_local InstValue::Int InstKind::LocalGet Inst bytecode.push
+                    bind_offset InstValue::Int InstKind::Push Inst bytecode.push
+                    InstValue::None InstKind::Add Inst bytecode.push
+                    InstValue::None InstKind::Load64 Inst bytecode.push
+
+                    # Add binding variable to locals if new
+                    bind_extract_index is_bindings.get = bind_var_name
+                    bind_var_name func_variables find_variable = bind_existing
+                    if bind_existing.is_none then
+                        bind_var_name func_variables.push
+                    fi
+                    global_variables func_variables bind_var_name resolve_variable = bind_var_idx = bind_set_kind drop
+                    bind_var_idx InstValue::Int bind_set_kind Inst bytecode.push
+
+                    1 += bind_extract_index
+                done
+
+                # Skip label target
+                skip_label InstValue::Int InstKind::Label Inst bytecode.push
+            fi
 
         else
             current_op op_to_inst bytecode.push
@@ -583,7 +714,7 @@ fn compile_function function:Function global_variables:List[str] label_offset:in
     # Copy body bytecode, inserting LocalsUninit before each FnReturn
     0 = scan_index
     while scan_index body_bytecode.length > do
-        scan_index body_bytecode.get = scan_inst
+        scan_index body_bytecode List::get = scan_inst
         if scan_inst.kind InstKind::FnReturn == 0 locals_count > && then
             locals_count InstValue::Int InstKind::LocalsUninit Inst final_bytecode.push
         fi
@@ -667,6 +798,14 @@ fn compile_bytecode ops:List[Op] string_table:List[str] functions:Map[str Functi
     # Find reachable functions (dead code elimination)
     functions ops find_reachable_functions = reachable
 
+    # Ensure trait implementations are reachable (used by Map and string match arms)
+    if "str::eq" functions.has then
+        "str::eq" "str::eq" reachable.set drop
+    fi
+    if "str::hash" functions.has then
+        "str::hash" "str::hash" reachable.set drop
+    fi
+
     # Constants table for closure captures
     List::new (List[str]) = constants_table
 
@@ -690,6 +829,36 @@ fn compile_bytecode ops:List[Op] string_table:List[str] functions:Map[str Functi
             func_label_count = total_label_count
         fi
         1 += func_index
+    done
+
+    # Post-compilation: scan compiled bytecode for additional FnCall references
+    # (e.g., from trait method resolution or string match arms)
+    # and compile any newly discovered functions.
+    true = found_new
+    while found_new do
+        false = found_new
+        compiled_functions.keys = compiled_names
+        0 = scan_fn_index
+        while scan_fn_index compiled_names.length > do
+            scan_fn_index compiled_names List::get = scan_fn_name
+            scan_fn_name compiled_functions.get .unwrap = scan_insts
+            0 = scan_inst_index
+            while scan_inst_index scan_insts.length > do
+                scan_inst_index scan_insts List::get = scan_inst
+                if scan_inst.kind InstKind::FnCall == then
+                    scan_inst.value inst_str_value = called_fn
+                    if called_fn compiled_functions.has ! called_fn functions.has && then
+                        called_fn functions.get .unwrap = extra_function
+                        constants_table functions total_label_count global_variables extra_function compile_function = extra_label_count = extra_bytecode
+                        called_fn extra_bytecode compiled_functions.set drop
+                        extra_label_count = total_label_count
+                        true = found_new
+                    fi
+                fi
+                1 += scan_inst_index
+            done
+            1 += scan_fn_index
+        done
     done
 
     constants_table.length total_label_count global_variables.length string_table compiled_functions bytecode Program

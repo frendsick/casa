@@ -22,8 +22,12 @@ run_test() {
     binary="/tmp/casa_self_hosted_test_$name"
 
     echo "Running test: $name"
-    "$COMPILER" "$source" -o "$binary" 2>&1
-    output=$("$binary")
+    if ! "$COMPILER" "$source" -o "$binary" 2>&1; then
+        echo "${RED}[X]${RESET}  Failed (compile error): $name"
+        fail=$((fail+1))
+        return
+    fi
+    output=$("$binary" 2>&1) || true
     rm -f "$binary"
 
     if [ "$output" = "$expected" ]; then
@@ -476,23 +480,423 @@ r area print
 CASA
 run_test "struct_in_function" "$tmp_struct_fn" "12"
 
+# -------------------------------------------------------
+# String and Char Literals
+# -------------------------------------------------------
+
+tmp_str_print="/tmp/casa_sh_str_print.casa"
+cat > "$tmp_str_print" << 'CASA'
+fn main { "hello" print_str }
+main
+CASA
+run_test "string_print" "$tmp_str_print" "hello"
+
+tmp_char_print="/tmp/casa_sh_char_print.casa"
+cat > "$tmp_char_print" << 'CASA'
+fn main { 'A' print_char }
+main
+CASA
+run_test "char_print" "$tmp_char_print" "A"
+
+tmp_bool_print="/tmp/casa_sh_bool_print.casa"
+cat > "$tmp_bool_print" << 'CASA'
+fn main { true print_bool false print_bool }
+main
+CASA
+run_test "bool_print" "$tmp_bool_print" "truefalse"
+
+tmp_escape="/tmp/casa_sh_escape.casa"
+cat > "$tmp_escape" << 'CASA'
+fn main { "a\tb\nc" print_str }
+main
+CASA
+printf 'a\tb\nc' > /tmp/casa_sh_escape_expected
+expected_escape=$(cat /tmp/casa_sh_escape_expected)
+run_test "string_escape" "$tmp_escape" "$expected_escape"
+
+# -------------------------------------------------------
+# Functions
+# -------------------------------------------------------
+
+tmp_fn_basic="/tmp/casa_sh_fn_basic.casa"
+cat > "$tmp_fn_basic" << 'CASA'
+fn add a:int b:int -> int { a b + }
+3 4 add print
+CASA
+run_test "function_basic" "$tmp_fn_basic" "7"
+
+tmp_fn_void="/tmp/casa_sh_fn_void.casa"
+cat > "$tmp_fn_void" << 'CASA'
+fn greet { 42 print }
+greet
+CASA
+run_test "function_void" "$tmp_fn_void" "42"
+
+tmp_fn_rec="/tmp/casa_sh_fn_rec.casa"
+cat > "$tmp_fn_rec" << 'CASA'
+fn factorial n:int -> int {
+    if 2 n < then 1
+    else n n 1 - factorial *
+    fi
+}
+5 factorial print
+CASA
+run_test "function_recursion" "$tmp_fn_rec" "120"
+
+tmp_fn_ret="/tmp/casa_sh_fn_ret.casa"
+cat > "$tmp_fn_ret" << 'CASA'
+fn check x:int -> int {
+    if x 0 == then 99 return fi
+    x 2 *
+}
+0 check print
+5 check print
+CASA
+run_test "function_early_return" "$tmp_fn_ret" "9910"
+
+tmp_fn_multi="/tmp/casa_sh_fn_multi.casa"
+cat > "$tmp_fn_multi" << 'CASA'
+fn double x:int -> int { x 2 * }
+fn triple x:int -> int { x 3 * }
+4 double print
+4 triple print
+CASA
+run_test "function_multiple" "$tmp_fn_multi" "812"
+
+# -------------------------------------------------------
+# Memory Intrinsics
+# -------------------------------------------------------
+
+tmp_mem="/tmp/casa_sh_mem.casa"
+cat > "$tmp_mem" << 'CASA'
+fn main {
+    16 alloc = ptr
+    42 ptr store64
+    ptr load64 print
+}
+main
+CASA
+run_test "memory_alloc_store_load" "$tmp_mem" "42"
+
+tmp_mem8="/tmp/casa_sh_mem8.casa"
+cat > "$tmp_mem8" << 'CASA'
+fn main {
+    8 alloc = ptr
+    255 ptr store8
+    ptr load8 print
+}
+main
+CASA
+run_test "memory_store8_load8" "$tmp_mem8" "255"
+
+# -------------------------------------------------------
+# Type Casts
+# -------------------------------------------------------
+
+tmp_cast="/tmp/casa_sh_cast.casa"
+cat > "$tmp_cast" << 'CASA'
+fn main { 65 (int) print }
+main
+CASA
+run_test "type_cast_noop" "$tmp_cast" "65"
+
+# -------------------------------------------------------
+# Method Calls and Impl Blocks
+# -------------------------------------------------------
+
+tmp_impl="/tmp/casa_sh_impl.casa"
+cat > "$tmp_impl" << 'CASA'
+struct Vec2 { x: int  y: int }
+impl Vec2 {
+    fn sum self:Vec2 -> int {
+        self Vec2::x self Vec2::y +
+    }
+}
+4 3 Vec2 = v
+v .sum print
+CASA
+run_test "impl_method" "$tmp_impl" "7"
+
+tmp_setter="/tmp/casa_sh_setter.casa"
+cat > "$tmp_setter" << 'CASA'
+struct Box { val: int }
+fn main {
+    10 Box = b
+    99 b->val
+    b Box::val print
+}
+main
+CASA
+run_test "field_setter" "$tmp_setter" "99"
+
+# -------------------------------------------------------
+# F-strings
+# -------------------------------------------------------
+
+tmp_fstr="/tmp/casa_sh_fstr.casa"
+cat > "$tmp_fstr" << 'CASA'
+fn main {
+    f"hello world" print_str
+}
+main
+CASA
+run_test "fstring_text_only" "$tmp_fstr" "hello world"
+
+tmp_fstr_concat="/tmp/casa_sh_fstr_concat.casa"
+cat > "$tmp_fstr_concat" << 'CASA'
+fn to_str_helper n:int -> str {
+    "42"
+}
+fn main {
+    f"val={42 to_str_helper}" print_str
+}
+main
+CASA
+run_test "fstring_with_call" "$tmp_fstr_concat" "val=42"
+
+# -------------------------------------------------------
+# String Match Arms (new feature)
+# -------------------------------------------------------
+
+tmp_str_match="$ROOT_DIR/tests/tmp_str_match.casa"
+cat > "$tmp_str_match" << 'CASA'
+include "../lib/std.casa"
+fn classify op:str -> int {
+    op match
+        "+" => 1
+        "-" => 2
+        "*" => 3
+        _   => 0
+    end
+}
+fn main {
+    "+" classify print
+    "-" classify print
+    "*" classify print
+    "/" classify print
+}
+main
+CASA
+run_test "string_match" "$tmp_str_match" "1230"
+rm -f "$tmp_str_match"
+
+tmp_char_match="/tmp/casa_sh_char_match.casa"
+cat > "$tmp_char_match" << 'CASA'
+fn main {
+    'a' = ch
+    ch match
+        'a' => 1 print
+        'b' => 2 print
+        _   => 0 print
+    end
+}
+main
+CASA
+run_test "char_match" "$tmp_char_match" "1"
+
+# -------------------------------------------------------
+# Data-carrying Enums
+# -------------------------------------------------------
+
+tmp_data_enum="/tmp/casa_sh_data_enum.casa"
+cat > "$tmp_data_enum" << 'CASA'
+enum Wrapper { Empty Val(int) }
+fn main {
+    42 Wrapper::Val = w
+    w (ptr) load64 print
+    w (ptr) 8 + load64 print
+}
+main
+CASA
+run_test "data_carrying_enum" "$tmp_data_enum" "142"
+
+# -------------------------------------------------------
+# Is Keyword (new feature)
+# -------------------------------------------------------
+
+tmp_is_some="/tmp/casa_sh_is_some.casa"
+cat > "$tmp_is_some" << 'CASA'
+enum Option[T] { None Some(T) }
+fn main {
+    42 Option::Some = val
+    if val Option::Some(x) is then
+        x print
+    else
+        0 print
+    fi
+}
+main
+CASA
+run_test "is_check_some" "$tmp_is_some" "42"
+
+tmp_is_none="/tmp/casa_sh_is_none.casa"
+cat > "$tmp_is_none" << 'CASA'
+enum Option[T] { None Some(T) }
+fn main {
+    Option::None = val
+    if val Option::Some(x) is then
+        x print
+    else
+        99 print
+    fi
+}
+main
+CASA
+run_test "is_check_none" "$tmp_is_none" "99"
+
+tmp_is_result="/tmp/casa_sh_is_result.casa"
+cat > "$tmp_is_result" << 'CASA'
+enum Result[T E] { Error(E) Ok(T) }
+fn main {
+    7 Result::Ok = r
+    if r Result::Ok(value) is then
+        value print
+    else
+        0 print
+    fi
+}
+main
+CASA
+run_test "is_check_result_ok" "$tmp_is_result" "7"
+
+tmp_is_elif="/tmp/casa_sh_is_elif.casa"
+cat > "$tmp_is_elif" << 'CASA'
+enum OpValue { None Int(int) Str(str) }
+fn main {
+    42 OpValue::Int = val
+    if val OpValue::None == then
+        0 print
+    elif val OpValue::Int(n) is then
+        n print
+    else
+        99 print
+    fi
+}
+main
+CASA
+run_test "is_check_elif" "$tmp_is_elif" "42"
+
+# -------------------------------------------------------
+# Include Files
+# -------------------------------------------------------
+
+tmp_inc_helper="$ROOT_DIR/tests/tmp_inc_helper.casa"
+cat > "$tmp_inc_helper" << 'CASA'
+fn double x:int -> int { x 2 * }
+CASA
+tmp_inc_main="$ROOT_DIR/tests/tmp_inc_main.casa"
+cat > "$tmp_inc_main" << 'CASA'
+include "tmp_inc_helper.casa"
+7 double print
+CASA
+run_test "include_file" "$tmp_inc_main" "14"
+rm -f "$tmp_inc_helper" "$tmp_inc_main"
+
+# -------------------------------------------------------
+# Global Variables
+# -------------------------------------------------------
+
+tmp_global="/tmp/casa_sh_global.casa"
+cat > "$tmp_global" << 'CASA'
+10 = global_x
+fn show_global { global_x print }
+show_global
+CASA
+run_test "global_variable" "$tmp_global" "10"
+
+# -------------------------------------------------------
+# Lambdas and Function References
+# -------------------------------------------------------
+
+# Function references require std.casa for exec — skip for now
+
+# -------------------------------------------------------
+# Traits (parsed but not enforced)
+# -------------------------------------------------------
+
+tmp_trait="/tmp/casa_sh_trait.casa"
+cat > "$tmp_trait" << 'CASA'
+trait Printable {
+    fn show self:self
+}
+42 print
+CASA
+run_test "trait_definition" "$tmp_trait" "42"
+
+# -------------------------------------------------------
+# Generics Syntax
+# -------------------------------------------------------
+
+tmp_generic="/tmp/casa_sh_generic.casa"
+cat > "$tmp_generic" << 'CASA'
+struct Pair[A B] { first: A  second: B }
+fn main {
+    20 10 Pair = p
+    p Pair::first print
+    p Pair::second print
+}
+main
+CASA
+run_test "generic_struct" "$tmp_generic" "1020"
+
+# -------------------------------------------------------
+# Syscalls
+# -------------------------------------------------------
+
+tmp_syscall="/tmp/casa_sh_syscall.casa"
+cat > "$tmp_syscall" << 'CASA'
+fn main {
+    # write(1, "hi\n", 3) using syscall3
+    3 alloc = buf
+    'h' (int) buf store8
+    'i' (int) buf 1 + store8
+    '\n' (int) buf 2 + store8
+    3 buf 1 1 syscall3 drop
+}
+main
+CASA
+run_test "syscall_write" "$tmp_syscall" "hi"
+
+# -------------------------------------------------------
+# Deeply Nested Control Flow
+# -------------------------------------------------------
+
+tmp_deep="/tmp/casa_sh_deep.casa"
+cat > "$tmp_deep" << 'CASA'
+fn main {
+    0 = sum
+    0 = i
+    while 3 i < do
+        0 = j
+        while 3 j < do
+            if i j + 2 % 0 == then
+                i j + += sum
+            fi
+            1 += j
+        done
+        1 += i
+    done
+    sum print
+}
+main
+CASA
+run_test "deeply_nested" "$tmp_deep" "10"
+
+# -------------------------------------------------------
+# Variable Decrement
+# -------------------------------------------------------
+
+tmp_dec="/tmp/casa_sh_dec.casa"
+cat > "$tmp_dec" << 'CASA'
+10 = x
+3 -= x
+x print
+CASA
+run_test "variable_decrement" "$tmp_dec" "7"
+
 # Clean up
 rm -f "$COMPILER"
-rm -f "$tmp_add" "$tmp_neg" "$tmp_zero" "$tmp_single" "$tmp_chain"
-rm -f "$tmp_sub" "$tmp_mul" "$tmp_div" "$tmp_mod" "$tmp_arith"
-rm -f "$tmp_band" "$tmp_bor" "$tmp_bxor" "$tmp_bnot" "$tmp_shl" "$tmp_shr"
-rm -f "$tmp_eq" "$tmp_eq2" "$tmp_ne" "$tmp_lt" "$tmp_gt" "$tmp_le" "$tmp_ge"
-rm -f "$tmp_and" "$tmp_and2" "$tmp_or" "$tmp_not" "$tmp_not2"
-rm -f "$tmp_drop" "$tmp_dup" "$tmp_swap" "$tmp_over" "$tmp_rot"
-rm -f "$tmp_var" "$tmp_var_inc"
-rm -f "$tmp_if" "$tmp_if_false" "$tmp_ifelse" "$tmp_ifelse2" "$tmp_elif"
-rm -f "$tmp_while" "$tmp_break" "$tmp_continue"
-rm -f "$tmp_nested_if" "$tmp_nested_while"
-rm -f "$tmp_struct" "$tmp_struct_set" "$tmp_struct_three"
-rm -f "$tmp_enum" "$tmp_enum_eq"
-rm -f "$tmp_match" "$tmp_match_wild" "$tmp_match_brace" "$tmp_match_fn"
-rm -f "$tmp_match_first" "$tmp_match_last" "$tmp_nested_match"
-rm -f "$tmp_struct_fn"
+rm -f /tmp/casa_sh_*.casa /tmp/casa_sh_*_expected /tmp/casa_self_hosted_test_*
 
 echo
 echo "Summary: $pass passed, $fail failed"
