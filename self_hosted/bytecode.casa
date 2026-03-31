@@ -232,6 +232,19 @@ fn resolve_variable name:str func_variables:List[str] global_variables:List[str]
     InstKind::GlobalGet InstKind::GlobalSet 0
 }
 
+# Intern a constant slot name, returning its index.
+fn intern_constant constants_table:List[str] name:str -> int {
+    0 = const_index
+    while const_index constants_table.length > do
+        if name const_index constants_table.get == then
+            const_index return
+        fi
+        1 += const_index
+    done
+    name constants_table.push
+    constants_table.length 1 -
+}
+
 # ---------------------------------------------------------------------------
 # Direct op-to-inst mapping (non-control-flow, non-variable ops)
 # ---------------------------------------------------------------------------
@@ -308,7 +321,7 @@ fn op_to_inst op:Op -> Inst {
 # Compile a list of ops into bytecode, resolving variables against
 # the given function_variables (locals) and global_variables lists.
 # New locals discovered via AssignVariable are added to function_variables.
-fn compile_ops ops:List[Op] func_variables:List[str] global_variables:List[str] label_offset:int -> List[Inst] int {
+fn compile_ops ops:List[Op] func_variables:List[str] global_variables:List[str] label_offset:int functions:Map[str Function] constants_table:List[str] current_function_name:str -> List[Inst] int {
     List::new (List[Inst]) = bytecode
     label_offset ops make_label_state = state
     0 = op_index
@@ -362,6 +375,28 @@ fn compile_ops ops:List[Op] func_variables:List[str] global_variables:List[str] 
         # Function return
         elif op_kind OpKind::FnReturn == then
             InstValue::None InstKind::FnReturn Inst bytecode.push
+
+        # Push function address (lambda or &name reference)
+        elif op_kind OpKind::FnPush == then
+            current_op.value op_str_value = fn_push_name
+            # Emit capture stores for each captured variable
+            if fn_push_name functions.has then
+                fn_push_name functions.get .unwrap .captures = capture_list
+                0 = cap_index
+                while cap_index capture_list.length > do
+                    cap_index capture_list.get = cap_name
+                    global_variables func_variables cap_name resolve_variable = cap_var_index = cap_set_kind = cap_get_kind
+                    cap_var_index InstValue::Int cap_get_kind Inst bytecode.push
+                    f"{fn_push_name}_{cap_name}" constants_table intern_constant InstValue::Int InstKind::ConstantStore Inst bytecode.push
+                    1 += cap_index
+                done
+            fi
+            fn_push_name InstValue::Str InstKind::FnPush Inst bytecode.push
+
+        # Push captured variable from constants area
+        elif op_kind OpKind::PushCapture == then
+            current_op.value op_str_value = capture_name
+            f"{current_function_name}_{capture_name}" constants_table intern_constant InstValue::Int InstKind::ConstantLoad Inst bytecode.push
 
         # No-op: IfStart, MatchStart are structural markers; TypeCast has no runtime effect
         elif op_kind OpKind::IfStart ==
@@ -420,11 +455,70 @@ fn compile_ops ops:List[Op] func_variables:List[str] global_variables:List[str] 
 
         # Enum variant push
         elif op_kind OpKind::PushEnumVariant == then
-            current_op.value op_int_value InstValue::Int InstKind::Push Inst bytecode.push
+            if current_op.value OpValue::Int(simple_ordinal) is then
+                # Simple enum: just push ordinal
+                simple_ordinal InstValue::Int InstKind::Push Inst bytecode.push
+            elif current_op.value OpValue::Str(enum_info) is then
+                # Data-carrying enum: parse "ordinal:inner_count"
+                enum_info ":" str::find = colon_pos
+                enum_info 0 colon_pos str::substring str_to_int = ordinal
+                enum_info colon_pos 1 + enum_info.length colon_pos - 1 - str::substring str_to_int = inner_count
+                1 inner_count + = slot_count
+
+                # Store inner values from stack into temp locals (reverse order)
+                List::new (List[int]) = temp_locals
+                0 = temp_index
+                while temp_index inner_count > do
+                    func_variables.length = temp_local_idx
+                    f"enum_tmp_{op_index .to_str}_{temp_index .to_str}" func_variables.push
+                    temp_local_idx InstValue::Int InstKind::LocalSet Inst bytecode.push
+                    temp_local_idx temp_locals.push
+                    1 += temp_index
+                done
+
+                # Allocate heap: slot_count * 8 bytes
+                func_variables.length = ptr_local_idx
+                f"enum_ptr_{op_index .to_str}" func_variables.push
+                slot_count 8 * InstValue::Int InstKind::Push Inst bytecode.push
+                InstValue::None InstKind::HeapAlloc Inst bytecode.push
+                ptr_local_idx InstValue::Int InstKind::LocalSet Inst bytecode.push
+
+                # Store ordinal at offset 0
+                ordinal InstValue::Int InstKind::Push Inst bytecode.push
+                ptr_local_idx InstValue::Int InstKind::LocalGet Inst bytecode.push
+                InstValue::None InstKind::Store64 Inst bytecode.push
+
+                # Store inner values at offsets 8, 16, ...
+                0 = store_index
+                while store_index inner_count > do
+                    inner_count 1 - store_index - temp_locals.get = restore_idx
+                    store_index 1 + 8 * = field_offset
+                    ptr_local_idx InstValue::Int InstKind::LocalGet Inst bytecode.push
+                    field_offset InstValue::Int InstKind::Push Inst bytecode.push
+                    InstValue::None InstKind::Add Inst bytecode.push
+                    restore_idx InstValue::Int InstKind::LocalGet Inst bytecode.push
+                    InstValue::None InstKind::Swap Inst bytecode.push
+                    InstValue::None InstKind::Store64 Inst bytecode.push
+                    1 += store_index
+                done
+
+                # Push pointer
+                ptr_local_idx InstValue::Int InstKind::LocalGet Inst bytecode.push
+            fi
 
         # Match blocks
         elif op_kind OpKind::MatchArm == then
-            current_op.value op_int_value = ordinal
+            # Parse ordinal and detect data-carrying enum
+            false = is_data_enum_arm
+            0 = ordinal
+            if current_op.value OpValue::Str(arm_info) is then
+                # Data-carrying enum: parse "ordinal:inner_count"
+                true = is_data_enum_arm
+                arm_info ":" str::find = arm_colon_pos
+                arm_info 0 arm_colon_pos str::substring str_to_int = ordinal
+            elif current_op.value OpValue::Int(arm_ordinal) is then
+                arm_ordinal = ordinal
+            fi
 
             # If this arm has a label (assigned by previous arm's JumpNe), emit jump-to-end + label
             op_index state.labels.get = my_label
@@ -439,6 +533,10 @@ fn compile_ops ops:List[Op] func_variables:List[str] global_variables:List[str] 
                 InstValue::None InstKind::Drop Inst bytecode.push
             else
                 InstValue::None InstKind::Dup Inst bytecode.push
+                # Data-carrying enums: load ordinal from heap pointer before comparing
+                if is_data_enum_arm then
+                    InstValue::None InstKind::Load64 Inst bytecode.push
+                fi
                 ordinal InstValue::Int InstKind::Push Inst bytecode.push
                 InstValue::None InstKind::Eq Inst bytecode.push
                 ops op_index state find_next_match_arm InstValue::Int InstKind::JumpNe Inst bytecode.push
@@ -460,7 +558,7 @@ fn compile_ops ops:List[Op] func_variables:List[str] global_variables:List[str] 
 
 # Compile a function's ops into bytecode with locals framing.
 # Parameters are the first variables in the function's variable list.
-fn compile_function function:Function global_variables:List[str] label_offset:int -> List[Inst] int {
+fn compile_function function:Function global_variables:List[str] label_offset:int functions:Map[str Function] constants_table:List[str] -> List[Inst] int {
     # Copy the function's parameter list as initial variables
     List::new (List[str]) = func_variables
     0 = param_index
@@ -470,7 +568,7 @@ fn compile_function function:Function global_variables:List[str] label_offset:in
     done
 
     # Compile function body
-    label_offset global_variables func_variables function.ops compile_ops = label_count = body_bytecode
+    function.name constants_table functions label_offset global_variables func_variables function.ops compile_ops = label_count = body_bytecode
 
     # Determine locals count (params + any new locals discovered during compilation)
     func_variables.length = locals_count
@@ -509,7 +607,7 @@ fn collect_called_functions op_list:List[Op] -> List[str] {
     0 = collect_index
     while collect_index op_list.length > do
         collect_index op_list.get = collect_op
-        if collect_op.kind OpKind::FnCall == then
+        if collect_op.kind OpKind::FnCall == collect_op.kind OpKind::FnPush == || then
             collect_op.value op_str_value called.push
         fi
         1 += collect_index
@@ -569,9 +667,12 @@ fn compile_bytecode ops:List[Op] string_table:List[str] functions:Map[str Functi
     # Find reachable functions (dead code elimination)
     functions ops find_reachable_functions = reachable
 
+    # Constants table for closure captures
+    List::new (List[str]) = constants_table
+
     # Compile global scope
     List::new (List[str]) = empty_locals
-    0 global_variables empty_locals ops compile_ops = label_count = bytecode
+    "__global__" constants_table functions 0 global_variables empty_locals ops compile_ops = label_count = bytecode
 
     # Compile only reachable functions
     Map::new (Map[str List[Inst]]) = compiled_functions
@@ -584,12 +685,12 @@ fn compile_bytecode ops:List[Op] string_table:List[str] functions:Map[str Functi
         func_index reachable_names.get = func_name
         if func_name functions.has then
             func_name functions.get .unwrap = function
-            total_label_count global_variables function compile_function = func_label_count = func_bytecode
+            constants_table functions total_label_count global_variables function compile_function = func_label_count = func_bytecode
             func_name func_bytecode compiled_functions.set drop
             func_label_count = total_label_count
         fi
         1 += func_index
     done
 
-    total_label_count global_variables.length string_table compiled_functions bytecode Program
+    constants_table.length total_label_count global_variables.length string_table compiled_functions bytecode Program
 }

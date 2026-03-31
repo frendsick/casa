@@ -166,6 +166,73 @@ fn skip_type ctx:ParseContext index:int -> int {
     index
 }
 
+# Parse a lambda block: { body }
+# The opening { has already been consumed. Parses body ops, registers an
+# anonymous function, gathers captures, and emits a FnPush op.
+fn parse_lambda ops:List[Op] ctx:ParseContext index:int -> int {
+    List::new (List[Op]) = lambda_ops
+
+    while index ctx.tokens.length > do
+        index ctx.tokens.get = lambda_token
+
+        if lambda_token.kind TokenKind::Eof == then
+            "unexpected end of file in lambda" eprintln
+            1 exit
+        elif lambda_token.kind TokenKind::Delimiter == "}" lambda_token.value == && then
+            1 += index
+            break
+        elif lambda_token.kind TokenKind::Delimiter == then
+            if "." lambda_token.value ==
+               "->" lambda_token.value == ||
+               "(" lambda_token.value == ||
+               "{" lambda_token.value == ||
+            then
+                1 += index
+                lambda_ops ctx index lambda_token parse_token = index
+            else
+                1 += index
+            fi
+        else
+            1 += index
+            lambda_ops ctx index lambda_token parse_token = index
+        fi
+    done
+
+    # Generate unique lambda name
+    ctx.lambda_count 1 + ctx->lambda_count
+    f"lambda__{ctx.current_function}_{ctx.lambda_count .to_str}" = lambda_name
+
+    # Gather captures: scan lambda body ops for PushVariable referencing
+    # variables in the enclosing scope
+    List::new (List[str]) = captures
+    Set::new (Set[str]) = captured_names
+    0 = capture_scan_index
+    while capture_scan_index lambda_ops.length > do
+        capture_scan_index lambda_ops.get = capture_op
+        if capture_op.kind OpKind::PushVariable == then
+            capture_op.value op_str_value = capture_var_name
+            if capture_var_name ctx.variable_types.has then
+                if capture_var_name captured_names.has ! then
+                    capture_var_name captures.push
+                    capture_var_name captured_names.add drop
+                fi
+                capture_var_name OpValue::Str OpKind::PushCapture Op capture_scan_index lambda_ops.set
+            fi
+        fi
+        1 += capture_scan_index
+    done
+
+    # Create and register the lambda function
+    List::new (List[str]) = lambda_vars
+    captures "" lambda_vars lambda_ops lambda_name Function = lambda_func
+    lambda_name lambda_func ctx.functions.set drop
+
+    # Emit FnPush op
+    lambda_name OpValue::Str OpKind::FnPush Op ops.push
+
+    index
+}
+
 # Parse a single token and append the resulting op(s) to ops.
 # Returns the updated index. Shared between parse and parse_function body.
 fn parse_token token:Token index:int ctx:ParseContext ops:List[Op] -> int {
@@ -267,7 +334,11 @@ fn parse_token token:Token index:int ctx:ParseContext ops:List[Op] -> int {
             "" ctx->expression_type
         fi
     elif kind TokenKind::Identifier == then
-        if token.value ctx.functions.has then
+        # Function reference: &name pushes function address as a value
+        if 0 token.value.length > 0 token.value str::at '&' == && then
+            token.value 1 token.value.length 1 - str::substring = ref_name
+            ref_name OpValue::Str OpKind::FnPush Op ops.push
+        elif token.value ctx.functions.has then
             token.value OpValue::Str OpKind::FnCall Op ops.push
             token.value ctx update_expression_type
         elif token.value ctx.structs.has then
@@ -281,6 +352,14 @@ fn parse_token token:Token index:int ctx:ParseContext ops:List[Op] -> int {
                 resolved_op.value op_str_value = var_name
                 if var_name ctx.variable_types.has then
                     var_name ctx.variable_types.get .unwrap ctx->expression_type
+                else
+                    "" ctx->expression_type
+                fi
+            elif resolved_op.kind OpKind::PushEnumVariant == then
+                # Track enum name for method resolution (e.g. Option::Some .unwrap)
+                token.value "::" str::find = enum_colon_pos
+                if 0 enum_colon_pos >= then
+                    token.value 0 enum_colon_pos str::substring ctx->expression_type
                 else
                     "" ctx->expression_type
                 fi
@@ -322,6 +401,9 @@ fn parse_token token:Token index:int ctx:ParseContext ops:List[Op] -> int {
                 1 += index
             done
             cast_type_name ctx->expression_type
+        elif "{" token.value == then
+            # Lambda block: { body }
+            index ctx ops parse_lambda = index
         elif "[" token.value ==
              "]" token.value == ||
              ")" token.value == ||
@@ -417,8 +499,13 @@ fn parse_function ctx:ParseContext index:int -> int {
     # Register placeholder so recursive/forward calls resolve during body parsing
     List::new (List[Op]) = placeholder_ops
     List::new (List[str]) = placeholder_vars
-    return_type_str placeholder_vars placeholder_ops func_name Function = placeholder
+    List::new (List[str]) = placeholder_captures
+    placeholder_captures return_type_str placeholder_vars placeholder_ops func_name Function = placeholder
     func_name placeholder ctx.functions.set drop
+
+    # Save and set current function context for lambda naming
+    ctx.current_function = saved_function
+    func_name ctx->current_function
 
     # Parse body ops until matching closing brace
     List::new (List[Op]) = body_ops
@@ -430,25 +517,17 @@ fn parse_function ctx:ParseContext index:int -> int {
         1 += param_emit_index
     done
 
-    1 = brace_depth
-    while
-        index ctx.tokens.length >
-        0 brace_depth > &&
-    do
+    while index ctx.tokens.length > do
         index ctx.tokens.get = body_token
 
-        # Track brace nesting for delimiters
         if body_token.kind TokenKind::Delimiter == then
-            if "{" body_token.value == then
-                1 += brace_depth
+            if "}" body_token.value == then
                 1 += index
-            elif "}" body_token.value == then
-                brace_depth 1 - = brace_depth
-                1 += index
-                if 0 brace_depth == then break fi
+                break
             elif "." body_token.value ==
                  "->" body_token.value == ||
                  "(" body_token.value == ||
+                 "{" body_token.value == ||
             then
                 1 += index
                 body_ops ctx index body_token parse_token = index
@@ -464,7 +543,11 @@ fn parse_function ctx:ParseContext index:int -> int {
         fi
     done
 
-    return_type_str variables body_ops func_name Function = function
+    # Restore current function context
+    saved_function ctx->current_function
+
+    List::new (List[str]) = empty_captures
+    empty_captures return_type_str variables body_ops func_name Function = function
     func_name function ctx.functions.set drop
 
     index
@@ -478,11 +561,18 @@ fn resolve_identifier ctx:ParseContext token_value:str -> Op {
         token_value 0 colon_pos str::substring = enum_name
         token_value colon_pos 2 + token_value.length colon_pos - 2 - str::substring = variant_name
         if enum_name ctx.enums.has then
-            enum_name ctx.enums.get .unwrap .variants = variant_list
+            enum_name ctx.enums.get .unwrap = enum_def
             0 = variant_index
-            while variant_index variant_list.length > do
-                if variant_name variant_index variant_list.get == then
-                    variant_index OpValue::Int OpKind::PushEnumVariant Op return
+            while variant_index enum_def.variants.length > do
+                if variant_name variant_index enum_def.variants.get == then
+                    variant_index enum_def.variant_inner_counts.get = inner_count
+                    if enum_def.has_inner_values then
+                        # Data-carrying enum: encode ordinal:inner_count
+                        f"{variant_index .to_str}:{inner_count .to_str}" OpValue::Str OpKind::PushEnumVariant Op return
+                    else
+                        # Simple enum: just push ordinal
+                        variant_index OpValue::Int OpKind::PushEnumVariant Op return
+                    fi
                 fi
                 1 += variant_index
             done
@@ -900,7 +990,8 @@ fn parse_struct ctx:ParseContext index:int -> int {
 
         List::new (List[str]) = getter_vars
         "self" getter_vars.push
-        field_type getter_vars getter_ops f"{struct_name}::{field_name}" Function = getter_func
+        List::new (List[str]) = getter_captures
+        getter_captures field_type getter_vars getter_ops f"{struct_name}::{field_name}" Function = getter_func
         f"{struct_name}::{field_name}" getter_func ctx.functions.set drop
 
         # Setter: StructName::set_field_name
@@ -921,7 +1012,8 @@ fn parse_struct ctx:ParseContext index:int -> int {
         List::new (List[str]) = setter_vars
         "self" setter_vars.push
         "value" setter_vars.push
-        "" setter_vars setter_ops f"{struct_name}::set_{field_name}" Function = setter_func
+        List::new (List[str]) = setter_captures
+        setter_captures "" setter_vars setter_ops f"{struct_name}::set_{field_name}" Function = setter_func
         f"{struct_name}::set_{field_name}" setter_func ctx.functions.set drop
 
         1 += field_index
@@ -958,6 +1050,8 @@ fn parse_enum ctx:ParseContext index:int -> int {
 
     # Parse variant names until closing brace
     List::new (List[str]) = variants
+    List::new (List[int]) = variant_inner_counts
+    false = enum_has_inner
     while index ctx.tokens.length > do
         index ctx.tokens.get = variant_token
 
@@ -973,26 +1067,33 @@ fn parse_enum ctx:ParseContext index:int -> int {
         variant_token.value variants.push
         1 += index
 
-        # Skip optional variant data type: Some(T), Error(E), Ok(T)
+        # Count optional variant data types: Some(T), Error(E), Ok(T)
+        0 = inner_count
         if index ctx.tokens.length > then
             if "(" index ctx.tokens.get .value == then
-                0 = paren_depth
+                1 += index
                 while index ctx.tokens.length > do
                     index ctx.tokens.get .value = paren_val
-                    if "(" paren_val == then
-                        1 += paren_depth
-                    elif ")" paren_val == then
-                        paren_depth 1 - = paren_depth
+                    if ")" paren_val == then
+                        1 += index
+                        break
+                    elif "," paren_val == then
+                        1 += index
+                    else
+                        1 += inner_count
+                        index ctx skip_type = index
                     fi
-                    1 += index
-                    if 0 paren_depth == then break fi
                 done
+                if 0 inner_count > then
+                    true = enum_has_inner
+                fi
             fi
         fi
+        inner_count variant_inner_counts.push
     done
 
     # Register enum definition
-    variants enum_name EnumDef = enum_def
+    enum_has_inner variant_inner_counts variants enum_name EnumDef = enum_def
     enum_name enum_def ctx.enums.set drop
 
     index
@@ -1061,7 +1162,8 @@ fn parse_impl ctx:ParseContext index:int -> int {
             f"{impl_type_name}::{method_name}" = qualified_name
             List::new (List[Op]) = pre_ops
             List::new (List[str]) = pre_vars
-            "" pre_vars pre_ops qualified_name Function = pre_func
+            List::new (List[str]) = pre_captures
+            pre_captures "" pre_vars pre_ops qualified_name Function = pre_func
             qualified_name pre_func ctx.functions.set drop
 
             index ctx parse_function = index
@@ -1159,15 +1261,18 @@ fn parse_match_braced_body ops:List[Op] ctx:ParseContext index:int -> int {
             "unexpected end of file in match arm" eprintln
             1 exit
         elif body_token.kind TokenKind::Delimiter == then
-            if "." body_token.value ==
-               "->" body_token.value == ||
-               "(" body_token.value == ||
+            if "}" body_token.value == then
+                brace_depth 1 - = brace_depth
+                if 0 brace_depth == then index 1 + return fi
+                1 += index
+            elif "." body_token.value ==
+                 "->" body_token.value == ||
+                 "(" body_token.value == ||
+                 "{" body_token.value == ||
             then
                 1 += index
                 ops ctx index body_token parse_token = index
             else
-                brace_depth body_token.value update_brace_depth = brace_depth
-                if 0 brace_depth == then index 1 + return fi
                 1 += index
             fi
         else
