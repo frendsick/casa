@@ -1,0 +1,514 @@
+# Unit tests for the self-hosted bytecode compiler.
+
+include "../../self_hosted/lexer.casa"
+include "../../self_hosted/parser.casa"
+include "../../self_hosted/bytecode.casa"
+include "../../lib/test.casa"
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+fn instkind_to_str kind:InstKind -> str {
+    kind match
+        InstKind::Push          => "Push"
+        InstKind::PushStr       => "PushStr"
+        InstKind::PushChar      => "PushChar"
+        InstKind::Add           => "Add"
+        InstKind::Sub           => "Sub"
+        InstKind::Mul           => "Mul"
+        InstKind::Div           => "Div"
+        InstKind::Mod           => "Mod"
+        InstKind::BitAnd        => "BitAnd"
+        InstKind::BitOr         => "BitOr"
+        InstKind::BitXor        => "BitXor"
+        InstKind::BitNot        => "BitNot"
+        InstKind::Shl           => "Shl"
+        InstKind::Shr           => "Shr"
+        InstKind::Eq            => "Eq"
+        InstKind::Ne            => "Ne"
+        InstKind::Lt            => "Lt"
+        InstKind::Gt            => "Gt"
+        InstKind::Le            => "Le"
+        InstKind::Ge            => "Ge"
+        InstKind::And           => "And"
+        InstKind::Or            => "Or"
+        InstKind::Not           => "Not"
+        InstKind::Drop          => "Drop"
+        InstKind::Dup           => "Dup"
+        InstKind::Swap          => "Swap"
+        InstKind::Over          => "Over"
+        InstKind::Rot           => "Rot"
+        InstKind::PrintInt      => "PrintInt"
+        InstKind::PrintStr      => "PrintStr"
+        InstKind::PrintBool     => "PrintBool"
+        InstKind::PrintChar     => "PrintChar"
+        InstKind::PrintCstr     => "PrintCstr"
+        InstKind::GlobalGet     => "GlobalGet"
+        InstKind::GlobalSet     => "GlobalSet"
+        InstKind::LocalGet      => "LocalGet"
+        InstKind::LocalSet      => "LocalSet"
+        InstKind::LocalsInit    => "LocalsInit"
+        InstKind::LocalsUninit  => "LocalsUninit"
+        InstKind::Label         => "Label"
+        InstKind::Jump          => "Jump"
+        InstKind::JumpNe        => "JumpNe"
+        InstKind::FnCall        => "FnCall"
+        InstKind::FnReturn      => "FnReturn"
+        InstKind::HeapAlloc     => "HeapAlloc"
+        InstKind::Load8         => "Load8"
+        InstKind::Load16        => "Load16"
+        InstKind::Load32        => "Load32"
+        InstKind::Load64        => "Load64"
+        InstKind::Store8        => "Store8"
+        InstKind::Store16       => "Store16"
+        InstKind::Store32       => "Store32"
+        InstKind::Store64       => "Store64"
+        InstKind::Syscall0      => "Syscall0"
+        InstKind::Syscall1      => "Syscall1"
+        InstKind::Syscall2      => "Syscall2"
+        InstKind::Syscall3      => "Syscall3"
+        InstKind::Syscall4      => "Syscall4"
+        InstKind::Syscall5      => "Syscall5"
+        InstKind::Syscall6      => "Syscall6"
+        InstKind::Argc          => "Argc"
+        InstKind::Argv          => "Argv"
+        InstKind::FnExec        => "FnExec"
+        InstKind::FnPush        => "FnPush"
+        InstKind::ConstantLoad  => "ConstantLoad"
+        InstKind::ConstantStore => "ConstantStore"
+        InstKind::StrEq         => "StrEq"
+        InstKind::FstringConcat => "FstringConcat"
+    end
+}
+
+fn assert_instkind actual:InstKind expected:InstKind msg:str {
+    if expected actual == then
+        1 += test_pass_count
+    else
+        f"[FAIL] {test_current_name}: {msg} (expected {expected instkind_to_str}, got {actual instkind_to_str})\n" eprint
+        1 += test_fail_count
+    fi
+}
+
+# Compile source string through the full pipeline: lex -> parse -> bytecode
+fn compile_source source:str -> Program {
+    source lex = tokens
+    List::new (List[str]) = string_table
+    Map::new (Map[str Function]) = functions
+    Map::new (Map[str StructDef]) = structs
+    Map::new (Map[str EnumDef]) = enums
+    Map::new (Map[str str]) "" 0 "__global__" "" Map::new (Map[str str]) enums structs functions string_table tokens ParseContext = ctx
+    ctx parse = ops
+    ctx.functions ctx.string_table ops compile_bytecode
+}
+
+# Check if any instruction in main bytecode has the given kind
+fn has_inst program:Program kind:InstKind -> bool {
+    0 = index
+    while index program.bytecode.length > do
+        if kind index program.bytecode.get .kind == then
+            true return
+        fi
+        1 += index
+    done
+    false
+}
+
+# Check if any instruction in any function bytecode has the given kind
+fn has_inst_in_functions program:Program kind:InstKind -> bool {
+    program.functions.keys = func_names
+    0 = func_index
+    while func_index func_names.length > do
+        func_index func_names.get = func_name
+        func_name program.functions.get .unwrap = func_insts
+        0 = inst_index
+        while inst_index func_insts.length > do
+            if kind inst_index func_insts.get .kind == then
+                true return
+            fi
+            1 += inst_index
+        done
+        1 += func_index
+    done
+    false
+}
+
+# Find the int value of a Push instruction with the given value
+fn has_push_value program:Program value:int -> bool {
+    0 = index
+    while index program.bytecode.length > do
+        index program.bytecode.get = inst
+        if inst.kind InstKind::Push == ! then
+            1 += index
+            continue
+        fi
+        if inst.value InstValue::Int(pushed_value) is then
+            if pushed_value value == then true return fi
+        fi
+        1 += index
+    done
+    false
+}
+
+# ---------------------------------------------------------------------------
+# Simple ops (1:1 mapping from OpKind to InstKind)
+# ---------------------------------------------------------------------------
+
+fn test_bytecode_simple_ops {
+    "bytecode_simple_ops" test_start
+
+    "1 2 +" compile_source = program
+    "Add" InstKind::Add program has_inst assert_true
+
+    "1 2 -" compile_source = program
+    "Sub" InstKind::Sub program has_inst assert_true
+
+    "1 2 *" compile_source = program
+    "Mul" InstKind::Mul program has_inst assert_true
+
+    "1 2 /" compile_source = program
+    "Div" InstKind::Div program has_inst assert_true
+
+    "1 2 %" compile_source = program
+    "Mod" InstKind::Mod program has_inst assert_true
+
+    "1 2 <<" compile_source = program
+    "Shl" InstKind::Shl program has_inst assert_true
+
+    "1 2 >>" compile_source = program
+    "Shr" InstKind::Shr program has_inst assert_true
+
+    "1 2 &&" compile_source = program
+    "And" InstKind::And program has_inst assert_true
+
+    "1 2 ||" compile_source = program
+    "Or" InstKind::Or program has_inst assert_true
+
+    "1 !" compile_source = program
+    "Not" InstKind::Not program has_inst assert_true
+
+    "1 2 ==" compile_source = program
+    "Eq" InstKind::Eq program has_inst assert_true
+
+    "1 2 !=" compile_source = program
+    "Ne" InstKind::Ne program has_inst assert_true
+
+    "1 2 >" compile_source = program
+    "Gt" InstKind::Gt program has_inst assert_true
+
+    "1 2 >=" compile_source = program
+    "Ge" InstKind::Ge program has_inst assert_true
+
+    "1 2 <" compile_source = program
+    "Lt" InstKind::Lt program has_inst assert_true
+
+    "1 2 <=" compile_source = program
+    "Le" InstKind::Le program has_inst assert_true
+
+    "1 drop" compile_source = program
+    "Drop" InstKind::Drop program has_inst assert_true
+
+    "1 dup" compile_source = program
+    "Dup" InstKind::Dup program has_inst assert_true
+
+    "1 2 swap" compile_source = program
+    "Swap" InstKind::Swap program has_inst assert_true
+
+    "1 2 over" compile_source = program
+    "Over" InstKind::Over program has_inst assert_true
+
+    "1 2 3 rot" compile_source = program
+    "Rot" InstKind::Rot program has_inst assert_true
+
+    "3 5 &" compile_source = program
+    "BitAnd" InstKind::BitAnd program has_inst assert_true
+
+    "3 5 |" compile_source = program
+    "BitOr" InstKind::BitOr program has_inst assert_true
+
+    "3 5 ^" compile_source = program
+    "BitXor" InstKind::BitXor program has_inst assert_true
+
+    "5 ~" compile_source = program
+    "BitNot" InstKind::BitNot program has_inst assert_true
+}
+
+fn test_bytecode_syscalls {
+    "bytecode_syscalls" test_start
+
+    "60 syscall0" compile_source = program
+    "Syscall0" InstKind::Syscall0 program has_inst assert_true
+
+    "0 60 syscall1" compile_source = program
+    "Syscall1" InstKind::Syscall1 program has_inst assert_true
+
+    "0 0 60 syscall2" compile_source = program
+    "Syscall2" InstKind::Syscall2 program has_inst assert_true
+
+    "0 0 0 60 syscall3" compile_source = program
+    "Syscall3" InstKind::Syscall3 program has_inst assert_true
+
+    "0 0 0 0 60 syscall4" compile_source = program
+    "Syscall4" InstKind::Syscall4 program has_inst assert_true
+
+    "0 0 0 0 0 60 syscall5" compile_source = program
+    "Syscall5" InstKind::Syscall5 program has_inst assert_true
+
+    "0 0 0 0 0 0 60 syscall6" compile_source = program
+    "Syscall6" InstKind::Syscall6 program has_inst assert_true
+}
+
+# ---------------------------------------------------------------------------
+# Push instructions
+# ---------------------------------------------------------------------------
+
+fn test_bytecode_push_int {
+    "bytecode_push_int" test_start
+
+    "42" compile_source = program
+    "Push" InstKind::Push program has_inst assert_true
+    "value 42" 42 program has_push_value assert_true
+}
+
+fn test_bytecode_push_bool {
+    "bytecode_push_bool" test_start
+
+    "true" compile_source = program
+    "true value" 1 program has_push_value assert_true
+
+    "false" compile_source = program
+    "false value" 0 program has_push_value assert_true
+}
+
+fn test_bytecode_push_str {
+    "bytecode_push_str" test_start
+
+    "\"hello\"" compile_source = program
+    "PushStr" InstKind::PushStr program has_inst assert_true
+    "string table" "hello" 0 program.strings.get assert_str_eq
+}
+
+fn test_bytecode_push_char {
+    "bytecode_push_char" test_start
+
+    "'a'" compile_source = program
+    "PushChar" InstKind::PushChar program has_inst assert_true
+}
+
+# ---------------------------------------------------------------------------
+# Print
+# ---------------------------------------------------------------------------
+
+fn test_bytecode_print {
+    "bytecode_print" test_start
+
+    "42 print" compile_source = program
+    "PrintInt" InstKind::PrintInt program has_inst assert_true
+
+    "\"hello\" print" compile_source = program
+    "PrintStr" InstKind::PrintStr program has_inst assert_true
+
+    "true print" compile_source = program
+    "PrintBool" InstKind::PrintBool program has_inst assert_true
+
+    "'a' print" compile_source = program
+    "PrintChar" InstKind::PrintChar program has_inst assert_true
+}
+
+# ---------------------------------------------------------------------------
+# Heap
+# ---------------------------------------------------------------------------
+
+fn test_bytecode_heap {
+    "bytecode_heap" test_start
+
+    "10 alloc" compile_source = program
+    "HeapAlloc" InstKind::HeapAlloc program has_inst assert_true
+}
+
+fn test_bytecode_load_store {
+    "bytecode_load_store" test_start
+
+    "42 10 alloc store64 10 alloc load64" compile_source = program
+    "Store64" InstKind::Store64 program has_inst assert_true
+    "Load64" InstKind::Load64 program has_inst assert_true
+}
+
+fn test_bytecode_sized_load {
+    "bytecode_sized_load" test_start
+
+    "10 alloc load8" compile_source = program
+    "Load8" InstKind::Load8 program has_inst assert_true
+
+    "10 alloc load16" compile_source = program
+    "Load16" InstKind::Load16 program has_inst assert_true
+
+    "10 alloc load32" compile_source = program
+    "Load32" InstKind::Load32 program has_inst assert_true
+
+    "10 alloc load64" compile_source = program
+    "Load64" InstKind::Load64 program has_inst assert_true
+}
+
+fn test_bytecode_sized_store {
+    "bytecode_sized_store" test_start
+
+    "42 10 alloc store8" compile_source = program
+    "Store8" InstKind::Store8 program has_inst assert_true
+
+    "42 10 alloc store16" compile_source = program
+    "Store16" InstKind::Store16 program has_inst assert_true
+
+    "42 10 alloc store32" compile_source = program
+    "Store32" InstKind::Store32 program has_inst assert_true
+
+    "42 10 alloc store64" compile_source = program
+    "Store64" InstKind::Store64 program has_inst assert_true
+}
+
+# ---------------------------------------------------------------------------
+# Globals
+# ---------------------------------------------------------------------------
+
+fn test_bytecode_globals {
+    "bytecode_globals" test_start
+
+    "42 = x x" compile_source = program
+    "globals_count" 0 program.globals_count > assert_true
+    "GlobalSet" InstKind::GlobalSet program has_inst assert_true
+    "GlobalGet" InstKind::GlobalGet program has_inst assert_true
+}
+
+# ---------------------------------------------------------------------------
+# Locals
+# ---------------------------------------------------------------------------
+
+fn test_bytecode_locals {
+    "bytecode_locals" test_start
+
+    "fn foo a:int -> int { a } 5 foo" compile_source = program
+    "LocalsInit" InstKind::LocalsInit program has_inst_in_functions assert_true
+    "LocalsUninit" InstKind::LocalsUninit program has_inst_in_functions assert_true
+    "LocalSet" InstKind::LocalSet program has_inst_in_functions assert_true
+    "LocalGet" InstKind::LocalGet program has_inst_in_functions assert_true
+}
+
+# ---------------------------------------------------------------------------
+# Function call / return
+# ---------------------------------------------------------------------------
+
+fn test_bytecode_fn_call {
+    "bytecode_fn_call" test_start
+
+    "fn greet { } greet" compile_source = program
+    "FnCall" InstKind::FnCall program has_inst assert_true
+    "fn registered" "greet" program.functions.has assert_true
+}
+
+fn test_bytecode_fn_return {
+    "bytecode_fn_return" test_start
+
+    "fn noop { } noop" compile_source = program
+    "FnReturn" InstKind::FnReturn program has_inst_in_functions assert_true
+}
+
+# ---------------------------------------------------------------------------
+# Lambda: FnPush / FnExec
+# ---------------------------------------------------------------------------
+
+fn test_bytecode_lambda {
+    "bytecode_lambda" test_start
+
+    "42 { 1 + } exec" compile_source = program
+    "FnPush" InstKind::FnPush program has_inst assert_true
+    "FnExec" InstKind::FnExec program has_inst assert_true
+}
+
+# ---------------------------------------------------------------------------
+# Function references
+# ---------------------------------------------------------------------------
+
+fn test_bytecode_fn_ref {
+    "bytecode_fn_ref" test_start
+
+    "fn add a:int b:int -> int { a b + } &add" compile_source = program
+    "FnPush" InstKind::FnPush program has_inst assert_true
+}
+
+# ---------------------------------------------------------------------------
+# Constants (captures)
+# ---------------------------------------------------------------------------
+
+fn test_bytecode_constants {
+    "bytecode_constants" test_start
+
+    "42 = x { x } exec" compile_source = program
+    "constants_count" 0 program.constants_count > assert_true
+    "ConstantStore" InstKind::ConstantStore program has_inst assert_true
+    "ConstantLoad" InstKind::ConstantLoad program has_inst_in_functions assert_true
+}
+
+# ---------------------------------------------------------------------------
+# Control flow: if
+# ---------------------------------------------------------------------------
+
+fn test_bytecode_if {
+    "bytecode_if" test_start
+
+    "if true then 1 drop fi" compile_source = program
+    "Label" InstKind::Label program has_inst assert_true
+    "JumpNe" InstKind::JumpNe program has_inst assert_true
+}
+
+# ---------------------------------------------------------------------------
+# Control flow: while
+# ---------------------------------------------------------------------------
+
+fn test_bytecode_while {
+    "bytecode_while" test_start
+
+    "while false do done" compile_source = program
+    "Label" InstKind::Label program has_inst assert_true
+    "Jump" InstKind::Jump program has_inst assert_true
+    "JumpNe" InstKind::JumpNe program has_inst assert_true
+}
+
+# ---------------------------------------------------------------------------
+# String interning
+# ---------------------------------------------------------------------------
+
+fn test_bytecode_string_interning {
+    "bytecode_string_interning" test_start
+
+    "\"hello\" print \"hello\" print \"world\" print" compile_source = program
+    # "hello" should appear only once in the string table
+    "string count" 2 program.strings.length assert_eq
+}
+
+# ---------------------------------------------------------------------------
+# Run all tests
+# ---------------------------------------------------------------------------
+
+test_bytecode_simple_ops
+test_bytecode_syscalls
+test_bytecode_push_int
+test_bytecode_push_bool
+test_bytecode_push_str
+test_bytecode_push_char
+test_bytecode_print
+test_bytecode_heap
+test_bytecode_load_store
+test_bytecode_sized_load
+test_bytecode_sized_store
+test_bytecode_globals
+test_bytecode_locals
+test_bytecode_fn_call
+test_bytecode_fn_return
+test_bytecode_lambda
+test_bytecode_fn_ref
+test_bytecode_constants
+test_bytecode_if
+test_bytecode_while
+test_bytecode_string_interning
+test_summary
