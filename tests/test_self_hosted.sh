@@ -127,11 +127,11 @@ echo '5 3 != print' > "$tmp_ne"
 run_test "not_equal_true" "$tmp_ne" "1"
 
 tmp_lt="/tmp/casa_sh_lt.casa"
-echo '3 5 < print' > "$tmp_lt"
+echo '5 3 < print' > "$tmp_lt"
 run_test "less_than_true" "$tmp_lt" "1"
 
 tmp_gt="/tmp/casa_sh_gt.casa"
-echo '5 3 > print' > "$tmp_gt"
+echo '3 5 > print' > "$tmp_gt"
 run_test "greater_than_true" "$tmp_gt" "1"
 
 tmp_le="/tmp/casa_sh_le.casa"
@@ -231,7 +231,7 @@ run_test "elif_chain" "$tmp_elif" "30"
 tmp_while="/tmp/casa_sh_while.casa"
 cat > "$tmp_while" << 'CASA'
 0 = i
-while i 5 < do
+while 5 i < do
     i print
     i 1 + = i
 done
@@ -242,7 +242,7 @@ run_test "while_loop" "$tmp_while" "01234"
 tmp_break="/tmp/casa_sh_break.casa"
 cat > "$tmp_break" << 'CASA'
 0 = i
-while i 10 < do
+while 10 i < do
     if i 3 == then break fi
     i print
     i 1 + = i
@@ -254,7 +254,7 @@ run_test "break" "$tmp_break" "012"
 tmp_continue="/tmp/casa_sh_continue.casa"
 cat > "$tmp_continue" << 'CASA'
 0 = i
-while i 5 < do
+while 5 i < do
     i 1 + = i
     if i 3 == then continue fi
     i print
@@ -266,7 +266,7 @@ run_test "continue" "$tmp_continue" "1245"
 tmp_nested_if="/tmp/casa_sh_nested_if.casa"
 cat > "$tmp_nested_if" << 'CASA'
 0 = i
-while i 6 < do
+while 6 i < do
     if i 2 % 0 == then
         i print
     fi
@@ -279,9 +279,9 @@ run_test "nested_if_in_while" "$tmp_nested_if" "024"
 tmp_nested_while="/tmp/casa_sh_nested_while.casa"
 cat > "$tmp_nested_while" << 'CASA'
 0 = i
-while i 3 < do
+while 3 i < do
     0 = j
-    while j 2 < do
+    while 2 j < do
         i j + print
         j 1 + = j
     done

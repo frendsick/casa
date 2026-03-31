@@ -65,6 +65,7 @@ fn parse_intrinsic intrinsic_value:str -> OpKind {
         "syscall6"   => OpKind::Syscall6
         "argc"       => OpKind::Argc
         "argv"       => OpKind::Argv
+        "exec"       => OpKind::FnExec
         _ => {
             f"unknown intrinsic: {intrinsic_value}" eprintln
             1 exit
@@ -148,7 +149,10 @@ fn skip_type ctx:ParseContext index:int -> int {
         if "[" next_val == then
             1 += index
             1 = bracket_depth
-            while index ctx.tokens.length > 0 bracket_depth > && do
+            while
+                index ctx.tokens.length >
+                0 bracket_depth > &&
+            do
                 index ctx.tokens.get .value = bracket_val
                 if "[" bracket_val == then
                     1 += bracket_depth
@@ -171,10 +175,13 @@ fn parse_token token:Token index:int ctx:ParseContext ops:List[Op] -> int {
         0 token.value str::at = first_ch
         if first_ch '"' == then
             token.value 1 token.value.length 1 - str::substring ctx.string_table intern_string OpValue::Int OpKind::PushStr Op ops.push
+            "str" ctx->expression_type
         elif first_ch '\'' == then
             token.value 1 token.value.length 1 - str::substring str_to_int OpValue::Int OpKind::PushChar Op ops.push
+            "char" ctx->expression_type
         else
             token.value str_to_int OpValue::Int OpKind::PushInt Op ops.push
+            "int" ctx->expression_type
         fi
     elif kind TokenKind::Operator == then
         token.value parse_operator = op_kind
@@ -186,8 +193,41 @@ fn parse_token token:Token index:int ctx:ParseContext ops:List[Op] -> int {
                 1 exit
             fi
             name_token.value OpValue::Str op_kind Op ops.push
+            # Track variable type on assignment
+            if op_kind OpKind::AssignVariable == then
+                name_token.value ctx.expression_type ctx.variable_types.set drop
+            fi
+            "" ctx->expression_type
         else
             OpValue::None op_kind Op ops.push
+            # Arithmetic/comparison operators produce known types
+            if op_kind OpKind::Add ==
+               op_kind OpKind::Sub == ||
+               op_kind OpKind::Mul == ||
+               op_kind OpKind::Div == ||
+               op_kind OpKind::Mod == ||
+               op_kind OpKind::BitAnd == ||
+               op_kind OpKind::BitOr == ||
+               op_kind OpKind::BitXor == ||
+               op_kind OpKind::BitNot == ||
+               op_kind OpKind::Shl == ||
+               op_kind OpKind::Shr == ||
+            then
+                "int" ctx->expression_type
+            elif op_kind OpKind::Eq ==
+                 op_kind OpKind::Ne == ||
+                 op_kind OpKind::Lt == ||
+                 op_kind OpKind::Gt == ||
+                 op_kind OpKind::Le == ||
+                 op_kind OpKind::Ge == ||
+                 op_kind OpKind::And == ||
+                 op_kind OpKind::Or == ||
+                 op_kind OpKind::Not == ||
+            then
+                "bool" ctx->expression_type
+            else
+                "" ctx->expression_type
+            fi
         fi
     elif kind TokenKind::Keyword == then
         if "fn" token.value == then
@@ -211,19 +251,54 @@ fn parse_token token:Token index:int ctx:ParseContext ops:List[Op] -> int {
         else
             OpValue::None token.value parse_intrinsic Op ops.push
         fi
+        "" ctx->expression_type
     elif kind TokenKind::Identifier == then
         if token.value ctx.functions.has then
             token.value OpValue::Str OpKind::FnCall Op ops.push
+            token.value ctx update_expression_type
         elif token.value ctx.structs.has then
             token.value ctx.structs.get .unwrap .member_names.length OpValue::Int OpKind::StructNew Op ops.push
+            token.value ctx->expression_type
         else
-            token.value ctx resolve_identifier ops.push
+            token.value ctx resolve_identifier = resolved_op
+            resolved_op ops.push
+            # Track expression type for variables
+            if resolved_op.kind OpKind::PushVariable == then
+                resolved_op.value op_str_value = var_name
+                if var_name ctx.variable_types.has then
+                    var_name ctx.variable_types.get .unwrap ctx->expression_type
+                else
+                    "" ctx->expression_type
+                fi
+            else
+                "" ctx->expression_type
+            fi
         fi
     elif kind TokenKind::Delimiter == then
-        if "(" token.value == then
-            # Type cast: skip tokens until matching )
+        if "." token.value == then
+            # Method call: resolve .method_name to Type::method_name
+            index ctx.tokens.get .value = method_name
+            1 += index
+            method_name ctx resolve_method_call = qualified_name
+            qualified_name OpValue::Str OpKind::FnCall Op ops.push
+        elif "->" token.value == then
+            # Field setter: resolve ->field to Type::set_field
+            index ctx.tokens.get .value = setter_field
+            1 += index
+            f"set_{setter_field}" ctx resolve_method_call = qualified_name
+            qualified_name OpValue::Str OpKind::FnCall Op ops.push
+        elif "(" token.value == then
+            # Type cast: capture type name for expression tracking, skip rest
+            if index ctx.tokens.length > then
+                index ctx.tokens.get .value = cast_type_name
+            else
+                "" = cast_type_name
+            fi
             1 = paren_depth
-            while index ctx.tokens.length > 0 paren_depth > && do
+            while
+                index ctx.tokens.length >
+                0 paren_depth > &&
+            do
                 index ctx.tokens.get .value = paren_val
                 if "(" paren_val == then
                     1 += paren_depth
@@ -232,14 +307,14 @@ fn parse_token token:Token index:int ctx:ParseContext ops:List[Op] -> int {
                 fi
                 1 += index
             done
+            cast_type_name ctx->expression_type
         elif "[" token.value ==
              "]" token.value == ||
              ")" token.value == ||
              "," token.value == ||
+             ":" token.value == ||
         then
-            # Stray brackets/parens/commas from type annotations — skip silently.
-            # This is intentionally permissive: without a type checker,
-            # we cannot distinguish annotation tokens from real errors.
+            # Stray brackets/parens/commas/colons from type annotations — skip silently.
         else
             f"unexpected delimiter: {token.value}" eprintln
             1 exit
@@ -269,16 +344,20 @@ fn parse_function ctx:ParseContext index:int -> int {
     # Skip optional generic type parameters: fn name[T1 T2] ...
     index ctx skip_generic_brackets = index
 
-    # Parse parameters and collect variable names
+    # Parse parameters and collect variable names and types
     List::new (List[str]) = variables
+    "" = return_type_str
     while index ctx.tokens.length > do
         index ctx.tokens.get = param_token
 
         # Check for return type arrow
         if param_token.kind TokenKind::Delimiter == "->" param_token.value == && then
             1 += index
-            # Skip return type
-            index ctx skip_type = index
+            # Read all return types until opening brace (keeps last = top-of-stack type)
+            while index ctx.tokens.length > do
+                if "{" index ctx.tokens.get .value == then break fi
+                index ctx read_type_string = index = return_type_str
+            done
             break
         fi
 
@@ -294,17 +373,19 @@ fn parse_function ctx:ParseContext index:int -> int {
         fi
 
         # Check if next token is colon (type annotation)
+        "" = param_type
         1 += index
         if index ctx.tokens.length > then
             index ctx.tokens.get = colon_token
             if colon_token.kind TokenKind::Delimiter == ":" colon_token.value == && then
                 1 += index
-                # Skip the type
-                index ctx skip_type = index
+                index ctx read_type_string = index = param_type
             fi
         fi
 
         param_token.value variables.push
+        # Track parameter types for method resolution
+        param_token.value param_type ctx.variable_types.set drop
     done
 
     # Expect opening brace
@@ -322,7 +403,7 @@ fn parse_function ctx:ParseContext index:int -> int {
     # Register placeholder so recursive/forward calls resolve during body parsing
     List::new (List[Op]) = placeholder_ops
     List::new (List[str]) = placeholder_vars
-    placeholder_vars placeholder_ops func_name Function = placeholder
+    return_type_str placeholder_vars placeholder_ops func_name Function = placeholder
     func_name placeholder ctx.functions.set drop
 
     # Parse body ops until matching closing brace
@@ -336,21 +417,30 @@ fn parse_function ctx:ParseContext index:int -> int {
     done
 
     1 = brace_depth
-    while index ctx.tokens.length > 0 brace_depth > && do
+    while
+        index ctx.tokens.length >
+        0 brace_depth > &&
+    do
         index ctx.tokens.get = body_token
 
         # Track brace nesting for delimiters
         if body_token.kind TokenKind::Delimiter == then
             if "{" body_token.value == then
                 1 += brace_depth
+                1 += index
             elif "}" body_token.value == then
                 brace_depth 1 - = brace_depth
-                if 0 brace_depth == then
-                    1 += index
-                    break
-                fi
+                1 += index
+                if 0 brace_depth == then break fi
+            elif "." body_token.value ==
+                 "->" body_token.value == ||
+                 "(" body_token.value == ||
+            then
+                1 += index
+                body_ops ctx index body_token parse_token = index
+            else
+                1 += index
             fi
-            1 += index
         elif body_token.kind TokenKind::Eof == then
             f"unexpected end of file in function {func_name}" eprintln
             1 exit
@@ -360,7 +450,7 @@ fn parse_function ctx:ParseContext index:int -> int {
         fi
     done
 
-    variables body_ops func_name Function = function
+    return_type_str variables body_ops func_name Function = function
     func_name function ctx.functions.set drop
 
     index
@@ -384,9 +474,13 @@ fn resolve_identifier ctx:ParseContext token_value:str -> Op {
             done
             f"unknown variant: {token_value}" eprintln
             1 exit
+        elif token_value ctx.functions.has then
+            # Qualified function call (e.g. Type::method or trait method K::hash)
+            token_value OpValue::Str OpKind::FnCall Op return
         else
-            f"unknown type in qualified name: {token_value}" eprintln
-            1 exit
+            # Treat as function call for unresolved qualified names
+            # (e.g. trait-bound calls like K::hash in generic code)
+            token_value OpValue::Str OpKind::FnCall Op return
         fi
     fi
     token_value OpValue::Str OpKind::PushVariable Op
@@ -399,7 +493,10 @@ fn skip_generic_brackets ctx:ParseContext index:int -> int {
     if "[" maybe_bracket == ! then index return fi
     1 += index
     1 = bracket_depth
-    while index ctx.tokens.length > 0 bracket_depth > && do
+    while
+        index ctx.tokens.length >
+        0 bracket_depth > &&
+    do
         index ctx.tokens.get .value = bracket_val
         if "[" bracket_val == then
             1 += bracket_depth
@@ -409,6 +506,302 @@ fn skip_generic_brackets ctx:ParseContext index:int -> int {
         1 += index
     done
     index
+}
+
+# Read a type annotation from the token stream and return it as a string.
+# Handles generic brackets: List[Token], Map[str Function], etc.
+fn read_type_string ctx:ParseContext index:int -> str int {
+    if index ctx.tokens.length > ! then "" index return fi
+    index ctx.tokens.get .value = type_name
+    1 += index
+
+    # Check for generic brackets: Type[T1 T2]
+    if index ctx.tokens.length > then
+        if "[" index ctx.tokens.get .value == then
+            f"{type_name}[" = type_name
+            1 += index
+            1 = bracket_depth
+            true = first_arg
+            while
+                index ctx.tokens.length >
+                0 bracket_depth > &&
+            do
+                index ctx.tokens.get .value = bracket_val
+                if "[" bracket_val == then
+                    1 += bracket_depth
+                    f"{type_name}[" = type_name
+                elif "]" bracket_val == then
+                    bracket_depth 1 - = bracket_depth
+                    f"{type_name}]" = type_name
+                elif "," bracket_val == then
+                    # Skip commas in generic params
+                else
+                    if first_arg then
+                        f"{type_name}{bracket_val}" = type_name
+                        false = first_arg
+                    else
+                        f"{type_name} {bracket_val}" = type_name
+                    fi
+                fi
+                1 += index
+            done
+        fi
+    fi
+    type_name index
+}
+
+# Extract the base type from a possibly-generic type string.
+# "List[Token]" -> "List", "int" -> "int"
+fn extract_base_type type_str:str -> str {
+    type_str "[" str::find = bracket_pos
+    if 0 bracket_pos >= then
+        type_str 0 bracket_pos str::substring
+    else
+        type_str
+    fi
+}
+
+# Extract type arguments from a generic type string.
+# "List[Token]" -> ["Token"], "Map[str Function]" -> ["str", "Function"]
+# "int" -> []
+fn extract_type_args type_str:str -> List[str] {
+    List::new (List[str]) = args
+    type_str "[" str::find = bracket_pos
+    if 0 bracket_pos > ! then
+        args return
+    fi
+
+    # Extract content between outer [ and ]
+    bracket_pos 1 + = start
+    type_str.length 1 - = end_pos
+    if start end_pos >= then args return fi
+    type_str start end_pos start - str::substring = inner
+
+    # Split on spaces, respecting bracket nesting
+    0 = pos
+    0 = arg_start
+    0 = depth
+    while pos inner.length > do
+        pos inner str::at = current_char
+        if current_char '[' == then
+            1 += depth
+        elif current_char ']' == then
+            depth 1 - = depth
+        elif current_char ' ' == 0 depth == && then
+            if arg_start pos > then
+                inner arg_start pos arg_start - str::substring args.push
+            fi
+            pos 1 + = arg_start
+        fi
+        1 += pos
+    done
+    # Last argument
+    if arg_start pos > then
+        inner arg_start pos arg_start - str::substring args.push
+    fi
+    args
+}
+
+# Read generic type parameter names from brackets: [T1 T2] or [K: Hashable, V]
+# Returns list of parameter names and updated index.
+fn read_struct_type_params ctx:ParseContext index:int -> List[str] int {
+    List::new (List[str]) = params
+    if index ctx.tokens.length > ! then params index return fi
+    if "[" index ctx.tokens.get .value != then params index return fi
+    1 += index
+    while index ctx.tokens.length > do
+        index ctx.tokens.get = param_token
+        if "]" param_token.value == then
+            1 += index
+            break
+        elif "," param_token.value == then
+            1 += index
+        elif ":" param_token.value == then
+            # Skip trait bound after colon: K: Hashable
+            1 += index
+            if index ctx.tokens.length > then
+                1 += index
+            fi
+        elif param_token.kind TokenKind::Identifier == then
+            param_token.value params.push
+            1 += index
+        else
+            1 += index
+        fi
+    done
+    params index
+}
+
+# Update expression_type from a resolved function call.
+fn update_expression_type ctx:ParseContext qualified_name:str {
+    if qualified_name ctx.functions.has then
+        qualified_name ctx.functions.get .unwrap .return_type = ret_type
+        if "" ret_type != then
+            ret_type ctx resolve_generic_return ctx->expression_type
+        else
+            "" ctx->expression_type
+        fi
+    else
+        "" ctx->expression_type
+    fi
+}
+
+# Resolve a generic return type using the receiver's concrete type args.
+# If return_type is a type parameter (e.g. "T"), substitute from receiver type.
+# Substitute a single type param name with a concrete type arg in a type string.
+# E.g., substitute_type_param("Option[V]", "V", "int") -> "Option[int]"
+fn substitute_type_param type_str:str param_name:str concrete:str -> str {
+    # If the whole string IS the param, return concrete directly
+    if type_str param_name == then concrete return fi
+
+    # Extract base and args, substitute in args, reconstruct
+    type_str extract_base_type = sub_base
+    type_str extract_type_args = sub_args
+    if 0 sub_args.length == then type_str return fi
+
+    f"{sub_base}[" = result
+    0 = arg_index
+    while arg_index sub_args.length > do
+        arg_index sub_args.get = arg_val
+        if arg_val param_name == then
+            concrete = arg_val
+        fi
+        if 0 arg_index > then
+            f"{result} {arg_val}" = result
+        else
+            f"{result}{arg_val}" = result
+        fi
+        1 += arg_index
+    done
+    f"{result}]"
+}
+
+fn resolve_generic_return ctx:ParseContext return_type:str -> str {
+    ctx.expression_type = receiver_type
+    receiver_type extract_base_type = base_type
+
+    # Try struct-level type param resolution
+    if base_type ctx.structs.has then
+        base_type ctx.structs.get .unwrap = struct_def
+        struct_def.type_params = type_params
+
+        if 0 type_params.length > then
+            receiver_type extract_type_args = type_args
+
+            # Direct match: return type is a type param (e.g., "T", "K", "V")
+            0 = param_index
+            while param_index type_params.length > do
+                if return_type param_index type_params.get == then
+                    if param_index type_args.length > then
+                        param_index type_args.get return
+                    fi
+                fi
+                1 += param_index
+            done
+
+            # Composite match: return type contains type params (e.g., "Option[V]")
+            return_type = resolved
+            0 = sub_index
+            while sub_index type_params.length > do
+                sub_index type_params.get = sub_param
+                if sub_index type_args.length > then
+                    sub_index type_args.get = sub_arg
+                    sub_param sub_arg resolved substitute_type_param = resolved
+                fi
+                1 += sub_index
+            done
+            if resolved return_type != then
+                resolved return
+            fi
+        fi
+    fi
+
+    # Fallback: receiver has generic args but no struct-level type params
+    # Use first generic arg for short return type names (type variables like T, T1)
+    receiver_type "[" str::find = fallback_bracket
+    if 0 fallback_bracket >= then
+        if 0 return_type.length > 3 return_type.length > ! && then
+            fallback_bracket 1 + = fallback_start
+            fallback_start = fallback_end
+            while fallback_end receiver_type.length > do
+                fallback_end receiver_type str::at = fallback_ch
+                if fallback_ch ' ' == fallback_ch ']' == || then
+                    break
+                fi
+                1 += fallback_end
+            done
+            if fallback_start fallback_end > then
+                receiver_type fallback_start fallback_end fallback_start - str::substring return
+            fi
+        fi
+    fi
+
+    return_type
+}
+
+# Search all registered functions for one matching *::method_name.
+# Returns true and the qualified name if exactly one match found.
+fn search_all_methods ctx:ParseContext method_name:str -> bool str {
+    ctx.functions.keys = func_names
+    f"::{method_name}" = suffix
+    "" = found_name
+    0 = match_count
+    0 = search_index
+    while search_index func_names.length > do
+        search_index func_names.get = func_name
+        if func_name suffix str::ends_with then
+            func_name = found_name
+            1 += match_count
+        fi
+        1 += search_index
+    done
+    if 1 match_count == then
+        found_name ctx update_expression_type
+        true found_name
+    else
+        false ""
+    fi
+}
+
+# Resolve a method call using the current expression type.
+# Tries direct type resolution first, then fallback search.
+fn resolve_method_call ctx:ParseContext method_name:str -> str {
+    ctx.expression_type = receiver_type
+
+    # Strategy 1: Known receiver type
+    if "" receiver_type != then
+        # Try with base type
+        receiver_type extract_base_type = base_type
+        f"{base_type}::{method_name}" = qualified
+        if qualified ctx.functions.has then
+            qualified ctx update_expression_type
+            qualified return
+        fi
+        # Try with full receiver type (e.g. "str::length")
+        f"{receiver_type}::{method_name}" = full_qualified
+        if full_qualified ctx.functions.has then
+            full_qualified ctx update_expression_type
+            full_qualified return
+        fi
+    fi
+
+    # Strategy 2: Fallback search all functions
+    method_name ctx search_all_methods = found_name = found
+    if found then found_name return fi
+
+    # Last resort: for common methods like .to_str, try known types
+    if "to_str" method_name == "" receiver_type == && then
+        # Default to str::to_str (identity on strings, works as no-op)
+        "str::to_str" = fallback_name
+        if fallback_name ctx.functions.has then
+            fallback_name ctx update_expression_type
+            fallback_name return
+        fi
+    fi
+
+    f"cannot resolve method: .{method_name} (receiver type: {receiver_type})\n" eprintln
+    1 exit
+    ""
 }
 
 # Parse a struct definition: struct Name { field1: type1  field2: type2 }
@@ -423,7 +816,8 @@ fn parse_struct ctx:ParseContext index:int -> int {
     name_token.value = struct_name
     1 += index
 
-    index ctx skip_generic_brackets = index
+    # Capture type parameters instead of skipping
+    index ctx read_struct_type_params = index = type_params
 
     # Expect opening brace
     if index ctx.tokens.length > ! then
@@ -439,6 +833,7 @@ fn parse_struct ctx:ParseContext index:int -> int {
 
     # Parse fields: name: type pairs until closing brace
     List::new (List[str]) = member_names
+    List::new (List[str]) = member_types
     while index ctx.tokens.length > do
         index ctx.tokens.get = field_token
 
@@ -455,23 +850,26 @@ fn parse_struct ctx:ParseContext index:int -> int {
         1 += index
 
         # Expect colon and type
+        "" = field_type
         if index ctx.tokens.length > then
             index ctx.tokens.get = colon_token
             if colon_token.kind TokenKind::Delimiter == ":" colon_token.value == && then
                 1 += index
-                index ctx skip_type = index
+                index ctx read_type_string = index = field_type
             fi
         fi
+        field_type member_types.push
     done
 
     # Register struct definition
-    member_names struct_name StructDef = struct_def
+    type_params member_types member_names struct_name StructDef = struct_def
     struct_name struct_def ctx.structs.set drop
 
     # Synthesize getter and setter functions for each field
     0 = field_index
     while field_index member_names.length > do
         field_index member_names.get = field_name
+        field_index member_types.get = field_type
         field_index 8 * = offset
 
         # Getter: StructName::field_name
@@ -488,7 +886,7 @@ fn parse_struct ctx:ParseContext index:int -> int {
 
         List::new (List[str]) = getter_vars
         "self" getter_vars.push
-        getter_vars getter_ops f"{struct_name}::{field_name}" Function = getter_func
+        field_type getter_vars getter_ops f"{struct_name}::{field_name}" Function = getter_func
         f"{struct_name}::{field_name}" getter_func ctx.functions.set drop
 
         # Setter: StructName::set_field_name
@@ -509,7 +907,7 @@ fn parse_struct ctx:ParseContext index:int -> int {
         List::new (List[str]) = setter_vars
         "self" setter_vars.push
         "value" setter_vars.push
-        setter_vars setter_ops f"{struct_name}::set_{field_name}" Function = setter_func
+        "" setter_vars setter_ops f"{struct_name}::set_{field_name}" Function = setter_func
         f"{struct_name}::set_{field_name}" setter_func ctx.functions.set drop
 
         1 += field_index
@@ -605,8 +1003,17 @@ fn parse_impl ctx:ParseContext index:int -> int {
     type_token.value = impl_type_name
     1 += index
 
-    # Skip optional generic brackets after type name: Map[K V]
-    index ctx skip_generic_brackets = index
+    # Capture type params from type name brackets: Map[K V] → ["K", "V"]
+    # Merge into struct type_params if the struct has none yet
+    index ctx read_struct_type_params = index = impl_type_params
+    if 0 impl_type_params.length > then
+        if impl_type_name ctx.structs.has then
+            impl_type_name ctx.structs.get .unwrap = impl_struct
+            if 0 impl_struct.type_params.length == then
+                impl_type_params impl_struct->type_params
+            fi
+        fi
+    fi
 
     # Expect opening brace
     if index ctx.tokens.length > ! then
@@ -636,9 +1043,15 @@ fn parse_impl ctx:ParseContext index:int -> int {
             index 1 + ctx.tokens.get .value = method_name
             1 += index
 
+            # Pre-register qualified name so method calls in the body resolve
+            f"{impl_type_name}::{method_name}" = qualified_name
+            List::new (List[Op]) = pre_ops
+            List::new (List[str]) = pre_vars
+            "" pre_vars pre_ops qualified_name Function = pre_func
+            qualified_name pre_func ctx.functions.set drop
+
             index ctx parse_function = index
 
-            f"{impl_type_name}::{method_name}" = qualified_name
             method_name ctx.functions.get .unwrap = method_func
             qualified_name method_func ctx.functions.set drop
             method_name ctx.functions.delete drop
@@ -679,7 +1092,10 @@ fn parse_trait ctx:ParseContext index:int -> int {
 
     # Skip all tokens until matching closing brace
     1 = brace_depth
-    while index ctx.tokens.length > 0 brace_depth > && do
+    while
+        index ctx.tokens.length >
+        0 brace_depth > &&
+    do
         index ctx.tokens.get .value = brace_val
         if "{" brace_val == then
             1 += brace_depth
@@ -720,15 +1136,26 @@ fn update_brace_depth token_value:str depth:int -> int {
 # The opening { has already been consumed.
 fn parse_match_braced_body ops:List[Op] ctx:ParseContext index:int -> int {
     1 = brace_depth
-    while index ctx.tokens.length > 0 brace_depth > && do
+    while
+        index ctx.tokens.length >
+        0 brace_depth > &&
+    do
         index ctx.tokens.get = body_token
         if body_token.kind TokenKind::Eof == then
             "unexpected end of file in match arm" eprintln
             1 exit
         elif body_token.kind TokenKind::Delimiter == then
-            brace_depth body_token.value update_brace_depth = brace_depth
-            if 0 brace_depth == then index 1 + return fi
-            1 += index
+            if "." body_token.value ==
+               "->" body_token.value == ||
+               "(" body_token.value == ||
+            then
+                1 += index
+                ops ctx index body_token parse_token = index
+            else
+                brace_depth body_token.value update_brace_depth = brace_depth
+                if 0 brace_depth == then index 1 + return fi
+                1 += index
+            fi
         else
             1 += index
             ops ctx index body_token parse_token = index
@@ -820,6 +1247,22 @@ fn parse_match ops:List[Op] ctx:ParseContext index:int -> int {
     index
 }
 
+# Resolve forward references: convert PushVariable ops to FnCall where
+# the variable name matches a known function. Applied after all parsing.
+fn resolve_forward_refs ops:List[Op] functions:Map[str Function] {
+    0 = resolve_index
+    while resolve_index ops.length > do
+        resolve_index ops.get = resolve_op
+        if resolve_op.kind OpKind::PushVariable == then
+            resolve_op.value op_str_value = resolve_name
+            if resolve_name functions.has then
+                resolve_name OpValue::Str OpKind::FnCall Op resolve_index ops.set
+            fi
+        fi
+        1 += resolve_index
+    done
+}
+
 fn parse ctx:ParseContext -> List[Op] {
     List::new (List[Op]) = ops
     0 = index
@@ -833,6 +1276,17 @@ fn parse ctx:ParseContext -> List[Op] {
         fi
 
         ops ctx index token parse_token = index
+    done
+
+    # Resolve forward references in global ops and all function bodies
+    ctx.functions ops resolve_forward_refs
+    ctx.functions.keys = all_func_names
+    0 = func_resolve_index
+    while func_resolve_index all_func_names.length > do
+        func_resolve_index all_func_names.get = func_resolve_name
+        func_resolve_name ctx.functions.get .unwrap .ops = func_ops
+        ctx.functions func_ops resolve_forward_refs
+        1 += func_resolve_index
     done
 
     ops
