@@ -70,6 +70,7 @@ fn make_intrinsic_set -> Set[str] {
     "syscall6" intrinsics.add drop
     "argc" intrinsics.add drop
     "argv" intrinsics.add drop
+    "exec" intrinsics.add drop
     intrinsics
 }
 
@@ -225,6 +226,116 @@ fn lex_operator cursor:Cursor ch:char -> Token {
     end
 }
 
+# Read a text segment from an f-string until { or " is reached.
+# Returns the collected text.
+fn lex_fstring_text cursor:Cursor -> str {
+    StringBuilder::new = text_builder
+    while cursor.is_eof ! do
+        cursor.peek.unwrap = text_ch
+        if text_ch '"' == text_ch '{' == || then
+            break
+        elif text_ch '\\' == then
+            cursor.advance drop
+            if cursor.is_eof ! then
+                cursor.advance.unwrap = esc_ch
+                esc_ch match
+                    'n'  => '\n' text_builder.append_char
+                    't'  => '\t' text_builder.append_char
+                    '\\' => '\\' text_builder.append_char
+                    '"'  => '"' text_builder.append_char
+                    '{'  => '{' text_builder.append_char
+                    '}'  => '}' text_builder.append_char
+                    '0'  => '\0' text_builder.append_char
+                    _    => esc_ch text_builder.append_char
+                end
+            fi
+        else
+            cursor.advance drop
+            text_ch text_builder.append_char
+        fi
+    done
+    text_builder.build
+}
+
+# Lex an f-string: f"text {expr} text"
+# Emits tokens that evaluate to a concatenated string.
+fn lex_fstring cursor:Cursor tokens:List[Token] keywords:Set[str] intrinsics:Set[str] {
+    cursor.advance drop  # consume 'f'
+    cursor.advance drop  # consume '"'
+
+    0 = fstr_part_count
+
+    while cursor.is_eof ! do
+        cursor.peek.unwrap = fstr_ch
+
+        if fstr_ch '"' == then
+            cursor.advance drop
+            break
+        elif fstr_ch '{' == then
+            cursor.advance drop
+            # Lex expression tokens until matching }
+            1 = fstr_brace_depth
+            while cursor.is_eof ! fstr_brace_depth 0 > && do
+                cursor skip_whitespace
+                if cursor.is_eof then break fi
+                cursor.peek.unwrap = expr_ch
+                if expr_ch '}' == then
+                    cursor.advance drop
+                    fstr_brace_depth 1 - = fstr_brace_depth
+                elif expr_ch '{' == then
+                    cursor.advance drop
+                    1 += fstr_brace_depth
+                elif expr_ch '"' == then
+                    if cursor parse_quoted_string Result::Ok(expr_str) is then
+                        f"\"{expr_str}" TokenKind::Literal Token tokens.push
+                    fi
+                elif expr_ch .is_digit then
+                    cursor lex_integer_literal tokens.push
+                elif expr_ch '-' == then
+                    tokens cursor lex_minus
+                elif expr_ch .is_alpha expr_ch '_' == || then
+                    intrinsics keywords cursor lex_word tokens.push
+                elif expr_ch '.' == then
+                    cursor.advance drop
+                    "." TokenKind::Delimiter Token tokens.push
+                elif expr_ch '+' == expr_ch '*' == || expr_ch '/' == || expr_ch '%' == || then
+                    expr_ch cursor lex_operator tokens.push
+                elif expr_ch '(' == then
+                    cursor.advance drop
+                    "(" TokenKind::Delimiter Token tokens.push
+                elif expr_ch ')' == then
+                    cursor.advance drop
+                    ")" TokenKind::Delimiter Token tokens.push
+                else
+                    expr_ch cursor lex_operator tokens.push
+                fi
+            done
+            # Emit .to_str to convert expression result to string
+            "." TokenKind::Delimiter Token tokens.push
+            "to_str" TokenKind::Identifier Token tokens.push
+            if 0 fstr_part_count > then
+                "str::concat" TokenKind::Identifier Token tokens.push
+            fi
+            1 += fstr_part_count
+        else
+            # Text segment
+            cursor lex_fstring_text = fstr_text
+            if 0 fstr_text.length > then
+                f"\"{fstr_text}" TokenKind::Literal Token tokens.push
+                if 0 fstr_part_count > then
+                    "str::concat" TokenKind::Identifier Token tokens.push
+                fi
+                1 += fstr_part_count
+            fi
+        fi
+    done
+
+    # If no parts were emitted, push empty string
+    if 0 fstr_part_count == then
+        "\"" TokenKind::Literal Token tokens.push
+    fi
+}
+
 fn lex source:str -> List[Token] {
     source Cursor::new = cursor
     List::new (List[Token]) = tokens
@@ -283,8 +394,23 @@ fn lex source:str -> List[Token] {
         elif ch ']' == then
             cursor.advance drop
             "]" TokenKind::Delimiter Token tokens.push
+        elif ch '.' == then
+            cursor.advance drop
+            "." TokenKind::Delimiter Token tokens.push
         elif ch '+' == ch '*' == || ch '/' == || ch '%' == || ch '&' == || ch '|' == || ch '^' == || ch '~' == || ch '<' == || ch '>' == || ch '=' == || ch '!' == || then
             ch cursor lex_operator tokens.push
+        elif ch 'f' == then
+            # Check if this is an f-string: f"..."
+            1 cursor.peek_at = fstr_next
+            if fstr_next Option::Some(fstr_ch) is then
+                if fstr_ch '"' == then
+                    intrinsics keywords tokens cursor lex_fstring
+                else
+                    intrinsics keywords cursor lex_word tokens.push
+                fi
+            else
+                intrinsics keywords cursor lex_word tokens.push
+            fi
         elif ch .is_alpha ch '_' == || then
             intrinsics keywords cursor lex_word tokens.push
         elif ch '#' == then
