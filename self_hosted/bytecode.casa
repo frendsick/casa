@@ -291,6 +291,7 @@ fn op_to_inst op:Op -> Inst {
         OpKind::Syscall6  => InstValue::None InstKind::Syscall6 Inst
         OpKind::Argc      => InstValue::None InstKind::Argc Inst
         OpKind::Argv      => InstValue::None InstKind::Argv Inst
+        OpKind::FnExec    => InstValue::None InstKind::FnExec Inst
         _ => {
             "unexpected op in op_to_inst" eprintln
             1 exit
@@ -501,6 +502,52 @@ fn compile_function function:Function global_variables:List[str] label_offset:in
     final_bytecode label_count
 }
 
+# Collect function names called via FnCall ops in a list of ops.
+fn collect_called_functions op_list:List[Op] -> List[str] {
+    List::new (List[str]) = called
+    0 = collect_index
+    while collect_index op_list.length > do
+        collect_index op_list.get = collect_op
+        if collect_op.kind OpKind::FnCall == then
+            collect_op.value op_str_value called.push
+        fi
+        1 += collect_index
+    done
+    called
+}
+
+# Add all unvisited names from a list to the worklist and visited set.
+fn enqueue_unvisited names:List[str] worklist:List[str] visited:Map[str str] {
+    0 = enqueue_index
+    while enqueue_index names.length > do
+        enqueue_index names.get = name
+        if name visited.has ! then
+            name name visited.set drop
+            name worklist.push
+        fi
+        1 += enqueue_index
+    done
+}
+
+# Find all functions transitively reachable from global ops.
+fn find_reachable_functions ops:List[Op] functions:Map[str Function] -> Map[str str] {
+    Map::new (Map[str str]) = visited
+    List::new (List[str]) = worklist
+
+    # Seed with functions called from global scope
+    visited worklist ops collect_called_functions enqueue_unvisited
+
+    # Process worklist until empty
+    while 0 worklist.length > do
+        worklist.pop = current_name
+        if current_name functions.has then
+            visited worklist current_name functions.get .unwrap .ops collect_called_functions enqueue_unvisited
+        fi
+    done
+
+    visited
+}
+
 fn compile_bytecode ops:List[Op] string_table:List[str] functions:Map[str Function] -> Program {
     # Build global variable list for resolution
     # Global variables are discovered by scanning global ops for AssignVariable
@@ -518,23 +565,28 @@ fn compile_bytecode ops:List[Op] string_table:List[str] functions:Map[str Functi
         1 += scan_index
     done
 
+    # Find reachable functions (dead code elimination)
+    functions ops find_reachable_functions = reachable
+
     # Compile global scope
     List::new (List[str]) = empty_locals
     0 global_variables empty_locals ops compile_ops = label_count = bytecode
 
-    # Compile each function
+    # Compile only reachable functions
     Map::new (Map[str List[Inst]]) = compiled_functions
     0 = total_label_count
     label_count += total_label_count
 
-    functions.keys = func_names
+    reachable.keys = reachable_names
     0 = func_index
-    while func_index func_names.length > do
-        func_index func_names.get = func_name
-        func_name functions.get .unwrap = function
-        total_label_count global_variables function compile_function = func_label_count = func_bytecode
-        func_name func_bytecode compiled_functions.set drop
-        func_label_count += total_label_count
+    while func_index reachable_names.length > do
+        func_index reachable_names.get = func_name
+        if func_name functions.has then
+            func_name functions.get .unwrap = function
+            total_label_count global_variables function compile_function = func_label_count = func_bytecode
+            func_name func_bytecode compiled_functions.set drop
+            func_label_count = total_label_count
+        fi
         1 += func_index
     done
 
