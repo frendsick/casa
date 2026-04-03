@@ -184,6 +184,23 @@ fn types_match expected:str actual:str -> bool {
     false
 }
 
+fn is_type_variable typ:str -> bool {
+    # Check if the type is a type variable (single uppercase letter or
+    # registered as a type var in a generic enum/struct)
+    if ANY_TYPE typ == then true return fi
+    if typ .length 0 == then false return fi
+    # Single uppercase letter is a type variable
+    if typ .length 1 == then
+        0 typ .at .is_upper return
+    fi
+    # Check if it's a known type variable in enums
+    typ extract_generic_base = itv_base
+    if itv_base .is_some then
+        itv_base .unwrap GLOBAL_ENUMS .get .is_some return
+    fi
+    false
+}
+
 fn types_match_params expected:str actual:str -> bool {
     expected extract_generic_params = tmp_exp_params_opt
     actual extract_generic_params = tmp_act_params_opt
@@ -192,15 +209,43 @@ fn types_match_params expected:str actual:str -> bool {
     tmp_exp_params_opt .unwrap = tmp_exp_params
     tmp_act_params_opt .unwrap = tmp_act_params
     if tmp_exp_params .length tmp_act_params .length != then false return fi
+
+    # Collect type variables from the expected type's base (if it's a generic struct/enum)
+    expected extract_generic_base = tmp_base_opt
+    Set::new (Set[str]) = tmp_type_vars
+    if tmp_base_opt .is_some then
+        tmp_base_opt .unwrap GLOBAL_ENUMS .get = tmp_enum_opt
+        if tmp_enum_opt .is_some then
+            0 = tmp_ti
+            while tmp_ti tmp_enum_opt .unwrap CasaEnum::type_vars .length > do
+                tmp_ti tmp_enum_opt .unwrap CasaEnum::type_vars .get tmp_type_vars .add = tmp_type_vars
+                1 += tmp_ti
+            done
+        fi
+        tmp_base_opt .unwrap GLOBAL_STRUCTS .get = tmp_struct_opt
+        if tmp_struct_opt .is_some then
+            0 = tmp_ti
+            while tmp_ti tmp_struct_opt .unwrap CasaStruct::type_vars .length > do
+                tmp_ti tmp_struct_opt .unwrap CasaStruct::type_vars .get tmp_type_vars .add = tmp_type_vars
+                1 += tmp_ti
+            done
+        fi
+    fi
+
     0 = tmp_i
     while tmp_i tmp_exp_params .length > do
         tmp_i tmp_exp_params .get = tmp_ep
         tmp_i tmp_act_params .get = tmp_ap
         if tmp_ep tmp_ap != then
-            if ANY_TYPE tmp_ep != then
-                if ANY_TYPE tmp_ap != then
-                    false return
-                fi
+            if
+                ANY_TYPE tmp_ep !=
+                ANY_TYPE tmp_ap != &&
+                tmp_ep tmp_type_vars .has ! &&
+                tmp_ap tmp_type_vars .has ! &&
+                tmp_ep is_type_variable ! &&
+                tmp_ap is_type_variable ! &&
+            then
+                false return
             fi
         fi
         1 += tmp_i
@@ -1185,21 +1230,31 @@ fn find_method_by_name method_name:str -> Option[str] {
     f"::{method_name}" = fmbn_suffix
     GLOBAL_FUNCTIONS .keys = fmbn_keys
     "" = fmbn_found
+    "" = fmbn_found_with_traits
     0 = fmbn_i
     while fmbn_i fmbn_keys .length > do
         fmbn_i fmbn_keys .get = fmbn_key
         if fmbn_key fmbn_suffix str::ends_with then
             if fmbn_key "lambda__" str::starts_with ! then
-                if "" fmbn_found == then
-                    fmbn_key = fmbn_found
+                fmbn_key GLOBAL_FUNCTIONS .get .unwrap = fmbn_fn
+                if 0 fmbn_fn Function::signature Signature::trait_bounds .keys .length == then
+                    if "" fmbn_found == then
+                        fmbn_key = fmbn_found
+                    fi
+                else
+                    if "" fmbn_found_with_traits == then
+                        fmbn_key = fmbn_found_with_traits
+                    fi
                 fi
-                # For multiple matches, keep first (deferred resolution)
             fi
         fi
         1 += fmbn_i
     done
+    # Prefer non-trait-bounded matches
     if "" fmbn_found != then
         fmbn_found Option::Some
+    elif "" fmbn_found_with_traits != then
+        fmbn_found_with_traits Option::Some
     else
         Option::None (Option[str])
     fi
@@ -1537,7 +1592,10 @@ fn type_check_ops ops:List[Op] function_opt:Option[Function] -> Signature {
     if function_opt .is_some then
         function_opt .unwrap = tc_function
         tc_function Function::signature = tc_declared
-        if tc_declared signature_to_str "None -> None" != then
+        if
+            tc_declared signature_to_str "None -> None" !=
+            0 tc_declared Signature::type_vars .length == &&
+        then
             if tc_inferred tc_declared signature_matches ! then
                 tc_function Function::location f"Invalid signature for function `{tc_function Function::name}`" ErrorKind::SignatureMismatch (int) add_error
             fi
