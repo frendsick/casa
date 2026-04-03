@@ -617,10 +617,14 @@ fn require_global_scope function_name:str what:str location:Location {
 # parse_type_vars - parse [T, K: Hashable] type variable lists
 # ============================================================================
 
+# Global to pass trait bounds from parse_type_vars (since we can't return tuples)
+Map::new (Map[str str]) = LAST_TRAIT_BOUNDS
+
 fn parse_type_vars cursor:TokenCursor -> List[str] {
     "[" cursor expect_token_value drop
     List::new (List[str]) = ptv_vars
     Set::new (Set[str]) = ptv_seen
+    Map::new (Map[str str]) = LAST_TRAIT_BOUNDS
 
     while true do
         cursor tc_pop = ptv_tok_opt
@@ -644,12 +648,13 @@ fn parse_type_vars cursor:TokenCursor -> List[str] {
             fi
             ptv_tok Token::value ptv_vars .push
             ptv_tok Token::value ptv_seen .add = ptv_seen
-            # Check for trait bound: K: Hashable (skip it for now)
+            # Check for trait bound: K: Hashable
             cursor tc_peek = ptv_colon_opt
             if ptv_colon_opt .is_some then
                 if ":" ptv_colon_opt .unwrap Token::value == then
                     cursor tc_pop drop  # consume :
-                    cursor tc_pop drop  # consume trait name
+                    TokenKind::Identifier (int) cursor expect_token_kind = ptv_trait_tok
+                    ptv_tok Token::value ptv_trait_tok Token::value LAST_TRAIT_BOUNDS .set = LAST_TRAIT_BOUNDS
                 fi
             fi
         else
@@ -1034,11 +1039,14 @@ fn parse_trait cursor:TokenCursor -> CasaTrait {
 fn parse_impl_block cursor:TokenCursor {
     "impl" cursor expect_token_value drop
 
-    # Parse optional type parameters
+    # Parse optional type parameters with trait bounds
+    List::new (List[str]) = pib_type_vars
+    Map::new (Map[str str]) = pib_trait_bounds
     cursor tc_peek = pib_tvars_opt
     if pib_tvars_opt .is_some then
         if "[" pib_tvars_opt .unwrap Token::value == then
-            cursor parse_type_vars drop
+            cursor parse_type_vars = pib_type_vars
+            LAST_TRAIT_BOUNDS = pib_trait_bounds
         fi
     fi
 
@@ -1060,6 +1068,28 @@ fn parse_impl_block cursor:TokenCursor {
         cursor parse_function = pib_fn
         f"{pib_base_type}::{pib_fn Function::name}" = pib_fn_name
         pib_fn_name pib_fn Function::set_name
+        # Merge inherited type vars and trait bounds from impl block
+        if pib_type_vars .length 0 < then
+            pib_fn Function::signature = pib_sig
+            0 = pib_tvi
+            while pib_tvi pib_type_vars .length > do
+                pib_tvi pib_type_vars .get = pib_tv
+                if pib_tv pib_sig Signature::type_vars .has ! then
+                    pib_tv pib_sig Signature::type_vars .add = pib_new_tvs
+                    pib_new_tvs pib_sig Signature::set_type_vars
+                fi
+                1 += pib_tvi
+            done
+            # Merge trait bounds
+            0 = pib_tbi
+            pib_trait_bounds .keys = pib_tb_keys
+            while pib_tbi pib_tb_keys .length > do
+                pib_tbi pib_tb_keys .get = pib_tb_key
+                pib_tb_key pib_tb_key pib_trait_bounds .get .unwrap pib_sig Signature::trait_bounds .set = pib_new_tb
+                pib_new_tb pib_sig Signature::set_trait_bounds
+                1 += pib_tbi
+            done
+        fi
         if pib_fn_name GLOBAL_FUNCTIONS .get .is_some then
             pib_fn Function::location f"Identifier `{pib_fn_name}` is already defined" ErrorKind::DuplicateName (int) raise_error
         fi
@@ -1704,6 +1734,35 @@ fn resolve_identifiers_fn ops:List[Op] function:Function -> List[Op] {
                 fi
             fi
 
+            # Trait-bound call: K::method -> push hidden var + exec
+            if ri_ident "::" str::find 0 < then
+                ri_ident 0 ri_ident "::" str::find str::substring = ri_tvar
+                if ri_tvar function Function::signature Signature::trait_bounds .get .is_some then
+                    ri_ident ri_ident "::" str::find 2 + ri_ident .length ri_ident "::" str::find - 2 - str::substring = ri_tmethod
+                    f"__trait_{ri_tvar}_{ri_tmethod}" = ri_hidden_var
+                    if ri_hidden_var function Function::variables variable_list_contains ! then
+                        ri_hidden_var make_variable function Function::variables .push
+                    fi
+                    OpKind::OpPushVar (int) ri_op Op::set_kind
+                    ri_hidden_var (int) ri_op Op::set_value
+                    ri_op Op::location OpKind::OpFnExec (int) 0 make_op = ri_exec_op
+                    ri_index 1 - ops .length > = ri_can_insert
+                    # Insert exec op after current op
+                    List::new (List[Op]) = ri_tops
+                    0 = ri_ti
+                    while ri_ti ops .length > do
+                        ri_ti ops .get ri_tops .push
+                        if ri_ti ri_index 1 - == then
+                            ri_exec_op ri_tops .push
+                        fi
+                        1 += ri_ti
+                    done
+                    ri_tops = ops
+                    1 += ri_index
+                    continue
+                fi
+            fi
+
             # Local variable
             if ri_ident function Function::variables variable_list_contains then
                 OpKind::OpPushVar (int) ri_op Op::set_kind
@@ -1767,19 +1826,28 @@ fn resolve_identifiers_fn ops:List[Op] function:Function -> List[Op] {
                 ri_inc_path INCLUDED_FILES .add = INCLUDED_FILES
                 ri_inc_path lex_file = ri_inc_tokens
                 ri_inc_tokens parse_ops = ri_inc_ops
-                # Insert included ops at current position (not at end)
+                # Insert included ops at current position
                 List::new (List[Op]) = ri_new_ops
+                # Copy ops already processed (before this include)
+                0 = ri_pre
+                while ri_pre ri_index 1 - > do
+                    ri_pre ops .get ri_new_ops .push
+                    1 += ri_pre
+                done
+                # Insert included ops
+                ri_new_ops .length = ri_insert_at
                 0 = ri_ii
                 while ri_ii ri_inc_ops .length > do
                     ri_ii ri_inc_ops .get ri_new_ops .push
                     1 += ri_ii
                 done
+                # Copy remaining ops after include
                 while ri_index ops .length > do
                     ri_index ops .get ri_new_ops .push
                     1 += ri_index
                 done
                 ri_new_ops = ops
-                0 = ri_index
+                ri_insert_at = ri_index
             fi
             continue
         fi
