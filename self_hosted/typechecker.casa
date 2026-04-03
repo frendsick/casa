@@ -637,6 +637,32 @@ fn check_arithmetic tc:TypeChecker op:Op {
 fn check_comparison tc:TypeChecker op:Op {
     tc stack_pop = cc_type1
     tc stack_pop = cc_type2
+    cc_type1 resolve_match_type = cc_base1
+    cc_type2 resolve_match_type = cc_base2
+    cc_base1 GLOBAL_ENUMS .get .is_some = cc_is_enum1
+    cc_base2 GLOBAL_ENUMS .get .is_some = cc_is_enum2
+    if cc_is_enum1 cc_is_enum2 || then
+        if cc_type1 cc_type2 != then
+            tc TypeChecker::current_location f"Cannot compare `{cc_type2}` with `{cc_type1}`" ErrorKind::TypeMismatch (int) raise_error
+        fi
+        if
+            OpKind::OpEq (int) op Op::kind !=
+            OpKind::OpNe (int) op Op::kind != &&
+        then
+            tc TypeChecker::current_location f"Enum type `{cc_type1}` only supports `==` and `!=` comparison" ErrorKind::TypeMismatch (int) raise_error
+        fi
+        # Annotate for bytecode: data-carrying enums need heap tag comparison
+        if cc_is_enum1 then
+            cc_base1 GLOBAL_ENUMS .get .unwrap = cc_enum
+            if cc_enum has_inner_values then
+                cc_base1 op Op::set_type_annotation
+            fi
+        fi
+    fi
+    # Annotate string comparisons for bytecode
+    if "str" cc_type1 == "str" cc_type2 == && then
+        "str" op Op::set_type_annotation
+    fi
     "bool" tc stack_push
 }
 
@@ -1302,8 +1328,18 @@ fn check_enum_variant tc:TypeChecker op:Op {
     if cev_inner_opt .is_none then
         # No inner values - push the enum type
         if 0 cev_enum CasaEnum::type_vars .length != then
-            # Generic enum without data (e.g. Option::None)
-            cev_enum_name tc stack_push
+            # Generic enum without data (e.g. Option::None) - include type vars
+            StringBuilder::new = cev_sb
+            cev_enum_name cev_sb .append
+            "[" cev_sb .append
+            0 = cev_tvi
+            while cev_tvi cev_enum CasaEnum::type_vars .length > do
+                if 0 cev_tvi != then " " cev_sb .append fi
+                cev_tvi cev_enum CasaEnum::type_vars .get cev_sb .append
+                1 += cev_tvi
+            done
+            "]" cev_sb .append
+            cev_sb .build tc stack_push
         else
             cev_enum_name tc stack_push
         fi
@@ -1311,7 +1347,21 @@ fn check_enum_variant tc:TypeChecker op:Op {
     fi
     cev_inner_opt .unwrap = cev_inner_types
     if 0 cev_inner_types .length == then
-        cev_enum_name tc stack_push
+        if 0 cev_enum CasaEnum::type_vars .length != then
+            StringBuilder::new = cev_sb2
+            cev_enum_name cev_sb2 .append
+            "[" cev_sb2 .append
+            0 = cev_tvi2
+            while cev_tvi2 cev_enum CasaEnum::type_vars .length > do
+                if 0 cev_tvi2 != then " " cev_sb2 .append fi
+                cev_tvi2 cev_enum CasaEnum::type_vars .get cev_sb2 .append
+                1 += cev_tvi2
+            done
+            "]" cev_sb2 .append
+            cev_sb2 .build tc stack_push
+        else
+            cev_enum_name tc stack_push
+        fi
         return
     fi
 
@@ -1371,7 +1421,11 @@ fn check_enum_variant tc:TypeChecker op:Op {
 # ============================================================================
 
 fn check_is tc:TypeChecker op:Op {
-    tc stack_pop drop
+    tc stack_pop = ci_type
+    ci_type resolve_match_type = ci_base
+    if ci_base GLOBAL_ENUMS .get .is_none then
+        tc TypeChecker::current_location f"`is` requires an enum type, got `{ci_type}`" ErrorKind::TypeMismatch (int) raise_error
+    fi
     "bool" tc stack_push
 }
 
@@ -1445,6 +1499,24 @@ fn check_match tc:TypeChecker op:Op function_opt:Option[Function] {
                 1 = cmb_is_wildcard
             fi
             f"__covered:{cmb_ev EnumVariant::variant_name}" = cmb_covered_key
+            # Check for bare variant (no enum qualifier)
+            if
+                "" cmb_ev EnumVariant::enum_name ==
+                cmb_is_wildcard ! &&
+            then
+                cmb_arm_base GLOBAL_ENUMS .get = cmb_bv_enum_opt
+                if cmb_bv_enum_opt .is_some then
+                    cmb_bv_enum_opt .unwrap = cmb_bv_enum
+                    cmb_ev EnumVariant::variant_name = cmb_bv_name
+                    # Check if the bare name is a variant of the matched enum
+                    cmb_bv_name cmb_bv_enum CasaEnum::variants string_list_index = cmb_bv_idx
+                    if 0 cmb_bv_idx >= then
+                        op Op::location f"Unqualified enum variant `{cmb_bv_name}`. Did you mean `{cmb_arm_base}::{cmb_bv_name}`?" ErrorKind::TypeMismatch (int) raise_error
+                    else
+                        op Op::location f"Expected qualified enum variant (e.g. `{cmb_arm_base}::{0 cmb_bv_enum CasaEnum::variants .get}`) or `_`, got `{cmb_bv_name}`" ErrorKind::TypeMismatch (int) raise_error
+                    fi
+                fi
+            fi
         fi
 
         # Check for duplicate arms
@@ -1565,9 +1637,30 @@ fn check_match tc:TypeChecker op:Op function_opt:Option[Function] {
 
     elif OpKind::OpMatchEnd (int) cmb_kind == then
         tc TypeChecker::branched_stacks .pop = cmb_branched
-        # Record last arm
+        # Record last arm label
         if "" cmb_branched BranchedStack::current_branch_label != then
             cmb_branched BranchedStack::current_branch_label cmb_branched BranchedStack::branch_records .push
+        fi
+        # Record last arm stack effect (same logic as next-arm recording)
+        if cmb_branched BranchedStack::condition_present (bool) then
+            if
+                tc TypeChecker::stack cmb_branched BranchedStack::before stacks_equal
+                cmb_branched BranchedStack::before cmb_branched BranchedStack::after stacks_equal &&
+            then
+                0 drop
+            else
+                tc TypeChecker::stack cmb_branched BranchedStack::after stacks_compatible = cmb_last_unified
+                if 0 cmb_last_unified .length != cmb_branched BranchedStack::before cmb_branched BranchedStack::after stacks_equal ! && then
+                    cmb_last_unified cmb_branched BranchedStack::set_after
+                elif cmb_branched BranchedStack::before cmb_branched BranchedStack::after stacks_equal then
+                    tc TypeChecker::stack copy_str_list cmb_branched BranchedStack::set_after
+                    tc TypeChecker::stack_origins copy_location_list cmb_branched BranchedStack::set_after_origins
+                else
+                    op Op::location "Match arms have incompatible stack effects" ErrorKind::StackMismatch (int) raise_error
+                fi
+            fi
+            cmb_branched BranchedStack::before copy_str_list tc TypeChecker::set_stack
+            cmb_branched BranchedStack::before_origins copy_location_list tc TypeChecker::set_stack_origins
         fi
 
         cmb_branched BranchedStack::match_type = cmb_end_match_type
@@ -1637,16 +1730,21 @@ fn check_match tc:TypeChecker op:Op function_opt:Option[Function] {
         # Apply final stack state
         cmb_branched BranchedStack::before = cmb_before
         cmb_branched BranchedStack::after = cmb_after
+        # When stack == before and before == after, nothing changed
         if tc TypeChecker::stack cmb_before stacks_equal cmb_before cmb_after stacks_equal && then
+            return
+        fi
+        # When stack == before but after differs (e.g. wildcard-only match),
+        # accept the after state directly
+        if tc TypeChecker::stack cmb_before stacks_equal cmb_before cmb_after stacks_equal ! && then
+            cmb_after tc TypeChecker::set_stack
+            cmb_branched BranchedStack::after_origins copy_location_list tc TypeChecker::set_stack_origins
             return
         fi
         tc TypeChecker::stack cmb_after stacks_compatible = cmb_unified
         if 0 cmb_unified .length != then
             cmb_unified tc TypeChecker::set_stack
             cmb_branched BranchedStack::after_origins copy_location_list tc TypeChecker::set_stack_origins
-            return
-        fi
-        if tc TypeChecker::stack cmb_before stacks_equal cmb_before cmb_after stacks_equal && then
             return
         fi
         op Op::location "Match arms have incompatible stack effects" ErrorKind::StackMismatch (int) raise_error
@@ -1660,12 +1758,45 @@ fn check_match tc:TypeChecker op:Op function_opt:Option[Function] {
 fn check_struct_new tc:TypeChecker op:Op {
     op Op::value (CasaStruct) = csn_struct
     csn_struct CasaStruct::name = csn_name
+    # Build type variable bindings from actual stack values
+    Map::new (Map[str str]) = csn_bindings
     0 = csn_i
     while csn_i csn_struct CasaStruct::members .length > do
-        csn_i csn_struct CasaStruct::members .get Member::typ tc expect_type drop
+        csn_i csn_struct CasaStruct::members .get = csn_member
+        tc stack_pop = csn_actual
+        csn_member Member::typ = csn_expected
+        # If expected is a type variable, bind it to the actual type
+        0 = csn_j
+        while csn_j csn_struct CasaStruct::type_vars .length > do
+            if csn_expected csn_j csn_struct CasaStruct::type_vars .get == then
+                csn_expected csn_actual csn_bindings .set = csn_bindings
+            fi
+            1 += csn_j
+        done
         1 += csn_i
     done
-    csn_name tc stack_push
+    # Construct the result type
+    if 0 csn_struct CasaStruct::type_vars .length == then
+        csn_name tc stack_push
+    else
+        StringBuilder::new = csn_sb
+        csn_name csn_sb .append
+        "[" csn_sb .append
+        0 = csn_ti
+        while csn_ti csn_struct CasaStruct::type_vars .length > do
+            if 0 csn_ti != then " " csn_sb .append fi
+            csn_ti csn_struct CasaStruct::type_vars .get = csn_tv
+            csn_tv csn_bindings .get = csn_bound_opt
+            if csn_bound_opt .is_some then
+                csn_bound_opt .unwrap csn_sb .append
+            else
+                csn_tv csn_sb .append
+            fi
+            1 += csn_ti
+        done
+        "]" csn_sb .append
+        csn_sb .build tc stack_push
+    fi
 }
 
 # ============================================================================
@@ -1745,6 +1876,61 @@ fn find_method_by_name method_name:str -> Option[str] {
 fn check_method_call tc:TypeChecker op:Op ops:List[Op] op_index:int function_opt:Option[Function] -> int {
     op op_str_value = cmc_method_name
     tc stack_peek = cmc_receiver
+
+    # Check if receiver is a trait-bounded type variable
+    if function_opt .is_some then
+        function_opt .unwrap Function::signature Signature::trait_bounds = cmc_bounds
+        cmc_receiver cmc_bounds .get = cmc_trait_opt
+        if cmc_trait_opt .is_some then
+            cmc_trait_opt .unwrap = cmc_trait_name
+            cmc_trait_name GLOBAL_TRAITS .get = cmc_trait_def_opt
+            if cmc_trait_def_opt .is_some then
+                cmc_trait_def_opt .unwrap = cmc_trait_def
+                0 = cmc_tmi
+                while cmc_tmi cmc_trait_def CasaTrait::methods .length > do
+                    cmc_tmi cmc_trait_def CasaTrait::methods .get = cmc_tm
+                    if cmc_method_name cmc_tm TraitMethod::name == then
+                        f"__trait_{cmc_receiver}_{cmc_method_name}" = cmc_hidden_var
+                        tc stack_pop drop
+                        # Resolve trait sig: replace "self" with the type variable
+                        cmc_tm TraitMethod::signature = cmc_tsig
+                        List::new (List[Parameter]) = cmc_resolved_params
+                        0 = cmc_rpi
+                        while cmc_rpi cmc_tsig Signature::parameters .length > do
+                            cmc_rpi cmc_tsig Signature::parameters .get = cmc_rparam
+                            if "self" cmc_rparam Parameter::typ == then
+                                cmc_receiver cmc_rparam Parameter::name make_named_param cmc_resolved_params .push
+                            else
+                                cmc_rparam cmc_resolved_params .push
+                            fi
+                            1 += cmc_rpi
+                        done
+                        List::new (List[str]) = cmc_resolved_rets
+                        0 = cmc_rri
+                        while cmc_rri cmc_tsig Signature::return_types .length > do
+                            cmc_rri cmc_tsig Signature::return_types .get = cmc_rret
+                            if "self" cmc_rret == then
+                                cmc_receiver cmc_resolved_rets .push
+                            else
+                                cmc_rret cmc_resolved_rets .push
+                            fi
+                            1 += cmc_rri
+                        done
+                        cmc_resolved_rets cmc_resolved_params make_signature = cmc_resolved_sig
+                        cmc_receiver tc stack_push
+                        f"{cmc_receiver}::{cmc_method_name}" cmc_resolved_sig tc apply_signature
+                        OpKind::OpPushVar (int) op Op::set_kind
+                        cmc_hidden_var (int) op Op::set_value
+                        # Insert FN_EXEC op after the PUSH_VARIABLE
+                        op Op::location OpKind::OpFnExec (int) 0 make_op = cmc_exec_op
+                        op_index cmc_exec_op ops .insert
+                        op_index 1 + return
+                    fi
+                    1 += cmc_tmi
+                done
+            fi
+        fi
+    fi
 
     # Look up Type::method
     f"{cmc_receiver}::{cmc_method_name}" = cmc_fn_name
