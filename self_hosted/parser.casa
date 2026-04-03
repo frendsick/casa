@@ -1,0 +1,1758 @@
+# Parser for the Casa programming language.
+#
+# Converts a token list into an op list. This file is included after
+# common.casa, error.casa, and lexer.casa.
+
+# ============================================================================
+# Global state
+# ============================================================================
+
+Map::new (Map[str Function]) = GLOBAL_FUNCTIONS
+Map::new (Map[str Variable]) = GLOBAL_VARIABLES
+Map::new (Map[str CasaEnum]) = GLOBAL_ENUMS
+Map::new (Map[str CasaStruct]) = GLOBAL_STRUCTS
+Map::new (Map[str CasaTrait]) = GLOBAL_TRAITS
+Set::new (Set[str]) = INCLUDED_FILES
+Set::new (Set[str]) = BUILTIN_TYPES
+"int" BUILTIN_TYPES .add = BUILTIN_TYPES
+"bool" BUILTIN_TYPES .add = BUILTIN_TYPES
+"str" BUILTIN_TYPES .add = BUILTIN_TYPES
+"char" BUILTIN_TYPES .add = BUILTIN_TYPES
+"cstr" BUILTIN_TYPES .add = BUILTIN_TYPES
+"ptr" BUILTIN_TYPES .add = BUILTIN_TYPES
+"array" BUILTIN_TYPES .add = BUILTIN_TYPES
+"any" BUILTIN_TYPES .add = BUILTIN_TYPES
+
+# ============================================================================
+# Simple keyword -> OpKind mapping
+# ============================================================================
+
+Map::new (Map[int int]) = SIMPLE_KEYWORD_OPS
+KeywordKind::Break (int) OpKind::OpWhileBreak (int) SIMPLE_KEYWORD_OPS .set = SIMPLE_KEYWORD_OPS
+KeywordKind::Continue (int) OpKind::OpWhileContinue (int) SIMPLE_KEYWORD_OPS .set = SIMPLE_KEYWORD_OPS
+KeywordKind::Do (int) OpKind::OpWhileCondition (int) SIMPLE_KEYWORD_OPS .set = SIMPLE_KEYWORD_OPS
+KeywordKind::Done (int) OpKind::OpWhileEnd (int) SIMPLE_KEYWORD_OPS .set = SIMPLE_KEYWORD_OPS
+KeywordKind::Elif (int) OpKind::OpIfElif (int) SIMPLE_KEYWORD_OPS .set = SIMPLE_KEYWORD_OPS
+KeywordKind::Else (int) OpKind::OpIfElse (int) SIMPLE_KEYWORD_OPS .set = SIMPLE_KEYWORD_OPS
+KeywordKind::Fi (int) OpKind::OpIfEnd (int) SIMPLE_KEYWORD_OPS .set = SIMPLE_KEYWORD_OPS
+KeywordKind::If (int) OpKind::OpIfStart (int) SIMPLE_KEYWORD_OPS .set = SIMPLE_KEYWORD_OPS
+KeywordKind::Return (int) OpKind::OpFnReturn (int) SIMPLE_KEYWORD_OPS .set = SIMPLE_KEYWORD_OPS
+KeywordKind::Then (int) OpKind::OpIfCondition (int) SIMPLE_KEYWORD_OPS .set = SIMPLE_KEYWORD_OPS
+KeywordKind::While (int) OpKind::OpWhileStart (int) SIMPLE_KEYWORD_OPS .set = SIMPLE_KEYWORD_OPS
+
+# ============================================================================
+# Operator -> OpKind mapping
+# ============================================================================
+
+Map::new (Map[int int]) = OPERATOR_TO_OPKIND
+OperatorKind::Plus (int) OpKind::OpAdd (int) OPERATOR_TO_OPKIND .set = OPERATOR_TO_OPKIND
+OperatorKind::Minus (int) OpKind::OpSub (int) OPERATOR_TO_OPKIND .set = OPERATOR_TO_OPKIND
+OperatorKind::Mul (int) OpKind::OpMul (int) OPERATOR_TO_OPKIND .set = OPERATOR_TO_OPKIND
+OperatorKind::Div (int) OpKind::OpDiv (int) OPERATOR_TO_OPKIND .set = OPERATOR_TO_OPKIND
+OperatorKind::Mod (int) OpKind::OpMod (int) OPERATOR_TO_OPKIND .set = OPERATOR_TO_OPKIND
+OperatorKind::Shl (int) OpKind::OpShl (int) OPERATOR_TO_OPKIND .set = OPERATOR_TO_OPKIND
+OperatorKind::Shr (int) OpKind::OpShr (int) OPERATOR_TO_OPKIND .set = OPERATOR_TO_OPKIND
+OperatorKind::BitAnd (int) OpKind::OpBitAnd (int) OPERATOR_TO_OPKIND .set = OPERATOR_TO_OPKIND
+OperatorKind::BitOr (int) OpKind::OpBitOr (int) OPERATOR_TO_OPKIND .set = OPERATOR_TO_OPKIND
+OperatorKind::BitXor (int) OpKind::OpBitXor (int) OPERATOR_TO_OPKIND .set = OPERATOR_TO_OPKIND
+OperatorKind::BitNot (int) OpKind::OpBitNot (int) OPERATOR_TO_OPKIND .set = OPERATOR_TO_OPKIND
+OperatorKind::And (int) OpKind::OpAnd (int) OPERATOR_TO_OPKIND .set = OPERATOR_TO_OPKIND
+OperatorKind::Or (int) OpKind::OpOr (int) OPERATOR_TO_OPKIND .set = OPERATOR_TO_OPKIND
+OperatorKind::Not (int) OpKind::OpNot (int) OPERATOR_TO_OPKIND .set = OPERATOR_TO_OPKIND
+OperatorKind::Eq (int) OpKind::OpEq (int) OPERATOR_TO_OPKIND .set = OPERATOR_TO_OPKIND
+OperatorKind::Ge (int) OpKind::OpGe (int) OPERATOR_TO_OPKIND .set = OPERATOR_TO_OPKIND
+OperatorKind::Gt (int) OpKind::OpGt (int) OPERATOR_TO_OPKIND .set = OPERATOR_TO_OPKIND
+OperatorKind::Le (int) OpKind::OpLe (int) OPERATOR_TO_OPKIND .set = OPERATOR_TO_OPKIND
+OperatorKind::Lt (int) OpKind::OpLt (int) OPERATOR_TO_OPKIND .set = OPERATOR_TO_OPKIND
+OperatorKind::Ne (int) OpKind::OpNe (int) OPERATOR_TO_OPKIND .set = OPERATOR_TO_OPKIND
+
+# ============================================================================
+# Token cursor
+# ============================================================================
+
+struct TokenCursor {
+    tokens: List[Token]
+    pos:    int
+}
+
+fn tc_new tokens:List[Token] -> TokenCursor {
+    0 tokens TokenCursor
+}
+
+fn tc_pop cursor:TokenCursor -> Option[Token] {
+    if cursor TokenCursor::tokens .length cursor TokenCursor::pos >= then
+        Option::None (Option[Token]) return
+    fi
+    cursor TokenCursor::pos cursor TokenCursor::tokens .get = tc_token
+    cursor TokenCursor::pos 1 + cursor TokenCursor::set_pos
+    tc_token Option::Some
+}
+
+fn tc_peek cursor:TokenCursor -> Option[Token] {
+    if cursor TokenCursor::tokens .length cursor TokenCursor::pos >= then
+        Option::None (Option[Token]) return
+    fi
+    cursor TokenCursor::pos cursor TokenCursor::tokens .get Option::Some
+}
+
+fn tc_is_finished cursor:TokenCursor -> bool {
+    cursor TokenCursor::tokens .length cursor TokenCursor::pos >=
+}
+
+fn tc_advance cursor:TokenCursor {
+    cursor TokenCursor::pos 1 + cursor TokenCursor::set_pos
+}
+
+fn tc_retreat cursor:TokenCursor {
+    cursor TokenCursor::pos 1 - cursor TokenCursor::set_pos
+}
+
+fn tc_save cursor:TokenCursor -> int {
+    cursor TokenCursor::pos
+}
+
+fn tc_restore cursor:TokenCursor saved:int {
+    saved cursor TokenCursor::set_pos
+}
+
+# ============================================================================
+# expect_token - consume next token, error if mismatch
+# ============================================================================
+
+fn expect_token cursor:TokenCursor -> Token {
+    cursor tc_pop = et_opt
+    if et_opt .is_none then
+        empty_location "Unexpected end of input" ErrorKind::UnexpectedToken (int) raise_error
+    fi
+    et_opt .unwrap = et_token
+    if TokenKind::Eof (int) et_token Token::kind == then
+        et_token Token::location "Unexpected end of input" ErrorKind::UnexpectedToken (int) raise_error
+    fi
+    et_token
+}
+
+fn expect_token_value cursor:TokenCursor expected:str -> Token {
+    cursor expect_token = etv_token
+    if expected etv_token Token::value != then
+        f"`{etv_token Token::value}`"
+        f"`{expected}`"
+        etv_token Token::location
+        "Unexpected token"
+        ErrorKind::UnexpectedToken (int)
+        raise_error_expected
+    fi
+    etv_token
+}
+
+fn expect_token_kind cursor:TokenCursor expected_kind:int -> Token {
+    cursor expect_token = etk_token
+    if expected_kind etk_token Token::kind != then
+        etk_token Token::location "Unexpected token" ErrorKind::UnexpectedToken (int) raise_error
+    fi
+    etk_token
+}
+
+# ============================================================================
+# expect_delimiter - consume expected delimiter or return None
+# ============================================================================
+
+fn expect_delimiter cursor:TokenCursor expected_value:str -> bool {
+    cursor tc_peek = ed_opt
+    if ed_opt .is_none then false return fi
+    ed_opt .unwrap = ed_token
+    if expected_value ed_token Token::value != then false return fi
+    cursor tc_advance
+    true
+}
+
+# ============================================================================
+# parse_type - parse a type expression
+# ============================================================================
+
+fn parse_type cursor:TokenCursor -> str {
+    cursor tc_peek = pt_peek_opt
+    if pt_peek_opt .is_none then
+        empty_location "Expected type" ErrorKind::UnexpectedToken (int) raise_error
+    fi
+    pt_peek_opt .unwrap = pt_peek
+
+    # Allow fn keyword as type base
+    if "fn" pt_peek Token::value == then
+        cursor tc_pop drop
+        "fn" = pt_base
+    else
+        cursor expect_token = pt_base_tok
+        if TokenKind::Identifier (int) pt_base_tok Token::kind != then
+            pt_base_tok Token::location "Expected type name" ErrorKind::UnexpectedToken (int) raise_error
+        fi
+        pt_base_tok Token::value = pt_base
+    fi
+
+    # Check for parameterized type
+    cursor tc_peek = pt_next_opt
+    if pt_next_opt .is_none then pt_base return fi
+    if "[" pt_next_opt .unwrap Token::value != then pt_base return fi
+    cursor tc_advance  # consume [
+
+    # fn types: balanced bracket tracking
+    if "fn" pt_base == then
+        StringBuilder::new = pt_fn_sb
+        0 = pt_fn_depth
+        while cursor tc_is_finished ! do
+            cursor tc_pop = pt_fn_tok_opt
+            if pt_fn_tok_opt .is_none then break fi
+            pt_fn_tok_opt .unwrap = pt_fn_tok
+            if "[" pt_fn_tok Token::value == then
+                1 += pt_fn_depth
+                "[" pt_fn_sb .append
+            elif "]" pt_fn_tok Token::value == then
+                if 0 pt_fn_depth == then break fi
+                1 -= pt_fn_depth
+                "]" pt_fn_sb .append
+            else
+                if 0 pt_fn_sb .length != then
+                    pt_fn_sb .build = pt_fn_prev
+                    if pt_fn_prev .length 0 != then
+                        pt_fn_prev .length 1 - pt_fn_prev .at = pt_fn_last
+                        if '[' pt_fn_last != "]" pt_fn_tok Token::value != && then
+                            " " pt_fn_sb .append
+                        fi
+                    fi
+                fi
+                pt_fn_tok Token::value pt_fn_sb .append
+            fi
+        done
+        f"fn[{pt_fn_sb .build}]" return
+    fi
+
+    # Regular parameterized type
+    List::new (List[str]) = pt_inner_types
+    while true do
+        cursor tc_peek = pt_inner_opt
+        if pt_inner_opt .is_some then
+            if "]" pt_inner_opt .unwrap Token::value == then
+                cursor tc_pop drop
+                break
+            fi
+        fi
+        cursor parse_type pt_inner_types .push
+    done
+    if 0 pt_inner_types .length == then
+        empty_location f"Expected type parameter inside `{pt_base}[...]`" ErrorKind::UnexpectedToken (int) raise_error
+    fi
+
+    # Join inner types with spaces
+    StringBuilder::new = pt_join_sb
+    0 = pt_join_i
+    while pt_join_i pt_inner_types .length > do
+        if 0 pt_join_i != then " " pt_join_sb .append fi
+        pt_join_i pt_inner_types .get pt_join_sb .append
+        1 += pt_join_i
+    done
+    f"{pt_base}[{pt_join_sb .build}]"
+}
+
+# ============================================================================
+# get_op_type_cast - parse (type) cast
+# ============================================================================
+
+fn get_op_type_cast cursor:TokenCursor -> Op {
+    "(" cursor expect_token_value = gtc_open
+    cursor parse_type = gtc_type
+    ")" cursor expect_token_value = gtc_close
+
+    gtc_open Token::location Location::span Span::offset = gtc_open_offset
+    gtc_close Token::location Location::span Span::offset = gtc_close_offset
+    gtc_close_offset gtc_open_offset - 1 + = gtc_len
+    gtc_len gtc_open_offset gtc_open Token::location Location::file make_location = gtc_loc
+    gtc_loc OpKind::OpTypeCast (int) gtc_type make_op_str
+}
+
+# ============================================================================
+# get_op_literal - convert literal token to push op
+# ============================================================================
+
+fn get_op_literal token:Token -> Op {
+    token Token::value = gol_value
+    if "true" gol_value == then
+        token Token::location OpKind::OpPushBool (int) 1 make_op return
+    fi
+    if "false" gol_value == then
+        token Token::location OpKind::OpPushBool (int) 0 make_op return
+    fi
+    # Integer literal (positive or negative)
+    if 0 gol_value .at .is_digit gol_value is_negative_integer_literal || then
+        gol_value str_to_int = gol_int
+        token Token::location OpKind::OpPushInt (int) gol_int make_op return
+    fi
+    # Char literal: 'X'
+    if
+        '\'' 0 gol_value .at ==
+        '\'' gol_value .length 1 - gol_value .at == &&
+        3 gol_value .length == &&
+    then
+        1 gol_value .at (int) = gol_char_val
+        token Token::location OpKind::OpPushChar (int) gol_char_val make_op return
+    fi
+    # String literal: "..."
+    if '"' 0 gol_value .at == '"' gol_value .length 1 - gol_value .at == && then
+        gol_value 1 gol_value .length 2 - str::substring = gol_str_val
+        token Token::location OpKind::OpPushStr (int) gol_str_val make_op_str return
+    fi
+    token Token::location f"Token `{gol_value}` is not a literal" ErrorKind::Syntax (int) raise_error
+    # Unreachable - raise_error exits
+    token Token::location OpKind::OpPushInt (int) 0 make_op
+}
+
+# ============================================================================
+# get_op_intrinsic - convert intrinsic token to op
+# ============================================================================
+
+fn get_op_intrinsic token:Token -> Op {
+    token Token::value intrinsic_from_str = goi_opt
+    if goi_opt .is_none then
+        token Token::location f"Token `{token Token::value}` is not an intrinsic" ErrorKind::Syntax (int) raise_error
+    fi
+    goi_opt .unwrap = goi_intrinsic_kind
+    goi_intrinsic_kind INTRINSIC_TO_OPKIND .get = goi_opkind_opt
+    if goi_opkind_opt .is_none then
+        token Token::location f"No OpKind for intrinsic `{token Token::value}`" ErrorKind::Syntax (int) raise_error
+    fi
+    token Token::location goi_opkind_opt .unwrap 0 make_op
+}
+
+# ============================================================================
+# get_op_operator - convert operator token to op
+# ============================================================================
+
+fn get_op_operator token:Token cursor:TokenCursor function_name:str -> Op {
+    token Token::value operator_from_str = goo_opt
+    if goo_opt .is_none then
+        token Token::location f"Token `{token Token::value}` is not an operator" ErrorKind::Syntax (int) raise_error
+    fi
+    goo_opt .unwrap = goo_operator
+
+    # Assignment: = varname
+    if OperatorKind::Assign (int) goo_operator == then
+        TokenKind::Identifier (int) cursor expect_token_kind = goo_name_tok
+        goo_name_tok Token::value = goo_var_name
+
+        # Optional type annotation: = varname : type
+        "" = goo_type_annotation
+        cursor tc_peek = goo_colon_opt
+        if goo_colon_opt .is_some then
+            if ":" goo_colon_opt .unwrap Token::value == then
+                cursor tc_advance
+                cursor parse_type = goo_type_annotation
+            fi
+        fi
+        if "" goo_type_annotation == then
+            goo_name_tok Token::location OpKind::OpAssignVar (int) goo_var_name make_op_str
+        else
+            goo_type_annotation goo_name_tok Token::location OpKind::OpAssignVar (int) goo_var_name (int) make_op_annotated
+        fi
+        return
+    fi
+
+    # Compound assignment: += varname
+    if OperatorKind::AssignInc (int) goo_operator == then
+        TokenKind::Identifier (int) cursor expect_token_kind = goo_inc_tok
+        token Token::location OpKind::OpAssignInc (int) goo_inc_tok Token::value make_op_str return
+    fi
+
+    # Compound assignment: -= varname
+    if OperatorKind::AssignDec (int) goo_operator == then
+        TokenKind::Identifier (int) cursor expect_token_kind = goo_dec_tok
+        token Token::location OpKind::OpAssignDec (int) goo_dec_tok Token::value make_op_str return
+    fi
+
+    # Simple operator -> opkind via map
+    goo_operator OPERATOR_TO_OPKIND .get = goo_opkind_opt
+    if goo_opkind_opt .is_none then
+        token Token::location f"No OpKind for operator `{token Token::value}`" ErrorKind::Syntax (int) raise_error
+    fi
+    token Token::location goo_opkind_opt .unwrap 0 make_op
+}
+
+# ============================================================================
+# Forward declarations (functions that call each other)
+# ============================================================================
+
+# token_to_op, parse_block_ops, handle_fstring are mutually recursive
+# In Casa, we just define them in order and rely on global function lookup.
+
+# ============================================================================
+# get_op_array - parse [item1, item2] array literal
+# ============================================================================
+
+fn get_op_array cursor:TokenCursor -> Op {
+    "[" cursor expect_token_value = goa_open
+    List::new (List[Op]) = goa_items
+    while "]" cursor expect_delimiter ! do
+        cursor tc_peek = goa_next_opt
+        if goa_next_opt .is_some then
+            if "[" goa_next_opt .unwrap Token::value == then
+                cursor get_op_array goa_items .push
+                "]" cursor expect_delimiter drop
+                continue
+            fi
+        fi
+        cursor tc_pop = goa_val_opt
+        if goa_val_opt .is_none then
+            goa_open Token::location "Unexpected end of input in array literal" ErrorKind::UnexpectedToken (int) raise_error
+        fi
+        goa_val_opt .unwrap = goa_val_tok
+        if TokenKind::Literal (int) goa_val_tok Token::kind == then
+            goa_val_tok get_op_literal goa_items .push
+        elif TokenKind::Identifier (int) goa_val_tok Token::kind == then
+            goa_val_tok Token::location OpKind::OpIdentifier (int) goa_val_tok Token::value make_op_str goa_items .push
+        else
+            goa_val_tok Token::location "Unexpected token in array literal" ErrorKind::UnexpectedToken (int) raise_error
+        fi
+        "," cursor expect_delimiter drop
+    done
+    goa_open Token::location OpKind::OpPushArray (int) goa_items (int) make_op
+}
+
+# ============================================================================
+# parse_block_ops - parse { ... } delimited block
+# ============================================================================
+
+fn parse_block_ops cursor:TokenCursor function_name:str -> List[Op] {
+    "{" cursor expect_token_value = pbo_open
+    List::new (List[Op]) = pbo_ops
+    while true do
+        cursor tc_pop = pbo_tok_opt
+        if pbo_tok_opt .is_none then
+            pbo_open Token::location "Unclosed block" ErrorKind::UnmatchedBlock (int) raise_error
+        fi
+        pbo_tok_opt .unwrap = pbo_token
+        if "}" pbo_token Token::value == then
+            pbo_ops return
+        fi
+        if TokenKind::FstringStart (int) pbo_token Token::kind == then
+            pbo_ops function_name cursor pbo_token handle_fstring
+            continue
+        fi
+        pbo_ops function_name cursor pbo_token token_to_op
+    done
+    pbo_ops
+}
+
+# ============================================================================
+# handle_fstring - parse f-string tokens into ops
+# ============================================================================
+
+fn parse_fstring_expr cursor:TokenCursor function_name:str -> List[Op] {
+    List::new (List[Op]) = pfe_ops
+    while true do
+        cursor tc_pop = pfe_tok_opt
+        if pfe_tok_opt .is_none then break fi
+        pfe_tok_opt .unwrap = pfe_token
+        if TokenKind::FstringExprEnd (int) pfe_token Token::kind == then
+            break
+        fi
+        if TokenKind::FstringStart (int) pfe_token Token::kind == then
+            pfe_ops function_name cursor pfe_token handle_fstring
+            continue
+        fi
+        pfe_ops function_name cursor pfe_token token_to_op
+    done
+    pfe_ops
+}
+
+fn handle_fstring start_token:Token cursor:TokenCursor function_name:str ops:List[Op] {
+    0 = hf_part_count
+    while true do
+        cursor tc_pop = hf_tok_opt
+        if hf_tok_opt .is_none then break fi
+        hf_tok_opt .unwrap = hf_token
+        if TokenKind::FstringText (int) hf_token Token::kind == then
+            hf_token Token::location OpKind::OpPushStr (int) hf_token Token::value make_op_str ops .push
+            1 += hf_part_count
+        elif TokenKind::FstringExprStart (int) hf_token Token::kind == then
+            function_name cursor parse_fstring_expr = hf_expr_ops
+            f"lambda__{function_name}_o{hf_token Token::location Location::span Span::offset .to_str}" = hf_lambda_name
+            hf_token Token::location hf_expr_ops hf_lambda_name make_function = hf_lambda_fn
+            hf_lambda_name hf_lambda_fn GLOBAL_FUNCTIONS .set = GLOBAL_FUNCTIONS
+            hf_token Token::location OpKind::OpFnPush (int) hf_lambda_name make_op_str ops .push
+            hf_token Token::location OpKind::OpFnExec (int) 0 make_op ops .push
+            1 += hf_part_count
+        elif TokenKind::FstringEnd (int) hf_token Token::kind == then
+            break
+        fi
+    done
+    if 0 hf_part_count == then
+        start_token Token::location OpKind::OpPushStr (int) "" make_op_str ops .push
+        1 = hf_part_count
+    fi
+    if 1 hf_part_count > then
+        start_token Token::location OpKind::OpFstringConcat (int) hf_part_count make_op ops .push
+    fi
+}
+
+# ============================================================================
+# get_op_delimiter - convert delimiter token to op
+# ============================================================================
+
+fn get_op_delimiter token:Token cursor:TokenCursor function_name:str ops:List[Op] {
+    token Token::value = god_value
+
+    # Arrow -> set_field
+    if "->" god_value == then
+        TokenKind::Identifier (int) cursor expect_token_kind = god_member
+        f"set_{god_member Token::value}" = god_setter_name
+        god_member Token::location OpKind::OpMethodCall (int) god_setter_name make_op_str ops .push
+        return
+    fi
+
+    # Dot . method
+    if "." god_value == then
+        TokenKind::Identifier (int) cursor expect_token_kind = god_method
+        god_method Token::location OpKind::OpMethodCall (int) god_method Token::value make_op_str ops .push
+        return
+    fi
+
+    # Open brace { -> lambda
+    if "{" god_value == then
+        cursor tc_retreat
+        function_name cursor parse_block_ops = god_lambda_ops
+        f"lambda__{function_name}_o{token Token::location Location::span Span::offset .to_str}" = god_lambda_name
+        token Token::location god_lambda_ops god_lambda_name make_function = god_lambda_fn
+        god_lambda_name god_lambda_fn GLOBAL_FUNCTIONS .set = GLOBAL_FUNCTIONS
+        token Token::location OpKind::OpFnPush (int) god_lambda_name make_op_str ops .push
+        return
+    fi
+
+    # Open bracket [ -> array literal
+    if "[" god_value == then
+        cursor tc_retreat
+        cursor get_op_array ops .push
+        return
+    fi
+
+    # Open paren ( -> type cast
+    if "(" god_value == then
+        cursor tc_retreat
+        cursor get_op_type_cast ops .push
+        return
+    fi
+
+    # Other delimiters (comma, colon, close brace/bracket/paren, fat arrow, hashtag)
+    # are ignored or handled by their enclosing constructs
+}
+
+# ============================================================================
+# _try_parse_is_check - try parsing Enum::Variant is
+# ============================================================================
+
+fn try_parse_is_check token:Token cursor:TokenCursor -> Option[Op] {
+    cursor tc_save = tpic_saved
+    cursor tc_peek = tpic_peek_opt
+    if tpic_peek_opt .is_none then
+        Option::None (Option[Op]) return
+    fi
+
+    List::new (List[str]) = tpic_bindings
+
+    # Check for bindings: Enum::Variant(a b) is
+    if "(" tpic_peek_opt .unwrap Token::value == then
+        cursor tc_pop drop  # consume (
+        while true do
+            cursor tc_peek = tpic_inner_opt
+            if tpic_inner_opt .is_none then
+                tpic_saved cursor tc_restore
+                Option::None (Option[Op]) return
+            fi
+            if ")" tpic_inner_opt .unwrap Token::value == then
+                cursor tc_pop drop  # consume )
+                if 0 tpic_bindings .length == then
+                    tpic_saved cursor tc_restore
+                    Option::None (Option[Op]) return
+                fi
+                break
+            fi
+            if TokenKind::Identifier (int) tpic_inner_opt .unwrap Token::kind != then
+                tpic_saved cursor tc_restore
+                Option::None (Option[Op]) return
+            fi
+            cursor tc_pop drop
+            tpic_inner_opt .unwrap Token::value tpic_bindings .push
+        done
+    fi
+
+    # Check if next token is `is`
+    cursor tc_peek = tpic_is_opt
+    if tpic_is_opt .is_none then
+        tpic_saved cursor tc_restore
+        Option::None (Option[Op]) return
+    fi
+    if "is" tpic_is_opt .unwrap Token::value != then
+        tpic_saved cursor tc_restore
+        Option::None (Option[Op]) return
+    fi
+    cursor tc_pop drop  # consume `is`
+
+    # Split token value on ::
+    token Token::value "::" str::find = tpic_sep
+    token Token::value 0 tpic_sep str::substring = tpic_enum_name
+    token Token::value tpic_sep 2 + token Token::value .length tpic_sep - 2 - str::substring = tpic_variant_name
+
+    0 1 - tpic_variant_name tpic_enum_name make_enum_variant = tpic_variant
+    tpic_bindings tpic_variant EnumVariant::set_bindings
+    token Token::location OpKind::OpIsCheck (int) tpic_variant (int) make_op Option::Some
+}
+
+# ============================================================================
+# _require_global_scope
+# ============================================================================
+
+fn require_global_scope function_name:str what:str location:Location {
+    if GLOBAL_SCOPE_LABEL function_name != then
+        location f"{what} should be defined in the global scope" ErrorKind::InvalidScope (int) raise_error
+    fi
+}
+
+# ============================================================================
+# parse_type_vars - parse [T, K: Hashable] type variable lists
+# ============================================================================
+
+fn parse_type_vars cursor:TokenCursor -> List[str] {
+    "[" cursor expect_token_value drop
+    List::new (List[str]) = ptv_vars
+    Set::new (Set[str]) = ptv_seen
+
+    while true do
+        cursor tc_pop = ptv_tok_opt
+        if ptv_tok_opt .is_none then
+            empty_location "Expected `]` to close type parameters" ErrorKind::Syntax (int) raise_error
+        fi
+        ptv_tok_opt .unwrap = ptv_tok
+        if "]" ptv_tok Token::value == then
+            if 0 ptv_vars .length == then
+                ptv_tok Token::location "Empty type parameter list `[]` is not allowed" ErrorKind::Syntax (int) raise_error
+            fi
+            ptv_vars return
+        fi
+        if "," ptv_tok Token::value == then continue fi
+        if TokenKind::Identifier (int) ptv_tok Token::kind == then
+            if ptv_tok Token::value BUILTIN_TYPES .has then
+                ptv_tok Token::location f"Type variable `{ptv_tok Token::value}` shadows built-in type" ErrorKind::DuplicateName (int) raise_error
+            fi
+            if ptv_tok Token::value ptv_seen .has then
+                ptv_tok Token::location f"Duplicate type variable `{ptv_tok Token::value}`" ErrorKind::DuplicateName (int) raise_error
+            fi
+            ptv_tok Token::value ptv_vars .push
+            ptv_tok Token::value ptv_seen .add = ptv_seen
+            # Check for trait bound: K: Hashable (skip it for now)
+            cursor tc_peek = ptv_colon_opt
+            if ptv_colon_opt .is_some then
+                if ":" ptv_colon_opt .unwrap Token::value == then
+                    cursor tc_pop drop  # consume :
+                    cursor tc_pop drop  # consume trait name
+                fi
+            fi
+        else
+            ptv_tok Token::location "Unexpected token in type parameters" ErrorKind::UnexpectedToken (int) raise_error
+        fi
+    done
+    ptv_vars
+}
+
+# ============================================================================
+# parse_parameters - parse name:type parameter pairs
+# ============================================================================
+
+fn parse_parameters cursor:TokenCursor -> List[Parameter] {
+    List::new (List[Parameter]) = pp_params
+    while true do
+        cursor tc_pop = pp_tok_opt
+        if pp_tok_opt .is_none then
+            empty_location "Unexpected end of input" ErrorKind::UnexpectedToken (int) raise_error
+        fi
+        pp_tok_opt .unwrap = pp_tok
+
+        # Stop at -> or {
+        if "->" pp_tok Token::value == "{" pp_tok Token::value == || then
+            cursor tc_retreat
+            pp_params return
+        fi
+
+        # Allow fn keyword as unnamed parameter type
+        if "fn" pp_tok Token::value == then
+            cursor tc_retreat
+            cursor parse_type make_param pp_params .push
+            continue
+        fi
+
+        if TokenKind::Identifier (int) pp_tok Token::kind != then
+            pp_tok Token::location "Unexpected token in parameter list" ErrorKind::UnexpectedToken (int) raise_error
+        fi
+
+        # Check if named parameter: name:type
+        cursor tc_peek = pp_next_opt
+        if pp_next_opt .is_some then
+            if ":" pp_next_opt .unwrap Token::value == then
+                cursor tc_advance  # consume :
+                cursor parse_type = pp_type
+                pp_type pp_tok Token::value make_named_param pp_params .push
+                continue
+            fi
+        fi
+
+        # Unnamed parameter - might be parameterized
+        cursor tc_retreat
+        cursor parse_type make_param pp_params .push
+    done
+    pp_params
+}
+
+# ============================================================================
+# parse_return_types - parse return types after ->
+# ============================================================================
+
+fn parse_return_types cursor:TokenCursor -> List[str] {
+    List::new (List[str]) = prt_types
+    while true do
+        cursor tc_peek = prt_peek_opt
+        if prt_peek_opt .is_none then
+            empty_location "Unexpected end of input" ErrorKind::UnexpectedToken (int) raise_error
+        fi
+        if "{" prt_peek_opt .unwrap Token::value == then
+            prt_types return
+        fi
+        cursor parse_type prt_types .push
+    done
+    prt_types
+}
+
+# ============================================================================
+# parse_signature - parse function signature
+# ============================================================================
+
+fn parse_signature cursor:TokenCursor -> Signature {
+    cursor parse_parameters = ps_params
+    List::new (List[str]) = ps_returns
+
+    cursor tc_peek = ps_next_opt
+    if ps_next_opt .is_none then
+        empty_location "Unexpected end of input" ErrorKind::UnexpectedToken (int) raise_error
+    fi
+    if "->" ps_next_opt .unwrap Token::value == then
+        cursor tc_advance  # consume ->
+        cursor parse_return_types = ps_returns
+    fi
+    ps_returns ps_params make_signature
+}
+
+# ============================================================================
+# parse_function - parse function definition
+# ============================================================================
+
+fn parse_function cursor:TokenCursor -> Function {
+    "fn" cursor expect_token_value drop
+    TokenKind::Identifier (int) cursor expect_token_kind = pf_name
+
+    # Parse optional type parameters
+    cursor tc_peek = pf_tvars_opt
+    if pf_tvars_opt .is_some then
+        if "[" pf_tvars_opt .unwrap Token::value == then
+            cursor parse_type_vars drop
+        fi
+    fi
+
+    cursor parse_signature = pf_sig
+    List::new (List[Op]) = pf_ops
+    List::new (List[Variable]) = pf_variables
+
+    # Register named parameters as variables and generate assign ops
+    0 = pf_pi
+    while pf_pi pf_sig Signature::parameters .length > do
+        pf_pi pf_sig Signature::parameters .get = pf_param
+        if "" pf_param Parameter::name != then
+            pf_param Parameter::name make_variable pf_variables .push
+            pf_name Token::location OpKind::OpAssignVar (int) pf_param Parameter::name make_op_str pf_ops .push
+        fi
+        1 += pf_pi
+    done
+
+    pf_name Token::value cursor parse_block_ops = pf_body_ops
+    0 = pf_bi
+    while pf_bi pf_body_ops .length > do
+        pf_bi pf_body_ops .get pf_ops .push
+        1 += pf_bi
+    done
+
+    pf_sig pf_name Token::location pf_ops pf_name Token::value make_function_with_sig = pf_fn
+    pf_variables pf_fn Function::set_variables
+    pf_fn
+}
+
+# ============================================================================
+# parse_enum - parse enum definition
+# ============================================================================
+
+fn parse_enum cursor:TokenCursor -> CasaEnum {
+    "enum" cursor expect_token_value drop
+    TokenKind::Identifier (int) cursor expect_token_kind = pe_name
+
+    # Parse optional type parameters
+    List::new (List[str]) = pe_type_vars
+    cursor tc_peek = pe_tvars_opt
+    if pe_tvars_opt .is_some then
+        if "[" pe_tvars_opt .unwrap Token::value == then
+            cursor parse_type_vars = pe_type_vars
+        fi
+    fi
+
+    "{" cursor expect_token_value drop
+    List::new (List[str]) = pe_variants
+    Map::new (Map[str List[str]]) = pe_variant_types
+
+    while true do
+        cursor expect_token = pe_vtok
+        if "}" pe_vtok Token::value == then break fi
+        if TokenKind::Identifier (int) pe_vtok Token::kind != then
+            pe_vtok Token::location "Expected variant name" ErrorKind::UnexpectedToken (int) raise_error
+        fi
+        if pe_vtok Token::value pe_variants string_list_contains then
+            pe_vtok Token::location f"Duplicate variant `{pe_vtok Token::value}`" ErrorKind::DuplicateName (int) raise_error
+        fi
+        pe_vtok Token::value pe_variants .push
+
+        # Parse optional inner types: Variant(type1 type2)
+        List::new (List[str]) = pe_inner_types
+        cursor tc_peek = pe_paren_opt
+        if pe_paren_opt .is_some then
+            if "(" pe_paren_opt .unwrap Token::value == then
+                cursor tc_pop drop  # consume (
+                while true do
+                    cursor tc_peek = pe_inner_opt
+                    if pe_inner_opt .is_none then
+                        pe_vtok Token::location "Unexpected end of input in variant inner types" ErrorKind::UnexpectedToken (int) raise_error
+                    fi
+                    if ")" pe_inner_opt .unwrap Token::value == then
+                        cursor tc_pop drop  # consume )
+                        break
+                    fi
+                    cursor parse_type pe_inner_types .push
+                done
+                if 0 pe_inner_types .length == then
+                    pe_vtok Token::location "Variant inner types cannot be empty" ErrorKind::Syntax (int) raise_error
+                fi
+            fi
+        fi
+        pe_vtok Token::value pe_inner_types pe_variant_types .set = pe_variant_types
+    done
+
+    if 0 pe_variants .length == then
+        pe_name Token::location "Enum must have at least one variant" ErrorKind::Syntax (int) raise_error
+    fi
+
+    pe_type_vars pe_variant_types pe_name Token::location pe_variants pe_name Token::value CasaEnum
+}
+
+# ============================================================================
+# _create_member_accessor - create getter/setter for struct members
+# ============================================================================
+
+fn create_member_accessor struct_name:str member_name:str member_type:str member_index:int location:Location {
+    member_index 8 * = cma_offset
+
+    # Getter
+    f"{struct_name}::{member_name}" = cma_getter_name
+    List::new (List[Op]) = cma_getter_ops
+    location OpKind::OpTypeCast (int) "ptr" make_op_str cma_getter_ops .push
+    location OpKind::OpPushInt (int) cma_offset make_op cma_getter_ops .push
+    location OpKind::OpAdd (int) 0 make_op cma_getter_ops .push
+    location OpKind::OpLoad64 (int) 0 make_op cma_getter_ops .push
+    location OpKind::OpTypeCast (int) member_type make_op_str cma_getter_ops .push
+
+    List::new (List[Parameter]) = cma_getter_params
+    struct_name make_param cma_getter_params .push
+    List::new (List[str]) = cma_getter_returns
+    member_type cma_getter_returns .push
+    cma_getter_returns cma_getter_params make_signature = cma_getter_sig
+    cma_getter_sig location cma_getter_ops cma_getter_name make_function_with_sig = cma_getter
+
+    if cma_getter_name GLOBAL_FUNCTIONS .get .is_some then
+        location f"Function `{cma_getter_name}` is already defined" ErrorKind::DuplicateName (int) raise_error
+    fi
+    cma_getter_name cma_getter GLOBAL_FUNCTIONS .set = GLOBAL_FUNCTIONS
+
+    # Setter
+    f"{struct_name}::set_{member_name}" = cma_setter_name
+    List::new (List[Op]) = cma_setter_ops
+    location OpKind::OpTypeCast (int) "ptr" make_op_str cma_setter_ops .push
+    location OpKind::OpPushInt (int) cma_offset make_op cma_setter_ops .push
+    location OpKind::OpAdd (int) 0 make_op cma_setter_ops .push
+    location OpKind::OpStore64 (int) 0 make_op cma_setter_ops .push
+
+    List::new (List[Parameter]) = cma_setter_params
+    struct_name make_param cma_setter_params .push
+    member_type make_param cma_setter_params .push
+    List::new (List[str]) = cma_setter_returns
+    cma_setter_returns cma_setter_params make_signature = cma_setter_sig
+    cma_setter_sig location cma_setter_ops cma_setter_name make_function_with_sig = cma_setter
+
+    if cma_setter_name GLOBAL_FUNCTIONS .get .is_some then
+        location f"Function `{cma_setter_name}` is already defined" ErrorKind::DuplicateName (int) raise_error
+    fi
+    cma_setter_name cma_setter GLOBAL_FUNCTIONS .set = GLOBAL_FUNCTIONS
+}
+
+# ============================================================================
+# parse_struct - parse struct definition
+# ============================================================================
+
+fn parse_struct cursor:TokenCursor -> CasaStruct {
+    "struct" cursor expect_token_value drop
+    TokenKind::Identifier (int) cursor expect_token_kind = pst_name
+
+    # Parse optional type parameters
+    List::new (List[str]) = pst_type_vars
+    cursor tc_peek = pst_tvars_opt
+    if pst_tvars_opt .is_some then
+        if "[" pst_tvars_opt .unwrap Token::value == then
+            cursor parse_type_vars = pst_type_vars
+        fi
+    fi
+
+    List::new (List[Member]) = pst_members
+    "{" cursor expect_token_value drop
+
+    while true do
+        cursor expect_token = pst_mtok
+        if "}" pst_mtok Token::value == then break fi
+        if TokenKind::Identifier (int) pst_mtok Token::kind != then
+            pst_mtok Token::location "Expected member name" ErrorKind::UnexpectedToken (int) raise_error
+        fi
+        ":" cursor expect_token_value drop
+        cursor parse_type = pst_member_type
+
+        pst_mtok Token::location pst_members .length pst_member_type pst_mtok Token::value pst_name Token::value create_member_accessor
+        pst_member_type pst_mtok Token::value Member pst_members .push
+    done
+
+    pst_type_vars pst_name Token::location pst_members pst_name Token::value CasaStruct
+}
+
+# ============================================================================
+# parse_trait - parse trait definition
+# ============================================================================
+
+fn parse_trait_method_signature cursor:TokenCursor -> Signature {
+    List::new (List[Parameter]) = ptms_params
+
+    # Parse parameters, stopping at ->, fn, or }
+    while true do
+        cursor tc_peek = ptms_peek_opt
+        if ptms_peek_opt .is_none then break fi
+        ptms_peek_opt .unwrap = ptms_peek
+        if
+            "->" ptms_peek Token::value ==
+            "{" ptms_peek Token::value == ||
+            "fn" ptms_peek Token::value == ||
+            "}" ptms_peek Token::value == ||
+        then
+            break
+        fi
+        cursor tc_pop drop
+
+        if
+            TokenKind::Identifier (int) ptms_peek Token::kind !=
+            "fn" ptms_peek Token::value != &&
+        then
+            ptms_peek Token::location "Unexpected token in trait method parameter list" ErrorKind::UnexpectedToken (int) raise_error
+        fi
+
+        cursor tc_peek = ptms_next_opt
+        if ptms_next_opt .is_some ":" ptms_next_opt .unwrap Token::value == && then
+            cursor tc_pop drop  # consume :
+            cursor parse_type = ptms_type
+            ptms_type ptms_peek Token::value make_named_param ptms_params .push
+        else
+            cursor tc_retreat
+            cursor parse_type make_param ptms_params .push
+        fi
+    done
+
+    List::new (List[str]) = ptms_returns
+    cursor tc_peek = ptms_arrow_opt
+    if ptms_arrow_opt .is_some then
+        if "->" ptms_arrow_opt .unwrap Token::value == then
+            cursor tc_pop drop  # consume ->
+            while true do
+                cursor tc_peek = ptms_ret_opt
+                if ptms_ret_opt .is_none then break fi
+                if
+                    "fn" ptms_ret_opt .unwrap Token::value ==
+                    "}" ptms_ret_opt .unwrap Token::value == ||
+                then
+                    break
+                fi
+                cursor parse_type ptms_returns .push
+            done
+        fi
+    fi
+
+    ptms_returns ptms_params make_signature
+}
+
+fn parse_trait cursor:TokenCursor -> CasaTrait {
+    "trait" cursor expect_token_value drop
+    TokenKind::Identifier (int) cursor expect_token_kind = pt_name
+
+    List::new (List[TraitMethod]) = pt_methods
+    "{" cursor expect_token_value drop
+
+    while true do
+        cursor tc_peek = pt_next_opt
+        if pt_next_opt .is_none then
+            pt_name Token::location "Unclosed trait block" ErrorKind::UnmatchedBlock (int) raise_error
+        fi
+        if "}" pt_next_opt .unwrap Token::value == then
+            cursor tc_pop drop
+            break
+        fi
+        if "fn" pt_next_opt .unwrap Token::value != then
+            pt_next_opt .unwrap Token::location "Expected method declaration in trait" ErrorKind::UnexpectedToken (int) raise_error
+        fi
+        cursor tc_pop drop  # consume fn
+        TokenKind::Identifier (int) cursor expect_token_kind = pt_method_name
+        cursor parse_trait_method_signature = pt_method_sig
+        pt_method_sig pt_method_name Token::value TraitMethod pt_methods .push
+    done
+
+    pt_name Token::location pt_methods pt_name Token::value CasaTrait
+}
+
+# ============================================================================
+# parse_impl_block - parse impl Type { fn methods... }
+# ============================================================================
+
+fn parse_impl_block cursor:TokenCursor {
+    "impl" cursor expect_token_value drop
+
+    # Parse optional type parameters
+    cursor tc_peek = pib_tvars_opt
+    if pib_tvars_opt .is_some then
+        if "[" pib_tvars_opt .unwrap Token::value == then
+            cursor parse_type_vars drop
+        fi
+    fi
+
+    cursor parse_type = pib_impl_type
+
+    # Get base type name (without type params)
+    pib_impl_type "[" str::find = pib_bracket
+    if 0 pib_bracket > then
+        pib_impl_type 0 pib_bracket str::substring = pib_base_type
+    else
+        pib_impl_type = pib_base_type
+    fi
+
+    "{" cursor expect_token_value drop
+    while true do
+        cursor tc_peek = pib_fn_opt
+        if pib_fn_opt .is_none then break fi
+        if "fn" pib_fn_opt .unwrap Token::value != then break fi
+        cursor parse_function = pib_fn
+        f"{pib_base_type}::{pib_fn Function::name}" = pib_fn_name
+        pib_fn_name pib_fn Function::set_name
+        if pib_fn_name GLOBAL_FUNCTIONS .get .is_some then
+            pib_fn Function::location f"Identifier `{pib_fn_name}` is already defined" ErrorKind::DuplicateName (int) raise_error
+        fi
+        pib_fn_name pib_fn GLOBAL_FUNCTIONS .set = GLOBAL_FUNCTIONS
+    done
+    "}" cursor expect_token_value drop
+}
+
+# ============================================================================
+# _handle_keyword_match - parse match block with arms
+# ============================================================================
+
+fn token_line token:Token -> int {
+    token Token::location Location::file SOURCE_CACHE .get = tl_src_opt
+    if tl_src_opt .is_none then 0 return fi
+    token Token::location Location::span Span::offset tl_src_opt .unwrap offset_to_line_col
+}
+
+fn is_match_arm_boundary cursor:TokenCursor -> bool {
+    cursor TokenCursor::pos = imab_pos
+    cursor TokenCursor::tokens = imab_tokens
+    if imab_pos 1 + imab_tokens .length >= then false return fi
+    imab_pos imab_tokens .get = imab_token
+    imab_pos 1 + imab_tokens .get = imab_next
+
+    # _ =>
+    if MATCH_WILDCARD imab_token Token::value == "=>" imab_next Token::value == && then
+        true return
+    fi
+    # literal =>
+    if TokenKind::Literal (int) imab_token Token::kind == "=>" imab_next Token::value == && then
+        true return
+    fi
+    if TokenKind::Identifier (int) imab_token Token::kind != then false return fi
+    # Identifier =>
+    if "=>" imab_next Token::value == then true return fi
+    # StructName { ... } =>
+    if "{" imab_next Token::value == imab_token Token::value GLOBAL_STRUCTS .get .is_some && then
+        true return
+    fi
+    # EnumName::Variant(bindings) => pattern
+    if "(" imab_next Token::value == then
+        imab_token Token::value "::" str::find = imab_sep
+        if 0 imab_sep > then
+            imab_pos 2 + = imab_scan
+            while imab_scan imab_tokens .length > do
+                if ")" imab_scan imab_tokens .get Token::value == then
+                    if imab_scan 1 + imab_tokens .length > then
+                        if "=>" imab_scan 1 + imab_tokens .get Token::value == then
+                            true return
+                        fi
+                    fi
+                    break
+                fi
+                1 += imab_scan
+            done
+        fi
+    fi
+    false
+}
+
+fn parse_struct_match_pattern name_token:Token cursor:TokenCursor -> StructPattern {
+    "{" cursor expect_token_value drop
+    name_token Token::value GLOBAL_STRUCTS .get = psmp_struct_opt
+    if psmp_struct_opt .is_none then
+        name_token Token::location f"Struct `{name_token Token::value}` is not defined" ErrorKind::UndefinedName (int) raise_error
+    fi
+    Map::new (Map[str str]) = psmp_bindings
+
+    while true do
+        cursor tc_peek = psmp_next_opt
+        if psmp_next_opt .is_none then
+            name_token Token::location "Unexpected end of input in struct pattern" ErrorKind::UnexpectedToken (int) raise_error
+        fi
+        if "}" psmp_next_opt .unwrap Token::value == then
+            cursor tc_pop drop
+            break
+        fi
+        TokenKind::Identifier (int) cursor expect_token_kind = psmp_field_tok
+        ":" cursor expect_token_value drop
+        TokenKind::Identifier (int) cursor expect_token_kind = psmp_var_tok
+        psmp_field_tok Token::value psmp_var_tok Token::value psmp_bindings .set = psmp_bindings
+    done
+
+    "=>" cursor expect_token_value drop
+    psmp_bindings name_token Token::value StructPattern
+}
+
+fn parse_literal_match_pattern token:Token -> LiteralPattern {
+    token Token::value = plmp_value
+    if "true" plmp_value == then
+        "true" "bool" 1 LiteralPattern return
+    fi
+    if "false" plmp_value == then
+        "false" "bool" 0 LiteralPattern return
+    fi
+    if 0 plmp_value .at .is_digit plmp_value is_negative_integer_literal || then
+        plmp_value "int" plmp_value str_to_int LiteralPattern return
+    fi
+    if
+        '\'' 0 plmp_value .at ==
+        3 plmp_value .length == &&
+    then
+        plmp_value "char" 1 plmp_value .at (int) LiteralPattern return
+    fi
+    if '"' 0 plmp_value .at == '"' plmp_value .length 1 - plmp_value .at == && then
+        plmp_value "str" plmp_value 1 plmp_value .length 2 - str::substring (int) LiteralPattern return
+    fi
+    token Token::location f"Unsupported literal in match arm: `{plmp_value}`" ErrorKind::UnexpectedToken (int) raise_error
+    # Unreachable
+    "" "int" 0 LiteralPattern
+}
+
+fn handle_keyword_match token:Token cursor:TokenCursor function_name:str -> List[Op] {
+    List::new (List[Op]) = hkm_ops
+    token Token::location OpKind::OpMatchStart (int) 0 make_op hkm_ops .push
+
+    while true do
+        cursor expect_token = hkm_arm_tok
+
+        # end keyword
+        if "end" hkm_arm_tok Token::value == then
+            hkm_arm_tok Token::location OpKind::OpMatchEnd (int) 0 make_op hkm_ops .push
+            break
+        fi
+
+        # Wildcard: _ =>
+        if MATCH_WILDCARD hkm_arm_tok Token::value == then
+            "=>" cursor expect_token_value drop
+            0 1 - MATCH_WILDCARD "" make_enum_variant = hkm_wildcard
+            hkm_arm_tok Token::location OpKind::OpMatchArm (int) hkm_wildcard (int) make_op hkm_ops .push
+        elif TokenKind::Literal (int) hkm_arm_tok Token::kind == then
+            "=>" cursor expect_token_value drop
+            hkm_arm_tok parse_literal_match_pattern = hkm_lit_pat
+            hkm_arm_tok Token::location OpKind::OpMatchArm (int) hkm_lit_pat (int) make_op hkm_ops .push
+        elif TokenKind::Identifier (int) hkm_arm_tok Token::kind != then
+            hkm_arm_tok Token::location "Expected match pattern or `_`" ErrorKind::UnexpectedToken (int) raise_error
+        elif cursor tc_peek .is_some "{" cursor tc_peek .unwrap Token::value == && then
+            # Struct pattern
+            cursor hkm_arm_tok parse_struct_match_pattern = hkm_spat
+            hkm_arm_tok Token::location OpKind::OpMatchArm (int) hkm_spat (int) make_op hkm_ops .push
+        elif hkm_arm_tok Token::value "::" str::find 0 <= then
+            # Bare identifier
+            "=>" cursor expect_token_value drop
+            0 1 - hkm_arm_tok Token::value "" make_enum_variant = hkm_bare_variant
+            hkm_arm_tok Token::location OpKind::OpMatchArm (int) hkm_bare_variant (int) make_op hkm_ops .push
+        else
+            # Enum::Variant pattern
+            hkm_arm_tok Token::value "::" str::find = hkm_sep
+            hkm_arm_tok Token::value 0 hkm_sep str::substring = hkm_enum_name
+            hkm_arm_tok Token::value hkm_sep 2 + hkm_arm_tok Token::value .length hkm_sep - 2 - str::substring = hkm_variant_name
+
+            # Parse optional bindings
+            List::new (List[str]) = hkm_bindings
+            cursor tc_peek = hkm_paren_opt
+            if hkm_paren_opt .is_some "(" hkm_paren_opt .unwrap Token::value == && then
+                cursor tc_pop drop  # consume (
+                while true do
+                    cursor tc_peek = hkm_inner_opt
+                    if hkm_inner_opt .is_none then
+                        hkm_arm_tok Token::location "Unexpected end of input in match arm bindings" ErrorKind::UnexpectedToken (int) raise_error
+                    fi
+                    if ")" hkm_inner_opt .unwrap Token::value == then
+                        cursor tc_pop drop
+                        break
+                    fi
+                    TokenKind::Identifier (int) cursor expect_token_kind = hkm_binding_tok
+                    hkm_binding_tok Token::value hkm_bindings .push
+                done
+            fi
+
+            "=>" cursor expect_token_value drop
+            0 1 - hkm_variant_name hkm_enum_name make_enum_variant = hkm_variant
+            hkm_bindings hkm_variant EnumVariant::set_bindings
+            hkm_arm_tok Token::location OpKind::OpMatchArm (int) hkm_variant (int) make_op hkm_ops .push
+        fi
+
+        # Parse arm body
+        cursor tc_peek = hkm_body_peek
+        if hkm_body_peek .is_some "{" hkm_body_peek .unwrap Token::value == && then
+            function_name cursor parse_block_ops = hkm_block_ops
+            0 = hkm_bi
+            while hkm_bi hkm_block_ops .length > do
+                hkm_bi hkm_block_ops .get hkm_ops .push
+                1 += hkm_bi
+            done
+        else
+            # Single-line arm body
+            while cursor tc_is_finished ! do
+                if cursor is_match_arm_boundary then break fi
+                cursor tc_peek = hkm_end_peek
+                if hkm_end_peek .is_some "end" hkm_end_peek .unwrap Token::value == && then
+                    break
+                fi
+                cursor tc_pop = hkm_body_tok_opt
+                if hkm_body_tok_opt .is_none then break fi
+                hkm_body_tok_opt .unwrap = hkm_body_tok
+                if TokenKind::FstringStart (int) hkm_body_tok Token::kind == then
+                    hkm_ops function_name cursor hkm_body_tok handle_fstring
+                    continue
+                fi
+                hkm_ops function_name cursor hkm_body_tok token_to_op
+            done
+        fi
+    done
+    hkm_ops
+}
+
+# ============================================================================
+# _handle_keyword_include - parse include path
+# ============================================================================
+
+fn handle_keyword_include token:Token cursor:TokenCursor -> Op {
+    TokenKind::Literal (int) cursor expect_token_kind = hki_path_tok
+    hki_path_tok get_op_literal = hki_literal_op
+    if OpKind::OpPushStr (int) hki_literal_op Op::kind != then
+        hki_path_tok Token::location "Expected string literal for include path" ErrorKind::UnexpectedToken (int) raise_error
+    fi
+    hki_literal_op op_str_value = hki_path
+
+    # Resolve relative path from the token's file location
+    token Token::location Location::file = hki_base_file
+    # Find the directory part of the base file (last / position)
+    0 1 - = hki_slash
+    0 = hki_fi
+    while hki_fi hki_base_file .length > do
+        if '/' hki_fi hki_base_file .at == then
+            hki_fi = hki_slash
+        fi
+        1 += hki_fi
+    done
+    if 0 hki_slash >= then
+        hki_base_file 0 hki_slash 1 + str::substring = hki_dir
+    else
+        "" = hki_dir
+    fi
+    f"{hki_dir}{hki_path}" = hki_resolved
+
+    hki_path_tok Token::location OpKind::OpIncludeFile (int) hki_resolved make_op_str
+}
+
+# ============================================================================
+# get_op_keyword - handle all keywords
+# ============================================================================
+
+fn get_op_keyword token:Token cursor:TokenCursor function_name:str ops:List[Op] {
+    token Token::value keyword_from_str = gok_kw_opt
+    if gok_kw_opt .is_none then
+        token Token::location f"Token `{token Token::value}` is not a keyword" ErrorKind::Syntax (int) raise_error
+    fi
+    gok_kw_opt .unwrap = gok_kw
+
+    # Simple keyword -> opkind mapping
+    gok_kw SIMPLE_KEYWORD_OPS .get = gok_simple_opt
+    if gok_simple_opt .is_some then
+        token Token::location gok_simple_opt .unwrap 0 make_op ops .push
+        return
+    fi
+
+    # end without match
+    if KeywordKind::End (int) gok_kw == then
+        token Token::location "`end` without matching `match`" ErrorKind::UnmatchedBlock (int) raise_error
+    fi
+
+    # enum
+    if KeywordKind::EnumKw (int) gok_kw == then
+        token Token::location "Enums" function_name require_global_scope
+        cursor tc_retreat
+        cursor parse_enum = gok_enum
+        if gok_enum CasaEnum::name GLOBAL_ENUMS .get .is_some then
+            gok_enum CasaEnum::location f"Enum `{gok_enum CasaEnum::name}` is already defined" ErrorKind::DuplicateName (int) raise_error
+        fi
+        gok_enum CasaEnum::name gok_enum GLOBAL_ENUMS .set = GLOBAL_ENUMS
+        return
+    fi
+
+    # fn
+    if KeywordKind::Fn (int) gok_kw == then
+        token Token::location "Functions" function_name require_global_scope
+        cursor tc_retreat
+        cursor parse_function = gok_fn
+        if gok_fn Function::name GLOBAL_FUNCTIONS .get .is_some then
+            gok_fn Function::location f"Identifier `{gok_fn Function::name}` is already defined" ErrorKind::DuplicateName (int) raise_error
+        fi
+        gok_fn Function::name gok_fn GLOBAL_FUNCTIONS .set = GLOBAL_FUNCTIONS
+        return
+    fi
+
+    # impl
+    if KeywordKind::Impl (int) gok_kw == then
+        token Token::location "Implementation blocks" function_name require_global_scope
+        cursor tc_retreat
+        cursor parse_impl_block
+        return
+    fi
+
+    # include
+    if KeywordKind::Include (int) gok_kw == then
+        cursor token handle_keyword_include ops .push
+        return
+    fi
+
+    # is (standalone is error)
+    if KeywordKind::Is (int) gok_kw == then
+        token Token::location "`is` requires a preceding enum variant" ErrorKind::Syntax (int) raise_error
+    fi
+
+    # match
+    if KeywordKind::Match (int) gok_kw == then
+        function_name cursor token handle_keyword_match = gok_match_ops
+        0 = gok_mi
+        while gok_mi gok_match_ops .length > do
+            gok_mi gok_match_ops .get ops .push
+            1 += gok_mi
+        done
+        return
+    fi
+
+    # struct
+    if KeywordKind::StructKw (int) gok_kw == then
+        token Token::location "Structs" function_name require_global_scope
+        cursor tc_retreat
+        cursor parse_struct = gok_struct
+        gok_struct CasaStruct::name gok_struct GLOBAL_STRUCTS .set = GLOBAL_STRUCTS
+        return
+    fi
+
+    # trait
+    if KeywordKind::TraitKw (int) gok_kw == then
+        token Token::location "Traits" function_name require_global_scope
+        cursor tc_retreat
+        cursor parse_trait = gok_trait
+        if gok_trait CasaTrait::name GLOBAL_TRAITS .get .is_some then
+            gok_trait CasaTrait::location f"Trait `{gok_trait CasaTrait::name}` is already defined" ErrorKind::DuplicateName (int) raise_error
+        fi
+        gok_trait CasaTrait::name gok_trait GLOBAL_TRAITS .set = GLOBAL_TRAITS
+        return
+    fi
+}
+
+# ============================================================================
+# _parse_struct_literal - parse StructName { field: value }
+# ============================================================================
+
+fn is_struct_field_boundary cursor:TokenCursor member_names:List[str] -> bool {
+    cursor TokenCursor::pos = isfb_pos
+    cursor TokenCursor::tokens = isfb_tokens
+    if isfb_pos 1 + isfb_tokens .length >= then false return fi
+    isfb_pos isfb_tokens .get = isfb_token
+    if TokenKind::Identifier (int) isfb_token Token::kind != then false return fi
+    if isfb_token Token::value member_names string_list_contains ! then false return fi
+    ":" isfb_pos 1 + isfb_tokens .get Token::value ==
+}
+
+fn parse_struct_field_value cursor:TokenCursor struct_name:str member_names:List[str] function_name:str all_ops:List[Op] {
+    while cursor tc_is_finished ! do
+        cursor tc_peek = psfv_peek_opt
+        if psfv_peek_opt .is_none then break fi
+        if "}" psfv_peek_opt .unwrap Token::value == then break fi
+        if member_names cursor is_struct_field_boundary then break fi
+        cursor tc_pop = psfv_val_opt
+        if psfv_val_opt .is_none then break fi
+        psfv_val_opt .unwrap = psfv_val_tok
+        if TokenKind::FstringStart (int) psfv_val_tok Token::kind == then
+            all_ops function_name cursor psfv_val_tok handle_fstring
+            continue
+        fi
+        all_ops function_name cursor psfv_val_tok token_to_op
+    done
+}
+
+fn parse_struct_literal name_token:Token cursor:TokenCursor function_name:str -> List[Op] {
+    "{" cursor expect_token_value drop
+    name_token Token::value GLOBAL_STRUCTS .get .unwrap = psl_struct
+    List::new (List[str]) = psl_member_names
+    0 = psl_mi
+    while psl_mi psl_struct CasaStruct::members .length > do
+        psl_mi psl_struct CasaStruct::members .get Member::name psl_member_names .push
+        1 += psl_mi
+    done
+
+    List::new (List[str]) = psl_field_order
+    List::new (List[Op]) = psl_all_ops
+    Set::new (Set[str]) = psl_seen
+
+    while true do
+        cursor tc_peek = psl_next_opt
+        if psl_next_opt .is_none then
+            name_token Token::location "Unexpected end of input in struct literal" ErrorKind::UnexpectedToken (int) raise_error
+        fi
+        if "}" psl_next_opt .unwrap Token::value == then
+            cursor tc_pop drop
+            break
+        fi
+
+        TokenKind::Identifier (int) cursor expect_token_kind = psl_field_tok
+        if psl_field_tok Token::value psl_member_names string_list_contains ! then
+            psl_field_tok Token::location f"Struct `{name_token Token::value}` has no field `{psl_field_tok Token::value}`" ErrorKind::UndefinedName (int) raise_error
+        fi
+        if psl_field_tok Token::value psl_seen .has then
+            psl_field_tok Token::location f"Duplicate field `{psl_field_tok Token::value}` in struct literal" ErrorKind::DuplicateName (int) raise_error
+        fi
+        psl_field_tok Token::value psl_seen .add = psl_seen
+        psl_field_tok Token::value psl_field_order .push
+
+        ":" cursor expect_token_value drop
+
+        psl_all_ops .length = psl_before
+        psl_all_ops function_name psl_member_names name_token Token::value cursor parse_struct_field_value
+        if psl_before psl_all_ops .length == then
+            psl_field_tok Token::location f"Missing value for field `{psl_field_tok Token::value}`" ErrorKind::Syntax (int) raise_error
+        fi
+    done
+
+    psl_field_order name_token Token::value StructLiteral = psl_literal
+    name_token Token::location OpKind::OpStructLiteral (int) psl_literal (int) make_op psl_all_ops .push
+    psl_all_ops
+}
+
+# ============================================================================
+# token_to_op - main dispatch: token kind -> handler
+# ============================================================================
+
+fn token_to_op token:Token cursor:TokenCursor function_name:str ops:List[Op] {
+    token Token::kind = tto_kind
+
+    if TokenKind::Eof (int) tto_kind == then return fi
+
+    if TokenKind::Delimiter (int) tto_kind == then
+        ops function_name cursor token get_op_delimiter
+        return
+    fi
+
+    if TokenKind::Literal (int) tto_kind == then
+        token get_op_literal ops .push
+        return
+    fi
+
+    if TokenKind::Intrinsic (int) tto_kind == then
+        token get_op_intrinsic ops .push
+        return
+    fi
+
+    if TokenKind::Keyword (int) tto_kind == then
+        ops function_name cursor token get_op_keyword
+        return
+    fi
+
+    if TokenKind::Operator (int) tto_kind == then
+        function_name cursor token get_op_operator ops .push
+        return
+    fi
+
+    if TokenKind::Identifier (int) tto_kind == then
+        # Check for struct literal: StructName { ... }
+        cursor tc_peek = tto_next_opt
+        if tto_next_opt .is_some then
+            if "{" tto_next_opt .unwrap Token::value == then
+                if token Token::value GLOBAL_STRUCTS .get .is_some then
+                    function_name cursor token parse_struct_literal = tto_sl_ops
+                    0 = tto_si
+                    while tto_si tto_sl_ops .length > do
+                        tto_si tto_sl_ops .get ops .push
+                        1 += tto_si
+                    done
+                    return
+                fi
+            fi
+        fi
+
+        # Check for is check: Enum::Variant is
+        if token Token::value "::" str::find 0 > then
+            cursor token try_parse_is_check = tto_is_opt
+            if tto_is_opt .is_some then
+                tto_is_opt .unwrap ops .push
+                return
+            fi
+        fi
+
+        # Plain identifier
+        token Token::location OpKind::OpIdentifier (int) token Token::value make_op_str ops .push
+        return
+    fi
+
+    # F-string tokens should be handled by handle_fstring
+    if
+        TokenKind::FstringStart (int) tto_kind ==
+        TokenKind::FstringEnd (int) tto_kind == ||
+        TokenKind::FstringExprStart (int) tto_kind == ||
+        TokenKind::FstringExprEnd (int) tto_kind == ||
+        TokenKind::FstringText (int) tto_kind == ||
+    then
+        token Token::location "F-string token should be handled by handle_fstring" ErrorKind::Syntax (int) raise_error
+    fi
+}
+
+# ============================================================================
+# parse_ops - main parse loop
+# ============================================================================
+
+fn parse_ops tokens:List[Token] -> List[Op] {
+    tokens tc_new = po_cursor
+    List::new (List[Op]) = po_ops
+    while po_cursor tc_is_finished ! do
+        po_cursor tc_pop = po_tok_opt
+        if po_tok_opt .is_none then break fi
+        po_tok_opt .unwrap = po_token
+        if TokenKind::FstringStart (int) po_token Token::kind == then
+            po_ops GLOBAL_SCOPE_LABEL po_cursor po_token handle_fstring
+            continue
+        fi
+        po_ops GLOBAL_SCOPE_LABEL po_cursor po_token token_to_op
+    done
+    po_ops
+}
+
+# ============================================================================
+# resolve_identifiers - post-parse pass
+# ============================================================================
+
+fn gather_captures lambda_function:Function function:Function {
+    0 = gc_i
+    while gc_i lambda_function Function::ops .length > do
+        gc_i lambda_function Function::ops .get = gc_op
+        if OpKind::OpIdentifier (int) gc_op Op::kind != then
+            1 += gc_i
+            continue
+        fi
+        gc_op op_str_value = gc_name
+        false = gc_captured
+
+        # Check enclosing function variables
+        0 = gc_vi
+        while gc_vi function Function::variables .length > do
+            if gc_name gc_vi function Function::variables .get Variable::name == then
+                gc_vi function Function::variables .get lambda_function Function::captures .push
+                true = gc_captured
+                break
+            fi
+            1 += gc_vi
+        done
+
+        if gc_captured ! then
+            # Check global variables
+            gc_name GLOBAL_VARIABLES .get = gc_gvar_opt
+            if gc_gvar_opt .is_some then
+                gc_gvar_opt .unwrap lambda_function Function::captures .push
+            fi
+        fi
+        1 += gc_i
+    done
+}
+
+fn resolve_identifiers ops:List[Op] function:Function -> List[Op] {
+    0 = ri_index
+    List::new (List[CasaError]) = ri_errors
+    while ri_index ops .length > do
+        ri_index ops .get = ri_op
+        1 += ri_index
+        ri_op Op::kind = ri_kind
+
+        # ASSIGN_VARIABLE: register variable
+        if OpKind::OpAssignVar (int) ri_kind == then
+            ri_op op_str_value = ri_var_name
+            ri_var_name make_variable = ri_var
+            if ri_var_name function Function::variables variable_list_contains ! then
+                if ri_var_name GLOBAL_VARIABLES .get .is_none then
+                    ri_var function Function::variables .push
+                fi
+            fi
+            continue
+        fi
+
+        # FN_PUSH: resolve lambda captures
+        if OpKind::OpFnPush (int) ri_kind == then
+            ri_op op_str_value = ri_fn_name
+            ri_fn_name GLOBAL_FUNCTIONS .get = ri_lambda_opt
+            if ri_lambda_opt .is_some then
+                ri_lambda_opt .unwrap = ri_lambda
+                1 ri_lambda Function::set_is_used
+                function ri_lambda gather_captures
+            fi
+            continue
+        fi
+
+        # IDENTIFIER: resolve to specific op kinds
+        if OpKind::OpIdentifier (int) ri_kind == then
+            ri_op op_str_value = ri_ident
+
+            # Function reference: &name
+            if ri_ident "&" str::starts_with then
+                ri_ident 1 ri_ident .length 1 - str::substring = ri_ref_name
+                ri_ref_name GLOBAL_FUNCTIONS .get = ri_ref_fn_opt
+                if ri_ref_fn_opt .is_some then
+                    OpKind::OpFnPush (int) ri_op Op::set_kind
+                    ri_ref_name (int) ri_op Op::set_value
+                    1 ri_ref_fn_opt .unwrap Function::set_is_used
+                else
+                    ri_op Op::location f"Function `{ri_ref_name}` is not defined" ErrorKind::UndefinedName (int) make_error ri_errors .push
+                fi
+                continue
+            fi
+
+            # Enum variant: Enum::Variant
+            if ri_ident "::" str::find 0 > then
+                ri_ident "::" str::find = ri_sep
+                ri_ident 0 ri_sep str::substring = ri_enum_name
+                ri_enum_name GLOBAL_ENUMS .get = ri_enum_opt
+                if ri_enum_opt .is_some then
+                    ri_ident ri_sep 2 + ri_ident .length ri_sep - 2 - str::substring = ri_vname
+                    ri_vname ri_enum_opt .unwrap CasaEnum::variants string_list_index = ri_ordinal
+                    if 0 ri_ordinal < then
+                        ri_op Op::location f"Variant `{ri_vname}` is not defined in enum `{ri_enum_name}`" ErrorKind::UndefinedName (int) make_error ri_errors .push
+                    else
+                        OpKind::OpPushEnumVariant (int) ri_op Op::set_kind
+                        ri_ordinal ri_vname ri_enum_name make_enum_variant = ri_ev
+                        ri_ev (int) ri_op Op::set_value
+                    fi
+                    continue
+                fi
+            fi
+
+            # Local variable
+            if ri_ident function Function::variables variable_list_contains then
+                OpKind::OpPushVar (int) ri_op Op::set_kind
+                continue
+            fi
+
+            # Global function
+            ri_ident GLOBAL_FUNCTIONS .get = ri_gfn_opt
+            if ri_gfn_opt .is_some then
+                OpKind::OpFnCall (int) ri_op Op::set_kind
+                1 ri_gfn_opt .unwrap Function::set_is_used
+                continue
+            fi
+
+            # Global variable
+            if ri_ident GLOBAL_VARIABLES .get .is_some then
+                OpKind::OpPushVar (int) ri_op Op::set_kind
+                continue
+            fi
+
+            # Struct constructor
+            ri_ident GLOBAL_STRUCTS .get = ri_struct_opt
+            if ri_struct_opt .is_some then
+                OpKind::OpStructNew (int) ri_op Op::set_kind
+                ri_struct_opt .unwrap (int) ri_op Op::set_value
+                continue
+            fi
+
+            # Enum name -> variant count
+            ri_ident GLOBAL_ENUMS .get = ri_enum2_opt
+            if ri_enum2_opt .is_some then
+                OpKind::OpPushInt (int) ri_op Op::set_kind
+                ri_enum2_opt .unwrap CasaEnum::variants .length ri_op Op::set_value
+                continue
+            fi
+
+            ri_op Op::location f"Identifier `{ri_ident}` is not defined" ErrorKind::UndefinedName (int) make_error ri_errors .push
+            continue
+        fi
+
+        # MATCH_ARM: resolve enum variants and struct patterns
+        if OpKind::OpMatchArm (int) ri_kind == then
+            continue
+        fi
+
+        # IS_CHECK: resolve enum variant
+        if OpKind::OpIsCheck (int) ri_kind == then
+            continue
+        fi
+
+        # INCLUDE_FILE: process included file
+        if OpKind::OpIncludeFile (int) ri_kind == then
+            ri_op op_str_value = ri_inc_path
+            if ri_inc_path INCLUDED_FILES .has ! then
+                ri_inc_path INCLUDED_FILES .add = INCLUDED_FILES
+                ri_inc_path lex_file = ri_inc_tokens
+                ri_inc_tokens parse_ops = ri_inc_ops
+                # Insert included ops into the current ops list
+                0 = ri_ii
+                while ri_ii ri_inc_ops .length > do
+                    ri_ii ri_inc_ops .get ops .push
+                    1 += ri_ii
+                done
+            fi
+            continue
+        fi
+    done
+
+    if 0 ri_errors .length != then
+        ri_errors report_errors
+        1 exit
+    fi
+    ops
+}
