@@ -1,0 +1,1067 @@
+# Bytecode compiler: converts Op tree into flat Inst list.
+#
+# Translates high-level Ops (produced by the parser/typechecker) into
+# low-level Instructions suitable for code generation.
+
+# ============================================================================
+# Label management
+# ============================================================================
+
+0 = LABEL_COUNTER
+Map::new (Map[int int]) = OP_LABEL_MAP
+
+fn new_label -> int {
+    LABEL_COUNTER = nl_value
+    1 += LABEL_COUNTER
+    nl_value
+}
+
+fn reset_labels {
+    0 = LABEL_COUNTER
+    Map::new (Map[int int]) = OP_LABEL_MAP
+}
+
+fn op_index_to_label op_index:int -> int {
+    # Return a stable label for an op index, allocating on first access.
+    op_index OP_LABEL_MAP .get = oitl_existing
+    if oitl_existing .is_some then
+        oitl_existing .unwrap
+    else
+        new_label = oitl_label
+        op_index oitl_label OP_LABEL_MAP .set = OP_LABEL_MAP
+        oitl_label
+    fi
+}
+
+# ============================================================================
+# BytecodeCompiler struct
+# ============================================================================
+
+struct BytecodeCompiler {
+    ops:              List[Op]
+    function:         int
+    locals_count:     int
+    string_table:     List[str]
+    constants_table:  List[str]
+}
+
+fn make_compiler ops:List[Op] -> BytecodeCompiler {
+    List::new (List[str])
+    List::new (List[str])
+    0
+    0
+    ops
+    BytecodeCompiler
+}
+
+fn make_compiler_with_tables ops:List[Op] function:int string_table:List[str] constants_table:List[str] -> BytecodeCompiler {
+    constants_table
+    string_table
+    0
+    function
+    ops
+    BytecodeCompiler
+}
+
+# ============================================================================
+# String/constant interning
+# ============================================================================
+
+fn intern_table table:List[str] value:str -> int {
+    # Add value to table if not present, return its index.
+    if value table string_list_contains then
+        value table string_list_index
+    else
+        table .length = it_index
+        value table .push
+        it_index
+    fi
+}
+
+fn intern_string compiler:BytecodeCompiler value:str -> int {
+    value compiler BytecodeCompiler::string_table intern_table
+}
+
+fn intern_constant compiler:BytecodeCompiler name:str -> int {
+    name compiler BytecodeCompiler::constants_table intern_table
+}
+
+# ============================================================================
+# Variable resolution
+# ============================================================================
+
+fn resolve_variable compiler:BytecodeCompiler variable_name:str -> int {
+    # Returns encoded value: high 32 bits = get_kind, low 32 bits = index.
+    # We pack get_kind and set_kind together as: get_kind * 65536 + index.
+    # Caller uses resolve_get_kind, resolve_set_kind, resolve_index.
+    compiler BytecodeCompiler::function = rv_fn_ptr
+    if 0 rv_fn_ptr != then
+        rv_fn_ptr (Function) = rv_func
+        variable_name rv_func Function::variables variable_list_contains = rv_is_local
+        if rv_is_local then
+            variable_name rv_func Function::variables variable_list_index = rv_idx
+            # Pack: LOCAL_GET, LOCAL_SET, index
+            InstKind::InstLocalGet (int) 65536 * InstKind::InstLocalSet (int) 256 * + rv_idx + return
+        fi
+    fi
+    variable_name GLOBAL_VARIABLES .has = rv_is_global
+    if rv_is_global then
+        variable_name GLOBAL_VARIABLES .keys string_list_index = rv_gidx
+        InstKind::InstGlobalGet (int) 65536 * InstKind::InstGlobalSet (int) 256 * + rv_gidx + return
+    fi
+    f"Variable `{variable_name}` is not defined\n" eprint
+    1 exit
+    0
+}
+
+fn resolve_get_kind packed:int -> int {
+    packed 65536 /
+}
+
+fn resolve_set_kind packed:int -> int {
+    packed 65536 % 256 /
+}
+
+fn resolve_index packed:int -> int {
+    packed 256 %
+}
+
+# ============================================================================
+# Block matching (find_matching_label)
+# ============================================================================
+
+fn is_block_start_kind kind:int -> bool {
+    OpKind::OpIfStart (int) kind ==
+    OpKind::OpWhileStart (int) kind == ||
+    OpKind::OpMatchStart (int) kind == ||
+}
+
+fn is_block_end_kind kind:int -> bool {
+    OpKind::OpIfEnd (int) kind ==
+    OpKind::OpWhileEnd (int) kind == ||
+    OpKind::OpMatchEnd (int) kind == ||
+}
+
+fn find_matching_label_forward ops:List[Op] op_index:int end_kind:int target_kinds:List[int] -> Option[int] {
+    # Search forward from op_index+1 for matching target, respecting nesting.
+    1 = fml_depth
+    op_index 1 + = fml_i
+    while fml_i ops .length > do
+        fml_i ops .get = fml_other
+        fml_other Op::kind = fml_kind
+        if 1 fml_depth <= then
+            fml_kind target_kinds int_list_contains = fml_found
+            if fml_found then
+                fml_i op_index_to_label Option::Some return
+            fi
+        fi
+        if fml_kind is_block_start_kind then
+            1 += fml_depth
+        elif fml_kind is_block_end_kind then
+            fml_depth 1 - = fml_depth
+        fi
+        if 1 fml_depth < then
+            if end_kind fml_kind == then
+                Option::None (Option[int]) return
+            fi
+        fi
+        1 += fml_i
+    done
+    Option::None (Option[int])
+}
+
+fn find_matching_label_reverse ops:List[Op] op_index:int start_kind:int target_kinds:List[int] -> Option[int] {
+    # Search backward from op_index-1 for matching target, respecting nesting.
+    1 = fmlr_depth
+    op_index 1 - = fmlr_i
+    while 0 fmlr_i >= do
+        fmlr_i ops .get = fmlr_other
+        fmlr_other Op::kind = fmlr_kind
+        if 1 fmlr_depth <= then
+            fmlr_kind target_kinds int_list_contains = fmlr_found
+            if fmlr_found then
+                fmlr_i op_index_to_label Option::Some return
+            fi
+        fi
+        if fmlr_kind is_block_start_kind then
+            fmlr_depth 1 - = fmlr_depth
+        elif fmlr_kind is_block_end_kind then
+            1 += fmlr_depth
+        fi
+        if 1 fmlr_depth < then
+            if start_kind fmlr_kind == then
+                Option::None (Option[int]) return
+            fi
+        fi
+        fmlr_i 1 - = fmlr_i
+    done
+    Option::None (Option[int])
+}
+
+fn int_list_contains items:List[int] value:int -> bool {
+    0 = ilc_i
+    while ilc_i items .length > do
+        if value ilc_i items .get == then
+            true return
+        fi
+        1 += ilc_i
+    done
+    false
+}
+
+fn require_matching_forward ops:List[Op] op_index:int end_kind:int target_kinds:List[int] location:Location message:str -> int {
+    target_kinds end_kind op_index ops find_matching_label_forward = rmf_result
+    if rmf_result .is_none then
+        location message ErrorKind::UnmatchedBlock (int) make_error ERRORS .push
+        0
+    else
+        rmf_result .unwrap
+    fi
+}
+
+fn require_matching_reverse ops:List[Op] op_index:int start_kind:int target_kinds:List[int] location:Location message:str -> int {
+    target_kinds start_kind op_index ops find_matching_label_reverse = rmr_result
+    if rmr_result .is_none then
+        location message ErrorKind::UnmatchedBlock (int) make_error ERRORS .push
+        0
+    else
+        rmr_result .unwrap
+    fi
+}
+
+# ============================================================================
+# Compile assignment
+# ============================================================================
+
+fn compile_assignment compiler:BytecodeCompiler op:Op bytecode:List[Inst] {
+    op op_str_value = ca_name
+    ca_name compiler resolve_variable = ca_packed
+    ca_packed resolve_get_kind = ca_get
+    ca_packed resolve_set_kind = ca_set
+    ca_packed resolve_index = ca_idx
+
+    if OpKind::OpAssignDec (int) op Op::kind == then
+        ca_idx ca_get make_inst_int bytecode .push
+        InstKind::InstSwap (int) make_inst bytecode .push
+        InstKind::InstAdd (int) make_inst bytecode .push
+        ca_idx ca_set make_inst_int bytecode .push
+    elif OpKind::OpAssignInc (int) op Op::kind == then
+        ca_idx ca_get make_inst_int bytecode .push
+        InstKind::InstAdd (int) make_inst bytecode .push
+        ca_idx ca_set make_inst_int bytecode .push
+    elif OpKind::OpAssignVar (int) op Op::kind == then
+        ca_idx ca_set make_inst_int bytecode .push
+    fi
+}
+
+# ============================================================================
+# Compile if block
+# ============================================================================
+
+fn compile_if_block compiler:BytecodeCompiler op:Op op_index:int bytecode:List[Inst] {
+    compiler BytecodeCompiler::ops = cib_ops
+    op Op::location = cib_loc
+
+    List::new (List[int]) = cib_start_targets
+    OpKind::OpIfStart (int) cib_start_targets .push
+
+    List::new (List[int]) = cib_elif_else_end
+    OpKind::OpIfElif (int) cib_elif_else_end .push
+    OpKind::OpIfElse (int) cib_elif_else_end .push
+    OpKind::OpIfEnd (int) cib_elif_else_end .push
+
+    List::new (List[int]) = cib_end_targets
+    OpKind::OpIfEnd (int) cib_end_targets .push
+
+    List::new (List[int]) = cib_else_targets
+    OpKind::OpIfElse (int) cib_else_targets .push
+
+    if OpKind::OpIfCondition (int) op Op::kind == then
+        "`then` without matching `if`" cib_loc cib_start_targets OpKind::OpIfStart (int) op_index cib_ops require_matching_reverse drop
+        "`then` without matching `fi`" cib_loc cib_elif_else_end OpKind::OpIfEnd (int) op_index cib_ops require_matching_forward = cib_end_label
+        cib_end_label InstKind::InstJumpNe (int) make_inst_int bytecode .push
+    elif OpKind::OpIfElif (int) op Op::kind == then
+        "`elif` without parent `if`" cib_loc cib_start_targets OpKind::OpIfStart (int) op_index cib_ops require_matching_reverse drop
+        op_index op_index_to_label = cib_elif_label
+        "`elif` without matching `fi`" cib_loc cib_end_targets OpKind::OpIfEnd (int) op_index cib_ops require_matching_forward = cib_end2
+        cib_end2 InstKind::InstJump (int) make_inst_int bytecode .push
+        cib_elif_label InstKind::InstLabel (int) make_inst_int bytecode .push
+    elif OpKind::OpIfElse (int) op Op::kind == then
+        "`else` without parent `if`" cib_loc cib_start_targets OpKind::OpIfStart (int) op_index cib_ops require_matching_reverse drop
+        op_index op_index_to_label = cib_else_label
+        "`else` without matching `fi`" cib_loc cib_end_targets OpKind::OpIfEnd (int) op_index cib_ops require_matching_forward = cib_end3
+        cib_end3 InstKind::InstJump (int) make_inst_int bytecode .push
+        cib_else_label InstKind::InstLabel (int) make_inst_int bytecode .push
+    elif OpKind::OpIfEnd (int) op Op::kind == then
+        "`fi` without parent `if`" cib_loc cib_start_targets OpKind::OpIfStart (int) op_index cib_ops require_matching_reverse drop
+        op_index op_index_to_label = cib_fi_label
+        cib_fi_label InstKind::InstLabel (int) make_inst_int bytecode .push
+    elif OpKind::OpIfStart (int) op Op::kind == then
+        "`if` without matching `fi`" cib_loc cib_end_targets OpKind::OpIfEnd (int) op_index cib_ops require_matching_forward drop
+    fi
+}
+
+# ============================================================================
+# Compile while block
+# ============================================================================
+
+fn compile_while_block compiler:BytecodeCompiler op:Op op_index:int bytecode:List[Inst] {
+    compiler BytecodeCompiler::ops = cwb_ops
+    op Op::location = cwb_loc
+
+    List::new (List[int]) = cwb_start_targets
+    OpKind::OpWhileStart (int) cwb_start_targets .push
+
+    List::new (List[int]) = cwb_end_targets
+    OpKind::OpWhileEnd (int) cwb_end_targets .push
+
+    if OpKind::OpWhileBreak (int) op Op::kind == then
+        "`break` without parent `while`" cwb_loc cwb_start_targets OpKind::OpWhileStart (int) op_index cwb_ops require_matching_reverse drop
+        "`break` without matching `done`" cwb_loc cwb_end_targets OpKind::OpWhileEnd (int) op_index cwb_ops require_matching_forward = cwb_end_label
+        cwb_end_label InstKind::InstJump (int) make_inst_int bytecode .push
+    elif OpKind::OpWhileCondition (int) op Op::kind == then
+        "`do` without parent `while`" cwb_loc cwb_start_targets OpKind::OpWhileStart (int) op_index cwb_ops require_matching_reverse drop
+        "`do` without matching `done`" cwb_loc cwb_end_targets OpKind::OpWhileEnd (int) op_index cwb_ops require_matching_forward = cwb_end2
+        cwb_end2 InstKind::InstJumpNe (int) make_inst_int bytecode .push
+    elif OpKind::OpWhileContinue (int) op Op::kind == then
+        "`continue` without parent `while`" cwb_loc cwb_start_targets OpKind::OpWhileStart (int) op_index cwb_ops require_matching_reverse = cwb_cont_target
+        cwb_cont_target InstKind::InstJump (int) make_inst_int bytecode .push
+    elif OpKind::OpWhileEnd (int) op Op::kind == then
+        op_index op_index_to_label = cwb_while_label
+        "`done` without parent `while`" cwb_loc cwb_start_targets OpKind::OpWhileStart (int) op_index cwb_ops require_matching_reverse = cwb_loop_start
+        cwb_loop_start InstKind::InstJump (int) make_inst_int bytecode .push
+        cwb_while_label InstKind::InstLabel (int) make_inst_int bytecode .push
+    elif OpKind::OpWhileStart (int) op Op::kind == then
+        op_index op_index_to_label = cwb_start_label
+        cwb_start_label InstKind::InstLabel (int) make_inst_int bytecode .push
+    fi
+}
+
+# ============================================================================
+# Compile match block
+# ============================================================================
+
+fn compile_match_arm_enum compiler:BytecodeCompiler pattern_ptr:int is_last:bool next_arm:Option[int] bytecode:List[Inst] {
+    pattern_ptr (EnumVariant) = cmae_variant
+    cmae_variant EnumVariant::enum_name = cmae_enum_name
+    cmae_enum_name GLOBAL_ENUMS .get .unwrap = cmae_enum
+
+    if is_last ! cmae_variant is_wildcard_variant ! && then
+        InstKind::InstDup (int) make_inst bytecode .push
+        InstKind::InstLoad64 (int) make_inst bytecode .push
+        cmae_variant EnumVariant::ordinal InstKind::InstPush (int) make_inst_int bytecode .push
+        InstKind::InstEq (int) make_inst bytecode .push
+        next_arm .unwrap InstKind::InstJumpNe (int) make_inst_int bytecode .push
+    fi
+
+    # Extract bindings
+    0 = cmae_i
+    while cmae_i cmae_variant EnumVariant::bindings .length > do
+        cmae_i 1 + 8 * = cmae_offset
+        InstKind::InstDup (int) make_inst bytecode .push
+        cmae_offset InstKind::InstPush (int) make_inst_int bytecode .push
+        InstKind::InstAdd (int) make_inst bytecode .push
+        InstKind::InstLoad64 (int) make_inst bytecode .push
+        cmae_i cmae_variant EnumVariant::bindings .get = cmae_var_name
+        cmae_var_name compiler resolve_variable = cmae_packed
+        cmae_packed resolve_index cmae_packed resolve_set_kind make_inst_int bytecode .push
+        1 += cmae_i
+    done
+    InstKind::InstDrop (int) make_inst bytecode .push
+}
+
+fn compile_match_arm_literal compiler:BytecodeCompiler pattern_ptr:int is_last:bool next_arm:Option[int] bytecode:List[Inst] {
+    pattern_ptr (LiteralPattern) = cmal_pattern
+    if is_last then
+        InstKind::InstDrop (int) make_inst bytecode .push
+        return
+    fi
+    InstKind::InstDup (int) make_inst bytecode .push
+    if "str" cmal_pattern LiteralPattern::typ == then
+        cmal_pattern LiteralPattern::value (str) = cmal_str_val
+        cmal_str_val compiler intern_string = cmal_str_idx
+        cmal_str_idx InstKind::InstPushStr (int) make_inst_int bytecode .push
+        InstKind::InstStrEq (int) make_inst bytecode .push
+    elif "char" cmal_pattern LiteralPattern::typ == then
+        cmal_pattern LiteralPattern::value InstKind::InstPush (int) make_inst_int bytecode .push
+        InstKind::InstEq (int) make_inst bytecode .push
+    else
+        cmal_pattern LiteralPattern::value InstKind::InstPush (int) make_inst_int bytecode .push
+        InstKind::InstEq (int) make_inst bytecode .push
+    fi
+    next_arm .unwrap InstKind::InstJumpNe (int) make_inst_int bytecode .push
+    InstKind::InstDrop (int) make_inst bytecode .push
+}
+
+fn compile_match_arm_struct compiler:BytecodeCompiler pattern_ptr:int bytecode:List[Inst] {
+    pattern_ptr (StructPattern) = cmas_pattern
+    cmas_pattern StructPattern::struct_name GLOBAL_STRUCTS .get .unwrap = cmas_struct
+
+    # Build field offset map
+    0 = cmas_i
+    while cmas_i cmas_struct CasaStruct::members .length > do
+        cmas_i cmas_struct CasaStruct::members .get Member::name = cmas_field_name
+        cmas_i 8 * = cmas_offset
+
+        # Check if this field is bound
+        cmas_field_name cmas_pattern StructPattern::bindings .get = cmas_binding
+        if cmas_binding .is_some then
+            InstKind::InstDup (int) make_inst bytecode .push
+            if 0 cmas_offset > then
+                cmas_offset InstKind::InstPush (int) make_inst_int bytecode .push
+                InstKind::InstAdd (int) make_inst bytecode .push
+            fi
+            InstKind::InstLoad64 (int) make_inst bytecode .push
+            cmas_binding .unwrap = cmas_var_name
+            cmas_var_name compiler resolve_variable = cmas_packed
+            cmas_packed resolve_index cmas_packed resolve_set_kind make_inst_int bytecode .push
+        fi
+        1 += cmas_i
+    done
+    InstKind::InstDrop (int) make_inst bytecode .push
+}
+
+fn compile_match_block compiler:BytecodeCompiler op:Op op_index:int bytecode:List[Inst] {
+    compiler BytecodeCompiler::ops = cmb_ops
+
+    if OpKind::OpMatchStart (int) op Op::kind == then
+        # Nothing to emit
+    elif OpKind::OpMatchArm (int) op Op::kind == then
+        op Op::location = cmb_loc
+
+        List::new (List[int]) = cmb_end_targets
+        OpKind::OpMatchEnd (int) cmb_end_targets .push
+
+        "`match` arm without matching `end`" cmb_loc cmb_end_targets OpKind::OpMatchEnd (int) op_index cmb_ops require_matching_forward = cmb_end_label
+
+        # Check if this is the first arm (label not yet assigned)
+        op_index OP_LABEL_MAP .get = cmb_existing
+        cmb_existing .is_some ! = cmb_is_first
+
+        if cmb_is_first ! then
+            cmb_end_label InstKind::InstJump (int) make_inst_int bytecode .push
+            cmb_existing .unwrap InstKind::InstLabel (int) make_inst_int bytecode .push
+        fi
+
+        # Find next arm
+        List::new (List[int]) = cmb_arm_targets
+        OpKind::OpMatchArm (int) cmb_arm_targets .push
+        cmb_arm_targets OpKind::OpMatchEnd (int) op_index cmb_ops find_matching_label_forward = cmb_next_arm
+        cmb_next_arm .is_none = cmb_is_last
+
+        op Op::value = cmb_pattern_ptr
+
+        # Determine pattern type by checking enum_name field
+        # The pattern_ptr points to either EnumVariant, StructPattern, or LiteralPattern
+        # We use the type_annotation on the op to distinguish
+        op Op::type_annotation = cmb_annotation
+
+        if "struct_pattern" cmb_annotation == then
+            bytecode cmb_pattern_ptr compiler compile_match_arm_struct
+        elif "literal_pattern" cmb_annotation == then
+            bytecode cmb_next_arm cmb_is_last cmb_pattern_ptr compiler compile_match_arm_literal
+        elif "enum_variant" cmb_annotation == then
+            cmb_pattern_ptr (EnumVariant) = cmb_variant
+            cmb_variant EnumVariant::enum_name = cmb_ename
+            if "" cmb_ename != cmb_ename GLOBAL_ENUMS .has && then
+                cmb_ename GLOBAL_ENUMS .get .unwrap = cmb_cenum
+                cmb_cenum has_inner_values = cmb_has_inner
+                if cmb_has_inner then
+                    bytecode cmb_next_arm cmb_is_last cmb_pattern_ptr compiler compile_match_arm_enum
+                elif cmb_is_last then
+                    InstKind::InstDrop (int) make_inst bytecode .push
+                else
+                    InstKind::InstDup (int) make_inst bytecode .push
+                    cmb_variant EnumVariant::ordinal InstKind::InstPush (int) make_inst_int bytecode .push
+                    InstKind::InstEq (int) make_inst bytecode .push
+                    cmb_next_arm .unwrap InstKind::InstJumpNe (int) make_inst_int bytecode .push
+                    InstKind::InstDrop (int) make_inst bytecode .push
+                fi
+            elif cmb_is_last then
+                InstKind::InstDrop (int) make_inst bytecode .push
+            else
+                InstKind::InstDup (int) make_inst bytecode .push
+                cmb_variant EnumVariant::ordinal InstKind::InstPush (int) make_inst_int bytecode .push
+                InstKind::InstEq (int) make_inst bytecode .push
+                cmb_next_arm .unwrap InstKind::InstJumpNe (int) make_inst_int bytecode .push
+                InstKind::InstDrop (int) make_inst bytecode .push
+            fi
+        fi
+    elif OpKind::OpMatchEnd (int) op Op::kind == then
+        op_index op_index_to_label = cmb_end_lbl
+        cmb_end_lbl InstKind::InstLabel (int) make_inst_int bytecode .push
+    fi
+}
+
+# ============================================================================
+# Compile struct new
+# ============================================================================
+
+fn compile_struct_new compiler:BytecodeCompiler op:Op bytecode:List[Inst] {
+    op Op::value (CasaStruct) = csn_struct
+    csn_struct CasaStruct::members .length = csn_count
+    csn_count 8 * InstKind::InstPush (int) make_inst_int bytecode .push
+    InstKind::InstHeapAlloc (int) make_inst bytecode .push
+    0 = csn_i
+    while csn_i csn_count > do
+        InstKind::InstSwap (int) make_inst bytecode .push
+        InstKind::InstOver (int) make_inst bytecode .push
+        if 0 csn_i > then
+            csn_i 8 * InstKind::InstPush (int) make_inst_int bytecode .push
+            InstKind::InstAdd (int) make_inst bytecode .push
+        fi
+        InstKind::InstStore64 (int) make_inst bytecode .push
+        1 += csn_i
+    done
+}
+
+# ============================================================================
+# Compile enum variant
+# ============================================================================
+
+fn compile_enum_variant compiler:BytecodeCompiler variant:EnumVariant casa_enum:CasaEnum bytecode:List[Inst] {
+    variant EnumVariant::variant_name = cev_vname
+    cev_vname casa_enum CasaEnum::variant_types .get = cev_types_opt
+    0 = cev_inner_count
+    if cev_types_opt .is_some then
+        cev_types_opt .unwrap .length = cev_inner_count
+    fi
+    cev_inner_count 1 + = cev_slot_count
+
+    # Store inner values from stack into temp locals
+    List::new (List[int]) = cev_temps
+    0 = cev_i
+    while cev_i cev_inner_count > do
+        compiler BytecodeCompiler::locals_count = cev_local_idx
+        compiler BytecodeCompiler::locals_count 1 + compiler->locals_count
+        cev_local_idx cev_temps .push
+        cev_local_idx InstKind::InstLocalSet (int) make_inst_int bytecode .push
+        1 += cev_i
+    done
+
+    # Allocate heap
+    compiler BytecodeCompiler::locals_count = cev_ptr_local
+    compiler BytecodeCompiler::locals_count 1 + compiler->locals_count
+    cev_slot_count 8 * InstKind::InstPush (int) make_inst_int bytecode .push
+    InstKind::InstHeapAlloc (int) make_inst bytecode .push
+    cev_ptr_local InstKind::InstLocalSet (int) make_inst_int bytecode .push
+
+    # Store ordinal at offset 0
+    variant EnumVariant::ordinal InstKind::InstPush (int) make_inst_int bytecode .push
+    cev_ptr_local InstKind::InstLocalGet (int) make_inst_int bytecode .push
+    InstKind::InstStore64 (int) make_inst bytecode .push
+
+    # Store inner values at offsets 8, 16, ...
+    # Reversed temp_locals
+    0 = cev_j
+    while cev_j cev_inner_count > do
+        cev_inner_count 1 - cev_j - = cev_rev_idx
+        cev_j 1 + 8 * = cev_offset
+        cev_ptr_local InstKind::InstLocalGet (int) make_inst_int bytecode .push
+        cev_offset InstKind::InstPush (int) make_inst_int bytecode .push
+        InstKind::InstAdd (int) make_inst bytecode .push
+        cev_rev_idx cev_temps .get = cev_temp_local
+        cev_temp_local InstKind::InstLocalGet (int) make_inst_int bytecode .push
+        InstKind::InstSwap (int) make_inst bytecode .push
+        InstKind::InstStore64 (int) make_inst bytecode .push
+        1 += cev_j
+    done
+
+    # Push pointer
+    cev_ptr_local InstKind::InstLocalGet (int) make_inst_int bytecode .push
+}
+
+# ============================================================================
+# Compile is check
+# ============================================================================
+
+fn compile_is_check compiler:BytecodeCompiler op:Op bytecode:List[Inst] {
+    op Op::value (EnumVariant) = cic_variant
+    cic_variant EnumVariant::enum_name = cic_enum_name
+    cic_enum_name GLOBAL_ENUMS .get .unwrap = cic_enum
+
+    if cic_enum has_inner_values ! then
+        # Plain enum: compare ordinal directly
+        cic_variant EnumVariant::ordinal InstKind::InstPush (int) make_inst_int bytecode .push
+        InstKind::InstEq (int) make_inst bytecode .push
+        return
+    fi
+
+    if 0 cic_variant EnumVariant::bindings .length == then
+        # Data-carrying enum, no bindings: load ordinal and compare
+        InstKind::InstLoad64 (int) make_inst bytecode .push
+        cic_variant EnumVariant::ordinal InstKind::InstPush (int) make_inst_int bytecode .push
+        InstKind::InstEq (int) make_inst bytecode .push
+        return
+    fi
+
+    # Data-carrying enum with bindings
+    compiler BytecodeCompiler::locals_count = cic_temp_ptr
+    compiler BytecodeCompiler::locals_count 1 + compiler->locals_count
+
+    new_label = cic_skip_bindings
+
+    # Save enum pointer
+    cic_temp_ptr InstKind::InstLocalSet (int) make_inst_int bytecode .push
+
+    # Load ordinal and compare
+    cic_temp_ptr InstKind::InstLocalGet (int) make_inst_int bytecode .push
+    InstKind::InstLoad64 (int) make_inst bytecode .push
+    cic_variant EnumVariant::ordinal InstKind::InstPush (int) make_inst_int bytecode .push
+    InstKind::InstEq (int) make_inst bytecode .push
+
+    # Duplicate bool
+    InstKind::InstDup (int) make_inst bytecode .push
+    cic_skip_bindings InstKind::InstJumpNe (int) make_inst_int bytecode .push
+
+    # Extract bindings
+    0 = cic_i
+    while cic_i cic_variant EnumVariant::bindings .length > do
+        cic_i 1 + 8 * = cic_offset
+        cic_temp_ptr InstKind::InstLocalGet (int) make_inst_int bytecode .push
+        cic_offset InstKind::InstPush (int) make_inst_int bytecode .push
+        InstKind::InstAdd (int) make_inst bytecode .push
+        InstKind::InstLoad64 (int) make_inst bytecode .push
+        cic_i cic_variant EnumVariant::bindings .get = cic_var_name
+        cic_var_name compiler resolve_variable = cic_packed
+        cic_packed resolve_index cic_packed resolve_set_kind make_inst_int bytecode .push
+        1 += cic_i
+    done
+
+    cic_skip_bindings InstKind::InstLabel (int) make_inst_int bytecode .push
+}
+
+# ============================================================================
+# Compile struct literal
+# ============================================================================
+
+fn compile_struct_literal compiler:BytecodeCompiler op:Op bytecode:List[Inst] {
+    op Op::value (StructLiteral) = csl_literal
+    csl_literal StructLiteral::struct_name GLOBAL_STRUCTS .get .unwrap = csl_struct
+    csl_struct CasaStruct::members .length = csl_count
+
+    # Store all field values into temp locals (top of stack = last in field_order)
+    # Iterate field_order in reverse
+    csl_literal StructLiteral::field_order .length 1 - = csl_fi
+    Map::new (Map[str int]) = csl_temp_locals
+    while 0 csl_fi >= do
+        compiler BytecodeCompiler::locals_count = csl_local_idx
+        compiler BytecodeCompiler::locals_count 1 + compiler->locals_count
+        csl_fi csl_literal StructLiteral::field_order .get = csl_field_name
+        csl_field_name csl_local_idx csl_temp_locals .set = csl_temp_locals
+        csl_local_idx InstKind::InstLocalSet (int) make_inst_int bytecode .push
+        csl_fi 1 - = csl_fi
+    done
+
+    # Allocate struct on heap
+    csl_count 8 * InstKind::InstPush (int) make_inst_int bytecode .push
+    InstKind::InstHeapAlloc (int) make_inst bytecode .push
+
+    # Store each field at its correct offset
+    0 = csl_mi
+    while csl_mi csl_struct CasaStruct::members .length > do
+        csl_mi csl_struct CasaStruct::members .get Member::name = csl_mname
+        csl_mi 8 * = csl_moffset
+        InstKind::InstDup (int) make_inst bytecode .push
+        if 0 csl_moffset > then
+            csl_moffset InstKind::InstPush (int) make_inst_int bytecode .push
+            InstKind::InstAdd (int) make_inst bytecode .push
+        fi
+        csl_mname csl_temp_locals .get .unwrap InstKind::InstLocalGet (int) make_inst_int bytecode .push
+        InstKind::InstSwap (int) make_inst bytecode .push
+        InstKind::InstStore64 (int) make_inst bytecode .push
+        1 += csl_mi
+    done
+}
+
+# ============================================================================
+# Compile push array
+# ============================================================================
+
+fn compile_push_array compiler:BytecodeCompiler op:Op bytecode:List[Inst] {
+    op Op::value (List[Op]) = cpa_items
+    cpa_items .length = cpa_len
+
+    # Compile items in reverse order
+    cpa_len 1 - = cpa_ri
+    while 0 cpa_ri >= do
+        cpa_ri cpa_items .get = cpa_item
+        bytecode cpa_ri cpa_item compiler compile_op
+        cpa_ri 1 - = cpa_ri
+    done
+
+    # Allocate memory: header (data_ptr + length) + elements
+    compiler BytecodeCompiler::locals_count = cpa_local_list
+    compiler BytecodeCompiler::locals_count 1 + compiler->locals_count
+    cpa_len 2 + 8 * InstKind::InstPush (int) make_inst_int bytecode .push
+    InstKind::InstHeapAlloc (int) make_inst bytecode .push
+    cpa_local_list InstKind::InstLocalSet (int) make_inst_int bytecode .push
+
+    # Store data_ptr (allocation + 16) at offset 0
+    cpa_local_list InstKind::InstLocalGet (int) make_inst_int bytecode .push
+    16 InstKind::InstPush (int) make_inst_int bytecode .push
+    InstKind::InstAdd (int) make_inst bytecode .push
+    cpa_local_list InstKind::InstLocalGet (int) make_inst_int bytecode .push
+    InstKind::InstStore64 (int) make_inst bytecode .push
+
+    # Store length at offset 8
+    cpa_len InstKind::InstPush (int) make_inst_int bytecode .push
+    cpa_local_list InstKind::InstLocalGet (int) make_inst_int bytecode .push
+    8 InstKind::InstPush (int) make_inst_int bytecode .push
+    InstKind::InstAdd (int) make_inst bytecode .push
+    InstKind::InstStore64 (int) make_inst bytecode .push
+
+    # Store elements starting at offset 16
+    compiler BytecodeCompiler::locals_count = cpa_local_index
+    compiler BytecodeCompiler::locals_count 1 + compiler->locals_count
+    16 InstKind::InstPush (int) make_inst_int bytecode .push
+    cpa_local_index InstKind::InstLocalSet (int) make_inst_int bytecode .push
+
+    new_label = cpa_start_label
+    new_label = cpa_end_label
+
+    # while index limit > do
+    cpa_start_label InstKind::InstLabel (int) make_inst_int bytecode .push
+    cpa_local_index InstKind::InstLocalGet (int) make_inst_int bytecode .push
+    cpa_len 2 + 8 * InstKind::InstPush (int) make_inst_int bytecode .push
+    InstKind::InstGt (int) make_inst bytecode .push
+    cpa_end_label InstKind::InstJumpNe (int) make_inst_int bytecode .push
+
+    # list index + store64
+    cpa_local_list InstKind::InstLocalGet (int) make_inst_int bytecode .push
+    cpa_local_index InstKind::InstLocalGet (int) make_inst_int bytecode .push
+    InstKind::InstAdd (int) make_inst bytecode .push
+    InstKind::InstStore64 (int) make_inst bytecode .push
+
+    # 8 += index
+    cpa_local_index InstKind::InstLocalGet (int) make_inst_int bytecode .push
+    8 InstKind::InstPush (int) make_inst_int bytecode .push
+    InstKind::InstAdd (int) make_inst bytecode .push
+    cpa_local_index InstKind::InstLocalSet (int) make_inst_int bytecode .push
+
+    # done
+    cpa_start_label InstKind::InstJump (int) make_inst_int bytecode .push
+    cpa_end_label InstKind::InstLabel (int) make_inst_int bytecode .push
+
+    # Push array pointer
+    cpa_local_list InstKind::InstLocalGet (int) make_inst_int bytecode .push
+}
+
+# ============================================================================
+# Compile function call
+# ============================================================================
+
+fn compile_function compiler:BytecodeCompiler function:Function op:Op {
+    # Compile a function if not already compiled.
+    if 0 function Function::bytecode .length != then
+        return
+    fi
+    function Function::ops = cf_ops
+    cf_ops .length = cf_ops_len
+    if 0 cf_ops_len == then
+        return
+    fi
+
+    List::new (List[Inst]) = cf_bytecode
+    compiler BytecodeCompiler::constants_table compiler BytecodeCompiler::string_table function (int) cf_ops make_compiler_with_tables = cf_compiler
+    cf_bytecode cf_compiler compile_ops
+
+    # Handle locals
+    cf_compiler BytecodeCompiler::locals_count = cf_lc
+    if 0 cf_lc < then
+        # Build new list with LOCALS_INIT at front
+        List::new (List[Inst]) = cf_final
+        cf_lc InstKind::InstLocalsInit (int) make_inst_int cf_final .push
+
+        0 = cf_i
+        while cf_i cf_bytecode .length > do
+            cf_i cf_bytecode .get = cf_inst
+            if InstKind::InstFnReturn (int) cf_inst Inst::kind == then
+                cf_lc InstKind::InstLocalsUninit (int) make_inst_int cf_final .push
+            fi
+            cf_inst cf_final .push
+            1 += cf_i
+        done
+        cf_lc InstKind::InstLocalsUninit (int) make_inst_int cf_final .push
+        InstKind::InstFnReturn (int) make_inst cf_final .push
+        cf_final = cf_bytecode
+    else
+        InstKind::InstFnReturn (int) make_inst cf_bytecode .push
+    fi
+
+    # Store bytecode on the function
+    0 = cf_bi
+    while cf_bi cf_bytecode .length > do
+        cf_bi cf_bytecode .get function Function::bytecode .push
+        1 += cf_bi
+    done
+}
+
+fn compile_function_ops compiler:BytecodeCompiler op:Op bytecode:List[Inst] {
+    op op_str_value = cfo_name
+
+    if OpKind::OpFnCall (int) op Op::kind == then
+        cfo_name GLOBAL_FUNCTIONS .get .unwrap = cfo_func
+        op cfo_func compiler compile_function
+        cfo_name InstKind::InstFnCall (int) make_inst_str bytecode .push
+    elif OpKind::OpFnPush (int) op Op::kind == then
+        cfo_name GLOBAL_FUNCTIONS .get = cfo_fn_opt
+        if cfo_fn_opt .is_none then
+            op Op::location f"Function `{cfo_name}` is not defined" ErrorKind::UndefinedName (int) make_error ERRORS .push
+            return
+        fi
+        cfo_fn_opt .unwrap = cfo_lambda
+        op cfo_lambda compiler compile_function
+
+        # Handle captures
+        0 = cfo_ci
+        while cfo_ci cfo_lambda Function::captures .length > do
+            cfo_ci cfo_lambda Function::captures .get = cfo_capture
+            cfo_capture Variable::name = cfo_cap_name
+            cfo_cap_name compiler resolve_variable = cfo_cap_packed
+            cfo_cap_packed resolve_index cfo_cap_packed resolve_get_kind make_inst_int bytecode .push
+            f"{cfo_lambda Function::name}_{cfo_cap_name}" = cfo_const_key
+            cfo_const_key compiler intern_constant = cfo_const_idx
+            cfo_const_idx InstKind::InstConstantStore (int) make_inst_int bytecode .push
+            1 += cfo_ci
+        done
+        cfo_name InstKind::InstFnPush (int) make_inst_str bytecode .push
+    fi
+}
+
+# ============================================================================
+# Compile enum comparison (data-carrying enums)
+# ============================================================================
+
+fn compile_enum_comparison compiler:BytecodeCompiler op:Op bytecode:List[Inst] {
+    compiler BytecodeCompiler::locals_count = cec_local_a
+    compiler BytecodeCompiler::locals_count 1 + compiler->locals_count
+    cec_local_a InstKind::InstLocalSet (int) make_inst_int bytecode .push
+    InstKind::InstLoad64 (int) make_inst bytecode .push
+    cec_local_a InstKind::InstLocalGet (int) make_inst_int bytecode .push
+    InstKind::InstLoad64 (int) make_inst bytecode .push
+    if OpKind::OpEq (int) op Op::kind == then
+        InstKind::InstEq (int) make_inst bytecode .push
+    else
+        InstKind::InstNe (int) make_inst bytecode .push
+    fi
+}
+
+# ============================================================================
+# Compile single op
+# ============================================================================
+
+fn compile_op compiler:BytecodeCompiler op:Op op_index:int bytecode:List[Inst] {
+    op Op::kind = co_kind
+
+    # Check direct op-to-inst mapping first
+    if co_kind (int) DIRECT_OP_TO_INST .has then
+        # Data-carrying enum comparison
+        if
+            OpKind::OpEq (int) co_kind ==
+            OpKind::OpNe (int) co_kind == ||
+            "" op Op::type_annotation != &&
+            op Op::type_annotation GLOBAL_ENUMS .has &&
+        then
+            bytecode op compiler compile_enum_comparison
+            return
+        fi
+        # String content comparison
+        if
+            OpKind::OpEq (int) co_kind ==
+            OpKind::OpNe (int) co_kind == ||
+            "str" op Op::type_annotation == &&
+        then
+            InstKind::InstStrEq (int) make_inst bytecode .push
+            if OpKind::OpNe (int) co_kind == then
+                InstKind::InstNot (int) make_inst bytecode .push
+            fi
+            return
+        fi
+        # Data-carrying enum print
+        if OpKind::OpPrintInt (int) co_kind == "" op Op::type_annotation != && then
+            InstKind::InstLoad64 (int) make_inst bytecode .push
+            InstKind::InstPrintInt (int) make_inst bytecode .push
+            return
+        fi
+        co_kind (int) DIRECT_OP_TO_INST .get .unwrap make_inst bytecode .push
+        return
+    fi
+
+    # Non-direct ops
+    if
+        OpKind::OpAssignDec (int) co_kind ==
+        OpKind::OpAssignInc (int) co_kind == ||
+        OpKind::OpAssignVar (int) co_kind == ||
+    then
+        bytecode op compiler compile_assignment
+    elif OpKind::OpFstringConcat (int) co_kind == then
+        op op_int_value InstKind::InstFstringConcat (int) make_inst_int bytecode .push
+    elif OpKind::OpFnCall (int) co_kind == OpKind::OpFnPush (int) co_kind == || then
+        if OpKind::OpFnPush (int) co_kind == then
+            op op_str_value GLOBAL_FUNCTIONS .get = co_fn_opt
+            if co_fn_opt .is_some then
+                co_fn_opt .unwrap = co_fn_check
+                if 0 co_fn_check Function::has_deferred_methods != then
+                    0 InstKind::InstPush (int) make_inst_int bytecode .push
+                    return
+                fi
+            fi
+        fi
+        bytecode op compiler compile_function_ops
+    elif OpKind::OpIdentifier (int) co_kind == then
+        f"Identifier `{op op_str_value}` should be resolved by the parser\n" eprint
+        1 exit
+    elif
+        OpKind::OpIfCondition (int) co_kind ==
+        OpKind::OpIfElif (int) co_kind == ||
+        OpKind::OpIfElse (int) co_kind == ||
+        OpKind::OpIfEnd (int) co_kind == ||
+        OpKind::OpIfStart (int) co_kind == ||
+    then
+        bytecode op_index op compiler compile_if_block
+    elif OpKind::OpIncludeFile (int) co_kind == OpKind::OpTypeCast (int) co_kind == || then
+        # No instruction emitted
+    elif OpKind::OpPushEnumVariant (int) co_kind == then
+        op Op::value (EnumVariant) = co_variant
+        co_variant EnumVariant::enum_name GLOBAL_ENUMS .get .unwrap = co_enum
+        if co_enum has_inner_values then
+            bytecode co_enum co_variant compiler compile_enum_variant
+        else
+            co_variant EnumVariant::ordinal InstKind::InstPush (int) make_inst_int bytecode .push
+        fi
+    elif OpKind::OpIsCheck (int) co_kind == then
+        bytecode op compiler compile_is_check
+    elif
+        OpKind::OpMatchStart (int) co_kind ==
+        OpKind::OpMatchArm (int) co_kind == ||
+        OpKind::OpMatchEnd (int) co_kind == ||
+    then
+        bytecode op_index op compiler compile_match_block
+    elif OpKind::OpMethodCall (int) co_kind == then
+        "Method call should be transpiled to function call during type checking\n" eprint
+        1 exit
+    elif OpKind::OpPrint (int) co_kind == then
+        "PRINT should be resolved by type checker\n" eprint
+        1 exit
+    elif OpKind::OpTypeof (int) co_kind == then
+        op Op::type_annotation = co_type_name
+        co_type_name compiler intern_string = co_typeof_idx
+        InstKind::InstDrop (int) make_inst bytecode .push
+        co_typeof_idx InstKind::InstPushStr (int) make_inst_int bytecode .push
+        InstKind::InstPrintStr (int) make_inst bytecode .push
+    elif OpKind::OpPushArray (int) co_kind == then
+        bytecode op compiler compile_push_array
+    elif OpKind::OpPushBool (int) co_kind == then
+        op op_int_value InstKind::InstPush (int) make_inst_int bytecode .push
+    elif OpKind::OpPushChar (int) co_kind == then
+        op op_int_value InstKind::InstPushChar (int) make_inst_int bytecode .push
+    elif OpKind::OpPushCapture (int) co_kind == then
+        op op_str_value = co_cap_name
+        compiler BytecodeCompiler::function = co_fn_ptr
+        if 0 co_fn_ptr != then
+            co_fn_ptr (Function) Function::name = co_fn_name
+        else
+            GLOBAL_SCOPE_LABEL = co_fn_name
+        fi
+        f"{co_fn_name}_{co_cap_name}" compiler intern_constant = co_cap_idx
+        co_cap_idx InstKind::InstConstantLoad (int) make_inst_int bytecode .push
+    elif OpKind::OpPushInt (int) co_kind == then
+        op op_int_value InstKind::InstPush (int) make_inst_int bytecode .push
+    elif OpKind::OpPushStr (int) co_kind == then
+        op op_str_value compiler intern_string = co_str_idx
+        co_str_idx InstKind::InstPushStr (int) make_inst_int bytecode .push
+    elif OpKind::OpPushVar (int) co_kind == then
+        op op_str_value = co_var_name
+        co_var_name compiler resolve_variable = co_var_packed
+        co_var_packed resolve_index co_var_packed resolve_get_kind make_inst_int bytecode .push
+    elif OpKind::OpStructNew (int) co_kind == then
+        bytecode op compiler compile_struct_new
+    elif OpKind::OpStructLiteral (int) co_kind == then
+        bytecode op compiler compile_struct_literal
+    elif
+        OpKind::OpWhileBreak (int) co_kind ==
+        OpKind::OpWhileCondition (int) co_kind == ||
+        OpKind::OpWhileContinue (int) co_kind == ||
+        OpKind::OpWhileEnd (int) co_kind == ||
+        OpKind::OpWhileStart (int) co_kind == ||
+    then
+        bytecode op_index op compiler compile_while_block
+    fi
+}
+
+# ============================================================================
+# Compile ops list
+# ============================================================================
+
+fn compile_ops compiler:BytecodeCompiler bytecode:List[Inst] {
+    # Set locals_count from function variables
+    compiler BytecodeCompiler::function = cops_fn_ptr
+    if 0 cops_fn_ptr != then
+        cops_fn_ptr (Function) Function::variables .length = cops_var_count
+        cops_var_count compiler->locals_count
+    fi
+
+    # Function label
+    new_label = cops_fn_label
+    cops_fn_label InstKind::InstLabel (int) make_inst_int bytecode .push
+
+    0 = cops_i
+    while cops_i compiler BytecodeCompiler::ops .length > do
+        cops_i compiler BytecodeCompiler::ops .get = cops_op
+        bytecode cops_i cops_op compiler compile_op
+        1 += cops_i
+    done
+}
+
+# ============================================================================
+# Main entry: compile_bytecode
+# ============================================================================
+
+fn compile_bytecode ops:List[Op] -> Program {
+    reset_labels
+
+    List::new (List[Inst]) = cb_bytecode
+    ops make_compiler = cb_compiler
+
+    # Emit globals init if needed
+    if 0 GLOBAL_VARIABLES .length < then
+        GLOBAL_VARIABLES .length InstKind::InstGlobalsInit (int) make_inst_int cb_bytecode .push
+    fi
+
+    cb_bytecode cb_compiler compile_ops
+
+    # Handle locals for global scope
+    cb_compiler BytecodeCompiler::locals_count = cb_lc
+    if 0 cb_lc < then
+        List::new (List[Inst]) = cb_final
+        cb_lc InstKind::InstLocalsInit (int) make_inst_int cb_final .push
+        0 = cb_i
+        while cb_i cb_bytecode .length > do
+            cb_i cb_bytecode .get cb_final .push
+            1 += cb_i
+        done
+        cb_lc InstKind::InstLocalsUninit (int) make_inst_int cb_final .push
+        cb_final = cb_bytecode
+    fi
+
+    # Compile all used functions
+    Map::new (Map[str List[Inst]]) = cb_functions
+    GLOBAL_FUNCTIONS .keys = cb_fn_names
+    0 = cb_fi
+    while cb_fi cb_fn_names .length > do
+        cb_fi cb_fn_names .get = cb_fn_name
+        cb_fn_name GLOBAL_FUNCTIONS .get .unwrap = cb_func
+        if 0 cb_func Function::bytecode .length != then
+            cb_fn_name cb_func Function::bytecode cb_functions .set = cb_functions
+        fi
+        1 += cb_fi
+    done
+
+    cb_compiler BytecodeCompiler::constants_table .length
+    GLOBAL_VARIABLES .length
+    cb_compiler BytecodeCompiler::string_table
+    cb_functions
+    cb_bytecode
+    Program
+}
