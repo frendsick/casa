@@ -1,0 +1,1286 @@
+# Stack-based type inference and checking for the Casa compiler.
+#
+# Maintains a virtual stack of type strings and validates that operations
+# are type-safe. This file is included after common.casa, error.casa,
+# lexer.casa, and parser.casa.
+
+# ============================================================================
+# BranchedStack — tracks stack state across conditional and loop branches
+# ============================================================================
+
+struct BranchedStack {
+    before:                 List[str]
+    after:                  List[str]
+    before_origins:         List[Location]
+    after_origins:          List[Location]
+    condition_present:      int
+    default_present:        int
+    branch_records:         List[str]
+    current_branch_label:   str
+    current_branch_location: Location
+    match_type:             str
+}
+
+fn copy_str_list source:List[str] -> List[str] {
+    List::new (List[str]) = csl_result
+    0 = csl_i
+    while csl_i source .length > do
+        csl_i source .get csl_result .push
+        1 += csl_i
+    done
+    csl_result
+}
+
+fn copy_location_list source:List[Location] -> List[Location] {
+    List::new (List[Location]) = cll_result
+    0 = cll_i
+    while cll_i source .length > do
+        cll_i source .get cll_result .push
+        1 += cll_i
+    done
+    cll_result
+}
+
+fn make_branched_stack stack:List[str] origins:List[Location] -> BranchedStack {
+    ""
+    empty_location
+    ""
+    List::new (List[str])
+    0
+    0
+    origins copy_location_list
+    origins copy_location_list
+    stack copy_str_list
+    stack copy_str_list
+    BranchedStack
+}
+
+# ============================================================================
+# TypeChecker struct
+# ============================================================================
+
+struct TypeChecker {
+    stack:               List[str]
+    stack_origins:       List[Location]
+    parameters:          List[Parameter]
+    return_types:        List[str]
+    has_return_types:    int
+    branched_stacks:     List[BranchedStack]
+    current_location:    Location
+    current_op_context:  str
+    current_expect_ctx:  str
+    in_branch_condition: int
+}
+
+fn make_typechecker -> TypeChecker {
+    0                                # in_branch_condition
+    ""                               # current_expect_ctx
+    ""                               # current_op_context
+    empty_location                   # current_location
+    List::new (List[BranchedStack])  # branched_stacks
+    0                                # has_return_types
+    List::new (List[str])            # return_types
+    List::new (List[Parameter])      # parameters
+    List::new (List[Location])       # stack_origins
+    List::new (List[str])            # stack
+    TypeChecker
+}
+
+# ============================================================================
+# Stack operations
+# ============================================================================
+
+fn stack_push tc:TypeChecker typ:str {
+    typ tc TypeChecker::stack .push
+    tc TypeChecker::current_location tc TypeChecker::stack_origins .push
+}
+
+fn stack_push_origin tc:TypeChecker typ:str origin:Location {
+    typ tc TypeChecker::stack .push
+    origin tc TypeChecker::stack_origins .push
+}
+
+fn stack_peek tc:TypeChecker -> str {
+    if 0 tc TypeChecker::stack .length == then
+        ANY_TYPE return
+    fi
+    tc TypeChecker::stack .length 1 - tc TypeChecker::stack .get
+}
+
+fn stack_pop tc:TypeChecker -> str {
+    if 0 tc TypeChecker::stack .length == then
+        ANY_TYPE make_param tc TypeChecker::parameters .push
+        ANY_TYPE return
+    fi
+    tc TypeChecker::stack_origins .pop drop
+    tc TypeChecker::stack .pop
+}
+
+fn expect_type tc:TypeChecker expected:str -> str {
+    if 0 tc TypeChecker::stack .length == then
+        expected make_param tc TypeChecker::parameters .push
+        expected return
+    fi
+    tc TypeChecker::stack_origins .pop = et_origin
+    tc TypeChecker::stack .pop = et_actual
+    # Check if types are compatible
+    if expected et_actual types_match then
+        et_actual return
+    fi
+    if et_actual expected types_match then
+        expected return
+    fi
+    # Build error message
+    "Type mismatch" = et_message
+    if "" tc TypeChecker::current_op_context != then
+        f"Type mismatch in {tc TypeChecker::current_op_context}" = et_message
+    fi
+    et_actual expected tc TypeChecker::current_location et_message ErrorKind::TypeMismatch (int) add_error_expected
+    expected
+}
+
+# ============================================================================
+# Type compatibility
+# ============================================================================
+
+fn types_match expected:str actual:str -> bool {
+    if expected actual == then true return fi
+    if ANY_TYPE expected == then true return fi
+    if ANY_TYPE actual == then true return fi
+    # Check fn type matching
+    if "fn" expected == then
+        if actual is_fn_type then true return fi
+    fi
+    if "fn" actual == then
+        if expected is_fn_type then true return fi
+    fi
+    # Check generic base matching: expected is base, actual is parameterized
+    actual extract_generic_base = tm_actual_base
+    if tm_actual_base .is_some then
+        if expected tm_actual_base .unwrap == then true return fi
+    fi
+    expected extract_generic_base = tm_expected_base
+    if tm_expected_base .is_some then
+        if actual tm_expected_base .unwrap == then true return fi
+    fi
+    # Check parameterized generics with same base
+    if tm_expected_base .is_some then
+        if tm_actual_base .is_some then
+            if tm_expected_base .unwrap tm_actual_base .unwrap == then
+                expected actual types_match_params = tm_params_ok
+                if tm_params_ok then true return fi
+            fi
+        fi
+    fi
+    # Check fn signature matching
+    expected extract_fn_signature_str = tm_exp_fn_opt
+    if tm_exp_fn_opt .is_some then
+        actual extract_fn_signature_str = tm_act_fn_opt
+        if tm_act_fn_opt .is_some then
+            tm_act_fn_opt .unwrap signature_from_str tm_exp_fn_opt .unwrap signature_from_str signature_matches = tm_sig_ok
+            if tm_sig_ok then true return fi
+        fi
+    fi
+    false
+}
+
+fn types_match_params expected:str actual:str -> bool {
+    expected extract_generic_params = tmp_exp_params_opt
+    actual extract_generic_params = tmp_act_params_opt
+    if tmp_exp_params_opt .is_none then false return fi
+    if tmp_act_params_opt .is_none then false return fi
+    tmp_exp_params_opt .unwrap = tmp_exp_params
+    tmp_act_params_opt .unwrap = tmp_act_params
+    if tmp_exp_params .length tmp_act_params .length != then false return fi
+    0 = tmp_i
+    while tmp_i tmp_exp_params .length > do
+        tmp_i tmp_exp_params .get = tmp_ep
+        tmp_i tmp_act_params .get = tmp_ap
+        if tmp_ep tmp_ap != then
+            if ANY_TYPE tmp_ep != then
+                if ANY_TYPE tmp_ap != then
+                    false return
+                fi
+            fi
+        fi
+        1 += tmp_i
+    done
+    true
+}
+
+# ============================================================================
+# Unify types — returns the more specific type, or "" on incompatibility
+# ============================================================================
+
+fn unify_generic_params type_a:str type_b:str -> str {
+    type_a extract_generic_params = ugp_params_a_opt
+    type_b extract_generic_params = ugp_params_b_opt
+    if ugp_params_a_opt .is_none then type_b return fi
+    if ugp_params_b_opt .is_none then type_a return fi
+    ugp_params_a_opt .unwrap = ugp_params_a
+    ugp_params_b_opt .unwrap = ugp_params_b
+    if ugp_params_a .length ugp_params_b .length != then "" return fi
+    List::new (List[str]) = ugp_unified
+    0 = ugp_i
+    while ugp_i ugp_params_a .length > do
+        ugp_i ugp_params_b .get ugp_i ugp_params_a .get unify_type = ugp_u
+        if "" ugp_u == then "" return fi
+        ugp_u ugp_unified .push
+        1 += ugp_i
+    done
+    type_a extract_generic_base .unwrap = ugp_base
+    StringBuilder::new = ugp_sb
+    ugp_base ugp_sb .append
+    "[" ugp_sb .append
+    0 = ugp_i
+    while ugp_i ugp_unified .length > do
+        if 0 ugp_i != then " " ugp_sb .append fi
+        ugp_i ugp_unified .get ugp_sb .append
+        1 += ugp_i
+    done
+    "]" ugp_sb .append
+    ugp_sb .build
+}
+
+fn unify_type type_a:str type_b:str -> str {
+    if type_a type_b == then type_a return fi
+    if ANY_TYPE type_a == then type_b return fi
+    if ANY_TYPE type_b == then type_a return fi
+    type_a extract_generic_base = ut_base_a
+    type_b extract_generic_base = ut_base_b
+    if ut_base_a .is_some then
+        if ut_base_b .is_some then
+            if ut_base_a .unwrap ut_base_b .unwrap == then
+                type_b type_a unify_generic_params = ut_generic_result
+                if "" ut_generic_result != then ut_generic_result return fi
+            fi
+        fi
+    fi
+    if ut_base_a .is_some then
+        if ut_base_a .unwrap type_b == then type_a return fi
+    fi
+    if ut_base_b .is_some then
+        if ut_base_b .unwrap type_a == then type_b return fi
+    fi
+    ""
+}
+
+# ============================================================================
+# Stack compatibility — unify element-wise, returns empty list on mismatch
+# ============================================================================
+
+fn stacks_compatible stack_a:List[str] stack_b:List[str] -> List[str] {
+    if stack_a .length stack_b .length != then
+        List::new (List[str]) return
+    fi
+    List::new (List[str]) = sc_result
+    0 = sc_i
+    while sc_i stack_a .length > do
+        sc_i stack_b .get sc_i stack_a .get unify_type = sc_unified
+        if "" sc_unified == then
+            List::new (List[str]) return
+        fi
+        sc_unified sc_result .push
+        1 += sc_i
+    done
+    sc_result
+}
+
+fn stacks_equal stack_a:List[str] stack_b:List[str] -> bool {
+    if stack_a .length stack_b .length != then false return fi
+    0 = se_i
+    while se_i stack_a .length > do
+        if se_i stack_a .get se_i stack_b .get != then false return fi
+        1 += se_i
+    done
+    true
+}
+
+# ============================================================================
+# Apply signature — pop params, push returns, with type variable binding
+# ============================================================================
+
+fn apply_signature tc:TypeChecker sig:Signature name:str {
+    # Simple case: no type variables
+    0 = as_i
+    while as_i sig Signature::parameters .length > do
+        as_i sig Signature::parameters .get Parameter::typ = as_expected
+        as_expected tc expect_type drop
+        1 += as_i
+    done
+    0 = as_i
+    while as_i sig Signature::return_types .length > do
+        as_i sig Signature::return_types .get tc stack_push
+        1 += as_i
+    done
+}
+
+# ============================================================================
+# Check arithmetic operations
+# ============================================================================
+
+fn check_arithmetic tc:TypeChecker op:Op {
+    op Op::kind = ca_kind
+    if
+        OpKind::OpAdd (int) ca_kind ==
+        OpKind::OpSub (int) ca_kind == ||
+    then
+        "int" tc expect_type drop
+        tc stack_pop = ca_top
+        ca_top tc stack_push
+    else
+        "int" tc expect_type drop
+        "int" tc expect_type drop
+        "int" tc stack_push
+    fi
+}
+
+# ============================================================================
+# Check comparison operations
+# ============================================================================
+
+fn check_comparison tc:TypeChecker op:Op {
+    tc stack_pop = cc_type1
+    tc stack_pop = cc_type2
+    "bool" tc stack_push
+}
+
+# ============================================================================
+# Check boolean operations
+# ============================================================================
+
+fn check_boolean tc:TypeChecker op:Op {
+    if OpKind::OpNot (int) op Op::kind == then
+        tc stack_pop drop
+    else
+        tc stack_pop drop
+        tc stack_pop drop
+    fi
+    "bool" tc stack_push
+}
+
+# ============================================================================
+# Check bitwise operations
+# ============================================================================
+
+fn check_bitwise tc:TypeChecker op:Op {
+    op Op::kind = cb_kind
+    if OpKind::OpBitNot (int) cb_kind == then
+        "int" tc expect_type drop
+        "int" tc stack_push
+    elif
+        OpKind::OpShl (int) cb_kind ==
+        OpKind::OpShr (int) cb_kind == ||
+    then
+        "int" tc expect_type drop
+        tc stack_pop = cb_top
+        cb_top tc stack_push
+    else
+        "int" tc expect_type drop
+        "int" tc expect_type drop
+        "int" tc stack_push
+    fi
+}
+
+# ============================================================================
+# Check stack manipulation operations
+# ============================================================================
+
+fn check_stack_ops tc:TypeChecker op:Op {
+    op Op::kind = cso_kind
+    if OpKind::OpDrop (int) cso_kind == then
+        tc stack_pop drop
+    elif OpKind::OpDup (int) cso_kind == then
+        tc stack_pop = cso_type
+        cso_type tc stack_push
+        cso_type tc stack_push
+    elif OpKind::OpSwap (int) cso_kind == then
+        tc stack_pop = cso_type1
+        tc stack_pop = cso_type2
+        cso_type1 tc stack_push
+        cso_type2 tc stack_push
+    elif OpKind::OpOver (int) cso_kind == then
+        tc stack_pop = cso_type1
+        tc stack_pop = cso_type2
+        cso_type2 tc stack_push
+        cso_type1 tc stack_push
+        cso_type2 tc stack_push
+    elif OpKind::OpRot (int) cso_kind == then
+        tc stack_pop = cso_type1
+        tc stack_pop = cso_type2
+        tc stack_pop = cso_type3
+        cso_type2 tc stack_push
+        cso_type1 tc stack_push
+        cso_type3 tc stack_push
+    fi
+}
+
+# ============================================================================
+# Check memory operations
+# ============================================================================
+
+fn check_memory tc:TypeChecker op:Op {
+    op Op::kind = cm_kind
+    if
+        OpKind::OpLoad8 (int) cm_kind ==
+        OpKind::OpLoad16 (int) cm_kind == ||
+        OpKind::OpLoad32 (int) cm_kind == ||
+        OpKind::OpLoad64 (int) cm_kind == ||
+    then
+        "ptr" tc expect_type drop
+        "int" tc stack_push
+    elif
+        OpKind::OpStore8 (int) cm_kind ==
+        OpKind::OpStore16 (int) cm_kind == ||
+        OpKind::OpStore32 (int) cm_kind == ||
+        OpKind::OpStore64 (int) cm_kind == ||
+    then
+        "ptr" tc expect_type drop
+        tc stack_pop drop
+    elif OpKind::OpHeapAlloc (int) cm_kind == then
+        "int" tc expect_type drop
+        "ptr" tc stack_push
+    fi
+}
+
+# ============================================================================
+# Check assignment operations
+# ============================================================================
+
+fn check_assignment tc:TypeChecker op:Op function_opt:Option[Function] {
+    if
+        OpKind::OpAssignDec (int) op Op::kind ==
+        OpKind::OpAssignInc (int) op Op::kind == ||
+    then
+        "int" tc expect_type drop
+        return
+    fi
+    op op_str_value = cas_var_name
+    tc stack_peek = cas_stack_type
+    "" op Op::type_annotation != = cas_has_annotation
+    cas_stack_type = cas_effective_type
+    if cas_has_annotation then
+        op Op::type_annotation = cas_effective_type
+    fi
+
+    # Try local variables first
+    if function_opt .is_some then
+        function_opt .unwrap = cas_function
+        cas_var_name cas_function Function::variables variable_list_index = cas_local_idx
+        if 0 cas_local_idx >= then
+            cas_local_idx cas_function Function::variables .get = cas_local_var
+            if "" cas_local_var Variable::typ == then
+                cas_effective_type cas_local_var Variable::set_typ
+            fi
+            cas_effective_type tc expect_type drop
+            return
+        fi
+    fi
+
+    # Try global variables
+    cas_var_name GLOBAL_VARIABLES .get = cas_global_opt
+    if cas_global_opt .is_some then
+        cas_global_opt .unwrap = cas_global_var
+        if "" cas_global_var Variable::typ == then
+            cas_effective_type cas_global_var Variable::set_typ
+        fi
+        cas_effective_type tc expect_type drop
+        return
+    fi
+    cas_effective_type tc expect_type drop
+}
+
+# ============================================================================
+# Check push variable / capture
+# ============================================================================
+
+fn check_push_var tc:TypeChecker op:Op function_opt:Option[Function] {
+    if OpKind::OpPushCapture (int) op Op::kind == then
+        op op_str_value = cpv_cap_name
+        if function_opt .is_some then
+            function_opt .unwrap = cpv_func
+            cpv_cap_name cpv_func Function::captures variable_list_index = cpv_cap_idx
+            if 0 cpv_cap_idx >= then
+                cpv_cap_idx cpv_func Function::captures .get Variable::typ = cpv_cap_type
+                if "" cpv_cap_type != then
+                    cpv_cap_type tc stack_push
+                    return
+                fi
+            fi
+        fi
+        ANY_TYPE tc stack_push
+        return
+    fi
+
+    # PUSH_VARIABLE
+    op op_str_value = cpv_var_name
+
+    # Check local variables first
+    if function_opt .is_some then
+        function_opt .unwrap = cpv_func
+        cpv_var_name cpv_func Function::variables variable_list_index = cpv_local_idx
+        if 0 cpv_local_idx >= then
+            cpv_local_idx cpv_func Function::variables .get Variable::typ = cpv_local_type
+            if "" cpv_local_type != then
+                cpv_local_type tc stack_push
+                return
+            fi
+        fi
+    fi
+
+    # Check global variables
+    cpv_var_name GLOBAL_VARIABLES .get = cpv_global_opt
+    if cpv_global_opt .is_some then
+        cpv_global_opt .unwrap Variable::typ = cpv_global_type
+        if "" cpv_global_type != then
+            cpv_global_type tc stack_push
+            return
+        fi
+    fi
+
+    op Op::location f"Variable `{cpv_var_name}` is not defined" ErrorKind::UndefinedName (int) raise_error
+}
+
+# ============================================================================
+# Check if/elif/else/fi blocks
+# ============================================================================
+
+fn check_if_block tc:TypeChecker op:Op {
+    op Op::kind = cib_kind
+    if OpKind::OpIfStart (int) cib_kind == then
+        tc TypeChecker::stack_origins tc TypeChecker::stack make_branched_stack = cib_bs
+        op Op::location cib_bs BranchedStack::set_current_branch_location
+        cib_bs tc TypeChecker::branched_stacks .push
+        1 tc TypeChecker::set_in_branch_condition
+    elif OpKind::OpIfCondition (int) cib_kind == then
+        0 tc TypeChecker::set_in_branch_condition
+        "bool" tc expect_type drop
+        if 0 tc TypeChecker::branched_stacks .length == then return fi
+        tc TypeChecker::branched_stacks .length 1 - tc TypeChecker::branched_stacks .get = cib_branched
+        if cib_branched BranchedStack::condition_present (bool) ! then
+            1 cib_branched BranchedStack::set_condition_present
+            tc TypeChecker::stack copy_str_list cib_branched BranchedStack::set_before
+            tc TypeChecker::stack_origins copy_location_list cib_branched BranchedStack::set_before_origins
+            tc TypeChecker::stack copy_str_list cib_branched BranchedStack::set_after
+            tc TypeChecker::stack_origins copy_location_list cib_branched BranchedStack::set_after_origins
+            "if" cib_branched BranchedStack::set_current_branch_label
+        fi
+    elif
+        OpKind::OpIfElif (int) cib_kind ==
+        OpKind::OpIfElse (int) cib_kind == ||
+    then
+        if 0 tc TypeChecker::branched_stacks .length == then return fi
+        tc TypeChecker::branched_stacks .length 1 - tc TypeChecker::branched_stacks .get = cib_branched
+        if OpKind::OpIfElse (int) cib_kind == then
+            1 cib_branched BranchedStack::set_default_present
+            0 tc TypeChecker::set_in_branch_condition
+        else
+            1 tc TypeChecker::set_in_branch_condition
+        fi
+        cib_branched BranchedStack::before = cib_before
+        cib_branched BranchedStack::after = cib_after
+        if tc TypeChecker::stack cib_before stacks_equal cib_before cib_after stacks_equal && then
+            op Op::location cib_branched BranchedStack::set_current_branch_location
+            return
+        fi
+        tc TypeChecker::stack cib_after stacks_compatible = cib_unified
+        if 0 cib_unified .length != cib_before cib_after stacks_equal ! && then
+            cib_unified cib_branched BranchedStack::set_after
+            cib_before copy_str_list tc TypeChecker::set_stack
+            cib_branched BranchedStack::before_origins copy_location_list tc TypeChecker::set_stack_origins
+            op Op::location cib_branched BranchedStack::set_current_branch_location
+            return
+        fi
+        if cib_before cib_after stacks_equal then
+            tc TypeChecker::stack copy_str_list cib_branched BranchedStack::set_after
+            tc TypeChecker::stack_origins copy_location_list cib_branched BranchedStack::set_after_origins
+            cib_before copy_str_list tc TypeChecker::set_stack
+            cib_branched BranchedStack::before_origins copy_location_list tc TypeChecker::set_stack_origins
+            op Op::location cib_branched BranchedStack::set_current_branch_location
+            return
+        fi
+        op Op::location "Branches have incompatible stack effects" ErrorKind::StackMismatch (int) raise_error
+    elif OpKind::OpIfEnd (int) cib_kind == then
+        tc TypeChecker::branched_stacks .pop = cib_branched
+        cib_branched BranchedStack::before = cib_before
+        cib_branched BranchedStack::after = cib_after
+        if tc TypeChecker::stack cib_before stacks_equal cib_before cib_after stacks_equal && then
+            return
+        fi
+        tc TypeChecker::stack cib_after stacks_compatible = cib_unified
+        if 0 cib_unified .length != cib_branched BranchedStack::default_present (bool) && then
+            cib_unified tc TypeChecker::set_stack
+            cib_branched BranchedStack::after_origins copy_location_list tc TypeChecker::set_stack_origins
+            return
+        fi
+        tc TypeChecker::stack cib_before stacks_compatible = cib_unified_before
+        if 0 cib_unified_before .length != cib_branched BranchedStack::default_present (bool) ! && then
+            cib_unified_before tc TypeChecker::set_stack
+            cib_branched BranchedStack::before_origins copy_location_list tc TypeChecker::set_stack_origins
+            return
+        fi
+        op Op::location "Branches have incompatible stack effects" ErrorKind::StackMismatch (int) raise_error
+    fi
+}
+
+# ============================================================================
+# Check while/do/break/continue/done blocks
+# ============================================================================
+
+fn check_while_block tc:TypeChecker op:Op {
+    op Op::kind = cwb_kind
+    if OpKind::OpWhileStart (int) cwb_kind == then
+        tc TypeChecker::stack_origins tc TypeChecker::stack make_branched_stack = cwb_bs
+        cwb_bs tc TypeChecker::branched_stacks .push
+    elif OpKind::OpWhileCondition (int) cwb_kind == then
+        "bool" tc expect_type drop
+        if 0 tc TypeChecker::branched_stacks .length == then return fi
+        tc TypeChecker::branched_stacks .length 1 - tc TypeChecker::branched_stacks .get = cwb_branched
+        1 cwb_branched BranchedStack::set_condition_present
+        if tc TypeChecker::stack cwb_branched BranchedStack::before stacks_equal ! then
+            op Op::location "Stack state changed in loop" ErrorKind::StackMismatch (int) raise_error
+        fi
+    elif
+        OpKind::OpWhileBreak (int) cwb_kind ==
+        OpKind::OpWhileContinue (int) cwb_kind == ||
+    then
+        if 0 tc TypeChecker::branched_stacks .length == then return fi
+        tc TypeChecker::branched_stacks .length 1 - tc TypeChecker::branched_stacks .get = cwb_branched
+        if tc TypeChecker::stack cwb_branched BranchedStack::after stacks_equal ! then
+            op Op::location "Stack state changed in loop" ErrorKind::StackMismatch (int) raise_error
+        fi
+    elif OpKind::OpWhileEnd (int) cwb_kind == then
+        tc TypeChecker::branched_stacks .pop = cwb_branched
+        if cwb_branched BranchedStack::after tc TypeChecker::stack stacks_equal ! then
+            op Op::location "Stack state changed in loop" ErrorKind::StackMismatch (int) raise_error
+        fi
+    fi
+}
+
+# ============================================================================
+# Check function-related operations
+# ============================================================================
+
+fn check_function_ops tc:TypeChecker op:Op function_opt:Option[Function] {
+    op Op::kind = cfo_kind
+    if OpKind::OpFnCall (int) cfo_kind == then
+        op op_str_value = cfo_fn_name
+        cfo_fn_name GLOBAL_FUNCTIONS .get = cfo_fn_opt
+        if cfo_fn_opt .is_some then
+            cfo_fn_opt .unwrap = cfo_fn
+            cfo_fn ensure_typechecked
+            cfo_fn_name cfo_fn Function::signature tc apply_signature
+        fi
+    elif OpKind::OpFnExec (int) cfo_kind == then
+        tc stack_peek = cfo_fn_ptr
+        if ANY_TYPE cfo_fn_ptr == then "fn" = cfo_fn_ptr fi
+        cfo_fn_ptr tc expect_type drop
+        if "fn" cfo_fn_ptr != then
+            cfo_fn_ptr extract_fn_signature_str = cfo_sig_str_opt
+            if cfo_sig_str_opt .is_some then
+                "exec" cfo_sig_str_opt .unwrap signature_from_str tc apply_signature
+            fi
+        fi
+    elif OpKind::OpFnPush (int) cfo_kind == then
+        op op_str_value = cfo_push_name
+        cfo_push_name GLOBAL_FUNCTIONS .get = cfo_push_fn_opt
+        if cfo_push_fn_opt .is_some then
+            cfo_push_fn_opt .unwrap = cfo_push_fn
+            cfo_push_fn ensure_typechecked
+            f"fn[{cfo_push_fn Function::signature signature_to_str}]" tc stack_push
+        else
+            "fn" tc stack_push
+        fi
+    elif OpKind::OpFnReturn (int) cfo_kind == then
+        if tc TypeChecker::has_return_types (bool) ! then
+            1 tc TypeChecker::set_has_return_types
+            tc TypeChecker::stack copy_str_list tc TypeChecker::set_return_types
+        fi
+        if 0 tc TypeChecker::branched_stacks .length != then
+            tc TypeChecker::branched_stacks .length 1 - tc TypeChecker::branched_stacks .get = cfo_branched
+            cfo_branched BranchedStack::before copy_str_list tc TypeChecker::set_stack
+            cfo_branched BranchedStack::before_origins copy_location_list tc TypeChecker::set_stack_origins
+        fi
+    fi
+}
+
+# ============================================================================
+# Check literal push operations
+# ============================================================================
+
+fn check_literals tc:TypeChecker op:Op {
+    op Op::kind = cl_kind
+    if OpKind::OpPushInt (int) cl_kind == then
+        "int" tc stack_push
+    elif OpKind::OpPushStr (int) cl_kind == then
+        "str" tc stack_push
+    elif OpKind::OpPushBool (int) cl_kind == then
+        "bool" tc stack_push
+    elif OpKind::OpPushChar (int) cl_kind == then
+        "char" tc stack_push
+    elif OpKind::OpPushArray (int) cl_kind == then
+        # Array literals: pop N items of same type
+        "array[any]" tc stack_push
+    elif OpKind::OpFstringConcat (int) cl_kind == then
+        op op_int_value = cl_count
+        0 = cl_i
+        while cl_i cl_count > do
+            "str" tc expect_type drop
+            1 += cl_i
+        done
+        "str" tc stack_push
+    fi
+}
+
+# ============================================================================
+# Check print dispatch
+# ============================================================================
+
+fn check_io tc:TypeChecker op:Op {
+    tc stack_pop = ci_type
+    if "str" ci_type == then
+        OpKind::OpPrintStr (int) op Op::set_kind
+    elif "bool" ci_type == then
+        OpKind::OpPrintBool (int) op Op::set_kind
+    elif "char" ci_type == then
+        OpKind::OpPrintChar (int) op Op::set_kind
+    elif "cstr" ci_type == then
+        OpKind::OpPrintCstr (int) op Op::set_kind
+    else
+        OpKind::OpPrintInt (int) op Op::set_kind
+    fi
+}
+
+# ============================================================================
+# Check typeof
+# ============================================================================
+
+fn check_typeof tc:TypeChecker op:Op {
+    tc stack_pop = ct_type
+    ct_type op Op::set_type_annotation
+    "str" tc stack_push
+}
+
+# ============================================================================
+# Check syscalls
+# ============================================================================
+
+fn check_syscalls tc:TypeChecker op:Op {
+    op Op::kind = cs_kind
+    # Calculate arg count from syscall variant
+    OpKind::OpSyscall0 (int) = cs_base
+    cs_kind cs_base - = cs_arg_count
+    "int" tc expect_type drop
+    0 = cs_i
+    while cs_i cs_arg_count > do
+        tc stack_pop drop
+        1 += cs_i
+    done
+    "int" tc stack_push
+}
+
+# ============================================================================
+# Check enum variant push
+# ============================================================================
+
+fn check_enum_variant tc:TypeChecker op:Op {
+    op Op::value (EnumVariant) = cev_variant
+    cev_variant EnumVariant::enum_name = cev_enum_name
+    cev_enum_name GLOBAL_ENUMS .get = cev_enum_opt
+    if cev_enum_opt .is_none then
+        cev_enum_name tc stack_push
+        return
+    fi
+    cev_enum_opt .unwrap = cev_enum
+    cev_variant EnumVariant::variant_name cev_enum CasaEnum::variant_types .get = cev_inner_opt
+    if cev_inner_opt .is_none then
+        cev_enum_name tc stack_push
+        return
+    fi
+    cev_inner_opt .unwrap = cev_inner_types
+    if 0 cev_inner_types .length == then
+        cev_enum_name tc stack_push
+        return
+    fi
+    # Data-carrying variant: pop inner values
+    0 = cev_i
+    while cev_i cev_inner_types .length > do
+        cev_i cev_inner_types .get tc expect_type drop
+        1 += cev_i
+    done
+    cev_enum_name tc stack_push
+}
+
+# ============================================================================
+# Check is keyword
+# ============================================================================
+
+fn check_is tc:TypeChecker op:Op {
+    tc stack_pop drop
+    "bool" tc stack_push
+}
+
+# ============================================================================
+# Check match blocks
+# ============================================================================
+
+fn check_match tc:TypeChecker op:Op function_opt:Option[Function] {
+    op Op::kind = cmb_kind
+    if OpKind::OpMatchStart (int) cmb_kind == then
+        tc stack_pop = cmb_type
+        tc TypeChecker::stack_origins tc TypeChecker::stack make_branched_stack = cmb_bs
+        cmb_type cmb_bs BranchedStack::set_match_type
+        1 cmb_bs BranchedStack::set_default_present
+        cmb_bs tc TypeChecker::branched_stacks .push
+    elif OpKind::OpMatchArm (int) cmb_kind == then
+        if 0 tc TypeChecker::branched_stacks .length == then return fi
+        tc TypeChecker::branched_stacks .length 1 - tc TypeChecker::branched_stacks .get = cmb_branched
+        if cmb_branched BranchedStack::condition_present (bool) then
+            if
+                tc TypeChecker::stack cmb_branched BranchedStack::before stacks_equal
+                cmb_branched BranchedStack::before cmb_branched BranchedStack::after stacks_equal &&
+            then
+                # No change needed
+                0 drop
+            else
+                tc TypeChecker::stack cmb_branched BranchedStack::after stacks_compatible = cmb_unified
+                if 0 cmb_unified .length != cmb_branched BranchedStack::before cmb_branched BranchedStack::after stacks_equal ! && then
+                    cmb_unified cmb_branched BranchedStack::set_after
+                elif cmb_branched BranchedStack::before cmb_branched BranchedStack::after stacks_equal then
+                    tc TypeChecker::stack copy_str_list cmb_branched BranchedStack::set_after
+                    tc TypeChecker::stack_origins copy_location_list cmb_branched BranchedStack::set_after_origins
+                else
+                    op Op::location "Match arms have incompatible stack effects" ErrorKind::StackMismatch (int) raise_error
+                fi
+            fi
+            cmb_branched BranchedStack::before copy_str_list tc TypeChecker::set_stack
+            cmb_branched BranchedStack::before_origins copy_location_list tc TypeChecker::set_stack_origins
+        else
+            1 cmb_branched BranchedStack::set_condition_present
+            tc TypeChecker::stack copy_str_list cmb_branched BranchedStack::set_before
+            tc TypeChecker::stack_origins copy_location_list cmb_branched BranchedStack::set_before_origins
+            tc TypeChecker::stack copy_str_list cmb_branched BranchedStack::set_after
+            tc TypeChecker::stack_origins copy_location_list cmb_branched BranchedStack::set_after_origins
+        fi
+    elif OpKind::OpMatchEnd (int) cmb_kind == then
+        tc TypeChecker::branched_stacks .pop = cmb_branched
+        cmb_branched BranchedStack::before = cmb_before
+        cmb_branched BranchedStack::after = cmb_after
+        if tc TypeChecker::stack cmb_before stacks_equal cmb_before cmb_after stacks_equal && then
+            return
+        fi
+        tc TypeChecker::stack cmb_after stacks_compatible = cmb_unified
+        if 0 cmb_unified .length != then
+            cmb_unified tc TypeChecker::set_stack
+            cmb_branched BranchedStack::after_origins copy_location_list tc TypeChecker::set_stack_origins
+            return
+        fi
+        if tc TypeChecker::stack cmb_before stacks_equal cmb_before cmb_after stacks_equal && then
+            return
+        fi
+        op Op::location "Match arms have incompatible stack effects" ErrorKind::StackMismatch (int) raise_error
+    fi
+}
+
+# ============================================================================
+# Check struct new
+# ============================================================================
+
+fn check_struct_new tc:TypeChecker op:Op {
+    op Op::value (CasaStruct) = csn_struct
+    csn_struct CasaStruct::name = csn_name
+    0 = csn_i
+    while csn_i csn_struct CasaStruct::members .length > do
+        csn_i csn_struct CasaStruct::members .get Member::typ tc expect_type drop
+        1 += csn_i
+    done
+    csn_name tc stack_push
+}
+
+# ============================================================================
+# Check struct literal
+# ============================================================================
+
+fn check_struct_literal tc:TypeChecker op:Op {
+    op Op::value (StructLiteral) = csl_literal
+    csl_literal StructLiteral::struct_name = csl_name
+    csl_name GLOBAL_STRUCTS .get = csl_struct_opt
+    if csl_struct_opt .is_none then
+        csl_name tc stack_push
+        return
+    fi
+    csl_struct_opt .unwrap = csl_struct
+    # Pop field values in reverse order
+    csl_literal StructLiteral::field_order .length 1 - = csl_i
+    while 0 csl_i >= do
+        csl_i csl_literal StructLiteral::field_order .get = csl_field_name
+        # Find member type
+        0 = csl_mi
+        while csl_mi csl_struct CasaStruct::members .length > do
+            csl_mi csl_struct CasaStruct::members .get = csl_member
+            if csl_field_name csl_member Member::name == then
+                csl_member Member::typ tc expect_type drop
+                csl_struct CasaStruct::members .length = csl_mi
+            fi
+            1 += csl_mi
+        done
+        1 -= csl_i
+    done
+    csl_name tc stack_push
+}
+
+# ============================================================================
+# Check method call
+# ============================================================================
+
+fn check_method_call tc:TypeChecker op:Op function_opt:Option[Function] {
+    op op_str_value = cmc_method_name
+    tc stack_peek = cmc_receiver
+
+    # Look up Type::method
+    f"{cmc_receiver}::{cmc_method_name}" = cmc_fn_name
+    cmc_fn_name GLOBAL_FUNCTIONS .get = cmc_fn_opt
+
+    # Try generic base type
+    if cmc_fn_opt .is_none then
+        cmc_receiver extract_generic_base = cmc_base_opt
+        if cmc_base_opt .is_some then
+            f"{cmc_base_opt .unwrap}::{cmc_method_name}" = cmc_fn_name
+            cmc_fn_name GLOBAL_FUNCTIONS .get = cmc_fn_opt
+        fi
+    fi
+
+    if cmc_fn_opt .is_some then
+        cmc_fn_opt .unwrap = cmc_fn
+        cmc_fn ensure_typechecked
+        cmc_fn_name cmc_fn Function::signature tc apply_signature
+        cmc_fn_name (int) op Op::set_value
+        OpKind::OpFnCall (int) op Op::set_kind
+    else
+        op Op::location f"Method `{cmc_fn_name}` does not exist" ErrorKind::UndefinedName (int) raise_error
+    fi
+}
+
+# ============================================================================
+# Ensure a function is typechecked
+# ============================================================================
+
+fn ensure_typechecked function:Function {
+    if function Function::is_typechecked (bool) then return fi
+    1 function Function::set_is_typechecked
+    function Option::Some function Function::ops type_check_ops = et_sig
+    if function Function::signature signature_to_str "None -> None" == then
+        et_sig function Function::set_signature
+    fi
+}
+
+# ============================================================================
+# Main type check dispatch
+# ============================================================================
+
+fn type_check_ops ops:List[Op] function_opt:Option[Function] -> Signature {
+    make_typechecker = tc_checker
+    0 = tc_index
+    while tc_index ops .length > do
+        tc_index ops .get = tc_op
+        1 += tc_index
+        tc_op Op::location tc_checker TypeChecker::set_current_location
+        "" tc_checker TypeChecker::set_current_expect_ctx
+        tc_op Op::kind = tc_kind
+
+        # Arithmetic
+        if
+            OpKind::OpAdd (int) tc_kind ==
+            OpKind::OpSub (int) tc_kind == ||
+            OpKind::OpMul (int) tc_kind == ||
+            OpKind::OpDiv (int) tc_kind == ||
+            OpKind::OpMod (int) tc_kind == ||
+        then
+            tc_op tc_checker check_arithmetic
+            continue
+        fi
+
+        # Comparison
+        if
+            OpKind::OpEq (int) tc_kind ==
+            OpKind::OpNe (int) tc_kind == ||
+            OpKind::OpLt (int) tc_kind == ||
+            OpKind::OpLe (int) tc_kind == ||
+            OpKind::OpGt (int) tc_kind == ||
+            OpKind::OpGe (int) tc_kind == ||
+        then
+            tc_op tc_checker check_comparison
+            continue
+        fi
+
+        # Boolean
+        if
+            OpKind::OpAnd (int) tc_kind ==
+            OpKind::OpOr (int) tc_kind == ||
+            OpKind::OpNot (int) tc_kind == ||
+        then
+            tc_op tc_checker check_boolean
+            continue
+        fi
+
+        # Bitwise
+        if
+            OpKind::OpBitAnd (int) tc_kind ==
+            OpKind::OpBitOr (int) tc_kind == ||
+            OpKind::OpBitXor (int) tc_kind == ||
+            OpKind::OpBitNot (int) tc_kind == ||
+            OpKind::OpShl (int) tc_kind == ||
+            OpKind::OpShr (int) tc_kind == ||
+        then
+            tc_op tc_checker check_bitwise
+            continue
+        fi
+
+        # Stack ops
+        if
+            OpKind::OpDrop (int) tc_kind ==
+            OpKind::OpDup (int) tc_kind == ||
+            OpKind::OpSwap (int) tc_kind == ||
+            OpKind::OpOver (int) tc_kind == ||
+            OpKind::OpRot (int) tc_kind == ||
+        then
+            tc_op tc_checker check_stack_ops
+            continue
+        fi
+
+        # Memory
+        if
+            OpKind::OpLoad8 (int) tc_kind ==
+            OpKind::OpLoad16 (int) tc_kind == ||
+            OpKind::OpLoad32 (int) tc_kind == ||
+            OpKind::OpLoad64 (int) tc_kind == ||
+            OpKind::OpStore8 (int) tc_kind == ||
+            OpKind::OpStore16 (int) tc_kind == ||
+            OpKind::OpStore32 (int) tc_kind == ||
+            OpKind::OpStore64 (int) tc_kind == ||
+            OpKind::OpHeapAlloc (int) tc_kind == ||
+        then
+            tc_op tc_checker check_memory
+            continue
+        fi
+
+        # Assignment
+        if
+            OpKind::OpAssignVar (int) tc_kind ==
+            OpKind::OpAssignDec (int) tc_kind == ||
+            OpKind::OpAssignInc (int) tc_kind == ||
+        then
+            function_opt tc_op tc_checker check_assignment
+            continue
+        fi
+
+        # Push variable / capture
+        if
+            OpKind::OpPushVar (int) tc_kind ==
+            OpKind::OpPushCapture (int) tc_kind == ||
+        then
+            function_opt tc_op tc_checker check_push_var
+            continue
+        fi
+
+        # If block
+        if
+            OpKind::OpIfStart (int) tc_kind ==
+            OpKind::OpIfCondition (int) tc_kind == ||
+            OpKind::OpIfElif (int) tc_kind == ||
+            OpKind::OpIfElse (int) tc_kind == ||
+            OpKind::OpIfEnd (int) tc_kind == ||
+        then
+            tc_op tc_checker check_if_block
+            continue
+        fi
+
+        # While block
+        if
+            OpKind::OpWhileStart (int) tc_kind ==
+            OpKind::OpWhileCondition (int) tc_kind == ||
+            OpKind::OpWhileBreak (int) tc_kind == ||
+            OpKind::OpWhileContinue (int) tc_kind == ||
+            OpKind::OpWhileEnd (int) tc_kind == ||
+        then
+            tc_op tc_checker check_while_block
+            continue
+        fi
+
+        # Function ops
+        if
+            OpKind::OpFnCall (int) tc_kind ==
+            OpKind::OpFnExec (int) tc_kind == ||
+            OpKind::OpFnPush (int) tc_kind == ||
+            OpKind::OpFnReturn (int) tc_kind == ||
+        then
+            function_opt tc_op tc_checker check_function_ops
+            continue
+        fi
+
+        # Literals
+        if
+            OpKind::OpPushInt (int) tc_kind ==
+            OpKind::OpPushStr (int) tc_kind == ||
+            OpKind::OpPushBool (int) tc_kind == ||
+            OpKind::OpPushChar (int) tc_kind == ||
+            OpKind::OpPushArray (int) tc_kind == ||
+            OpKind::OpFstringConcat (int) tc_kind == ||
+        then
+            tc_op tc_checker check_literals
+            continue
+        fi
+
+        # IO
+        if OpKind::OpPrint (int) tc_kind == then
+            tc_op tc_checker check_io
+            continue
+        fi
+
+        # Typeof
+        if OpKind::OpTypeof (int) tc_kind == then
+            tc_op tc_checker check_typeof
+            continue
+        fi
+
+        # Syscalls
+        if
+            OpKind::OpSyscall0 (int) tc_kind ==
+            OpKind::OpSyscall1 (int) tc_kind == ||
+            OpKind::OpSyscall2 (int) tc_kind == ||
+            OpKind::OpSyscall3 (int) tc_kind == ||
+            OpKind::OpSyscall4 (int) tc_kind == ||
+            OpKind::OpSyscall5 (int) tc_kind == ||
+            OpKind::OpSyscall6 (int) tc_kind == ||
+        then
+            tc_op tc_checker check_syscalls
+            continue
+        fi
+
+        # Argc / Argv
+        if OpKind::OpArgc (int) tc_kind == then
+            "int" tc_checker stack_push
+            continue
+        fi
+        if OpKind::OpArgv (int) tc_kind == then
+            "ptr" tc_checker stack_push
+            continue
+        fi
+
+        # Enum variant
+        if OpKind::OpPushEnumVariant (int) tc_kind == then
+            tc_op tc_checker check_enum_variant
+            continue
+        fi
+
+        # Is check
+        if OpKind::OpIsCheck (int) tc_kind == then
+            tc_op tc_checker check_is
+            continue
+        fi
+
+        # Match block
+        if
+            OpKind::OpMatchStart (int) tc_kind ==
+            OpKind::OpMatchArm (int) tc_kind == ||
+            OpKind::OpMatchEnd (int) tc_kind == ||
+        then
+            function_opt tc_op tc_checker check_match
+            continue
+        fi
+
+        # Struct new
+        if OpKind::OpStructNew (int) tc_kind == then
+            tc_op tc_checker check_struct_new
+            continue
+        fi
+
+        # Struct literal
+        if OpKind::OpStructLiteral (int) tc_kind == then
+            tc_op tc_checker check_struct_literal
+            continue
+        fi
+
+        # Method call
+        if OpKind::OpMethodCall (int) tc_kind == then
+            function_opt tc_op tc_checker check_method_call
+            continue
+        fi
+
+        # Type cast
+        if OpKind::OpTypeCast (int) tc_kind == then
+            tc_checker stack_pop drop
+            tc_op op_str_value tc_checker stack_push
+            continue
+        fi
+
+        # Include file (no-op in typechecker)
+        if OpKind::OpIncludeFile (int) tc_kind == then
+            continue
+        fi
+
+        # Print variants (already resolved, should not appear)
+        if
+            OpKind::OpPrintBool (int) tc_kind ==
+            OpKind::OpPrintChar (int) tc_kind == ||
+            OpKind::OpPrintCstr (int) tc_kind == ||
+            OpKind::OpPrintInt (int) tc_kind == ||
+            OpKind::OpPrintStr (int) tc_kind == ||
+        then
+            continue
+        fi
+
+        # Identifier (should be resolved by parser)
+        if OpKind::OpIdentifier (int) tc_kind == then
+            continue
+        fi
+    done
+
+    # Build inferred signature
+    tc_checker TypeChecker::stack tc_checker TypeChecker::parameters make_signature = tc_inferred
+
+    # Verify against declared signature if function has one
+    if function_opt .is_some then
+        function_opt .unwrap = tc_function
+        tc_function Function::signature = tc_declared
+        if tc_declared signature_to_str "None -> None" != then
+            if tc_inferred tc_declared signature_matches ! then
+                tc_function Function::location f"Invalid signature for function `{tc_function Function::name}`" ErrorKind::SignatureMismatch (int) add_error
+            fi
+        fi
+    fi
+
+    tc_inferred
+}
+
+# ============================================================================
+# Type check all functions
+# ============================================================================
+
+fn type_check_functions {
+    GLOBAL_FUNCTIONS .keys = tcf_keys
+    0 = tcf_i
+    while tcf_i tcf_keys .length > do
+        tcf_i tcf_keys .get = tcf_name
+        tcf_name GLOBAL_FUNCTIONS .get .unwrap = tcf_fn
+        if tcf_fn Function::is_typechecked (bool) then
+            1 += tcf_i
+            continue
+        fi
+        if tcf_name "lambda__" str::starts_with then
+            1 += tcf_i
+            continue
+        fi
+        1 tcf_fn Function::set_is_typechecked
+        if tcf_fn Function::is_used (bool) ! then
+            tcf_fn tcf_fn Function::ops resolve_identifiers = tcf_resolved_ops
+            tcf_resolved_ops tcf_fn Function::set_ops
+        fi
+        tcf_fn Option::Some tcf_fn Function::ops type_check_ops = tcf_sig
+        if tcf_fn Function::signature signature_to_str "None -> None" == then
+            tcf_sig tcf_fn Function::set_signature
+        fi
+        1 += tcf_i
+    done
+    flush_errors
+}
