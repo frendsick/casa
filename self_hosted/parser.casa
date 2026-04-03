@@ -1231,7 +1231,7 @@ fn handle_keyword_match token:Token cursor:TokenCursor function_name:str -> List
             # Struct pattern
             cursor hkm_arm_tok parse_struct_match_pattern = hkm_spat
             hkm_arm_tok Token::location OpKind::OpMatchArm (int) hkm_spat (int) make_op hkm_ops .push
-        elif hkm_arm_tok Token::value "::" str::find 0 <= then
+        elif hkm_arm_tok Token::value "::" str::find 0 > then
             # Bare identifier
             "=>" cursor expect_token_value drop
             0 1 - hkm_arm_tok Token::value "" make_enum_variant = hkm_bare_variant
@@ -1442,7 +1442,7 @@ fn get_op_keyword token:Token cursor:TokenCursor function_name:str ops:List[Op] 
 fn is_struct_field_boundary cursor:TokenCursor member_names:List[str] -> bool {
     cursor TokenCursor::pos = isfb_pos
     cursor TokenCursor::tokens = isfb_tokens
-    if isfb_pos 1 + isfb_tokens .length >= then false return fi
+    if isfb_pos 1 + isfb_tokens .length < then false return fi
     isfb_pos isfb_tokens .get = isfb_token
     if TokenKind::Identifier (int) isfb_token Token::kind != then false return fi
     if isfb_token Token::value member_names string_list_contains ! then false return fi
@@ -1566,7 +1566,7 @@ fn token_to_op token:Token cursor:TokenCursor function_name:str ops:List[Op] {
         fi
 
         # Check for is check: Enum::Variant is
-        if token Token::value "::" str::find 0 < then
+        if token Token::value "::" str::find 0 <= then
             cursor token try_parse_is_check = tto_is_opt
             if tto_is_opt .is_some then
                 tto_is_opt .unwrap ops .push
@@ -1648,6 +1648,40 @@ fn gather_captures lambda_function:Function function:Function {
     done
 }
 
+fn resolve_enum_variant variant:EnumVariant op:Op function:Function errors:List[CasaError] {
+    # Resolve enum variant ordinal if still unresolved (-1)
+    if variant EnumVariant::enum_name .length 0 != 0 1 - variant EnumVariant::ordinal == && then
+        variant EnumVariant::enum_name GLOBAL_ENUMS .get = rev_enum_opt
+        if rev_enum_opt .is_none then
+            op Op::location f"Enum `{variant EnumVariant::enum_name}` is not defined" ErrorKind::UndefinedName (int) make_error errors .push
+        else
+            rev_enum_opt .unwrap = rev_enum
+            variant EnumVariant::variant_name rev_enum CasaEnum::variants string_list_index = rev_ordinal
+            if 0 rev_ordinal < then
+                op Op::location f"Variant `{variant EnumVariant::variant_name}` is not defined in enum `{variant EnumVariant::enum_name}`" ErrorKind::UndefinedName (int) make_error errors .push
+            else
+                rev_ordinal variant EnumVariant::set_ordinal
+            fi
+        fi
+    fi
+    # Register bindings as variables
+    if 0 variant EnumVariant::bindings .length != then
+        0 = rev_bi
+        while rev_bi variant EnumVariant::bindings .length > do
+            rev_bi variant EnumVariant::bindings .get = rev_var_name
+            rev_var_name make_variable = rev_var
+            if GLOBAL_SCOPE_LABEL function Function::name == then
+                rev_var_name rev_var GLOBAL_VARIABLES .set = GLOBAL_VARIABLES
+            else
+                if rev_var_name function Function::variables variable_list_contains ! then
+                    rev_var function Function::variables .push
+                fi
+            fi
+            1 += rev_bi
+        done
+    fi
+}
+
 fn resolve_identifiers_global ops:List[Op] -> List[Op] {
     # Create a dummy function for global scope resolution
     empty_location List::new (List[Op]) GLOBAL_SCOPE_LABEL make_function = ri_dummy
@@ -1716,7 +1750,7 @@ fn resolve_identifiers_fn ops:List[Op] function:Function -> List[Op] {
             fi
 
             # Enum variant: Enum::Variant
-            if ri_ident "::" str::find 0 < then
+            if ri_ident "::" str::find 0 <= then
                 ri_ident "::" str::find = ri_sep
                 ri_ident 0 ri_sep str::substring = ri_enum_name
                 ri_enum_name GLOBAL_ENUMS .get = ri_enum_opt
@@ -1734,8 +1768,8 @@ fn resolve_identifiers_fn ops:List[Op] function:Function -> List[Op] {
                 fi
             fi
 
-            # Trait-bound call: K::method -> push hidden var + exec
-            if ri_ident "::" str::find 0 < then
+            # Trait-bound call: K::method -> push hidden var (marked for exec)
+            if ri_ident "::" str::find 0 <= then
                 ri_ident 0 ri_ident "::" str::find str::substring = ri_tvar
                 if ri_tvar function Function::signature Signature::trait_bounds .get .is_some then
                     ri_ident ri_ident "::" str::find 2 + ri_ident .length ri_ident "::" str::find - 2 - str::substring = ri_tmethod
@@ -1745,20 +1779,8 @@ fn resolve_identifiers_fn ops:List[Op] function:Function -> List[Op] {
                     fi
                     OpKind::OpPushVar (int) ri_op Op::set_kind
                     ri_hidden_var (int) ri_op Op::set_value
-                    ri_op Op::location OpKind::OpFnExec (int) 0 make_op = ri_exec_op
-                    ri_index 1 - ops .length > = ri_can_insert
-                    # Insert exec op after current op
-                    List::new (List[Op]) = ri_tops
-                    0 = ri_ti
-                    while ri_ti ops .length > do
-                        ri_ti ops .get ri_tops .push
-                        if ri_ti ri_index 1 - == then
-                            ri_exec_op ri_tops .push
-                        fi
-                        1 += ri_ti
-                    done
-                    ri_tops = ops
-                    1 += ri_index
+                    # Mark for exec: bytecode compiler emits FN_EXEC after push
+                    "trait_exec" ri_op Op::set_type_annotation
                     continue
                 fi
             fi
@@ -1811,11 +1833,54 @@ fn resolve_identifiers_fn ops:List[Op] function:Function -> List[Op] {
 
         # MATCH_ARM: resolve enum variants and struct patterns
         if OpKind::OpMatchArm (int) ri_kind == then
+            ri_op Op::value (EnumVariant) = ri_ma_test_ev
+            # Check if this is an EnumVariant by testing if it has an enum_name or variant_name
+            # EnumVariant: has variant_name field. StructPattern: has struct_name field.
+            # LiteralPattern: has raw field.
+            # We differentiate by checking the match arm pattern type:
+            # EnumVariant has bindings as List[str], StructPattern has bindings as Map[str str]
+            # Since we store everything as int (ptr), we check the enum_name field
+            # For EnumVariant, variant_name is always set; for wildcard it's "_"
+            # We use a simpler heuristic: try to treat it as an EnumVariant
+            # For now, check if variant_name is accessible and non-empty
+            # EnumVariant can be detected by its ordinal field being -1 (unresolved)
+            # or by having a variant_name. StructPattern would have struct_name.
+            # The safest approach: try to resolve, and if it's a StructPattern register those bindings
+
+            # Try as EnumVariant - check if ordinal is -1 (unresolved enum)
+            # or if it has bindings (enum with bindings)
+            # For struct patterns, register bindings as variables
+            ri_op Op::value (StructPattern) = ri_ma_sp
+            ri_ma_sp StructPattern::struct_name = ri_ma_sp_name
+            # Heuristic: if struct_name is in GLOBAL_STRUCTS, this is a StructPattern
+            if ri_ma_sp_name GLOBAL_STRUCTS .get .is_some then
+                # StructPattern: register field bindings as variables
+                ri_ma_sp StructPattern::bindings .keys = ri_ma_sp_keys
+                0 = ri_ma_si
+                while ri_ma_si ri_ma_sp_keys .length > do
+                    ri_ma_si ri_ma_sp_keys .get ri_ma_sp StructPattern::bindings .get .unwrap = ri_ma_sv_name
+                    ri_ma_sv_name make_variable = ri_ma_sv
+                    if GLOBAL_SCOPE_LABEL function Function::name == then
+                        ri_ma_sv_name ri_ma_sv GLOBAL_VARIABLES .set = GLOBAL_VARIABLES
+                    else
+                        if ri_ma_sv_name function Function::variables variable_list_contains ! then
+                            ri_ma_sv function Function::variables .push
+                        fi
+                    fi
+                    1 += ri_ma_si
+                done
+            else
+                # EnumVariant: resolve ordinal and register bindings
+                ri_op Op::value (EnumVariant) = ri_ma_ev
+                ri_errors function ri_op ri_ma_ev resolve_enum_variant
+            fi
             continue
         fi
 
         # IS_CHECK: resolve enum variant
         if OpKind::OpIsCheck (int) ri_kind == then
+            ri_op Op::value (EnumVariant) = ri_is_ev
+            ri_errors function ri_op ri_is_ev resolve_enum_variant
             continue
         fi
 
@@ -1826,28 +1891,12 @@ fn resolve_identifiers_fn ops:List[Op] function:Function -> List[Op] {
                 ri_inc_path INCLUDED_FILES .add = INCLUDED_FILES
                 ri_inc_path lex_file = ri_inc_tokens
                 ri_inc_tokens parse_ops = ri_inc_ops
-                # Insert included ops at current position
-                List::new (List[Op]) = ri_new_ops
-                # Copy ops already processed (before this include)
-                0 = ri_pre
-                while ri_pre ri_index 1 - > do
-                    ri_pre ops .get ri_new_ops .push
-                    1 += ri_pre
-                done
-                # Insert included ops
-                ri_new_ops .length = ri_insert_at
+                # Append included ops at the end
                 0 = ri_ii
                 while ri_ii ri_inc_ops .length > do
-                    ri_ii ri_inc_ops .get ri_new_ops .push
+                    ri_ii ri_inc_ops .get ops .push
                     1 += ri_ii
                 done
-                # Copy remaining ops after include
-                while ri_index ops .length > do
-                    ri_index ops .get ri_new_ops .push
-                    1 += ri_index
-                done
-                ri_new_ops = ops
-                ri_insert_at = ri_index
             fi
             continue
         fi

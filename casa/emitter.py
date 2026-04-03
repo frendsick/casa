@@ -9,7 +9,7 @@ INT32_MAX = (1 << 31) - 1
 RETURN_STACK_SIZE = 65536
 # 256 MB — large enough for self-hosting compiler intermediates.
 # BSS is demand-paged so only touched pages consume physical memory.
-HEAP_SIZE = 268435456  # was 64MB, increased for self-hosting
+HEAP_SIZE = 1073741824  # 1GB for self-hosting bootstrap
 
 
 class Emitter:
