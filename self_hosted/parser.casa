@@ -207,7 +207,7 @@ fn parse_type cursor:TokenCursor -> str {
                 "[" pt_fn_sb .append
             elif "]" pt_fn_tok Token::value == then
                 if 0 pt_fn_depth == then break fi
-                1 -= pt_fn_depth
+                pt_fn_depth 1 - = pt_fn_depth
                 "]" pt_fn_sb .append
             else
                 if 0 pt_fn_sb .length != then
@@ -783,13 +783,49 @@ fn parse_function cursor:TokenCursor -> Function {
     List::new (List[Op]) = pf_ops
     List::new (List[Variable]) = pf_variables
 
+    # Inject hidden __trait_* parameters for trait-bounded type vars
+    if 0 pf_sig Signature::trait_bounds .keys .length != then
+        List::new (List[Parameter]) = pf_hidden_params
+        pf_sig Signature::trait_bounds .keys = pf_tb_keys
+        0 = pf_tbi
+        while pf_tbi pf_tb_keys .length > do
+            pf_tbi pf_tb_keys .get = pf_tb_tv
+            pf_tb_tv pf_sig Signature::trait_bounds .get .unwrap = pf_tb_trait_name
+            pf_tb_trait_name GLOBAL_TRAITS .get = pf_tb_trait_opt
+            if pf_tb_trait_opt .is_some then
+                pf_tb_trait_opt .unwrap = pf_tb_trait
+                0 = pf_tmi
+                while pf_tmi pf_tb_trait CasaTrait::methods .length > do
+                    pf_tmi pf_tb_trait CasaTrait::methods .get = pf_tb_method
+                    f"__trait_{pf_tb_tv}_{pf_tb_method TraitMethod::name}" = pf_hidden_name
+                    pf_tb_tv pf_tb_method TraitMethod::signature resolve_trait_sig = pf_hidden_sig
+                    f"fn[{pf_hidden_sig signature_to_str}]" = pf_hidden_type
+                    pf_hidden_name pf_hidden_type make_named_param pf_hidden_params .push
+                    pf_hidden_name make_variable pf_variables .push
+                    pf_name Token::location OpKind::OpAssignVar (int) pf_hidden_name make_op_str pf_ops .push
+                    1 += pf_tmi
+                done
+            fi
+            1 += pf_tbi
+        done
+        # Prepend hidden params to signature parameters
+        0 = pf_opi
+        while pf_opi pf_sig Signature::parameters .length > do
+            pf_opi pf_sig Signature::parameters .get pf_hidden_params .push
+            1 += pf_opi
+        done
+        pf_hidden_params pf_sig Signature::set_parameters
+    fi
+
     # Register named parameters as variables and generate assign ops
     0 = pf_pi
     while pf_pi pf_sig Signature::parameters .length > do
         pf_pi pf_sig Signature::parameters .get = pf_param
         if "" pf_param Parameter::name != then
-            pf_param Parameter::name make_variable pf_variables .push
-            pf_name Token::location OpKind::OpAssignVar (int) pf_param Parameter::name make_op_str pf_ops .push
+            if pf_param Parameter::name "__trait_" str::starts_with ! then
+                pf_param Parameter::typ pf_param Parameter::name Variable pf_variables .push
+                pf_name Token::location OpKind::OpAssignVar (int) pf_param Parameter::name make_op_str pf_ops .push
+            fi
         fi
         1 += pf_pi
     done
@@ -988,7 +1024,7 @@ fn parse_trait_method_signature cursor:TokenCursor -> Signature {
         if ptms_next_opt .is_some ":" ptms_next_opt .unwrap Token::value == && then
             cursor tc_pop drop  # consume :
             cursor parse_type = ptms_type
-            ptms_type ptms_peek Token::value make_named_param ptms_params .push
+            ptms_peek Token::value ptms_type make_named_param ptms_params .push
         else
             cursor tc_retreat
             cursor parse_type make_param ptms_params .push
@@ -1102,6 +1138,41 @@ fn parse_impl_block cursor:TokenCursor {
                 pib_new_tb pib_sig Signature::set_trait_bounds
                 1 += pib_tbi
             done
+            # Inject hidden __trait_* parameters for the merged trait bounds
+            List::new (List[Parameter]) = pib_hidden_params
+            0 = pib_h_insert_pos
+            0 = pib_hi
+            while pib_hi pib_tb_keys .length > do
+                pib_hi pib_tb_keys .get = pib_htv
+                pib_htv pib_sig Signature::trait_bounds .get .unwrap = pib_htrait_name
+                pib_htrait_name GLOBAL_TRAITS .get = pib_htrait_opt
+                if pib_htrait_opt .is_some then
+                    pib_htrait_opt .unwrap = pib_htrait
+                    0 = pib_hmi
+                    while pib_hmi pib_htrait CasaTrait::methods .length > do
+                        pib_hmi pib_htrait CasaTrait::methods .get = pib_hmethod
+                        f"__trait_{pib_htv}_{pib_hmethod TraitMethod::name}" = pib_hname
+                        pib_htv pib_hmethod TraitMethod::signature resolve_trait_sig = pib_hsig
+                        f"fn[{pib_hsig signature_to_str}]" = pib_htype
+                        pib_hname pib_htype make_named_param pib_hidden_params .push
+                        pib_hname make_variable pib_fn Function::variables .push
+                        pib_fn Function::location OpKind::OpAssignVar (int) pib_hname make_op_str = pib_hop
+                        pib_h_insert_pos pib_hop pib_fn Function::ops .insert
+                        1 += pib_h_insert_pos
+                        1 += pib_hmi
+                    done
+                fi
+                1 += pib_hi
+            done
+            # Prepend hidden params to existing signature parameters
+            if 0 pib_hidden_params .length != then
+                0 = pib_epi
+                while pib_epi pib_sig Signature::parameters .length > do
+                    pib_epi pib_sig Signature::parameters .get pib_hidden_params .push
+                    1 += pib_epi
+                done
+                pib_hidden_params pib_sig Signature::set_parameters
+            fi
         fi
         if pib_fn_name GLOBAL_FUNCTIONS .get .is_some then
             pib_fn Function::location f"Identifier `{pib_fn_name}` is already defined" ErrorKind::DuplicateName (int) raise_error
@@ -1233,22 +1304,22 @@ fn handle_keyword_match token:Token cursor:TokenCursor function_name:str -> List
         if MATCH_WILDCARD hkm_arm_tok Token::value == then
             "=>" cursor expect_token_value drop
             0 1 - MATCH_WILDCARD "" make_enum_variant = hkm_wildcard
-            hkm_arm_tok Token::location OpKind::OpMatchArm (int) hkm_wildcard (int) make_op hkm_ops .push
+            "enum_variant" hkm_arm_tok Token::location OpKind::OpMatchArm (int) hkm_wildcard (int) make_op_annotated hkm_ops .push
         elif TokenKind::Literal (int) hkm_arm_tok Token::kind == then
             "=>" cursor expect_token_value drop
             hkm_arm_tok parse_literal_match_pattern = hkm_lit_pat
-            hkm_arm_tok Token::location OpKind::OpMatchArm (int) hkm_lit_pat (int) make_op hkm_ops .push
+            "literal_pattern" hkm_arm_tok Token::location OpKind::OpMatchArm (int) hkm_lit_pat (int) make_op_annotated hkm_ops .push
         elif TokenKind::Identifier (int) hkm_arm_tok Token::kind != then
             hkm_arm_tok Token::location "Expected match pattern or `_`" ErrorKind::UnexpectedToken (int) raise_error
         elif cursor tc_peek .is_some "{" cursor tc_peek .unwrap Token::value == && then
             # Struct pattern
             cursor hkm_arm_tok parse_struct_match_pattern = hkm_spat
-            hkm_arm_tok Token::location OpKind::OpMatchArm (int) hkm_spat (int) make_op hkm_ops .push
+            "struct_pattern" hkm_arm_tok Token::location OpKind::OpMatchArm (int) hkm_spat (int) make_op_annotated hkm_ops .push
         elif hkm_arm_tok Token::value "::" str::find 0 > then
             # Bare identifier
             "=>" cursor expect_token_value drop
             0 1 - hkm_arm_tok Token::value "" make_enum_variant = hkm_bare_variant
-            hkm_arm_tok Token::location OpKind::OpMatchArm (int) hkm_bare_variant (int) make_op hkm_ops .push
+            "enum_variant" hkm_arm_tok Token::location OpKind::OpMatchArm (int) hkm_bare_variant (int) make_op_annotated hkm_ops .push
         else
             # Enum::Variant pattern
             hkm_arm_tok Token::value "::" str::find = hkm_sep
@@ -1277,7 +1348,7 @@ fn handle_keyword_match token:Token cursor:TokenCursor function_name:str -> List
             "=>" cursor expect_token_value drop
             0 1 - hkm_variant_name hkm_enum_name make_enum_variant = hkm_variant
             hkm_bindings hkm_variant EnumVariant::set_bindings
-            hkm_arm_tok Token::location OpKind::OpMatchArm (int) hkm_variant (int) make_op hkm_ops .push
+            "enum_variant" hkm_arm_tok Token::location OpKind::OpMatchArm (int) hkm_variant (int) make_op_annotated hkm_ops .push
         fi
 
         # Parse arm body
@@ -1846,28 +1917,10 @@ fn resolve_identifiers_fn ops:List[Op] function:Function -> List[Op] {
 
         # MATCH_ARM: resolve enum variants and struct patterns
         if OpKind::OpMatchArm (int) ri_kind == then
-            ri_op Op::value (EnumVariant) = ri_ma_test_ev
-            # Check if this is an EnumVariant by testing if it has an enum_name or variant_name
-            # EnumVariant: has variant_name field. StructPattern: has struct_name field.
-            # LiteralPattern: has raw field.
-            # We differentiate by checking the match arm pattern type:
-            # EnumVariant has bindings as List[str], StructPattern has bindings as Map[str str]
-            # Since we store everything as int (ptr), we check the enum_name field
-            # For EnumVariant, variant_name is always set; for wildcard it's "_"
-            # We use a simpler heuristic: try to treat it as an EnumVariant
-            # For now, check if variant_name is accessible and non-empty
-            # EnumVariant can be detected by its ordinal field being -1 (unresolved)
-            # or by having a variant_name. StructPattern would have struct_name.
-            # The safest approach: try to resolve, and if it's a StructPattern register those bindings
-
-            # Try as EnumVariant - check if ordinal is -1 (unresolved enum)
-            # or if it has bindings (enum with bindings)
-            # For struct patterns, register bindings as variables
-            ri_op Op::value (StructPattern) = ri_ma_sp
-            ri_ma_sp StructPattern::struct_name = ri_ma_sp_name
-            # Heuristic: if struct_name is in GLOBAL_STRUCTS, this is a StructPattern
-            if ri_ma_sp_name GLOBAL_STRUCTS .get .is_some then
+            ri_op Op::type_annotation = ri_ma_tag
+            if "struct_pattern" ri_ma_tag == then
                 # StructPattern: register field bindings as variables
+                ri_op Op::value (StructPattern) = ri_ma_sp
                 ri_ma_sp StructPattern::bindings .keys = ri_ma_sp_keys
                 0 = ri_ma_si
                 while ri_ma_si ri_ma_sp_keys .length > do
@@ -1882,11 +1935,12 @@ fn resolve_identifiers_fn ops:List[Op] function:Function -> List[Op] {
                     fi
                     1 += ri_ma_si
                 done
-            else
+            elif "enum_variant" ri_ma_tag == then
                 # EnumVariant: resolve ordinal and register bindings
                 ri_op Op::value (EnumVariant) = ri_ma_ev
                 ri_errors function ri_op ri_ma_ev resolve_enum_variant
             fi
+            # literal_pattern: no resolution needed
             continue
         fi
 

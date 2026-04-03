@@ -291,6 +291,9 @@ fn unify_type type_a:str type_b:str -> str {
     if type_a type_b == then type_a return fi
     if ANY_TYPE type_a == then type_b return fi
     if ANY_TYPE type_b == then type_a return fi
+    # Enum type variables unify with concrete types
+    if type_a is_enum_type_var then type_b return fi
+    if type_b is_enum_type_var then type_a return fi
     type_a extract_generic_base = ut_base_a
     type_b extract_generic_base = ut_base_b
     if ut_base_a .is_some then
@@ -944,10 +947,221 @@ fn check_while_block tc:TypeChecker op:Op {
 }
 
 # ============================================================================
+# Trait support: bind_generic_params_standalone, type_satisfies_trait, inject_trait_fn_ptrs
+# ============================================================================
+
+fn bind_generic_params_standalone bindings:Map[str str] expected_type:str actual_type:str type_vars:Set[str] -> Map[str str] {
+    expected_type extract_generic_base = bgps_exp_base
+    if bgps_exp_base .is_none then bindings return fi
+    actual_type extract_generic_base = bgps_act_base
+    if bgps_act_base .is_none then bindings return fi
+    if bgps_exp_base .unwrap bgps_act_base .unwrap != then bindings return fi
+    expected_type extract_generic_params = bgps_exp_params_opt
+    actual_type extract_generic_params = bgps_act_params_opt
+    if bgps_exp_params_opt .is_none then bindings return fi
+    if bgps_act_params_opt .is_none then bindings return fi
+    bgps_exp_params_opt .unwrap = bgps_exp_params
+    bgps_act_params_opt .unwrap = bgps_act_params
+    0 = bgps_i
+    while bgps_i bgps_exp_params .length > bgps_i bgps_act_params .length > && do
+        bgps_i bgps_exp_params .get = bgps_ep
+        if bgps_ep type_vars .has bgps_ep bindings .get .is_none && then
+            bgps_ep bgps_i bgps_act_params .get bindings .set = bindings
+        fi
+        1 += bgps_i
+    done
+    bindings
+}
+
+fn type_satisfies_trait type_name:str trait_name:str function_opt:Option[Function] -> bool {
+    trait_name GLOBAL_TRAITS .get = tst_trait_opt
+    if tst_trait_opt .is_none then false return fi
+    tst_trait_opt .unwrap = tst_trait
+    # Type variable with matching bound satisfies the trait
+    if function_opt .is_some then
+        function_opt .unwrap Function::signature Signature::trait_bounds = tst_bounds
+        type_name tst_bounds .get = tst_bound_opt
+        if tst_bound_opt .is_some then
+            if trait_name tst_bound_opt .unwrap == then true return fi
+        fi
+    fi
+    0 = tst_i
+    while tst_i tst_trait CasaTrait::methods .length > do
+        tst_i tst_trait CasaTrait::methods .get = tst_method
+        f"{type_name}::{tst_method TraitMethod::name}" = tst_fn_name
+        tst_fn_name GLOBAL_FUNCTIONS .get = tst_fn_opt
+        if tst_fn_opt .is_none then false return fi
+        tst_fn_opt .unwrap = tst_fn
+        tst_fn ensure_typechecked
+        if "None -> None" tst_fn Function::signature signature_to_str == then false return fi
+        type_name tst_method TraitMethod::signature resolve_trait_sig = tst_resolved
+        if tst_fn Function::signature Signature::parameters .length tst_resolved Signature::parameters .length != then
+            false return
+        fi
+        if tst_fn Function::signature Signature::return_types .length tst_resolved Signature::return_types .length != then
+            false return
+        fi
+        0 = tst_pi
+        while tst_pi tst_resolved Signature::parameters .length > do
+            tst_pi tst_fn Function::signature Signature::parameters .get Parameter::typ = tst_ap
+            tst_pi tst_resolved Signature::parameters .get Parameter::typ = tst_ep
+            if
+                tst_ap tst_ep !=
+                ANY_TYPE tst_ap != &&
+                ANY_TYPE tst_ep != &&
+            then
+                false return
+            fi
+            1 += tst_pi
+        done
+        0 = tst_ri
+        while tst_ri tst_resolved Signature::return_types .length > do
+            tst_ri tst_fn Function::signature Signature::return_types .get = tst_ar
+            tst_ri tst_resolved Signature::return_types .get = tst_er
+            if
+                tst_ar tst_er !=
+                ANY_TYPE tst_ar != &&
+                ANY_TYPE tst_er != &&
+            then
+                false return
+            fi
+            1 += tst_ri
+        done
+        1 += tst_i
+    done
+    true
+}
+
+fn inject_trait_fn_ptrs tc:TypeChecker sig:Signature ops:List[Op] op_index:int location:Location function_opt:Option[Function] -> int {
+    # Bind type variables from the stack (peek at positions)
+    Map::new (Map[str str]) = itfp_bindings
+
+    # Collect non-hidden parameters
+    List::new (List[Parameter]) = itfp_non_hidden
+    0 = itfp_i
+    while itfp_i sig Signature::parameters .length > do
+        itfp_i sig Signature::parameters .get = itfp_p
+        if itfp_p Parameter::name "__trait_" str::starts_with ! then
+            itfp_p itfp_non_hidden .push
+        fi
+        1 += itfp_i
+    done
+
+    # Peek at stack to bind type variables
+    tc TypeChecker::stack .length = itfp_depth
+    0 = itfp_i
+    while itfp_i itfp_non_hidden .length > do
+        itfp_depth 1 - itfp_i - = itfp_stack_idx
+        if 0 itfp_stack_idx >= then
+            itfp_i itfp_non_hidden .get = itfp_param
+            itfp_stack_idx tc TypeChecker::stack .get = itfp_actual
+            if itfp_param Parameter::typ sig Signature::type_vars .has then
+                if itfp_param Parameter::typ itfp_bindings .get .is_none then
+                    itfp_param Parameter::typ itfp_actual itfp_bindings .set = itfp_bindings
+                fi
+            else
+                sig Signature::type_vars itfp_actual itfp_param Parameter::typ itfp_bindings bind_generic_params_standalone = itfp_bindings
+            fi
+        fi
+        1 += itfp_i
+    done
+
+    # Check TYPE_CAST lookahead for return type binding
+    if op_index ops .length > then
+        op_index ops .get Op::kind = itfp_next_kind
+        if OpKind::OpTypeCast (int) itfp_next_kind == then
+            op_index ops .get op_str_value = itfp_cast_type
+            0 = itfp_ri
+            while itfp_ri sig Signature::return_types .length > do
+                sig Signature::type_vars itfp_cast_type itfp_ri sig Signature::return_types .get itfp_bindings bind_generic_params_standalone = itfp_bindings
+                1 += itfp_ri
+            done
+        fi
+    fi
+
+    # Inject FN_PUSH ops for each trait bound
+    0 = itfp_inserted
+    op_index 1 - = itfp_insert_pos
+    sig Signature::trait_bounds .keys = itfp_tv_keys
+    0 = itfp_ti
+    while itfp_ti itfp_tv_keys .length > do
+        itfp_ti itfp_tv_keys .get = itfp_tv
+        itfp_tv sig Signature::trait_bounds .get .unwrap = itfp_trait_name
+        itfp_tv itfp_bindings .get = itfp_concrete_opt
+        if itfp_concrete_opt .is_none then
+            location f"Cannot determine concrete type for type variable `{itfp_tv}`" ErrorKind::TypeMismatch (int) raise_error
+            1 += itfp_ti
+            continue
+        fi
+        itfp_concrete_opt .unwrap = itfp_concrete
+        itfp_trait_name GLOBAL_TRAITS .get .unwrap = itfp_trait
+
+        # Check if forwarding (type var has same trait bound in calling function)
+        0 = itfp_is_forwarding
+        if function_opt .is_some then
+            function_opt .unwrap Function::signature Signature::trait_bounds = itfp_caller_bounds
+            itfp_concrete itfp_caller_bounds .get = itfp_caller_bound_opt
+            if itfp_caller_bound_opt .is_some then
+                if itfp_trait_name itfp_caller_bound_opt .unwrap == then
+                    1 = itfp_is_forwarding
+                fi
+            fi
+        fi
+
+        if itfp_is_forwarding (bool) then
+            # Forward hidden fn ptrs from calling function
+            itfp_trait CasaTrait::methods .length 1 - = itfp_mi
+            while 0 itfp_mi >= do
+                itfp_mi itfp_trait CasaTrait::methods .get = itfp_method
+                f"__trait_{itfp_concrete}_{itfp_method TraitMethod::name}" = itfp_hidden_var
+                location OpKind::OpPushVar (int) itfp_hidden_var make_op_str = itfp_push_op
+                itfp_insert_pos itfp_push_op ops .insert
+                1 += itfp_insert_pos
+                1 += itfp_inserted
+                itfp_concrete itfp_method TraitMethod::signature resolve_trait_sig = itfp_fwd_sig
+                f"fn[{itfp_fwd_sig signature_to_str}]" tc stack_push
+                itfp_mi 1 - = itfp_mi
+            done
+        else
+            # Verify structural satisfaction
+            if function_opt itfp_trait_name itfp_concrete type_satisfies_trait ! then
+                location f"Type `{itfp_concrete}` does not satisfy trait `{itfp_trait_name}`" ErrorKind::TypeMismatch (int) raise_error
+            fi
+            # Inject FN_PUSH for each method (reversed)
+            itfp_trait CasaTrait::methods .length 1 - = itfp_mi
+            while 0 itfp_mi >= do
+                itfp_mi itfp_trait CasaTrait::methods .get = itfp_method
+                f"{itfp_concrete}::{itfp_method TraitMethod::name}" = itfp_fn_name
+                itfp_fn_name GLOBAL_FUNCTIONS .get = itfp_gf_opt
+                if itfp_gf_opt .is_none then
+                    location f"Function `{itfp_fn_name}` required by trait `{itfp_trait_name}` not found" ErrorKind::TypeMismatch (int) raise_error
+                    itfp_mi 1 - = itfp_mi
+                    continue
+                fi
+                itfp_gf_opt .unwrap = itfp_gf
+                if itfp_gf Function::is_used (bool) ! then
+                    1 itfp_gf Function::set_is_used
+                    itfp_gf itfp_gf Function::ops resolve_identifiers itfp_gf Function::set_ops
+                fi
+                itfp_gf ensure_typechecked
+                location OpKind::OpFnPush (int) itfp_fn_name make_op_str = itfp_push_op
+                itfp_insert_pos itfp_push_op ops .insert
+                1 += itfp_insert_pos
+                1 += itfp_inserted
+                f"fn[{itfp_gf Function::signature signature_to_str}]" tc stack_push
+                itfp_mi 1 - = itfp_mi
+            done
+        fi
+        1 += itfp_ti
+    done
+    itfp_inserted
+}
+
+# ============================================================================
 # Check function-related operations
 # ============================================================================
 
-fn check_function_ops tc:TypeChecker op:Op function_opt:Option[Function] {
+fn check_function_ops tc:TypeChecker op:Op ops:List[Op] op_index:int function_opt:Option[Function] -> int {
     op Op::kind = cfo_kind
     if OpKind::OpFnCall (int) cfo_kind == then
         op op_str_value = cfo_fn_name
@@ -955,7 +1169,12 @@ fn check_function_ops tc:TypeChecker op:Op function_opt:Option[Function] {
         if cfo_fn_opt .is_some then
             cfo_fn_opt .unwrap = cfo_fn
             cfo_fn ensure_typechecked
-            cfo_fn_name cfo_fn Function::signature tc apply_signature
+            cfo_fn Function::signature = cfo_sig
+            if 0 cfo_sig Signature::trait_bounds .keys .length != then
+                function_opt op Op::location op_index ops cfo_sig tc inject_trait_fn_ptrs = cfo_injected
+                cfo_injected += op_index
+            fi
+            cfo_fn_name cfo_sig tc apply_signature
         fi
     elif OpKind::OpFnExec (int) cfo_kind == then
         tc stack_peek = cfo_fn_ptr
@@ -988,6 +1207,7 @@ fn check_function_ops tc:TypeChecker op:Op function_opt:Option[Function] {
             cfo_branched BranchedStack::before_origins copy_location_list tc TypeChecker::set_stack_origins
         fi
     fi
+    op_index
 }
 
 # ============================================================================
@@ -1159,6 +1379,37 @@ fn check_is tc:TypeChecker op:Op {
 # Check match blocks
 # ============================================================================
 
+fn resolve_match_type typ:str -> str {
+    if typ GLOBAL_ENUMS .get .is_some then typ return fi
+    if typ GLOBAL_STRUCTS .get .is_some then typ return fi
+    typ extract_generic_base = rmt_base
+    if rmt_base .is_some then
+        if rmt_base .unwrap GLOBAL_ENUMS .get .is_some then
+            rmt_base .unwrap return
+        fi
+    fi
+    typ
+}
+
+fn set_binding_type var_name:str field_type:str function_opt:Option[Function] {
+    if function_opt .is_some then
+        function_opt .unwrap = sbt_func
+        0 = sbt_i
+        while sbt_i sbt_func Function::variables .length > do
+            sbt_i sbt_func Function::variables .get = sbt_var
+            if var_name sbt_var Variable::name == then
+                field_type sbt_var Variable::set_typ
+                return
+            fi
+            1 += sbt_i
+        done
+    fi
+    var_name GLOBAL_VARIABLES .get = sbt_gv_opt
+    if sbt_gv_opt .is_some then
+        field_type sbt_gv_opt .unwrap Variable::set_typ
+    fi
+}
+
 fn check_match tc:TypeChecker op:Op function_opt:Option[Function] {
     op Op::kind = cmb_kind
     if OpKind::OpMatchStart (int) cmb_kind == then
@@ -1170,12 +1421,57 @@ fn check_match tc:TypeChecker op:Op function_opt:Option[Function] {
     elif OpKind::OpMatchArm (int) cmb_kind == then
         if 0 tc TypeChecker::branched_stacks .length == then return fi
         tc TypeChecker::branched_stacks .length 1 - tc TypeChecker::branched_stacks .get = cmb_branched
+        cmb_branched BranchedStack::match_type = cmb_match_type
+
+        # Determine pattern type from annotation tag set by parser
+        op Op::value = cmb_pattern_ptr
+        op Op::type_annotation = cmb_pat_tag
+        "" = cmb_covered_key
+        cmb_match_type resolve_match_type = cmb_arm_base
+        0 = cmb_is_wildcard
+        0 = cmb_is_enum_pattern
+
+        if "struct_pattern" cmb_pat_tag == then
+            cmb_pattern_ptr (StructPattern) = cmb_sp
+            f"__covered:{cmb_sp StructPattern::struct_name}" = cmb_covered_key
+        elif "literal_pattern" cmb_pat_tag == then
+            # Literal patterns: just mark as covered with generic key
+            f"__covered:__literal_{cmb_pattern_ptr .to_str}" = cmb_covered_key
+        else
+            # Enum variant (includes wildcard)
+            cmb_pattern_ptr (EnumVariant) = cmb_ev
+            1 = cmb_is_enum_pattern
+            if MATCH_WILDCARD cmb_ev EnumVariant::variant_name == then
+                1 = cmb_is_wildcard
+            fi
+            f"__covered:{cmb_ev EnumVariant::variant_name}" = cmb_covered_key
+        fi
+
+        # Check for duplicate arms
+        if "" cmb_covered_key != then
+            0 = cmb_di
+            while cmb_di cmb_branched BranchedStack::branch_records .length > do
+                cmb_di cmb_branched BranchedStack::branch_records .get = cmb_rec
+                if cmb_covered_key cmb_rec == then
+                    op Op::location f"Duplicate match arm for `{cmb_covered_key}`" ErrorKind::DuplicateName (int) raise_error
+                fi
+                1 += cmb_di
+            done
+            if cmb_covered_key cmb_branched BranchedStack::current_branch_label == then
+                op Op::location f"Duplicate match arm for `{cmb_covered_key}`" ErrorKind::DuplicateName (int) raise_error
+            fi
+        fi
+
+        # Handle branch state
         if cmb_branched BranchedStack::condition_present (bool) then
+            # Record previous arm
+            if "" cmb_branched BranchedStack::current_branch_label != then
+                cmb_branched BranchedStack::current_branch_label cmb_branched BranchedStack::branch_records .push
+            fi
             if
                 tc TypeChecker::stack cmb_branched BranchedStack::before stacks_equal
                 cmb_branched BranchedStack::before cmb_branched BranchedStack::after stacks_equal &&
             then
-                # No change needed
                 0 drop
             else
                 tc TypeChecker::stack cmb_branched BranchedStack::after stacks_compatible = cmb_unified
@@ -1197,8 +1493,149 @@ fn check_match tc:TypeChecker op:Op function_opt:Option[Function] {
             tc TypeChecker::stack copy_str_list cmb_branched BranchedStack::set_after
             tc TypeChecker::stack_origins copy_location_list cmb_branched BranchedStack::set_after_origins
         fi
+
+        # Set types on pattern bindings
+        if "struct_pattern" cmb_pat_tag == then
+            # StructPattern bindings
+            cmb_pattern_ptr (StructPattern) = cmb_sp2
+            cmb_sp2 StructPattern::struct_name GLOBAL_STRUCTS .get .unwrap = cmb_sp2_struct
+            cmb_sp2 StructPattern::bindings .keys = cmb_sp2_keys
+            0 = cmb_sp2_i
+            while cmb_sp2_i cmb_sp2_keys .length > do
+                cmb_sp2_i cmb_sp2_keys .get = cmb_sp2_field
+                cmb_sp2_field cmb_sp2 StructPattern::bindings .get .unwrap = cmb_sp2_var
+                0 = cmb_sp2_mi
+                while cmb_sp2_mi cmb_sp2_struct CasaStruct::members .length > do
+                    cmb_sp2_mi cmb_sp2_struct CasaStruct::members .get = cmb_sp2_m
+                    if cmb_sp2_field cmb_sp2_m Member::name == then
+                        function_opt cmb_sp2_m Member::typ cmb_sp2_var set_binding_type
+                    fi
+                    1 += cmb_sp2_mi
+                done
+                1 += cmb_sp2_i
+            done
+        elif
+            cmb_is_enum_pattern (bool)
+            cmb_is_wildcard (bool) ! &&
+            0 cmb_ev EnumVariant::bindings .length != &&
+        then
+            # EnumVariant bindings
+            cmb_match_type resolve_match_type = cmb_base_enum
+            cmb_base_enum GLOBAL_ENUMS .get = cmb_enum_opt
+            if cmb_enum_opt .is_some then
+                cmb_enum_opt .unwrap = cmb_casa_enum
+                cmb_ev EnumVariant::variant_name cmb_casa_enum CasaEnum::variant_types .get = cmb_inner_opt
+                if cmb_inner_opt .is_some then
+                    cmb_inner_opt .unwrap = cmb_inner_types
+                    # Resolve generic type vars from match subject
+                    Map::new (Map[str str]) = cmb_type_bindings
+                    if 0 cmb_casa_enum CasaEnum::type_vars .length != then
+                        cmb_match_type extract_generic_params = cmb_params_opt
+                        if cmb_params_opt .is_some then
+                            cmb_params_opt .unwrap = cmb_params
+                            0 = cmb_tvi
+                            while
+                                cmb_tvi cmb_casa_enum CasaEnum::type_vars .length >
+                                cmb_tvi cmb_params .length > &&
+                            do
+                                cmb_tvi cmb_casa_enum CasaEnum::type_vars .get cmb_tvi cmb_params .get cmb_type_bindings .set = cmb_type_bindings
+                                1 += cmb_tvi
+                            done
+                        fi
+                    fi
+                    0 = cmb_bi
+                    while
+                        cmb_bi cmb_ev EnumVariant::bindings .length >
+                        cmb_bi cmb_inner_types .length > &&
+                    do
+                        cmb_bi cmb_ev EnumVariant::bindings .get = cmb_bvar
+                        cmb_bi cmb_inner_types .get = cmb_btype
+                        cmb_btype cmb_type_bindings .get = cmb_resolved_opt
+                        if cmb_resolved_opt .is_some then
+                            cmb_resolved_opt .unwrap = cmb_btype
+                        fi
+                        function_opt cmb_btype cmb_bvar set_binding_type
+                        1 += cmb_bi
+                    done
+                fi
+            fi
+        fi
+
+        cmb_covered_key cmb_branched BranchedStack::set_current_branch_label
+        op Op::location cmb_branched BranchedStack::set_current_branch_location
+
     elif OpKind::OpMatchEnd (int) cmb_kind == then
         tc TypeChecker::branched_stacks .pop = cmb_branched
+        # Record last arm
+        if "" cmb_branched BranchedStack::current_branch_label != then
+            cmb_branched BranchedStack::current_branch_label cmb_branched BranchedStack::branch_records .push
+        fi
+
+        cmb_branched BranchedStack::match_type = cmb_end_match_type
+        cmb_end_match_type resolve_match_type = cmb_end_base
+
+        # Build covered set
+        Set::new (Set[str]) = cmb_covered
+        0 = cmb_ci
+        while cmb_ci cmb_branched BranchedStack::branch_records .length > do
+            cmb_ci cmb_branched BranchedStack::branch_records .get = cmb_rec
+            if cmb_rec "__covered:" str::starts_with then
+                cmb_rec 10 cmb_rec .length 10 - str::substring cmb_covered .add = cmb_covered
+            fi
+            1 += cmb_ci
+        done
+        MATCH_WILDCARD cmb_covered .has = cmb_has_wildcard
+
+        # Check exhaustiveness
+        if cmb_end_base GLOBAL_ENUMS .get .is_some cmb_has_wildcard ! && then
+            cmb_end_base GLOBAL_ENUMS .get .unwrap = cmb_end_enum
+            List::new (List[str]) = cmb_missing
+            0 = cmb_vi
+            while cmb_vi cmb_end_enum CasaEnum::variants .length > do
+                cmb_vi cmb_end_enum CasaEnum::variants .get = cmb_variant
+                if cmb_variant cmb_covered .has ! then
+                    cmb_variant cmb_missing .push
+                fi
+                1 += cmb_vi
+            done
+            if 0 cmb_missing .length != then
+                StringBuilder::new = cmb_msb
+                0 = cmb_mi
+                while cmb_mi cmb_missing .length > do
+                    if 0 cmb_mi != then ", " cmb_msb .append fi
+                    f"`{cmb_end_base}::{cmb_mi cmb_missing .get}`" cmb_msb .append
+                    1 += cmb_mi
+                done
+                op Op::location f"Non-exhaustive match, missing arms: {cmb_msb .build}" ErrorKind::TypeMismatch (int) raise_error
+            fi
+        fi
+        if cmb_end_base GLOBAL_STRUCTS .get .is_some cmb_has_wildcard ! && then
+            if cmb_end_base cmb_covered .has ! then
+                op Op::location f"Non-exhaustive match on struct `{cmb_end_match_type}`" ErrorKind::TypeMismatch (int) raise_error
+            fi
+        fi
+        # Literal exhaustiveness
+        if
+            "bool" cmb_end_base ==
+            "int" cmb_end_base == ||
+            "char" cmb_end_base == ||
+            "str" cmb_end_base == ||
+        then
+            if cmb_has_wildcard ! then
+                if "bool" cmb_end_base == then
+                    List::new (List[str]) = cmb_bool_missing
+                    if "true" cmb_covered .has ! then "true" cmb_bool_missing .push fi
+                    if "false" cmb_covered .has ! then "false" cmb_bool_missing .push fi
+                    if 0 cmb_bool_missing .length != then
+                        op Op::location "Non-exhaustive match on `bool`" ErrorKind::TypeMismatch (int) raise_error
+                    fi
+                else
+                    op Op::location f"Non-exhaustive match on type `{cmb_end_base}`. A wildcard `_` arm is required" ErrorKind::TypeMismatch (int) raise_error
+                fi
+            fi
+        fi
+
+        # Apply final stack state
         cmb_branched BranchedStack::before = cmb_before
         cmb_branched BranchedStack::after = cmb_after
         if tc TypeChecker::stack cmb_before stacks_equal cmb_before cmb_after stacks_equal && then
@@ -1259,7 +1696,7 @@ fn check_struct_literal tc:TypeChecker op:Op {
             fi
             1 += csl_mi
         done
-        1 -= csl_i
+        csl_i 1 - = csl_i
     done
     csl_name tc stack_push
 }
@@ -1306,7 +1743,7 @@ fn find_method_by_name method_name:str -> Option[str] {
 # Check method call
 # ============================================================================
 
-fn check_method_call tc:TypeChecker op:Op function_opt:Option[Function] {
+fn check_method_call tc:TypeChecker op:Op ops:List[Op] op_index:int function_opt:Option[Function] -> int {
     op op_str_value = cmc_method_name
     tc stack_peek = cmc_receiver
 
@@ -1336,13 +1773,23 @@ fn check_method_call tc:TypeChecker op:Op function_opt:Option[Function] {
 
     if cmc_fn_opt .is_some then
         cmc_fn_opt .unwrap = cmc_fn
+        if cmc_fn Function::is_typechecked (bool) ! then
+            cmc_fn cmc_fn Function::ops resolve_identifiers cmc_fn Function::set_ops
+            1 cmc_fn Function::set_is_used
+        fi
         cmc_fn ensure_typechecked
-        cmc_fn_name cmc_fn Function::signature tc apply_signature
+        cmc_fn Function::signature = cmc_sig
+        if 0 cmc_sig Signature::trait_bounds .keys .length != then
+            function_opt op Op::location op_index ops cmc_sig tc inject_trait_fn_ptrs = cmc_injected
+            cmc_injected += op_index
+        fi
+        cmc_fn_name cmc_sig tc apply_signature
         cmc_fn_name (int) op Op::set_value
         OpKind::OpFnCall (int) op Op::set_kind
     else
         op Op::location f"Method `{cmc_fn_name}` does not exist" ErrorKind::UndefinedName (int) raise_error
     fi
+    op_index
 }
 
 # ============================================================================
@@ -1352,11 +1799,6 @@ fn check_method_call tc:TypeChecker op:Op function_opt:Option[Function] {
 fn ensure_typechecked function:Function {
     if function Function::is_typechecked (bool) then return fi
     1 function Function::set_is_typechecked
-    # Skip full type checking for functions with trait bounds
-    if function Function::signature Signature::trait_bounds .keys .length 0 < then
-        function function Function::ops resolve_identifiers drop
-        return
-    fi
     function function Function::ops resolve_identifiers = et_resolved_ops
     et_resolved_ops function Function::set_ops
     function Option::Some et_resolved_ops type_check_ops = et_sig
@@ -1504,7 +1946,7 @@ fn type_check_ops ops:List[Op] function_opt:Option[Function] -> Signature {
             OpKind::OpFnPush (int) tc_kind == ||
             OpKind::OpFnReturn (int) tc_kind == ||
         then
-            function_opt tc_op tc_checker check_function_ops
+            function_opt tc_index ops tc_op tc_checker check_function_ops = tc_index
             continue
         fi
 
@@ -1593,7 +2035,7 @@ fn type_check_ops ops:List[Op] function_opt:Option[Function] -> Signature {
 
         # Method call
         if OpKind::OpMethodCall (int) tc_kind == then
-            function_opt tc_op tc_checker check_method_call
+            function_opt tc_index ops tc_op tc_checker check_method_call = tc_index
             continue
         fi
 
@@ -1671,7 +2113,7 @@ fn type_check_functions {
         1 tcf_fn Function::set_is_typechecked
         tcf_fn tcf_fn Function::ops resolve_identifiers = tcf_resolved_ops
         tcf_resolved_ops tcf_fn Function::set_ops
-        # Skip type checking for functions with trait bounds
+        # Skip type checking for functions with trait bounds (checked on demand)
         if tcf_fn Function::signature Signature::trait_bounds .keys .length 0 < then
             1 += tcf_i
             continue
