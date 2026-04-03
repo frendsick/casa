@@ -910,8 +910,26 @@ fn parse_enum cursor:TokenCursor -> CasaEnum {
 # _create_member_accessor - create getter/setter for struct members
 # ============================================================================
 
-fn create_member_accessor struct_name:str member_name:str member_type:str member_index:int location:Location {
+fn create_member_accessor struct_name:str member_name:str member_type:str member_index:int location:Location type_vars:List[str] {
     member_index 8 * = cma_offset
+
+    # Parameterize the struct name when the struct has type vars
+    struct_name = cma_param_type
+    Set::new (Set[str]) = cma_sig_type_vars
+    if 0 type_vars .length != then
+        StringBuilder::new = cma_sb
+        struct_name cma_sb .append
+        "[" cma_sb .append
+        0 = cma_tvi
+        while cma_tvi type_vars .length > do
+            if 0 cma_tvi != then " " cma_sb .append fi
+            cma_tvi type_vars .get cma_sb .append
+            cma_tvi type_vars .get cma_sig_type_vars .add = cma_sig_type_vars
+            1 += cma_tvi
+        done
+        "]" cma_sb .append
+        cma_sb .build = cma_param_type
+    fi
 
     # Getter
     f"{struct_name}::{member_name}" = cma_getter_name
@@ -923,10 +941,11 @@ fn create_member_accessor struct_name:str member_name:str member_type:str member
     location OpKind::OpTypeCast (int) member_type make_op_str cma_getter_ops .push
 
     List::new (List[Parameter]) = cma_getter_params
-    struct_name make_param cma_getter_params .push
+    cma_param_type make_param cma_getter_params .push
     List::new (List[str]) = cma_getter_returns
     member_type cma_getter_returns .push
     cma_getter_returns cma_getter_params make_signature = cma_getter_sig
+    cma_sig_type_vars cma_getter_sig Signature::set_type_vars
     cma_getter_sig location cma_getter_ops cma_getter_name make_function_with_sig = cma_getter
 
     if cma_getter_name GLOBAL_FUNCTIONS .get .is_some then
@@ -943,10 +962,11 @@ fn create_member_accessor struct_name:str member_name:str member_type:str member
     location OpKind::OpStore64 (int) 0 make_op cma_setter_ops .push
 
     List::new (List[Parameter]) = cma_setter_params
-    struct_name make_param cma_setter_params .push
+    cma_param_type make_param cma_setter_params .push
     member_type make_param cma_setter_params .push
     List::new (List[str]) = cma_setter_returns
     cma_setter_returns cma_setter_params make_signature = cma_setter_sig
+    cma_sig_type_vars cma_setter_sig Signature::set_type_vars
     cma_setter_sig location cma_setter_ops cma_setter_name make_function_with_sig = cma_setter
 
     if cma_setter_name GLOBAL_FUNCTIONS .get .is_some then
@@ -969,6 +989,10 @@ fn parse_struct cursor:TokenCursor -> CasaStruct {
     if pst_tvars_opt .is_some then
         if "[" pst_tvars_opt .unwrap Token::value == then
             cursor parse_type_vars = pst_type_vars
+            # Trait bounds are not allowed on struct definitions
+            if 0 LAST_TRAIT_BOUNDS .keys .length != then
+                pst_name Token::location "Trait bounds are not allowed on struct definitions. Use `impl[K: Bound] StructName[K]` instead" ErrorKind::UnexpectedToken (int) raise_error
+            fi
         fi
     fi
 
@@ -984,7 +1008,7 @@ fn parse_struct cursor:TokenCursor -> CasaStruct {
         ":" cursor expect_token_value drop
         cursor parse_type = pst_member_type
 
-        pst_mtok Token::location pst_members .length pst_member_type pst_mtok Token::value pst_name Token::value create_member_accessor
+        pst_type_vars pst_mtok Token::location pst_members .length pst_member_type pst_mtok Token::value pst_name Token::value create_member_accessor
         pst_member_type pst_mtok Token::value Member pst_members .push
     done
 
@@ -1118,7 +1142,7 @@ fn parse_impl_block cursor:TokenCursor {
         f"{pib_base_type}::{pib_fn Function::name}" = pib_fn_name
         pib_fn_name pib_fn Function::set_name
         # Merge inherited type vars and trait bounds from impl block
-        if pib_type_vars .length 0 < then
+        if 0 pib_type_vars .length != then
             pib_fn Function::signature = pib_sig
             0 = pib_tvi
             while pib_tvi pib_type_vars .length > do
@@ -1733,6 +1757,28 @@ fn gather_captures lambda_function:Function function:Function {
     done
 }
 
+fn resolve_array_identifiers items:List[Op] function:Function errors:List[CasaError] {
+    0 = rai_i
+    while rai_i items .length > do
+        rai_i items .get = rai_item
+        if OpKind::OpPushArray (int) rai_item Op::kind == then
+            errors function rai_item Op::value (List[Op]) resolve_array_identifiers
+        elif OpKind::OpIdentifier (int) rai_item Op::kind == then
+            rai_item op_str_value = rai_name
+            if rai_name function Function::variables variable_list_contains then
+                OpKind::OpPushVar (int) rai_item Op::set_kind
+            elif rai_name function Function::captures variable_list_contains then
+                OpKind::OpPushCapture (int) rai_item Op::set_kind
+            elif rai_name GLOBAL_VARIABLES .get .is_some then
+                OpKind::OpPushVar (int) rai_item Op::set_kind
+            else
+                rai_item Op::location f"Identifier `{rai_name}` is not defined" ErrorKind::UndefinedName (int) make_error errors .push
+            fi
+        fi
+        1 += rai_i
+    done
+}
+
 fn resolve_enum_variant variant:EnumVariant op:Op function:Function errors:List[CasaError] {
     # Resolve enum variant ordinal if still unresolved (-1)
     if variant EnumVariant::enum_name .length 0 != 0 1 - variant EnumVariant::ordinal == && then
@@ -1817,19 +1863,45 @@ fn resolve_identifiers_fn ops:List[Op] function:Function -> List[Op] {
             continue
         fi
 
+        # PUSH_ARRAY: resolve identifiers inside array literals
+        if OpKind::OpPushArray (int) ri_kind == then
+            ri_errors function ri_op Op::value (List[Op]) resolve_array_identifiers
+            continue
+        fi
+
         # IDENTIFIER: resolve to specific op kinds
         if OpKind::OpIdentifier (int) ri_kind == then
             ri_op op_str_value = ri_ident
             # Function reference: &name
             if '&' 0 ri_ident .at == then
                 ri_ident 1 ri_ident .length 1 - str::substring = ri_ref_name
-                ri_ref_name GLOBAL_FUNCTIONS .get = ri_ref_fn_opt
-                if ri_ref_fn_opt .is_some then
-                    OpKind::OpFnPush (int) ri_op Op::set_kind
-                    ri_ref_name (int) ri_op Op::set_value
-                    1 ri_ref_fn_opt .unwrap Function::set_is_used
-                else
-                    ri_op Op::location f"Function `{ri_ref_name}` is not defined" ErrorKind::UndefinedName (int) make_error ri_errors .push
+                # Empty & validation
+                if 0 ri_ref_name .length == then
+                    ri_op Op::location "Expected function name after `&`" ErrorKind::Syntax (int) make_error ri_errors .push
+                    continue
+                fi
+                # Check trait bound reference: &K::method
+                false = ri_ref_is_trait
+                if ri_ref_name "::" str::find 0 <= then
+                    ri_ref_name 0 ri_ref_name "::" str::find str::substring = ri_ref_tv
+                    ri_ref_tv function Function::signature Signature::trait_bounds .get = ri_ref_tb_opt
+                    if ri_ref_tb_opt .is_some then
+                        ri_ref_name ri_ref_name "::" str::find 2 + ri_ref_name .length ri_ref_name "::" str::find - 2 - str::substring = ri_ref_tmethod
+                        f"__trait_{ri_ref_tv}_{ri_ref_tmethod}" = ri_ref_hidden
+                        OpKind::OpPushVar (int) ri_op Op::set_kind
+                        ri_ref_hidden (int) ri_op Op::set_value
+                        true = ri_ref_is_trait
+                    fi
+                fi
+                if ri_ref_is_trait ! then
+                    ri_ref_name GLOBAL_FUNCTIONS .get = ri_ref_fn_opt
+                    if ri_ref_fn_opt .is_some then
+                        OpKind::OpFnPush (int) ri_op Op::set_kind
+                        ri_ref_name (int) ri_op Op::set_value
+                        1 ri_ref_fn_opt .unwrap Function::set_is_used
+                    else
+                        ri_op Op::location f"Function `{ri_ref_name}` is not defined" ErrorKind::UndefinedName (int) make_error ri_errors .push
+                    fi
                 fi
                 continue
             fi
@@ -1876,17 +1948,17 @@ fn resolve_identifiers_fn ops:List[Op] function:Function -> List[Op] {
                 continue
             fi
 
-            # Captured variable
-            if ri_ident function Function::captures variable_list_contains then
-                OpKind::OpPushCapture (int) ri_op Op::set_kind
-                continue
-            fi
-
             # Global function
             ri_ident GLOBAL_FUNCTIONS .get = ri_gfn_opt
             if ri_gfn_opt .is_some then
                 OpKind::OpFnCall (int) ri_op Op::set_kind
                 1 ri_gfn_opt .unwrap Function::set_is_used
+                continue
+            fi
+
+            # Captured variable
+            if ri_ident function Function::captures variable_list_contains then
+                OpKind::OpPushCapture (int) ri_op Op::set_kind
                 continue
             fi
 
