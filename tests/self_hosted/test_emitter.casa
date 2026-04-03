@@ -1,0 +1,333 @@
+include "../../self_hosted/common.casa"
+include "../../self_hosted/error.casa"
+include "../../self_hosted/emitter.casa"
+include "../../lib/test.casa"
+
+# Helper: check that a string contains a substring
+fn assert_contains needle:str haystack:str msg:str {
+    haystack needle str::find = ac_pos
+    if 0 ac_pos < then
+        msg false assert_true
+    else
+        msg true assert_true
+    fi
+}
+
+# Helper: build a minimal program with no bytecode
+fn make_empty_program -> Program {
+    0 0
+    List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    List::new (List[Inst])
+    Program
+}
+
+# Helper: build a program with given bytecode and strings
+fn make_simple_program bytecode:List[Inst] strings:List[str] globals:int constants:int -> Program {
+    constants globals strings
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program
+}
+
+fn test_sanitize_name {
+    "sanitize_name" test_start
+    "simple name" "foo" "foo" sanitize_name assert_str_eq
+    "double colon" "Foo__bar" "Foo::bar" sanitize_name assert_str_eq
+    "multiple" "A__B__C" "A::B::C" sanitize_name assert_str_eq
+    "no colons" "hello_world" "hello_world" sanitize_name assert_str_eq
+    "single colon preserved" "a:b" "a:b" sanitize_name assert_str_eq
+}
+
+fn test_escape_string {
+    "escape_string" test_start
+    "plain" "hello" "hello" escape_string assert_str_eq
+    "newline" "a\\nb" "a\nb" escape_string assert_str_eq
+    "tab" "a\\tb" "a\tb" escape_string assert_str_eq
+    "backslash" "\\\\" "\\" escape_string assert_str_eq
+    "quote" "\\\"" "\"" escape_string assert_str_eq
+}
+
+fn test_emit_bss {
+    "emit_bss" test_start
+    3 = bss_globals
+    2 = bss_constants
+    bss_constants bss_globals
+    List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    List::new (List[Inst])
+    Program = bss_prog
+
+    StringBuilder::new = bss_asm
+    bss_prog bss_asm emit_bss
+    bss_asm .build = bss_result
+
+    "has bss section" bss_result ".section .bss" assert_contains
+    "has globals" bss_result "globals: .skip 24" assert_contains
+    "has constants" bss_result "constants: .skip 16" assert_contains
+    "has return stack" bss_result "return_stack: .skip 65536" assert_contains
+    "has heap" bss_result "heap: .skip 67108864" assert_contains
+    "has heap_ptr" bss_result "heap_ptr: .skip 8" assert_contains
+    "has argc" bss_result "__argc: .skip 8" assert_contains
+    "has argv" bss_result "__argv: .skip 8" assert_contains
+    "has print_buf" bss_result "print_buf: .skip 32" assert_contains
+}
+
+fn test_emit_data {
+    "emit_data" test_start
+    List::new (List[str]) = data_strings
+    "hello" data_strings .push
+    "world" data_strings .push
+
+    0 0 data_strings
+    Map::new (Map[str List[Inst]])
+    List::new (List[Inst])
+    Program = data_prog
+
+    StringBuilder::new = data_asm
+    data_prog data_asm emit_data
+    data_asm .build = data_result
+
+    "has data section" data_result ".section .data" assert_contains
+    "has str_0 label" data_result "str_0:" assert_contains
+    "has str_1 label" data_result "str_1:" assert_contains
+    "has quad 5 for hello" data_result ".quad 5" assert_contains
+    "has hello ascii" data_result ".asciz \"hello\"" assert_contains
+    "has quad 5 for world" data_result ".quad 5" assert_contains
+    "has bool_true" data_result "bool_true:" assert_contains
+    "has bool_false" data_result "bool_false:" assert_contains
+}
+
+fn test_emit_push {
+    "emit_push" test_start
+    List::new (List[Inst]) = push_bc
+    42 InstKind::InstPush (int) make_inst_int push_bc .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    push_bc
+    Program = push_prog
+
+    push_prog emit = push_result
+    "has pushq $42" push_result "pushq $42" assert_contains
+}
+
+fn test_emit_push_str {
+    "emit_push_str" test_start
+    List::new (List[Inst]) = ps_bc
+    0 InstKind::InstPushStr (int) make_inst_int ps_bc .push
+
+    List::new (List[str]) = ps_strings
+    "test" ps_strings .push
+
+    0 0 ps_strings
+    Map::new (Map[str List[Inst]])
+    ps_bc
+    Program = ps_prog
+
+    ps_prog emit = ps_result
+    "has str_0 ref" ps_result "str_0(%rip)" assert_contains
+}
+
+fn test_emit_add {
+    "emit_add" test_start
+    List::new (List[Inst]) = add_bc
+    InstKind::InstAdd (int) make_inst add_bc .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    add_bc
+    Program = add_prog
+
+    add_prog emit = add_result
+    "has addq" add_result "addq %rax, (%rsp)" assert_contains
+}
+
+fn test_emit_label_and_jump {
+    "emit_label_and_jump" test_start
+    List::new (List[Inst]) = lj_bc
+    7 InstKind::InstLabel (int) make_inst_int lj_bc .push
+    7 InstKind::InstJump (int) make_inst_int lj_bc .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    lj_bc
+    Program = lj_prog
+
+    lj_prog emit = lj_result
+    "has label" lj_result ".L7:" assert_contains
+    "has jump" lj_result "jmp .L7" assert_contains
+}
+
+fn test_emit_fn_call {
+    "emit_fn_call" test_start
+    List::new (List[Inst]) = fc_bc
+    "my_func" InstKind::InstFnCall (int) make_inst_str fc_bc .push
+
+    List::new (List[Inst]) = fc_fn_bc
+
+    Map::new (Map[str List[Inst]]) = fc_fns
+    "my_func" fc_fn_bc fc_fns .set = fc_fns
+
+    0 0 List::new (List[str]) fc_fns fc_bc Program = fc_prog
+    fc_prog emit = fc_result
+    "has jmp fn_my_func" fc_result "jmp fn_my_func" assert_contains
+    "has fn_my_func label" fc_result "fn_my_func:" assert_contains
+}
+
+fn test_emit_fn_call_sanitized {
+    "emit_fn_call_sanitized" test_start
+    List::new (List[Inst]) = fcs_bc
+    "Foo::bar" InstKind::InstFnCall (int) make_inst_str fcs_bc .push
+
+    List::new (List[Inst]) = fcs_fn_bc
+    Map::new (Map[str List[Inst]]) = fcs_fns
+    "Foo::bar" fcs_fn_bc fcs_fns .set = fcs_fns
+
+    0 0 List::new (List[str]) fcs_fns fcs_bc Program = fcs_prog
+    fcs_prog emit = fcs_result
+    "has jmp fn_Foo__bar" fcs_result "jmp fn_Foo__bar" assert_contains
+    "has fn_Foo__bar label" fcs_result "fn_Foo__bar:" assert_contains
+}
+
+fn test_emit_start_section {
+    "emit_start_section" test_start
+    make_empty_program emit = es_result
+    "has _start label" es_result "_start:" assert_contains
+    "has globl" es_result ".globl _start" assert_contains
+    "has return_stack init" es_result "leaq return_stack(%rip), %r14" assert_contains
+    "has exit syscall" es_result "movq $60, %rax" assert_contains
+}
+
+fn test_emit_helpers_present {
+    "emit_helpers_present" test_start
+    make_empty_program emit = eh_result
+    "has print_int" eh_result "print_int:" assert_contains
+    "has print_str" eh_result "print_str:" assert_contains
+    "has str_concat" eh_result "str_concat:" assert_contains
+}
+
+fn test_emit_comparison {
+    "emit_comparison" test_start
+    List::new (List[Inst]) = cmp_bc
+    InstKind::InstEq (int) make_inst cmp_bc .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    cmp_bc
+    Program = cmp_prog
+
+    cmp_prog emit = cmp_result
+    "has cmpq" cmp_result "cmpq (%rsp), %rax" assert_contains
+    "has sete" cmp_result "sete %al" assert_contains
+}
+
+fn test_emit_syscall {
+    "emit_syscall" test_start
+    List::new (List[Inst]) = sc_bc
+    InstKind::InstSyscall3 (int) make_inst sc_bc .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    sc_bc
+    Program = sc_prog
+
+    sc_prog emit = sc_result
+    "has popq rax" sc_result "popq %rax" assert_contains
+    "has popq rdi" sc_result "popq %rdi" assert_contains
+    "has popq rsi" sc_result "popq %rsi" assert_contains
+    "has popq rdx" sc_result "popq %rdx" assert_contains
+    "has syscall" sc_result "    syscall" assert_contains
+    "has pushq rax" sc_result "pushq %rax" assert_contains
+}
+
+fn test_emit_local_ops {
+    "emit_local_ops" test_start
+    List::new (List[Inst]) = lo_bc
+    3 InstKind::InstLocalsInit (int) make_inst_int lo_bc .push
+    0 InstKind::InstLocalGet (int) make_inst_int lo_bc .push
+    1 InstKind::InstLocalSet (int) make_inst_int lo_bc .push
+    3 InstKind::InstLocalsUninit (int) make_inst_int lo_bc .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    lo_bc
+    Program = lo_prog
+
+    lo_prog emit = lo_result
+    "has locals init count" lo_result "movq $3, %rcx" assert_contains
+    "has locals init add" lo_result "addq $24, %r14" assert_contains
+    "has local get offset" lo_result "movq -8(%r14), %rax" assert_contains
+    "has local set offset" lo_result "movq %rax, -16(%r14)" assert_contains
+    "has locals uninit" lo_result "subq $24, %r14" assert_contains
+}
+
+fn test_emit_global_ops {
+    "emit_global_ops" test_start
+    List::new (List[Inst]) = go_bc
+    2 InstKind::InstGlobalGet (int) make_inst_int go_bc .push
+    3 InstKind::InstGlobalSet (int) make_inst_int go_bc .push
+
+    5 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    go_bc
+    Program = go_prog
+
+    go_prog emit = go_result
+    "has global get" go_result "globals+16(%rip)" assert_contains
+    "has global set" go_result "globals+24(%rip)" assert_contains
+}
+
+fn test_emit_memory_ops {
+    "emit_memory_ops" test_start
+    List::new (List[Inst]) = mo_bc
+    InstKind::InstLoad64 (int) make_inst mo_bc .push
+    InstKind::InstStore64 (int) make_inst mo_bc .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    mo_bc
+    Program = mo_prog
+
+    mo_prog emit = mo_result
+    "has load64" mo_result "movq (%rax), %rax" assert_contains
+    "has store64" mo_result "movq %rbx, (%rax)" assert_contains
+}
+
+fn test_emit_full_program {
+    "emit_full_program" test_start
+    # Emit a program with one PUSH instruction
+    List::new (List[Inst]) = fp_bc
+    99 InstKind::InstPush (int) make_inst_int fp_bc .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    fp_bc
+    Program = fp_prog
+
+    fp_prog emit = fp_result
+    "has bss" fp_result ".section .bss" assert_contains
+    "has data" fp_result ".section .data" assert_contains
+    "has text" fp_result ".section .text" assert_contains
+    "has push 99" fp_result "pushq $99" assert_contains
+}
+
+test_sanitize_name
+test_escape_string
+test_emit_bss
+test_emit_data
+test_emit_push
+test_emit_push_str
+test_emit_add
+test_emit_label_and_jump
+test_emit_fn_call
+test_emit_fn_call_sanitized
+test_emit_start_section
+test_emit_helpers_present
+test_emit_comparison
+test_emit_syscall
+test_emit_local_ops
+test_emit_global_ops
+test_emit_memory_ops
+test_emit_full_program
+test_summary
