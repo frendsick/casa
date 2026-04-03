@@ -66,7 +66,7 @@ fn test_emit_bss {
     "has globals" bss_result "globals: .skip 24" assert_contains
     "has constants" bss_result "constants: .skip 16" assert_contains
     "has return stack" bss_result "return_stack: .skip 65536" assert_contains
-    "has heap" bss_result "heap: .skip 268435456" assert_contains
+    "has heap" bss_result "heap: .skip 1073741824" assert_contains
     "has heap_ptr" bss_result "heap_ptr: .skip 8" assert_contains
     "has argc" bss_result "__argc: .skip 8" assert_contains
     "has argv" bss_result "__argv: .skip 8" assert_contains
@@ -1187,6 +1187,194 @@ fn test_emit_exit_syscall {
 }
 
 # ---------------------------------------------------------------------------
+# Globals init (no-op, BSS handles allocation)
+# ---------------------------------------------------------------------------
+
+fn test_emit_globals_init {
+    "emit_globals_init" test_start
+    List::new (List[Inst]) = gi_bc
+    5 InstKind::InstGlobalsInit (int) make_inst_int gi_bc .push
+    42 InstKind::InstPush (int) make_inst_int gi_bc .push
+
+    0 5 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    gi_bc
+    Program = gi_prog
+
+    gi_prog emit = gi_result
+    # GlobInit itself is no-op but the push after it should be there
+    "has pushq $42" gi_result "pushq $42" assert_contains
+    # BSS should reserve space for 5 globals
+    "has globals skip" gi_result "globals: .skip 40" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# While loop pattern (label + jump_ne + unconditional jump)
+# ---------------------------------------------------------------------------
+
+fn test_emit_while_loop_pattern {
+    "emit_while_loop_pattern" test_start
+    List::new (List[Inst]) = wl_bc
+    # while loop: label 10, condition check, jump_ne 11, body, jump 10, label 11
+    10 InstKind::InstLabel (int) make_inst_int wl_bc .push
+    1 InstKind::InstPush (int) make_inst_int wl_bc .push
+    11 InstKind::InstJumpNe (int) make_inst_int wl_bc .push
+    10 InstKind::InstJump (int) make_inst_int wl_bc .push
+    11 InstKind::InstLabel (int) make_inst_int wl_bc .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    wl_bc
+    Program = wl_prog
+
+    wl_prog emit = wl_result
+    "has loop start label" wl_result ".L10:" assert_contains
+    "has conditional jz" wl_result "jz .L11" assert_contains
+    "has unconditional jmp" wl_result "jmp .L10" assert_contains
+    "has loop end label" wl_result ".L11:" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# Data section with escape sequences
+# ---------------------------------------------------------------------------
+
+fn test_emit_data_escape_sequences {
+    "emit_data_escape_sequences" test_start
+    List::new (List[str]) = esc_strings
+    "hello\nworld" esc_strings .push
+    "col1\tcol2" esc_strings .push
+
+    0 0 esc_strings
+    Map::new (Map[str List[Inst]])
+    List::new (List[Inst])
+    Program = esc_prog
+
+    StringBuilder::new = esc_asm
+    esc_prog esc_asm emit_data
+    esc_asm .build = esc_result
+
+    "has escaped newline" esc_result "hello\\nworld" assert_contains
+    "has escaped tab" esc_result "col1\\tcol2" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# Locals init emits rep stosq
+# ---------------------------------------------------------------------------
+
+fn test_emit_locals_rep_stosq {
+    "emit_locals_rep_stosq" test_start
+    List::new (List[Inst]) = rs_bc
+    4 InstKind::InstLocalsInit (int) make_inst_int rs_bc .push
+    4 InstKind::InstLocalsUninit (int) make_inst_int rs_bc .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    rs_bc
+    Program = rs_prog
+
+    rs_prog emit = rs_result
+    "has rep stosq" rs_result "rep stosq" assert_contains
+    "has xorq rax rax" rs_result "xorq %rax, %rax" assert_contains
+    "has movq rdi" rs_result "movq %r14, %rdi" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# Load64 instruction
+# ---------------------------------------------------------------------------
+
+fn test_emit_load64 {
+    "emit_load64" test_start
+    List::new (List[Inst]) = l64_bc
+    InstKind::InstLoad64 (int) make_inst l64_bc .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    l64_bc
+    Program = l64_prog
+
+    l64_prog emit = l64_result
+    "has popq rax" l64_result "popq %rax" assert_contains
+    "has movq load" l64_result "movq (%rax), %rax" assert_contains
+    "has pushq rax" l64_result "pushq %rax" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# Store64 instruction
+# ---------------------------------------------------------------------------
+
+fn test_emit_store64 {
+    "emit_store64" test_start
+    List::new (List[Inst]) = s64_bc
+    InstKind::InstStore64 (int) make_inst s64_bc .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    s64_bc
+    Program = s64_prog
+
+    s64_prog emit = s64_result
+    "has popq rax" s64_result "popq %rax" assert_contains
+    "has popq rbx" s64_result "popq %rbx" assert_contains
+    "has movq store" s64_result "movq %rbx, (%rax)" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# Function with body instructions
+# ---------------------------------------------------------------------------
+
+fn test_emit_fn_with_body {
+    "emit_fn_with_body" test_start
+    List::new (List[Inst]) = fb_bc
+    "adder" InstKind::InstFnCall (int) make_inst_str fb_bc .push
+
+    List::new (List[Inst]) = fb_fn_bc
+    2 InstKind::InstLocalsInit (int) make_inst_int fb_fn_bc .push
+    0 InstKind::InstLocalGet (int) make_inst_int fb_fn_bc .push
+    1 InstKind::InstLocalGet (int) make_inst_int fb_fn_bc .push
+    InstKind::InstAdd (int) make_inst fb_fn_bc .push
+    2 InstKind::InstLocalsUninit (int) make_inst_int fb_fn_bc .push
+    InstKind::InstFnReturn (int) make_inst fb_fn_bc .push
+
+    Map::new (Map[str List[Inst]]) = fb_fns
+    "adder" fb_fn_bc fb_fns .set = fb_fns
+
+    0 0 List::new (List[str]) fb_fns fb_bc Program = fb_prog
+    fb_prog emit = fb_result
+    "has fn label" fb_result "fn_adder:" assert_contains
+    "has locals init" fb_result "rep stosq" assert_contains
+    "has add in body" fb_result "addq %rax, (%rsp)" assert_contains
+    "has fn return" fb_result "jmpq *(%r14)" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# Multiple functions emitted
+# ---------------------------------------------------------------------------
+
+fn test_emit_multiple_functions {
+    "emit_multiple_functions" test_start
+    List::new (List[Inst]) = mf_bc
+    "alpha" InstKind::InstFnCall (int) make_inst_str mf_bc .push
+    "beta" InstKind::InstFnCall (int) make_inst_str mf_bc .push
+
+    List::new (List[Inst]) = mf_alpha_bc
+    InstKind::InstFnReturn (int) make_inst mf_alpha_bc .push
+
+    List::new (List[Inst]) = mf_beta_bc
+    InstKind::InstFnReturn (int) make_inst mf_beta_bc .push
+
+    Map::new (Map[str List[Inst]]) = mf_fns
+    "alpha" mf_alpha_bc mf_fns .set = mf_fns
+    "beta" mf_beta_bc mf_fns .set = mf_fns
+
+    0 0 List::new (List[str]) mf_fns mf_bc Program = mf_prog
+    mf_prog emit = mf_result
+    "has fn_alpha label" mf_result "fn_alpha:" assert_contains
+    "has fn_beta label" mf_result "fn_beta:" assert_contains
+    "has jmp fn_alpha" mf_result "jmp fn_alpha" assert_contains
+    "has jmp fn_beta" mf_result "jmp fn_beta" assert_contains
+}
+
+# ---------------------------------------------------------------------------
 # Run all tests
 # ---------------------------------------------------------------------------
 
@@ -1263,4 +1451,12 @@ test_emit_jump_ne
 test_emit_argc
 test_emit_argv
 test_emit_exit_syscall
+test_emit_globals_init
+test_emit_while_loop_pattern
+test_emit_data_escape_sequences
+test_emit_locals_rep_stosq
+test_emit_load64
+test_emit_store64
+test_emit_fn_with_body
+test_emit_multiple_functions
 test_summary
