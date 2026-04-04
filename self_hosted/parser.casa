@@ -598,7 +598,7 @@ fn try_parse_is_check token:Token cursor:TokenCursor -> Option[Op] {
     token Token::value 0 tpic_sep str::substring = tpic_enum_name
     token Token::value tpic_sep 2 + token Token::value .length tpic_sep - 2 - str::substring = tpic_variant_name
 
-    0 1 - tpic_variant_name tpic_enum_name make_enum_variant = tpic_variant
+    -1 tpic_variant_name tpic_enum_name make_enum_variant = tpic_variant
     tpic_bindings tpic_variant EnumVariant::set_bindings
     token Token::location OpKind::OpIsCheck (int) tpic_variant (int) make_op Option::Some
 }
@@ -920,18 +920,12 @@ fn create_member_accessor struct_name:str member_name:str member_type:str member
     struct_name = cma_param_type
     Set::new (Set[str]) = cma_sig_type_vars
     if 0 type_vars .length != then
-        StringBuilder::new = cma_sb
-        struct_name cma_sb .append
-        "[" cma_sb .append
+        type_vars struct_name build_parameterized_type = cma_param_type
         0 = cma_tvi
         while cma_tvi type_vars .length > do
-            if 0 cma_tvi != then " " cma_sb .append fi
-            cma_tvi type_vars .get cma_sb .append
             cma_tvi type_vars .get cma_sig_type_vars .add = cma_sig_type_vars
             1 += cma_tvi
         done
-        "]" cma_sb .append
-        cma_sb .build = cma_param_type
     fi
 
     # Getter
@@ -1114,6 +1108,68 @@ fn parse_trait cursor:TokenCursor -> CasaTrait {
 # parse_impl_block - parse impl Type { fn methods... }
 # ============================================================================
 
+fn inject_impl_trait_params function:Function type_vars:List[str] trait_bounds:Map[str str] {
+    function Function::signature = iitp_sig
+
+    # Merge type vars into function signature
+    0 = iitp_tvi
+    while iitp_tvi type_vars .length > do
+        iitp_tvi type_vars .get = iitp_tv
+        if iitp_tv iitp_sig Signature::type_vars .has ! then
+            iitp_tv iitp_sig Signature::type_vars .add = iitp_new_tvs
+            iitp_new_tvs iitp_sig Signature::set_type_vars
+        fi
+        1 += iitp_tvi
+    done
+
+    # Merge trait bounds
+    trait_bounds .keys = iitp_tb_keys
+    0 = iitp_tbi
+    while iitp_tbi iitp_tb_keys .length > do
+        iitp_tbi iitp_tb_keys .get = iitp_tb_key
+        iitp_tb_key iitp_tb_key trait_bounds .get .unwrap iitp_sig Signature::trait_bounds .set = iitp_new_tb
+        iitp_new_tb iitp_sig Signature::set_trait_bounds
+        1 += iitp_tbi
+    done
+
+    # Inject hidden __trait_* parameters
+    List::new (List[Parameter]) = iitp_hidden_params
+    0 = iitp_insert_pos
+    0 = iitp_hi
+    while iitp_hi iitp_tb_keys .length > do
+        iitp_hi iitp_tb_keys .get = iitp_htv
+        iitp_htv iitp_sig Signature::trait_bounds .get .unwrap = iitp_htrait_name
+        iitp_htrait_name GLOBAL_TRAITS .get = iitp_htrait_opt
+        if iitp_htrait_opt .is_some then
+            iitp_htrait_opt .unwrap = iitp_htrait
+            0 = iitp_hmi
+            while iitp_hmi iitp_htrait CasaTrait::methods .length > do
+                iitp_hmi iitp_htrait CasaTrait::methods .get = iitp_hmethod
+                f"__trait_{iitp_htv}_{iitp_hmethod TraitMethod::name}" = iitp_hname
+                iitp_htv iitp_hmethod TraitMethod::signature resolve_trait_sig = iitp_hsig
+                f"fn[{iitp_hsig signature_to_str}]" = iitp_htype
+                iitp_hname iitp_htype make_named_param iitp_hidden_params .push
+                iitp_hname make_variable function Function::variables .push
+                function Function::location OpKind::OpAssignVar (int) iitp_hname make_op_str = iitp_hop
+                iitp_insert_pos iitp_hop function Function::ops .insert
+                1 += iitp_insert_pos
+                1 += iitp_hmi
+            done
+        fi
+        1 += iitp_hi
+    done
+
+    # Prepend hidden params to existing signature parameters
+    if 0 iitp_hidden_params .length != then
+        0 = iitp_epi
+        while iitp_epi iitp_sig Signature::parameters .length > do
+            iitp_epi iitp_sig Signature::parameters .get iitp_hidden_params .push
+            1 += iitp_epi
+        done
+        iitp_hidden_params iitp_sig Signature::set_parameters
+    fi
+}
+
 fn parse_impl_block cursor:TokenCursor {
     "impl" cursor expect_token_value drop
 
@@ -1148,60 +1204,7 @@ fn parse_impl_block cursor:TokenCursor {
         pib_fn_name pib_fn Function::set_name
         # Merge inherited type vars and trait bounds from impl block
         if 0 pib_type_vars .length != then
-            pib_fn Function::signature = pib_sig
-            0 = pib_tvi
-            while pib_tvi pib_type_vars .length > do
-                pib_tvi pib_type_vars .get = pib_tv
-                if pib_tv pib_sig Signature::type_vars .has ! then
-                    pib_tv pib_sig Signature::type_vars .add = pib_new_tvs
-                    pib_new_tvs pib_sig Signature::set_type_vars
-                fi
-                1 += pib_tvi
-            done
-            # Merge trait bounds
-            0 = pib_tbi
-            pib_trait_bounds .keys = pib_tb_keys
-            while pib_tbi pib_tb_keys .length > do
-                pib_tbi pib_tb_keys .get = pib_tb_key
-                pib_tb_key pib_tb_key pib_trait_bounds .get .unwrap pib_sig Signature::trait_bounds .set = pib_new_tb
-                pib_new_tb pib_sig Signature::set_trait_bounds
-                1 += pib_tbi
-            done
-            # Inject hidden __trait_* parameters for the merged trait bounds
-            List::new (List[Parameter]) = pib_hidden_params
-            0 = pib_h_insert_pos
-            0 = pib_hi
-            while pib_hi pib_tb_keys .length > do
-                pib_hi pib_tb_keys .get = pib_htv
-                pib_htv pib_sig Signature::trait_bounds .get .unwrap = pib_htrait_name
-                pib_htrait_name GLOBAL_TRAITS .get = pib_htrait_opt
-                if pib_htrait_opt .is_some then
-                    pib_htrait_opt .unwrap = pib_htrait
-                    0 = pib_hmi
-                    while pib_hmi pib_htrait CasaTrait::methods .length > do
-                        pib_hmi pib_htrait CasaTrait::methods .get = pib_hmethod
-                        f"__trait_{pib_htv}_{pib_hmethod TraitMethod::name}" = pib_hname
-                        pib_htv pib_hmethod TraitMethod::signature resolve_trait_sig = pib_hsig
-                        f"fn[{pib_hsig signature_to_str}]" = pib_htype
-                        pib_hname pib_htype make_named_param pib_hidden_params .push
-                        pib_hname make_variable pib_fn Function::variables .push
-                        pib_fn Function::location OpKind::OpAssignVar (int) pib_hname make_op_str = pib_hop
-                        pib_h_insert_pos pib_hop pib_fn Function::ops .insert
-                        1 += pib_h_insert_pos
-                        1 += pib_hmi
-                    done
-                fi
-                1 += pib_hi
-            done
-            # Prepend hidden params to existing signature parameters
-            if 0 pib_hidden_params .length != then
-                0 = pib_epi
-                while pib_epi pib_sig Signature::parameters .length > do
-                    pib_epi pib_sig Signature::parameters .get pib_hidden_params .push
-                    1 += pib_epi
-                done
-                pib_hidden_params pib_sig Signature::set_parameters
-            fi
+            pib_trait_bounds pib_type_vars pib_fn inject_impl_trait_params
         fi
         if pib_fn_name GLOBAL_FUNCTIONS .get .is_some then
             pib_fn Function::location f"Identifier `{pib_fn_name}` is already defined" ErrorKind::DuplicateName (int) raise_error
@@ -1332,7 +1335,7 @@ fn handle_keyword_match token:Token cursor:TokenCursor function_name:str -> List
         # Wildcard: _ =>
         if MATCH_WILDCARD hkm_arm_tok Token::value == then
             "=>" cursor expect_token_value drop
-            0 1 - MATCH_WILDCARD "" make_enum_variant = hkm_wildcard
+            -1 MATCH_WILDCARD "" make_enum_variant = hkm_wildcard
             "enum_variant" hkm_arm_tok Token::location OpKind::OpMatchArm (int) hkm_wildcard (int) make_op_annotated hkm_ops .push
         elif TokenKind::Literal (int) hkm_arm_tok Token::kind == then
             "=>" cursor expect_token_value drop
@@ -1348,7 +1351,7 @@ fn handle_keyword_match token:Token cursor:TokenCursor function_name:str -> List
         elif hkm_arm_tok Token::value "::" str::find 0 > then
             # Bare identifier
             "=>" cursor expect_token_value drop
-            0 1 - hkm_arm_tok Token::value "" make_enum_variant = hkm_bare_variant
+            -1 hkm_arm_tok Token::value "" make_enum_variant = hkm_bare_variant
             "enum_variant" hkm_arm_tok Token::location OpKind::OpMatchArm (int) hkm_bare_variant (int) make_op_annotated hkm_ops .push
         else
             # Enum::Variant pattern
@@ -1376,7 +1379,7 @@ fn handle_keyword_match token:Token cursor:TokenCursor function_name:str -> List
             fi
 
             "=>" cursor expect_token_value drop
-            0 1 - hkm_variant_name hkm_enum_name make_enum_variant = hkm_variant
+            -1 hkm_variant_name hkm_enum_name make_enum_variant = hkm_variant
             hkm_bindings hkm_variant EnumVariant::set_bindings
             "enum_variant" hkm_arm_tok Token::location OpKind::OpMatchArm (int) hkm_variant (int) make_op_annotated hkm_ops .push
         fi
@@ -1427,7 +1430,7 @@ fn handle_keyword_include token:Token cursor:TokenCursor -> Op {
     # Resolve relative path from the token's file location
     token Token::location Location::file = hki_base_file
     # Find the directory part of the base file (last / position)
-    0 1 - = hki_slash
+    -1 = hki_slash
     0 = hki_fi
     while hki_fi hki_base_file .length > do
         if '/' hki_fi hki_base_file .at == then
@@ -1786,7 +1789,7 @@ fn resolve_array_identifiers items:List[Op] function:Function errors:List[CasaEr
 
 fn resolve_enum_variant variant:EnumVariant op:Op function:Function errors:List[CasaError] {
     # Resolve enum variant ordinal if still unresolved (-1)
-    if variant EnumVariant::enum_name .length 0 != 0 1 - variant EnumVariant::ordinal == && then
+    if variant EnumVariant::enum_name .length 0 != -1 variant EnumVariant::ordinal == && then
         variant EnumVariant::enum_name GLOBAL_ENUMS .get = rev_enum_opt
         if rev_enum_opt .is_none then
             op Op::location f"Enum `{variant EnumVariant::enum_name}` is not defined" ErrorKind::UndefinedName (int) make_error errors .push
