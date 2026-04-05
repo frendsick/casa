@@ -2,18 +2,32 @@
 
 Casa includes an LSP language server that provides real-time compiler diagnostics in any editor that supports the [Language Server Protocol](https://microsoft.github.io/language-server-protocol/).
 
-## Setup
+## Setup (Native)
 
-Install the `pygls` LSP framework in the project virtualenv:
+Compile the self-hosted language server:
 
 ```sh
-python3.13 -m venv .venv
+./casa_stage1 self_hosted/lsp.casa -o casa_lsp
+```
+
+## Setup (Python)
+
+Alternatively, use the Python implementation. Install the `pygls` LSP framework in the project virtualenv:
+
+```sh
+python3.14 -m venv .venv
 .venv/bin/pip install pygls
 ```
 
 ## Running
 
 The server communicates over stdio:
+
+```sh
+./casa_lsp
+```
+
+Or using the Python implementation:
 
 ```sh
 .venv/bin/python casa_ls.py
@@ -163,7 +177,7 @@ Intrinsics are highlighted as `macro` to visually distinguish them from user-def
 ```lua
 require('lspconfig.configs').casa = {
   default_config = {
-    cmd = { '.venv/bin/python', 'casa_ls.py' },
+    cmd = { './casa_lsp' },
     filetypes = { 'casa' },
     root_dir = function(fname)
       return vim.fs.dirname(fname)
@@ -179,8 +193,7 @@ Add a `.vscode/settings.json` entry or use a generic LSP client extension (e.g. 
 
 ```json
 {
-  "command": ".venv/bin/python",
-  "args": ["casa_ls.py"],
+  "command": "./casa_lsp",
   "filetypes": ["casa"]
 }
 ```
@@ -197,8 +210,7 @@ file-types = ["casa"]
 language-servers = ["casa-ls"]
 
 [language-server.casa-ls]
-command = ".venv/bin/python"
-args = ["casa_ls.py"]
+command = "./casa_lsp"
 ```
 
 ## Limitations
@@ -208,3 +220,4 @@ args = ["casa_ls.py"]
 - Completion does not filter by prefix or context (the editor handles filtering)
 - Dot-triggered method completion works for variables, literals, and method chains but not for arbitrary expressions
 - No code actions
+- The native LSP (casa_lsp) uses alloc without freeing, so memory grows over long sessions

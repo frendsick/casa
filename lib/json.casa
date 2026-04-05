@@ -1,0 +1,455 @@
+# JSON parser and serializer
+#
+# Provides parsing of JSON text into a JsonValue tree and serialization
+# back to JSON text. Used by the language server for JSON-RPC communication.
+
+include "std.casa"
+include "parser.casa"
+
+# ============================================================================
+# JsonValue enum
+# ============================================================================
+
+enum JsonValue {
+    JsonNull
+    JsonBool(bool)
+    JsonInt(int)
+    JsonString(str)
+    JsonArray(List[JsonValue])
+    JsonObject(Map[str JsonValue])
+}
+
+# ============================================================================
+# JSON parsing
+# ============================================================================
+
+fn json_skip_whitespace cursor:Cursor {
+    while cursor .is_eof ! do
+        cursor .peek .unwrap = jws_ch
+        if
+            ' ' jws_ch !=
+            '\t' jws_ch != &&
+            '\n' jws_ch != &&
+            '\r' jws_ch != &&
+        then
+            break
+        fi
+        cursor .advance drop
+    done
+}
+
+fn json_parse_string cursor:Cursor -> Result[str ParseError] {
+    cursor .save = jps_start
+    '"' cursor .expect_char = jps_open
+    if jps_open .is_error then
+        jps_start cursor .restore
+        jps_open .unwrap_error Result::Error
+        return
+    fi
+    jps_open drop
+    List::new (List[char]) = jps_chars
+    while cursor .is_eof ! do
+        cursor .peek .unwrap = jps_ch
+        if jps_ch '"' == then
+            cursor .advance drop
+            jps_chars chars_to_str Result::Ok
+            return
+        elif jps_ch '\\' == then
+            cursor .advance drop
+            if cursor .is_eof then
+                jps_start cursor .restore
+                jps_start "unexpected EOF in string escape" ParseError Result::Error
+                return
+            fi
+            cursor .peek .unwrap = jps_esc
+            cursor .advance drop
+            if jps_esc '"' == then '"' jps_chars .push
+            elif jps_esc '\\' == then '\\' jps_chars .push
+            elif jps_esc '/' == then '/' jps_chars .push
+            elif jps_esc 'n' == then '\n' jps_chars .push
+            elif jps_esc 't' == then '\t' jps_chars .push
+            elif jps_esc 'r' == then '\r' jps_chars .push
+            elif jps_esc 'b' == then '\0' jps_chars .push
+            elif jps_esc 'f' == then '\0' jps_chars .push
+            elif jps_esc 'u' == then
+                # \uXXXX: skip 4 hex digits, store as '?'
+                0 = jps_ui
+                while jps_ui 4 > do
+                    if cursor .is_eof ! then cursor .advance drop fi
+                    1 += jps_ui
+                done
+                '?' jps_chars .push
+            else
+                jps_esc jps_chars .push
+            fi
+        else
+            cursor .advance drop
+            jps_ch jps_chars .push
+        fi
+    done
+    jps_start cursor .restore
+    jps_start "unterminated JSON string" ParseError Result::Error
+}
+
+fn json_parse_number cursor:Cursor -> Result[int ParseError] {
+    cursor parse_int
+}
+
+fn json_parse_bool cursor:Cursor -> Result[bool ParseError] {
+    if "true" cursor .starts_with then
+        4 cursor .skip
+        true Result::Ok
+    elif "false" cursor .starts_with then
+        5 cursor .skip
+        false Result::Ok
+    else
+        cursor .pos "expected 'true' or 'false'" ParseError Result::Error
+    fi
+}
+
+fn json_parse_null cursor:Cursor -> Result[JsonValue ParseError] {
+    if "null" cursor .starts_with then
+        4 cursor .skip
+        JsonValue::JsonNull Result::Ok
+    else
+        cursor .pos "expected 'null'" ParseError Result::Error
+    fi
+}
+
+fn json_parse_array cursor:Cursor -> Result[JsonValue ParseError] {
+    cursor .save = jpa_start
+    '[' cursor .expect_char = jpa_open
+    if jpa_open .is_error then
+        jpa_start cursor .restore
+        jpa_open .unwrap_error Result::Error
+        return
+    fi
+    jpa_open drop
+    List::new (List[JsonValue]) = jpa_items
+    cursor json_skip_whitespace
+
+    # Empty array
+    if cursor .is_eof ! then
+        if cursor .peek .unwrap ']' == then
+            cursor .advance drop
+            jpa_items JsonValue::JsonArray Result::Ok
+            return
+        fi
+    fi
+
+    while true do
+        cursor json_skip_whitespace
+        cursor json_parse = jpa_val
+        if jpa_val .is_error then
+            jpa_start cursor .restore
+            jpa_val .unwrap_error Result::Error
+            return
+        fi
+        jpa_val .unwrap jpa_items .push
+        cursor json_skip_whitespace
+
+        if cursor .is_eof then
+            jpa_start cursor .restore
+            jpa_start "unterminated JSON array" ParseError Result::Error
+            return
+        fi
+        cursor .peek .unwrap = jpa_next
+        if jpa_next ']' == then
+            cursor .advance drop
+            jpa_items JsonValue::JsonArray Result::Ok
+            return
+        elif jpa_next ',' == then
+            cursor .advance drop
+        else
+            jpa_start cursor .restore
+            cursor .pos "expected ',' or ']' in array" ParseError Result::Error
+            return
+        fi
+    done
+    jpa_start "unreachable" ParseError Result::Error
+}
+
+fn json_parse_object cursor:Cursor -> Result[JsonValue ParseError] {
+    cursor .save = jpo_start
+    '{' cursor .expect_char = jpo_open
+    if jpo_open .is_error then
+        jpo_start cursor .restore
+        jpo_open .unwrap_error Result::Error
+        return
+    fi
+    jpo_open drop
+    Map::new (Map[str JsonValue]) = jpo_map
+    cursor json_skip_whitespace
+
+    # Empty object
+    if cursor .is_eof ! then
+        if cursor .peek .unwrap '}' == then
+            cursor .advance drop
+            jpo_map JsonValue::JsonObject Result::Ok
+            return
+        fi
+    fi
+
+    while true do
+        cursor json_skip_whitespace
+        # Parse key
+        cursor json_parse_string = jpo_key
+        if jpo_key .is_error then
+            jpo_start cursor .restore
+            jpo_key .unwrap_error Result::Error
+            return
+        fi
+        jpo_key .unwrap = jpo_key_str
+
+        cursor json_skip_whitespace
+        ':' cursor .expect_char = jpo_colon
+        if jpo_colon .is_error then
+            jpo_start cursor .restore
+            jpo_colon .unwrap_error Result::Error
+            return
+        fi
+        jpo_colon drop
+
+        cursor json_skip_whitespace
+        cursor json_parse = jpo_val
+        if jpo_val .is_error then
+            jpo_start cursor .restore
+            jpo_val .unwrap_error Result::Error
+            return
+        fi
+        jpo_key_str jpo_val .unwrap jpo_map .set = jpo_map
+
+        cursor json_skip_whitespace
+        if cursor .is_eof then
+            jpo_start cursor .restore
+            jpo_start "unterminated JSON object" ParseError Result::Error
+            return
+        fi
+        cursor .peek .unwrap = jpo_next
+        if jpo_next '}' == then
+            cursor .advance drop
+            jpo_map JsonValue::JsonObject Result::Ok
+            return
+        elif jpo_next ',' == then
+            cursor .advance drop
+        else
+            jpo_start cursor .restore
+            cursor .pos "expected ',' or '}' in object" ParseError Result::Error
+            return
+        fi
+    done
+    jpo_start "unreachable" ParseError Result::Error
+}
+
+fn json_parse cursor:Cursor -> Result[JsonValue ParseError] {
+    cursor json_skip_whitespace
+    if cursor .is_eof then
+        cursor .pos "unexpected EOF" ParseError Result::Error
+        return
+    fi
+    cursor .peek .unwrap = jp_ch
+    if jp_ch '"' == then
+        cursor json_parse_string = jp_str
+        if jp_str .is_error then
+            jp_str .unwrap_error Result::Error
+        else
+            jp_str .unwrap JsonValue::JsonString Result::Ok
+        fi
+    elif jp_ch '{' == then
+        cursor json_parse_object
+    elif jp_ch '[' == then
+        cursor json_parse_array
+    elif jp_ch 't' == jp_ch 'f' == || then
+        cursor json_parse_bool = jp_bool
+        if jp_bool .is_error then
+            jp_bool .unwrap_error Result::Error
+        else
+            jp_bool .unwrap JsonValue::JsonBool Result::Ok
+        fi
+    elif jp_ch 'n' == then
+        cursor json_parse_null
+    elif jp_ch .is_digit jp_ch '-' == || then
+        cursor json_parse_number = jp_num
+        if jp_num .is_error then
+            jp_num .unwrap_error Result::Error
+        else
+            jp_num .unwrap JsonValue::JsonInt Result::Ok
+        fi
+    else
+        cursor .pos "unexpected character in JSON" ParseError Result::Error
+    fi
+}
+
+# ============================================================================
+# JSON serialization
+# ============================================================================
+
+fn json_escape_string s:str -> str {
+    StringBuilder::new = jes_builder
+    0 = jes_i
+    while jes_i s .length > do
+        jes_i s .at = jes_ch
+        if jes_ch '"' == then "\\\"" jes_builder .append
+        elif jes_ch '\\' == then "\\\\" jes_builder .append
+        elif jes_ch '\n' == then "\\n" jes_builder .append
+        elif jes_ch '\t' == then "\\t" jes_builder .append
+        elif jes_ch '\r' == then "\\r" jes_builder .append
+        else jes_ch jes_builder .append_char
+        fi
+        1 += jes_i
+    done
+    jes_builder .build
+}
+
+fn json_serialize value:JsonValue -> str {
+    value match
+        JsonValue::JsonNull => "null"
+        JsonValue::JsonBool(js_bool) => {
+            if js_bool then "true" else "false" fi
+        }
+        JsonValue::JsonInt(js_int) => js_int .to_str
+        JsonValue::JsonString(js_str) => {
+            f"\"{js_str json_escape_string}\""
+        }
+        JsonValue::JsonArray(js_arr) => {
+            StringBuilder::new = js_ab
+            "[" js_ab .append
+            0 = js_ai
+            while js_ai js_arr .length > do
+                if 0 js_ai != then "," js_ab .append fi
+                js_ai js_arr .get json_serialize js_ab .append
+                1 += js_ai
+            done
+            "]" js_ab .append
+            js_ab .build
+        }
+        JsonValue::JsonObject(js_obj) => {
+            StringBuilder::new = js_ob
+            "{" js_ob .append
+            js_obj .keys = js_keys
+            0 = js_ki
+            while js_ki js_keys .length > do
+                if 0 js_ki != then "," js_ob .append fi
+                js_ki js_keys .get = js_key
+                f"\"{js_key json_escape_string}\":" js_ob .append
+                js_key js_obj .get .unwrap json_serialize js_ob .append
+                1 += js_ki
+            done
+            "}" js_ob .append
+            js_ob .build
+        }
+    end
+}
+
+# ============================================================================
+# JSON helper accessors
+# ============================================================================
+
+fn json_get_str value:JsonValue key:str -> Option[str] {
+    if value JsonValue::JsonObject(jgs_map) is then
+        key jgs_map (Map[str JsonValue]) .get = jgs_opt
+        if jgs_opt .is_some then
+            if jgs_opt .unwrap JsonValue::JsonString(jgs_str) is then
+                jgs_str Option::Some
+                return
+            fi
+        fi
+    fi
+    Option::None (Option[str])
+}
+
+fn json_get_int value:JsonValue key:str -> Option[int] {
+    if value JsonValue::JsonObject(jgi_map) is then
+        key jgi_map (Map[str JsonValue]) .get = jgi_opt
+        if jgi_opt .is_some then
+            if jgi_opt .unwrap JsonValue::JsonInt(jgi_val) is then
+                jgi_val Option::Some
+                return
+            fi
+        fi
+    fi
+    Option::None (Option[int])
+}
+
+fn json_get_bool value:JsonValue key:str -> Option[bool] {
+    if value JsonValue::JsonObject(jgb_map) is then
+        key jgb_map (Map[str JsonValue]) .get = jgb_opt
+        if jgb_opt .is_some then
+            if jgb_opt .unwrap JsonValue::JsonBool(jgb_val) is then
+                jgb_val Option::Some
+                return
+            fi
+        fi
+    fi
+    Option::None (Option[bool])
+}
+
+fn json_get_object value:JsonValue key:str -> Option[JsonValue] {
+    if value JsonValue::JsonObject(jgo_map) is then
+        key jgo_map (Map[str JsonValue]) .get = jgo_opt
+        if jgo_opt .is_some then
+            if jgo_opt .unwrap JsonValue::JsonObject(jgo_inner) is then
+                jgo_opt .unwrap Option::Some
+                return
+            fi
+        fi
+    fi
+    Option::None (Option[JsonValue])
+}
+
+fn json_get_array value:JsonValue key:str -> Option[List[JsonValue]] {
+    if value JsonValue::JsonObject(jga_map) is then
+        key jga_map (Map[str JsonValue]) .get = jga_opt
+        if jga_opt .is_some then
+            if jga_opt .unwrap JsonValue::JsonArray(jga_arr) is then
+                jga_arr Option::Some
+                return
+            fi
+        fi
+    fi
+    Option::None (Option[List[JsonValue]])
+}
+
+fn json_get_value value:JsonValue key:str -> Option[JsonValue] {
+    if value JsonValue::JsonObject(jgv_map) is then
+        key jgv_map (Map[str JsonValue]) .get
+    else
+        Option::None (Option[JsonValue])
+    fi
+}
+
+# ============================================================================
+# JSON builder helpers
+# ============================================================================
+
+fn json_object -> Map[str JsonValue] {
+    Map::new (Map[str JsonValue])
+}
+
+fn json_set value:JsonValue key:str map:Map[str JsonValue] -> Map[str JsonValue] {
+    key value map .set
+}
+
+fn json_object_value obj:Map[str JsonValue] -> JsonValue {
+    obj JsonValue::JsonObject
+}
+
+fn json_string_value s:str -> JsonValue {
+    s JsonValue::JsonString
+}
+
+fn json_int_value n:int -> JsonValue {
+    n JsonValue::JsonInt
+}
+
+fn json_bool_value b:bool -> JsonValue {
+    b JsonValue::JsonBool
+}
+
+fn json_null_value -> JsonValue {
+    JsonValue::JsonNull
+}
+
+fn json_array_value items:List[JsonValue] -> JsonValue {
+    items JsonValue::JsonArray
+}
