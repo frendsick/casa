@@ -1,0 +1,2374 @@
+# Casa Language Server
+#
+# LSP server implementation for the Casa language, providing diagnostics,
+# go-to-definition, hover, completion, references, rename, and semantic tokens.
+# Communicates via JSON-RPC over stdin/stdout.
+
+include "../lib/std.casa"
+include "../lib/parser.casa"
+include "../lib/json.casa"
+include "../lib/io.casa"
+include "common.casa"
+include "error.casa"
+include "lexer.casa"
+include "parser.casa"
+include "typechecker.casa"
+
+# ============================================================================
+# LSP structs
+# ============================================================================
+
+struct DocumentState {
+    ops:       List[Op]
+    functions: Map[str Function]
+    structs:   Map[str CasaStruct]
+    enums:     Map[str CasaEnum]
+    variables: Map[str Variable]
+    source:    str
+    file_path: str
+}
+
+struct LspRange {
+    start_line: int
+    start_col:  int
+    end_line:   int
+    end_col:    int
+}
+
+struct LspLocation {
+    uri:   str
+    range: LspRange
+}
+
+struct LspDiagnostic {
+    range:    LspRange
+    message:  str
+    severity: int
+}
+
+struct CompletionItem {
+    label:  str
+    kind:   int
+    detail: str
+}
+
+struct SemanticToken {
+    line:       int
+    col:        int
+    length:     int
+    token_type: int
+    modifiers:  int
+}
+
+struct TextEdit {
+    range:    LspRange
+    new_text: str
+}
+
+struct FindResult {
+    op:       Op
+    function: Option[Function]
+}
+
+# ============================================================================
+# LSP constants
+# ============================================================================
+
+1 = DIAGNOSTIC_ERROR
+2 = DIAGNOSTIC_WARNING
+
+1 = COMPLETION_METHOD
+2 = COMPLETION_FUNCTION
+6 = COMPLETION_VARIABLE
+13 = COMPLETION_ENUM
+14 = COMPLETION_KEYWORD
+22 = COMPLETION_STRUCT
+20 = COMPLETION_ENUM_MEMBER
+
+# Qualified name parts
+0 = QPART_TYPE
+1 = QPART_SEPARATOR
+2 = QPART_MEMBER
+0 1 - = QPART_NONE
+
+# ============================================================================
+# Global state
+# ============================================================================
+
+Map::new (Map[str DocumentState]) = DOCUMENT_STATES
+StdinReader::new = STDIN_READER
+Map::new (Map[int str]) = STACK_EFFECTS
+Map::new (Map[int int]) = TOKEN_TYPE_MAP
+
+# ============================================================================
+# Coordinate conversion utilities
+# ============================================================================
+
+fn offset_to_lsp_range source:str offset:int length:int -> LspRange {
+    if 1 length > then 1 = length fi
+    offset source offset_to_line_col 1 - = start_line
+    offset source offset_to_col 1 - = start_col
+    offset length + = end_offset
+    end_offset source offset_to_line_col 1 - = end_line
+    end_offset source offset_to_col 1 - = end_col
+    end_col end_line start_col start_line LspRange
+}
+
+fn position_to_offset source:str line:int col:int -> int {
+    0 = pto_offset
+    0 = pto_line
+    while pto_line line > do
+        pto_offset = pto_search
+        while pto_search source .length > do
+            if '\n' pto_search source .at == then
+                pto_search 1 + = pto_offset
+                break
+            fi
+            1 += pto_search
+        done
+        if pto_search source .length == then
+            break
+        fi
+        1 += pto_line
+    done
+    pto_offset col +
+}
+
+fn uri_to_path uri:str -> str {
+    # Strip file:// prefix
+    if uri "file://" str::starts_with then
+        uri 7 uri .length 7 - str::substring
+    else
+        uri
+    fi
+}
+
+fn path_to_uri path:str -> str {
+    f"file://{path}"
+}
+
+# ============================================================================
+# JSON builders for LSP types
+# ============================================================================
+
+fn lsp_range_to_json range:LspRange -> JsonValue {
+    json_object
+        "line" range LspRange::start_line json_int_value json_set
+        "character" range LspRange::start_col json_int_value json_set
+    json_object_value = start_json
+    json_object
+        "line" range LspRange::end_line json_int_value json_set
+        "character" range LspRange::end_col json_int_value json_set
+    json_object_value = end_json
+    json_object
+        "start" start_json json_set
+        "end" end_json json_set
+    json_object_value
+}
+
+fn lsp_location_to_json loc:LspLocation -> JsonValue {
+    json_object
+        "uri" loc LspLocation::uri json_string_value json_set
+        "range" loc LspLocation::range lsp_range_to_json json_set
+    json_object_value
+}
+
+fn lsp_diagnostic_to_json diag:LspDiagnostic -> JsonValue {
+    json_object
+        "range" diag LspDiagnostic::range lsp_range_to_json json_set
+        "message" diag LspDiagnostic::message json_string_value json_set
+        "severity" diag LspDiagnostic::severity json_int_value json_set
+        "source" "casa" json_string_value json_set
+    json_object_value
+}
+
+fn completion_item_to_json item:CompletionItem -> JsonValue {
+    json_object = ci_obj
+    ci_obj "label" item CompletionItem::label json_string_value json_set = ci_obj
+    ci_obj "kind" item CompletionItem::kind json_int_value json_set = ci_obj
+    if "" item CompletionItem::detail != then
+        ci_obj "detail" item CompletionItem::detail json_string_value json_set = ci_obj
+    fi
+    ci_obj json_object_value
+}
+
+fn text_edit_to_json range:LspRange new_text:str -> JsonValue {
+    json_object
+        "range" range lsp_range_to_json json_set
+        "newText" new_text json_string_value json_set
+    json_object_value
+}
+
+# ============================================================================
+# JSON-RPC protocol layer
+# ============================================================================
+
+fn lsp_log message:str {
+    f"[LSP] {message}\n" eprint
+}
+
+fn read_message reader:StdinReader -> Option[JsonValue] {
+    0 1 - = rm_content_length
+    # Read headers until empty line
+    while true do
+        reader stdin_read_line = rm_line
+        if 0 rm_line .length == then
+            break
+        fi
+        if rm_line "Content-Length: " str::starts_with then
+            rm_line 16 rm_line .length 16 - str::substring str_to_int = rm_content_length
+        fi
+    done
+    if rm_content_length 0 >= then
+        Option::None (Option[JsonValue])
+        return
+    fi
+    rm_content_length reader stdin_read_exact = rm_body
+    rm_body Cursor::new = rm_cursor
+    rm_cursor json_parse = rm_result
+    if rm_result .is_error then
+        Option::None (Option[JsonValue])
+    else
+        rm_result .unwrap Option::Some
+    fi
+}
+
+fn send_json_rpc body:str {
+    body .length = sjr_len
+    f"Content-Length: {sjr_len .to_str}\r\n\r\n{body}" stdout_write
+}
+
+fn send_response id:JsonValue result:JsonValue {
+    json_object
+        "jsonrpc" "2.0" json_string_value json_set
+        "id" id json_set
+        "result" result json_set
+    json_object_value json_serialize send_json_rpc
+}
+
+fn send_notification method:str params:JsonValue {
+    json_object
+        "jsonrpc" "2.0" json_string_value json_set
+        "method" method json_string_value json_set
+        "params" params json_set
+    json_object_value json_serialize send_json_rpc
+}
+
+# ============================================================================
+# Compilation pipeline
+# ============================================================================
+
+fn clear_compilation_state {
+    Map::new (Map[str str]) = SOURCE_CACHE
+    List::new (List[CasaError]) = ERRORS
+    List::new (List[CasaWarning]) = WARNINGS
+    Map::new (Map[str Function]) = GLOBAL_FUNCTIONS
+    Map::new (Map[str Variable]) = GLOBAL_VARIABLES
+    Map::new (Map[str CasaEnum]) = GLOBAL_ENUMS
+    Map::new (Map[str CasaStruct]) = GLOBAL_STRUCTS
+    Map::new (Map[str CasaTrait]) = GLOBAL_TRAITS
+    Set::new (Set[str]) = INCLUDED_FILES
+}
+
+fn run_pipeline file_path:str source:str -> DocumentState {
+    true = RESILIENT_MODE
+    clear_compilation_state
+
+    # Pre-populate SOURCE_CACHE with open document sources
+    DOCUMENT_STATES .keys = rp_uris
+    0 = rp_ui
+    while rp_ui rp_uris .length > do
+        rp_ui rp_uris .get = rp_uri
+        rp_uri DOCUMENT_STATES .get .unwrap = rp_state
+        if rp_state DocumentState::file_path file_path != then
+            rp_state DocumentState::source rp_state DocumentState::file_path SOURCE_CACHE .set = SOURCE_CACHE
+        fi
+        1 += rp_ui
+    done
+
+    # Lex
+    source file_path SOURCE_CACHE .set = SOURCE_CACHE
+    file_path source lex_source = rp_tokens
+
+    # Parse
+    rp_tokens parse_ops = rp_ops
+    rp_ops resolve_identifiers_global = rp_ops
+
+    # Type check
+    if 0 rp_ops .length != then
+        Option::None rp_ops type_check_ops drop
+        type_check_functions
+    fi
+
+    # Snapshot state
+    file_path SOURCE_CACHE .get = rp_source_opt
+    if rp_source_opt .is_some then
+        rp_source_opt .unwrap
+    else
+        source
+    fi
+    = rp_final_source
+
+    rp_final_source
+    file_path
+    Map::new (Map[str Variable]) = rp_vars_copy
+    GLOBAL_VARIABLES .keys = rp_vk
+    0 = rp_vi
+    while rp_vi rp_vk .length > do
+        rp_vi rp_vk .get = rp_vname
+        rp_vname GLOBAL_VARIABLES .get .unwrap = rp_vval
+        rp_vname rp_vval rp_vars_copy .set = rp_vars_copy
+        1 += rp_vi
+    done
+    rp_vars_copy
+
+    Map::new (Map[str CasaEnum]) = rp_enums_copy
+    GLOBAL_ENUMS .keys = rp_ek
+    0 = rp_ei
+    while rp_ei rp_ek .length > do
+        rp_ei rp_ek .get = rp_ename
+        rp_ename GLOBAL_ENUMS .get .unwrap = rp_eval
+        rp_ename rp_eval rp_enums_copy .set = rp_enums_copy
+        1 += rp_ei
+    done
+    rp_enums_copy
+
+    Map::new (Map[str CasaStruct]) = rp_structs_copy
+    GLOBAL_STRUCTS .keys = rp_sk
+    0 = rp_si
+    while rp_si rp_sk .length > do
+        rp_si rp_sk .get = rp_sname
+        rp_sname GLOBAL_STRUCTS .get .unwrap = rp_sval
+        rp_sname rp_sval rp_structs_copy .set = rp_structs_copy
+        1 += rp_si
+    done
+    rp_structs_copy
+
+    Map::new (Map[str Function]) = rp_fns_copy
+    GLOBAL_FUNCTIONS .keys = rp_fk
+    0 = rp_fi
+    while rp_fi rp_fk .length > do
+        rp_fi rp_fk .get = rp_fname
+        rp_fname GLOBAL_FUNCTIONS .get .unwrap = rp_fval
+        rp_fname rp_fval rp_fns_copy .set = rp_fns_copy
+        1 += rp_fi
+    done
+    rp_fns_copy
+
+    rp_ops
+
+    DocumentState
+}
+
+fn run_diagnostics uri:str source:str {
+    uri uri_to_path = rd_path
+    source rd_path run_pipeline = rd_state
+    uri rd_state DOCUMENT_STATES .set = DOCUMENT_STATES
+
+    List::new (List[LspDiagnostic]) = rd_diags
+
+    # Convert errors
+    0 = rd_ei
+    while rd_ei ERRORS .length > do
+        rd_ei ERRORS .get = rd_err
+        if "" rd_err CasaError::location Location::file != then
+            if rd_err CasaError::location Location::file rd_path != then
+                1 += rd_ei
+                continue
+            fi
+        fi
+        rd_err CasaError::location Location::file SOURCE_CACHE .get = rd_src_opt
+        if rd_src_opt .is_some then
+            rd_src_opt .unwrap = rd_src
+        else
+            rd_state DocumentState::source = rd_src
+        fi
+
+        # Build message
+        StringBuilder::new = rd_msg_builder
+        rd_err CasaError::message rd_msg_builder .append
+        if rd_err CasaError::expected .is_some then
+            "\nExpected: " rd_msg_builder .append
+            rd_err CasaError::expected .unwrap rd_msg_builder .append
+        fi
+        if rd_err CasaError::got .is_some then
+            "\n" rd_msg_builder .append
+            rd_err CasaError::got_label rd_msg_builder .append
+            ": " rd_msg_builder .append
+            rd_err CasaError::got .unwrap rd_msg_builder .append
+        fi
+
+        DIAGNOSTIC_ERROR
+        rd_msg_builder .build
+        rd_err CasaError::location Location::span Span::length
+        rd_err CasaError::location Location::span Span::offset
+        rd_src offset_to_lsp_range
+        LspDiagnostic rd_diags .push
+        1 += rd_ei
+    done
+
+    # Convert warnings
+    0 = rd_wi
+    while rd_wi WARNINGS .length > do
+        rd_wi WARNINGS .get = rd_warn
+        if "" rd_warn CasaWarning::location Location::file != then
+            if rd_warn CasaWarning::location Location::file rd_path != then
+                1 += rd_wi
+                continue
+            fi
+        fi
+        rd_warn CasaWarning::location Location::file SOURCE_CACHE .get = rd_wsrc_opt
+        if rd_wsrc_opt .is_some then
+            rd_wsrc_opt .unwrap = rd_wsrc
+        else
+            rd_state DocumentState::source = rd_wsrc
+        fi
+        DIAGNOSTIC_WARNING
+        rd_warn CasaWarning::message
+        rd_warn CasaWarning::location Location::span Span::length
+        rd_warn CasaWarning::location Location::span Span::offset
+        rd_wsrc offset_to_lsp_range
+        LspDiagnostic rd_diags .push
+        1 += rd_wi
+    done
+
+    # Publish diagnostics
+    rd_diags uri publish_diagnostics
+}
+
+fn publish_diagnostics uri:str diagnostics:List[LspDiagnostic] {
+    List::new (List[JsonValue]) = pd_arr
+    0 = pd_i
+    while pd_i diagnostics .length > do
+        pd_i diagnostics .get lsp_diagnostic_to_json pd_arr .push
+        1 += pd_i
+    done
+    json_object
+        "uri" uri json_string_value json_set
+        "diagnostics" pd_arr json_array_value json_set
+    json_object_value = pd_params
+    pd_params "textDocument/publishDiagnostics" send_notification
+}
+
+# ============================================================================
+# Position and op finding utilities
+# ============================================================================
+
+fn find_op_at_position state:DocumentState line:int col:int -> Option[FindResult] {
+    col line state DocumentState::source position_to_offset = fop_offset
+    Option::None (Option[FindResult]) = fop_best
+    999999999 = fop_best_len
+
+    # Search global ops
+    0 = fop_gi
+    while fop_gi state DocumentState::ops .length > do
+        fop_gi state DocumentState::ops .get = fop_op
+        if fop_op Op::location Location::file state DocumentState::file_path != then
+            1 += fop_gi
+            continue
+        fi
+        fop_op Op::location Location::span Span::offset = fop_so
+        fop_op Op::location Location::span Span::length = fop_sl
+        if 1 fop_sl > then 1 = fop_sl fi
+        if
+            fop_so fop_offset >=
+            fop_offset fop_so fop_sl + > &&
+            fop_sl fop_best_len > &&
+        then
+            Option::None (Option[Function]) fop_op FindResult Option::Some = fop_best
+            fop_sl = fop_best_len
+        fi
+        1 += fop_gi
+    done
+
+    # Search function ops
+    state DocumentState::functions .keys = fop_fkeys
+    0 = fop_fi
+    while fop_fi fop_fkeys .length > do
+        fop_fi fop_fkeys .get state DocumentState::functions .get .unwrap = fop_func
+        if "" fop_func Function::location Location::file == then
+            1 += fop_fi
+            continue
+        fi
+        if fop_func Function::location Location::file state DocumentState::file_path != then
+            1 += fop_fi
+            continue
+        fi
+        0 = fop_oi
+        while fop_oi fop_func Function::ops .length > do
+            fop_oi fop_func Function::ops .get = fop_op
+            if fop_op Op::location Location::file state DocumentState::file_path != then
+                1 += fop_oi
+                continue
+            fi
+            fop_op Op::location Location::span Span::offset = fop_so
+            fop_op Op::location Location::span Span::length = fop_sl
+            if 1 fop_sl > then 1 = fop_sl fi
+            if
+                fop_so fop_offset >=
+                fop_offset fop_so fop_sl + > &&
+                fop_sl fop_best_len > &&
+            then
+                fop_func Option::Some fop_op FindResult Option::Some = fop_best
+                fop_sl = fop_best_len
+            fi
+            1 += fop_oi
+        done
+        1 += fop_fi
+    done
+
+    fop_best
+}
+
+fn find_containing_function state:DocumentState offset:int -> Option[Function] {
+    state DocumentState::functions .keys = fcf_keys
+    0 = fcf_i
+    while fcf_i fcf_keys .length > do
+        fcf_i fcf_keys .get state DocumentState::functions .get .unwrap = fcf_func
+        if "" fcf_func Function::location Location::file == then
+            1 += fcf_i
+            continue
+        fi
+        if fcf_func Function::location Location::file state DocumentState::file_path != then
+            1 += fcf_i
+            continue
+        fi
+        if 0 fcf_func Function::ops .length == then
+            1 += fcf_i
+            continue
+        fi
+        0 fcf_func Function::ops .get Op::location Location::span Span::offset = fcf_start
+        fcf_func Function::ops .length 1 - fcf_func Function::ops .get = fcf_last_op
+        fcf_last_op Op::location Location::span Span::offset fcf_last_op Op::location Location::span Span::length + = fcf_end
+        if fcf_start offset >= offset fcf_end >= && then
+            fcf_func Option::Some
+            return
+        fi
+        1 += fcf_i
+    done
+    Option::None (Option[Function])
+}
+
+fn casa_location_to_lsp location:Location -> LspLocation {
+    location Location::file SOURCE_CACHE .get = cltl_src_opt
+    if cltl_src_opt .is_some then
+        cltl_src_opt .unwrap = cltl_src
+    else
+        "" = cltl_src
+    fi
+    location Location::file path_to_uri
+    location Location::span Span::length
+    location Location::span Span::offset
+    cltl_src offset_to_lsp_range
+    LspLocation
+}
+
+# ============================================================================
+# Qualified name utilities
+# ============================================================================
+
+fn qualified_name_part source:str op:Op cursor_offset:int -> int {
+    op Op::location Location::span Span::offset = qnp_start
+    op Op::location Location::span Span::length = qnp_len
+    source qnp_start qnp_len str::substring = qnp_text
+    qnp_text "::" str::find = qnp_sep
+    if 0 qnp_sep < then
+        QPART_NONE
+        return
+    fi
+    cursor_offset qnp_start - = qnp_rel
+    if qnp_rel qnp_sep > then
+        QPART_TYPE
+    elif qnp_rel qnp_sep 2 + > then
+        QPART_SEPARATOR
+    else
+        QPART_MEMBER
+    fi
+}
+
+fn qualified_type_range source:str op:Op -> LspRange {
+    op Op::location Location::span Span::offset = qtr_start
+    op Op::location Location::span Span::length = qtr_len
+    source qtr_start qtr_len str::substring = qtr_text
+    qtr_text "::" str::find = qtr_sep
+    qtr_sep qtr_start source offset_to_lsp_range
+}
+
+fn qualified_member_range source:str op:Op -> LspRange {
+    op Op::location Location::span Span::offset = qmr_start
+    op Op::location Location::span Span::length = qmr_len
+    source qmr_start qmr_len str::substring = qmr_text
+    qmr_text "::" str::find = qmr_sep
+    qmr_start qmr_sep + 2 + = qmr_member_offset
+    qmr_len qmr_sep - 2 - = qmr_member_len
+    qmr_member_len qmr_member_offset source offset_to_lsp_range
+}
+
+fn split_qualified name:str -> List[str] {
+    name "::" str::split
+}
+
+# ============================================================================
+# Diagnostics handler
+# ============================================================================
+
+fn extract_uri message:JsonValue -> str {
+    "params" message json_get_object .unwrap = eu_params
+    "textDocument" eu_params json_get_object .unwrap = eu_td
+    "uri" eu_td json_get_str .unwrap
+}
+
+fn extract_position message:JsonValue -> LspRange {
+    "params" message json_get_object .unwrap = ep_params
+    "position" ep_params json_get_object .unwrap = ep_pos
+    "line" ep_pos json_get_int .unwrap = ep_line
+    "character" ep_pos json_get_int .unwrap = ep_char
+    0 0 ep_char ep_line LspRange
+}
+
+fn handle_did_open message:JsonValue {
+    "params" message json_get_object .unwrap = hdo_params
+    "textDocument" hdo_params json_get_object .unwrap = hdo_td
+    "uri" hdo_td json_get_str .unwrap = hdo_uri
+    "text" hdo_td json_get_str .unwrap = hdo_text
+    hdo_text hdo_uri run_diagnostics
+}
+
+fn handle_did_change message:JsonValue {
+    "params" message json_get_object .unwrap = hdc_params
+    "textDocument" hdc_params json_get_object .unwrap = hdc_td
+    "uri" hdc_td json_get_str .unwrap = hdc_uri
+    "contentChanges" hdc_params json_get_array .unwrap = hdc_changes
+    0 hdc_changes .get = hdc_change
+    "text" hdc_change json_get_str .unwrap = hdc_text
+    hdc_text hdc_uri run_diagnostics
+}
+
+fn handle_did_save message:JsonValue {
+    message extract_uri = hds_uri
+    hds_uri DOCUMENT_STATES .get = hds_state_opt
+    if hds_state_opt .is_some then
+        hds_state_opt .unwrap DocumentState::source hds_uri run_diagnostics
+    fi
+}
+
+# ============================================================================
+# Go-to-definition handler
+# ============================================================================
+
+fn find_variable_definition name:str function:Option[Function] state:DocumentState usage_offset:int -> Option[LspLocation] {
+    Option::None (Option[Op]) = fvd_best
+
+    # Search function scope first
+    if function .is_some then
+        function .unwrap = fvd_func
+        0 = fvd_i
+        while fvd_i fvd_func Function::ops .length > do
+            fvd_i fvd_func Function::ops .get = fvd_op
+            if OpKind::OpAssignVar (int) fvd_op Op::kind == then
+                if fvd_op op_str_value name == then
+                    if fvd_op Op::location Location::span Span::offset usage_offset > then
+                        fvd_op Option::Some = fvd_best
+                    elif fvd_best .is_none then
+                        fvd_op Option::Some = fvd_best
+                    fi
+                fi
+            fi
+            1 += fvd_i
+        done
+    fi
+
+    # Search global scope
+    if fvd_best .is_none then
+        0 = fvd_gi
+        while fvd_gi state DocumentState::ops .length > do
+            fvd_gi state DocumentState::ops .get = fvd_op
+            if OpKind::OpAssignVar (int) fvd_op Op::kind == then
+                if fvd_op op_str_value name == then
+                    if fvd_op Op::location Location::span Span::offset usage_offset > then
+                        fvd_op Option::Some = fvd_best
+                    elif fvd_best .is_none then
+                        fvd_op Option::Some = fvd_best
+                    fi
+                fi
+            fi
+            1 += fvd_gi
+        done
+    fi
+
+    if fvd_best .is_some then
+        fvd_best .unwrap Op::location casa_location_to_lsp Option::Some
+    else
+        Option::None (Option[LspLocation])
+    fi
+}
+
+fn handle_definition message:JsonValue {
+    message extract_uri = hd_uri
+    "id" message json_get_value .unwrap = hd_id
+
+    hd_uri DOCUMENT_STATES .get = hd_state_opt
+    if hd_state_opt .is_none then
+        json_null_value hd_id send_response
+        return
+    fi
+    hd_state_opt .unwrap = hd_state
+
+    message extract_position = hd_pos
+    hd_pos LspRange::start_col hd_pos LspRange::start_line hd_state find_op_at_position = hd_result
+    if hd_result .is_none then
+        json_null_value hd_id send_response
+        return
+    fi
+    hd_result .unwrap = hd_find
+    hd_find FindResult::op = hd_op
+    hd_find FindResult::function = hd_func
+    hd_pos LspRange::start_col hd_pos LspRange::start_line hd_state DocumentState::source position_to_offset = hd_cursor_offset
+
+    # Check qualified name
+    hd_cursor_offset hd_op hd_state DocumentState::source qualified_name_part = hd_qpart
+    if QPART_SEPARATOR hd_qpart == then
+        json_null_value hd_id send_response
+        return
+    fi
+
+    hd_op Op::kind = hd_kind
+
+    # FN_CALL / FN_PUSH
+    if OpKind::OpFnCall (int) hd_kind == OpKind::OpFnPush (int) hd_kind == || then
+        if QPART_TYPE hd_qpart == then
+            hd_op op_str_value "::" str::split = hd_parts
+            0 hd_parts .get = hd_type_name
+            if hd_type_name hd_state DocumentState::structs .has then
+                hd_type_name hd_state DocumentState::structs .get .unwrap CasaStruct::location casa_location_to_lsp lsp_location_to_json hd_id send_response
+                return
+            fi
+            if hd_type_name hd_state DocumentState::enums .has then
+                hd_type_name hd_state DocumentState::enums .get .unwrap CasaEnum::location casa_location_to_lsp lsp_location_to_json hd_id send_response
+                return
+            fi
+            json_null_value hd_id send_response
+            return
+        fi
+        hd_op op_str_value hd_state DocumentState::functions .get = hd_fn_opt
+        if hd_fn_opt .is_some then
+            hd_fn_opt .unwrap = hd_fn_def
+            if "" hd_fn_def Function::location Location::file != then
+                hd_fn_def Function::location casa_location_to_lsp lsp_location_to_json hd_id send_response
+                return
+            fi
+        fi
+        json_null_value hd_id send_response
+        return
+    fi
+
+    # PUSH_VARIABLE / PUSH_CAPTURE
+    if OpKind::OpPushVar (int) hd_kind == OpKind::OpPushCapture (int) hd_kind == || then
+        hd_op Op::location Location::span Span::offset hd_state hd_func hd_op op_str_value find_variable_definition = hd_var_loc
+        if hd_var_loc .is_some then
+            hd_var_loc .unwrap lsp_location_to_json hd_id send_response
+        else
+            json_null_value hd_id send_response
+        fi
+        return
+    fi
+
+    # STRUCT_NEW
+    if OpKind::OpStructNew (int) hd_kind == then
+        hd_op Op::value (CasaStruct) CasaStruct::location casa_location_to_lsp lsp_location_to_json hd_id send_response
+        return
+    fi
+
+    # PUSH_ENUM_VARIANT
+    if OpKind::OpPushEnumVariant (int) hd_kind == then
+        hd_op Op::value (EnumVariant) EnumVariant::enum_name = hd_ev_enum
+        if hd_ev_enum hd_state DocumentState::enums .has then
+            hd_ev_enum hd_state DocumentState::enums .get .unwrap CasaEnum::location casa_location_to_lsp lsp_location_to_json hd_id send_response
+            return
+        fi
+        json_null_value hd_id send_response
+        return
+    fi
+
+    # TYPE_CAST
+    if OpKind::OpTypeCast (int) hd_kind == then
+        hd_op op_str_value = hd_cast_type
+        if hd_cast_type hd_state DocumentState::structs .has then
+            hd_cast_type hd_state DocumentState::structs .get .unwrap CasaStruct::location casa_location_to_lsp lsp_location_to_json hd_id send_response
+            return
+        fi
+        if hd_cast_type hd_state DocumentState::enums .has then
+            hd_cast_type hd_state DocumentState::enums .get .unwrap CasaEnum::location casa_location_to_lsp lsp_location_to_json hd_id send_response
+            return
+        fi
+    fi
+
+    json_null_value hd_id send_response
+}
+
+# ============================================================================
+# Hover handler
+# ============================================================================
+
+fn resolve_variable_type name:str func:Option[Function] state:DocumentState -> Option[str] {
+    if func .is_some then
+        func .unwrap = rvt_func
+        0 = rvt_i
+        while rvt_i rvt_func Function::variables .length > do
+            rvt_i rvt_func Function::variables .get = rvt_var
+            if rvt_var Variable::name name == then
+                if "" rvt_var Variable::typ != then
+                    rvt_var Variable::typ Option::Some
+                    return
+                fi
+            fi
+            1 += rvt_i
+        done
+        0 = rvt_ci
+        while rvt_ci rvt_func Function::captures .length > do
+            rvt_ci rvt_func Function::captures .get = rvt_cap
+            if rvt_cap Variable::name name == then
+                if "" rvt_cap Variable::typ != then
+                    rvt_cap Variable::typ Option::Some
+                    return
+                fi
+            fi
+            1 += rvt_ci
+        done
+    fi
+    name state DocumentState::variables .get = rvt_gvar_opt
+    if rvt_gvar_opt .is_some then
+        rvt_gvar_opt .unwrap Variable::typ = rvt_gtyp
+        if "" rvt_gtyp != then
+            rvt_gtyp Option::Some
+            return
+        fi
+    fi
+    Option::None (Option[str])
+}
+
+fn format_hover op:Op state:DocumentState func:Option[Function] -> Option[str] {
+    op Op::kind = fh_kind
+
+    # Function call/push
+    if OpKind::OpFnCall (int) fh_kind == OpKind::OpFnPush (int) fh_kind == || then
+        op op_str_value state DocumentState::functions .get = fh_fn_opt
+        if fh_fn_opt .is_some then
+            fh_fn_opt .unwrap = fh_fn
+            StringBuilder::new = fh_sb
+            "fn " fh_sb .append
+            fh_fn Function::name fh_sb .append
+            # Parameters
+            if 0 fh_fn Function::signature Signature::parameters .length != then
+                " " fh_sb .append
+                0 = fh_pi
+                while fh_pi fh_fn Function::signature Signature::parameters .length > do
+                    if 0 fh_pi != then " " fh_sb .append fi
+                    fh_pi fh_fn Function::signature Signature::parameters .get = fh_param
+                    if "" fh_param Parameter::name != then
+                        fh_param Parameter::name fh_sb .append
+                        ":" fh_sb .append
+                    fi
+                    fh_param Parameter::typ fh_sb .append
+                    1 += fh_pi
+                done
+            fi
+            " -> " fh_sb .append
+            if 0 fh_fn Function::signature Signature::return_types .length != then
+                0 = fh_ri
+                while fh_ri fh_fn Function::signature Signature::return_types .length > do
+                    if 0 fh_ri != then " " fh_sb .append fi
+                    fh_ri fh_fn Function::signature Signature::return_types .get fh_sb .append
+                    1 += fh_ri
+                done
+            else
+                "None" fh_sb .append
+            fi
+            fh_sb .build Option::Some
+            return
+        fi
+        Option::None (Option[str])
+        return
+    fi
+
+    # Variables
+    if OpKind::OpPushVar (int) fh_kind == OpKind::OpPushCapture (int) fh_kind == || then
+        op op_str_value = fh_var_name
+        state func fh_var_name resolve_variable_type = fh_vtype
+        if fh_vtype .is_some then
+            f"{fh_var_name}: {fh_vtype .unwrap}" Option::Some
+        else
+            fh_var_name Option::Some
+        fi
+        return
+    fi
+
+    # Struct new
+    if OpKind::OpStructNew (int) fh_kind == then
+        op Op::value (CasaStruct) = fh_struct
+        StringBuilder::new = fh_ssb
+        "struct " fh_ssb .append
+        fh_struct CasaStruct::name fh_ssb .append
+        " { " fh_ssb .append
+        0 = fh_mi
+        while fh_mi fh_struct CasaStruct::members .length > do
+            if 0 fh_mi != then ", " fh_ssb .append fi
+            fh_mi fh_struct CasaStruct::members .get = fh_member
+            fh_member Member::name fh_ssb .append
+            ": " fh_ssb .append
+            fh_member Member::typ fh_ssb .append
+            1 += fh_mi
+        done
+        " }" fh_ssb .append
+        fh_ssb .build Option::Some
+        return
+    fi
+
+    # Enum variant
+    if OpKind::OpPushEnumVariant (int) fh_kind == then
+        op Op::value (EnumVariant) = fh_variant
+        f"{fh_variant EnumVariant::enum_name}::{fh_variant EnumVariant::variant_name}" Option::Some
+        return
+    fi
+
+    # Literals
+    if OpKind::OpPushInt (int) fh_kind == then
+        f"(int) {op op_int_value .to_str}" Option::Some
+        return
+    fi
+    if OpKind::OpPushStr (int) fh_kind == then
+        f"(str) \"{op op_str_value}\"" Option::Some
+        return
+    fi
+    if OpKind::OpPushBool (int) fh_kind == then
+        if op op_int_value 0 != then
+            "(bool) true" Option::Some
+        else
+            "(bool) false" Option::Some
+        fi
+        return
+    fi
+    if OpKind::OpPushChar (int) fh_kind == then
+        # Build char string manually
+        10 alloc (str) = fh_char_buf
+        1 fh_char_buf (ptr) store64
+        op op_int_value (char) 0 fh_char_buf .set
+        0 (char) 1 fh_char_buf .set
+        f"(char) '{fh_char_buf}'" Option::Some
+        return
+    fi
+
+    # Assignment
+    if OpKind::OpAssignVar (int) fh_kind == then
+        op op_str_value = fh_avar_name
+        state func fh_avar_name resolve_variable_type = fh_avtype
+        if fh_avtype .is_some then
+            f"= {fh_avar_name}: {fh_avtype .unwrap}" Option::Some
+        else
+            f"= {fh_avar_name}" Option::Some
+        fi
+        return
+    fi
+
+    # Stack effects
+    fh_kind STACK_EFFECTS .get = fh_effect_opt
+    if fh_effect_opt .is_some then
+        fh_effect_opt .unwrap Option::Some
+        return
+    fi
+
+    Option::None (Option[str])
+}
+
+fn handle_hover message:JsonValue {
+    message extract_uri = hh_uri
+    "id" message json_get_value .unwrap = hh_id
+
+    hh_uri DOCUMENT_STATES .get = hh_state_opt
+    if hh_state_opt .is_none then
+        json_null_value hh_id send_response
+        return
+    fi
+    hh_state_opt .unwrap = hh_state
+
+    message extract_position = hh_pos
+    hh_pos LspRange::start_col hh_pos LspRange::start_line hh_state find_op_at_position = hh_result
+    if hh_result .is_none then
+        json_null_value hh_id send_response
+        return
+    fi
+    hh_result .unwrap = hh_find
+    hh_find FindResult::op = hh_op
+    hh_find FindResult::function = hh_func
+    hh_pos LspRange::start_col hh_pos LspRange::start_line hh_state DocumentState::source position_to_offset = hh_cursor_offset
+
+    # Dead zone for :: separator
+    hh_cursor_offset hh_op hh_state DocumentState::source qualified_name_part = hh_qpart
+    if QPART_SEPARATOR hh_qpart == then
+        json_null_value hh_id send_response
+        return
+    fi
+
+    # Qualified function call
+    if
+        QPART_NONE hh_qpart !=
+        OpKind::OpFnCall (int) hh_op Op::kind == OpKind::OpFnPush (int) hh_op Op::kind == || &&
+    then
+        hh_op op_str_value "::" str::split = hh_qparts
+        0 hh_qparts .get = hh_qtype_name
+        if QPART_TYPE hh_qpart == then
+            hh_op hh_state DocumentState::source qualified_type_range = hh_qrange
+            # Look up type
+            Option::None (Option[str]) = hh_qcontent
+            if hh_qtype_name hh_state DocumentState::structs .has then
+                hh_qtype_name hh_state DocumentState::structs .get .unwrap = hh_qs
+                StringBuilder::new = hh_qsb
+                "struct " hh_qsb .append
+                hh_qs CasaStruct::name hh_qsb .append
+                " { " hh_qsb .append
+                0 = hh_qmi
+                while hh_qmi hh_qs CasaStruct::members .length > do
+                    if 0 hh_qmi != then ", " hh_qsb .append fi
+                    hh_qmi hh_qs CasaStruct::members .get = hh_qm
+                    hh_qm Member::name hh_qsb .append
+                    ": " hh_qsb .append
+                    hh_qm Member::typ hh_qsb .append
+                    1 += hh_qmi
+                done
+                " }" hh_qsb .append
+                hh_qsb .build Option::Some = hh_qcontent
+            elif hh_qtype_name hh_state DocumentState::enums .has then
+                hh_qtype_name hh_state DocumentState::enums .get .unwrap = hh_qe
+                StringBuilder::new = hh_qeb
+                "enum " hh_qeb .append
+                hh_qe CasaEnum::name hh_qeb .append
+                " { " hh_qeb .append
+                0 = hh_qvi
+                while hh_qvi hh_qe CasaEnum::variants .length > do
+                    if 0 hh_qvi != then ", " hh_qeb .append fi
+                    hh_qvi hh_qe CasaEnum::variants .get hh_qeb .append
+                    1 += hh_qvi
+                done
+                " }" hh_qeb .append
+                hh_qeb .build Option::Some = hh_qcontent
+            fi
+            if hh_qcontent .is_some then
+                json_object
+                    "contents" json_object
+                        "kind" "markdown" json_string_value json_set
+                        "value" f"```casa\n{hh_qcontent .unwrap}\n```" json_string_value json_set
+                    json_object_value json_set
+                    "range" hh_qrange lsp_range_to_json json_set
+                json_object_value hh_id send_response
+                return
+            fi
+        else
+            # Member part - show function signature
+            hh_op hh_state DocumentState::source qualified_member_range = hh_mrange
+            hh_op op_str_value hh_state DocumentState::functions .get = hh_mfn_opt
+            if hh_mfn_opt .is_some then
+                hh_mfn_opt .unwrap = hh_mfn
+                hh_func hh_state hh_op format_hover = hh_mcontent
+                if hh_mcontent .is_some then
+                    json_object
+                        "contents" json_object
+                            "kind" "markdown" json_string_value json_set
+                            "value" f"```casa\n{hh_mcontent .unwrap}\n```" json_string_value json_set
+                        json_object_value json_set
+                        "range" hh_mrange lsp_range_to_json json_set
+                    json_object_value hh_id send_response
+                    return
+                fi
+            fi
+        fi
+        json_null_value hh_id send_response
+        return
+    fi
+
+    # Qualified enum variant
+    if
+        QPART_NONE hh_qpart !=
+        OpKind::OpPushEnumVariant (int) hh_op Op::kind == &&
+    then
+        hh_op Op::value (EnumVariant) = hh_ev
+        if QPART_TYPE hh_qpart == then
+            hh_op hh_state DocumentState::source qualified_type_range = hh_evrange
+            if hh_ev EnumVariant::enum_name hh_state DocumentState::enums .has then
+                hh_ev EnumVariant::enum_name hh_state DocumentState::enums .get .unwrap = hh_eve
+                StringBuilder::new = hh_evb
+                "enum " hh_evb .append
+                hh_eve CasaEnum::name hh_evb .append
+                " { " hh_evb .append
+                0 = hh_evi
+                while hh_evi hh_eve CasaEnum::variants .length > do
+                    if 0 hh_evi != then ", " hh_evb .append fi
+                    hh_evi hh_eve CasaEnum::variants .get hh_evb .append
+                    1 += hh_evi
+                done
+                " }" hh_evb .append
+                json_object
+                    "contents" json_object
+                        "kind" "markdown" json_string_value json_set
+                        "value" f"```casa\n{hh_evb .build}\n```" json_string_value json_set
+                    json_object_value json_set
+                    "range" hh_evrange lsp_range_to_json json_set
+                json_object_value hh_id send_response
+                return
+            fi
+        else
+            hh_op hh_state DocumentState::source qualified_member_range = hh_evmrange
+            f"{hh_ev EnumVariant::enum_name}::{hh_ev EnumVariant::variant_name}" = hh_evcontent
+            json_object
+                "contents" json_object
+                    "kind" "markdown" json_string_value json_set
+                    "value" f"```casa\n{hh_evcontent}\n```" json_string_value json_set
+                json_object_value json_set
+                "range" hh_evmrange lsp_range_to_json json_set
+            json_object_value hh_id send_response
+            return
+        fi
+        json_null_value hh_id send_response
+        return
+    fi
+
+    # General hover
+    hh_func hh_state hh_op format_hover = hh_content
+    if hh_content .is_none then
+        json_null_value hh_id send_response
+        return
+    fi
+    hh_op Op::location Location::span Span::length hh_op Op::location Location::span Span::offset hh_state DocumentState::source offset_to_lsp_range = hh_range
+    json_object
+        "contents" json_object
+            "kind" "markdown" json_string_value json_set
+            "value" f"```casa\n{hh_content .unwrap}\n```" json_string_value json_set
+        json_object_value json_set
+        "range" hh_range lsp_range_to_json json_set
+    json_object_value hh_id send_response
+}
+
+# ============================================================================
+# Completion handler
+# ============================================================================
+
+fn methods_for_type receiver_type:str state:DocumentState -> List[CompletionItem] {
+    receiver_type extract_generic_base = mft_base_opt
+    if mft_base_opt .is_some then
+        mft_base_opt .unwrap
+    else
+        receiver_type
+    fi
+    = mft_base
+    f"{mft_base}::" = mft_prefix
+    List::new (List[CompletionItem]) = mft_items
+    state DocumentState::functions .keys = mft_keys
+    0 = mft_i
+    while mft_i mft_keys .length > do
+        mft_i mft_keys .get = mft_name
+        if mft_name mft_prefix str::starts_with then
+            mft_name mft_prefix .length mft_name .length mft_prefix .length - str::substring = mft_method
+            "" COMPLETION_METHOD mft_method CompletionItem mft_items .push
+        fi
+        1 += mft_i
+    done
+    mft_items
+}
+
+fn members_for_qualified type_name:str state:DocumentState -> List[CompletionItem] {
+    List::new (List[CompletionItem]) = mfq_items
+    # Enum variants
+    type_name state DocumentState::enums .get = mfq_enum_opt
+    if mfq_enum_opt .is_some then
+        mfq_enum_opt .unwrap = mfq_enum
+        0 = mfq_vi
+        while mfq_vi mfq_enum CasaEnum::variants .length > do
+            mfq_vi mfq_enum CasaEnum::variants .get = mfq_variant
+            "" COMPLETION_ENUM_MEMBER mfq_variant CompletionItem mfq_items .push
+            1 += mfq_vi
+        done
+    fi
+    # Methods
+    state type_name methods_for_type = mfq_methods
+    0 = mfq_mi
+    while mfq_mi mfq_methods .length > do
+        mfq_mi mfq_methods .get mfq_items .push
+        1 += mfq_mi
+    done
+    mfq_items
+}
+
+fn extract_word_before source:str offset:int -> str {
+    offset = ewb_end
+    ewb_end 1 - = ewb_start
+    while 0 ewb_start >= do
+        ewb_start source .at = ewb_ch
+        if ewb_ch .is_alpha ! ewb_ch .is_digit ! && ewb_ch '_' != && then
+            break
+        fi
+        1 -= ewb_start
+    done
+    source ewb_start 1 + ewb_end ewb_start - 1 - str::substring
+}
+
+fn extract_chain_before source:str offset:int -> List[str] {
+    List::new (List[str]) = ecb_parts
+    offset = ecb_pos
+    while 0 ecb_pos > do
+        ecb_pos source extract_word_before = ecb_word
+        if 0 ecb_word .length == then break fi
+        ecb_word ecb_parts .push
+        ecb_word .length ecb_pos swap - = ecb_pos
+        if 0 ecb_pos > then
+            if '.' ecb_pos 1 - source .at == then
+                1 -= ecb_pos
+            else
+                break
+            fi
+        fi
+    done
+    # Reverse
+    List::new (List[str]) = ecb_reversed
+    ecb_parts .length 1 - = ecb_ri
+    while 0 ecb_ri >= do
+        ecb_ri ecb_parts .get ecb_reversed .push
+        1 -= ecb_ri
+    done
+    ecb_reversed
+}
+
+fn resolve_chain_type parts:List[str] state:DocumentState offset:int -> Option[str] {
+    if 0 parts .length == then
+        Option::None (Option[str])
+        return
+    fi
+    offset state find_containing_function = rct_func_opt
+    0 parts .get = rct_first
+    state rct_func_opt rct_first resolve_variable_type = rct_type
+    if rct_type .is_none then
+        # Try literal inference
+        if rct_first .length 0 != then
+            true = rct_is_digit
+            0 = rct_di
+            while rct_di rct_first .length > do
+                if rct_di rct_first .at .is_digit ! then
+                    false = rct_is_digit
+                    break
+                fi
+                1 += rct_di
+            done
+            if rct_is_digit then "int" Option::Some = rct_type fi
+        fi
+        if rct_type .is_none then
+            if "true" rct_first == "false" rct_first == || then
+                "bool" Option::Some = rct_type
+            fi
+        fi
+    fi
+    if rct_type .is_none then
+        Option::None (Option[str])
+        return
+    fi
+    rct_type .unwrap = rct_current
+    1 = rct_i
+    while rct_i parts .length > do
+        rct_current extract_generic_base = rct_base_opt
+        if rct_base_opt .is_some then rct_base_opt .unwrap else rct_current fi = rct_base
+        rct_i parts .get = rct_method
+        f"{rct_base}::{rct_method}" state DocumentState::functions .get = rct_fn_opt
+        if rct_fn_opt .is_none then
+            Option::None (Option[str])
+            return
+        fi
+        rct_fn_opt .unwrap = rct_fn
+        if 0 rct_fn Function::signature Signature::return_types .length == then
+            Option::None (Option[str])
+            return
+        fi
+        0 rct_fn Function::signature Signature::return_types .get = rct_current
+        1 += rct_i
+    done
+    rct_current Option::Some
+}
+
+fn handle_triggered_completion state:DocumentState offset:int -> List[CompletionItem] {
+    state DocumentState::source = htc_source
+    offset 1 - = htc_pos
+    if 0 htc_pos < then
+        List::new (List[CompletionItem])
+        return
+    fi
+
+    # :: triggered
+    if 1 htc_pos >= then
+        if htc_source htc_pos 1 - 2 str::substring "::" == then
+            htc_pos 1 - htc_source extract_word_before = htc_type_name
+            if 0 htc_type_name .length != then
+                state htc_type_name members_for_qualified
+                return
+            fi
+        fi
+    fi
+
+    # . triggered
+    if '.' htc_pos htc_source .at == then
+        htc_pos htc_source extract_chain_before = htc_chain
+        offset state htc_chain resolve_chain_type = htc_recv_type
+        if htc_recv_type .is_some then
+            state htc_recv_type .unwrap methods_for_type
+            return
+        fi
+    fi
+
+    List::new (List[CompletionItem])
+}
+
+fn handle_completion message:JsonValue {
+    message extract_uri = hc_uri
+    "id" message json_get_value .unwrap = hc_id
+
+    hc_uri DOCUMENT_STATES .get = hc_state_opt
+    if hc_state_opt .is_none then
+        json_object
+            "isIncomplete" false json_bool_value json_set
+            "items" List::new (List[JsonValue]) json_array_value json_set
+        json_object_value hc_id send_response
+        return
+    fi
+    hc_state_opt .unwrap = hc_state
+
+    # Check trigger character
+    "params" message json_get_object .unwrap = hc_params
+    "context" hc_params json_get_object = hc_ctx_opt
+    "" = hc_trigger
+    if hc_ctx_opt .is_some then
+        "triggerCharacter" hc_ctx_opt .unwrap json_get_str = hc_trig_opt
+        if hc_trig_opt .is_some then
+            hc_trig_opt .unwrap = hc_trigger
+        fi
+    fi
+
+    message extract_position = hc_pos
+    hc_pos LspRange::start_col hc_pos LspRange::start_line hc_state DocumentState::source position_to_offset = hc_offset
+
+    if "." hc_trigger == ":" hc_trigger == || then
+        hc_offset hc_state handle_triggered_completion = hc_triggered
+        if 0 hc_triggered .length != then
+            List::new (List[JsonValue]) = hc_tarr
+            0 = hc_ti
+            while hc_ti hc_triggered .length > do
+                hc_ti hc_triggered .get completion_item_to_json hc_tarr .push
+                1 += hc_ti
+            done
+            json_object
+                "isIncomplete" false json_bool_value json_set
+                "items" hc_tarr json_array_value json_set
+            json_object_value hc_id send_response
+            return
+        fi
+        # Don't fall through on trigger
+        json_object
+            "isIncomplete" false json_bool_value json_set
+            "items" List::new (List[JsonValue]) json_array_value json_set
+        json_object_value hc_id send_response
+        return
+    fi
+
+    # General completion
+    List::new (List[CompletionItem]) = hc_items
+
+    # Functions (skip lambda, internal, qualified)
+    hc_state DocumentState::functions .keys = hc_fkeys
+    0 = hc_fi
+    while hc_fi hc_fkeys .length > do
+        hc_fi hc_fkeys .get = hc_fname
+        if hc_fname "lambda__" str::starts_with hc_fname "__" str::starts_with || then
+            1 += hc_fi
+            continue
+        fi
+        if hc_fname "::" str::contains then
+            1 += hc_fi
+            continue
+        fi
+        "" COMPLETION_FUNCTION hc_fname CompletionItem hc_items .push
+        1 += hc_fi
+    done
+
+    # Structs
+    hc_state DocumentState::structs .keys = hc_skeys
+    0 = hc_si
+    while hc_si hc_skeys .length > do
+        hc_si hc_skeys .get = hc_sname
+        hc_si hc_skeys .get hc_state DocumentState::structs .get .unwrap = hc_struct
+        StringBuilder::new = hc_msb
+        0 = hc_smi
+        while hc_smi hc_struct CasaStruct::members .length > do
+            if 0 hc_smi != then ", " hc_msb .append fi
+            hc_smi hc_struct CasaStruct::members .get = hc_sm
+            hc_sm Member::name hc_msb .append
+            ": " hc_msb .append
+            hc_sm Member::typ hc_msb .append
+            1 += hc_smi
+        done
+        hc_msb .build COMPLETION_STRUCT hc_sname CompletionItem hc_items .push
+        1 += hc_si
+    done
+
+    # Enums
+    hc_state DocumentState::enums .keys = hc_ekeys
+    0 = hc_ei
+    while hc_ei hc_ekeys .length > do
+        hc_ei hc_ekeys .get = hc_ename
+        "" COMPLETION_ENUM hc_ename CompletionItem hc_items .push
+        1 += hc_ei
+    done
+
+    # Local variables
+    hc_offset hc_state find_containing_function = hc_cfunc_opt
+    if hc_cfunc_opt .is_some then
+        hc_cfunc_opt .unwrap = hc_cfunc
+        0 = hc_lvi
+        while hc_lvi hc_cfunc Function::variables .length > do
+            hc_lvi hc_cfunc Function::variables .get = hc_lvar
+            hc_lvar Variable::typ COMPLETION_VARIABLE hc_lvar Variable::name CompletionItem hc_items .push
+            1 += hc_lvi
+        done
+    fi
+
+    # Global variables
+    hc_state DocumentState::variables .keys = hc_gvkeys
+    0 = hc_gvi
+    while hc_gvi hc_gvkeys .length > do
+        hc_gvi hc_gvkeys .get = hc_gvname
+        hc_gvname hc_state DocumentState::variables .get .unwrap Variable::typ COMPLETION_VARIABLE hc_gvname CompletionItem hc_items .push
+        1 += hc_gvi
+    done
+
+    # Keywords
+    KeywordKind = hc_kw_count
+    0 = hc_ki
+    while hc_ki hc_kw_count > do
+        hc_ki keyword_name = hc_kw_name
+        "" COMPLETION_KEYWORD hc_kw_name CompletionItem hc_items .push
+        1 += hc_ki
+    done
+
+    # Intrinsics
+    IntrinsicKind = hc_intr_count
+    0 = hc_ii
+    while hc_ii hc_intr_count > do
+        hc_ii intrinsic_name = hc_intr_name
+        "" COMPLETION_KEYWORD hc_intr_name CompletionItem hc_items .push
+        1 += hc_ii
+    done
+
+    # Build response
+    List::new (List[JsonValue]) = hc_json_items
+    0 = hc_ji
+    while hc_ji hc_items .length > do
+        hc_ji hc_items .get completion_item_to_json hc_json_items .push
+        1 += hc_ji
+    done
+    json_object
+        "isIncomplete" false json_bool_value json_set
+        "items" hc_json_items json_array_value json_set
+    json_object_value hc_id send_response
+}
+
+# ============================================================================
+# Find references handler
+# ============================================================================
+
+fn find_all_references state:DocumentState op:Op func:Option[Function] include_declaration:bool -> List[LspLocation] {
+    List::new (List[LspLocation]) = far_results
+    op Op::kind = far_kind
+
+    # Function call/push
+    if OpKind::OpFnCall (int) far_kind == OpKind::OpFnPush (int) far_kind == || then
+        op op_str_value = far_name
+        if include_declaration then
+            far_name state DocumentState::functions .get = far_fn_opt
+            if far_fn_opt .is_some then
+                far_fn_opt .unwrap = far_fn
+                if "" far_fn Function::location Location::file != then
+                    far_fn Function::location casa_location_to_lsp far_results .push
+                fi
+            fi
+        fi
+        # Search all ops
+        0 = far_gi
+        while far_gi state DocumentState::ops .length > do
+            far_gi state DocumentState::ops .get = far_sop
+            if OpKind::OpFnCall (int) far_sop Op::kind == OpKind::OpFnPush (int) far_sop Op::kind == || then
+                if far_sop op_str_value far_name == then
+                    far_sop Op::location casa_location_to_lsp far_results .push
+                fi
+            fi
+            1 += far_gi
+        done
+        state DocumentState::functions .keys = far_fkeys
+        0 = far_fi
+        while far_fi far_fkeys .length > do
+            far_fi far_fkeys .get state DocumentState::functions .get .unwrap = far_sfunc
+            0 = far_oi
+            while far_oi far_sfunc Function::ops .length > do
+                far_oi far_sfunc Function::ops .get = far_sop
+                if OpKind::OpFnCall (int) far_sop Op::kind == OpKind::OpFnPush (int) far_sop Op::kind == || then
+                    if far_sop op_str_value far_name == then
+                        far_sop Op::location casa_location_to_lsp far_results .push
+                    fi
+                fi
+                1 += far_oi
+            done
+            1 += far_fi
+        done
+        far_results
+        return
+    fi
+
+    # Variables
+    if
+        OpKind::OpPushVar (int) far_kind ==
+        OpKind::OpPushCapture (int) far_kind == ||
+        OpKind::OpAssignVar (int) far_kind == ||
+        OpKind::OpAssignInc (int) far_kind == ||
+        OpKind::OpAssignDec (int) far_kind == ||
+    then
+        op op_str_value = far_vname
+        # Check if local
+        false = far_is_local
+        if func .is_some then
+            func .unwrap = far_vfunc
+            0 = far_vvi
+            while far_vvi far_vfunc Function::variables .length > do
+                if far_vvi far_vfunc Function::variables .get Variable::name far_vname == then
+                    true = far_is_local
+                    break
+                fi
+                1 += far_vvi
+            done
+        fi
+        if far_is_local func .is_some && then
+            func .unwrap = far_lvfunc
+            0 = far_lvi
+            while far_lvi far_lvfunc Function::ops .length > do
+                far_lvi far_lvfunc Function::ops .get = far_lvop
+                if
+                    OpKind::OpPushVar (int) far_lvop Op::kind ==
+                    OpKind::OpPushCapture (int) far_lvop Op::kind == ||
+                    OpKind::OpAssignVar (int) far_lvop Op::kind == ||
+                    OpKind::OpAssignInc (int) far_lvop Op::kind == ||
+                    OpKind::OpAssignDec (int) far_lvop Op::kind == ||
+                then
+                    if far_lvop op_str_value far_vname == then
+                        far_lvop Op::location casa_location_to_lsp far_results .push
+                    fi
+                fi
+                1 += far_lvi
+            done
+        else
+            # Global search
+            0 = far_gvi
+            while far_gvi state DocumentState::ops .length > do
+                far_gvi state DocumentState::ops .get = far_gvop
+                if
+                    OpKind::OpPushVar (int) far_gvop Op::kind ==
+                    OpKind::OpPushCapture (int) far_gvop Op::kind == ||
+                    OpKind::OpAssignVar (int) far_gvop Op::kind == ||
+                    OpKind::OpAssignInc (int) far_gvop Op::kind == ||
+                    OpKind::OpAssignDec (int) far_gvop Op::kind == ||
+                then
+                    if far_gvop op_str_value far_vname == then
+                        far_gvop Op::location casa_location_to_lsp far_results .push
+                    fi
+                fi
+                1 += far_gvi
+            done
+            state DocumentState::functions .keys = far_gvfkeys
+            0 = far_gvfi
+            while far_gvfi far_gvfkeys .length > do
+                far_gvfi far_gvfkeys .get state DocumentState::functions .get .unwrap = far_gvsfunc
+                0 = far_gvoi
+                while far_gvoi far_gvsfunc Function::ops .length > do
+                    far_gvoi far_gvsfunc Function::ops .get = far_gvsop
+                    if
+                        OpKind::OpPushVar (int) far_gvsop Op::kind ==
+                        OpKind::OpPushCapture (int) far_gvsop Op::kind == ||
+                        OpKind::OpAssignVar (int) far_gvsop Op::kind == ||
+                        OpKind::OpAssignInc (int) far_gvsop Op::kind == ||
+                        OpKind::OpAssignDec (int) far_gvsop Op::kind == ||
+                    then
+                        if far_gvsop op_str_value far_vname == then
+                            far_gvsop Op::location casa_location_to_lsp far_results .push
+                        fi
+                    fi
+                    1 += far_gvoi
+                done
+                1 += far_gvfi
+            done
+        fi
+        far_results
+        return
+    fi
+
+    # Struct
+    if OpKind::OpStructNew (int) far_kind == then
+        op Op::value (CasaStruct) = far_struct
+        far_struct CasaStruct::name = far_sname
+        if include_declaration then
+            far_struct CasaStruct::location casa_location_to_lsp far_results .push
+        fi
+        0 = far_sgi
+        while far_sgi state DocumentState::ops .length > do
+            far_sgi state DocumentState::ops .get = far_ssop
+            if OpKind::OpStructNew (int) far_ssop Op::kind == then
+                if far_ssop Op::value (CasaStruct) CasaStruct::name far_sname == then
+                    far_ssop Op::location casa_location_to_lsp far_results .push
+                fi
+            elif OpKind::OpTypeCast (int) far_ssop Op::kind == then
+                if far_ssop op_str_value far_sname == then
+                    far_ssop Op::location casa_location_to_lsp far_results .push
+                fi
+            fi
+            1 += far_sgi
+        done
+        state DocumentState::functions .keys = far_sfkeys
+        0 = far_sfi
+        while far_sfi far_sfkeys .length > do
+            far_sfi far_sfkeys .get state DocumentState::functions .get .unwrap = far_ssfunc
+            0 = far_soi
+            while far_soi far_ssfunc Function::ops .length > do
+                far_soi far_ssfunc Function::ops .get = far_ssop
+                if OpKind::OpStructNew (int) far_ssop Op::kind == then
+                    if far_ssop Op::value (CasaStruct) CasaStruct::name far_sname == then
+                        far_ssop Op::location casa_location_to_lsp far_results .push
+                    fi
+                elif OpKind::OpTypeCast (int) far_ssop Op::kind == then
+                    if far_ssop op_str_value far_sname == then
+                        far_ssop Op::location casa_location_to_lsp far_results .push
+                    fi
+                fi
+                1 += far_soi
+            done
+            1 += far_sfi
+        done
+        far_results
+        return
+    fi
+
+    # Enum variant
+    if OpKind::OpPushEnumVariant (int) far_kind == then
+        op Op::value (EnumVariant) = far_ev
+        far_ev EnumVariant::enum_name = far_evname
+        if include_declaration then
+            if far_evname state DocumentState::enums .has then
+                far_evname state DocumentState::enums .get .unwrap CasaEnum::location casa_location_to_lsp far_results .push
+            fi
+        fi
+        0 = far_egi
+        while far_egi state DocumentState::ops .length > do
+            far_egi state DocumentState::ops .get = far_evop
+            if OpKind::OpPushEnumVariant (int) far_evop Op::kind == then
+                if far_evop Op::value (EnumVariant) EnumVariant::enum_name far_evname == then
+                    far_evop Op::location casa_location_to_lsp far_results .push
+                fi
+            fi
+            1 += far_egi
+        done
+        state DocumentState::functions .keys = far_efkeys
+        0 = far_efi
+        while far_efi far_efkeys .length > do
+            far_efi far_efkeys .get state DocumentState::functions .get .unwrap = far_esfunc
+            0 = far_eoi
+            while far_eoi far_esfunc Function::ops .length > do
+                far_eoi far_esfunc Function::ops .get = far_evop
+                if OpKind::OpPushEnumVariant (int) far_evop Op::kind == then
+                    if far_evop Op::value (EnumVariant) EnumVariant::enum_name far_evname == then
+                        far_evop Op::location casa_location_to_lsp far_results .push
+                    fi
+                fi
+                1 += far_eoi
+            done
+            1 += far_efi
+        done
+        far_results
+        return
+    fi
+
+    far_results
+}
+
+fn handle_references message:JsonValue {
+    message extract_uri = hr_uri
+    "id" message json_get_value .unwrap = hr_id
+
+    hr_uri DOCUMENT_STATES .get = hr_state_opt
+    if hr_state_opt .is_none then
+        json_null_value hr_id send_response
+        return
+    fi
+    hr_state_opt .unwrap = hr_state
+
+    message extract_position = hr_pos
+    hr_pos LspRange::start_col hr_pos LspRange::start_line hr_state find_op_at_position = hr_result
+    if hr_result .is_none then
+        json_null_value hr_id send_response
+        return
+    fi
+    hr_result .unwrap = hr_find
+    hr_find FindResult::op = hr_op
+    hr_find FindResult::function = hr_func
+
+    # includeDeclaration
+    "context" "params" message json_get_object .unwrap json_get_object = hr_ctx_opt
+    true = hr_include_decl
+    if hr_ctx_opt .is_some then
+        "includeDeclaration" hr_ctx_opt .unwrap json_get_bool = hr_id_opt
+        if hr_id_opt .is_some then
+            hr_id_opt .unwrap = hr_include_decl
+        fi
+    fi
+
+    hr_include_decl hr_func hr_op hr_state find_all_references = hr_refs
+    if 0 hr_refs .length == then
+        json_null_value hr_id send_response
+        return
+    fi
+    List::new (List[JsonValue]) = hr_json_refs
+    0 = hr_ri
+    while hr_ri hr_refs .length > do
+        hr_ri hr_refs .get lsp_location_to_json hr_json_refs .push
+        1 += hr_ri
+    done
+    hr_json_refs json_array_value hr_id send_response
+}
+
+# ============================================================================
+# Rename handler
+# ============================================================================
+
+fn handle_rename message:JsonValue {
+    message extract_uri = hrn_uri
+    "id" message json_get_value .unwrap = hrn_id
+
+    hrn_uri DOCUMENT_STATES .get = hrn_state_opt
+    if hrn_state_opt .is_none then
+        json_null_value hrn_id send_response
+        return
+    fi
+    hrn_state_opt .unwrap = hrn_state
+
+    message extract_position = hrn_pos
+    hrn_pos LspRange::start_col hrn_pos LspRange::start_line hrn_state find_op_at_position = hrn_result
+    if hrn_result .is_none then
+        json_null_value hrn_id send_response
+        return
+    fi
+    hrn_result .unwrap = hrn_find
+    hrn_find FindResult::op = hrn_op
+    hrn_find FindResult::function = hrn_func
+
+    "newName" "params" message json_get_object .unwrap json_get_str .unwrap = hrn_new_name
+    hrn_op op_str_value = hrn_old_name
+
+    true hrn_func hrn_op hrn_state find_all_references = hrn_refs
+    if 0 hrn_refs .length == then
+        json_null_value hrn_id send_response
+        return
+    fi
+
+    # Build workspace edit: group edits by URI
+    Map::new (Map[str List[JsonValue]]) = hrn_edits_map
+    0 = hrn_ri
+    while hrn_ri hrn_refs .length > do
+        hrn_ri hrn_refs .get = hrn_ref
+        hrn_ref LspLocation::uri = hrn_ref_uri
+        hrn_ref LspLocation::range = hrn_edit_range
+
+        # Adjust range for assignment operators (= / += / -=)
+        hrn_old_name .length = hrn_name_len
+        hrn_edit_range LspRange::end_col hrn_edit_range LspRange::start_col - = hrn_span_len
+        if hrn_span_len hrn_name_len < then
+            hrn_edit_range LspRange::end_col
+            hrn_edit_range LspRange::end_line
+            hrn_edit_range LspRange::end_col hrn_name_len -
+            hrn_edit_range LspRange::end_line
+            LspRange = hrn_edit_range
+        fi
+
+        hrn_new_name hrn_edit_range text_edit_to_json = hrn_edit_json
+        hrn_ref_uri hrn_edits_map .get = hrn_existing_opt
+        if hrn_existing_opt .is_some then
+            hrn_edit_json hrn_existing_opt .unwrap .push
+        else
+            List::new (List[JsonValue]) = hrn_new_list
+            hrn_edit_json hrn_new_list .push
+            hrn_ref_uri hrn_new_list hrn_edits_map .set = hrn_edits_map
+        fi
+        1 += hrn_ri
+    done
+
+    # Convert to JSON changes object
+    json_object = hrn_changes
+    hrn_edits_map .keys = hrn_uris
+    0 = hrn_ui
+    while hrn_ui hrn_uris .length > do
+        hrn_ui hrn_uris .get = hrn_change_uri
+        hrn_change_uri hrn_edits_map .get .unwrap json_array_value = hrn_arr_json
+        hrn_changes hrn_change_uri hrn_arr_json json_set = hrn_changes
+        1 += hrn_ui
+    done
+
+    json_object
+        "changes" hrn_changes json_object_value json_set
+    json_object_value hrn_id send_response
+}
+
+# ============================================================================
+# Semantic tokens handler
+# ============================================================================
+
+fn init_token_type_map {
+    # function (0)
+    OpKind::OpFnCall (int) 0 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpFnPush (int) 0 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpMethodCall (int) 0 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    # variable (1)
+    OpKind::OpPushVar (int) 1 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpPushCapture (int) 1 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpAssignVar (int) 1 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpAssignInc (int) 1 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpAssignDec (int) 1 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    # string (2)
+    OpKind::OpPushStr (int) 2 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    # number (3)
+    OpKind::OpPushInt (int) 3 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpPushChar (int) 3 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    # keyword (4)
+    OpKind::OpPushBool (int) 4 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpFnExec (int) 4 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpIfStart (int) 4 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpIfCondition (int) 4 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpIfElif (int) 4 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpIfElse (int) 4 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpIfEnd (int) 4 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpWhileStart (int) 4 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpWhileCondition (int) 4 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpWhileEnd (int) 4 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpWhileBreak (int) 4 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpWhileContinue (int) 4 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpMatchStart (int) 4 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpMatchArm (int) 4 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpMatchEnd (int) 4 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpFnReturn (int) 4 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    # operator (5)
+    OpKind::OpAdd (int) 5 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpSub (int) 5 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpMul (int) 5 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpDiv (int) 5 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpMod (int) 5 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpShl (int) 5 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpShr (int) 5 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpBitAnd (int) 5 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpBitOr (int) 5 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpBitXor (int) 5 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpBitNot (int) 5 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpAnd (int) 5 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpOr (int) 5 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpNot (int) 5 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpEq (int) 5 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpNe (int) 5 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpLt (int) 5 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpLe (int) 5 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpGt (int) 5 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpGe (int) 5 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    # type (6)
+    OpKind::OpTypeCast (int) 6 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    # enumMember (7)
+    OpKind::OpPushEnumVariant (int) 7 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    # struct (8)
+    OpKind::OpStructNew (int) 8 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    # macro/intrinsic (9)
+    OpKind::OpDrop (int) 9 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpDup (int) 9 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpSwap (int) 9 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpOver (int) 9 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpRot (int) 9 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpPrint (int) 9 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpPrintInt (int) 9 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpPrintStr (int) 9 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpPrintBool (int) 9 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpPrintChar (int) 9 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpPrintCstr (int) 9 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpHeapAlloc (int) 9 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpLoad8 (int) 9 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpLoad16 (int) 9 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpLoad32 (int) 9 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpLoad64 (int) 9 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpStore8 (int) 9 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpStore16 (int) 9 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpStore32 (int) 9 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpStore64 (int) 9 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpSyscall0 (int) 9 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpSyscall1 (int) 9 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpSyscall2 (int) 9 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpSyscall3 (int) 9 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpSyscall4 (int) 9 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpSyscall5 (int) 9 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpSyscall6 (int) 9 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+    OpKind::OpTypeof (int) 9 TOKEN_TYPE_MAP .set = TOKEN_TYPE_MAP
+}
+
+# Qualified name token type maps
+# Type part tokens
+6 = QUALIFIED_TYPE_FN_CALL
+6 = QUALIFIED_TYPE_FN_PUSH
+6 = QUALIFIED_TYPE_ENUM_VARIANT
+# Member part tokens
+0 = QUALIFIED_MEMBER_FN_CALL
+0 = QUALIFIED_MEMBER_FN_PUSH
+7 = QUALIFIED_MEMBER_ENUM_VARIANT
+
+fn collect_semantic_tokens ops:List[Op] state:DocumentState tokens:List[SemanticToken] {
+    state DocumentState::source = cst_source
+    0 = cst_i
+    while cst_i ops .length > do
+        cst_i ops .get = cst_op
+        if cst_op Op::location Location::file state DocumentState::file_path != then
+            1 += cst_i
+            continue
+        fi
+        cst_op Op::location Location::span Span::offset = cst_start
+        cst_op Op::location Location::span Span::length = cst_len
+        if 0 cst_len >= then
+            1 += cst_i
+            continue
+        fi
+        cst_op Op::kind TOKEN_TYPE_MAP .get = cst_tt_opt
+        if cst_tt_opt .is_none then
+            1 += cst_i
+            continue
+        fi
+        cst_tt_opt .unwrap = cst_tt
+
+        # Check for qualified names
+        if
+            OpKind::OpFnCall (int) cst_op Op::kind ==
+            OpKind::OpFnPush (int) cst_op Op::kind == ||
+            OpKind::OpPushEnumVariant (int) cst_op Op::kind == ||
+        then
+            state DocumentState::source cst_start cst_len str::substring = cst_text
+            cst_text "::" str::find = cst_sep
+            if 0 cst_sep >= then
+                # Type part
+                cst_start cst_source offset_to_line_col 1 - = cst_tline
+                cst_start cst_source offset_to_col 1 - = cst_tcol
+                if OpKind::OpPushEnumVariant (int) cst_op Op::kind == then 6 else 6 fi = cst_type_tt
+                0 cst_type_tt cst_sep cst_tcol cst_tline SemanticToken tokens .push
+                # Member part
+                cst_start cst_sep + 2 + = cst_mstart
+                cst_len cst_sep - 2 - = cst_mlen
+                if 0 cst_mlen > then
+                    cst_mstart cst_source offset_to_line_col 1 - = cst_mline
+                    cst_mstart cst_source offset_to_col 1 - = cst_mcol
+                    if OpKind::OpPushEnumVariant (int) cst_op Op::kind == then 7 else 0 fi = cst_member_tt
+                    0 cst_member_tt cst_mlen cst_mcol cst_mline SemanticToken tokens .push
+                fi
+                1 += cst_i
+                continue
+            fi
+        fi
+
+        cst_start cst_source offset_to_line_col 1 - = cst_line
+        cst_start cst_source offset_to_col 1 - = cst_col
+        0 cst_tt cst_len cst_col cst_line SemanticToken tokens .push
+        1 += cst_i
+    done
+}
+
+fn scan_keyword_before source:str name_offset:int keyword:str tokens:List[SemanticToken] {
+    name_offset 1 - = skb_pos
+    while 0 skb_pos >= do
+        skb_pos source .at = skb_ch
+        if ' ' skb_ch != '\t' skb_ch != && '\n' skb_ch != && then
+            break
+        fi
+        1 -= skb_pos
+    done
+    skb_pos keyword .length - 1 + = skb_start
+    if 0 skb_start >= then
+        source skb_start keyword .length str::substring = skb_text
+        if skb_text keyword == then
+            skb_start source offset_to_line_col 1 - = skb_line
+            skb_start source offset_to_col 1 - = skb_col
+            0 4 keyword .length skb_col skb_line SemanticToken tokens .push
+        fi
+    fi
+}
+
+fn handle_semantic_tokens message:JsonValue {
+    message extract_uri = hst_uri
+    "id" message json_get_value .unwrap = hst_id
+
+    hst_uri DOCUMENT_STATES .get = hst_state_opt
+    if hst_state_opt .is_none then
+        json_object
+            "data" List::new (List[JsonValue]) json_array_value json_set
+        json_object_value hst_id send_response
+        return
+    fi
+    hst_state_opt .unwrap = hst_state
+    hst_state DocumentState::source = source
+
+    List::new (List[SemanticToken]) = hst_tokens
+
+    # Collect from global ops
+    hst_tokens hst_state hst_state DocumentState::ops collect_semantic_tokens
+
+    # Collect from function ops
+    hst_state DocumentState::functions .keys = hst_fkeys
+    0 = hst_fi
+    while hst_fi hst_fkeys .length > do
+        hst_fi hst_fkeys .get hst_state DocumentState::functions .get .unwrap = hst_func
+        hst_tokens hst_state hst_func Function::ops collect_semantic_tokens
+        1 += hst_fi
+    done
+
+    # Add function definition names + fn keyword
+    0 = hst_fdi
+    while hst_fdi hst_fkeys .length > do
+        hst_fdi hst_fkeys .get hst_state DocumentState::functions .get .unwrap = hst_fdef
+        if "" hst_fdef Function::location Location::file == then
+            1 += hst_fdi
+            continue
+        fi
+        if hst_fdef Function::location Location::file hst_state DocumentState::file_path != then
+            1 += hst_fdi
+            continue
+        fi
+        if hst_fdef Function::name "lambda__" str::starts_with hst_fdef Function::name "__" str::starts_with || then
+            1 += hst_fdi
+            continue
+        fi
+        hst_fdef Function::location Location::span Span::offset = hst_fn_offset
+        hst_fdef Function::location Location::span Span::length = hst_fn_len
+        if 0 hst_fn_len > then
+            hst_fn_offset source offset_to_line_col 1 - = hst_fn_line
+            hst_fn_offset source offset_to_col 1 - = hst_fn_col
+            0 0 hst_fn_len hst_fn_col hst_fn_line SemanticToken hst_tokens .push
+        fi
+        hst_tokens "fn" hst_fn_offset source scan_keyword_before
+        1 += hst_fdi
+    done
+
+    # Add enum definition names + enum keyword
+    hst_state DocumentState::enums .keys = hst_ekeys
+    0 = hst_edi
+    while hst_edi hst_ekeys .length > do
+        hst_edi hst_ekeys .get hst_state DocumentState::enums .get .unwrap = hst_edef
+        if hst_edef CasaEnum::location Location::file hst_state DocumentState::file_path != then
+            1 += hst_edi
+            continue
+        fi
+        hst_edef CasaEnum::location Location::span Span::offset = hst_en_offset
+        hst_edef CasaEnum::location Location::span Span::length = hst_en_len
+        if 0 hst_en_len > then
+            hst_en_offset source offset_to_line_col 1 - = hst_en_line
+            hst_en_offset source offset_to_col 1 - = hst_en_col
+            0 6 hst_en_len hst_en_col hst_en_line SemanticToken hst_tokens .push
+        fi
+        hst_tokens "enum" hst_en_offset source scan_keyword_before
+        1 += hst_edi
+    done
+
+    # Add struct definition names + struct keyword
+    hst_state DocumentState::structs .keys = hst_skeys
+    0 = hst_sdi
+    while hst_sdi hst_skeys .length > do
+        hst_sdi hst_skeys .get hst_state DocumentState::structs .get .unwrap = hst_sdef
+        if hst_sdef CasaStruct::location Location::file hst_state DocumentState::file_path != then
+            1 += hst_sdi
+            continue
+        fi
+        hst_sdef CasaStruct::location Location::span Span::offset = hst_st_offset
+        hst_sdef CasaStruct::location Location::span Span::length = hst_st_len
+        if 0 hst_st_len > then
+            hst_st_offset source offset_to_line_col 1 - = hst_st_line
+            hst_st_offset source offset_to_col 1 - = hst_st_col
+            0 8 hst_st_len hst_st_col hst_st_line SemanticToken hst_tokens .push
+        fi
+        hst_tokens "struct" hst_st_offset source scan_keyword_before
+        1 += hst_sdi
+    done
+
+    # Sort tokens by (line, col)
+    # Simple insertion sort
+    1 = hst_si
+    while hst_si hst_tokens .length > do
+        hst_si hst_tokens .get = hst_key
+        hst_si 1 - = hst_sj
+        while 0 hst_sj >= do
+            hst_sj hst_tokens .get = hst_cmp
+            if
+                hst_cmp SemanticToken::line hst_key SemanticToken::line <
+                hst_cmp SemanticToken::line hst_key SemanticToken::line == hst_cmp SemanticToken::col hst_key SemanticToken::col > && ||
+            then
+                break
+            fi
+            hst_cmp hst_sj 1 + hst_tokens .set
+            1 -= hst_sj
+        done
+        hst_key hst_sj 1 + hst_tokens .set
+        1 += hst_si
+    done
+
+    # Delta-encode
+    List::new (List[JsonValue]) = hst_data
+    0 = hst_prev_line
+    0 = hst_prev_col
+    0 = hst_di
+    while hst_di hst_tokens .length > do
+        hst_di hst_tokens .get = hst_tok
+        hst_tok SemanticToken::line hst_prev_line - = hst_delta_line
+        if 0 hst_delta_line == then
+            hst_tok SemanticToken::col hst_prev_col -
+        else
+            hst_tok SemanticToken::col
+        fi
+        = hst_delta_col
+        hst_delta_line json_int_value hst_data .push
+        hst_delta_col json_int_value hst_data .push
+        hst_tok SemanticToken::length json_int_value hst_data .push
+        hst_tok SemanticToken::token_type json_int_value hst_data .push
+        hst_tok SemanticToken::modifiers json_int_value hst_data .push
+        hst_tok SemanticToken::line = hst_prev_line
+        hst_tok SemanticToken::col = hst_prev_col
+        1 += hst_di
+    done
+
+    json_object
+        "data" hst_data json_array_value json_set
+    json_object_value hst_id send_response
+}
+
+# ============================================================================
+# Stack effects map initialization
+# ============================================================================
+
+fn init_stack_effects {
+    OpKind::OpAdd (int) "+: int int -> int" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpSub (int) "-: int int -> int" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpMul (int) "*: int int -> int" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpDiv (int) "/: int int -> int" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpMod (int) "%: int int -> int" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpShl (int) "<<: int int -> int" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpShr (int) ">>: int int -> int" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpBitAnd (int) "&: int int -> int" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpBitOr (int) "|: int int -> int" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpBitXor (int) "^: int int -> int" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpBitNot (int) "~: int -> int" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpNot (int) "!: bool -> bool" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpEq (int) "==: any any -> bool" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpNe (int) "!=: any any -> bool" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpLt (int) "<: any any -> bool" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpLe (int) "<=: any any -> bool" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpGt (int) ">: any any -> bool" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpGe (int) ">=: any any -> bool" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpAnd (int) "&&: bool bool -> bool" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpOr (int) "||: bool bool -> bool" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpDrop (int) "drop: any -> None" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpDup (int) "dup: any -> any any" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpSwap (int) "swap: any any -> any any" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpOver (int) "over: any any -> any any any" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpRot (int) "rot: any any any -> any any any" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpPrint (int) "print: any -> None" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpPrintInt (int) "print: any -> None" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpPrintStr (int) "print: any -> None" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpPrintBool (int) "print: any -> None" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpPrintChar (int) "print: any -> None" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpPrintCstr (int) "print: any -> None" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpFnExec (int) "exec: fn[sig] -> ..." STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpTypeof (int) "typeof: any -> str" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpAssignDec (int) "-=: int -> None" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpAssignInc (int) "+=: int -> None" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpHeapAlloc (int) "alloc: int -> ptr" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpLoad8 (int) "load8: ptr -> int" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpLoad16 (int) "load16: ptr -> int" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpLoad32 (int) "load32: ptr -> int" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpLoad64 (int) "load64: ptr -> int" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpStore8 (int) "store8: any ptr -> None" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpStore16 (int) "store16: any ptr -> None" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpStore32 (int) "store32: any ptr -> None" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpStore64 (int) "store64: any ptr -> None" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpSyscall0 (int) "syscall0: int -> int" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpSyscall1 (int) "syscall1: any int -> int" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpSyscall2 (int) "syscall2: any any int -> int" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpSyscall3 (int) "syscall3: any any any int -> int" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpSyscall4 (int) "syscall4: any any any any int -> int" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpSyscall5 (int) "syscall5: any any any any any int -> int" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpSyscall6 (int) "syscall6: any any any any any any int -> int" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpArgc (int) "argc: None -> int" STACK_EFFECTS .set = STACK_EFFECTS
+    OpKind::OpArgv (int) "argv: None -> ptr" STACK_EFFECTS .set = STACK_EFFECTS
+}
+
+# ============================================================================
+# Keyword and intrinsic name helpers
+# ============================================================================
+
+fn keyword_name kind:int -> str {
+    if KeywordKind::Fn (int) kind == then "fn"
+    elif KeywordKind::Impl (int) kind == then "impl"
+    elif KeywordKind::Return (int) kind == then "return"
+    elif KeywordKind::While (int) kind == then "while"
+    elif KeywordKind::Do (int) kind == then "do"
+    elif KeywordKind::Break (int) kind == then "break"
+    elif KeywordKind::Continue (int) kind == then "continue"
+    elif KeywordKind::Done (int) kind == then "done"
+    elif KeywordKind::If (int) kind == then "if"
+    elif KeywordKind::Then (int) kind == then "then"
+    elif KeywordKind::Elif (int) kind == then "elif"
+    elif KeywordKind::Else (int) kind == then "else"
+    elif KeywordKind::Fi (int) kind == then "fi"
+    elif KeywordKind::EnumKw (int) kind == then "enum"
+    elif KeywordKind::StructKw (int) kind == then "struct"
+    elif KeywordKind::TraitKw (int) kind == then "trait"
+    elif KeywordKind::End (int) kind == then "end"
+    elif KeywordKind::Match (int) kind == then "match"
+    elif KeywordKind::Is (int) kind == then "is"
+    elif KeywordKind::Include (int) kind == then "include"
+    else "unknown"
+    fi
+}
+
+fn intrinsic_name kind:int -> str {
+    if IntrinsicKind::Drop (int) kind == then "drop"
+    elif IntrinsicKind::Dup (int) kind == then "dup"
+    elif IntrinsicKind::Over (int) kind == then "over"
+    elif IntrinsicKind::Rot (int) kind == then "rot"
+    elif IntrinsicKind::Swap (int) kind == then "swap"
+    elif IntrinsicKind::Alloc (int) kind == then "alloc"
+    elif IntrinsicKind::Load8 (int) kind == then "load8"
+    elif IntrinsicKind::Load16 (int) kind == then "load16"
+    elif IntrinsicKind::Load32 (int) kind == then "load32"
+    elif IntrinsicKind::Load64 (int) kind == then "load64"
+    elif IntrinsicKind::Store8 (int) kind == then "store8"
+    elif IntrinsicKind::Store16 (int) kind == then "store16"
+    elif IntrinsicKind::Store32 (int) kind == then "store32"
+    elif IntrinsicKind::Store64 (int) kind == then "store64"
+    elif IntrinsicKind::Print (int) kind == then "print"
+    elif IntrinsicKind::Typeof (int) kind == then "typeof"
+    elif IntrinsicKind::Exec (int) kind == then "exec"
+    elif IntrinsicKind::Syscall0 (int) kind == then "syscall0"
+    elif IntrinsicKind::Syscall1 (int) kind == then "syscall1"
+    elif IntrinsicKind::Syscall2 (int) kind == then "syscall2"
+    elif IntrinsicKind::Syscall3 (int) kind == then "syscall3"
+    elif IntrinsicKind::Syscall4 (int) kind == then "syscall4"
+    elif IntrinsicKind::Syscall5 (int) kind == then "syscall5"
+    elif IntrinsicKind::Syscall6 (int) kind == then "syscall6"
+    elif IntrinsicKind::Argc (int) kind == then "argc"
+    elif IntrinsicKind::Argv (int) kind == then "argv"
+    else "unknown"
+    fi
+}
+
+# ============================================================================
+# Server initialization and main loop
+# ============================================================================
+
+fn handle_initialize message:JsonValue {
+    "id" message json_get_value .unwrap = hi_id
+
+    # Build semantic tokens legend
+    List::new (List[JsonValue]) = hi_token_types
+    "function" json_string_value hi_token_types .push
+    "variable" json_string_value hi_token_types .push
+    "string" json_string_value hi_token_types .push
+    "number" json_string_value hi_token_types .push
+    "keyword" json_string_value hi_token_types .push
+    "operator" json_string_value hi_token_types .push
+    "type" json_string_value hi_token_types .push
+    "enumMember" json_string_value hi_token_types .push
+    "struct" json_string_value hi_token_types .push
+    "macro" json_string_value hi_token_types .push
+
+    # Trigger characters for completion
+    List::new (List[JsonValue]) = hi_triggers
+    "." json_string_value hi_triggers .push
+    ":" json_string_value hi_triggers .push
+
+    json_object
+        "capabilities" json_object
+            "textDocumentSync" 1 json_int_value json_set
+            "definitionProvider" true json_bool_value json_set
+            "hoverProvider" true json_bool_value json_set
+            "completionProvider" json_object
+                "triggerCharacters" hi_triggers json_array_value json_set
+            json_object_value json_set
+            "referencesProvider" true json_bool_value json_set
+            "renameProvider" true json_bool_value json_set
+            "semanticTokensProvider" json_object
+                "legend" json_object
+                    "tokenTypes" hi_token_types json_array_value json_set
+                    "tokenModifiers" List::new (List[JsonValue]) json_array_value json_set
+                json_object_value json_set
+                "full" true json_bool_value json_set
+            json_object_value json_set
+        json_object_value json_set
+    json_object_value hi_id send_response
+}
+
+fn handle_shutdown message:JsonValue {
+    "id" message json_get_value .unwrap = hs_id
+    json_null_value hs_id send_response
+}
+
+fn handle_exit message:JsonValue {
+    0 exit
+}
+
+fn dispatch_message message:JsonValue {
+    "method" message json_get_str = dm_method_opt
+    if dm_method_opt .is_none then return fi
+    dm_method_opt .unwrap = dm_method
+
+    if "initialize" dm_method == then
+        message handle_initialize
+    elif "shutdown" dm_method == then
+        message handle_shutdown
+    elif "exit" dm_method == then
+        message handle_exit
+    elif "textDocument/didOpen" dm_method == then
+        message handle_did_open
+    elif "textDocument/didChange" dm_method == then
+        message handle_did_change
+    elif "textDocument/didSave" dm_method == then
+        message handle_did_save
+    elif "textDocument/definition" dm_method == then
+        message handle_definition
+    elif "textDocument/hover" dm_method == then
+        message handle_hover
+    elif "textDocument/completion" dm_method == then
+        message handle_completion
+    elif "textDocument/references" dm_method == then
+        message handle_references
+    elif "textDocument/rename" dm_method == then
+        message handle_rename
+    elif "textDocument/semanticTokens/full" dm_method == then
+        message handle_semantic_tokens
+    fi
+}
+
+fn main {
+    true = RESILIENT_MODE
+    init_token_type_map
+    init_stack_effects
+
+    while true do
+        STDIN_READER read_message = msg_opt
+        if msg_opt .is_none then
+            break
+        fi
+        msg_opt .unwrap dispatch_message
+    done
+}
+
+main
