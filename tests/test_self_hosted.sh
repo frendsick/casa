@@ -4,6 +4,13 @@ set -eu
 ROOT_DIR=$(git rev-parse --show-toplevel)
 TESTS_DIR="$ROOT_DIR/tests/self_hosted"
 
+# Accept optional compiler path as first argument
+if [ $# -ge 1 ]; then
+    COMPILER="$1"
+else
+    COMPILER="python3 $ROOT_DIR/casa.py"
+fi
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 RESET='\033[0m'
@@ -17,7 +24,7 @@ for f in "$TESTS_DIR"/test_*.casa; do
 
     printf "Running: %s ... " "$base"
 
-    if ! python3 "$ROOT_DIR/casa.py" "$f" -o "$binary" 2>/tmp/casa_compile_err; then
+    if ! $COMPILER "$f" -o "$binary" 2>/tmp/casa_compile_err; then
         printf "${RED}COMPILE FAIL${RESET}\n"
         cat /tmp/casa_compile_err
         fail=$((fail+1))
@@ -76,6 +83,41 @@ else
     fi
 fi
 rm -f "$stage1" "$stage2" "$stage2_test_bin"
+
+# Fixed-point verification: stage2.s == stage3.s
+printf "Running: fixed_point ... "
+
+stage1="/tmp/casa_fp_stage1"
+stage2="/tmp/casa_fp_stage2"
+stage3="/tmp/casa_fp_stage3"
+
+if ! python3 "$ROOT_DIR/casa.py" "$ROOT_DIR/self_hosted/casa.casa" -o "$stage1" 2>/tmp/casa_compile_err; then
+    printf "${RED}STAGE1 COMPILE FAIL${RESET}\n"
+    cat /tmp/casa_compile_err
+    fail=$((fail+1))
+else
+    if ! "$stage1" "$ROOT_DIR/self_hosted/casa.casa" -o "$stage2" --keep-asm 2>/tmp/casa_compile_err; then
+        printf "${RED}STAGE2 COMPILE FAIL${RESET}\n"
+        cat /tmp/casa_compile_err
+        fail=$((fail+1))
+    else
+        if ! "$stage2" "$ROOT_DIR/self_hosted/casa.casa" -o "$stage3" --keep-asm 2>/tmp/casa_compile_err; then
+            printf "${RED}STAGE3 COMPILE FAIL${RESET}\n"
+            cat /tmp/casa_compile_err
+            fail=$((fail+1))
+        else
+            if diff "$stage2.s" "$stage3.s" > /dev/null 2>&1; then
+                printf "${GREEN}OK${RESET}\n"
+                pass=$((pass+1))
+            else
+                printf "${RED}STAGE2/STAGE3 ASSEMBLY DIFFERS${RESET}\n"
+                diff "$stage2.s" "$stage3.s" | head -20
+                fail=$((fail+1))
+            fi
+        fi
+    fi
+fi
+rm -f "$stage1" "$stage2" "$stage3" "$stage2.s" "$stage3.s"
 
 echo
 echo "Summary: $pass passed, $fail failed"

@@ -476,6 +476,202 @@ fn test_nested_generic_params {
 }
 
 # ============================================================================
+# split_type_tokens
+# ============================================================================
+
+fn test_stt_simple_types {
+    "stt_simple_types" test_start
+    "str int" split_type_tokens = result
+    "count" 2 result .length assert_eq
+    "first" "str" 0 result .get assert_str_eq
+    "second" "int" 1 result .get assert_str_eq
+}
+
+fn test_stt_single_type {
+    "stt_single_type" test_start
+    "int" split_type_tokens = result
+    "count" 1 result .length assert_eq
+    "value" "int" 0 result .get assert_str_eq
+}
+
+fn test_stt_generic_type {
+    "stt_generic_type" test_start
+    "str List[int]" split_type_tokens = result
+    "count" 2 result .length assert_eq
+    "first" "str" 0 result .get assert_str_eq
+    "second" "List[int]" 1 result .get assert_str_eq
+}
+
+fn test_stt_arrow {
+    "stt_arrow" test_start
+    "int -> int" split_type_tokens = result
+    "count" 3 result .length assert_eq
+    "first" "int" 0 result .get assert_str_eq
+    "arrow" "->" 1 result .get assert_str_eq
+    "third" "int" 2 result .get assert_str_eq
+}
+
+fn test_stt_nested_brackets {
+    "stt_nested_brackets" test_start
+    "Map[str List[int]]" split_type_tokens = result
+    "count" 1 result .length assert_eq
+    "value" "Map[str List[int]]" 0 result .get assert_str_eq
+}
+
+fn test_stt_empty_string {
+    "stt_empty_string" test_start
+    "" split_type_tokens = result
+    "count" 0 result .length assert_eq
+}
+
+# ============================================================================
+# Type satisfaction - type variables
+# ============================================================================
+
+fn test_type_var_with_matching_bound_satisfies {
+    "type_var_with_matching_bound_satisfies" test_start
+    HASHABLE_TRAIT trait_test_parse drop
+    # Build a Signature with K bounded by Hashable
+    Map::new (Map[str str]) = bounds
+    "K" "Hashable" bounds .set = bounds
+    Set::new (Set[str]) = type_vars
+    "K" type_vars .add = type_vars
+    # Construct Signature: parameters, return_types, type_vars, trait_bounds
+    bounds type_vars List::new (List[str]) List::new (List[Parameter]) Signature = sig
+    sig empty_location List::new (List[Op]) "test_fn" make_function_with_sig = func
+    func Option::Some = func_opt
+    "satisfies" func_opt "Hashable" "K" type_satisfies_trait assert_true
+}
+
+fn test_type_var_without_bound_does_not_satisfy {
+    "type_var_without_bound_does_not_satisfy" test_start
+    HASHABLE_TRAIT trait_test_parse drop
+    # Build a Signature with K but no trait bounds
+    Set::new (Set[str]) = type_vars
+    "K" type_vars .add = type_vars
+    Map::new (Map[str str]) type_vars List::new (List[str]) List::new (List[Parameter]) Signature = sig
+    sig empty_location List::new (List[Op]) "test_fn" make_function_with_sig = func
+    func Option::Some = func_opt
+    "does not satisfy" func_opt "Hashable" "K" type_satisfies_trait ! assert_true
+}
+
+fn test_type_var_with_wrong_bound_does_not_satisfy {
+    "type_var_with_wrong_bound_does_not_satisfy" test_start
+    "trait Hashable { fn hash self:self -> int }\ntrait Printable { fn to_str self:self -> str }\n" trait_test_parse drop
+    # Build a Signature with K bounded by Printable, check against Hashable
+    Map::new (Map[str str]) = bounds
+    "K" "Printable" bounds .set = bounds
+    Set::new (Set[str]) = type_vars
+    "K" type_vars .add = type_vars
+    bounds type_vars List::new (List[str]) List::new (List[Parameter]) Signature = sig
+    sig empty_location List::new (List[Op]) "test_fn" make_function_with_sig = func
+    func Option::Some = func_opt
+    "does not satisfy" func_opt "Hashable" "K" type_satisfies_trait ! assert_true
+}
+
+# ============================================================================
+# Signature trait_bounds field
+# ============================================================================
+
+fn test_trait_bounds_default_empty {
+    "trait_bounds_default_empty" test_start
+    empty_signature = sig
+    "empty" 0 sig Signature::trait_bounds .length assert_eq
+}
+
+fn test_trait_bounds_preserved_in_signature {
+    "trait_bounds_preserved_in_signature" test_start
+    Map::new (Map[str str]) = bounds
+    "K" "Hashable" bounds .set = bounds
+    Set::new (Set[str]) = type_vars
+    "K" type_vars .add = type_vars
+    bounds type_vars List::new (List[str]) List::new (List[Parameter]) Signature = sig
+    "preserved" "Hashable" "K" sig Signature::trait_bounds .get .unwrap assert_str_eq
+}
+
+# ============================================================================
+# Trait ref resolution (K::hash, &K::hash)
+# ============================================================================
+
+fn test_k_coloncolon_method_resolved_as_push_variable_exec {
+    "k_coloncolon_method_resolved_as_push_variable_exec" test_start
+    enable_test_mode
+    clear_errors
+    HASHABLE_TRAIT "struct MyType { val: int }\nimpl MyType {\n    fn hash self:MyType -> int { self MyType::val }\n    fn eq self:MyType other:MyType -> bool { self MyType::val other MyType::val == }\n}\nfn get_hash[K: Hashable] k:K -> int { k K::hash }\n42 MyType = m\nm get_hash drop\n" str::concat trait_test_typecheck drop
+    "get_hash" GLOBAL_FUNCTIONS .get .unwrap = func
+    # K::hash resolves to OpPushVar with trait_exec annotation
+    false = found_push_var
+    false = found_trait_exec
+    0 = index
+    while index func Function::ops .length > do
+        index func Function::ops .get = current_op
+        if
+            OpKind::OpPushVar (int) current_op Op::kind ==
+            "__trait_K_hash" current_op Op::value (str) == &&
+        then
+            true = found_push_var
+            if "trait_exec" current_op Op::type_annotation == then
+                true = found_trait_exec
+            fi
+        fi
+        1 += index
+    done
+    "found push_var" found_push_var assert_true
+    "found trait_exec annotation" found_trait_exec assert_true
+    clear_errors
+    disable_test_mode
+}
+
+fn test_ampersand_k_coloncolon_method_resolved_as_push_variable {
+    "ampersand_k_coloncolon_method_resolved_as_push_variable" test_start
+    enable_test_mode
+    clear_errors
+    HASHABLE_TRAIT "struct MyType { val: int }\nimpl MyType {\n    fn hash self:MyType -> int { self MyType::val }\n    fn eq self:MyType other:MyType -> bool { self MyType::val other MyType::val == }\n}\nfn get_hash_fn[K: Hashable] -> fn[K -> int] { &K::hash }\n42 MyType = m\nm get_hash_fn drop\n" str::concat trait_test_typecheck drop
+    "get_hash_fn" GLOBAL_FUNCTIONS .get .unwrap = func
+    # &K::hash resolves to OpPushVar without trait_exec annotation (fn ref)
+    false = found_push_var
+    0 = index
+    while index func Function::ops .length > do
+        index func Function::ops .get = current_op
+        if
+            OpKind::OpPushVar (int) current_op Op::kind ==
+            "__trait_K_hash" current_op Op::value (str) == &&
+        then
+            true = found_push_var
+        fi
+        1 += index
+    done
+    "found push_var" found_push_var assert_true
+    clear_errors
+    disable_test_mode
+}
+
+# ============================================================================
+# Auto-injection errors
+# ============================================================================
+
+fn test_trait_bounded_fn_with_non_satisfying_type_raises {
+    "trait_bounded_fn_with_non_satisfying_type_raises" test_start
+    enable_test_mode
+    clear_errors
+    HASHABLE_TRAIT "struct NoHash { val: int }\nfn get_hash[K: Hashable] k:K -> int { k .hash }\n42 NoHash = m\nm get_hash\n" str::concat trait_test_typecheck drop
+    "has errors" assert_has_errors
+    "type mismatch for unsatisfied trait" ErrorKind::TypeMismatch (int) assert_error_kind
+    clear_errors
+    disable_test_mode
+}
+
+# ============================================================================
+# Parse map type in signature
+# ============================================================================
+
+fn test_parse_map_type_in_signature {
+    "parse_map_type_in_signature" test_start
+    "trait Hashable { fn hash self:self -> int }\nstruct MapStruct { data: ptr }\nfn test_fn m:MapStruct -> int { 0 }" trait_test_parse drop
+    "passes" true assert_true
+}
+
+# ============================================================================
 # Trait method calling (dot syntax on bounded type var)
 # ============================================================================
 
@@ -570,5 +766,32 @@ test_dot_eq_on_bounded_type_var
 
 # Auto-injection
 test_calling_trait_bounded_fn_injects_fn_push
+
+# split_type_tokens
+test_stt_simple_types
+test_stt_single_type
+test_stt_generic_type
+test_stt_arrow
+test_stt_nested_brackets
+test_stt_empty_string
+
+# Type satisfaction - type variables
+test_type_var_with_matching_bound_satisfies
+test_type_var_without_bound_does_not_satisfy
+test_type_var_with_wrong_bound_does_not_satisfy
+
+# Signature trait_bounds field
+test_trait_bounds_default_empty
+test_trait_bounds_preserved_in_signature
+
+# Trait ref resolution
+test_k_coloncolon_method_resolved_as_push_variable_exec
+test_ampersand_k_coloncolon_method_resolved_as_push_variable
+
+# Auto-injection errors
+test_trait_bounded_fn_with_non_satisfying_type_raises
+
+# Parse map type
+test_parse_map_type_in_signature
 
 test_summary
