@@ -1,0 +1,469 @@
+# Tokenizer for the Casa programming language.
+
+# ============================================================================
+# Escape sequence map
+# ============================================================================
+Map::new (Map[int str]) = ESCAPE_SEQUENCES
+'n' (int) "\n" ESCAPE_SEQUENCES .set = ESCAPE_SEQUENCES
+'t' (int) "\t" ESCAPE_SEQUENCES .set = ESCAPE_SEQUENCES
+'\\' (int) "\\" ESCAPE_SEQUENCES .set = ESCAPE_SEQUENCES
+'"' (int) "\"" ESCAPE_SEQUENCES .set = ESCAPE_SEQUENCES
+'0' (int) "\0" ESCAPE_SEQUENCES .set = ESCAPE_SEQUENCES
+'r' (int) "\r" ESCAPE_SEQUENCES .set = ESCAPE_SEQUENCES
+'{' (int) "{" ESCAPE_SEQUENCES .set = ESCAPE_SEQUENCES
+'}' (int) "}" ESCAPE_SEQUENCES .set = ESCAPE_SEQUENCES
+'\'' (int) "'" ESCAPE_SEQUENCES .set = ESCAPE_SEQUENCES
+
+# ============================================================================
+# Lexer state
+# ============================================================================
+struct Lexer {
+    cursor: Cursor
+    file:   str
+    errors: List[CasaError]
+}
+
+fn make_lexer source:str file:str -> Lexer {
+    List::new (List[CasaError]) file source Cursor::new Lexer
+}
+
+# ============================================================================
+# Lexer helpers
+# ============================================================================
+
+fn lexer_loc lexer:Lexer offset:int length:int -> Location {
+    length offset lexer Lexer::file make_location
+}
+
+fn lexer_cur_loc lexer:Lexer length:int -> Location {
+    length lexer Lexer::cursor Cursor::pos lexer lexer_loc
+}
+
+fn lexer_skip_whitespace lexer:Lexer {
+    while lexer Lexer::cursor .is_eof ! do
+        lexer Lexer::cursor .peek = char_opt
+        if char_opt .is_none then break fi
+        if char_opt .unwrap .is_space ! then break fi
+        lexer Lexer::cursor .advance drop
+    done
+}
+
+fn lexer_skip_line lexer:Lexer {
+    while lexer Lexer::cursor .is_eof ! do
+        lexer Lexer::cursor .advance = char_opt
+        if char_opt .is_none then break fi
+        if '\n' char_opt .unwrap == then break fi
+    done
+}
+
+fn lexer_startswith lexer:Lexer prefix:str -> bool {
+    prefix lexer Lexer::cursor .starts_with
+}
+
+fn lexer_add_error lexer:Lexer kind:int message:str loc:Location {
+    loc message kind make_error lexer Lexer::errors .push
+}
+
+# ============================================================================
+# Integer literal
+# ============================================================================
+
+fn lexer_lex_integer lexer:Lexer -> Token {
+    lexer Lexer::cursor Cursor::pos = start
+    StringBuilder::new = builder
+    while lexer Lexer::cursor .is_eof ! do
+        lexer Lexer::cursor .peek = char_opt
+        if char_opt .is_none then break fi
+        if char_opt .unwrap .is_digit ! then break fi
+        char_opt .unwrap builder .append_char
+        lexer Lexer::cursor .advance drop
+    done
+    lexer Lexer::cursor Cursor::pos start - start lexer lexer_loc = loc
+    loc TokenKind::Literal (int) builder .build make_token
+}
+
+# ============================================================================
+# Escape sequence
+# ============================================================================
+
+fn lexer_parse_escape lexer:Lexer -> Option[str] {
+    lexer Lexer::cursor .advance = char_opt
+    if char_opt .is_none then
+        Option::None return
+    fi
+    char_opt .unwrap (int) ESCAPE_SEQUENCES .get = result
+    if result .is_some then
+        result return
+    fi
+    2 lexer Lexer::cursor Cursor::pos 2 - lexer lexer_loc = loc
+    loc f"Invalid escape sequence" ErrorKind::Syntax (int) lexer lexer_add_error
+    "" Option::Some
+}
+
+# ============================================================================
+# String literal
+# ============================================================================
+
+fn lexer_parse_string lexer:Lexer -> str {
+    lexer Lexer::cursor Cursor::pos = start
+    lexer Lexer::cursor .advance drop  # skip "
+    StringBuilder::new = builder
+    '"' builder .append_char
+    false = closed
+    while lexer Lexer::cursor .is_eof ! do
+        lexer Lexer::cursor .advance = char_opt
+        if char_opt .is_none then break fi
+        char_opt .unwrap = ch
+        if '\\' ch == then
+            lexer lexer_parse_escape = escape
+            if escape .is_none then break fi
+            escape .unwrap builder .append
+            continue
+        fi
+        if '"' ch == then
+            '"' builder .append_char
+            true = closed
+            break
+        fi
+        ch builder .append_char
+    done
+    if closed ! then
+        lexer Lexer::cursor Cursor::pos start - start lexer lexer_loc = error_loc
+        error_loc "Unclosed string literal" ErrorKind::Syntax (int) lexer lexer_add_error
+    fi
+    builder .build
+}
+
+# ============================================================================
+# Char literal
+# ============================================================================
+
+fn lexer_parse_char lexer:Lexer -> Token {
+    lexer Lexer::cursor Cursor::pos = start
+    lexer Lexer::cursor .advance drop  # skip '
+
+    lexer Lexer::cursor .advance = next_opt
+    if next_opt .is_none then
+        lexer Lexer::cursor Cursor::pos start - start lexer lexer_loc = error_loc
+        error_loc "Unclosed char literal" ErrorKind::Syntax (int) lexer lexer_add_error
+        error_loc TokenKind::Literal (int) "'\0'" make_token return
+    fi
+    next_opt .unwrap = next_char
+    "" = char_value
+
+    if '\\' next_char == then
+        lexer lexer_parse_escape = escape
+        if escape .is_none then
+            lexer Lexer::cursor Cursor::pos start - start lexer lexer_loc = error_loc2
+            error_loc2 TokenKind::Literal (int) "'\0'" make_token return
+        fi
+        escape .unwrap = char_value
+    elif '\'' next_char == then
+        lexer Lexer::cursor Cursor::pos start - start lexer lexer_loc = error_loc3
+        error_loc3 "Empty char literal" ErrorKind::Syntax (int) lexer lexer_add_error
+        error_loc3 TokenKind::Literal (int) "'\0'" make_token return
+    else
+        StringBuilder::new = char_builder
+        next_char char_builder .append_char
+        char_builder .build = char_value
+    fi
+
+    # Expect closing '
+    lexer Lexer::cursor .advance = closing
+    if closing .is_none then
+        lexer Lexer::cursor Cursor::pos start - start lexer lexer_loc = error_loc4
+        error_loc4 "Unclosed char literal" ErrorKind::Syntax (int) lexer lexer_add_error
+    elif '\'' closing .unwrap != then
+        lexer Lexer::cursor Cursor::pos start - start lexer lexer_loc = error_loc5
+        error_loc5 "Unclosed char literal" ErrorKind::Syntax (int) lexer lexer_add_error
+    fi
+
+    lexer Lexer::cursor Cursor::pos start - start lexer lexer_loc = final_loc
+    StringBuilder::new = result
+    '\'' result .append_char
+    char_value result .append
+    '\'' result .append_char
+    final_loc TokenKind::Literal (int) result .build make_token
+}
+
+# ============================================================================
+# Peek word
+# ============================================================================
+
+fn lexer_peek_word lexer:Lexer -> Option[str] {
+    if lexer Lexer::cursor .is_eof then
+        Option::None return
+    fi
+    lexer Lexer::cursor Cursor::source = source
+    lexer Lexer::cursor Cursor::pos = pos
+    StringBuilder::new = builder
+
+    while pos source .length > do
+        pos source .at = ch
+        if ch delimiter_from_char .is_some then break fi
+        if ch .is_space then break fi
+        builder .build = word
+        if "->" word == then break fi
+        if "=>" word == then break fi
+        if word "->" str::ends_with then
+            word 0 word .length 2 - str::substring Option::Some return
+        fi
+        if word "=>" str::ends_with then
+            word 0 word .length 2 - str::substring Option::Some return
+        fi
+        ch builder .append_char
+        1 += pos
+    done
+
+    builder .build = final_word
+    if 0 final_word .length == then
+        Option::None
+    else
+        final_word Option::Some
+    fi
+}
+
+# ============================================================================
+# Negative integer literal check
+# ============================================================================
+
+fn is_negative_integer_literal value:str -> bool {
+    if 2 value .length < then false return fi
+    if '-' 0 value .at != then false return fi
+    1 = index
+    while index value .length > do
+        if index value .at .is_digit ! then false return fi
+        1 += index
+    done
+    true
+}
+
+# ============================================================================
+# Multichar token
+# ============================================================================
+
+fn lexer_lex_multichar lexer:Lexer -> Option[Token] {
+    lexer Lexer::cursor Cursor::pos = start
+    # String literal
+    if "\"" lexer lexer_startswith then
+        lexer lexer_parse_string = str_value
+        lexer Lexer::cursor Cursor::pos start - start lexer lexer_loc = str_loc
+        str_loc TokenKind::Literal (int) str_value make_token Option::Some return
+    fi
+
+    lexer lexer_peek_word = word_opt
+    if word_opt .is_none then
+        Option::None return
+    fi
+    word_opt .unwrap = value
+    value .length = length
+    length start lexer lexer_loc = loc
+    lexer Lexer::cursor Cursor::pos length + lexer Lexer::cursor Cursor::set_pos
+
+    # Previous char is digit?
+    false = prev_digit
+    if 0 start != then
+        start 1 - lexer Lexer::cursor Cursor::source .at .is_digit = prev_digit
+    fi
+
+    # Negative integer literal
+    if value is_negative_integer_literal prev_digit ! && then
+        loc TokenKind::Literal (int) value make_token Option::Some return
+    fi
+    # Boolean literals
+    if "true" value == "false" value == || then
+        loc TokenKind::Literal (int) value make_token Option::Some return
+    fi
+    # Delimiter
+    if value delimiter_from_str .is_some then
+        loc TokenKind::Delimiter (int) value make_token Option::Some return
+    fi
+    # Intrinsic
+    if value intrinsic_from_str .is_some then
+        loc TokenKind::Intrinsic (int) value make_token Option::Some return
+    fi
+    # Keyword
+    if value keyword_from_str .is_some then
+        loc TokenKind::Keyword (int) value make_token Option::Some return
+    fi
+    # Operator
+    if value operator_from_str .is_some then
+        loc TokenKind::Operator (int) value make_token Option::Some return
+    fi
+    # :: chaining
+    if "::" lexer lexer_startswith then
+        lexer Lexer::cursor Cursor::pos 2 + lexer Lexer::cursor Cursor::set_pos
+        lexer lexer_lex_multichar = method_opt
+        if method_opt .is_none then
+            loc "Expected method name after `::`" ErrorKind::Syntax (int) lexer lexer_add_error
+            loc TokenKind::Identifier (int) value make_token Option::Some return
+        fi
+        method_opt .unwrap Token::value = method_name
+        f"{value}::{method_name}" = full_name
+        full_name .length start lexer lexer_loc = full_loc
+        full_loc TokenKind::Identifier (int) full_name make_token Option::Some return
+    fi
+    # Identifier
+    loc TokenKind::Identifier (int) value make_token Option::Some
+}
+
+# ============================================================================
+# F-string lexing
+# ============================================================================
+
+fn lexer_lex_fstring_expr lexer:Lexer tokens:List[Token] {
+    0 = depth
+    while lexer Lexer::cursor .is_eof ! do
+        lexer lexer_skip_whitespace
+        if lexer Lexer::cursor .is_eof then break fi
+        lexer Lexer::cursor .peek .unwrap = ch
+        # Nested f-string
+        if "f\"" lexer lexer_startswith then
+            tokens lexer lexer_lex_fstring
+            continue
+        fi
+        # Closing }
+        if '}' ch == 0 depth == && then
+            1 lexer lexer_cur_loc = end_loc
+            end_loc TokenKind::FstringExprEnd (int) "}" make_token tokens .push
+            lexer Lexer::cursor .advance drop
+            return
+        fi
+        if '{' ch == then 1 += depth fi
+        if '}' ch == then depth 1 - = depth fi
+        lexer lexer_parse_single_token = token_opt
+        if token_opt .is_some then
+            token_opt .unwrap tokens .push
+        fi
+    done
+    0 lexer lexer_cur_loc "Unclosed f-string expression" ErrorKind::Syntax (int) lexer lexer_add_error
+}
+
+fn lexer_lex_fstring lexer:Lexer tokens:List[Token] {
+    lexer Lexer::cursor Cursor::pos = start
+    2 start lexer lexer_loc = start_loc
+    lexer Lexer::cursor Cursor::pos 2 + lexer Lexer::cursor Cursor::set_pos
+
+    start_loc TokenKind::FstringStart (int) "" make_token tokens .push
+    StringBuilder::new = text
+    lexer Lexer::cursor Cursor::pos = text_start
+
+    while lexer Lexer::cursor .is_eof ! do
+        lexer Lexer::cursor .peek .unwrap = ch
+        # Escape
+        if '\\' ch == then
+            lexer Lexer::cursor .advance drop
+            lexer lexer_parse_escape = escape
+            if escape .is_none then break fi
+            escape .unwrap text .append
+            continue
+        fi
+        # Expression
+        if '{' ch == then
+            if 0 text .length != then
+                lexer Lexer::cursor Cursor::pos text_start - text_start lexer lexer_loc = text_loc
+                text_loc TokenKind::FstringText (int) text .build make_token tokens .push
+                StringBuilder::new = text
+            fi
+            1 lexer Lexer::cursor Cursor::pos lexer lexer_loc = expr_loc
+            expr_loc TokenKind::FstringExprStart (int) "{" make_token tokens .push
+            lexer Lexer::cursor .advance drop
+            tokens lexer lexer_lex_fstring_expr
+            lexer Lexer::cursor Cursor::pos = text_start
+            continue
+        fi
+        # End
+        if '"' ch == then
+            if 0 text .length != then
+                lexer Lexer::cursor Cursor::pos text_start - text_start lexer lexer_loc = text_loc2
+                text_loc2 TokenKind::FstringText (int) text .build make_token tokens .push
+            fi
+            lexer Lexer::cursor .advance drop
+            1 lexer Lexer::cursor Cursor::pos 1 - lexer lexer_loc = end_loc
+            end_loc TokenKind::FstringEnd (int) "" make_token tokens .push
+            return
+        fi
+        ch text .append_char
+        lexer Lexer::cursor .advance drop
+    done
+    lexer Lexer::cursor Cursor::pos start - start lexer lexer_loc
+    "Unclosed f-string" ErrorKind::Syntax (int) lexer lexer_add_error
+}
+
+# ============================================================================
+# Single token parsing
+# ============================================================================
+
+fn lexer_parse_single_token lexer:Lexer -> Option[Token] {
+    lexer Lexer::cursor .peek = peek_opt
+    if peek_opt .is_none then
+        Option::None return
+    fi
+    peek_opt .unwrap = ch
+    # Comment
+    if '#' ch == then
+        lexer lexer_skip_line
+        Option::None return
+    fi
+    # Char literal
+    if '\'' ch == then
+        lexer lexer_parse_char Option::Some return
+    fi
+    # Single-char delimiter
+    if ch delimiter_from_char .is_some then
+        lexer Lexer::cursor Cursor::pos = pos
+        StringBuilder::new = builder
+        ch builder .append_char
+        1 pos lexer lexer_loc = loc
+        loc TokenKind::Delimiter (int) builder .build make_token Option::Some
+        lexer Lexer::cursor .advance drop
+        return
+    fi
+    # Integer literal
+    if ch .is_digit then
+        lexer lexer_lex_integer Option::Some return
+    fi
+    # Multichar
+    lexer lexer_lex_multichar
+}
+
+# ============================================================================
+# Main lex function
+# ============================================================================
+
+fn lexer_lex lexer:Lexer -> List[Token] {
+    List::new (List[Token]) = tokens
+    while lexer Lexer::cursor .is_eof ! do
+        lexer lexer_skip_whitespace
+        if lexer Lexer::cursor .is_eof then break fi
+        if "f\"" lexer lexer_startswith then
+            tokens lexer lexer_lex_fstring
+            continue
+        fi
+        lexer lexer_parse_single_token = token_opt
+        if token_opt .is_some then
+            token_opt .unwrap tokens .push
+        fi
+    done
+    0 lexer lexer_cur_loc TokenKind::Eof (int) "" make_token tokens .push
+    if 0 lexer Lexer::errors .length != then
+        lexer Lexer::errors report_errors
+        1 exit
+    fi
+    tokens
+}
+
+# ============================================================================
+# Public API
+# ============================================================================
+
+fn lex_source code:str file:str -> List[Token] {
+    file code SOURCE_CACHE .set = SOURCE_CACHE
+    file code make_lexer lexer_lex
+}
+
+fn lex_file path:str -> List[Token] {
+    path file::read_all = code
+    path code SOURCE_CACHE .set = SOURCE_CACHE
+    path code make_lexer lexer_lex
+}

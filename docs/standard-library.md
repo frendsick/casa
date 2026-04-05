@@ -1187,6 +1187,131 @@ Returns the nth command-line argument as a string (zero-indexed). Prints an erro
 1 get_arg print    # prints the first argument
 ```
 
+## Argument Parser
+
+The argument parser library is in `lib/argparse.casa`. Include it with:
+
+```casa
+include "../lib/argparse.casa"
+```
+
+It provides a declarative API for defining and parsing CLI arguments, with auto-generated help output similar to Python's `argparse`.
+
+### `ArgParser::new`
+
+Creates a new argument parser with the given program name (used in help/error output).
+
+**Signature:** `ArgParser::new program_name:str -> ArgParser`
+
+**Stack effect:** `str -> ArgParser`
+
+```casa
+"myapp" ArgParser::new = parser
+```
+
+### `ArgParser::add_positional`
+
+Adds a required positional argument.
+
+**Signature:** `ArgParser::add_positional self:ArgParser name:str help_text:str`
+
+**Stack effect:** `ArgParser str str -> None`
+
+```casa
+"input file" "input" parser .add_positional
+```
+
+### `ArgParser::add_flag`
+
+Adds a boolean flag (store-true). Pass `""` for `short_flag` or `long_flag` if only one form is needed.
+
+**Signature:** `ArgParser::add_flag self:ArgParser name:str short_flag:str long_flag:str help_text:str`
+
+**Stack effect:** `ArgParser str str str str -> None`
+
+```casa
+"verbose output" "--verbose" "-v" "verbose" parser .add_flag
+```
+
+### `ArgParser::add_option`
+
+Adds an option that takes a string value.
+
+**Signature:** `ArgParser::add_option self:ArgParser name:str short_flag:str long_flag:str help_text:str`
+
+**Stack effect:** `ArgParser str str str str -> None`
+
+```casa
+"output binary name" "--output" "-o" "output" parser .add_option
+```
+
+### `ArgParser::parse_args`
+
+Parses `argc`/`argv` and returns the results. Automatically handles `-h`/`--help` (prints help and exits). Prints a usage error and exits on unrecognized arguments or missing positionals.
+
+**Signature:** `ArgParser::parse_args self:ArgParser -> ParsedArgs`
+
+**Stack effect:** `ArgParser -> ParsedArgs`
+
+```casa
+parser .parse_args = args
+```
+
+### `ParsedArgs::get`
+
+Returns an `Option[str]` for the named argument. Returns `Option::Some` with the value if provided, `Option::None` if not.
+
+**Signature:** `ParsedArgs::get self:ParsedArgs name:str -> Option[str]`
+
+**Stack effect:** `ParsedArgs str -> Option[str]`
+
+```casa
+"input" args .get .unwrap = input_file
+"output" args .get = output_opt    # Option::None if -o not given
+```
+
+### `ParsedArgs::get_flag`
+
+Returns `true` if the flag was set, `false` otherwise.
+
+**Signature:** `ParsedArgs::get_flag self:ParsedArgs name:str -> bool`
+
+**Stack effect:** `ParsedArgs str -> bool`
+
+```casa
+"verbose" args .get_flag = is_verbose
+```
+
+### Complete Example
+
+```casa
+include "../lib/argparse.casa"
+
+"myapp" ArgParser::new = parser
+"input file" "input" parser .add_positional
+"output file" "--output" "-o" "output" parser .add_option
+"verbose output" "--verbose" "-v" "verbose" parser .add_flag
+parser .parse_args = args
+
+"input" args .get .unwrap = input_file
+"output" args .get = output_opt
+"verbose" args .get_flag = is_verbose
+```
+
+Running `./myapp --help` produces:
+
+```
+usage: myapp [-h] [-o OUTPUT] [-v] input
+
+positional arguments:
+  input               input file
+
+options:
+  -h, --help          show this help message and exit
+  -o, --output OUTPUT output file
+  -v, --verbose       verbose output
+```
+
 ## `StringBuilder`
 
 A mutable string builder backed by `List[char]`. Useful for efficiently constructing strings from many parts.

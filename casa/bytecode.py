@@ -186,7 +186,7 @@ class Compiler:
             case OpKind.ASSIGN_DECREMENT:
                 bytecode.append(self.inst(get_kind, args=[index]))
                 bytecode.append(self.inst(InstKind.SWAP))
-                bytecode.append(self.inst(InstKind.ADD))
+                bytecode.append(self.inst(InstKind.SUB))
                 bytecode.append(self.inst(set_kind, args=[index]))
             case OpKind.ASSIGN_INCREMENT:
                 bytecode.append(self.inst(get_kind, args=[index]))

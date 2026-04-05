@@ -1,0 +1,315 @@
+# Error reporting for the Casa compiler.
+#
+# Provides Rust-style diagnostics with source context and multi-error collection.
+
+# ============================================================================
+# Source cache (populated during lexing)
+# ============================================================================
+Map::new (Map[str str]) = SOURCE_CACHE
+List::new (List[CasaError]) = ERRORS
+List::new (List[CasaWarning]) = WARNINGS
+false = TEST_MODE
+
+# ============================================================================
+# CasaError struct
+# ============================================================================
+
+struct CasaNote {
+    message:  str
+    location: Location
+}
+
+struct CasaError {
+    kind:      int
+    message:   str
+    location:  Location
+    expected:  Option[str]
+    got:       Option[str]
+    got_label: str
+    notes:     List[CasaNote]
+}
+
+fn make_error kind:int message:str location:Location -> CasaError {
+    List::new (List[CasaNote]) "Got" Option::None Option::None location message kind CasaError
+}
+
+fn make_error_expected kind:int message:str location:Location expected:str got:str -> CasaError {
+    List::new (List[CasaNote]) "Got" got Option::Some expected Option::Some location message kind CasaError
+}
+
+# ============================================================================
+# CasaWarning struct
+# ============================================================================
+
+struct CasaWarning {
+    kind:     int
+    message:  str
+    location: Location
+}
+
+# ============================================================================
+# Source position utilities
+# ============================================================================
+
+fn offset_to_line_col source:str offset:int -> int {
+    # Returns line number (1-based). Column and source line are not returned
+    # to keep the interface simple; use offset_to_col and offset_to_source_line.
+    if offset source .length < then
+        source .length = offset
+    fi
+    if 0 offset < then 0 = offset fi
+    1 = line
+    0 = index
+    while index offset > do
+        if '\n' index source .at == then
+            1 += line
+        fi
+        1 += index
+    done
+    line
+}
+
+fn offset_to_col source:str offset:int -> int {
+    # Returns column (1-based).
+    if offset source .length < then
+        source .length = offset
+    fi
+    if 0 offset < then 0 = offset fi
+    # Find the start of the line containing offset
+    offset = pos
+    while 0 pos > do
+        pos 1 - = prev
+        if '\n' prev source .at == then
+            break
+        fi
+        prev = pos
+    done
+    offset pos - 1 +
+}
+
+fn offset_to_source_line source:str offset:int -> str {
+    # Returns the source line containing offset.
+    if offset source .length < then
+        source .length = offset
+    fi
+    if 0 offset < then 0 = offset fi
+    # Find line start
+    offset = start
+    while 0 start > do
+        start 1 - = prev
+        if '\n' prev source .at == then
+            break
+        fi
+        prev = start
+    done
+    # Find line end
+    offset = end_pos
+    while end_pos source .length > do
+        if '\n' end_pos source .at == then
+            break
+        fi
+        1 += end_pos
+    done
+    source start end_pos start - str::substring
+}
+
+# ============================================================================
+# Error formatting
+# ============================================================================
+
+fn error_kind_name kind:int -> str {
+    if ErrorKind::Syntax (int) kind == then "SYNTAX"
+    elif ErrorKind::UnexpectedToken (int) kind == then "UNEXPECTED_TOKEN"
+    elif ErrorKind::UndefinedName (int) kind == then "UNDEFINED_NAME"
+    elif ErrorKind::DuplicateName (int) kind == then "DUPLICATE_NAME"
+    elif ErrorKind::InvalidScope (int) kind == then "INVALID_SCOPE"
+    elif ErrorKind::TypeMismatch (int) kind == then "TYPE_MISMATCH"
+    elif ErrorKind::StackMismatch (int) kind == then "STACK_MISMATCH"
+    elif ErrorKind::SignatureMismatch (int) kind == then "SIGNATURE_MISMATCH"
+    elif ErrorKind::InvalidVariable (int) kind == then "INVALID_VARIABLE"
+    elif ErrorKind::UnmatchedBlock (int) kind == then "UNMATCHED_BLOCK"
+    elif ErrorKind::MissingTraitMethod (int) kind == then "MISSING_TRAIT_METHOD"
+    elif ErrorKind::TraitSignatureMismatch (int) kind == then "TRAIT_SIGNATURE_MISMATCH"
+    else "UNKNOWN"
+    fi
+}
+
+fn format_source_context file:str source:str span_offset:int span_length:int -> str {
+    if 0 span_length == then 1 = span_length fi
+    span_offset source offset_to_line_col = line
+    span_offset source offset_to_col = col
+    span_offset source offset_to_source_line = source_line
+
+    line .to_str .length = width
+    StringBuilder::new = builder
+
+    # Arrow line: "  --> file:line:col"
+    "  --> " builder .append
+    file builder .append
+    ":" builder .append
+    line .to_str builder .append
+    ":" builder .append
+    col .to_str builder .append
+    "\n" builder .append
+
+    # Padding + pipe
+    0 = index
+    while index width > do
+        " " builder .append
+        1 += index
+    done
+    " |\n" builder .append
+
+    # Line number + source
+    line .to_str builder .append
+    " | " builder .append
+    source_line builder .append
+    "\n" builder .append
+
+    # Padding + carets
+    0 = index
+    while index width > do
+        " " builder .append
+        1 += index
+    done
+    " | " builder .append
+    0 = index
+    while index col 1 - > do
+        " " builder .append
+        1 += index
+    done
+    0 = index
+    while index span_length > do
+        "^" builder .append
+        1 += index
+    done
+
+    builder .build
+}
+
+fn format_error error:CasaError -> str {
+    StringBuilder::new = builder
+
+    # Header: error[KIND]: message
+    "error[" builder .append
+    error CasaError::kind error_kind_name builder .append
+    "]: " builder .append
+    error CasaError::message builder .append
+
+    # Source context if location has a file
+    if "" error CasaError::location Location::file != then
+        error CasaError::location Location::file SOURCE_CACHE .get = source_opt
+        if source_opt .is_some then
+            "\n" builder .append
+            source_opt .unwrap = source
+            error CasaError::location Location::span Span::length
+            error CasaError::location Location::span Span::offset
+            source
+            error CasaError::location Location::file
+            format_source_context builder .append
+        fi
+    fi
+
+    # Expected/Got
+    if error CasaError::expected .is_some then
+        "\n  Expected: " builder .append
+        error CasaError::expected .unwrap builder .append
+    fi
+    if error CasaError::got .is_some then
+        "\n  " builder .append
+        error CasaError::got_label builder .append
+        ": " builder .append
+        error CasaError::got .unwrap builder .append
+    fi
+
+    # Notes
+    0 = index
+    while index error CasaError::notes .length > do
+        index error CasaError::notes .get = note
+        "\n  Note: " builder .append
+        note CasaNote::message builder .append
+        if "" note CasaNote::location Location::file != then
+            note CasaNote::location Location::file SOURCE_CACHE .get = note_source
+            if note_source .is_some then
+                "\n" builder .append
+                note CasaNote::location Location::span Span::length
+                note CasaNote::location Location::span Span::offset
+                note_source .unwrap
+                note CasaNote::location Location::file
+                format_source_context builder .append
+            fi
+        fi
+        1 += index
+    done
+
+    builder .build
+}
+
+# ============================================================================
+# Error reporting
+# ============================================================================
+
+fn report_errors errors:List[CasaError] {
+    0 = index
+    while index errors .length > do
+        index errors .get format_error eprintln
+        "" eprintln
+        1 += index
+    done
+    f"Found {errors .length .to_str} error(s)." eprintln
+}
+
+fn report_warnings {
+    0 = index
+    while index WARNINGS .length > do
+        index WARNINGS .get = warning
+        StringBuilder::new = builder
+        "warning[" builder .append
+        if WarningKind::UnusedParameter (int) warning CasaWarning::kind == then
+            "UNUSED_PARAMETER" builder .append
+        else
+            "LOSSY_TYPE_ANNOTATION" builder .append
+        fi
+        "]: " builder .append
+        warning CasaWarning::message builder .append
+        builder .build eprintln
+        1 += index
+    done
+}
+
+# ============================================================================
+# Convenience functions
+# ============================================================================
+
+fn add_error kind:int message:str location:Location {
+    location message kind make_error ERRORS .push
+}
+
+fn add_error_expected kind:int message:str location:Location expected:str got:str {
+    got expected location message kind make_error_expected ERRORS .push
+}
+
+fn raise_error kind:int message:str location:Location {
+    location message kind make_error ERRORS .push
+    if TEST_MODE ! then
+        ERRORS report_errors
+        1 exit
+    fi
+}
+
+fn raise_error_expected kind:int message:str location:Location expected:str got:str {
+    got expected location message kind make_error_expected ERRORS .push
+    if TEST_MODE ! then
+        ERRORS report_errors
+        1 exit
+    fi
+}
+
+fn flush_errors {
+    if 0 ERRORS .length != then
+        if TEST_MODE ! then
+            ERRORS report_errors
+            1 exit
+        fi
+    fi
+}

@@ -1,0 +1,1462 @@
+include "../../self_hosted/common.casa"
+include "../../self_hosted/error.casa"
+include "../../self_hosted/emitter.casa"
+include "../../lib/test.casa"
+
+# Helper: check that a string contains a substring
+fn assert_contains needle:str haystack:str msg:str {
+    haystack needle str::find = position
+    if 0 position < then
+        msg false assert_true
+    else
+        msg true assert_true
+    fi
+}
+
+# Helper: build a minimal program with no bytecode
+fn make_empty_program -> Program {
+    0 0
+    List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    List::new (List[Inst])
+    Program
+}
+
+# Helper: build a program with given bytecode and strings
+fn make_simple_program bytecode:List[Inst] strings:List[str] globals:int constants:int -> Program {
+    constants globals strings
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program
+}
+
+fn test_sanitize_name {
+    "sanitize_name" test_start
+    "simple name" "foo" "foo" sanitize_name assert_str_eq
+    "double colon" "Foo__bar" "Foo::bar" sanitize_name assert_str_eq
+    "multiple" "A__B__C" "A::B::C" sanitize_name assert_str_eq
+    "no colons" "hello_world" "hello_world" sanitize_name assert_str_eq
+    "single colon preserved" "a:b" "a:b" sanitize_name assert_str_eq
+}
+
+fn test_escape_string {
+    "escape_string" test_start
+    "plain" "hello" "hello" escape_string assert_str_eq
+    "newline" "a\\nb" "a\nb" escape_string assert_str_eq
+    "tab" "a\\tb" "a\tb" escape_string assert_str_eq
+    "backslash" "\\\\" "\\" escape_string assert_str_eq
+    "quote" "\\\"" "\"" escape_string assert_str_eq
+}
+
+fn test_emit_bss {
+    "emit_bss" test_start
+    3 = globals
+    2 = constants
+    constants globals
+    List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    List::new (List[Inst])
+    Program = program
+
+    StringBuilder::new = asm_builder
+    program asm_builder emit_bss
+    asm_builder .build = result
+
+    "has bss section" result ".section .bss" assert_contains
+    "has globals" result "globals: .skip 24" assert_contains
+    "has constants" result "constants: .skip 16" assert_contains
+    "has return stack" result "return_stack: .skip 65536" assert_contains
+    "has heap" result "heap: .skip 1073741824" assert_contains
+    "has heap_ptr" result "heap_ptr: .skip 8" assert_contains
+    "has argc" result "__argc: .skip 8" assert_contains
+    "has argv" result "__argv: .skip 8" assert_contains
+    "has print_buf" result "print_buf: .skip 32" assert_contains
+}
+
+fn test_emit_data {
+    "emit_data" test_start
+    List::new (List[str]) = strings
+    "hello" strings .push
+    "world" strings .push
+
+    0 0 strings
+    Map::new (Map[str List[Inst]])
+    List::new (List[Inst])
+    Program = program
+
+    StringBuilder::new = asm_builder
+    program asm_builder emit_data
+    asm_builder .build = result
+
+    "has data section" result ".section .data" assert_contains
+    "has str_0 label" result "str_0:" assert_contains
+    "has str_1 label" result "str_1:" assert_contains
+    "has quad 5 for hello" result ".quad 5" assert_contains
+    "has hello ascii" result ".asciz \"hello\"" assert_contains
+    "has quad 5 for world" result ".quad 5" assert_contains
+    "has bool_true" result "bool_true:" assert_contains
+    "has bool_false" result "bool_false:" assert_contains
+}
+
+fn test_emit_push {
+    "emit_push" test_start
+    List::new (List[Inst]) = bytecode
+    42 InstKind::InstPush (int) make_inst_int bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has pushq $42" result "pushq $42" assert_contains
+}
+
+fn test_emit_push_str {
+    "emit_push_str" test_start
+    List::new (List[Inst]) = bytecode
+    0 InstKind::InstPushStr (int) make_inst_int bytecode .push
+
+    List::new (List[str]) = strings
+    "test" strings .push
+
+    0 0 strings
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has str_0 ref" result "str_0(%rip)" assert_contains
+}
+
+fn test_emit_add {
+    "emit_add" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstAdd (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has addq" result "addq %rax, (%rsp)" assert_contains
+}
+
+fn test_emit_label_and_jump {
+    "emit_label_and_jump" test_start
+    List::new (List[Inst]) = bytecode
+    7 InstKind::InstLabel (int) make_inst_int bytecode .push
+    7 InstKind::InstJump (int) make_inst_int bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has label" result ".L7:" assert_contains
+    "has jump" result "jmp .L7" assert_contains
+}
+
+fn test_emit_fn_call {
+    "emit_fn_call" test_start
+    List::new (List[Inst]) = bytecode
+    "my_func" InstKind::InstFnCall (int) make_inst_str bytecode .push
+
+    List::new (List[Inst]) = fn_bytecode
+
+    Map::new (Map[str List[Inst]]) = functions
+    "my_func" fn_bytecode functions .set = functions
+
+    0 0 List::new (List[str]) functions bytecode Program = program
+    program emit = result
+    "has jmp fn_my_func" result "jmp fn_my_func" assert_contains
+    "has fn_my_func label" result "fn_my_func:" assert_contains
+}
+
+fn test_emit_fn_call_sanitized {
+    "emit_fn_call_sanitized" test_start
+    List::new (List[Inst]) = bytecode
+    "Foo::bar" InstKind::InstFnCall (int) make_inst_str bytecode .push
+
+    List::new (List[Inst]) = fn_bytecode
+    Map::new (Map[str List[Inst]]) = functions
+    "Foo::bar" fn_bytecode functions .set = functions
+
+    0 0 List::new (List[str]) functions bytecode Program = program
+    program emit = result
+    "has jmp fn_Foo__bar" result "jmp fn_Foo__bar" assert_contains
+    "has fn_Foo__bar label" result "fn_Foo__bar:" assert_contains
+}
+
+fn test_emit_start_section {
+    "emit_start_section" test_start
+    make_empty_program emit = result
+    "has _start label" result "_start:" assert_contains
+    "has globl" result ".globl _start" assert_contains
+    "has return_stack init" result "leaq return_stack(%rip), %r14" assert_contains
+    "has exit syscall" result "movq $60, %rax" assert_contains
+}
+
+fn test_emit_helpers_present {
+    "emit_helpers_present" test_start
+    make_empty_program emit = result
+    "has print_int" result "print_int:" assert_contains
+    "has print_str" result "print_str:" assert_contains
+    "has str_concat" result "str_concat:" assert_contains
+}
+
+fn test_emit_comparison {
+    "emit_comparison" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstEq (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has cmpq" result "cmpq (%rsp), %rax" assert_contains
+    "has sete" result "sete %al" assert_contains
+}
+
+fn test_emit_syscall {
+    "emit_syscall" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstSyscall3 (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has popq rax" result "popq %rax" assert_contains
+    "has popq rdi" result "popq %rdi" assert_contains
+    "has popq rsi" result "popq %rsi" assert_contains
+    "has popq rdx" result "popq %rdx" assert_contains
+    "has syscall" result "    syscall" assert_contains
+    "has pushq rax" result "pushq %rax" assert_contains
+}
+
+fn test_emit_local_ops {
+    "emit_local_ops" test_start
+    List::new (List[Inst]) = bytecode
+    3 InstKind::InstLocalsInit (int) make_inst_int bytecode .push
+    0 InstKind::InstLocalGet (int) make_inst_int bytecode .push
+    1 InstKind::InstLocalSet (int) make_inst_int bytecode .push
+    3 InstKind::InstLocalsUninit (int) make_inst_int bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has locals init count" result "movq $3, %rcx" assert_contains
+    "has locals init add" result "addq $24, %r14" assert_contains
+    "has local get offset" result "movq -8(%r14), %rax" assert_contains
+    "has local set offset" result "movq %rax, -16(%r14)" assert_contains
+    "has locals uninit" result "subq $24, %r14" assert_contains
+}
+
+fn test_emit_global_ops {
+    "emit_global_ops" test_start
+    List::new (List[Inst]) = bytecode
+    2 InstKind::InstGlobalGet (int) make_inst_int bytecode .push
+    3 InstKind::InstGlobalSet (int) make_inst_int bytecode .push
+
+    5 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has global get" result "globals+16(%rip)" assert_contains
+    "has global set" result "globals+24(%rip)" assert_contains
+}
+
+fn test_emit_memory_ops {
+    "emit_memory_ops" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstLoad64 (int) make_inst bytecode .push
+    InstKind::InstStore64 (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has load64" result "movq (%rax), %rax" assert_contains
+    "has store64" result "movq %rbx, (%rax)" assert_contains
+}
+
+fn test_emit_full_program {
+    "emit_full_program" test_start
+    # Emit a program with one PUSH instruction
+    List::new (List[Inst]) = bytecode
+    99 InstKind::InstPush (int) make_inst_int bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has bss" result ".section .bss" assert_contains
+    "has data" result ".section .data" assert_contains
+    "has text" result ".section .text" assert_contains
+    "has push 99" result "pushq $99" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# Stack operations
+# ---------------------------------------------------------------------------
+
+fn test_emit_drop {
+    "emit_drop" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstDrop (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has addq $8" result "addq $8, %rsp" assert_contains
+}
+
+fn test_emit_dup {
+    "emit_dup" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstDup (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has pushq (%rsp)" result "pushq (%rsp)" assert_contains
+}
+
+fn test_emit_swap {
+    "emit_swap" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstSwap (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has popq rax" result "popq %rax" assert_contains
+    "has popq rbx" result "popq %rbx" assert_contains
+    "has pushq rax" result "pushq %rax" assert_contains
+    "has pushq rbx" result "pushq %rbx" assert_contains
+}
+
+fn test_emit_over {
+    "emit_over" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstOver (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has pushq 8(%rsp)" result "pushq 8(%rsp)" assert_contains
+}
+
+fn test_emit_rot {
+    "emit_rot" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstRot (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has popq rax" result "popq %rax" assert_contains
+    "has popq rbx" result "popq %rbx" assert_contains
+    "has popq rcx" result "popq %rcx" assert_contains
+    "has pushq rbx" result "pushq %rbx" assert_contains
+    "has pushq rax" result "pushq %rax" assert_contains
+    "has pushq rcx" result "pushq %rcx" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# Push variants
+# ---------------------------------------------------------------------------
+
+fn test_emit_push_char {
+    "emit_push_char" test_start
+    List::new (List[Inst]) = bytecode
+    97 InstKind::InstPushChar (int) make_inst_int bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has pushq $97" result "pushq $97" assert_contains
+}
+
+fn test_emit_push_large_int {
+    "emit_push_large_int" test_start
+    List::new (List[Inst]) = bytecode
+    4294967296 InstKind::InstPush (int) make_inst_int bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has movabsq" result "movabsq" assert_contains
+}
+
+fn test_emit_push_negative_int {
+    "emit_push_negative_int" test_start
+    List::new (List[Inst]) = bytecode
+    0 42 - InstKind::InstPush (int) make_inst_int bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has pushq $-42" result "pushq $-42" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# Arithmetic operations
+# ---------------------------------------------------------------------------
+
+fn test_emit_sub {
+    "emit_sub" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstSub (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has subq" result "subq %rax, (%rsp)" assert_contains
+}
+
+fn test_emit_mul {
+    "emit_mul" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstMul (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has imulq" result "imulq" assert_contains
+}
+
+fn test_emit_div {
+    "emit_div" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstDiv (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has idivq" result "idivq" assert_contains
+}
+
+fn test_emit_mod {
+    "emit_mod" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstMod (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has idivq for mod" result "idivq" assert_contains
+    "has pushq rdx for mod" result "pushq %rdx" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# Bitshift operations
+# ---------------------------------------------------------------------------
+
+fn test_emit_shl {
+    "emit_shl" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstShl (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has shlq %cl" result "shlq %cl" assert_contains
+}
+
+fn test_emit_shr {
+    "emit_shr" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstShr (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has sarq %cl" result "sarq %cl" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# Bitwise operations
+# ---------------------------------------------------------------------------
+
+fn test_emit_bit_and {
+    "emit_bit_and" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstBitAnd (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has andq" result "andq %rax, (%rsp)" assert_contains
+}
+
+fn test_emit_bit_or {
+    "emit_bit_or" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstBitOr (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has orq" result "orq %rax, (%rsp)" assert_contains
+}
+
+fn test_emit_bit_xor {
+    "emit_bit_xor" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstBitXor (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has xorq" result "xorq %rax, (%rsp)" assert_contains
+}
+
+fn test_emit_bit_not {
+    "emit_bit_not" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstBitNot (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has notq" result "notq (%rsp)" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# Boolean operations
+# ---------------------------------------------------------------------------
+
+fn test_emit_bool_and {
+    "emit_bool_and" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstAnd (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has andb" result "andb" assert_contains
+}
+
+fn test_emit_bool_or {
+    "emit_bool_or" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstOr (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has orq" result "orq" assert_contains
+}
+
+fn test_emit_bool_not {
+    "emit_bool_not" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstNot (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has sete" result "sete" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# Comparison operations (remaining)
+# ---------------------------------------------------------------------------
+
+fn test_emit_ne {
+    "emit_ne" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstNe (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has cmpq" result "cmpq (%rsp), %rax" assert_contains
+    "has setne" result "setne" assert_contains
+}
+
+fn test_emit_lt {
+    "emit_lt" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstLt (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has setl" result "setl" assert_contains
+}
+
+fn test_emit_le {
+    "emit_le" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstLe (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has setle" result "setle" assert_contains
+}
+
+fn test_emit_gt {
+    "emit_gt" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstGt (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has setg" result "setg" assert_contains
+}
+
+fn test_emit_ge {
+    "emit_ge" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstGe (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has setge" result "setge" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# Memory operations (remaining)
+# ---------------------------------------------------------------------------
+
+fn test_emit_heap_alloc {
+    "emit_heap_alloc" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstHeapAlloc (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has heap_ptr" result "heap_ptr" assert_contains
+    "has leaq heap" result "leaq heap(%rip)" assert_contains
+}
+
+fn test_emit_load8 {
+    "emit_load8" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstLoad8 (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has movzbl" result "movzbl" assert_contains
+}
+
+fn test_emit_load16 {
+    "emit_load16" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstLoad16 (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has movzwl" result "movzwl" assert_contains
+}
+
+fn test_emit_load32 {
+    "emit_load32" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstLoad32 (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has movl" result "movl (%rax)" assert_contains
+}
+
+fn test_emit_store8 {
+    "emit_store8" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstStore8 (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has movb" result "movb %bl, (%rax)" assert_contains
+}
+
+fn test_emit_store16 {
+    "emit_store16" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstStore16 (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has movw" result "movw %bx, (%rax)" assert_contains
+}
+
+fn test_emit_store32 {
+    "emit_store32" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstStore32 (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has movl for store" result "movl %ebx, (%rax)" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# Syscall variants (remaining)
+# ---------------------------------------------------------------------------
+
+fn test_emit_syscall0 {
+    "emit_syscall0" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstSyscall0 (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has popq rax" result "popq %rax" assert_contains
+    "has syscall" result "    syscall" assert_contains
+    "has pushq rax" result "pushq %rax" assert_contains
+}
+
+fn test_emit_syscall1 {
+    "emit_syscall1" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstSyscall1 (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has popq rax" result "popq %rax" assert_contains
+    "has popq rdi" result "popq %rdi" assert_contains
+    "has syscall" result "    syscall" assert_contains
+    "has pushq rax" result "pushq %rax" assert_contains
+}
+
+fn test_emit_syscall2 {
+    "emit_syscall2" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstSyscall2 (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has popq rax" result "popq %rax" assert_contains
+    "has popq rdi" result "popq %rdi" assert_contains
+    "has popq rsi" result "popq %rsi" assert_contains
+    "has syscall" result "    syscall" assert_contains
+    "has pushq rax" result "pushq %rax" assert_contains
+}
+
+fn test_emit_syscall4 {
+    "emit_syscall4" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstSyscall4 (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has popq rax" result "popq %rax" assert_contains
+    "has popq rdi" result "popq %rdi" assert_contains
+    "has popq rsi" result "popq %rsi" assert_contains
+    "has popq rdx" result "popq %rdx" assert_contains
+    "has popq r10" result "popq %r10" assert_contains
+    "has syscall" result "    syscall" assert_contains
+    "has pushq rax" result "pushq %rax" assert_contains
+}
+
+fn test_emit_syscall5 {
+    "emit_syscall5" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstSyscall5 (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has popq rax" result "popq %rax" assert_contains
+    "has popq rdi" result "popq %rdi" assert_contains
+    "has popq rsi" result "popq %rsi" assert_contains
+    "has popq rdx" result "popq %rdx" assert_contains
+    "has popq r10" result "popq %r10" assert_contains
+    "has popq r8" result "popq %r8" assert_contains
+    "has syscall" result "    syscall" assert_contains
+    "has pushq rax" result "pushq %rax" assert_contains
+}
+
+fn test_emit_syscall6 {
+    "emit_syscall6" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstSyscall6 (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has popq rax" result "popq %rax" assert_contains
+    "has popq rdi" result "popq %rdi" assert_contains
+    "has popq rsi" result "popq %rsi" assert_contains
+    "has popq rdx" result "popq %rdx" assert_contains
+    "has popq r10" result "popq %r10" assert_contains
+    "has popq r8" result "popq %r8" assert_contains
+    "has popq r9" result "popq %r9" assert_contains
+    "has syscall" result "    syscall" assert_contains
+    "has pushq rax" result "pushq %rax" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# Function operations
+# ---------------------------------------------------------------------------
+
+fn test_emit_fn_return {
+    "emit_fn_return" test_start
+    # In a non-global context, fn_return emits jmpq *(%r14)
+    List::new (List[Inst]) = bytecode
+    InstKind::InstFnReturn (int) make_inst bytecode .push
+
+    List::new (List[Inst]) = fn_bytecode
+    InstKind::InstFnReturn (int) make_inst fn_bytecode .push
+
+    Map::new (Map[str List[Inst]]) = functions
+    "test_fn" fn_bytecode functions .set = functions
+
+    0 0 List::new (List[str]) functions bytecode Program = program
+    program emit = result
+    "has jmpq *(%r14)" result "jmpq *(%r14)" assert_contains
+}
+
+fn test_emit_fn_exec {
+    "emit_fn_exec" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstFnExec (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has jmpq *%rax" result "jmpq *%rax" assert_contains
+}
+
+fn test_emit_fn_push {
+    "emit_fn_push" test_start
+    List::new (List[Inst]) = bytecode
+    "my_lambda" InstKind::InstFnPush (int) make_inst_str bytecode .push
+
+    List::new (List[Inst]) = fn_bytecode
+    Map::new (Map[str List[Inst]]) = functions
+    "my_lambda" fn_bytecode functions .set = functions
+
+    0 0 List::new (List[str]) functions bytecode Program = program
+    program emit = result
+    "has leaq fn_my_lambda" result "leaq fn_my_lambda" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# Print operations
+# ---------------------------------------------------------------------------
+
+fn test_emit_print_int {
+    "emit_print_int" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstPrintInt (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has jmp print_int" result "jmp print_int" assert_contains
+}
+
+fn test_emit_print_str {
+    "emit_print_str" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstPrintStr (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has jmp print_str" result "jmp print_str" assert_contains
+}
+
+fn test_emit_print_bool {
+    "emit_print_bool" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstPrintBool (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has bool_true ref" result "bool_true" assert_contains
+    "has bool_false ref" result "bool_false" assert_contains
+}
+
+fn test_emit_print_char {
+    "emit_print_char" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstPrintChar (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has movb %al" result "movb %al, -1(%rsp)" assert_contains
+}
+
+fn test_emit_print_cstr {
+    "emit_print_cstr" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstPrintCstr (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has cmpb $0" result "cmpb $0" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# String operations
+# ---------------------------------------------------------------------------
+
+fn test_emit_str_eq {
+    "emit_str_eq" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstStrEq (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has repe cmpsb" result "repe cmpsb" assert_contains
+}
+
+fn test_emit_fstring_concat {
+    "emit_fstring_concat" test_start
+    List::new (List[Inst]) = bytecode
+    3 InstKind::InstFstringConcat (int) make_inst_int bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has movq $3 for part count" result "movq $3, %rdi" assert_contains
+    "has jmp str_concat" result "jmp str_concat" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# Constant operations
+# ---------------------------------------------------------------------------
+
+fn test_emit_constant_load {
+    "emit_constant_load" test_start
+    List::new (List[Inst]) = bytecode
+    0 InstKind::InstConstantLoad (int) make_inst_int bytecode .push
+
+    0 1 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has constants+0" result "constants+0(%rip)" assert_contains
+}
+
+fn test_emit_constant_store {
+    "emit_constant_store" test_start
+    List::new (List[Inst]) = bytecode
+    1 InstKind::InstConstantStore (int) make_inst_int bytecode .push
+
+    0 2 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has constants+8" result "constants+8(%rip)" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# Conditional jump
+# ---------------------------------------------------------------------------
+
+fn test_emit_jump_ne {
+    "emit_jump_ne" test_start
+    List::new (List[Inst]) = bytecode
+    5 InstKind::InstJumpNe (int) make_inst_int bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has testq" result "testq %rax, %rax" assert_contains
+    "has jz" result "jz .L5" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# Argc / Argv
+# ---------------------------------------------------------------------------
+
+fn test_emit_argc {
+    "emit_argc" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstArgc (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has __argc" result "__argc(%rip)" assert_contains
+}
+
+fn test_emit_argv {
+    "emit_argv" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstArgv (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has __argv" result "__argv(%rip)" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# Exit syscall in start section
+# ---------------------------------------------------------------------------
+
+fn test_emit_exit_syscall {
+    "emit_exit_syscall" test_start
+    make_empty_program emit = result
+    "has movq $60" result "movq $60, %rax" assert_contains
+    "has syscall" result "    syscall" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# Globals init (no-op, BSS handles allocation)
+# ---------------------------------------------------------------------------
+
+fn test_emit_globals_init {
+    "emit_globals_init" test_start
+    List::new (List[Inst]) = bytecode
+    5 InstKind::InstGlobalsInit (int) make_inst_int bytecode .push
+    42 InstKind::InstPush (int) make_inst_int bytecode .push
+
+    0 5 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    # GlobInit itself is no-op but the push after it should be there
+    "has pushq $42" result "pushq $42" assert_contains
+    # BSS should reserve space for 5 globals
+    "has globals skip" result "globals: .skip 40" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# While loop pattern (label + jump_ne + unconditional jump)
+# ---------------------------------------------------------------------------
+
+fn test_emit_while_loop_pattern {
+    "emit_while_loop_pattern" test_start
+    List::new (List[Inst]) = bytecode
+    # while loop: label 10, condition check, jump_ne 11, body, jump 10, label 11
+    10 InstKind::InstLabel (int) make_inst_int bytecode .push
+    1 InstKind::InstPush (int) make_inst_int bytecode .push
+    11 InstKind::InstJumpNe (int) make_inst_int bytecode .push
+    10 InstKind::InstJump (int) make_inst_int bytecode .push
+    11 InstKind::InstLabel (int) make_inst_int bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has loop start label" result ".L10:" assert_contains
+    "has conditional jz" result "jz .L11" assert_contains
+    "has unconditional jmp" result "jmp .L10" assert_contains
+    "has loop end label" result ".L11:" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# Data section with escape sequences
+# ---------------------------------------------------------------------------
+
+fn test_emit_data_escape_sequences {
+    "emit_data_escape_sequences" test_start
+    List::new (List[str]) = strings
+    "hello\nworld" strings .push
+    "col1\tcol2" strings .push
+
+    0 0 strings
+    Map::new (Map[str List[Inst]])
+    List::new (List[Inst])
+    Program = program
+
+    StringBuilder::new = asm_builder
+    program asm_builder emit_data
+    asm_builder .build = result
+
+    "has escaped newline" result "hello\\nworld" assert_contains
+    "has escaped tab" result "col1\\tcol2" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# Locals init emits rep stosq
+# ---------------------------------------------------------------------------
+
+fn test_emit_locals_rep_stosq {
+    "emit_locals_rep_stosq" test_start
+    List::new (List[Inst]) = bytecode
+    4 InstKind::InstLocalsInit (int) make_inst_int bytecode .push
+    4 InstKind::InstLocalsUninit (int) make_inst_int bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has rep stosq" result "rep stosq" assert_contains
+    "has xorq rax rax" result "xorq %rax, %rax" assert_contains
+    "has movq rdi" result "movq %r14, %rdi" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# Load64 instruction
+# ---------------------------------------------------------------------------
+
+fn test_emit_load64 {
+    "emit_load64" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstLoad64 (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has popq rax" result "popq %rax" assert_contains
+    "has movq load" result "movq (%rax), %rax" assert_contains
+    "has pushq rax" result "pushq %rax" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# Store64 instruction
+# ---------------------------------------------------------------------------
+
+fn test_emit_store64 {
+    "emit_store64" test_start
+    List::new (List[Inst]) = bytecode
+    InstKind::InstStore64 (int) make_inst bytecode .push
+
+    0 0 List::new (List[str])
+    Map::new (Map[str List[Inst]])
+    bytecode
+    Program = program
+
+    program emit = result
+    "has popq rax" result "popq %rax" assert_contains
+    "has popq rbx" result "popq %rbx" assert_contains
+    "has movq store" result "movq %rbx, (%rax)" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# Function with body instructions
+# ---------------------------------------------------------------------------
+
+fn test_emit_fn_with_body {
+    "emit_fn_with_body" test_start
+    List::new (List[Inst]) = bytecode
+    "adder" InstKind::InstFnCall (int) make_inst_str bytecode .push
+
+    List::new (List[Inst]) = fn_bytecode
+    2 InstKind::InstLocalsInit (int) make_inst_int fn_bytecode .push
+    0 InstKind::InstLocalGet (int) make_inst_int fn_bytecode .push
+    1 InstKind::InstLocalGet (int) make_inst_int fn_bytecode .push
+    InstKind::InstAdd (int) make_inst fn_bytecode .push
+    2 InstKind::InstLocalsUninit (int) make_inst_int fn_bytecode .push
+    InstKind::InstFnReturn (int) make_inst fn_bytecode .push
+
+    Map::new (Map[str List[Inst]]) = functions
+    "adder" fn_bytecode functions .set = functions
+
+    0 0 List::new (List[str]) functions bytecode Program = program
+    program emit = result
+    "has fn label" result "fn_adder:" assert_contains
+    "has locals init" result "rep stosq" assert_contains
+    "has add in body" result "addq %rax, (%rsp)" assert_contains
+    "has fn return" result "jmpq *(%r14)" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# Multiple functions emitted
+# ---------------------------------------------------------------------------
+
+fn test_emit_multiple_functions {
+    "emit_multiple_functions" test_start
+    List::new (List[Inst]) = bytecode
+    "alpha" InstKind::InstFnCall (int) make_inst_str bytecode .push
+    "beta" InstKind::InstFnCall (int) make_inst_str bytecode .push
+
+    List::new (List[Inst]) = alpha_bytecode
+    InstKind::InstFnReturn (int) make_inst alpha_bytecode .push
+
+    List::new (List[Inst]) = beta_bytecode
+    InstKind::InstFnReturn (int) make_inst beta_bytecode .push
+
+    Map::new (Map[str List[Inst]]) = functions
+    "alpha" alpha_bytecode functions .set = functions
+    "beta" beta_bytecode functions .set = functions
+
+    0 0 List::new (List[str]) functions bytecode Program = program
+    program emit = result
+    "has fn_alpha label" result "fn_alpha:" assert_contains
+    "has fn_beta label" result "fn_beta:" assert_contains
+    "has jmp fn_alpha" result "jmp fn_alpha" assert_contains
+    "has jmp fn_beta" result "jmp fn_beta" assert_contains
+}
+
+# ---------------------------------------------------------------------------
+# Run all tests
+# ---------------------------------------------------------------------------
+
+test_sanitize_name
+test_escape_string
+test_emit_bss
+test_emit_data
+test_emit_push
+test_emit_push_str
+test_emit_add
+test_emit_label_and_jump
+test_emit_fn_call
+test_emit_fn_call_sanitized
+test_emit_start_section
+test_emit_helpers_present
+test_emit_comparison
+test_emit_syscall
+test_emit_local_ops
+test_emit_global_ops
+test_emit_memory_ops
+test_emit_full_program
+test_emit_drop
+test_emit_dup
+test_emit_swap
+test_emit_over
+test_emit_rot
+test_emit_push_char
+test_emit_push_large_int
+test_emit_push_negative_int
+test_emit_sub
+test_emit_mul
+test_emit_div
+test_emit_mod
+test_emit_shl
+test_emit_shr
+test_emit_bit_and
+test_emit_bit_or
+test_emit_bit_xor
+test_emit_bit_not
+test_emit_bool_and
+test_emit_bool_or
+test_emit_bool_not
+test_emit_ne
+test_emit_lt
+test_emit_le
+test_emit_gt
+test_emit_ge
+test_emit_heap_alloc
+test_emit_load8
+test_emit_load16
+test_emit_load32
+test_emit_store8
+test_emit_store16
+test_emit_store32
+test_emit_syscall0
+test_emit_syscall1
+test_emit_syscall2
+test_emit_syscall4
+test_emit_syscall5
+test_emit_syscall6
+test_emit_fn_return
+test_emit_fn_exec
+test_emit_fn_push
+test_emit_print_int
+test_emit_print_str
+test_emit_print_bool
+test_emit_print_char
+test_emit_print_cstr
+test_emit_str_eq
+test_emit_fstring_concat
+test_emit_constant_load
+test_emit_constant_store
+test_emit_jump_ne
+test_emit_argc
+test_emit_argv
+test_emit_exit_syscall
+test_emit_globals_init
+test_emit_while_loop_pattern
+test_emit_data_escape_sequences
+test_emit_locals_rep_stosq
+test_emit_load64
+test_emit_store64
+test_emit_fn_with_body
+test_emit_multiple_functions
+test_summary

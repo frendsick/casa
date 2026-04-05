@@ -1,0 +1,249 @@
+include "../../self_hosted/common.casa"
+include "../../self_hosted/error.casa"
+include "../../self_hosted/lexer.casa"
+include "../../self_hosted/parser.casa"
+include "../../self_hosted/typechecker.casa"
+include "../../self_hosted/bytecode.casa"
+include "../../self_hosted/emitter.casa"
+include "../../lib/test.casa"
+include "../../lib/test_helpers.casa"
+
+# ============================================================================
+# Helpers
+# ============================================================================
+
+fn parse_gs code:str -> List[Op] {
+    clear_global_state
+    "test" code lex_source = tokens
+    tokens parse_ops
+}
+
+fn resolve_gs code:str -> List[Op] {
+    clear_global_state
+    "test" code lex_source = tokens
+    tokens parse_ops = ops
+    ops resolve_identifiers_global
+}
+
+fn tc_gs code:str -> Signature {
+    clear_global_state
+    "test" code lex_source = tokens
+    tokens parse_ops = ops
+    ops resolve_identifiers_global = ops
+    Option::None (Option[Function]) ops type_check_ops
+}
+
+fn compile_gs code:str -> Program {
+    clear_global_state
+    "test" code lex_source = tokens
+    tokens parse_ops = ops
+    ops resolve_identifiers_global = ops
+    Option::None (Option[Function]) ops type_check_ops drop
+    ops compile_bytecode
+}
+
+fn emit_gs code:str -> str {
+    code compile_gs emit
+}
+
+fn assert_contains needle:str haystack:str msg:str {
+    haystack needle str::find = position
+    if 0 position < then
+        msg false assert_true
+    else
+        msg true assert_true
+    fi
+}
+
+# ============================================================================
+# Parser tests
+# ============================================================================
+
+fn test_parse_generic_struct {
+    "parse_generic_struct" test_start
+    "struct Box[T] { value: T }" parse_gs drop
+    "registered" "Box" GLOBAL_STRUCTS .get .is_some assert_true
+    "Box" GLOBAL_STRUCTS .get .unwrap = box_struct
+    "type vars count" 1 box_struct CasaStruct::type_vars .length assert_eq
+    "type var T" "T" 0 box_struct CasaStruct::type_vars .get assert_str_eq
+    "member name" "value" 0 box_struct CasaStruct::members .get Member::name assert_str_eq
+    "member type" "T" 0 box_struct CasaStruct::members .get Member::typ assert_str_eq
+}
+
+fn test_parse_generic_struct_multiple_type_vars {
+    "parse_generic_struct_multiple_type_vars" test_start
+    "struct Pair[A B] { first: A second: B }" parse_gs drop
+    "Pair" GLOBAL_STRUCTS .get .unwrap = pair_struct
+    "type vars count" 2 pair_struct CasaStruct::type_vars .length assert_eq
+    "type var A" "A" 0 pair_struct CasaStruct::type_vars .get assert_str_eq
+    "type var B" "B" 1 pair_struct CasaStruct::type_vars .get assert_str_eq
+}
+
+fn test_parse_struct_rejects_trait_bounds {
+    "parse_struct_rejects_trait_bounds" test_start
+    enable_test_mode
+    clear_global_state
+    clear_errors
+    "trait Hashable { fn hash int -> int }\nstruct Set[K: Hashable] { data: K }" parse_gs drop
+    "has errors" assert_has_errors
+    clear_errors
+    disable_test_mode
+}
+
+fn test_parse_generic_struct_generates_getter {
+    "parse_generic_struct_generates_getter" test_start
+    "struct Box[T] { value: T }" parse_gs drop
+    "getter exists" "Box::value" GLOBAL_FUNCTIONS .get .is_some assert_true
+    "Box::value" GLOBAL_FUNCTIONS .get .unwrap = getter
+    "getter param type" "Box[T]" 0 getter Function::signature Signature::parameters .get Parameter::typ assert_str_eq
+    "getter return type" "T" 0 getter Function::signature Signature::return_types .get assert_str_eq
+}
+
+fn test_parse_generic_struct_generates_setter {
+    "parse_generic_struct_generates_setter" test_start
+    "struct Box[T] { value: T }" parse_gs drop
+    "setter exists" "Box::set_value" GLOBAL_FUNCTIONS .get .is_some assert_true
+    "Box::set_value" GLOBAL_FUNCTIONS .get .unwrap = setter
+    "setter param 0 type" "Box[T]" 0 setter Function::signature Signature::parameters .get Parameter::typ assert_str_eq
+    "setter param 1 type" "T" 1 setter Function::signature Signature::parameters .get Parameter::typ assert_str_eq
+}
+
+fn test_parse_nongeneric_struct_has_empty_type_vars {
+    "parse_nongeneric_struct_has_empty_type_vars" test_start
+    "struct Point { x: int y: int }" parse_gs drop
+    "Point" GLOBAL_STRUCTS .get .unwrap = point_struct
+    "no type vars" 0 point_struct CasaStruct::type_vars .length assert_eq
+}
+
+fn test_parse_impl_with_type_params {
+    "parse_impl_with_type_params" test_start
+    "trait Hashable { fn hash int -> int }\nstruct Box[K] { data: K }\nimpl[K: Hashable] Box[K] {\n    fn get self:Box[K] -> K { self Box::data }\n}\n" parse_gs drop
+    "method exists" "Box::get" GLOBAL_FUNCTIONS .get .is_some assert_true
+}
+
+# ============================================================================
+# Typechecker tests
+# ============================================================================
+
+fn test_typecheck_generic_struct_infers_type {
+    "typecheck_generic_struct_infers_type" test_start
+    "struct Box[T] { value: T }\n42 Box" tc_gs = sig
+    "returns Box[int]" "Box[int]" 0 sig Signature::return_types .get assert_str_eq
+}
+
+fn test_typecheck_generic_struct_str {
+    "typecheck_generic_struct_str" test_start
+    "struct Box[T] { value: T }\n\"hello\" Box" tc_gs = sig
+    "returns Box[str]" "Box[str]" 0 sig Signature::return_types .get assert_str_eq
+}
+
+fn test_typecheck_generic_struct_bool {
+    "typecheck_generic_struct_bool" test_start
+    "struct Box[T] { value: T }\ntrue Box" tc_gs = sig
+    "returns Box[bool]" "Box[bool]" 0 sig Signature::return_types .get assert_str_eq
+}
+
+fn test_typecheck_generic_struct_getter {
+    "typecheck_generic_struct_getter" test_start
+    "struct Box[T] { value: T }\n42 Box .value" tc_gs = sig
+    "returns int" "int" 0 sig Signature::return_types .get assert_str_eq
+}
+
+fn test_typecheck_generic_struct_setter {
+    "typecheck_generic_struct_setter" test_start
+    "struct Box[T] { value: T }\n42 Box = b\n99 b ->value" tc_gs = sig
+    "returns empty" 0 sig Signature::return_types .length assert_eq
+}
+
+fn test_typecheck_generic_struct_two_fields {
+    "typecheck_generic_struct_two_fields" test_start
+    "struct Pair[A B] { first: A second: B }\ntrue 42 Pair" tc_gs = sig
+    "returns Pair[int bool]" "Pair[int bool]" 0 sig Signature::return_types .get assert_str_eq
+}
+
+fn test_typecheck_generic_struct_two_fields_getter {
+    "typecheck_generic_struct_two_fields_getter" test_start
+    "struct Pair[A B] { first: A second: B }\ntrue 42 Pair .second" tc_gs = sig
+    "returns bool" "bool" 0 sig Signature::return_types .get assert_str_eq
+}
+
+fn test_typecheck_generic_struct_nested {
+    "typecheck_generic_struct_nested" test_start
+    "struct Box[T] { value: T }\nstruct Wrapper[U] { inner: U }\n42 Box Wrapper" tc_gs = sig
+    "returns Wrapper[Box[int]]" "Wrapper[Box[int]]" 0 sig Signature::return_types .get assert_str_eq
+}
+
+fn test_typecheck_generic_struct_in_function {
+    "typecheck_generic_struct_in_function" test_start
+    "struct Box[T] { value: T }\nfn unbox[T] b:Box[T] -> T { b .value }\n42 Box unbox" tc_gs = sig
+    "returns int" "int" 0 sig Signature::return_types .get assert_str_eq
+}
+
+# ============================================================================
+# Resolver test
+# ============================================================================
+
+fn test_resolve_generic_struct_new {
+    "resolve_generic_struct_new" test_start
+    "struct Box[T] { value: T }\n42 Box" resolve_gs = ops
+    OpKind::OpStructNew (int) ops find_ops_by_kind = struct_new_ops
+    "has struct new op" 1 struct_new_ops .length assert_eq
+}
+
+fn find_ops_by_kind ops:List[Op] kind:int -> List[Op] {
+    List::new (List[Op]) = result
+    0 = index
+    while index ops .length > do
+        index ops .get = op
+        if kind op Op::kind == then
+            op result .push
+        fi
+        1 += index
+    done
+    result
+}
+
+# ============================================================================
+# Bytecode test
+# ============================================================================
+
+fn test_bytecode_generic_struct {
+    "bytecode_generic_struct" test_start
+    "struct Box[T] { value: T }\n42 Box" compile_gs = prog
+    "has bytecode" 0 prog Program::bytecode .length != assert_true
+}
+
+# ============================================================================
+# Emitter test
+# ============================================================================
+
+fn test_emit_generic_struct {
+    "emit_generic_struct" test_start
+    "struct Box[T] { value: T }\n42 Box drop" emit_gs = asm
+    "has _start" asm "_start:" assert_contains
+}
+
+# ============================================================================
+# Run all tests
+# ============================================================================
+
+test_parse_generic_struct
+test_parse_generic_struct_multiple_type_vars
+test_parse_struct_rejects_trait_bounds
+test_parse_generic_struct_generates_getter
+test_parse_generic_struct_generates_setter
+test_parse_nongeneric_struct_has_empty_type_vars
+test_parse_impl_with_type_params
+test_typecheck_generic_struct_infers_type
+test_typecheck_generic_struct_str
+test_typecheck_generic_struct_bool
+test_typecheck_generic_struct_getter
+test_typecheck_generic_struct_setter
+test_typecheck_generic_struct_two_fields
+test_typecheck_generic_struct_two_fields_getter
+test_typecheck_generic_struct_nested
+test_typecheck_generic_struct_in_function
+test_resolve_generic_struct_new
+test_bytecode_generic_struct
+test_emit_generic_struct
+test_summary

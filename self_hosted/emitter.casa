@@ -1,0 +1,816 @@
+# x86-64 GNU assembly emitter for the Casa compiler.
+
+# ============================================================================
+# Constants
+# ============================================================================
+
+2147483647 = INT32_MAX
+0 2147483648 - = INT32_MIN
+65536 = RETURN_STACK_SIZE
+1073741824 = HEAP_SIZE
+
+# ============================================================================
+# Label counter (global mutable state)
+# ============================================================================
+
+0 = emit_label_counter
+
+fn emit_uid -> int {
+    1 += emit_label_counter
+    emit_label_counter
+}
+
+# ============================================================================
+# Helper: write a line to the assembly buffer
+# ============================================================================
+
+fn emit_line asm:StringBuilder text:str {
+    text asm .append
+    '\n' asm .append_char
+}
+
+fn emit_indent asm:StringBuilder text:str {
+    "    " asm .append
+    text asm .append
+    '\n' asm .append_char
+}
+
+# ============================================================================
+# sanitize_name: replace :: with __ in label names
+# ============================================================================
+
+fn sanitize_name name:str -> str {
+    StringBuilder::new = builder
+    0 = index
+    while index name .length > do
+        index name .at = ch
+        if
+            ':' ch ==
+            name .length index 1 + < &&
+        then
+            if ':' index 1 + name .at == then
+                '_' builder .append_char
+                '_' builder .append_char
+                2 += index
+            else
+                ch builder .append_char
+                1 += index
+            fi
+        else
+            ch builder .append_char
+            1 += index
+        fi
+    done
+    builder .build
+}
+
+# ============================================================================
+# escape_string: escape special chars for assembly string literals
+# ============================================================================
+
+fn escape_string s:str -> str {
+    StringBuilder::new = builder
+    0 = index
+    while index s .length > do
+        index s .at = ch
+        if '\\' ch == then
+            "\\\\" builder .append
+        elif '"' ch == then
+            "\\\"" builder .append
+        elif '\n' ch == then
+            "\\n" builder .append
+        elif '\t' ch == then
+            "\\t" builder .append
+        elif '\0' ch == then
+            "\\0" builder .append
+        elif '\r' ch == then
+            "\\r" builder .append
+        else
+            ch builder .append_char
+        fi
+        1 += index
+    done
+    builder .build
+}
+
+# ============================================================================
+# BSS section
+# ============================================================================
+
+fn emit_bss asm:StringBuilder program:Program {
+    ".section .bss" asm emit_line
+    f"globals: .skip {program Program::globals_count 8 * .to_str}" asm emit_line
+    f"constants: .skip {program Program::constants_count 8 * .to_str}" asm emit_line
+    f"return_stack: .skip {RETURN_STACK_SIZE .to_str}" asm emit_line
+    f"heap: .skip {HEAP_SIZE .to_str}" asm emit_line
+    "heap_ptr: .skip 8" asm emit_line
+    "__argc: .skip 8" asm emit_line
+    "__argv: .skip 8" asm emit_line
+    "print_buf: .skip 32" asm emit_line
+    "" asm emit_line
+}
+
+# ============================================================================
+# DATA section
+# ============================================================================
+
+fn emit_data asm:StringBuilder program:Program {
+    ".section .data" asm emit_line
+    0 = index
+    while index program Program::strings .length > do
+        index program Program::strings .get = value
+        value escape_string = escaped
+        ".align 8" asm emit_line
+        f"str_{index .to_str}:" asm emit_line
+        f".quad {value .length .to_str}" asm emit_line
+        f".asciz \"{escaped}\"" asm emit_line
+        1 += index
+    done
+    "bool_true: .ascii \"true\"" asm emit_line
+    "bool_false: .ascii \"false\"" asm emit_line
+    "" asm emit_line
+}
+
+# ============================================================================
+# TEXT section
+# ============================================================================
+
+fn emit_text asm:StringBuilder program:Program {
+    ".section .text" asm emit_line
+    asm emit_helpers
+    program asm emit_functions
+    program asm emit_start
+}
+
+# ============================================================================
+# Helper subroutines
+# ============================================================================
+
+fn emit_helpers asm:StringBuilder {
+    # print_int: value in %rdi, returns via r14
+    "print_int:" asm emit_line
+    "movq %rdi, %rax" asm emit_indent
+    "leaq print_buf+32(%rip), %rsi" asm emit_indent
+    "testq %rax, %rax" asm emit_indent
+    "jnz .Lpi_nonzero" asm emit_indent
+    "decq %rsi" asm emit_indent
+    "movb $48, (%rsi)" asm emit_indent
+    "jmp .Lpi_write" asm emit_indent
+    ".Lpi_nonzero:" asm emit_line
+    "movq %rax, %r15" asm emit_indent
+    "jns .Lpi_abs" asm emit_indent
+    "negq %rax" asm emit_indent
+    ".Lpi_abs:" asm emit_line
+    "movq $10, %rcx" asm emit_indent
+    ".Lpi_digit_loop:" asm emit_line
+    "decq %rsi" asm emit_indent
+    "xorq %rdx, %rdx" asm emit_indent
+    "divq %rcx" asm emit_indent
+    "addb $48, %dl" asm emit_indent
+    "movb %dl, (%rsi)" asm emit_indent
+    "testq %rax, %rax" asm emit_indent
+    "jnz .Lpi_digit_loop" asm emit_indent
+    "testq %r15, %r15" asm emit_indent
+    "jns .Lpi_write" asm emit_indent
+    "decq %rsi" asm emit_indent
+    "movb $45, (%rsi)" asm emit_indent
+    ".Lpi_write:" asm emit_line
+    "leaq print_buf+32(%rip), %rdx" asm emit_indent
+    "subq %rsi, %rdx" asm emit_indent
+    "movq $1, %rax" asm emit_indent
+    "movq $1, %rdi" asm emit_indent
+    "syscall" asm emit_indent
+    "subq $8, %r14" asm emit_indent
+    "jmpq *(%r14)" asm emit_indent
+    "" asm emit_line
+
+    # print_str: string pointer in %rdi (points to length prefix), returns via r14
+    "print_str:" asm emit_line
+    "movq (%rdi), %rdx" asm emit_indent
+    "leaq 8(%rdi), %rsi" asm emit_indent
+    "movq $1, %rdi" asm emit_indent
+    "movq $1, %rax" asm emit_indent
+    "syscall" asm emit_indent
+    "subq $8, %r14" asm emit_indent
+    "jmpq *(%r14)" asm emit_indent
+    "" asm emit_line
+
+    # str_concat: %rdi = part count (N), N string pointers on data stack
+    "str_concat:" asm emit_line
+    "movq %rdi, %r8" asm emit_indent
+    "movq %rsp, %r9" asm emit_indent
+    "xorq %r10, %r10" asm emit_indent
+    "xorq %rcx, %rcx" asm emit_indent
+    ".Lsc_len_loop:" asm emit_line
+    "cmpq %r8, %rcx" asm emit_indent
+    "jge .Lsc_len_done" asm emit_indent
+    "movq (%r9, %rcx, 8), %rax" asm emit_indent
+    "addq (%rax), %r10" asm emit_indent
+    "incq %rcx" asm emit_indent
+    "jmp .Lsc_len_loop" asm emit_indent
+    ".Lsc_len_done:" asm emit_line
+    "leaq heap(%rip), %r11" asm emit_indent
+    "movq heap_ptr(%rip), %r12" asm emit_indent
+    "leaq (%r11, %r12), %r13" asm emit_indent
+    "leaq 9(%r10, %r12), %rax" asm emit_indent
+    "movq %rax, heap_ptr(%rip)" asm emit_indent
+    "movq %r10, (%r13)" asm emit_indent
+    "leaq 8(%r13), %rdi" asm emit_indent
+    "movq %r8, %rcx" asm emit_indent
+    "decq %rcx" asm emit_indent
+    ".Lsc_copy_loop:" asm emit_line
+    "cmpq $0, %rcx" asm emit_indent
+    "jl .Lsc_copy_done" asm emit_indent
+    "movq (%r9, %rcx, 8), %rsi" asm emit_indent
+    "movq (%rsi), %rdx" asm emit_indent
+    "addq $8, %rsi" asm emit_indent
+    "pushq %rcx" asm emit_indent
+    "movq %rdx, %rcx" asm emit_indent
+    "rep movsb" asm emit_indent
+    "popq %rcx" asm emit_indent
+    "decq %rcx" asm emit_indent
+    "jmp .Lsc_copy_loop" asm emit_indent
+    ".Lsc_copy_done:" asm emit_line
+    "movb $0, (%rdi)" asm emit_indent
+    "leaq (%r9, %r8, 8), %rsp" asm emit_indent
+    "pushq %r13" asm emit_indent
+    "subq $8, %r14" asm emit_indent
+    "jmpq *(%r14)" asm emit_indent
+    "" asm emit_line
+}
+
+# ============================================================================
+# Emit user functions
+# ============================================================================
+
+fn emit_functions asm:StringBuilder program:Program {
+    program Program::functions .keys = keys
+    0 = index
+    while index keys .length > do
+        index keys .get = name
+        name sanitize_name = label
+        f"fn_{label}:" asm emit_line
+        name program Program::functions .get .unwrap = bytecode
+        false bytecode asm emit_bytecode
+        "" asm emit_line
+        1 += index
+    done
+}
+
+# ============================================================================
+# Emit _start entry point
+# ============================================================================
+
+fn emit_start asm:StringBuilder program:Program {
+    ".globl _start" asm emit_line
+    "_start:" asm emit_line
+    "leaq return_stack(%rip), %r14" asm emit_indent
+    "movq (%rsp), %rax" asm emit_indent
+    "movq %rax, __argc(%rip)" asm emit_indent
+    "leaq 8(%rsp), %rax" asm emit_indent
+    "movq %rax, __argv(%rip)" asm emit_indent
+    true program Program::bytecode asm emit_bytecode
+    "movq $60, %rax" asm emit_indent
+    "xorq %rdi, %rdi" asm emit_indent
+    "syscall" asm emit_indent
+    "" asm emit_line
+}
+
+# ============================================================================
+# Emit bytecode sequence
+# ============================================================================
+
+fn emit_bytecode asm:StringBuilder bytecode:List[Inst] is_global:bool {
+    0 = index
+    while index bytecode .length > do
+        index bytecode .get = inst
+        is_global inst asm emit_inst
+        1 += index
+    done
+}
+
+# ============================================================================
+# Emit comparison helper
+# ============================================================================
+
+fn emit_comparison setcc:str asm:StringBuilder {
+    "popq %rax" asm emit_indent
+    "cmpq (%rsp), %rax" asm emit_indent
+    f"{setcc} %al" asm emit_indent
+    "movzbq %al, %rax" asm emit_indent
+    "movq %rax, (%rsp)" asm emit_indent
+}
+
+# ============================================================================
+# Emit syscall helper
+# ============================================================================
+
+fn emit_syscall arg_count:int asm:StringBuilder {
+    "popq %rax" asm emit_indent
+    ["%rdi", "%rsi", "%rdx", "%r10", "%r8", "%r9"] = syscall_regs
+    0 = index
+    while index arg_count > do
+        f"popq {index syscall_regs array::nth (str)}" asm emit_indent
+        1 += index
+    done
+    "syscall" asm emit_indent
+    "pushq %rax" asm emit_indent
+}
+
+# ============================================================================
+# Emit stack operations
+# ============================================================================
+
+fn emit_stack_ops asm:StringBuilder inst:Inst {
+    inst Inst::kind = kind
+    if InstKind::InstPush (int) kind == then
+        inst Inst::int_arg = value
+        if
+            INT32_MIN value >=
+            INT32_MAX value <= &&
+        then
+            f"pushq ${value .to_str}" asm emit_indent
+        else
+            f"movabsq ${value .to_str}, %rax" asm emit_indent
+            "pushq %rax" asm emit_indent
+        fi
+    elif InstKind::InstPushStr (int) kind == then
+        f"leaq str_{inst Inst::int_arg .to_str}(%rip), %rax" asm emit_indent
+        "pushq %rax" asm emit_indent
+    elif InstKind::InstPushChar (int) kind == then
+        f"pushq ${inst Inst::int_arg .to_str}" asm emit_indent
+    elif InstKind::InstDrop (int) kind == then
+        "addq $8, %rsp" asm emit_indent
+    elif InstKind::InstDup (int) kind == then
+        "pushq (%rsp)" asm emit_indent
+    elif InstKind::InstSwap (int) kind == then
+        "popq %rax" asm emit_indent
+        "popq %rbx" asm emit_indent
+        "pushq %rax" asm emit_indent
+        "pushq %rbx" asm emit_indent
+    elif InstKind::InstOver (int) kind == then
+        "pushq 8(%rsp)" asm emit_indent
+    elif InstKind::InstRot (int) kind == then
+        "popq %rax" asm emit_indent
+        "popq %rbx" asm emit_indent
+        "popq %rcx" asm emit_indent
+        "pushq %rbx" asm emit_indent
+        "pushq %rax" asm emit_indent
+        "pushq %rcx" asm emit_indent
+    fi
+}
+
+# ============================================================================
+# Emit arithmetic / bitwise / boolean / comparison operations
+# ============================================================================
+
+fn emit_arithmetic asm:StringBuilder inst:Inst {
+    inst Inst::kind = kind
+    if InstKind::InstAdd (int) kind == then
+        "popq %rax" asm emit_indent
+        "addq %rax, (%rsp)" asm emit_indent
+    elif InstKind::InstSub (int) kind == then
+        "popq %rax" asm emit_indent
+        "subq %rax, (%rsp)" asm emit_indent
+    elif InstKind::InstMul (int) kind == then
+        "popq %rax" asm emit_indent
+        "imulq (%rsp), %rax" asm emit_indent
+        "movq %rax, (%rsp)" asm emit_indent
+    elif InstKind::InstDiv (int) kind == then
+        "popq %rbx" asm emit_indent
+        "popq %rax" asm emit_indent
+        "cqto" asm emit_indent
+        "idivq %rbx" asm emit_indent
+        "pushq %rax" asm emit_indent
+    elif InstKind::InstMod (int) kind == then
+        "popq %rbx" asm emit_indent
+        "popq %rax" asm emit_indent
+        "cqto" asm emit_indent
+        "idivq %rbx" asm emit_indent
+        "pushq %rdx" asm emit_indent
+    elif InstKind::InstShl (int) kind == then
+        "popq %rcx" asm emit_indent
+        "shlq %cl, (%rsp)" asm emit_indent
+    elif InstKind::InstShr (int) kind == then
+        "popq %rcx" asm emit_indent
+        "sarq %cl, (%rsp)" asm emit_indent
+    elif InstKind::InstBitAnd (int) kind == then
+        "popq %rax" asm emit_indent
+        "andq %rax, (%rsp)" asm emit_indent
+    elif InstKind::InstBitOr (int) kind == then
+        "popq %rax" asm emit_indent
+        "orq %rax, (%rsp)" asm emit_indent
+    elif InstKind::InstBitXor (int) kind == then
+        "popq %rax" asm emit_indent
+        "xorq %rax, (%rsp)" asm emit_indent
+    elif InstKind::InstBitNot (int) kind == then
+        "notq (%rsp)" asm emit_indent
+    elif InstKind::InstAnd (int) kind == then
+        "popq %rax" asm emit_indent
+        "testq %rax, %rax" asm emit_indent
+        "setne %al" asm emit_indent
+        "cmpq $0, (%rsp)" asm emit_indent
+        "setne %cl" asm emit_indent
+        "andb %cl, %al" asm emit_indent
+        "movzbq %al, %rax" asm emit_indent
+        "movq %rax, (%rsp)" asm emit_indent
+    elif InstKind::InstOr (int) kind == then
+        "popq %rax" asm emit_indent
+        "orq %rax, (%rsp)" asm emit_indent
+        "setne %al" asm emit_indent
+        "movzbq %al, %rax" asm emit_indent
+        "movq %rax, (%rsp)" asm emit_indent
+    elif InstKind::InstNot (int) kind == then
+        "cmpq $0, (%rsp)" asm emit_indent
+        "sete %al" asm emit_indent
+        "movzbq %al, %rax" asm emit_indent
+        "movq %rax, (%rsp)" asm emit_indent
+    elif InstKind::InstEq (int) kind == then
+        asm "sete" emit_comparison
+    elif InstKind::InstNe (int) kind == then
+        asm "setne" emit_comparison
+    elif InstKind::InstLt (int) kind == then
+        asm "setl" emit_comparison
+    elif InstKind::InstLe (int) kind == then
+        asm "setle" emit_comparison
+    elif InstKind::InstGt (int) kind == then
+        asm "setg" emit_comparison
+    elif InstKind::InstGe (int) kind == then
+        asm "setge" emit_comparison
+    fi
+}
+
+# ============================================================================
+# Emit control flow / variable / function operations
+# ============================================================================
+
+fn emit_control_flow asm:StringBuilder inst:Inst is_global:bool {
+    inst Inst::kind = kind
+    if InstKind::InstLabel (int) kind == then
+        f".L{inst Inst::int_arg .to_str}:" asm emit_line
+    elif InstKind::InstJump (int) kind == then
+        f"jmp .L{inst Inst::int_arg .to_str}" asm emit_indent
+    elif InstKind::InstJumpNe (int) kind == then
+        "popq %rax" asm emit_indent
+        "testq %rax, %rax" asm emit_indent
+        f"jz .L{inst Inst::int_arg .to_str}" asm emit_indent
+    elif InstKind::InstGlobalsInit (int) kind == then
+        # Nothing needed, BSS handles it
+    elif InstKind::InstGlobalGet (int) kind == then
+        inst Inst::int_arg 8 * = offset
+        f"movq globals+{offset .to_str}(%rip), %rax" asm emit_indent
+        "pushq %rax" asm emit_indent
+    elif InstKind::InstGlobalSet (int) kind == then
+        inst Inst::int_arg 8 * = offset
+        "popq %rax" asm emit_indent
+        f"movq %rax, globals+{offset .to_str}(%rip)" asm emit_indent
+    elif InstKind::InstLocalsInit (int) kind == then
+        inst Inst::int_arg = count
+        if 0 count != then
+            "movq %r14, %rdi" asm emit_indent
+            f"movq ${count .to_str}, %rcx" asm emit_indent
+            "xorq %rax, %rax" asm emit_indent
+            "rep stosq" asm emit_indent
+            f"addq ${count 8 * .to_str}, %r14" asm emit_indent
+        fi
+    elif InstKind::InstLocalsUninit (int) kind == then
+        inst Inst::int_arg = count
+        if 0 count != then
+            f"subq ${count 8 * .to_str}, %r14" asm emit_indent
+        fi
+    elif InstKind::InstLocalGet (int) kind == then
+        inst Inst::int_arg 1 + 8 * = offset
+        f"movq -{offset .to_str}(%r14), %rax" asm emit_indent
+        "pushq %rax" asm emit_indent
+    elif InstKind::InstLocalSet (int) kind == then
+        inst Inst::int_arg 1 + 8 * = offset
+        "popq %rax" asm emit_indent
+        f"movq %rax, -{offset .to_str}(%r14)" asm emit_indent
+    elif InstKind::InstConstantLoad (int) kind == then
+        inst Inst::int_arg 8 * = offset
+        f"movq constants+{offset .to_str}(%rip), %rax" asm emit_indent
+        "pushq %rax" asm emit_indent
+    elif InstKind::InstConstantStore (int) kind == then
+        inst Inst::int_arg 8 * = offset
+        "popq %rax" asm emit_indent
+        f"movq %rax, constants+{offset .to_str}(%rip)" asm emit_indent
+    elif InstKind::InstFnCall (int) kind == then
+        inst Inst::str_arg sanitize_name = label
+        emit_uid = uid
+        f"leaq .Lret_{uid .to_str}(%rip), %rax" asm emit_indent
+        "movq %rax, (%r14)" asm emit_indent
+        "addq $8, %r14" asm emit_indent
+        f"jmp fn_{label}" asm emit_indent
+        f".Lret_{uid .to_str}:" asm emit_line
+    elif InstKind::InstFnExec (int) kind == then
+        emit_uid = uid
+        f"leaq .Lret_{uid .to_str}(%rip), %rax" asm emit_indent
+        "movq %rax, (%r14)" asm emit_indent
+        "addq $8, %r14" asm emit_indent
+        "popq %rax" asm emit_indent
+        "jmpq *%rax" asm emit_indent
+        f".Lret_{uid .to_str}:" asm emit_line
+    elif InstKind::InstFnPush (int) kind == then
+        inst Inst::str_arg sanitize_name = label
+        f"leaq fn_{label}(%rip), %rax" asm emit_indent
+        "pushq %rax" asm emit_indent
+    elif InstKind::InstFnReturn (int) kind == then
+        if is_global then
+            "movq $60, %rax" asm emit_indent
+            "xorq %rdi, %rdi" asm emit_indent
+            "syscall" asm emit_indent
+        else
+            "subq $8, %r14" asm emit_indent
+            "jmpq *(%r14)" asm emit_indent
+        fi
+    fi
+}
+
+# ============================================================================
+# Emit memory operations
+# ============================================================================
+
+fn emit_memory asm:StringBuilder inst:Inst {
+    inst Inst::kind = kind
+    if InstKind::InstHeapAlloc (int) kind == then
+        "popq %rax" asm emit_indent
+        "leaq heap(%rip), %rbx" asm emit_indent
+        "movq heap_ptr(%rip), %rcx" asm emit_indent
+        "leaq (%rbx,%rcx), %rdx" asm emit_indent
+        "pushq %rdx" asm emit_indent
+        "addq %rax, %rcx" asm emit_indent
+        "movq %rcx, heap_ptr(%rip)" asm emit_indent
+    elif InstKind::InstLoad8 (int) kind == then
+        "popq %rax" asm emit_indent
+        "movzbl (%rax), %eax" asm emit_indent
+        "pushq %rax" asm emit_indent
+    elif InstKind::InstLoad16 (int) kind == then
+        "popq %rax" asm emit_indent
+        "movzwl (%rax), %eax" asm emit_indent
+        "pushq %rax" asm emit_indent
+    elif InstKind::InstLoad32 (int) kind == then
+        "popq %rax" asm emit_indent
+        "movl (%rax), %eax" asm emit_indent
+        "pushq %rax" asm emit_indent
+    elif InstKind::InstLoad64 (int) kind == then
+        "popq %rax" asm emit_indent
+        "movq (%rax), %rax" asm emit_indent
+        "pushq %rax" asm emit_indent
+    elif InstKind::InstStore8 (int) kind == then
+        "popq %rax" asm emit_indent
+        "popq %rbx" asm emit_indent
+        "movb %bl, (%rax)" asm emit_indent
+    elif InstKind::InstStore16 (int) kind == then
+        "popq %rax" asm emit_indent
+        "popq %rbx" asm emit_indent
+        "movw %bx, (%rax)" asm emit_indent
+    elif InstKind::InstStore32 (int) kind == then
+        "popq %rax" asm emit_indent
+        "popq %rbx" asm emit_indent
+        "movl %ebx, (%rax)" asm emit_indent
+    elif InstKind::InstStore64 (int) kind == then
+        "popq %rax" asm emit_indent
+        "popq %rbx" asm emit_indent
+        "movq %rbx, (%rax)" asm emit_indent
+    fi
+}
+
+# ============================================================================
+# Emit IO operations
+# ============================================================================
+
+fn emit_io_ops asm:StringBuilder inst:Inst {
+    inst Inst::kind = kind
+    if InstKind::InstPrintInt (int) kind == then
+        emit_uid = uid
+        "popq %rdi" asm emit_indent
+        f"leaq .Lprint_done_{uid .to_str}(%rip), %rax" asm emit_indent
+        "movq %rax, (%r14)" asm emit_indent
+        "addq $8, %r14" asm emit_indent
+        "jmp print_int" asm emit_indent
+        f".Lprint_done_{uid .to_str}:" asm emit_line
+    elif InstKind::InstPrintBool (int) kind == then
+        emit_uid = uid
+        "popq %rax" asm emit_indent
+        "testq %rax, %rax" asm emit_indent
+        f"jz .Lpb_false_{uid .to_str}" asm emit_indent
+        "leaq bool_true(%rip), %rsi" asm emit_indent
+        "movq $4, %rdx" asm emit_indent
+        f"jmp .Lpb_write_{uid .to_str}" asm emit_indent
+        f".Lpb_false_{uid .to_str}:" asm emit_line
+        "leaq bool_false(%rip), %rsi" asm emit_indent
+        "movq $5, %rdx" asm emit_indent
+        f".Lpb_write_{uid .to_str}:" asm emit_line
+        "movq $1, %rdi" asm emit_indent
+        "movq $1, %rax" asm emit_indent
+        "syscall" asm emit_indent
+    elif InstKind::InstPrintStr (int) kind == then
+        emit_uid = uid
+        "popq %rdi" asm emit_indent
+        f"leaq .Lprint_done_{uid .to_str}(%rip), %rax" asm emit_indent
+        "movq %rax, (%r14)" asm emit_indent
+        "addq $8, %r14" asm emit_indent
+        "jmp print_str" asm emit_indent
+        f".Lprint_done_{uid .to_str}:" asm emit_line
+    elif InstKind::InstPrintChar (int) kind == then
+        "popq %rax" asm emit_indent
+        "movb %al, -1(%rsp)" asm emit_indent
+        "leaq -1(%rsp), %rsi" asm emit_indent
+        "movq $1, %rdx" asm emit_indent
+        "movq $1, %rdi" asm emit_indent
+        "movq $1, %rax" asm emit_indent
+        "syscall" asm emit_indent
+    elif InstKind::InstPrintCstr (int) kind == then
+        emit_uid = uid
+        "popq %rsi" asm emit_indent
+        "movq %rsi, %rdi" asm emit_indent
+        f".Lpc_scan_{uid .to_str}:" asm emit_line
+        "cmpb $0, (%rsi)" asm emit_indent
+        f"je .Lpc_done_{uid .to_str}" asm emit_indent
+        "incq %rsi" asm emit_indent
+        f"jmp .Lpc_scan_{uid .to_str}" asm emit_indent
+        f".Lpc_done_{uid .to_str}:" asm emit_line
+        "movq %rsi, %rdx" asm emit_indent
+        "subq %rdi, %rdx" asm emit_indent
+        "movq %rdi, %rsi" asm emit_indent
+        "movq $1, %rdi" asm emit_indent
+        "movq $1, %rax" asm emit_indent
+        "syscall" asm emit_indent
+    elif InstKind::InstFstringConcat (int) kind == then
+        emit_uid = uid
+        f"movq ${inst Inst::int_arg .to_str}, %rdi" asm emit_indent
+        f"leaq .Lconcat_done_{uid .to_str}(%rip), %rax" asm emit_indent
+        "movq %rax, (%r14)" asm emit_indent
+        "addq $8, %r14" asm emit_indent
+        "jmp str_concat" asm emit_indent
+        f".Lconcat_done_{uid .to_str}:" asm emit_line
+    fi
+}
+
+# ============================================================================
+# Emit string equality
+# ============================================================================
+
+fn emit_str_eq asm:StringBuilder {
+    emit_uid = uid
+    "popq %rsi" asm emit_indent
+    "popq %rdi" asm emit_indent
+    "movq (%rdi), %rcx" asm emit_indent
+    "cmpq (%rsi), %rcx" asm emit_indent
+    f"jne .Lstreq_ne_{uid .to_str}" asm emit_indent
+    "leaq 8(%rdi), %rdi" asm emit_indent
+    "leaq 8(%rsi), %rsi" asm emit_indent
+    "repe cmpsb" asm emit_indent
+    f"jne .Lstreq_ne_{uid .to_str}" asm emit_indent
+    "pushq $1" asm emit_indent
+    f"jmp .Lstreq_done_{uid .to_str}" asm emit_indent
+    f".Lstreq_ne_{uid .to_str}:" asm emit_line
+    "pushq $0" asm emit_indent
+    f".Lstreq_done_{uid .to_str}:" asm emit_line
+}
+
+# ============================================================================
+# Emit single instruction (main dispatch)
+# ============================================================================
+
+fn emit_inst asm:StringBuilder inst:Inst is_global:bool {
+    inst Inst::kind = kind
+
+    # Stack operations
+    if
+        InstKind::InstPush (int) kind ==
+        InstKind::InstPushStr (int) kind == ||
+        InstKind::InstPushChar (int) kind == ||
+        InstKind::InstDrop (int) kind == ||
+        InstKind::InstDup (int) kind == ||
+        InstKind::InstSwap (int) kind == ||
+        InstKind::InstOver (int) kind == ||
+        InstKind::InstRot (int) kind == ||
+    then
+        inst asm emit_stack_ops
+
+    # Arithmetic / bitwise / boolean / comparison
+    elif
+        InstKind::InstAdd (int) kind ==
+        InstKind::InstSub (int) kind == ||
+        InstKind::InstMul (int) kind == ||
+        InstKind::InstDiv (int) kind == ||
+        InstKind::InstMod (int) kind == ||
+        InstKind::InstShl (int) kind == ||
+        InstKind::InstShr (int) kind == ||
+        InstKind::InstBitAnd (int) kind == ||
+        InstKind::InstBitOr (int) kind == ||
+        InstKind::InstBitXor (int) kind == ||
+        InstKind::InstBitNot (int) kind == ||
+        InstKind::InstAnd (int) kind == ||
+        InstKind::InstOr (int) kind == ||
+        InstKind::InstNot (int) kind == ||
+        InstKind::InstEq (int) kind == ||
+        InstKind::InstNe (int) kind == ||
+        InstKind::InstLt (int) kind == ||
+        InstKind::InstLe (int) kind == ||
+        InstKind::InstGt (int) kind == ||
+        InstKind::InstGe (int) kind == ||
+    then
+        inst asm emit_arithmetic
+
+    # Control flow / variables / functions
+    elif
+        InstKind::InstLabel (int) kind ==
+        InstKind::InstJump (int) kind == ||
+        InstKind::InstJumpNe (int) kind == ||
+        InstKind::InstGlobalsInit (int) kind == ||
+        InstKind::InstGlobalGet (int) kind == ||
+        InstKind::InstGlobalSet (int) kind == ||
+        InstKind::InstLocalsInit (int) kind == ||
+        InstKind::InstLocalsUninit (int) kind == ||
+        InstKind::InstLocalGet (int) kind == ||
+        InstKind::InstLocalSet (int) kind == ||
+        InstKind::InstConstantLoad (int) kind == ||
+        InstKind::InstConstantStore (int) kind == ||
+        InstKind::InstFnCall (int) kind == ||
+        InstKind::InstFnExec (int) kind == ||
+        InstKind::InstFnPush (int) kind == ||
+        InstKind::InstFnReturn (int) kind == ||
+    then
+        is_global inst asm emit_control_flow
+
+    # Memory operations
+    elif
+        InstKind::InstHeapAlloc (int) kind ==
+        InstKind::InstLoad8 (int) kind == ||
+        InstKind::InstLoad16 (int) kind == ||
+        InstKind::InstLoad32 (int) kind == ||
+        InstKind::InstLoad64 (int) kind == ||
+        InstKind::InstStore8 (int) kind == ||
+        InstKind::InstStore16 (int) kind == ||
+        InstKind::InstStore32 (int) kind == ||
+        InstKind::InstStore64 (int) kind == ||
+    then
+        inst asm emit_memory
+
+    # IO operations
+    elif
+        InstKind::InstPrintInt (int) kind ==
+        InstKind::InstPrintBool (int) kind == ||
+        InstKind::InstPrintStr (int) kind == ||
+        InstKind::InstPrintChar (int) kind == ||
+        InstKind::InstPrintCstr (int) kind == ||
+        InstKind::InstFstringConcat (int) kind == ||
+    then
+        inst asm emit_io_ops
+
+    # String equality
+    elif InstKind::InstStrEq (int) kind == then
+        asm emit_str_eq
+
+    # Syscalls
+    elif
+        InstKind::InstSyscall0 (int) kind ==
+        InstKind::InstSyscall1 (int) kind == ||
+        InstKind::InstSyscall2 (int) kind == ||
+        InstKind::InstSyscall3 (int) kind == ||
+        InstKind::InstSyscall4 (int) kind == ||
+        InstKind::InstSyscall5 (int) kind == ||
+        InstKind::InstSyscall6 (int) kind == ||
+    then
+        inst Inst::kind = syscall_kind
+        if InstKind::InstSyscall0 (int) syscall_kind == then
+            asm 0 emit_syscall
+        elif InstKind::InstSyscall1 (int) syscall_kind == then
+            asm 1 emit_syscall
+        elif InstKind::InstSyscall2 (int) syscall_kind == then
+            asm 2 emit_syscall
+        elif InstKind::InstSyscall3 (int) syscall_kind == then
+            asm 3 emit_syscall
+        elif InstKind::InstSyscall4 (int) syscall_kind == then
+            asm 4 emit_syscall
+        elif InstKind::InstSyscall5 (int) syscall_kind == then
+            asm 5 emit_syscall
+        elif InstKind::InstSyscall6 (int) syscall_kind == then
+            asm 6 emit_syscall
+        fi
+
+    # argc / argv
+    elif InstKind::InstArgc (int) kind == then
+        "movq __argc(%rip), %rax" asm emit_indent
+        "pushq %rax" asm emit_indent
+    elif InstKind::InstArgv (int) kind == then
+        "movq __argv(%rip), %rax" asm emit_indent
+        "pushq %rax" asm emit_indent
+    fi
+}
+
+# ============================================================================
+# Main emit function
+# ============================================================================
+
+fn emit program:Program -> str {
+    # Reset label counter for each emission
+    0 = emit_label_counter
+    StringBuilder::new = asm
+    program asm emit_bss
+    program asm emit_data
+    program asm emit_text
+    asm .build
+}
