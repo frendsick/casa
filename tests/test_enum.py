@@ -432,6 +432,17 @@ class TestEnumTypeChecking:
         )
         assert sig.return_types == ["bool"]
 
+    @pytest.mark.parametrize("op", ["<", "<=", ">", ">="])
+    def test_enum_ordering_same_type(self, op):
+        sig = typecheck_string(
+            COLOR_ENUM + f"Color::Red Color::Blue {op}"
+        )
+        assert sig.return_types == ["bool"]
+
+    def test_data_enum_ordering(self):
+        sig = typecheck_string(SHAPE_ENUM + "Shape::Point Shape::Point <")
+        assert sig.return_types == ["bool"]
+
     def test_enum_eq_different_types_raises(self):
         with pytest.raises(CasaErrorCollection) as exc_info:
             typecheck_string(
@@ -1037,6 +1048,33 @@ class TestEnumEndToEnd:
 
     def test_data_enum_ne(self, run_casa):
         output = run_casa(SHAPE_ENUM + "10 Shape::Circle Shape::Point != print\n")
+        assert output == "true"
+
+    def test_enum_lt_true(self, run_casa):
+        # RPN: Color::Blue Color::Red < means Red < Blue (0 < 2)
+        output = run_casa(COLOR_ENUM + "Color::Blue Color::Red < print\n")
+        assert output == "true"
+
+    def test_enum_lt_false(self, run_casa):
+        output = run_casa(COLOR_ENUM + "Color::Red Color::Blue < print\n")
+        assert output == "false"
+
+    def test_enum_le_true(self, run_casa):
+        output = run_casa(COLOR_ENUM + "Color::Red Color::Red <= print\n")
+        assert output == "true"
+
+    def test_enum_gt_true(self, run_casa):
+        # RPN: Color::Red Color::Blue > means Blue > Red (2 > 0)
+        output = run_casa(COLOR_ENUM + "Color::Red Color::Blue > print\n")
+        assert output == "true"
+
+    def test_enum_ge_true(self, run_casa):
+        output = run_casa(COLOR_ENUM + "Color::Green Color::Green >= print\n")
+        assert output == "true"
+
+    def test_data_enum_lt(self, run_casa):
+        # RPN: Shape::Point 10 Shape::Circle < means Circle < Point (0 < 2)
+        output = run_casa(SHAPE_ENUM + "Shape::Point 10 Shape::Circle < print\n")
         assert output == "true"
 
 

@@ -556,8 +556,15 @@ class Compiler:
         bytecode.append(self.inst(InstKind.LOCAL_GET, args=[local_a]))
         bytecode.append(self.inst(InstKind.LOAD64))
         # Compare ordinals
-        inst_kind = InstKind.EQ if op.kind == OpKind.EQ else InstKind.NE
-        bytecode.append(self.inst(inst_kind))
+        enum_cmp_ops = {
+            OpKind.EQ: InstKind.EQ,
+            OpKind.NE: InstKind.NE,
+            OpKind.LT: InstKind.LT,
+            OpKind.LE: InstKind.LE,
+            OpKind.GT: InstKind.GT,
+            OpKind.GE: InstKind.GE,
+        }
+        bytecode.append(self.inst(enum_cmp_ops[op.kind]))
 
     def _compile_is_check(self, op: Op, bytecode: list[Inst]) -> None:
         """Compile IS_CHECK: variant check that pushes bool, optionally extracts bindings."""
@@ -789,7 +796,15 @@ class Compiler:
             if op.kind in DIRECT_OP_TO_INST:
                 # Data-carrying enum comparison: load ordinals from heap
                 if (
-                    op.kind in (OpKind.EQ, OpKind.NE)
+                    op.kind
+                    in (
+                        OpKind.EQ,
+                        OpKind.NE,
+                        OpKind.LT,
+                        OpKind.LE,
+                        OpKind.GT,
+                        OpKind.GE,
+                    )
                     and op.type_annotation
                     and op.type_annotation in GLOBAL_ENUMS
                 ):

@@ -377,7 +377,7 @@ enum Color { Red Green Blue }
 Color::Red = c    # c has type Color
 ```
 
-Enum values support `==` and `!=` comparison (same enum type only). Printing outputs the ordinal. Pattern matching is done with `match`/`end`.
+Enum values support all comparison operators (`==`, `!=`, `<`, `<=`, `>`, `>=`) on the same enum type. Ordering is by declaration order. Printing outputs the ordinal. Pattern matching is done with `match`/`end`.
 
 See [Enums](enums.md) for details.
 
