@@ -76,13 +76,15 @@ Color::Blue = my_color
 
 ## Comparison
 
-Enum values of the same type can be compared with `==` and `!=`. For data-carrying enums, comparison checks the variant tag only (not inner values).
+Enum values of the same type can be compared with all comparison operators (`==`, `!=`, `<`, `<=`, `>`, `>=`). Ordering is based on the declaration order of variants (0-based ordinal). For data-carrying enums, comparison checks the variant tag only (not inner values).
 
 **Stack effect:** `EnumName EnumName -> bool`
 
 ```casa
 Color::Red Color::Red == print     # true
 Color::Red Color::Blue != print    # true
+Color::Blue Color::Red < print     # true (Red < Blue, ordinal 0 < 2)
+Color::Red Color::Blue > print     # true (Blue > Red, ordinal 2 > 0)
 ```
 
 Comparing values of different enum types is a compile-time error:

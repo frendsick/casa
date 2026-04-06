@@ -392,12 +392,6 @@ class TypeChecker:
                     f"Cannot compare `{t2}` with `{t1}`",
                     self.current_location,
                 )
-            if op.kind not in (OpKind.EQ, OpKind.NE):
-                raise_error(
-                    ErrorKind.TYPE_MISMATCH,
-                    f"Enum type `{t1}` only supports `==` and `!=` comparison",
-                    self.current_location,
-                )
             # Annotate for bytecode: data-carrying enums need heap tag comparison
             assert t1_enum is not None
             casa_enum = GLOBAL_ENUMS[t1_enum]
