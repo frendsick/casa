@@ -21,22 +21,37 @@ Casa compiles to x86-64 Linux executables via GNU assembly. It features static t
 ## Requirements
 
 - **Linux x86-64**
-- **Python 3.11+**
-- **GNU assembler** (`as`) and **linker** (`ld`)
+- **GNU assembler** (`as`) and **linker** (`ld`) — typically from the `binutils` package
+
+## Installation
+
+Clone the repository and run the install script to download the latest compiler binary:
+
+```sh
+git clone https://github.com/frendsick/casa.git
+cd casa
+./install.sh
+```
+
+Or download and run the install script directly:
+
+```sh
+curl -sSL https://raw.githubusercontent.com/frendsick/casa/main/install.sh | sh
+```
 
 ## Getting Started
 
 Compile and run a program:
 
 ```sh
-python3 casa.py examples/hello_world.casa -r
+./casac examples/hello_world.casa -r
 # Hello world!
 ```
 
 Compile with a custom output name:
 
 ```sh
-python3 casa.py examples/fibonacci.casa -o fib
+./casac examples/fibonacci.casa -o fib
 ./fib
 # 6765
 ```
@@ -44,7 +59,7 @@ python3 casa.py examples/fibonacci.casa -o fib
 ## CLI Usage
 
 ```
-python3 casa.py <file> [-o name] [--keep-asm] [-r] [-v]
+./casac <file> [-o name] [--keep-asm] [-r] [-v]
 ```
 
 | Flag | Description |
@@ -98,30 +113,24 @@ More examples: [examples](./examples/)
 
 ## Editor Integration
 
-Casa ships with an LSP language server that provides real-time error and warning diagnostics. It runs the compiler pipeline on every file open and save, reporting issues back to the editor.
+Casa ships with an LSP language server written in Casa. It provides diagnostics, go-to-definition, hover, completion, references, rename, and semantic tokens.
 
-### Setup
+### Building the Language Server
 
-Install the Python LSP framework in the project virtualenv:
-
-```sh
-.venv/bin/pip install pygls
-```
-
-### Running the Language Server
-
-The server communicates over stdio:
+Compile the LSP server with the Casa compiler:
 
 ```sh
-.venv/bin/python casa_ls.py
+./casac self_hosted/lsp.casa -o casa_lsp
 ```
 
-Point your editor's LSP client at this command. For example, in Neovim with `nvim-lspconfig`:
+### Editor Configuration
+
+The server communicates over stdio. Point your editor's LSP client at the compiled binary. For example, in Neovim with `nvim-lspconfig`:
 
 ```lua
 require('lspconfig.configs').casa = {
   default_config = {
-    cmd = { '.venv/bin/python', 'casa_ls.py' },
+    cmd = { '/path/to/casa/casa_lsp' },
     filetypes = { 'casa' },
     root_dir = function(fname)
       return vim.fs.dirname(fname)
@@ -135,8 +144,13 @@ require('lspconfig').casa.setup({})
 
 | Feature | Trigger |
 |---------|---------|
-| Error diagnostics | File open, file save |
-| Warning diagnostics | File open, file save |
+| Error/warning diagnostics | File open, file save |
+| Go-to-definition | `gd` or equivalent |
+| Hover | Hover over identifier |
+| Completion | Typing |
+| Find references | `gr` or equivalent |
+| Rename | `<leader>rn` or equivalent |
+| Semantic tokens | Automatic |
 
 ## Testing
 
