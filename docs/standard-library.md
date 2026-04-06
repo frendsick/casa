@@ -1156,6 +1156,106 @@ Writes a string followed by a newline to stderr.
 "error: file not found" eprintln
 ```
 
+## Logging
+
+The logging library is in `lib/log.casa`. Include it with:
+
+```casa
+include "../lib/log.casa"
+```
+
+It provides leveled logging to stderr. Messages above the current log level (more verbose) are suppressed. The default level is `LogLevel::Warning`.
+
+### `LogLevel`
+
+An enum with four variants, ordered from least to most verbose:
+
+| Variant | Ordinal | Description |
+|---------|---------|-------------|
+| `LogLevel::Error` | 0 | Critical errors |
+| `LogLevel::Warning` | 1 | Warnings (default level) |
+| `LogLevel::Info` | 2 | Informational messages |
+| `LogLevel::Debug` | 3 | Debug details |
+
+### `log_set_level`
+
+Sets the global log level. Messages at or below this level are printed.
+
+**Signature:** `log_set_level level:LogLevel`
+
+**Stack effect:** `LogLevel -> None`
+
+```casa
+LogLevel::Info log_set_level
+```
+
+### `log_error`
+
+Logs a message at ERROR level.
+
+**Signature:** `log_error msg:str`
+
+**Stack effect:** `str -> None`
+
+```casa
+"something went wrong" log_error
+# stderr: [ERROR] something went wrong
+```
+
+### `log_warning`
+
+Logs a message at WARNING level.
+
+**Signature:** `log_warning msg:str`
+
+**Stack effect:** `str -> None`
+
+```casa
+"deprecated feature used" log_warning
+# stderr: [WARNING] deprecated feature used
+```
+
+### `log_info`
+
+Logs a message at INFO level.
+
+**Signature:** `log_info msg:str`
+
+**Stack effect:** `str -> None`
+
+```casa
+"processing file" log_info
+# stderr: [INFO] processing file
+```
+
+### `log_debug`
+
+Logs a message at DEBUG level.
+
+**Signature:** `log_debug msg:str`
+
+**Stack effect:** `str -> None`
+
+```casa
+f"token count: {count .to_str}" log_debug
+# stderr: [DEBUG] token count: 42
+```
+
+### Complete Example
+
+```casa
+include "../lib/log.casa"
+
+# Default level is Warning — only Error and Warning are shown
+"this is hidden" log_info
+"this is visible" log_warning
+
+# Raise the level to see Info messages
+LogLevel::Info log_set_level
+"now this is visible" log_info
+"still visible" log_warning
+```
+
 ## Command-Line Arguments
 
 ### `argc`
