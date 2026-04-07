@@ -70,6 +70,11 @@ struct FindResult {
     function: Option[Function]
 }
 
+struct HoverContent {
+    content: str
+    range:   LspRange
+}
+
 struct FindOpState {
     best:     Option[FindResult]
     best_len: int
@@ -743,6 +748,99 @@ fn find_variable_definition name:str function:Option[Function] state:DocumentSta
     fi
 }
 
+fn compute_definition state:DocumentState line:int col:int -> Option[LspLocation] {
+    col line state find_op_at_position = result
+    if result .is_none then
+        Option::None (Option[LspLocation])
+        return
+    fi
+    result .unwrap = find
+    find FindResult::op = op
+    find FindResult::function = func
+    col line state DocumentState::source position_to_offset = cursor_offset
+
+    # Check qualified name
+    cursor_offset op state DocumentState::source qualified_name_part = qpart
+    if QPART_SEPARATOR qpart == then
+        Option::None (Option[LspLocation])
+        return
+    fi
+
+    op Op::kind = kind
+
+    # FN_CALL / FN_PUSH
+    if OpKind::OpFnCall kind == OpKind::OpFnPush kind == || then
+        if QPART_TYPE qpart == then
+            op op_str_value "::" str::split = parts
+            0 parts .get = type_name
+            if type_name state DocumentState::structs .has then
+                type_name state DocumentState::structs .get .unwrap CasaStruct::location casa_location_to_lsp Option::Some
+                return
+            fi
+            if type_name state DocumentState::enums .has then
+                type_name state DocumentState::enums .get .unwrap CasaEnum::location casa_location_to_lsp Option::Some
+                return
+            fi
+            Option::None (Option[LspLocation])
+            return
+        fi
+        op op_str_value state DocumentState::functions .get = fn_opt
+        if fn_opt .is_some then
+            fn_opt .unwrap = fn_def
+            if "" fn_def Function::location Location::file != then
+                fn_def Function::location casa_location_to_lsp Option::Some
+                return
+            fi
+        fi
+        Option::None (Option[LspLocation])
+        return
+    fi
+
+    # PUSH_VARIABLE / PUSH_CAPTURE
+    if OpKind::OpPushVar kind == OpKind::OpPushCapture kind == || then
+        op Op::location Location::span Span::offset state func op op_str_value find_variable_definition
+        return
+    fi
+
+    # STRUCT_NEW
+    if OpKind::OpStructNew kind == then
+        op Op::value (CasaStruct) CasaStruct::location casa_location_to_lsp Option::Some
+        return
+    fi
+
+    # PUSH_ENUM_VARIANT
+    if OpKind::OpPushEnumVariant kind == then
+        op Op::value (EnumVariant) EnumVariant::enum_name = enum_name
+        if enum_name state DocumentState::enums .has ! then
+            Option::None (Option[LspLocation])
+            return
+        fi
+        enum_name state DocumentState::enums .get .unwrap = casa_enum
+        op Op::value (EnumVariant) EnumVariant::variant_name casa_enum CasaEnum::variant_locations .get = variant_loc_opt
+        if QPART_MEMBER qpart == variant_loc_opt .is_some && then
+            variant_loc_opt .unwrap casa_location_to_lsp Option::Some
+            return
+        fi
+        casa_enum CasaEnum::location casa_location_to_lsp Option::Some
+        return
+    fi
+
+    # TYPE_CAST
+    if OpKind::OpTypeCast kind == then
+        op op_str_value = cast_type
+        if cast_type state DocumentState::structs .has then
+            cast_type state DocumentState::structs .get .unwrap CasaStruct::location casa_location_to_lsp Option::Some
+            return
+        fi
+        if cast_type state DocumentState::enums .has then
+            cast_type state DocumentState::enums .get .unwrap CasaEnum::location casa_location_to_lsp Option::Some
+            return
+        fi
+    fi
+
+    Option::None (Option[LspLocation])
+}
+
 fn handle_definition message:JsonValue {
     message extract_uri = uri
     "id" message json_get_value .unwrap = request_id
@@ -755,101 +853,12 @@ fn handle_definition message:JsonValue {
     state_opt .unwrap = state
 
     message extract_position = position
-    position LspRange::start_col position LspRange::start_line state find_op_at_position = result
-    if result .is_none then
+    position LspRange::start_col position LspRange::start_line state compute_definition = loc_opt
+    if loc_opt .is_some then
+        loc_opt .unwrap lsp_location_to_json request_id send_response
+    else
         json_null_value request_id send_response
-        return
     fi
-    result .unwrap = find
-    find FindResult::op = op
-    find FindResult::function = func
-    position LspRange::start_col position LspRange::start_line state DocumentState::source position_to_offset = cursor_offset
-
-    # Check qualified name
-    cursor_offset op state DocumentState::source qualified_name_part = qpart
-    if QPART_SEPARATOR qpart == then
-        json_null_value request_id send_response
-        return
-    fi
-
-    op Op::kind = kind
-
-    # FN_CALL / FN_PUSH
-    if OpKind::OpFnCall kind == OpKind::OpFnPush kind == || then
-        if QPART_TYPE qpart == then
-            op op_str_value "::" str::split = parts
-            0 parts .get = type_name
-            if type_name state DocumentState::structs .has then
-                type_name state DocumentState::structs .get .unwrap CasaStruct::location casa_location_to_lsp lsp_location_to_json request_id send_response
-                return
-            fi
-            if type_name state DocumentState::enums .has then
-                type_name state DocumentState::enums .get .unwrap CasaEnum::location casa_location_to_lsp lsp_location_to_json request_id send_response
-                return
-            fi
-            json_null_value request_id send_response
-            return
-        fi
-        op op_str_value state DocumentState::functions .get = fn_opt
-        if fn_opt .is_some then
-            fn_opt .unwrap = fn_def
-            if "" fn_def Function::location Location::file != then
-                fn_def Function::location casa_location_to_lsp lsp_location_to_json request_id send_response
-                return
-            fi
-        fi
-        json_null_value request_id send_response
-        return
-    fi
-
-    # PUSH_VARIABLE / PUSH_CAPTURE
-    if OpKind::OpPushVar kind == OpKind::OpPushCapture kind == || then
-        op Op::location Location::span Span::offset state func op op_str_value find_variable_definition = var_loc
-        if var_loc .is_some then
-            var_loc .unwrap lsp_location_to_json request_id send_response
-        else
-            json_null_value request_id send_response
-        fi
-        return
-    fi
-
-    # STRUCT_NEW
-    if OpKind::OpStructNew kind == then
-        op Op::value (CasaStruct) CasaStruct::location casa_location_to_lsp lsp_location_to_json request_id send_response
-        return
-    fi
-
-    # PUSH_ENUM_VARIANT
-    if OpKind::OpPushEnumVariant kind == then
-        op Op::value (EnumVariant) EnumVariant::enum_name = enum_name
-        if enum_name state DocumentState::enums .has ! then
-            json_null_value request_id send_response
-            return
-        fi
-        enum_name state DocumentState::enums .get .unwrap = casa_enum
-        op Op::value (EnumVariant) EnumVariant::variant_name casa_enum CasaEnum::variant_locations .get = variant_loc_opt
-        if QPART_MEMBER qpart == variant_loc_opt .is_some && then
-            variant_loc_opt .unwrap casa_location_to_lsp lsp_location_to_json request_id send_response
-            return
-        fi
-        casa_enum CasaEnum::location casa_location_to_lsp lsp_location_to_json request_id send_response
-        return
-    fi
-
-    # TYPE_CAST
-    if OpKind::OpTypeCast kind == then
-        op op_str_value = cast_type
-        if cast_type state DocumentState::structs .has then
-            cast_type state DocumentState::structs .get .unwrap CasaStruct::location casa_location_to_lsp lsp_location_to_json request_id send_response
-            return
-        fi
-        if cast_type state DocumentState::enums .has then
-            cast_type state DocumentState::enums .get .unwrap CasaEnum::location casa_location_to_lsp lsp_location_to_json request_id send_response
-            return
-        fi
-    fi
-
-    json_null_value request_id send_response
 }
 
 # ============================================================================
@@ -1026,32 +1035,21 @@ fn format_hover op:Op state:DocumentState func:Option[Function] -> Option[str] {
     Option::None (Option[str])
 }
 
-fn handle_hover message:JsonValue {
-    message extract_uri = uri
-    "id" message json_get_value .unwrap = request_id
-
-    uri DOCUMENT_STATES .get = state_opt
-    if state_opt .is_none then
-        json_null_value request_id send_response
-        return
-    fi
-    state_opt .unwrap = state
-
-    message extract_position = position
-    position LspRange::start_col position LspRange::start_line state find_op_at_position = result
+fn compute_hover state:DocumentState line:int col:int -> Option[HoverContent] {
+    col line state find_op_at_position = result
     if result .is_none then
-        json_null_value request_id send_response
+        Option::None (Option[HoverContent])
         return
     fi
     result .unwrap = find
     find FindResult::op = op
     find FindResult::function = func
-    position LspRange::start_col position LspRange::start_line state DocumentState::source position_to_offset = cursor_offset
+    col line state DocumentState::source position_to_offset = cursor_offset
 
     # Dead zone for :: separator
     cursor_offset op state DocumentState::source qualified_name_part = qpart
     if QPART_SEPARATOR qpart == then
-        json_null_value request_id send_response
+        Option::None (Option[HoverContent])
         return
     fi
 
@@ -1099,13 +1097,7 @@ fn handle_hover message:JsonValue {
                 enum_builder .build Option::Some = qualified_content
             fi
             if qualified_content .is_some then
-                json_object
-                    "contents" json_object
-                        "kind" "markdown" json_string_value json_set
-                        "value" f"```casa\n{qualified_content .unwrap}\n```" json_string_value json_set
-                    json_object_value json_set
-                    "range" qualified_range lsp_range_to_json json_set
-                json_object_value request_id send_response
+                qualified_range f"```casa\n{qualified_content .unwrap}\n```" HoverContent Option::Some
                 return
             fi
         else
@@ -1116,18 +1108,12 @@ fn handle_hover message:JsonValue {
                 member_fn_opt .unwrap = member_fn
                 func state op format_hover = member_content
                 if member_content .is_some then
-                    json_object
-                        "contents" json_object
-                            "kind" "markdown" json_string_value json_set
-                            "value" f"```casa\n{member_content .unwrap}\n```" json_string_value json_set
-                        json_object_value json_set
-                        "range" member_range lsp_range_to_json json_set
-                    json_object_value request_id send_response
+                    member_range f"```casa\n{member_content .unwrap}\n```" HoverContent Option::Some
                     return
                 fi
             fi
         fi
-        json_null_value request_id send_response
+        Option::None (Option[HoverContent])
         return
     fi
 
@@ -1152,44 +1138,53 @@ fn handle_hover message:JsonValue {
                     1 += variant_index
                 done
                 " }" variant_builder .append
-                json_object
-                    "contents" json_object
-                        "kind" "markdown" json_string_value json_set
-                        "value" f"```casa\n{variant_builder .build}\n```" json_string_value json_set
-                    json_object_value json_set
-                    "range" enum_range lsp_range_to_json json_set
-                json_object_value request_id send_response
+                enum_range f"```casa\n{variant_builder .build}\n```" HoverContent Option::Some
                 return
             fi
         else
             op state DocumentState::source qualified_member_range = variant_range
             f"{enum_variant EnumVariant::enum_name}::{enum_variant EnumVariant::variant_name}" = variant_content
-            json_object
-                "contents" json_object
-                    "kind" "markdown" json_string_value json_set
-                    "value" f"```casa\n{variant_content}\n```" json_string_value json_set
-                json_object_value json_set
-                "range" variant_range lsp_range_to_json json_set
-            json_object_value request_id send_response
+            variant_range f"```casa\n{variant_content}\n```" HoverContent Option::Some
             return
         fi
-        json_null_value request_id send_response
+        Option::None (Option[HoverContent])
         return
     fi
 
     # General hover
     func state op format_hover = hover_content
     if hover_content .is_none then
-        json_null_value request_id send_response
+        Option::None (Option[HoverContent])
         return
     fi
     op Op::location Location::span Span::length op Op::location Location::span Span::offset state DocumentState::source offset_to_lsp_range = hover_range
+    hover_range f"```casa\n{hover_content .unwrap}\n```" HoverContent Option::Some
+}
+
+fn handle_hover message:JsonValue {
+    message extract_uri = uri
+    "id" message json_get_value .unwrap = request_id
+
+    uri DOCUMENT_STATES .get = state_opt
+    if state_opt .is_none then
+        json_null_value request_id send_response
+        return
+    fi
+    state_opt .unwrap = state
+
+    message extract_position = position
+    position LspRange::start_col position LspRange::start_line state compute_hover = hover_opt
+    if hover_opt .is_none then
+        json_null_value request_id send_response
+        return
+    fi
+    hover_opt .unwrap = hover
     json_object
         "contents" json_object
             "kind" "markdown" json_string_value json_set
-            "value" f"```casa\n{hover_content .unwrap}\n```" json_string_value json_set
+            "value" hover HoverContent::content json_string_value json_set
         json_object_value json_set
-        "range" hover_range lsp_range_to_json json_set
+        "range" hover HoverContent::range lsp_range_to_json json_set
     json_object_value request_id send_response
 }
 
@@ -1368,54 +1363,11 @@ fn handle_triggered_completion state:DocumentState offset:int -> List[Completion
     List::new (List[CompletionItem])
 }
 
-fn handle_completion message:JsonValue {
-    message extract_uri = uri
-    "id" message json_get_value .unwrap = request_id
-
-    uri DOCUMENT_STATES .get = state_opt
-    if state_opt .is_none then
-        json_object
-            "isIncomplete" false json_bool_value json_set
-            "items" List::new (List[JsonValue]) json_array_value json_set
-        json_object_value request_id send_response
-        return
-    fi
-    state_opt .unwrap = state
-
-    # Check trigger character
-    "params" message json_get_object .unwrap = params
-    "context" params json_get_object = context_opt
-    "" = trigger
-    if context_opt .is_some then
-        "triggerCharacter" context_opt .unwrap json_get_str = trigger_opt
-        if trigger_opt .is_some then
-            trigger_opt .unwrap = trigger
-        fi
-    fi
-
-    message extract_position = position
-    position LspRange::start_col position LspRange::start_line state DocumentState::source position_to_offset = cursor_offset
+fn compute_completion state:DocumentState line:int col:int trigger:str -> List[CompletionItem] {
+    col line state DocumentState::source position_to_offset = cursor_offset
 
     if "." trigger == ":" trigger == || then
-        cursor_offset state handle_triggered_completion = triggered_items
-        if 0 triggered_items .length != then
-            List::new (List[JsonValue]) = triggered_json
-            0 = triggered_index
-            while triggered_index triggered_items .length > do
-                triggered_index triggered_items .get completion_item_to_json triggered_json .push
-                1 += triggered_index
-            done
-            json_object
-                "isIncomplete" false json_bool_value json_set
-                "items" triggered_json json_array_value json_set
-            json_object_value request_id send_response
-            return
-        fi
-        # Don't fall through on trigger
-        json_object
-            "isIncomplete" false json_bool_value json_set
-            "items" List::new (List[JsonValue]) json_array_value json_set
-        json_object_value request_id send_response
+        cursor_offset state handle_triggered_completion
         return
     fi
 
@@ -1506,6 +1458,37 @@ fn handle_completion message:JsonValue {
         "" COMPLETION_KEYWORD intr_name CompletionItem items .push
         1 += intrinsic_index
     done
+
+    items
+}
+
+fn handle_completion message:JsonValue {
+    message extract_uri = uri
+    "id" message json_get_value .unwrap = request_id
+
+    uri DOCUMENT_STATES .get = state_opt
+    if state_opt .is_none then
+        json_object
+            "isIncomplete" false json_bool_value json_set
+            "items" List::new (List[JsonValue]) json_array_value json_set
+        json_object_value request_id send_response
+        return
+    fi
+    state_opt .unwrap = state
+
+    # Check trigger character
+    "params" message json_get_object .unwrap = params
+    "context" params json_get_object = context_opt
+    "" = trigger
+    if context_opt .is_some then
+        "triggerCharacter" context_opt .unwrap json_get_str = trigger_opt
+        if trigger_opt .is_some then
+            trigger_opt .unwrap = trigger
+        fi
+    fi
+
+    message extract_position = position
+    trigger position LspRange::start_col position LspRange::start_line state compute_completion = items
 
     # Build response
     List::new (List[JsonValue]) = json_items
@@ -1697,6 +1680,31 @@ fn find_all_references state:DocumentState op:Op func:Option[Function] include_d
     results
 }
 
+fn compute_references state:DocumentState line:int col:int include_declaration:bool -> Option[List[LspLocation]] {
+    # Check function definition name first (parameter ops share the name token location)
+    col line state find_function_at_position = fn_at_pos
+    if fn_at_pos Option::Some(matched_function) is then
+        matched_function Function::location OpKind::OpFnCall matched_function Function::name make_op_str = op
+        Option::None (Option[Function]) = func
+    else
+        col line state find_op_at_position = result
+        if result .is_none then
+            Option::None (Option[List[LspLocation]])
+            return
+        fi
+        result .unwrap = find
+        find FindResult::op = op
+        find FindResult::function = func
+    fi
+
+    include_declaration func op state find_all_references = refs
+    if 0 refs .length == then
+        Option::None (Option[List[LspLocation]])
+        return
+    fi
+    refs Option::Some
+}
+
 fn handle_references message:JsonValue {
     message extract_uri = uri
     "id" message json_get_value .unwrap = request_id
@@ -1708,23 +1716,6 @@ fn handle_references message:JsonValue {
     fi
     state_opt .unwrap = state
 
-    message extract_position = position
-    # Check function definition name first (parameter ops share the name token location)
-    position LspRange::start_col position LspRange::start_line state find_function_at_position = fn_at_pos
-    if fn_at_pos Option::Some(matched_function) is then
-        matched_function Function::location OpKind::OpFnCall matched_function Function::name make_op_str = op
-        Option::None (Option[Function]) = func
-    else
-        position LspRange::start_col position LspRange::start_line state find_op_at_position = result
-        if result .is_none then
-            json_null_value request_id send_response
-            return
-        fi
-        result .unwrap = find
-        find FindResult::op = op
-        find FindResult::function = func
-    fi
-
     # includeDeclaration
     "context" "params" message json_get_object .unwrap json_get_object = context_opt
     true = include_decl
@@ -1735,11 +1726,13 @@ fn handle_references message:JsonValue {
         fi
     fi
 
-    include_decl func op state find_all_references = refs
-    if 0 refs .length == then
+    message extract_position = position
+    include_decl position LspRange::start_col position LspRange::start_line state compute_references = refs_opt
+    if refs_opt .is_none then
         json_null_value request_id send_response
         return
     fi
+    refs_opt .unwrap = refs
     List::new (List[JsonValue]) = json_refs
     0 = ref_index
     while ref_index refs .length > do
@@ -1753,28 +1746,17 @@ fn handle_references message:JsonValue {
 # Rename handler
 # ============================================================================
 
-fn handle_rename message:JsonValue {
-    message extract_uri = uri
-    "id" message json_get_value .unwrap = request_id
-
-    uri DOCUMENT_STATES .get = state_opt
-    if state_opt .is_none then
-        json_null_value request_id send_response
-        return
-    fi
-    state_opt .unwrap = state
-
-    message extract_position = position
+fn compute_rename state:DocumentState line:int col:int new_name:str -> Option[Map[str List[TextEdit]]] {
     # Check function definition name first (parameter ops share the name token location)
-    position LspRange::start_col position LspRange::start_line state find_function_at_position = fn_at_pos
+    col line state find_function_at_position = fn_at_pos
     if fn_at_pos Option::Some(matched_function) is then
         matched_function Function::location OpKind::OpFnCall matched_function Function::name make_op_str = op
         Option::None (Option[Function]) = func
         matched_function Function::name function_short_name = old_name
     else
-        position LspRange::start_col position LspRange::start_line state find_op_at_position = result
+        col line state find_op_at_position = result
         if result .is_none then
-            json_null_value request_id send_response
+            Option::None (Option[Map[str List[TextEdit]]])
             return
         fi
         result .unwrap = find
@@ -1783,16 +1765,14 @@ fn handle_rename message:JsonValue {
         op op_str_value = old_name
     fi
 
-    "newName" "params" message json_get_object .unwrap json_get_str .unwrap = new_name
-
     true func op state find_all_references = refs
     if 0 refs .length == then
-        json_null_value request_id send_response
+        Option::None (Option[Map[str List[TextEdit]]])
         return
     fi
 
     # Build workspace edit: group edits by URI
-    Map::new (Map[str List[JsonValue]]) = edits_map
+    Map::new (Map[str List[TextEdit]]) = edits_map
     0 = ref_index
     while ref_index refs .length > do
         ref_index refs .get = ref_loc
@@ -1810,17 +1790,41 @@ fn handle_rename message:JsonValue {
             LspRange = edit_range
         fi
 
-        new_name edit_range text_edit_to_json = edit_json
+        new_name edit_range TextEdit = edit_item
         ref_uri edits_map .get = existing_opt
         if existing_opt .is_some then
-            edit_json existing_opt .unwrap .push
+            edit_item existing_opt .unwrap .push
         else
-            List::new (List[JsonValue]) = new_list
-            edit_json new_list .push
+            List::new (List[TextEdit]) = new_list
+            edit_item new_list .push
             ref_uri new_list edits_map .set = edits_map
         fi
         1 += ref_index
     done
+
+    edits_map Option::Some
+}
+
+fn handle_rename message:JsonValue {
+    message extract_uri = uri
+    "id" message json_get_value .unwrap = request_id
+
+    uri DOCUMENT_STATES .get = state_opt
+    if state_opt .is_none then
+        json_null_value request_id send_response
+        return
+    fi
+    state_opt .unwrap = state
+
+    "newName" "params" message json_get_object .unwrap json_get_str .unwrap = new_name
+
+    message extract_position = position
+    new_name position LspRange::start_col position LspRange::start_line state compute_rename = edits_opt
+    if edits_opt .is_none then
+        json_null_value request_id send_response
+        return
+    fi
+    edits_opt .unwrap = edits_map
 
     # Convert to JSON changes object
     json_object = changes
@@ -1828,8 +1832,15 @@ fn handle_rename message:JsonValue {
     0 = uri_index
     while uri_index change_uris .length > do
         uri_index change_uris .get = change_uri
-        change_uri edits_map .get .unwrap json_array_value = edits_json
-        changes change_uri edits_json json_set = changes
+        change_uri edits_map .get .unwrap = edit_list
+        List::new (List[JsonValue]) = edit_json_list
+        0 = edit_index
+        while edit_index edit_list .length > do
+            edit_index edit_list .get = edit_item
+            edit_item TextEdit::new_text edit_item TextEdit::range text_edit_to_json edit_json_list .push
+            1 += edit_index
+        done
+        changes change_uri edit_json_list json_array_value json_set = changes
         1 += uri_index
     done
 
@@ -2006,18 +2017,7 @@ fn scan_keyword_before source:str name_offset:int keyword:str tokens:List[Semant
     fi
 }
 
-fn handle_semantic_tokens message:JsonValue {
-    message extract_uri = uri
-    "id" message json_get_value .unwrap = request_id
-
-    uri DOCUMENT_STATES .get = state_opt
-    if state_opt .is_none then
-        json_object
-            "data" List::new (List[JsonValue]) json_array_value json_set
-        json_object_value request_id send_response
-        return
-    fi
-    state_opt .unwrap = state
+fn compute_semantic_tokens state:DocumentState -> List[SemanticToken] {
     state DocumentState::source = source
 
     List::new (List[SemanticToken]) = tokens
@@ -2121,6 +2121,24 @@ fn handle_semantic_tokens message:JsonValue {
         sort_key sort_j 1 + tokens .set
         1 += sort_index
     done
+
+    tokens
+}
+
+fn handle_semantic_tokens message:JsonValue {
+    message extract_uri = uri
+    "id" message json_get_value .unwrap = request_id
+
+    uri DOCUMENT_STATES .get = state_opt
+    if state_opt .is_none then
+        json_object
+            "data" List::new (List[JsonValue]) json_array_value json_set
+        json_object_value request_id send_response
+        return
+    fi
+    state_opt .unwrap = state
+
+    state compute_semantic_tokens = tokens
 
     # Delta-encode
     List::new (List[JsonValue]) = encoded_data
