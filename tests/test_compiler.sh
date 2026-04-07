@@ -2,7 +2,7 @@
 set -eu
 
 ROOT_DIR=$(git rev-parse --show-toplevel)
-TESTS_DIR="$ROOT_DIR/tests/self_hosted"
+TESTS_DIR="$ROOT_DIR/tests/compiler"
 
 # Accept optional compiler path as first argument
 if [ $# -ge 1 ]; then
@@ -52,12 +52,12 @@ stage1="/tmp/casa_stage1"
 stage2="/tmp/casa_stage2"
 stage2_test_bin="/tmp/casa_stage2_test"
 
-if ! $COMPILER "$ROOT_DIR/self_hosted/casa.casa" -o "$stage1" 2>/tmp/casa_compile_err; then
+if ! $COMPILER "$ROOT_DIR/casa.casa" -o "$stage1" 2>/tmp/casa_compile_err; then
     printf "${RED}STAGE1 COMPILE FAIL${RESET}\n"
     cat /tmp/casa_compile_err
     fail=$((fail+1))
 else
-    if ! "$stage1" "$ROOT_DIR/self_hosted/casa.casa" -o "$stage2" 2>/tmp/casa_compile_err; then
+    if ! "$stage1" "$ROOT_DIR/casa.casa" -o "$stage2" 2>/tmp/casa_compile_err; then
         printf "${RED}STAGE2 COMPILE FAIL${RESET}\n"
         cat /tmp/casa_compile_err
         fail=$((fail+1))
@@ -91,17 +91,17 @@ stage1="/tmp/casa_fp_stage1"
 stage2="/tmp/casa_fp_stage2"
 stage3="/tmp/casa_fp_stage3"
 
-if ! $COMPILER "$ROOT_DIR/self_hosted/casa.casa" -o "$stage1" 2>/tmp/casa_compile_err; then
+if ! $COMPILER "$ROOT_DIR/casa.casa" -o "$stage1" 2>/tmp/casa_compile_err; then
     printf "${RED}STAGE1 COMPILE FAIL${RESET}\n"
     cat /tmp/casa_compile_err
     fail=$((fail+1))
 else
-    if ! "$stage1" "$ROOT_DIR/self_hosted/casa.casa" -o "$stage2" --keep-asm 2>/tmp/casa_compile_err; then
+    if ! "$stage1" "$ROOT_DIR/casa.casa" -o "$stage2" --keep-asm 2>/tmp/casa_compile_err; then
         printf "${RED}STAGE2 COMPILE FAIL${RESET}\n"
         cat /tmp/casa_compile_err
         fail=$((fail+1))
     else
-        if ! "$stage2" "$ROOT_DIR/self_hosted/casa.casa" -o "$stage3" --keep-asm 2>/tmp/casa_compile_err; then
+        if ! "$stage2" "$ROOT_DIR/casa.casa" -o "$stage3" --keep-asm 2>/tmp/casa_compile_err; then
             printf "${RED}STAGE3 COMPILE FAIL${RESET}\n"
             cat /tmp/casa_compile_err
             fail=$((fail+1))

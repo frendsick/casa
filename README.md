@@ -120,7 +120,7 @@ Casa ships with an LSP language server written in Casa. It provides diagnostics,
 Compile the LSP server with the Casa compiler:
 
 ```sh
-./casac self_hosted/lsp.casa -o casa_lsp
+./casac lsp.casa -o casa_lsp
 ```
 
 ### Editor Configuration
@@ -154,11 +154,11 @@ require('lspconfig').casa.setup({})
 
 ## Testing
 
-Run the example and self-hosted test suites from the root folder of the repository:
+Run the example and compiler test suites from the root folder of the repository:
 
 ```sh
 ./tests/test_examples.sh
-./tests/test_self_hosted.sh
+./tests/test_compiler.sh
 ```
 
 Both scripts default to the `./casac` binary downloaded by `install.sh`. Pass an alternate compiler path as the first argument to use a different binary.
