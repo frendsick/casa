@@ -2,7 +2,18 @@
 set -eu
 
 ROOT_DIR=$(git rev-parse --show-toplevel)
-EXAMPLES_DIR="$ROOT_DIR/examples"
+
+# Accept optional compiler path as first argument
+if [ $# -ge 1 ]; then
+    COMPILER="$1"
+else
+    COMPILER="$ROOT_DIR/casac"
+fi
+
+# Run from repo root so error messages use relative paths matching the
+# checked-in .err fixtures.
+cd "$ROOT_DIR"
+EXAMPLES_DIR="examples"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -22,7 +33,7 @@ for f in "$EXAMPLES_DIR"/*.casa; do
 
     # Examples with .err files are expected to fail compilation
     if [ -f "$err_file" ]; then
-        error_output=$(python3 "$ROOT_DIR/casa.py" "$f" -o "$binary" 2>&1 || true)
+        error_output=$("$COMPILER" "$f" -o "$binary" 2>&1 || true)
         if echo "$error_output" | diff -u - "$err_file"; then
             echo "${GREEN}[OK]${RESET} Passed: $base (expected error)"
             pass=$((pass+1))
@@ -35,7 +46,7 @@ for f in "$EXAMPLES_DIR"/*.casa; do
     fi
 
     # Compile
-    python3 "$ROOT_DIR/casa.py" "$f" -o "$binary"
+    "$COMPILER" "$f" -o "$binary"
 
     # Run and capture output
     output=$("$binary")

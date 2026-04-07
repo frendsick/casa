@@ -8,7 +8,7 @@ TESTS_DIR="$ROOT_DIR/tests/self_hosted"
 if [ $# -ge 1 ]; then
     COMPILER="$1"
 else
-    COMPILER="python3 $ROOT_DIR/casa.py"
+    COMPILER="$ROOT_DIR/casac"
 fi
 
 RED='\033[0;31m'
@@ -45,14 +45,14 @@ for f in "$TESTS_DIR"/test_*.casa; do
     rm -f "$binary"
 done
 
-# Self-compilation test: stage1 (Python-compiled) compiles itself to stage2
+# Self-compilation test: stage1 (released casac) compiles itself to stage2
 printf "Running: self_compilation ... "
 
 stage1="/tmp/casa_stage1"
 stage2="/tmp/casa_stage2"
 stage2_test_bin="/tmp/casa_stage2_test"
 
-if ! python3 "$ROOT_DIR/casa.py" "$ROOT_DIR/self_hosted/casa.casa" -o "$stage1" 2>/tmp/casa_compile_err; then
+if ! $COMPILER "$ROOT_DIR/self_hosted/casa.casa" -o "$stage1" 2>/tmp/casa_compile_err; then
     printf "${RED}STAGE1 COMPILE FAIL${RESET}\n"
     cat /tmp/casa_compile_err
     fail=$((fail+1))
@@ -91,7 +91,7 @@ stage1="/tmp/casa_fp_stage1"
 stage2="/tmp/casa_fp_stage2"
 stage3="/tmp/casa_fp_stage3"
 
-if ! python3 "$ROOT_DIR/casa.py" "$ROOT_DIR/self_hosted/casa.casa" -o "$stage1" 2>/tmp/casa_compile_err; then
+if ! $COMPILER "$ROOT_DIR/self_hosted/casa.casa" -o "$stage1" 2>/tmp/casa_compile_err; then
     printf "${RED}STAGE1 COMPILE FAIL${RESET}\n"
     cat /tmp/casa_compile_err
     fail=$((fail+1))

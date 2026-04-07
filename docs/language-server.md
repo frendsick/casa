@@ -2,21 +2,12 @@
 
 Casa includes an LSP language server that provides real-time compiler diagnostics in any editor that supports the [Language Server Protocol](https://microsoft.github.io/language-server-protocol/).
 
-## Setup (Native)
+## Setup
 
 Compile the self-hosted language server:
 
 ```sh
-./casa_stage1 self_hosted/lsp.casa -o casa_lsp
-```
-
-## Setup (Python)
-
-Alternatively, use the Python implementation. Install the `pygls` LSP framework in the project virtualenv:
-
-```sh
-python3.14 -m venv .venv
-.venv/bin/pip install pygls
+./casac self_hosted/lsp.casa -o casa_lsp
 ```
 
 ## Running
@@ -25,12 +16,6 @@ The server communicates over stdio:
 
 ```sh
 ./casa_lsp
-```
-
-Or using the Python implementation:
-
-```sh
-.venv/bin/python casa_ls.py
 ```
 
 ## Features
@@ -220,4 +205,4 @@ command = "./casa_lsp"
 - Completion does not filter by prefix or context (the editor handles filtering)
 - Dot-triggered method completion works for variables, literals, and method chains but not for arbitrary expressions
 - No code actions
-- The native LSP (casa_lsp) uses alloc without freeing, so memory grows over long sessions
+- The LSP uses alloc without freeing, so memory grows over long sessions
