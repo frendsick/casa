@@ -45,7 +45,7 @@ for f in "$TESTS_DIR"/test_*.casa; do
     rm -f "$binary"
 done
 
-# Self-compilation test: stage1 (Python-compiled) compiles itself to stage2
+# Self-compilation test: stage1 (released casac) compiles itself to stage2
 printf "Running: self_compilation ... "
 
 stage1="/tmp/casa_stage1"
