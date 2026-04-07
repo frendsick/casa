@@ -1,0 +1,1154 @@
+include "../../self_hosted/lsp.casa"
+include "../../lib/test.casa"
+include "../../lib/test_helpers.casa"
+
+# Synthetic file path used for tests that don't need a real file on disk.
+"/tmp/lsp_test.casa" = LSP_TEST_FILE
+
+fn lsp_clear_documents {
+    Map::new (Map[str DocumentState]) = DOCUMENT_STATES
+}
+
+fn lsp_test_state source:str -> DocumentState {
+    lsp_clear_documents
+    source LSP_TEST_FILE run_pipeline
+}
+
+fn lsp_test_uri -> str {
+    LSP_TEST_FILE path_to_uri
+}
+
+# ============================================================================
+# Test: offset_to_lsp_range
+# ============================================================================
+
+fn test_offset_to_lsp_range_single_line_start {
+    "offset_to_lsp_range_single_line_start" test_start
+    5 0 "hello world" offset_to_lsp_range = range
+    "start_line" 0 range LspRange::start_line assert_eq
+    "start_col"  0 range LspRange::start_col assert_eq
+    "end_line"   0 range LspRange::end_line assert_eq
+    "end_col"    5 range LspRange::end_col assert_eq
+}
+
+fn test_offset_to_lsp_range_multiline_second_line {
+    "offset_to_lsp_range_multiline_second_line" test_start
+    6 6 "first\nsecond" offset_to_lsp_range = range
+    "start_line" 1 range LspRange::start_line assert_eq
+    "start_col"  0 range LspRange::start_col assert_eq
+    "end_line"   1 range LspRange::end_line assert_eq
+    "end_col"    6 range LspRange::end_col assert_eq
+}
+
+fn test_offset_to_lsp_range_zero_length_uses_minimum_of_one {
+    "offset_to_lsp_range_zero_length_uses_minimum_of_one" test_start
+    0 1 "abc" offset_to_lsp_range = range
+    "start_line" 0 range LspRange::start_line assert_eq
+    "start_col"  1 range LspRange::start_col assert_eq
+    "end_line"   0 range LspRange::end_line assert_eq
+    "end_col"    2 range LspRange::end_col assert_eq
+}
+
+fn test_offset_to_lsp_range_mid_line_offset {
+    "offset_to_lsp_range_mid_line_offset" test_start
+    5 6 "hello world" offset_to_lsp_range = range
+    "start_line" 0 range LspRange::start_line assert_eq
+    "start_col"  6 range LspRange::start_col assert_eq
+    "end_line"   0 range LspRange::end_line assert_eq
+    "end_col"    11 range LspRange::end_col assert_eq
+}
+
+# ============================================================================
+# Test: position_to_offset
+# ============================================================================
+
+fn test_position_to_offset_first_line_first_col {
+    "position_to_offset_first_line_first_col" test_start
+    "result" 0 0 0 "hello world" position_to_offset assert_eq
+}
+
+fn test_position_to_offset_second_line {
+    "position_to_offset_second_line" test_start
+    "result" 6 0 1 "first\nsecond" position_to_offset assert_eq
+}
+
+fn test_position_to_offset_mid_line {
+    "position_to_offset_mid_line" test_start
+    "result" 6 6 0 "hello world" position_to_offset assert_eq
+}
+
+fn test_position_to_offset_third_line_mid_col {
+    "position_to_offset_third_line_mid_col" test_start
+    "result" 11 3 2 "aaa\nbbb\ncccdef" position_to_offset assert_eq
+}
+
+# ============================================================================
+# Test: clear_compilation_state
+# ============================================================================
+
+fn test_clear_compilation_state_clears_all_global_state {
+    "clear_compilation_state_clears_all_global_state" test_start
+    # Populate state by running the pipeline
+    "fn greet { 42 print }" lsp_test_state drop
+    "has functions before" 0 GLOBAL_FUNCTIONS .keys .length > assert_true
+    clear_compilation_state
+    "no functions" 0 GLOBAL_FUNCTIONS .keys .length assert_eq
+    "no errors"    0 ERRORS .length assert_eq
+    "no warnings"  0 WARNINGS .length assert_eq
+}
+
+# ============================================================================
+# Test: compute_diagnostics
+# ============================================================================
+
+fn test_compute_diagnostics_valid_code_produces_no_diagnostics {
+    "compute_diagnostics_valid_code_produces_no_diagnostics" test_start
+    lsp_clear_documents
+    "42 print" lsp_test_uri compute_diagnostics = diagnostics
+    "no diagnostics" 0 diagnostics .length assert_eq
+}
+
+fn test_compute_diagnostics_invalid_code_produces_error_diagnostics {
+    "compute_diagnostics_invalid_code_produces_error_diagnostics" test_start
+    lsp_clear_documents
+    "42 \"hello\" +" lsp_test_uri compute_diagnostics = diagnostics
+    "has diagnostics" 0 diagnostics .length > assert_true
+    "first is error severity" DIAGNOSTIC_ERROR 0 diagnostics .get LspDiagnostic::severity assert_eq
+}
+
+# ============================================================================
+# Test: run_pipeline
+# ============================================================================
+
+fn test_run_pipeline_returns_document_state {
+    "run_pipeline_returns_document_state" test_start
+    "fn greet { 42 print }\ngreet" lsp_test_state = state
+    "has ops" 0 state DocumentState::ops .length > assert_true
+    "has greet function" "greet" state DocumentState::functions .has assert_true
+    "source matches" "fn greet { 42 print }\ngreet" state DocumentState::source assert_str_eq
+    "file_path matches" LSP_TEST_FILE state DocumentState::file_path assert_str_eq
+    "no errors" 0 ERRORS .length assert_eq
+}
+
+fn test_run_pipeline_partial_failure_still_returns_ops {
+    "run_pipeline_partial_failure_still_returns_ops" test_start
+    "42 \"hello\" +" lsp_test_state = state
+    "has ops" 0 state DocumentState::ops .length > assert_true
+    "source matches" "42 \"hello\" +" state DocumentState::source assert_str_eq
+    "has errors" 0 ERRORS .length > assert_true
+}
+
+fn test_run_pipeline_populates_structs {
+    "run_pipeline_populates_structs" test_start
+    "struct Point {\n    x: int\n    y: int\n}" lsp_test_state = state
+    "has Point struct" "Point" state DocumentState::structs .has assert_true
+}
+
+fn test_run_pipeline_populates_enums {
+    "run_pipeline_populates_enums" test_start
+    "enum Color { Red Green Blue }" lsp_test_state = state
+    "has Color enum" "Color" state DocumentState::enums .has assert_true
+}
+
+# ============================================================================
+# Test: find_op_at_position
+# ============================================================================
+
+fn test_find_op_at_position_finds_op {
+    "find_op_at_position_finds_op" test_start
+    "42 print" lsp_test_state = state
+    0 0 state find_op_at_position = result
+    "is some" result .is_some assert_true
+    result .unwrap = find
+    "kind is push int" OpKind::OpPushInt find FindResult::op Op::kind == assert_true
+    "no containing function" find FindResult::function .is_none assert_true
+}
+
+fn test_find_op_at_position_finds_op_in_function {
+    "find_op_at_position_finds_op_in_function" test_start
+    "fn greet {\n    42 print\n}\ngreet" lsp_test_state = state
+    4 1 state find_op_at_position = result
+    "is some" result .is_some assert_true
+    result .unwrap = find
+    "kind is push int" OpKind::OpPushInt find FindResult::op Op::kind == assert_true
+    "has containing function" find FindResult::function .is_some assert_true
+    "function is greet" "greet" find FindResult::function .unwrap Function::name assert_str_eq
+}
+
+fn test_find_op_at_position_returns_none_for_empty_position {
+    "find_op_at_position_returns_none_for_empty_position" test_start
+    "42 print" lsp_test_state = state
+    50 0 state find_op_at_position = result
+    "is none" result .is_none assert_true
+}
+
+# ============================================================================
+# Test: find_containing_function
+# ============================================================================
+
+fn test_find_containing_function_offset_inside_function {
+    "find_containing_function_offset_inside_function" test_start
+    "fn greet {\n    42 print\n}\ngreet" = source
+    source lsp_test_state = state
+    4 1 source position_to_offset = offset
+    offset state find_containing_function = func
+    "is some" func .is_some assert_true
+    "function is greet" "greet" func .unwrap Function::name assert_str_eq
+}
+
+fn test_find_containing_function_offset_outside_function {
+    "find_containing_function_offset_outside_function" test_start
+    "42 print" lsp_test_state = state
+    0 state find_containing_function = func
+    "is none" func .is_none assert_true
+}
+
+# ============================================================================
+# Test: find_variable_definition
+# ============================================================================
+
+fn test_find_variable_definition_finds_global_variable {
+    "find_variable_definition_finds_global_variable" test_start
+    "42 = count\ncount print" lsp_test_state = state
+    0 state Option::None (Option[Function]) "count" find_variable_definition = location
+    "is some" location .is_some assert_true
+}
+
+fn test_find_variable_definition_finds_local_variable {
+    "find_variable_definition_finds_local_variable" test_start
+    "fn foo {\n    42 = count\n    count print\n}\nfoo" lsp_test_state = state
+    "foo" state DocumentState::functions .get = func
+    0 state func "count" find_variable_definition = location
+    "is some" location .is_some assert_true
+}
+
+fn test_find_variable_definition_returns_none_for_missing_variable {
+    "find_variable_definition_returns_none_for_missing_variable" test_start
+    "42 print" lsp_test_state = state
+    0 state Option::None (Option[Function]) "nonexistent" find_variable_definition = location
+    "is none" location .is_none assert_true
+}
+
+# ============================================================================
+# Test: find_variable_definition with reassignment
+# ============================================================================
+
+fn test_find_variable_definition_returns_last_assignment_before_usage {
+    "find_variable_definition_returns_last_assignment_before_usage" test_start
+    "1 = x\n2 = x\nx print" = source
+    source lsp_test_state = state
+    source "x print" str::find = usage_offset
+    usage_offset state Option::None (Option[Function]) "x" find_variable_definition = location
+    "is some" location .is_some assert_true
+    "line is 1" 1 location .unwrap LspLocation::range LspRange::start_line assert_eq
+}
+
+fn test_find_variable_definition_returns_first_assignment_when_usage_before_reassignment {
+    "find_variable_definition_returns_first_assignment_when_usage_before_reassignment" test_start
+    "1 = x\nx print\n2 = x" = source
+    source lsp_test_state = state
+    source "x print" str::find = usage_offset
+    usage_offset state Option::None (Option[Function]) "x" find_variable_definition = location
+    "is some" location .is_some assert_true
+    "line is 0" 0 location .unwrap LspLocation::range LspRange::start_line assert_eq
+}
+
+fn test_find_variable_definition_falls_back_to_first_assignment_without_usage_offset {
+    "find_variable_definition_falls_back_to_first_assignment_without_usage_offset" test_start
+    "1 = x\n2 = x\nx print" lsp_test_state = state
+    0 state Option::None (Option[Function]) "x" find_variable_definition = location
+    "is some" location .is_some assert_true
+    "line is 0" 0 location .unwrap LspLocation::range LspRange::start_line assert_eq
+}
+
+fn test_find_variable_definition_reassigned_local_variable_in_function {
+    "find_variable_definition_reassigned_local_variable_in_function" test_start
+    "fn foo {\n    1 = x\n    2 = x\n    x print\n}\nfoo" = source
+    source lsp_test_state = state
+    "foo" state DocumentState::functions .get = func
+    source "x print" str::find = usage_offset
+    usage_offset state func "x" find_variable_definition = location
+    "is some" location .is_some assert_true
+    "line is 2" 2 location .unwrap LspLocation::range LspRange::start_line assert_eq
+}
+
+# ============================================================================
+# Test: infer_literal_type
+# ============================================================================
+
+fn test_infer_literal_type_integer {
+    "infer_literal_type_integer" test_start
+    "42" infer_literal_type = result
+    "is some" result .is_some assert_true
+    "is int" "int" result .unwrap assert_str_eq
+}
+
+fn test_infer_literal_type_zero {
+    "infer_literal_type_zero" test_start
+    "0" infer_literal_type = result
+    "is some" result .is_some assert_true
+    "is int" "int" result .unwrap assert_str_eq
+}
+
+fn test_infer_literal_type_true {
+    "infer_literal_type_true" test_start
+    "true" infer_literal_type = result
+    "is some" result .is_some assert_true
+    "is bool" "bool" result .unwrap assert_str_eq
+}
+
+fn test_infer_literal_type_false {
+    "infer_literal_type_false" test_start
+    "false" infer_literal_type = result
+    "is some" result .is_some assert_true
+    "is bool" "bool" result .unwrap assert_str_eq
+}
+
+fn test_infer_literal_type_identifier_returns_none {
+    "infer_literal_type_identifier_returns_none" test_start
+    "foo" infer_literal_type = result
+    "is none" result .is_none assert_true
+}
+
+fn test_infer_literal_type_empty_string_returns_none {
+    "infer_literal_type_empty_string_returns_none" test_start
+    "" infer_literal_type = result
+    "is none" result .is_none assert_true
+}
+
+fn test_infer_literal_type_negative_number_returns_none {
+    "infer_literal_type_negative_number_returns_none" test_start
+    "-5" infer_literal_type = result
+    "is none" result .is_none assert_true
+}
+
+# ============================================================================
+# Helper: search the items list for a label
+# ============================================================================
+
+fn lsp_completion_has items:List[CompletionItem] label:str -> bool {
+    0 = index
+    while index items .length > do
+        if index items .get CompletionItem::label label == then
+            true return
+        fi
+        1 += index
+    done
+    false
+}
+
+fn lsp_completion_first_kind items:List[CompletionItem] label:str -> int {
+    0 = index
+    while index items .length > do
+        index items .get = item
+        if item CompletionItem::label label == then
+            item CompletionItem::kind return
+        fi
+        1 += index
+    done
+    0 1 -
+}
+
+# ============================================================================
+# Test: compute_definition (go-to-definition)
+# ============================================================================
+
+fn test_compute_definition_function {
+    "compute_definition_function" test_start
+    "fn greet {\n    42 print\n}\ngreet" lsp_test_state = state
+    0 3 state compute_definition = result
+    "is some" result .is_some assert_true
+    "line is 0" 0 result .unwrap LspLocation::range LspRange::start_line assert_eq
+}
+
+fn test_compute_definition_variable {
+    "compute_definition_variable" test_start
+    "42 = count\ncount print" lsp_test_state = state
+    0 1 state compute_definition = result
+    "is some" result .is_some assert_true
+}
+
+fn test_compute_definition_struct {
+    "compute_definition_struct" test_start
+    "struct Point {\n    x: int\n    y: int\n}\n1 2 Point" lsp_test_state = state
+    4 4 state compute_definition = result
+    "is some" result .is_some assert_true
+    "line is 0" 0 result .unwrap LspLocation::range LspRange::start_line assert_eq
+}
+
+fn test_compute_definition_enum {
+    "compute_definition_enum" test_start
+    "enum Color { Red Green Blue }\nColor::Red print" lsp_test_state = state
+    0 1 state compute_definition = result
+    "is some" result .is_some assert_true
+    "line is 0" 0 result .unwrap LspLocation::range LspRange::start_line assert_eq
+}
+
+fn test_compute_definition_returns_none_for_literal {
+    "compute_definition_returns_none_for_literal" test_start
+    "42 print" lsp_test_state = state
+    0 0 state compute_definition = result
+    "is none" result .is_none assert_true
+}
+
+# ============================================================================
+# Test: compute_hover
+# ============================================================================
+
+fn test_compute_hover_function {
+    "compute_hover_function" test_start
+    "fn add x:int y:int -> int {\n    x y +\n}\n1 2 add" lsp_test_state = state
+    4 3 state compute_hover = result
+    "is some" result .is_some assert_true
+    result .unwrap HoverContent::content = content
+    "contains fn add" 0 content "fn add" str::find >= assert_true
+    "contains x:int" 0 content "x:int" str::find >= assert_true
+    "contains y:int" 0 content "y:int" str::find >= assert_true
+}
+
+fn test_compute_hover_variable {
+    "compute_hover_variable" test_start
+    "42 = count\ncount print" lsp_test_state = state
+    0 1 state compute_hover = result
+    "is some" result .is_some assert_true
+    "contains count" 0 result .unwrap HoverContent::content "count" str::find >= assert_true
+}
+
+fn test_compute_hover_literal {
+    "compute_hover_literal" test_start
+    "42 print" lsp_test_state = state
+    0 0 state compute_hover = result
+    "is some" result .is_some assert_true
+    "contains (int) 42" 0 result .unwrap HoverContent::content "(int) 42" str::find >= assert_true
+}
+
+fn test_compute_hover_operator {
+    "compute_hover_operator" test_start
+    "1 2 +" lsp_test_state = state
+    4 0 state compute_hover = result
+    "is some" result .is_some assert_true
+    "contains stack effect" 0 result .unwrap HoverContent::content "+: int int -> int" str::find >= assert_true
+}
+
+fn test_compute_hover_struct {
+    "compute_hover_struct" test_start
+    "struct Point {\n    x: int\n    y: int\n}\n1 2 Point" lsp_test_state = state
+    4 4 state compute_hover = result
+    "is some" result .is_some assert_true
+    result .unwrap HoverContent::content = content
+    "contains struct Point" 0 content "struct Point" str::find >= assert_true
+    "contains x: int" 0 content "x: int" str::find >= assert_true
+}
+
+fn test_compute_hover_string_literal {
+    "compute_hover_string_literal" test_start
+    "\"hello\" print" lsp_test_state = state
+    0 0 state compute_hover = result
+    "is some" result .is_some assert_true
+    "contains (str) \"hello\"" 0 result .unwrap HoverContent::content "(str) \"hello\"" str::find >= assert_true
+}
+
+fn test_compute_hover_assign_variable {
+    "compute_hover_assign_variable" test_start
+    "42 = count" lsp_test_state = state
+    5 0 state compute_hover = result
+    "is some" result .is_some assert_true
+    "contains = count: int" 0 result .unwrap HoverContent::content "= count: int" str::find >= assert_true
+}
+
+# ============================================================================
+# Test: compute_hover for stack-effect intrinsics/operators
+# ============================================================================
+
+fn test_compute_hover_drop {
+    "compute_hover_drop" test_start
+    "42 drop" lsp_test_state = state
+    3 0 state compute_hover = result
+    "is some" result .is_some assert_true
+    "contains drop effect" 0 result .unwrap HoverContent::content "drop: any -> None" str::find >= assert_true
+}
+
+fn test_compute_hover_dup {
+    "compute_hover_dup" test_start
+    "42 dup drop drop" lsp_test_state = state
+    3 0 state compute_hover = result
+    "is some" result .is_some assert_true
+    "contains dup effect" 0 result .unwrap HoverContent::content "dup: any -> any any" str::find >= assert_true
+}
+
+fn test_compute_hover_swap {
+    "compute_hover_swap" test_start
+    "1 2 swap drop drop" lsp_test_state = state
+    4 0 state compute_hover = result
+    "is some" result .is_some assert_true
+    "contains swap effect" 0 result .unwrap HoverContent::content "swap: any any -> any any" str::find >= assert_true
+}
+
+fn test_compute_hover_not {
+    "compute_hover_not" test_start
+    "true ! drop" lsp_test_state = state
+    5 0 state compute_hover = result
+    "is some" result .is_some assert_true
+    "contains not effect" 0 result .unwrap HoverContent::content "!: bool -> bool" str::find >= assert_true
+}
+
+fn test_compute_hover_eq {
+    "compute_hover_eq" test_start
+    "1 2 == drop" lsp_test_state = state
+    4 0 state compute_hover = result
+    "is some" result .is_some assert_true
+    "contains eq effect" 0 result .unwrap HoverContent::content "==: any any -> bool" str::find >= assert_true
+}
+
+fn test_compute_hover_print {
+    "compute_hover_print" test_start
+    "42 print" lsp_test_state = state
+    3 0 state compute_hover = result
+    "is some" result .is_some assert_true
+    "contains print effect" 0 result .unwrap HoverContent::content "print: any -> None" str::find >= assert_true
+}
+
+fn test_compute_hover_exec {
+    "compute_hover_exec" test_start
+    "{ 42 print } exec" lsp_test_state = state
+    13 0 state compute_hover = result
+    "is some" result .is_some assert_true
+    "contains exec effect" 0 result .unwrap HoverContent::content "exec: fn[sig] -> ..." str::find >= assert_true
+}
+
+# ============================================================================
+# Test: compute_completion
+# ============================================================================
+
+fn test_compute_completion_includes_functions {
+    "compute_completion_includes_functions" test_start
+    "fn greet { 42 print }\ngreet" lsp_test_state = state
+    "" 5 1 state compute_completion = items
+    "has greet" "greet" items lsp_completion_has assert_true
+}
+
+fn test_compute_completion_includes_variables {
+    "compute_completion_includes_variables" test_start
+    "42 = count\ncount print" lsp_test_state = state
+    "" 0 1 state compute_completion = items
+    "has count" "count" items lsp_completion_has assert_true
+}
+
+fn test_compute_completion_includes_keywords {
+    "compute_completion_includes_keywords" test_start
+    "42 print" lsp_test_state = state
+    "" 0 0 state compute_completion = items
+    "has fn"    "fn" items lsp_completion_has assert_true
+    "has if"    "if" items lsp_completion_has assert_true
+    "has while" "while" items lsp_completion_has assert_true
+}
+
+fn test_compute_completion_includes_intrinsics {
+    "compute_completion_includes_intrinsics" test_start
+    "42 print" lsp_test_state = state
+    "" 0 0 state compute_completion = items
+    "has print" "print" items lsp_completion_has assert_true
+    "has drop"  "drop" items lsp_completion_has assert_true
+    "has dup"   "dup" items lsp_completion_has assert_true
+}
+
+fn test_compute_completion_excludes_lambda_functions {
+    "compute_completion_excludes_lambda_functions" test_start
+    "fn apply func:fn[int -> int] x:int -> int {\n    x func exec\n}\n{ 2 * } 5 apply print" lsp_test_state = state
+    "" 0 3 state compute_completion = items
+    "has apply" "apply" items lsp_completion_has assert_true
+    # No lambda__ should appear
+    0 = lambda_count
+    0 = lambda_index
+    while lambda_index items .length > do
+        if lambda_index items .get CompletionItem::label "lambda__" str::starts_with then
+            1 += lambda_count
+        fi
+        1 += lambda_index
+    done
+    "no lambda" 0 lambda_count assert_eq
+}
+
+fn test_compute_completion_includes_structs {
+    "compute_completion_includes_structs" test_start
+    "struct Point {\n    x: int\n    y: int\n}\n1 2 Point" lsp_test_state = state
+    "" 0 4 state compute_completion = items
+    "has Point" "Point" items lsp_completion_has assert_true
+}
+
+fn test_compute_completion_includes_enums {
+    "compute_completion_includes_enums" test_start
+    "enum Color { Red Green Blue }\nColor::Red print" lsp_test_state = state
+    "" 0 1 state compute_completion = items
+    "has Color" "Color" items lsp_completion_has assert_true
+}
+
+fn test_compute_completion_intrinsics_use_keyword_kind {
+    "compute_completion_intrinsics_use_keyword_kind" test_start
+    "42 print" lsp_test_state = state
+    "" 0 0 state compute_completion = items
+    "print kind" COMPLETION_KEYWORD "print" items lsp_completion_first_kind assert_eq
+    "drop kind"  COMPLETION_KEYWORD "drop" items lsp_completion_first_kind assert_eq
+}
+
+# ============================================================================
+# Test: compute_references
+# ============================================================================
+
+fn test_compute_references_function {
+    "compute_references_function" test_start
+    "fn greet { 42 print }\ngreet\ngreet" lsp_test_state = state
+    true 0 1 state compute_references = refs_opt
+    "is some" refs_opt .is_some assert_true
+    "at least 3 refs" 3 refs_opt .unwrap .length >= assert_true
+}
+
+fn test_compute_references_function_exclude_declaration {
+    "compute_references_function_exclude_declaration" test_start
+    "fn greet { 42 print }\ngreet\ngreet" lsp_test_state = state
+    true 0 1 state compute_references = with_decl
+    false 0 1 state compute_references = without_decl
+    "with is some" with_decl .is_some assert_true
+    "without is some" without_decl .is_some assert_true
+    "without is fewer" with_decl .unwrap .length without_decl .unwrap .length < assert_true
+}
+
+fn test_compute_references_variable {
+    "compute_references_variable" test_start
+    "42 = count\ncount print\ncount drop" lsp_test_state = state
+    true 0 1 state compute_references = refs_opt
+    "is some" refs_opt .is_some assert_true
+    "at least 3 refs" 3 refs_opt .unwrap .length >= assert_true
+}
+
+fn test_compute_references_struct {
+    "compute_references_struct" test_start
+    "struct Point {\n    x: int\n    y: int\n}\n1 2 Point\n3 4 Point" lsp_test_state = state
+    true 4 4 state compute_references = refs_opt
+    "is some" refs_opt .is_some assert_true
+    "at least 3 refs" 3 refs_opt .unwrap .length >= assert_true
+}
+
+# ============================================================================
+# Test: compute_rename
+# ============================================================================
+
+fn test_compute_rename_function {
+    "compute_rename_function" test_start
+    "fn greet { 42 print }\ngreet\ngreet" lsp_test_state = state
+    "hello" 0 1 state compute_rename = edits_opt
+    "is some" edits_opt .is_some assert_true
+    edits_opt .unwrap = edits_map
+    lsp_test_uri = uri
+    "uri in changes" uri edits_map .has assert_true
+    "at least 3 edits" 3 uri edits_map .get .unwrap .length >= assert_true
+}
+
+fn test_compute_rename_variable {
+    "compute_rename_variable" test_start
+    "42 = count\ncount print\ncount drop" lsp_test_state = state
+    "total" 0 1 state compute_rename = edits_opt
+    "is some" edits_opt .is_some assert_true
+    edits_opt .unwrap = edits_map
+    lsp_test_uri = uri
+    "uri in changes" uri edits_map .has assert_true
+    "at least 3 edits" 3 uri edits_map .get .unwrap .length >= assert_true
+}
+
+# ============================================================================
+# Test: compute_semantic_tokens
+# ============================================================================
+
+fn lsp_token_types tokens:List[SemanticToken] -> List[int] {
+    List::new (List[int]) = types
+    0 = index
+    while index tokens .length > do
+        index tokens .get SemanticToken::token_type types .push
+        1 += index
+    done
+    types
+}
+
+fn lsp_int_list_contains list:List[int] target:int -> bool {
+    0 = index
+    while index list .length > do
+        if index list .get target == then
+            true return
+        fi
+        1 += index
+    done
+    false
+}
+
+fn lsp_int_list_count list:List[int] target:int -> int {
+    0 = count
+    0 = index
+    while index list .length > do
+        if index list .get target == then
+            1 += count
+        fi
+        1 += index
+    done
+    count
+}
+
+fn test_compute_semantic_tokens_produces_tokens {
+    "compute_semantic_tokens_produces_tokens" test_start
+    "42 print" lsp_test_state = state
+    state compute_semantic_tokens = tokens
+    "has tokens" 0 tokens .length > assert_true
+}
+
+fn test_compute_semantic_tokens_int_literal_token_type {
+    "compute_semantic_tokens_int_literal_token_type" test_start
+    "42 print" lsp_test_state = state
+    state compute_semantic_tokens = tokens
+    "first is number" TOKEN_NUMBER 0 tokens .get SemanticToken::token_type assert_eq
+}
+
+fn test_compute_semantic_tokens_print_intrinsic_token_type {
+    "compute_semantic_tokens_print_intrinsic_token_type" test_start
+    "42 print" lsp_test_state = state
+    state compute_semantic_tokens = tokens
+    "second is macro" TOKEN_MACRO 1 tokens .get SemanticToken::token_type assert_eq
+}
+
+fn test_compute_semantic_tokens_function_call_token_type {
+    "compute_semantic_tokens_function_call_token_type" test_start
+    "fn greet { 42 print }\ngreet" lsp_test_state = state
+    state compute_semantic_tokens = tokens
+    tokens lsp_token_types = types
+    "has function token" TOKEN_FUNCTION types lsp_int_list_contains assert_true
+}
+
+fn test_compute_semantic_tokens_keyword_token_type {
+    "compute_semantic_tokens_keyword_token_type" test_start
+    "fn greet { 42 print }\ngreet" lsp_test_state = state
+    state compute_semantic_tokens = tokens
+    tokens lsp_token_types = types
+    "has keyword token" TOKEN_KEYWORD types lsp_int_list_contains assert_true
+}
+
+fn test_compute_semantic_tokens_enum_keyword {
+    "compute_semantic_tokens_enum_keyword" test_start
+    "enum Color { Red Green Blue }" lsp_test_state = state
+    state compute_semantic_tokens = tokens
+    "first is line 0" 0 0 tokens .get SemanticToken::line assert_eq
+    "first is col 0" 0 0 tokens .get SemanticToken::col assert_eq
+    "first length is 4" 4 0 tokens .get SemanticToken::length assert_eq
+    "first is keyword" TOKEN_KEYWORD 0 tokens .get SemanticToken::token_type assert_eq
+}
+
+fn test_compute_semantic_tokens_enum_name {
+    "compute_semantic_tokens_enum_name" test_start
+    "enum Color { Red Green Blue }" lsp_test_state = state
+    state compute_semantic_tokens = tokens
+    "second is line 0" 0 1 tokens .get SemanticToken::line assert_eq
+    "second is col 5" 5 1 tokens .get SemanticToken::col assert_eq
+    "second length is 5" 5 1 tokens .get SemanticToken::length assert_eq
+    "second is type" TOKEN_TYPE 1 tokens .get SemanticToken::token_type assert_eq
+}
+
+fn test_compute_semantic_tokens_struct_keyword {
+    "compute_semantic_tokens_struct_keyword" test_start
+    "struct Point {\n    x: int\n    y: int\n}" lsp_test_state = state
+    state compute_semantic_tokens = tokens
+    "first is line 0" 0 0 tokens .get SemanticToken::line assert_eq
+    "first is col 0" 0 0 tokens .get SemanticToken::col assert_eq
+    "first length is 6" 6 0 tokens .get SemanticToken::length assert_eq
+    "first is keyword" TOKEN_KEYWORD 0 tokens .get SemanticToken::token_type assert_eq
+}
+
+fn test_compute_semantic_tokens_if_then_fi {
+    "compute_semantic_tokens_if_then_fi" test_start
+    "true if 42 then 0 fi print" lsp_test_state = state
+    state compute_semantic_tokens = tokens
+    tokens lsp_token_types = types
+    "at least 3 keywords" 3 TOKEN_KEYWORD types lsp_int_list_count >= assert_true
+}
+
+fn test_compute_semantic_tokens_while_do_done {
+    "compute_semantic_tokens_while_do_done" test_start
+    "0 = i\ni 10 < while i 1 + = i do done" lsp_test_state = state
+    state compute_semantic_tokens = tokens
+    tokens lsp_token_types = types
+    "at least 3 keywords" 3 TOKEN_KEYWORD types lsp_int_list_count >= assert_true
+}
+
+# ============================================================================
+# Test: compute_definition on qualified names (Type::method)
+# ============================================================================
+
+"struct Point {\n    x: int\n    y: int\n}\nimpl Point {\n    fn get_x self:Point -> int { self Point::x }\n}\n1 2 Point = p\np Point::get_x print" = QUAL_POINT_SOURCE
+
+fn test_compute_definition_qualified_type_part {
+    "compute_definition_qualified_type_part" test_start
+    QUAL_POINT_SOURCE lsp_test_state = state
+    2 8 state compute_definition = result
+    "is some" result .is_some assert_true
+    "line is 0" 0 result .unwrap LspLocation::range LspRange::start_line assert_eq
+}
+
+fn test_compute_definition_qualified_method_part {
+    "compute_definition_qualified_method_part" test_start
+    QUAL_POINT_SOURCE lsp_test_state = state
+    9 8 state compute_definition = result
+    "is some" result .is_some assert_true
+    "line is 5" 5 result .unwrap LspLocation::range LspRange::start_line assert_eq
+}
+
+fn test_compute_definition_qualified_separator_returns_none {
+    "compute_definition_qualified_separator_returns_none" test_start
+    QUAL_POINT_SOURCE lsp_test_state = state
+    7 8 state compute_definition = result
+    "is none" result .is_none assert_true
+}
+
+fn test_compute_definition_enum_variant_separator_returns_none {
+    "compute_definition_enum_variant_separator_returns_none" test_start
+    "enum Color { Red Green Blue }\nColor::Red print" lsp_test_state = state
+    5 1 state compute_definition = result
+    "is none" result .is_none assert_true
+}
+
+# ============================================================================
+# Test: compute_hover on qualified names
+# ============================================================================
+
+fn test_compute_hover_qualified_type_part {
+    "compute_hover_qualified_type_part" test_start
+    QUAL_POINT_SOURCE lsp_test_state = state
+    2 8 state compute_hover = result
+    "is some" result .is_some assert_true
+    result .unwrap HoverContent::content = content
+    "contains struct Point" 0 content "struct Point" str::find >= assert_true
+    "contains x: int" 0 content "x: int" str::find >= assert_true
+}
+
+fn test_compute_hover_qualified_method_part {
+    "compute_hover_qualified_method_part" test_start
+    QUAL_POINT_SOURCE lsp_test_state = state
+    9 8 state compute_hover = result
+    "is some" result .is_some assert_true
+    "contains fn Point::get_x" 0 result .unwrap HoverContent::content "fn Point::get_x" str::find >= assert_true
+}
+
+fn test_compute_hover_qualified_separator_returns_none {
+    "compute_hover_qualified_separator_returns_none" test_start
+    QUAL_POINT_SOURCE lsp_test_state = state
+    7 8 state compute_hover = result
+    "is none" result .is_none assert_true
+}
+
+fn test_compute_hover_enum_variant_type_part {
+    "compute_hover_enum_variant_type_part" test_start
+    "enum Color { Red Green Blue }\nColor::Red print" lsp_test_state = state
+    0 1 state compute_hover = result
+    "is some" result .is_some assert_true
+    "contains enum Color" 0 result .unwrap HoverContent::content "enum Color" str::find >= assert_true
+}
+
+fn test_compute_hover_enum_variant_member_part {
+    "compute_hover_enum_variant_member_part" test_start
+    "enum Color { Red Green Blue }\nColor::Red print" lsp_test_state = state
+    7 1 state compute_hover = result
+    "is some" result .is_some assert_true
+    "contains Color::Red" 0 result .unwrap HoverContent::content "Color::Red" str::find >= assert_true
+}
+
+fn test_compute_hover_enum_variant_separator_returns_none {
+    "compute_hover_enum_variant_separator_returns_none" test_start
+    "enum Color { Red Green Blue }\nColor::Red print" lsp_test_state = state
+    5 1 state compute_hover = result
+    "is none" result .is_none assert_true
+}
+
+# ============================================================================
+# Helper: build a synthetic Function with a single self:T parameter
+# ============================================================================
+
+fn lsp_make_synthetic_method name:str self_type:str ret_type:str -> Function {
+    List::new (List[Parameter]) = params
+    self_type make_param params .push
+    List::new (List[str]) = returns
+    ret_type returns .push
+    returns params make_signature = sig
+    sig empty_location List::new (List[Op]) name make_function_with_sig
+}
+
+fn lsp_make_synthetic_void name:str self_type:str -> Function {
+    List::new (List[Parameter]) = params
+    self_type make_param params .push
+    List::new (List[str]) = returns
+    returns params make_signature = sig
+    sig empty_location List::new (List[Op]) name make_function_with_sig
+}
+
+# Inject int:: synthetic methods into a DocumentState's functions map.
+# Returns a new DocumentState with the updated functions map.
+fn lsp_inject_int_methods state:DocumentState -> DocumentState {
+    state DocumentState::functions = fns
+    "int::hash" "int" "int" "int::hash" lsp_make_synthetic_method fns .set = fns
+    "int::eq"   "int" "int" "int::eq"   lsp_make_synthetic_method fns .set = fns
+    state DocumentState::file_path
+    state DocumentState::source
+    state DocumentState::variables
+    state DocumentState::enums
+    state DocumentState::structs
+    fns
+    state DocumentState::ops
+    DocumentState
+}
+
+# ============================================================================
+# Test: compute_completion - dot completion on primitives
+# ============================================================================
+
+fn test_compute_completion_dot_after_int_variable {
+    "compute_completion_dot_after_int_variable" test_start
+    "69 = num" lsp_test_state lsp_inject_int_methods = state
+    # Simulate user typing num. by overriding source
+    state DocumentState::file_path = file_path
+    "69 = num\nnum." = typing_source
+    file_path
+    typing_source
+    state DocumentState::variables
+    state DocumentState::enums
+    state DocumentState::structs
+    state DocumentState::functions
+    state DocumentState::ops
+    DocumentState = state2
+    "." 4 1 state2 compute_completion = items
+    "has hash" "hash" items lsp_completion_has assert_true
+    "has eq"   "eq" items lsp_completion_has assert_true
+}
+
+fn test_compute_completion_dot_after_int_literal {
+    "compute_completion_dot_after_int_literal" test_start
+    "69" lsp_test_state lsp_inject_int_methods = state
+    state DocumentState::file_path = file_path
+    "69." = typing_source
+    file_path
+    typing_source
+    state DocumentState::variables
+    state DocumentState::enums
+    state DocumentState::structs
+    state DocumentState::functions
+    state DocumentState::ops
+    DocumentState = state2
+    "." 3 0 state2 compute_completion = items
+    "has hash" "hash" items lsp_completion_has assert_true
+    "has eq"   "eq" items lsp_completion_has assert_true
+}
+
+# ============================================================================
+# Test: compute_completion - :: triggered (qualified) completion
+# ============================================================================
+
+fn test_compute_completion_enum_variants_after_double_colon {
+    "compute_completion_enum_variants_after_double_colon" test_start
+    "enum Color { Red Green Blue }\nColor::Red" lsp_test_state = state
+    # Simulate user typing Color:: by overriding source
+    state DocumentState::file_path = file_path
+    "enum Color { Red Green Blue }\nColor::" = typing_source
+    file_path
+    typing_source
+    state DocumentState::variables
+    state DocumentState::enums
+    state DocumentState::structs
+    state DocumentState::functions
+    state DocumentState::ops
+    DocumentState = state2
+    ":" 7 1 state2 compute_completion = items
+    "has Red"   "Red" items lsp_completion_has assert_true
+    "has Green" "Green" items lsp_completion_has assert_true
+    "has Blue"  "Blue" items lsp_completion_has assert_true
+}
+
+fn test_compute_completion_methods_after_double_colon {
+    "compute_completion_methods_after_double_colon" test_start
+    "69 = num" lsp_test_state lsp_inject_int_methods = state
+    state DocumentState::file_path = file_path
+    "69 = num\nint::" = typing_source
+    file_path
+    typing_source
+    state DocumentState::variables
+    state DocumentState::enums
+    state DocumentState::structs
+    state DocumentState::functions
+    state DocumentState::ops
+    DocumentState = state2
+    ":" 5 1 state2 compute_completion = items
+    "has hash" "hash" items lsp_completion_has assert_true
+}
+
+fn test_compute_completion_single_colon_returns_empty {
+    "compute_completion_single_colon_returns_empty" test_start
+    "69 = num:" lsp_test_state = state
+    ":" 9 0 state compute_completion = items
+    "is empty" 0 items .length assert_eq
+}
+
+# ============================================================================
+# Test: compute_completion - chain dot completion
+# ============================================================================
+
+fn test_compute_completion_chain {
+    "compute_completion_chain" test_start
+    "69 = test" lsp_test_state lsp_inject_int_methods = state
+    state DocumentState::file_path = file_path
+    "69 = test\ntest.hash." = typing_source
+    file_path
+    typing_source
+    state DocumentState::variables
+    state DocumentState::enums
+    state DocumentState::structs
+    state DocumentState::functions
+    state DocumentState::ops
+    DocumentState = state2
+    "." 10 1 state2 compute_completion = items
+    "has hash" "hash" items lsp_completion_has assert_true
+    "has eq"   "eq" items lsp_completion_has assert_true
+}
+
+fn test_compute_completion_chain_void_method_returns_empty {
+    "compute_completion_chain_void_method_returns_empty" test_start
+    "69 = test" lsp_test_state lsp_inject_int_methods = state
+    # Inject int::no_return as void
+    state DocumentState::functions = fns
+    "int::no_return" "int" "int::no_return" lsp_make_synthetic_void fns .set = fns
+    state DocumentState::file_path
+    "69 = test\ntest.no_return."
+    state DocumentState::variables
+    state DocumentState::enums
+    state DocumentState::structs
+    fns
+    state DocumentState::ops
+    DocumentState = state2
+    "." 15 1 state2 compute_completion = items
+    "is empty" 0 items .length assert_eq
+}
+
+# ============================================================================
+# Test: compute_definition for enum variants
+# ============================================================================
+
+fn test_compute_definition_enum_variant_member {
+    "compute_definition_enum_variant_member" test_start
+    "enum Color { Red Green Blue }\nColor::Blue print" lsp_test_state = state
+    7 1 state compute_definition = result
+    "is some" result .is_some assert_true
+    "line is 0" 0 result .unwrap LspLocation::range LspRange::start_line assert_eq
+    "col is 23" 23 result .unwrap LspLocation::range LspRange::start_col assert_eq
+}
+
+fn test_compute_definition_enum_variant_type {
+    "compute_definition_enum_variant_type" test_start
+    "enum Color { Red Green Blue }\nColor::Blue print" lsp_test_state = state
+    0 1 state compute_definition = result
+    "is some" result .is_some assert_true
+    "line is 0" 0 result .unwrap LspLocation::range LspRange::start_line assert_eq
+    "col is 5" 5 result .unwrap LspLocation::range LspRange::start_col assert_eq
+}
+
+# ============================================================================
+# Test runner
+# ============================================================================
+
+test_offset_to_lsp_range_single_line_start
+test_offset_to_lsp_range_multiline_second_line
+test_offset_to_lsp_range_zero_length_uses_minimum_of_one
+test_offset_to_lsp_range_mid_line_offset
+test_position_to_offset_first_line_first_col
+test_position_to_offset_second_line
+test_position_to_offset_mid_line
+test_position_to_offset_third_line_mid_col
+test_clear_compilation_state_clears_all_global_state
+test_compute_diagnostics_valid_code_produces_no_diagnostics
+test_compute_diagnostics_invalid_code_produces_error_diagnostics
+test_run_pipeline_returns_document_state
+test_run_pipeline_partial_failure_still_returns_ops
+test_run_pipeline_populates_structs
+test_run_pipeline_populates_enums
+test_find_op_at_position_finds_op
+test_find_op_at_position_finds_op_in_function
+test_find_op_at_position_returns_none_for_empty_position
+test_find_containing_function_offset_inside_function
+test_find_containing_function_offset_outside_function
+test_find_variable_definition_finds_global_variable
+test_find_variable_definition_finds_local_variable
+test_find_variable_definition_returns_none_for_missing_variable
+test_find_variable_definition_returns_last_assignment_before_usage
+test_find_variable_definition_returns_first_assignment_when_usage_before_reassignment
+test_find_variable_definition_falls_back_to_first_assignment_without_usage_offset
+test_find_variable_definition_reassigned_local_variable_in_function
+test_infer_literal_type_integer
+test_infer_literal_type_zero
+test_infer_literal_type_true
+test_infer_literal_type_false
+test_infer_literal_type_identifier_returns_none
+test_infer_literal_type_empty_string_returns_none
+test_infer_literal_type_negative_number_returns_none
+test_compute_definition_function
+test_compute_definition_variable
+test_compute_definition_struct
+test_compute_definition_enum
+test_compute_definition_returns_none_for_literal
+test_compute_hover_function
+test_compute_hover_variable
+test_compute_hover_literal
+test_compute_hover_operator
+test_compute_hover_struct
+test_compute_hover_string_literal
+test_compute_hover_assign_variable
+test_compute_hover_drop
+test_compute_hover_dup
+test_compute_hover_swap
+test_compute_hover_not
+test_compute_hover_eq
+test_compute_hover_print
+test_compute_hover_exec
+test_compute_completion_includes_functions
+test_compute_completion_includes_variables
+test_compute_completion_includes_keywords
+test_compute_completion_includes_intrinsics
+test_compute_completion_excludes_lambda_functions
+test_compute_completion_includes_structs
+test_compute_completion_includes_enums
+test_compute_completion_intrinsics_use_keyword_kind
+test_compute_references_function
+test_compute_references_function_exclude_declaration
+test_compute_references_variable
+test_compute_references_struct
+test_compute_rename_function
+test_compute_rename_variable
+test_compute_semantic_tokens_produces_tokens
+test_compute_semantic_tokens_int_literal_token_type
+test_compute_semantic_tokens_print_intrinsic_token_type
+test_compute_semantic_tokens_function_call_token_type
+test_compute_semantic_tokens_keyword_token_type
+test_compute_semantic_tokens_enum_keyword
+test_compute_semantic_tokens_enum_name
+test_compute_semantic_tokens_struct_keyword
+test_compute_semantic_tokens_if_then_fi
+test_compute_semantic_tokens_while_do_done
+test_compute_definition_qualified_type_part
+test_compute_definition_qualified_method_part
+test_compute_definition_qualified_separator_returns_none
+test_compute_definition_enum_variant_separator_returns_none
+test_compute_hover_qualified_type_part
+test_compute_hover_qualified_method_part
+test_compute_hover_qualified_separator_returns_none
+test_compute_hover_enum_variant_type_part
+test_compute_hover_enum_variant_member_part
+test_compute_hover_enum_variant_separator_returns_none
+test_compute_definition_enum_variant_member
+test_compute_definition_enum_variant_type
+test_compute_completion_dot_after_int_variable
+test_compute_completion_dot_after_int_literal
+test_compute_completion_enum_variants_after_double_colon
+test_compute_completion_methods_after_double_colon
+test_compute_completion_single_colon_returns_empty
+test_compute_completion_chain
+test_compute_completion_chain_void_method_returns_empty
+test_summary
