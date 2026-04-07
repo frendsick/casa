@@ -154,8 +154,11 @@ require('lspconfig').casa.setup({})
 
 ## Testing
 
-Run the following command from the root folder of the repository:
+Run the example and self-hosted test suites from the root folder of the repository:
 
 ```sh
-pytest tests
+./tests/test_examples.sh
+./tests/test_self_hosted.sh
 ```
+
+Both scripts default to the `./casac` binary downloaded by `install.sh`. Pass an alternate compiler path as the first argument to use a different binary.
