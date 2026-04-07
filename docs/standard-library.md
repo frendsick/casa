@@ -1299,14 +1299,14 @@ It provides a declarative API for defining and parsing CLI arguments, with auto-
 
 ### `ArgParser::new`
 
-Creates a new argument parser with the given program name (used in help/error output).
+Creates a new argument parser. The program name used in help/error output is derived from `basename(argv[0])`, matching the default behavior of Python's `argparse`.
 
-**Signature:** `ArgParser::new program_name:str -> ArgParser`
+**Signature:** `ArgParser::new -> ArgParser`
 
-**Stack effect:** `str -> ArgParser`
+**Stack effect:** `-> ArgParser`
 
 ```casa
-"myapp" ArgParser::new = parser
+ArgParser::new = parser
 ```
 
 ### `ArgParser::add_positional`
@@ -1387,7 +1387,7 @@ Returns `true` if the flag was set, `false` otherwise.
 ```casa
 include "../lib/argparse.casa"
 
-"myapp" ArgParser::new = parser
+ArgParser::new = parser
 "input file" "input" parser .add_positional
 "output file" "--output" "-o" "output" parser .add_option
 "verbose output" "--verbose" "-v" "verbose" parser .add_flag
@@ -1398,7 +1398,7 @@ parser .parse_args = args
 "verbose" args .get_flag = is_verbose
 ```
 
-Running `./myapp --help` produces:
+Assuming the compiled binary is named `myapp`, running `./myapp --help` produces:
 
 ```
 usage: myapp [-h] [-o OUTPUT] [-v] input
