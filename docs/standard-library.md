@@ -832,6 +832,56 @@ Converts a pointer to a string by casting its address to an integer and converti
 buf.to_str print        # prints the address as a decimal number
 ```
 
+### `char::to_str`
+
+Wraps a single character in a one-character string.
+
+**Signature:** `char::to_str c:char -> str`
+
+**Stack effect:** `char -> str`
+
+```casa
+'A'.to_str print    # A
+```
+
+### `array[T]::to_str`
+
+Formats an array as `[elem1, elem2, ...]`. Requires `T` to satisfy the `Display` trait.
+
+**Signature:** `array::to_str self:array[T] -> str` (with `T: Display`)
+
+```casa
+[1, 2, 3] (array[int]) .to_str print    # [1, 2, 3]
+```
+
+### `List[T]::to_str`
+
+Formats a `List` the same way as an array. Requires `T` to satisfy the `Display` trait.
+
+**Signature:** `List::to_str self:List[T] -> str` (with `T: Display`)
+
+### `Option[T]::to_str`
+
+Formats an `Option` as `Some(value)` or `None`. Requires `T` to satisfy the `Display` trait.
+
+**Signature:** `Option::to_str self:Option[T] -> str` (with `T: Display`)
+
+```casa
+5 Option::Some .to_str print                # Some(5)
+Option::None (Option[int]) .to_str print    # None
+```
+
+### `Result[T E]::to_str`
+
+Formats a `Result` as `Ok(value)` or `Error(err)`. Requires both `T` and `E` to satisfy the `Display` trait.
+
+**Signature:** `Result::to_str self:Result[T E] -> str` (with `T: Display, E: Display`)
+
+```casa
+99 Result::Ok (Result[int str]) .to_str print       # Ok(99)
+"oops" Result::Error (Result[int str]) .to_str print # Error(oops)
+```
+
 ## Hash Helpers
 
 Standalone hash functions used by the built-in `Hashable` trait implementations.

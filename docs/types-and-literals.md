@@ -113,13 +113,14 @@ F-strings let you embed expressions inside a string literal. Prefix a string wit
 f"hello {name}" print    # hello world
 ```
 
-Expressions inside `{}` must produce a value of type `str`. Non-string types are not auto-converted.
+Any expression whose type satisfies the [`Display`](traits.md#built-in-trait-display) trait can be interpolated. The compiler automatically calls `to_str` on non-string values, so explicit conversions are no longer required:
 
 ```casa
-# This will NOT work: int expression inside f-string with text
 42 = n
-f"count: {n}"    # TYPE error: expected str, got int
+f"count: {n}"    # count: 42
 ```
+
+Types that do not implement `Display` — for example, custom structs without a `to_str` method — are rejected at compile time with a dedicated f-string error.
 
 Multiple expressions are supported:
 

@@ -161,6 +161,33 @@ Built-in implementations:
 - `int::hash` returns the absolute value (via `int_hash`)
 - `int::eq` compares integers with `==`
 
+## Built-in Trait: `Display`
+
+The standard library defines a `Display` trait used by f-string interpolation to convert values to strings:
+
+```casa
+trait Display {
+    fn to_str self:self -> str
+}
+```
+
+Any type with a `to_str self:T -> str` method structurally satisfies `Display`. The standard library provides implementations for `int`, `bool`, `str`, `char`, `cstr`, `ptr`, and generic containers `array[T]`, `List[T]`, `Option[T]`, and `Result[T E]` (the parameter types must themselves satisfy `Display`).
+
+When an expression appears inside an f-string (`f"value: {x}"`), the compiler verifies that its type satisfies `Display` and automatically calls the corresponding `to_str` method. Custom structs and enums become interpolatable simply by providing a `to_str` method:
+
+```casa
+struct Point { x: int y: int }
+
+impl Point {
+    fn to_str self:Point -> str {
+        f"Point({self.x}, {self.y})"
+    }
+}
+
+1 2 Point = origin
+f"origin = {origin}\n" print    # origin = Point(1, 2)
+```
+
 ## Errors
 
 ### `MISSING_TRAIT_METHOD`
