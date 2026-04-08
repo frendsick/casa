@@ -15,7 +15,7 @@ Casa compiles to x86-64 Linux executables via GNU assembly. It features static t
 - **String interpolation** — f-strings with embedded expressions (`f"hello {name}"`)
 - **Compiles to native code** — generates x86-64 assembly with `ld` and `as`
 - **Enums and match** — enum types with exhaustive pattern matching
-- **Traits** — structural trait system with bounded polymorphism (`trait`, `Hashable`)
+- **Traits** — structural trait system with bounded polymorphism (`trait`, `Hashable`, `Display`)
 - **Standard library** — generic `List[T]`, `Map[K V]`, `Set[K]`, arrays with `map`/`filter`/`reduce`, type conversions, and memory utilities
 
 ## Requirements

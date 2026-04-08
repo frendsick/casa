@@ -814,6 +814,35 @@ fn check_assignment tc:TypeChecker op:Op function_opt:Option[Function] {
 # Check push variable / capture
 # ============================================================================
 
+# Simulate the FnExec emitted by the bytecode pass for trait-bound namespace calls
+# like `K::hash`. The parser rewrites these to an OpPushVar of the hidden
+# `__trait_{type_var}_{method}` variable, annotated as "trait_exec". At typecheck
+# time we pop the fn-pointer type we just pushed and apply the resolved trait
+# method signature so the correct return type lands on the stack.
+fn simulate_trait_exec tc:TypeChecker function:Function var_name:str {
+    var_name 8 var_name .length 8 - str::substring = trait_suffix
+    trait_suffix "_" str::find = trait_sep
+    if trait_sep 0 >= then return fi
+    trait_suffix 0 trait_sep str::substring = trait_type_var
+    trait_suffix trait_sep 1 + trait_suffix .length trait_sep - 1 - str::substring = trait_method_name
+    trait_type_var function Function::signature Signature::trait_bounds .get = trait_name_opt
+    if trait_name_opt .is_none then return fi
+    trait_name_opt .unwrap GLOBAL_TRAITS .get = trait_def_opt
+    if trait_def_opt .is_none then return fi
+    trait_def_opt .unwrap = trait_def
+    0 = trait_lookup_index
+    while trait_lookup_index trait_def CasaTrait::methods .length > do
+        trait_lookup_index trait_def CasaTrait::methods .get = trait_method_entry
+        if trait_method_name trait_method_entry TraitMethod::name == then
+            tc stack_pop drop
+            trait_type_var trait_method_entry TraitMethod::signature resolve_trait_sig = resolved_exec_sig
+            f"{trait_type_var}::{trait_method_name}" resolved_exec_sig tc apply_signature
+            return
+        fi
+        1 += trait_lookup_index
+    done
+}
+
 fn check_push_var tc:TypeChecker op:Op function_opt:Option[Function] {
     if OpKind::OpPushCapture op Op::kind == then
         op op_str_value = capture_name
@@ -834,6 +863,7 @@ fn check_push_var tc:TypeChecker op:Op function_opt:Option[Function] {
 
     # PUSH_VARIABLE
     op op_str_value = var_name
+    "trait_exec" op Op::type_annotation == = is_trait_exec
 
     # Check local variables first
     if function_opt .is_some then
@@ -845,6 +875,9 @@ fn check_push_var tc:TypeChecker op:Op function_opt:Option[Function] {
                 local_type tc stack_push
             else
                 ANY_TYPE tc stack_push
+            fi
+            if is_trait_exec then
+                var_name function tc simulate_trait_exec
             fi
             return
         fi
@@ -1015,10 +1048,26 @@ fn type_satisfies_trait type_name:str trait_name:str function_opt:Option[Functio
         index trait_def CasaTrait::methods .get = method
         f"{type_name}::{method TraitMethod::name}" = fn_name
         fn_name GLOBAL_FUNCTIONS .get = fn_opt
+        false = via_generic_base
+        # Fall back to the generic base type (e.g. `Option::to_str` for `Option[int]`)
+        if fn_opt .is_none then
+            type_name extract_generic_base = base_opt
+            if base_opt .is_some then
+                f"{base_opt .unwrap}::{method TraitMethod::name}" = fn_name
+                fn_name GLOBAL_FUNCTIONS .get = fn_opt
+                true = via_generic_base
+            fi
+        fi
         if fn_opt .is_none then false return fi
         fn_opt .unwrap = function
         function ensure_typechecked
         if "None -> None" function Function::signature signature_to_str == then false return fi
+        # When satisfying via the generic base, skip strict signature comparison —
+        # the concrete trait bounds are verified at the actual call site.
+        if via_generic_base then
+            1 += index
+            continue
+        fi
         type_name method TraitMethod::signature resolve_trait_sig = resolved
         if function Function::signature Signature::parameters .length resolved Signature::parameters .length != then
             false return
@@ -1104,18 +1153,21 @@ fn inject_trait_fn_ptrs tc:TypeChecker sig:Signature ops:List[Op] op_index:int l
         fi
     fi
 
-    # Inject FN_PUSH ops for each trait bound
+    # Inject FN_PUSH ops for each trait bound.
+    # Iterate type vars in reverse so the first param in the signature (which
+    # the parser prepends in forward key order) ends up on the top of the stack,
+    # matching the order apply_signature pops parameters in.
     0 = inserted
     op_index 1 - = insert_pos
     sig Signature::trait_bounds .keys = type_var_keys
-    0 = type_index
-    while type_index type_var_keys .length > do
+    type_var_keys .length 1 - = type_index
+    while 0 type_index >= do
         type_index type_var_keys .get = type_var
         type_var sig Signature::trait_bounds .get .unwrap = trait_name
         type_var bindings .get = concrete_opt
         if concrete_opt .is_none then
             location f"Cannot determine concrete type for type variable `{type_var}`" ErrorKind::TypeMismatch raise_error
-            1 += type_index
+            type_index 1 - = type_index
             continue
         fi
         concrete_opt .unwrap = concrete
@@ -1177,7 +1229,7 @@ fn inject_trait_fn_ptrs tc:TypeChecker sig:Signature ops:List[Op] op_index:int l
                 method_index 1 - = method_index
             done
         fi
-        1 += type_index
+        type_index 1 - = type_index
     done
     inserted
 }
@@ -1943,6 +1995,26 @@ fn check_method_call tc:TypeChecker op:Op ops:List[Op] op_index:int function_opt
 }
 
 # ============================================================================
+# Check f-string expression conversion (Display trait dispatch)
+# ============================================================================
+
+fn check_fstring_to_str tc:TypeChecker op:Op ops:List[Op] op_index:int function_opt:Option[Function] -> int {
+    tc stack_peek = fstring_type
+    if "str" fstring_type == then
+        op_index return
+    fi
+    if function_opt "Display" fstring_type type_satisfies_trait ! then
+        op Op::location f"Type `{fstring_type}` cannot be used in f-string: does not satisfy trait `Display`" ErrorKind::MissingTraitMethod add_error
+        tc stack_pop drop
+        "str" tc stack_push
+        op_index return
+    fi
+    OpKind::OpMethodCall op Op::set_kind
+    "to_str" (int) op Op::set_value
+    function_opt op_index ops op tc check_method_call
+}
+
+# ============================================================================
 # Ensure a function is typechecked
 # ============================================================================
 
@@ -2187,6 +2259,12 @@ fn type_check_ops ops:List[Op] function_opt:Option[Function] -> Signature {
         # Method call
         if OpKind::OpMethodCall op_kind == then
             function_opt op_index ops current_op checker check_method_call = op_index
+            continue
+        fi
+
+        # F-string expression -> str conversion (Display trait)
+        if OpKind::OpFstringToStr op_kind == then
+            function_opt op_index ops current_op checker check_fstring_to_str = op_index
             continue
         fi
 

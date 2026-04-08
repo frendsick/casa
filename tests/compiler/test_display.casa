@@ -1,0 +1,251 @@
+include "../../compiler/common.casa"
+include "../../compiler/error.casa"
+include "../../compiler/lexer.casa"
+include "../../compiler/parser.casa"
+include "../../compiler/typechecker.casa"
+include "../../lib/test.casa"
+include "../../lib/test_helpers.casa"
+
+# ============================================================================
+# Constants
+# ============================================================================
+
+"trait Display { fn to_str self:self -> str }\n" = DISPLAY_TRAIT
+
+# ============================================================================
+# Helpers
+# ============================================================================
+
+fn display_test_parse code:str -> List[Op] {
+    clear_global_state
+    "test" code lex_source = tokens
+    tokens parse_ops
+}
+
+fn display_test_resolve code:str -> List[Op] {
+    clear_global_state
+    "test" code lex_source = tokens
+    tokens parse_ops = ops
+    ops resolve_identifiers_global
+}
+
+fn display_test_typecheck code:str -> Signature {
+    clear_global_state
+    "test" code lex_source = tokens
+    tokens parse_ops = ops
+    ops resolve_identifiers_global = ops
+    Option::None (Option[Function]) ops type_check_ops
+}
+
+fn display_test_typecheck_error code:str -> Signature {
+    enable_test_mode
+    clear_errors
+    clear_global_state
+    "test" code lex_source = tokens
+    tokens parse_ops = ops
+    ops resolve_identifiers_global = ops
+    Option::None (Option[Function]) ops type_check_ops
+}
+
+fn count_op_kind ops:List[Op] kind:OpKind -> int {
+    0 = count_result
+    0 = count_index
+    while count_index ops .length > do
+        if kind count_index ops .get Op::kind == then
+            1 += count_result
+        fi
+        1 += count_index
+    done
+    count_result
+}
+
+# ============================================================================
+# Parser: OpFstringToStr is emitted for each expression part
+# ============================================================================
+
+fn test_parser_emits_fstring_to_str {
+    "parser_emits_fstring_to_str" test_start
+    "\"x\" = name\nf\"hi {name}\" drop\n" display_test_parse = ops
+    # Find the lambda's enclosing function (global scope) and look for OpFstringToStr
+    # in the top-level ops list.
+    0 = found_count
+    0 = index
+    while index ops .length > do
+        if OpKind::OpFstringToStr index ops .get Op::kind == then
+            1 += found_count
+        fi
+        1 += index
+    done
+    "one OpFstringToStr per expression" 1 found_count assert_eq
+}
+
+fn test_parser_emits_fstring_to_str_multiple {
+    "parser_emits_fstring_to_str_multiple" test_start
+    "\"a\" = a\n\"b\" = b\nf\"{a} and {b}\" drop\n" display_test_parse = ops
+    0 = found_count
+    0 = index
+    while index ops .length > do
+        if OpKind::OpFstringToStr index ops .get Op::kind == then
+            1 += found_count
+        fi
+        1 += index
+    done
+    "two OpFstringToStr ops for two expressions" 2 found_count assert_eq
+}
+
+fn test_parser_no_fstring_to_str_without_expressions {
+    "parser_no_fstring_to_str_without_expressions" test_start
+    "f\"plain text\" drop\n" display_test_parse = ops
+    0 = found_count
+    0 = index
+    while index ops .length > do
+        if OpKind::OpFstringToStr index ops .get Op::kind == then
+            1 += found_count
+        fi
+        1 += index
+    done
+    "no OpFstringToStr for plain f-string" 0 found_count assert_eq
+}
+
+# ============================================================================
+# Typechecker: f-strings with str expressions pass through unchanged
+# ============================================================================
+
+fn test_fstring_str_expression_typechecks {
+    "fstring_str_expression_typechecks" test_start
+    DISPLAY_TRAIT "\"world\" = greeting\nf\"hello {greeting}\" drop\n" str::concat display_test_typecheck drop
+    "no errors for str expression" assert_no_errors
+}
+
+# ============================================================================
+# Typechecker: f-strings with Display-implementing types auto-convert
+# ============================================================================
+
+fn test_fstring_int_with_display {
+    "fstring_int_with_display" test_start
+    DISPLAY_TRAIT "impl int { fn to_str n:int -> str { \"42\" } }\n42 = n\nf\"value {n}\" drop\n" str::concat display_test_typecheck drop
+    "no errors for int with Display" assert_no_errors
+}
+
+fn test_fstring_custom_struct_with_display {
+    "fstring_custom_struct_with_display" test_start
+    DISPLAY_TRAIT "struct Point { x: int }\nimpl Point { fn to_str self:Point -> str { \"Point\" } }\n1 Point = p\nf\"value {p}\" drop\n" str::concat display_test_typecheck drop
+    "no errors for custom struct with Display" assert_no_errors
+}
+
+# ============================================================================
+# Typechecker: types without Display produce the dedicated f-string error
+# ============================================================================
+
+fn test_fstring_missing_display_raises {
+    "fstring_missing_display_raises" test_start
+    DISPLAY_TRAIT "struct NoDisplay { val: int }\n1 NoDisplay = n\nf\"value {n}\" drop\n" str::concat display_test_typecheck_error drop
+    "has errors" assert_has_errors
+    "error contains custom f-string message" "cannot be used in f-string" assert_error_contains
+    "error mentions Display trait" "Display" assert_error_contains
+    "missing trait method error kind" ErrorKind::MissingTraitMethod assert_error_kind
+    clear_errors
+    disable_test_mode
+}
+
+fn test_fstring_missing_display_without_trait_raises {
+    "fstring_missing_display_without_trait_raises" test_start
+    # Display trait not defined at all — int cannot be interpolated
+    "42 = n\nf\"value {n}\" drop\n" display_test_typecheck_error drop
+    "has errors" assert_has_errors
+    clear_errors
+    disable_test_mode
+}
+
+# ============================================================================
+# type_satisfies_trait: generic base fallback
+# ============================================================================
+
+fn test_type_satisfies_trait_generic_base_fallback {
+    "type_satisfies_trait_generic_base_fallback" test_start
+    DISPLAY_TRAIT "enum Box[T] { Boxed(T) }\nimpl Box { fn to_str self:Box -> str { \"boxed\" } }\n" str::concat display_test_resolve drop
+    Option::None (Option[Function]) = no_fn
+    "Box[int] satisfies Display via base" no_fn "Display" "Box[int]" type_satisfies_trait assert_true
+    "Box[str] satisfies Display via base" no_fn "Display" "Box[str]" type_satisfies_trait assert_true
+}
+
+fn test_type_satisfies_trait_no_fallback_method {
+    "type_satisfies_trait_no_fallback_method" test_start
+    DISPLAY_TRAIT "enum Bag[T] { Empty Full(T) }\n" str::concat display_test_resolve drop
+    Option::None (Option[Function]) = no_fn
+    "Bag[int] does not satisfy without to_str" no_fn "Display" "Bag[int]" type_satisfies_trait ! assert_true
+}
+
+# ============================================================================
+# check_push_var: trait_exec annotation simulates the exec
+# ============================================================================
+
+fn test_trait_exec_pushes_return_type {
+    "trait_exec_pushes_return_type" test_start
+    DISPLAY_TRAIT "struct Tag { val: int }\nimpl Tag { fn to_str self:Tag -> str { \"tag\" } }\nfn show[T: Display] x:T -> str { x T::to_str }\n1 Tag = t\nt show drop\n" str::concat display_test_typecheck drop
+    "show" GLOBAL_FUNCTIONS .get .unwrap = func
+    "signature has str return type" "str" 0 func Function::signature Signature::return_types .get assert_str_eq
+    "no errors" assert_no_errors
+}
+
+# ============================================================================
+# inject_trait_fn_ptrs: multi-type-parameter ordering (the Result[T E] bug)
+# ============================================================================
+
+fn test_multi_trait_bound_ordering {
+    "multi_trait_bound_ordering" test_start
+    DISPLAY_TRAIT "fn either[A: Display, B: Display] a:A b:B -> str { a A::to_str }\nimpl int { fn to_str n:int -> str { \"i\" } }\nimpl bool { fn to_str b:bool -> str { \"b\" } }\n1 true either drop\n" str::concat display_test_typecheck drop
+    "no errors for multi-bound call" assert_no_errors
+}
+
+# ============================================================================
+# Integration: explicit .to_str inside an f-string still works (identity path)
+# ============================================================================
+
+fn test_fstring_explicit_to_str_still_works {
+    "fstring_explicit_to_str_still_works" test_start
+    DISPLAY_TRAIT "impl int { fn to_str n:int -> str { \"n\" } }\n42 = n\nf\"value {n .to_str}\" drop\n" str::concat display_test_typecheck drop
+    "no errors with explicit .to_str" assert_no_errors
+}
+
+# ============================================================================
+# Integration: nested f-strings with mixed primitive types
+# ============================================================================
+
+fn test_fstring_mixed_types {
+    "fstring_mixed_types" test_start
+    DISPLAY_TRAIT "impl int { fn to_str n:int -> str { \"i\" } }\nimpl bool { fn to_str b:bool -> str { \"b\" } }\n42 = n\ntrue = flag\nf\"n={n} flag={flag}\" drop\n" str::concat display_test_typecheck drop
+    "no errors for mixed primitive f-string" assert_no_errors
+}
+
+# ============================================================================
+# Run all tests
+# ============================================================================
+
+# Parser
+test_parser_emits_fstring_to_str
+test_parser_emits_fstring_to_str_multiple
+test_parser_no_fstring_to_str_without_expressions
+
+# Typechecker: positive cases
+test_fstring_str_expression_typechecks
+test_fstring_int_with_display
+test_fstring_custom_struct_with_display
+test_fstring_explicit_to_str_still_works
+test_fstring_mixed_types
+
+# Typechecker: error cases
+test_fstring_missing_display_raises
+test_fstring_missing_display_without_trait_raises
+
+# type_satisfies_trait
+test_type_satisfies_trait_generic_base_fallback
+test_type_satisfies_trait_no_fallback_method
+
+# check_push_var trait_exec simulation
+test_trait_exec_pushes_return_type
+
+# Multi-type-parameter trait bound ordering
+test_multi_trait_bound_ordering
+
+test_summary
