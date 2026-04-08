@@ -825,9 +825,9 @@ fn simulate_trait_exec tc:TypeChecker function:Function var_name:str {
     if trait_sep 0 >= then return fi
     trait_suffix 0 trait_sep str::substring = trait_type_var
     trait_suffix trait_sep 1 + trait_suffix .length trait_sep - 1 - str::substring = trait_method_name
-    trait_type_var function Function::signature Signature::trait_bounds .get = trait_name_opt
-    if trait_name_opt .is_none then return fi
-    trait_name_opt .unwrap GLOBAL_TRAITS .get = trait_def_opt
+    trait_type_var function Function::signature Signature::trait_bounds .get = trait_bound_opt
+    if trait_bound_opt .is_none then return fi
+    trait_bound_opt .unwrap TraitBound::name GLOBAL_TRAITS .get = trait_def_opt
     if trait_def_opt .is_none then return fi
     trait_def_opt .unwrap = trait_def
     0 = trait_lookup_index
@@ -1032,15 +1032,34 @@ fn bind_generic_params_standalone bindings:Map[str str] expected_type:str actual
 }
 
 fn type_satisfies_trait type_name:str trait_name:str function_opt:Option[Function] -> bool {
-    trait_name GLOBAL_TRAITS .get = trait_opt
+    # Accept both bare ("Iterator") and concrete generic ("Iterator[int]") trait names.
+    trait_name extract_generic_base = trait_base_opt
+    if trait_base_opt .is_some then trait_base_opt .unwrap else trait_name fi = trait_lookup_name
+    trait_lookup_name GLOBAL_TRAITS .get = trait_opt
     if trait_opt .is_none then false return fi
     trait_opt .unwrap = trait_def
+    # Build substitution map from trait's type_params to concrete args from trait_name.
+    Map::new (Map[str str]) = trait_subs
+    if trait_base_opt .is_some then
+        trait_name extract_generic_params = trait_args_opt
+        if trait_args_opt .is_some then
+            trait_args_opt .unwrap = trait_args
+            trait_def CasaTrait::type_params = tparams
+            if trait_args .length tparams .length == then
+                0 = tsub_index
+                while tsub_index tparams .length > do
+                    tsub_index tparams .get tsub_index trait_args .get trait_subs .set = trait_subs
+                    1 += tsub_index
+                done
+            fi
+        fi
+    fi
     # Type variable with matching bound satisfies the trait
     if function_opt .is_some then
         function_opt .unwrap Function::signature Signature::trait_bounds = bounds
         type_name bounds .get = bound_opt
         if bound_opt .is_some then
-            if trait_name bound_opt .unwrap == then true return fi
+            if trait_name bound_opt .unwrap trait_bound_to_str == then true return fi
         fi
     fi
     0 = index
@@ -1068,7 +1087,7 @@ fn type_satisfies_trait type_name:str trait_name:str function_opt:Option[Functio
             1 += index
             continue
         fi
-        type_name method TraitMethod::signature resolve_trait_sig = resolved
+        trait_subs type_name method TraitMethod::signature resolve_trait_sig apply_type_subs_to_sig = resolved
         if function Function::signature Signature::parameters .length resolved Signature::parameters .length != then
             false return
         fi
@@ -1106,6 +1125,121 @@ fn type_satisfies_trait type_name:str trait_name:str function_opt:Option[Functio
     true
 }
 
+fn find_tparam_index tparams:List[str] name:str -> int {
+    -1 = ftpi_result
+    0 = ftpi_scan
+    while ftpi_scan tparams .length > do
+        if ftpi_scan tparams .get name == then
+            ftpi_scan = ftpi_result
+        fi
+        1 += ftpi_scan
+    done
+    ftpi_result
+}
+
+fn try_bind_caller_tvar bindings:Map[str str] sig:Signature caller_ref:str concrete:str -> Map[str str] {
+    if caller_ref sig Signature::type_vars .has ! then bindings return fi
+    if caller_ref bindings .get .is_some then bindings return fi
+    caller_ref concrete bindings .set return
+}
+
+# Given a single (trait-side expected type, concrete-side actual type) pair
+# from a method signature diff, if the expected type references a trait
+# type parameter that maps (via the current bound's type args) to an unbound
+# caller type variable, bind it to the actual type. Handles both direct
+# references (`T`) and one-level nested generics (`Option[T]` vs `Option[int]`).
+fn bind_from_type_slot bindings:Map[str str] sig:Signature tparams:List[str] bargs:List[str] expected:str actual:str -> Map[str str] {
+    expected tparams find_tparam_index = direct_tp_idx
+    if 0 direct_tp_idx >= then
+        direct_tp_idx bargs .get = direct_caller_ref
+        actual direct_caller_ref sig bindings try_bind_caller_tvar return
+    fi
+    expected extract_generic_base = expected_base_opt
+    actual extract_generic_base = actual_base_opt
+    if expected_base_opt .is_none then bindings return fi
+    if actual_base_opt .is_none then bindings return fi
+    if expected_base_opt .unwrap actual_base_opt .unwrap != then bindings return fi
+    expected extract_generic_params = expected_params_opt
+    actual extract_generic_params = actual_params_opt
+    if expected_params_opt .is_none then bindings return fi
+    if actual_params_opt .is_none then bindings return fi
+    expected_params_opt .unwrap = expected_params
+    actual_params_opt .unwrap = actual_params
+    0 = slot_index
+    while
+        slot_index expected_params .length >
+        slot_index actual_params .length > &&
+    do
+        slot_index expected_params .get = nested_expected
+        nested_expected tparams find_tparam_index = nested_tp_idx
+        if 0 nested_tp_idx >= then
+            nested_tp_idx bargs .get = nested_caller_ref
+            slot_index actual_params .get nested_caller_ref sig bindings try_bind_caller_tvar = bindings
+        fi
+        1 += slot_index
+    done
+    bindings
+}
+
+fn diff_method_sig bindings:Map[str str] sig:Signature tparams:List[str] bargs:List[str] trait_resolved:Signature impl_sig:Signature -> Map[str str] {
+    0 = param_index
+    while
+        param_index trait_resolved Signature::parameters .length >
+        param_index impl_sig Signature::parameters .length > &&
+    do
+        param_index trait_resolved Signature::parameters .get Parameter::typ = expected_param
+        param_index impl_sig Signature::parameters .get Parameter::typ = actual_param
+        actual_param expected_param bargs tparams sig bindings bind_from_type_slot = bindings
+        1 += param_index
+    done
+    0 = return_index
+    while
+        return_index trait_resolved Signature::return_types .length >
+        return_index impl_sig Signature::return_types .length > &&
+    do
+        return_index trait_resolved Signature::return_types .get = expected_return
+        return_index impl_sig Signature::return_types .get = actual_return
+        actual_return expected_return bargs tparams sig bindings bind_from_type_slot = bindings
+        1 += return_index
+    done
+    bindings
+}
+
+fn method_diff_bind_for_bound bindings:Map[str str] sig:Signature bound:TraitBound concrete:str -> Map[str str] {
+    bound TraitBound::name GLOBAL_TRAITS .get = mdbb_trait_opt
+    if mdbb_trait_opt .is_none then bindings return fi
+    mdbb_trait_opt .unwrap = mdbb_trait
+    mdbb_trait CasaTrait::type_params = mdbb_tparams
+    bound TraitBound::type_args = mdbb_bargs
+    if mdbb_bargs .length mdbb_tparams .length != then bindings return fi
+    0 = mdbb_method_idx
+    while mdbb_method_idx mdbb_trait CasaTrait::methods .length > do
+        mdbb_method_idx mdbb_trait CasaTrait::methods .get = mdbb_method
+        f"{concrete}::{mdbb_method TraitMethod::name}" GLOBAL_FUNCTIONS .get = mdbb_fn_opt
+        if mdbb_fn_opt .is_some then
+            concrete mdbb_method TraitMethod::signature resolve_trait_sig = mdbb_trait_resolved
+            mdbb_fn_opt .unwrap Function::signature mdbb_trait_resolved mdbb_bargs mdbb_tparams sig bindings diff_method_sig = bindings
+        fi
+        1 += mdbb_method_idx
+    done
+    bindings
+}
+
+fn method_diff_bind_all sig:Signature function_opt:Option[Function] bindings:Map[str str] -> Map[str str] {
+    sig Signature::trait_bounds .keys = mdba_bound_keys
+    0 = mdba_idx
+    while mdba_idx mdba_bound_keys .length > do
+        mdba_idx mdba_bound_keys .get = mdba_type_var
+        mdba_type_var sig Signature::trait_bounds .get .unwrap = mdba_bound
+        mdba_type_var bindings .get = mdba_concrete_opt
+        if mdba_concrete_opt .is_some then
+            mdba_concrete_opt .unwrap mdba_bound sig bindings method_diff_bind_for_bound = bindings
+        fi
+        1 += mdba_idx
+    done
+    bindings
+}
+
 fn inject_trait_fn_ptrs tc:TypeChecker sig:Signature ops:List[Op] op_index:int location:Location function_opt:Option[Function] -> int {
     # Bind type variables from the stack (peek at positions)
     Map::new (Map[str str]) = bindings
@@ -1130,8 +1264,12 @@ fn inject_trait_fn_ptrs tc:TypeChecker sig:Signature ops:List[Op] op_index:int l
             index non_hidden .get = stack_param
             stack_index tc TypeChecker::stack .get = actual
             if stack_param Parameter::typ sig Signature::type_vars .has then
-                if stack_param Parameter::typ bindings .get .is_none then
-                    stack_param Parameter::typ actual bindings .set = bindings
+                stack_param Parameter::typ = binding_type_var
+                binding_type_var bindings .get = existing_binding_opt
+                if existing_binding_opt .is_none then
+                    binding_type_var actual bindings .set = bindings
+                elif actual existing_binding_opt .unwrap != then
+                    location f"Type variable `{binding_type_var}` bound to `{existing_binding_opt .unwrap}` but got `{actual}`" ErrorKind::TypeMismatch raise_error
                 fi
             else
                 sig Signature::type_vars actual stack_param Parameter::typ bindings bind_generic_params_standalone = bindings
@@ -1139,6 +1277,13 @@ fn inject_trait_fn_ptrs tc:TypeChecker sig:Signature ops:List[Op] op_index:int l
         fi
         1 += index
     done
+
+    # Method-signature-diff binding for bounds with type-var args.
+    # For a bound like `I: Iterator[T]` where T is still unbound but I is
+    # bound from the stack, inspect the concrete type's implementation of
+    # each trait method and diff its signature against the trait's declared
+    # signature to bind T. Single pass in declaration order.
+    bindings function_opt sig method_diff_bind_all = bindings
 
     # Check TYPE_CAST lookahead for return type binding
     if op_index ops .length > then
@@ -1163,7 +1308,10 @@ fn inject_trait_fn_ptrs tc:TypeChecker sig:Signature ops:List[Op] op_index:int l
     type_var_keys .length 1 - = type_index
     while 0 type_index >= do
         type_index type_var_keys .get = type_var
-        type_var sig Signature::trait_bounds .get .unwrap = trait_name
+        type_var sig Signature::trait_bounds .get .unwrap = trait_bound
+        # Resolve trait type args against current bindings so that
+        # `Carrier[T]` becomes `Carrier[int]` once T has been bound.
+        bindings trait_bound trait_bound_to_str substitute_type_params = trait_name
         type_var bindings .get = concrete_opt
         if concrete_opt .is_none then
             location f"Cannot determine concrete type for type variable `{type_var}`" ErrorKind::TypeMismatch raise_error
@@ -1171,7 +1319,7 @@ fn inject_trait_fn_ptrs tc:TypeChecker sig:Signature ops:List[Op] op_index:int l
             continue
         fi
         concrete_opt .unwrap = concrete
-        trait_name GLOBAL_TRAITS .get .unwrap = trait_def
+        trait_bound TraitBound::name GLOBAL_TRAITS .get .unwrap = trait_def
 
         # Check if forwarding (type var has same trait bound in calling function)
         false = is_forwarding
@@ -1179,7 +1327,7 @@ fn inject_trait_fn_ptrs tc:TypeChecker sig:Signature ops:List[Op] op_index:int l
             concrete function_opt .unwrap Function::signature Signature::trait_bounds .get = caller_bound_opt
             if caller_bound_opt .is_some then
                 caller_bound_opt .unwrap = caller_bound_val
-                if trait_name caller_bound_val == then
+                if trait_bound caller_bound_val trait_bound_eq then
                     true = is_forwarding
                 fi
             fi
@@ -1900,41 +2048,32 @@ fn check_method_call tc:TypeChecker op:Op ops:List[Op] op_index:int function_opt
         function_opt .unwrap Function::signature Signature::trait_bounds = bounds
         receiver bounds .get = trait_opt
         if trait_opt .is_some then
-            trait_opt .unwrap = trait_name
+            trait_opt .unwrap = bound
+            bound TraitBound::name = trait_name
             trait_name GLOBAL_TRAITS .get = trait_def_opt
             if trait_def_opt .is_some then
                 trait_def_opt .unwrap = trait_def
+                # Build substitution map from trait's type_params to the
+                # bound's concrete type_args, so that a trait method like
+                # `next self:self -> Option[T]` with bound `I: Iterator[int]`
+                # resolves to `next self:I -> Option[int]` at the call site.
+                Map::new (Map[str str]) = mc_subs
+                trait_def CasaTrait::type_params = mc_tparams
+                bound TraitBound::type_args = mc_targs
+                if mc_tparams .length mc_targs .length == then
+                    0 = mc_sub_index
+                    while mc_sub_index mc_tparams .length > do
+                        mc_sub_index mc_tparams .get mc_sub_index mc_targs .get mc_subs .set = mc_subs
+                        1 += mc_sub_index
+                    done
+                fi
                 0 = trait_method_index
                 while trait_method_index trait_def CasaTrait::methods .length > do
                     trait_method_index trait_def CasaTrait::methods .get = trait_method
                     if method_name trait_method TraitMethod::name == then
                         f"__trait_{receiver}_{method_name}" = hidden_var
                         tc stack_pop drop
-                        # Resolve trait sig: replace "self" with the type variable
-                        trait_method TraitMethod::signature = trait_sig
-                        List::new (List[Parameter]) = resolved_params
-                        0 = resolved_param_index
-                        while resolved_param_index trait_sig Signature::parameters .length > do
-                            resolved_param_index trait_sig Signature::parameters .get = resolved_param
-                            if "self" resolved_param Parameter::typ == then
-                                receiver resolved_param Parameter::name make_named_param resolved_params .push
-                            else
-                                resolved_param resolved_params .push
-                            fi
-                            1 += resolved_param_index
-                        done
-                        List::new (List[str]) = resolved_returns
-                        0 = resolved_return_index
-                        while resolved_return_index trait_sig Signature::return_types .length > do
-                            resolved_return_index trait_sig Signature::return_types .get = resolved_return
-                            if "self" resolved_return == then
-                                receiver resolved_returns .push
-                            else
-                                resolved_return resolved_returns .push
-                            fi
-                            1 += resolved_return_index
-                        done
-                        resolved_returns resolved_params make_signature = resolved_sig
+                        mc_subs receiver trait_method TraitMethod::signature resolve_trait_sig apply_type_subs_to_sig = resolved_sig
                         receiver tc stack_push
                         f"{receiver}::{method_name}" resolved_sig tc apply_signature
                         OpKind::OpPushVar op Op::set_kind
