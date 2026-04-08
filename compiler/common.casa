@@ -517,11 +517,11 @@ struct Signature {
     parameters:   List[Parameter]
     return_types: List[str]
     type_vars:    Set[str]
-    trait_bounds:  Map[str str]
+    trait_bounds:  Map[str TraitBound]
 }
 
 fn empty_signature -> Signature {
-    Map::new (Map[str str])
+    Map::new (Map[str TraitBound])
     Set::new (Set[str])
     List::new (List[str])
     List::new (List[Parameter])
@@ -529,7 +529,7 @@ fn empty_signature -> Signature {
 }
 
 fn make_signature params:List[Parameter] returns:List[str] -> Signature {
-    Map::new (Map[str str])
+    Map::new (Map[str TraitBound])
     Set::new (Set[str])
     returns
     params
@@ -649,9 +649,64 @@ struct TraitMethod {
 }
 
 struct CasaTrait {
-    name:     str
-    methods:  List[TraitMethod]
-    location: Location
+    name:        str
+    type_params: List[str]
+    methods:     List[TraitMethod]
+    location:    Location
+}
+
+# Per-method hidden-parameter info produced by build_hidden_trait_methods.
+# Both parse_function and inject_impl_trait_params consume this list to
+# prepend `__trait_{type_var}_{method}` function-pointer parameters.
+struct HiddenTraitMethod {
+    var_name: str  # e.g. "__trait_I_next"
+    fn_type:  str  # e.g. "fn[I -> Option[int]]"
+}
+
+# A generic trait bound attached to a type variable in a function or impl
+# header. For `fn foo[I: Iterator[int]] ...` the bound is
+# TraitBound{name="Iterator", type_args=["int"]}. For non-generic bounds
+# like `K: Hashable` the type_args list is empty.
+struct TraitBound {
+    name:      str
+    type_args: List[str]
+}
+
+fn make_simple_trait_bound name:str -> TraitBound {
+    List::new (List[str]) name TraitBound
+}
+
+fn trait_bound_to_str bound:TraitBound -> str {
+    bound TraitBound::type_args = tbts_args
+    if 0 tbts_args .length == then
+        bound TraitBound::name return
+    fi
+    StringBuilder::new = tbts_sb
+    bound TraitBound::name tbts_sb .append
+    "[" tbts_sb .append
+    0 = tbts_index
+    while tbts_index tbts_args .length > do
+        if 0 tbts_index != then " " tbts_sb .append fi
+        tbts_index tbts_args .get tbts_sb .append
+        1 += tbts_index
+    done
+    "]" tbts_sb .append
+    tbts_sb .build
+}
+
+fn trait_bound_eq a:TraitBound b:TraitBound -> bool {
+    if a TraitBound::name b TraitBound::name != then false return fi
+    a TraitBound::type_args = tbe_a_args
+    b TraitBound::type_args = tbe_b_args
+    if tbe_a_args .length tbe_b_args .length != then false return fi
+    0 = tbe_index
+    while tbe_index tbe_a_args .length > do
+        if tbe_index tbe_a_args .get tbe_index tbe_b_args .get != then
+            false return
+        fi
+        1 += tbe_index
+    done
+    true
 }
 
 # ============================================================================
@@ -980,6 +1035,54 @@ fn signature_matches sig_a:Signature sig_b:Signature -> bool {
     done
 
     true
+}
+
+fn substitute_type_params typ:str subs:Map[str str] -> str {
+    # Replace any occurrence of a substitution key within a type expression.
+    # E.g. with subs {T: int}, "T" -> "int", "Option[T]" -> "Option[int]".
+    if typ subs .get .is_some then
+        typ subs .get .unwrap return
+    fi
+    typ extract_generic_base = base_opt
+    if base_opt .is_none then
+        typ return
+    fi
+    base_opt .unwrap = base
+    typ extract_generic_params = params_opt
+    if params_opt .is_none then
+        typ return
+    fi
+    params_opt .unwrap = params
+    StringBuilder::new = builder
+    base builder .append
+    "[" builder .append
+    0 = stp_index
+    while stp_index params .length > do
+        if 0 stp_index != then " " builder .append fi
+        subs stp_index params .get substitute_type_params builder .append
+        1 += stp_index
+    done
+    "]" builder .append
+    builder .build
+}
+
+fn apply_type_subs_to_sig sig:Signature subs:Map[str str] -> Signature {
+    if 0 subs .length == then sig return fi
+    List::new (List[Parameter]) = params
+    0 = index
+    while index sig Signature::parameters .length > do
+        index sig Signature::parameters .get = param
+        subs param Parameter::typ substitute_type_params = new_typ
+        param Parameter::name new_typ make_named_param params .push
+        1 += index
+    done
+    List::new (List[str]) = returns
+    0 = index
+    while index sig Signature::return_types .length > do
+        subs index sig Signature::return_types .get substitute_type_params returns .push
+        1 += index
+    done
+    returns params make_signature
 }
 
 fn resolve_trait_sig sig:Signature type_var:str -> Signature {

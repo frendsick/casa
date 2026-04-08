@@ -619,13 +619,80 @@ fn require_global_scope function_name:str what:str location:Location {
 # ============================================================================
 
 # Global to pass trait bounds from parse_type_vars (since we can't return tuples)
-Map::new (Map[str str]) = LAST_TRAIT_BOUNDS
+Map::new (Map[str TraitBound]) = LAST_TRAIT_BOUNDS
+
+# Parse the `[arg1 arg2 ...]` type argument list that follows a generic trait
+# name in a trait bound (e.g. `I: Iterator[int]`). The caller has already
+# consumed the trait identifier. If the next token is not `[`, returns an
+# empty list. Otherwise consumes tokens up to the matching closing `]`,
+# splitting args at top-level `,` or whitespace and preserving nested
+# generic structure including the space separators.
+fn parse_bound_type_args cursor:TokenCursor trait_token:Token -> List[str] {
+    List::new (List[str]) = bound_args
+    cursor tc_peek = bracket_opt
+    if bracket_opt .is_none then bound_args return fi
+    if "[" bracket_opt .unwrap Token::value != then bound_args return fi
+    cursor tc_pop drop  # consume [
+    1 = pba_depth
+    StringBuilder::new = pba_current
+    false = pba_need_space
+    while 0 pba_depth > do
+        cursor tc_pop = arg_tok_opt
+        if arg_tok_opt .is_none then
+            trait_token Token::location "Unclosed trait bound type argument list" ErrorKind::Syntax raise_error
+            bound_args return
+        fi
+        arg_tok_opt .unwrap Token::value = arg_val
+        if "[" arg_val == then
+            1 += pba_depth
+            arg_val pba_current .append
+            false = pba_need_space
+            continue
+        fi
+        if "]" arg_val == then
+            pba_depth 1 - = pba_depth
+            if 0 pba_depth == then
+                if 0 pba_current .length != then
+                    pba_current .build bound_args .push
+                fi
+                continue
+            fi
+            arg_val pba_current .append
+            true = pba_need_space
+            continue
+        fi
+        if "," arg_val == 1 pba_depth == && then
+            if 0 pba_current .length != then
+                pba_current .build bound_args .push
+                StringBuilder::new = pba_current
+            fi
+            false = pba_need_space
+            continue
+        fi
+        # Top-level whitespace-separated args: finalize the current arg and
+        # start a new one. Nested args (depth > 1) preserve spacing so that
+        # `Map[str int]` serializes back as the canonical multi-token form.
+        if 1 pba_depth == then
+            if 0 pba_current .length != then
+                pba_current .build bound_args .push
+                StringBuilder::new = pba_current
+            fi
+            arg_val pba_current .append
+            true = pba_need_space
+            continue
+        fi
+        if pba_need_space then " " pba_current .append fi
+        arg_val pba_current .append
+        true = pba_need_space
+    done
+    bound_args
+}
 
 fn parse_type_vars cursor:TokenCursor -> List[str] {
     "[" cursor expect_token_value drop
     List::new (List[str]) = vars
     Set::new (Set[str]) = seen
-    Map::new (Map[str str]) = LAST_TRAIT_BOUNDS
+    Map::new (Map[str TraitBound]) = LAST_TRAIT_BOUNDS
 
     while true do
         cursor tc_pop = token_opt
@@ -649,16 +716,27 @@ fn parse_type_vars cursor:TokenCursor -> List[str] {
             fi
             token Token::value vars .push
             token Token::value seen .add = seen
-            # Check for trait bound: K: Hashable
+            # Check for trait bound: K: Hashable  or  K: Iterator[int]
             cursor tc_peek = colon_opt
             if colon_opt .is_some then
                 if ":" colon_opt .unwrap Token::value == then
                     cursor tc_pop drop  # consume :
                     TokenKind::Identifier cursor expect_token_kind = trait_token
-                    if trait_token Token::value GLOBAL_TRAITS .get .is_none then
-                        trait_token Token::location f"Trait `{trait_token Token::value}` is not defined" ErrorKind::UndefinedName raise_error
+                    trait_token Token::value = bound_trait_name
+                    bound_trait_name GLOBAL_TRAITS .get = bound_trait_def_opt
+                    if bound_trait_def_opt .is_none then
+                        trait_token Token::location f"Trait `{bound_trait_name}` is not defined" ErrorKind::UndefinedName raise_error
                     fi
-                    token Token::value trait_token Token::value LAST_TRAIT_BOUNDS .set = LAST_TRAIT_BOUNDS
+                    trait_token cursor parse_bound_type_args = bound_args
+                    if bound_trait_def_opt .is_some then
+                        # Arity check against trait's declared type_params
+                        bound_trait_def_opt .unwrap CasaTrait::type_params = declared_params
+                        if bound_args .length declared_params .length != then
+                            trait_token Token::location f"Trait `{bound_trait_name}` expects {declared_params .length} type argument(s), got {bound_args .length}" ErrorKind::Syntax raise_error
+                        fi
+                        bound_args bound_trait_name TraitBound = ptv_bound
+                        token Token::value ptv_bound LAST_TRAIT_BOUNDS .set = LAST_TRAIT_BOUNDS
+                    fi
                 fi
             fi
         else
@@ -755,6 +833,52 @@ fn parse_signature cursor:TokenCursor -> Signature {
 }
 
 # ============================================================================
+# build_hidden_trait_methods - shared hidden-param construction
+# ============================================================================
+#
+# Walks the given trait bounds and returns a flat list of (var_name, fn_type)
+# pairs describing each hidden `__trait_{type_var}_{method}` parameter that
+# must be injected. Used by both parse_function and inject_impl_trait_params.
+# Bounds whose trait is not registered in GLOBAL_TRAITS are silently skipped,
+# matching the pre-extraction behavior of both call sites.
+fn build_hidden_trait_methods trait_bounds:Map[str TraitBound] -> List[HiddenTraitMethod] {
+    List::new (List[HiddenTraitMethod]) = result
+    trait_bounds .keys = bound_keys
+    0 = bound_index
+    while bound_index bound_keys .length > do
+        bound_index bound_keys .get = bound_type_var
+        bound_type_var trait_bounds .get .unwrap = bound
+        bound TraitBound::name GLOBAL_TRAITS .get = bound_trait_opt
+        if bound_trait_opt .is_some then
+            bound_trait_opt .unwrap = bound_trait
+            # Build substitution map from trait's declared type_params to the
+            # concrete type_args carried on the bound.
+            Map::new (Map[str str]) = bound_subs
+            bound_trait CasaTrait::type_params = bhtm_params
+            bound TraitBound::type_args = bhtm_args
+            if bhtm_params .length bhtm_args .length == then
+                0 = bhtm_sub_index
+                while bhtm_sub_index bhtm_params .length > do
+                    bhtm_sub_index bhtm_params .get bhtm_sub_index bhtm_args .get bound_subs .set = bound_subs
+                    1 += bhtm_sub_index
+                done
+            fi
+            0 = method_index
+            while method_index bound_trait CasaTrait::methods .length > do
+                method_index bound_trait CasaTrait::methods .get = bound_method
+                f"__trait_{bound_type_var}_{bound_method TraitMethod::name}" = hidden_name
+                bound_subs bound_type_var bound_method TraitMethod::signature resolve_trait_sig apply_type_subs_to_sig = hidden_sig
+                f"fn[{hidden_sig signature_to_str}]" = hidden_type
+                hidden_type hidden_name HiddenTraitMethod result .push
+                1 += method_index
+            done
+        fi
+        1 += bound_index
+    done
+    result
+}
+
+# ============================================================================
 # parse_function - parse function definition
 # ============================================================================
 
@@ -790,27 +914,16 @@ fn parse_function cursor:TokenCursor -> Function {
     # Inject hidden __trait_* parameters for trait-bounded type vars
     if 0 sig Signature::trait_bounds .keys .length != then
         List::new (List[Parameter]) = hidden_params
-        sig Signature::trait_bounds .keys = bound_keys
-        0 = bound_index
-        while bound_index bound_keys .length > do
-            bound_index bound_keys .get = bound_type_var
-            bound_type_var sig Signature::trait_bounds .get .unwrap = bound_trait_name
-            bound_trait_name GLOBAL_TRAITS .get = bound_trait_opt
-            if bound_trait_opt .is_some then
-                bound_trait_opt .unwrap = bound_trait
-                0 = method_index
-                while method_index bound_trait CasaTrait::methods .length > do
-                    method_index bound_trait CasaTrait::methods .get = bound_method
-                    f"__trait_{bound_type_var}_{bound_method TraitMethod::name}" = hidden_name
-                    bound_type_var bound_method TraitMethod::signature resolve_trait_sig = hidden_sig
-                    f"fn[{hidden_sig signature_to_str}]" = hidden_type
-                    hidden_name hidden_type make_named_param hidden_params .push
-                    hidden_type hidden_name Variable variables .push
-                    name_token Token::location OpKind::OpAssignVar hidden_name make_op_str ops .push
-                    1 += method_index
-                done
-            fi
-            1 += bound_index
+        sig Signature::trait_bounds build_hidden_trait_methods = hidden_methods
+        0 = hidden_index
+        while hidden_index hidden_methods .length > do
+            hidden_index hidden_methods .get = hidden
+            hidden HiddenTraitMethod::var_name = hidden_name
+            hidden HiddenTraitMethod::fn_type = hidden_type
+            hidden_name hidden_type make_named_param hidden_params .push
+            hidden_type hidden_name Variable variables .push
+            name_token Token::location OpKind::OpAssignVar hidden_name make_op_str ops .push
+            1 += hidden_index
         done
         # Prepend hidden params to signature parameters
         0 = param_index
@@ -1081,6 +1194,30 @@ fn parse_trait cursor:TokenCursor -> CasaTrait {
     "trait" cursor expect_token_value drop
     TokenKind::Identifier cursor expect_token_kind = name_token
 
+    List::new (List[str]) = type_params
+    cursor tc_peek = bracket_opt
+    if bracket_opt .is_some "[" bracket_opt .unwrap Token::value == && then
+        cursor tc_pop drop  # consume [
+        while true do
+            cursor tc_peek = tp_opt
+            if tp_opt .is_none then
+                name_token Token::location "Unclosed trait type parameter list" ErrorKind::UnmatchedBlock raise_error
+                break
+            fi
+            tp_opt .unwrap = tp_tok
+            if "]" tp_tok Token::value == then
+                cursor tc_pop drop
+                break
+            fi
+            if TokenKind::Identifier tp_tok Token::kind != then
+                tp_tok Token::location "Expected type parameter identifier in trait" ErrorKind::UnexpectedToken raise_error
+                break
+            fi
+            cursor tc_pop drop
+            tp_tok Token::value type_params .push
+        done
+    fi
+
     List::new (List[TraitMethod]) = methods
     "{" cursor expect_token_value drop
 
@@ -1104,14 +1241,14 @@ fn parse_trait cursor:TokenCursor -> CasaTrait {
         method_sig method_name Token::value TraitMethod methods .push
     done
 
-    name_token Token::location methods name_token Token::value CasaTrait
+    name_token Token::location methods type_params name_token Token::value CasaTrait
 }
 
 # ============================================================================
 # parse_impl_block - parse impl Type { fn methods... }
 # ============================================================================
 
-fn inject_impl_trait_params function:Function type_vars:List[str] trait_bounds:Map[str str] {
+fn inject_impl_trait_params function:Function type_vars:List[str] trait_bounds:Map[str TraitBound] {
     function Function::signature = sig
 
     # Merge type vars into function signature
@@ -1138,28 +1275,18 @@ fn inject_impl_trait_params function:Function type_vars:List[str] trait_bounds:M
     # Inject hidden __trait_* parameters
     List::new (List[Parameter]) = hidden_params
     0 = insert_pos
-    0 = bound_iter
-    while bound_iter bound_keys .length > do
-        bound_iter bound_keys .get = bound_type_var
-        bound_type_var sig Signature::trait_bounds .get .unwrap = trait_name
-        trait_name GLOBAL_TRAITS .get = trait_opt
-        if trait_opt .is_some then
-            trait_opt .unwrap = trait_def
-            0 = method_index
-            while method_index trait_def CasaTrait::methods .length > do
-                method_index trait_def CasaTrait::methods .get = method
-                f"__trait_{bound_type_var}_{method TraitMethod::name}" = hidden_name
-                bound_type_var method TraitMethod::signature resolve_trait_sig = hidden_sig
-                f"fn[{hidden_sig signature_to_str}]" = hidden_type
-                hidden_name hidden_type make_named_param hidden_params .push
-                hidden_name make_variable function Function::variables .push
-                function Function::location OpKind::OpAssignVar hidden_name make_op_str = assign_op
-                insert_pos assign_op function Function::ops .insert
-                1 += insert_pos
-                1 += method_index
-            done
-        fi
-        1 += bound_iter
+    sig Signature::trait_bounds build_hidden_trait_methods = hidden_methods
+    0 = hidden_index
+    while hidden_index hidden_methods .length > do
+        hidden_index hidden_methods .get = hidden
+        hidden HiddenTraitMethod::var_name = hidden_name
+        hidden HiddenTraitMethod::fn_type = hidden_type
+        hidden_name hidden_type make_named_param hidden_params .push
+        hidden_name make_variable function Function::variables .push
+        function Function::location OpKind::OpAssignVar hidden_name make_op_str = assign_op
+        insert_pos assign_op function Function::ops .insert
+        1 += insert_pos
+        1 += hidden_index
     done
 
     # Prepend hidden params to existing signature parameters
@@ -1178,7 +1305,7 @@ fn parse_impl_block cursor:TokenCursor {
 
     # Parse optional type parameters with trait bounds
     List::new (List[str]) = type_vars
-    Map::new (Map[str str]) = trait_bounds
+    Map::new (Map[str TraitBound]) = trait_bounds
     cursor tc_peek = tvars_opt
     if tvars_opt .is_some then
         if "[" tvars_opt .unwrap Token::value == then
