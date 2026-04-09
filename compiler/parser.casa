@@ -1636,6 +1636,86 @@ fn handle_keyword_include token:Token cursor:TokenCursor -> Op {
 }
 
 # ============================================================================
+# handle_keyword_for - parse `for <ident> in <expr> do <body> done`
+# ============================================================================
+#
+# The for-loop is emitted as three dedicated ops: OpForStart carries the loop
+# variable name, OpForNext marks the end of the iterable expression and the
+# start of the body, and OpForEnd closes the loop. Between OpForStart and
+# OpForNext are the iterable expression ops; between OpForNext and OpForEnd
+# are the body ops. Nested while/for loops inside the body are detected via
+# depth counting on `while`/`for` openers and `done` closers so that the
+# enclosing `do`/`done` pair is identified correctly.
+fn handle_keyword_for token:Token cursor:TokenCursor function_name:str ops:List[Op] {
+    TokenKind::Identifier cursor expect_token_kind = loop_var_token
+    loop_var_token Token::value = loop_var_name
+    "in" cursor expect_token_value drop
+
+    # Iterable-expression phase — emit ops until the matching `do`. These ops
+    # leave the iterator value on the stack; OpForStart (emitted below) then
+    # pops it and captures it into a hidden local during typecheck/bytecode.
+    0 = hkf_depth
+    while true do
+        cursor tc_peek = hkf_peek
+        if hkf_peek .is_none then
+            token Token::location "Unclosed `for` loop" ErrorKind::UnmatchedBlock raise_error
+            return
+        fi
+        hkf_peek .unwrap = hkf_tok
+        if "do" hkf_tok Token::value == 0 hkf_depth == && then
+            cursor tc_pop drop
+            # OpForStart's value encodes `{loop_var_name}|{hidden_iter_name}`
+            # so the typechecker can bind both locals from one op. The hidden
+            # name includes the source offset so nested for-loops stay unique.
+            token Token::location Location::span Span::offset = for_offset
+            f"{loop_var_name}|__for_iter_{for_offset}" = for_value
+            token Token::location OpKind::OpForStart for_value make_op_str ops .push
+            break
+        fi
+        if "while" hkf_tok Token::value == "for" hkf_tok Token::value == || then
+            1 += hkf_depth
+        fi
+        if "done" hkf_tok Token::value == 0 hkf_depth > && then
+            hkf_depth 1 - = hkf_depth
+        fi
+        cursor tc_pop drop
+        if TokenKind::FstringStart hkf_tok Token::kind == then
+            ops function_name cursor hkf_tok handle_fstring
+            continue
+        fi
+        ops function_name cursor hkf_tok token_to_op
+    done
+
+    # Body phase — emit ops until the matching `done`.
+    0 = hkf_body_depth
+    while true do
+        cursor tc_peek = hkf_body_peek
+        if hkf_body_peek .is_none then
+            token Token::location "Unclosed `for` loop body" ErrorKind::UnmatchedBlock raise_error
+            return
+        fi
+        hkf_body_peek .unwrap = hkf_body_tok
+        if "done" hkf_body_tok Token::value == 0 hkf_body_depth == && then
+            cursor tc_pop drop
+            hkf_body_tok Token::location OpKind::OpForEnd 0 make_op ops .push
+            return
+        fi
+        if "while" hkf_body_tok Token::value == "for" hkf_body_tok Token::value == || then
+            1 += hkf_body_depth
+        fi
+        if "done" hkf_body_tok Token::value == 0 hkf_body_depth > && then
+            hkf_body_depth 1 - = hkf_body_depth
+        fi
+        cursor tc_pop drop
+        if TokenKind::FstringStart hkf_body_tok Token::kind == then
+            ops function_name cursor hkf_body_tok handle_fstring
+            continue
+        fi
+        ops function_name cursor hkf_body_tok token_to_op
+    done
+}
+
+# ============================================================================
 # get_op_keyword - handle all keywords
 # ============================================================================
 
@@ -1719,6 +1799,17 @@ fn get_op_keyword token:Token cursor:TokenCursor function_name:str ops:List[Op] 
         cursor parse_struct = casa_struct
         casa_struct CasaStruct::name casa_struct GLOBAL_STRUCTS .set = GLOBAL_STRUCTS
         return
+    fi
+
+    # for
+    if KeywordKind::For keyword == then
+        ops function_name cursor token handle_keyword_for
+        return
+    fi
+
+    # in (standalone is error — only valid inside a for header)
+    if KeywordKind::In keyword == then
+        token Token::location "`in` is only valid inside a `for` loop header" ErrorKind::Syntax raise_error
     fi
 
     # trait
@@ -2034,6 +2125,29 @@ fn resolve_identifiers_fn ops:List[Op] function:Function -> List[Op] {
             if ri_var_name function Function::variables variable_list_contains ! then
                 if ri_var_name GLOBAL_VARIABLES .get .is_none then
                     ri_var function Function::variables .push
+                fi
+            fi
+            continue
+        fi
+
+        # FOR_START: register loop variable and hidden iterator local
+        if OpKind::OpForStart ri_kind == then
+            ri_op op_str_value = ri_for_value
+            ri_for_value "|" str::find = ri_for_sep
+            if 0 ri_for_sep < then continue fi
+            ri_for_value 0 ri_for_sep str::substring = ri_for_loop_var
+            ri_for_value ri_for_sep 1 + ri_for_value .length ri_for_sep - 1 - str::substring = ri_for_hidden
+            ri_for_loop_var make_variable = ri_for_lv
+            ri_for_hidden make_variable = ri_for_hv
+            if GLOBAL_SCOPE_LABEL function Function::name == then
+                ri_for_loop_var ri_for_lv GLOBAL_VARIABLES .set = GLOBAL_VARIABLES
+                ri_for_hidden ri_for_hv GLOBAL_VARIABLES .set = GLOBAL_VARIABLES
+            else
+                if ri_for_loop_var function Function::variables variable_list_contains ! then
+                    ri_for_lv function Function::variables .push
+                fi
+                if ri_for_hidden function Function::variables variable_list_contains ! then
+                    ri_for_hv function Function::variables .push
                 fi
             fi
             continue

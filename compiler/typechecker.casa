@@ -984,6 +984,73 @@ fn check_if_block tc:TypeChecker op:Op {
 # Check while/do/break/continue/done blocks
 # ============================================================================
 
+fn check_for_block tc:TypeChecker op:Op function_opt:Option[Function] {
+    op Op::kind = cfb_kind
+    if OpKind::OpForStart cfb_kind == then
+        op op_str_value = cfb_value
+        cfb_value "|" str::find = cfb_sep
+        if 0 cfb_sep < then return fi
+        cfb_value 0 cfb_sep str::substring = cfb_loop_var
+        cfb_value cfb_sep 1 + cfb_value .length cfb_sep - 1 - str::substring = cfb_hidden_iter
+        # Pop the iterator value left on the stack by the iterable expression.
+        tc stack_pop = cfb_iter_type
+        # Look up the concrete type's `next` method and extract the element
+        # type from its Option[T] return. This is the structural form of
+        # checking that the iterator type implements Iterator[T].
+        f"{cfb_iter_type}::next" GLOBAL_FUNCTIONS .get = cfb_next_opt
+        if cfb_next_opt .is_none then
+            op Op::location f"Type `{cfb_iter_type}` cannot be iterated: no `next` method found" ErrorKind::TypeMismatch raise_error
+            return
+        fi
+        cfb_next_opt .unwrap Function::signature = cfb_next_sig
+        if 1 cfb_next_sig Signature::return_types .length != then
+            op Op::location f"Type `{cfb_iter_type}` cannot be iterated: `next` must return exactly one value" ErrorKind::TypeMismatch raise_error
+            return
+        fi
+        0 cfb_next_sig Signature::return_types .get = cfb_return_type
+        cfb_return_type extract_generic_base = cfb_base_opt
+        if cfb_base_opt .is_none then
+            op Op::location f"Type `{cfb_iter_type}` cannot be iterated: `next` must return `Option[T]`, got `{cfb_return_type}`" ErrorKind::TypeMismatch raise_error
+            return
+        fi
+        if "Option" cfb_base_opt .unwrap != then
+            op Op::location f"Type `{cfb_iter_type}` cannot be iterated: `next` must return `Option[T]`, got `{cfb_return_type}`" ErrorKind::TypeMismatch raise_error
+            return
+        fi
+        cfb_return_type extract_generic_inner = cfb_inner_opt
+        if cfb_inner_opt .is_none then
+            op Op::location f"Type `{cfb_iter_type}` cannot be iterated: cannot extract element type from `{cfb_return_type}`" ErrorKind::TypeMismatch raise_error
+            return
+        fi
+        cfb_inner_opt .unwrap = cfb_element_type
+        # Bind the hidden iterator local and the loop variable in the
+        # enclosing function's locals. resolve_identifiers_fn already
+        # registered the names; we only need to set their types.
+        if function_opt .is_some then
+            function_opt .unwrap = cfb_function
+            cfb_loop_var cfb_function Function::variables variable_list_index = cfb_lv_idx
+            if 0 cfb_lv_idx >= then
+                cfb_element_type cfb_lv_idx cfb_function Function::variables .get Variable::set_typ
+            fi
+            cfb_hidden_iter cfb_function Function::variables variable_list_index = cfb_hi_idx
+            if 0 cfb_hi_idx >= then
+                cfb_iter_type cfb_hi_idx cfb_function Function::variables .get Variable::set_typ
+            fi
+        fi
+        # Open a branched-stack frame so break/continue inside the body are
+        # recognized. Mark condition as present (the loop always has an
+        # implicit next-check termination condition).
+        tc TypeChecker::stack_origins tc TypeChecker::stack make_branched_stack = cfb_branched
+        true cfb_branched BranchedStack::set_condition_present
+        cfb_branched tc TypeChecker::branched_stacks .push
+        return
+    fi
+    if OpKind::OpForEnd cfb_kind == then
+        if 0 tc TypeChecker::branched_stacks .length == then return fi
+        tc TypeChecker::branched_stacks .pop drop
+    fi
+}
+
 fn check_while_block tc:TypeChecker op:Op {
     op Op::kind = kind
     if OpKind::OpWhileStart kind == then
@@ -2298,6 +2365,15 @@ fn type_check_ops ops:List[Op] function_opt:Option[Function] -> Signature {
             OpKind::OpWhileEnd op_kind == ||
         then
             current_op checker check_while_block
+            continue
+        fi
+
+        # For block
+        if
+            OpKind::OpForStart op_kind ==
+            OpKind::OpForEnd op_kind == ||
+        then
+            function_opt current_op checker check_for_block
             continue
         fi
 
