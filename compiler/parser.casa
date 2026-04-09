@@ -1636,6 +1636,114 @@ fn handle_keyword_include token:Token cursor:TokenCursor -> Op {
 }
 
 # ============================================================================
+# handle_keyword_for - parse `for <ident> in <expr> do <body> done`
+# ============================================================================
+#
+# The for-loop is desugared at parse time into a `while` loop over the
+# iterator's `next` method. The synthesized ops use only existing op kinds,
+# so no new typechecker or bytecode support is required.
+#
+# Source `for x in <iter> do <body> done` lowers to roughly:
+#
+#     <iter_expr_ops>
+#     = __for_iter_N
+#     while
+#         __for_iter_N .next
+#         = __for_opt_N
+#         __for_opt_N .is_some
+#     do
+#         __for_opt_N .unwrap
+#         = x
+#         <body_ops>
+#     done
+#
+# The hidden variable names embed the source offset so nested for-loops do
+# not collide. Nested `while`/`for` inside the body or the iterable
+# expression are detected via depth counting on `while`/`for` openers and
+# `done` closers so the enclosing `do`/`done` pair is identified correctly.
+fn handle_keyword_for token:Token cursor:TokenCursor function_name:str ops:List[Op] {
+    TokenKind::Identifier cursor expect_token_kind = loop_var_token
+    loop_var_token Token::value = loop_var_name
+    "in" cursor expect_token_value drop
+
+    token Token::location = for_loc
+    for_loc Location::span Span::offset = for_offset
+    f"__for_iter_{for_offset}" = hidden_iter_name
+    f"__for_opt_{for_offset}" = hidden_opt_name
+
+    # Iterable-expression phase — emit ops until the matching `do`. These ops
+    # leave the iterator value on the stack, which the synthesized
+    # OpAssignVar below pops into the hidden iterator local.
+    0 = nesting_depth
+    while true do
+        cursor tc_peek = peek_opt
+        if peek_opt .is_none then
+            for_loc "Unclosed `for` loop" ErrorKind::UnmatchedBlock raise_error
+            return
+        fi
+        peek_opt .unwrap = peeked_token
+        if "do" peeked_token Token::value == 0 nesting_depth == && then
+            cursor tc_pop drop
+            break
+        fi
+        if "while" peeked_token Token::value == then
+            1 += nesting_depth
+        fi
+        if "done" peeked_token Token::value == 0 nesting_depth > && then
+            nesting_depth 1 - = nesting_depth
+        fi
+        cursor tc_pop drop
+        if TokenKind::FstringStart peeked_token Token::kind == then
+            ops function_name cursor peeked_token handle_fstring
+            continue
+        fi
+        ops function_name cursor peeked_token token_to_op
+    done
+
+    # Loop preamble: store iterator into hidden local, then open the while
+    # loop with the `next`/`is_some` condition.
+    for_loc OpKind::OpAssignVar hidden_iter_name make_op_str ops .push
+    for_loc OpKind::OpWhileStart 0 make_op ops .push
+    for_loc OpKind::OpPushVar hidden_iter_name make_op_str ops .push
+    for_loc OpKind::OpMethodCall "next" make_op_str ops .push
+    for_loc OpKind::OpAssignVar hidden_opt_name make_op_str ops .push
+    for_loc OpKind::OpPushVar hidden_opt_name make_op_str ops .push
+    for_loc OpKind::OpMethodCall "is_some" make_op_str ops .push
+    for_loc OpKind::OpWhileCondition 0 make_op ops .push
+    for_loc OpKind::OpPushVar hidden_opt_name make_op_str ops .push
+    for_loc OpKind::OpMethodCall "unwrap" make_op_str ops .push
+    for_loc OpKind::OpAssignVar loop_var_name make_op_str ops .push
+
+    # Body phase — emit ops until the matching `done`, then close the while.
+    0 = body_nesting_depth
+    while true do
+        cursor tc_peek = body_peek_opt
+        if body_peek_opt .is_none then
+            for_loc "Unclosed `for` loop body" ErrorKind::UnmatchedBlock raise_error
+            return
+        fi
+        body_peek_opt .unwrap = body_token
+        if "done" body_token Token::value == 0 body_nesting_depth == && then
+            cursor tc_pop drop
+            body_token Token::location OpKind::OpWhileEnd 0 make_op ops .push
+            return
+        fi
+        if "while" body_token Token::value == then
+            1 += body_nesting_depth
+        fi
+        if "done" body_token Token::value == 0 body_nesting_depth > && then
+            body_nesting_depth 1 - = body_nesting_depth
+        fi
+        cursor tc_pop drop
+        if TokenKind::FstringStart body_token Token::kind == then
+            ops function_name cursor body_token handle_fstring
+            continue
+        fi
+        ops function_name cursor body_token token_to_op
+    done
+}
+
+# ============================================================================
 # get_op_keyword - handle all keywords
 # ============================================================================
 
@@ -1719,6 +1827,17 @@ fn get_op_keyword token:Token cursor:TokenCursor function_name:str ops:List[Op] 
         cursor parse_struct = casa_struct
         casa_struct CasaStruct::name casa_struct GLOBAL_STRUCTS .set = GLOBAL_STRUCTS
         return
+    fi
+
+    # for
+    if KeywordKind::For keyword == then
+        ops function_name cursor token handle_keyword_for
+        return
+    fi
+
+    # in (standalone is error — only valid inside a for header)
+    if KeywordKind::In keyword == then
+        token Token::location "`in` is only valid inside a `for` loop header" ErrorKind::Syntax raise_error
     fi
 
     # trait
