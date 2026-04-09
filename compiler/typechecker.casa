@@ -19,55 +19,106 @@ fn ts_new -> TypedStack {
     TypedStack
 }
 
+# Deep-copy a TypedStack into a new, independent value.
+fn ts_snapshot source:TypedStack -> TypedStack {
+    List::new (List[str]) = new_types
+    List::new (List[Location]) = new_origins
+    0 = snap_index
+    while snap_index source TypedStack::types .length > do
+        snap_index source TypedStack::types .get new_types .push
+        snap_index source TypedStack::origins .get new_origins .push
+        1 += snap_index
+    done
+    new_origins new_types TypedStack
+}
+
+# Mutate `target` in place so it deep-equals `source`. `source` is unchanged.
+fn ts_restore target:TypedStack source:TypedStack {
+    List::new (List[str]) = new_types
+    List::new (List[Location]) = new_origins
+    0 = restore_index
+    while restore_index source TypedStack::types .length > do
+        restore_index source TypedStack::types .get new_types .push
+        restore_index source TypedStack::origins .get new_origins .push
+        1 += restore_index
+    done
+    new_types target TypedStack::set_types
+    new_origins target TypedStack::set_origins
+}
+
+# Pure stack comparison on the types slice (origins are not compared).
+fn ts_equals left:TypedStack right:TypedStack -> bool {
+    left TypedStack::types right TypedStack::types stacks_equal
+}
+
+# Produce the unified types list between two TypedStacks, or empty on incompatibility.
+fn ts_unify_types target:TypedStack candidate:TypedStack -> List[str] {
+    target TypedStack::types candidate TypedStack::types stacks_compatible
+}
+
 # ============================================================================
-# BranchedStack — tracks stack state across conditional and loop branches
+# Branch contexts — one specialized struct per branch kind (if / while / match).
 # ============================================================================
 
-struct BranchedStack {
-    before:                 List[str]
-    after:                  List[str]
-    before_origins:         List[Location]
-    after_origins:          List[Location]
-    condition_present:      bool
-    default_present:        bool
-    branch_records:         List[str]
-    current_branch_label:   str
+struct IfContext {
+    before:                  TypedStack
+    after:                   TypedStack
+    condition_present:       bool
+    default_present:         bool
+    current_branch_label:    str
     current_branch_location: Location
-    match_type:             str
 }
 
-fn copy_str_list source:List[str] -> List[str] {
-    List::new (List[str]) = result
-    0 = index
-    while index source .length > do
-        index source .get result .push
-        1 += index
-    done
-    result
+struct WhileContext {
+    before:                  TypedStack
+    condition_present:       bool
+    current_branch_location: Location
 }
 
-fn copy_location_list source:List[Location] -> List[Location] {
-    List::new (List[Location]) = result
-    0 = index
-    while index source .length > do
-        index source .get result .push
-        1 += index
-    done
-    result
+struct MatchContext {
+    before:                  TypedStack
+    after:                   TypedStack
+    condition_present:       bool
+    default_present:         bool
+    branch_records:          List[str]
+    match_type:              str
+    current_branch_label:    str
+    current_branch_location: Location
 }
 
-fn make_branched_stack stack:List[str] origins:List[Location] -> BranchedStack {
-    ""
+enum BranchFrame {
+    BranchIf(IfContext)
+    BranchWhile(WhileContext)
+    BranchMatch(MatchContext)
+}
+
+fn make_if_context -> IfContext {
     empty_location
     ""
+    false
+    false
+    ts_new
+    ts_new
+    IfContext
+}
+
+fn make_while_context -> WhileContext {
+    empty_location
+    false
+    ts_new
+    WhileContext
+}
+
+fn make_match_context match_type:str -> MatchContext {
+    empty_location
+    ""
+    match_type
     List::new (List[str])
+    true      # default_present — starts true; cleared when a non-wildcard arm is seen
     false
-    false
-    origins copy_location_list
-    origins copy_location_list
-    stack copy_str_list
-    stack copy_str_list
-    BranchedStack
+    ts_new
+    ts_new
+    MatchContext
 }
 
 # ============================================================================
@@ -77,9 +128,9 @@ fn make_branched_stack stack:List[str] origins:List[Location] -> BranchedStack {
 struct TypeChecker {
     live:                TypedStack
     parameters:          List[Parameter]
-    return_types:        List[str]
+    return_types:        TypedStack
     has_return_types:    bool
-    branched_stacks:     List[BranchedStack]
+    branched_stacks:     List[BranchFrame]
     current_location:    Location
     current_op_context:  str
     current_expect_ctx:  str
@@ -93,9 +144,9 @@ fn make_typechecker store:SymbolStore -> TypeChecker {
     ""                               # current_expect_ctx
     ""                               # current_op_context
     empty_location                   # current_location
-    List::new (List[BranchedStack])  # branched_stacks
+    List::new (List[BranchFrame])    # branched_stacks
     false                            # has_return_types
-    List::new (List[str])            # return_types
+    ts_new                           # return_types
     List::new (List[Parameter])      # parameters
     ts_new                           # live
     TypeChecker
@@ -920,78 +971,80 @@ fn check_push_var tc:TypeChecker op:Op function_opt:Option[Function] {
 fn check_if_block tc:TypeChecker op:Op {
     op Op::kind = kind
     if OpKind::OpIfStart kind == then
-        tc TypeChecker::live TypedStack::origins tc TypeChecker::live TypedStack::types make_branched_stack = branched
-        op Op::location branched BranchedStack::set_current_branch_location
-        branched tc TypeChecker::branched_stacks .push
+        make_if_context = if_ctx
+        op Op::location if_ctx IfContext::set_current_branch_location
+        if_ctx BranchFrame::BranchIf = if_frame
+        if_frame tc TypeChecker::branched_stacks .push
         true tc TypeChecker::set_in_branch_condition
     elif OpKind::OpIfCondition kind == then
         false tc TypeChecker::set_in_branch_condition
         "bool" tc expect_type drop
         if 0 tc TypeChecker::branched_stacks .length == then return fi
-        tc TypeChecker::branched_stacks .length 1 - tc TypeChecker::branched_stacks .get = branched_stack
-        if branched_stack BranchedStack::condition_present ! then
-            true branched_stack BranchedStack::set_condition_present
-            tc TypeChecker::live TypedStack::types copy_str_list branched_stack BranchedStack::set_before
-            tc TypeChecker::live TypedStack::origins copy_location_list branched_stack BranchedStack::set_before_origins
-            tc TypeChecker::live TypedStack::types copy_str_list branched_stack BranchedStack::set_after
-            tc TypeChecker::live TypedStack::origins copy_location_list branched_stack BranchedStack::set_after_origins
-            "if" branched_stack BranchedStack::set_current_branch_label
+        tc TypeChecker::branched_stacks .length 1 - tc TypeChecker::branched_stacks .get = top_frame
+        if top_frame BranchFrame::BranchIf(if_ctx) is then
+            if if_ctx IfContext::condition_present ! then
+                true if_ctx IfContext::set_condition_present
+                tc TypeChecker::live if_ctx IfContext::before ts_restore
+                tc TypeChecker::live if_ctx IfContext::after ts_restore
+                "if" if_ctx IfContext::set_current_branch_label
+            fi
         fi
     elif
         OpKind::OpIfElif kind ==
         OpKind::OpIfElse kind == ||
     then
         if 0 tc TypeChecker::branched_stacks .length == then return fi
-        tc TypeChecker::branched_stacks .length 1 - tc TypeChecker::branched_stacks .get = branched_stack
-        if OpKind::OpIfElse kind == then
-            true branched_stack BranchedStack::set_default_present
-            false tc TypeChecker::set_in_branch_condition
-        else
-            true tc TypeChecker::set_in_branch_condition
+        tc TypeChecker::branched_stacks .length 1 - tc TypeChecker::branched_stacks .get = top_frame
+        if top_frame BranchFrame::BranchIf(if_ctx) is then
+            if OpKind::OpIfElse kind == then
+                true if_ctx IfContext::set_default_present
+                false tc TypeChecker::set_in_branch_condition
+            else
+                true tc TypeChecker::set_in_branch_condition
+            fi
+            if_ctx IfContext::before = if_before
+            if_ctx IfContext::after = if_after
+            if if_before tc TypeChecker::live ts_equals if_after if_before ts_equals && then
+                op Op::location if_ctx IfContext::set_current_branch_location
+                return
+            fi
+            if_after tc TypeChecker::live ts_unify_types = unified
+            if 0 unified .length != if_after if_before ts_equals ! && then
+                unified if_after TypedStack::set_types
+                if_before tc TypeChecker::live ts_restore
+                op Op::location if_ctx IfContext::set_current_branch_location
+                return
+            fi
+            if if_after if_before ts_equals then
+                tc TypeChecker::live if_after ts_restore
+                if_before tc TypeChecker::live ts_restore
+                op Op::location if_ctx IfContext::set_current_branch_location
+                return
+            fi
+            op Op::location "Branches have incompatible stack effects" ErrorKind::StackMismatch add_error
         fi
-        branched_stack BranchedStack::before = before
-        branched_stack BranchedStack::after = after
-        if tc TypeChecker::live TypedStack::types before stacks_equal before after stacks_equal && then
-            op Op::location branched_stack BranchedStack::set_current_branch_location
-            return
-        fi
-        tc TypeChecker::live TypedStack::types after stacks_compatible = unified
-        if 0 unified .length != before after stacks_equal ! && then
-            unified branched_stack BranchedStack::set_after
-            before copy_str_list tc TypeChecker::live TypedStack::set_types
-            branched_stack BranchedStack::before_origins copy_location_list tc TypeChecker::live TypedStack::set_origins
-            op Op::location branched_stack BranchedStack::set_current_branch_location
-            return
-        fi
-        if before after stacks_equal then
-            tc TypeChecker::live TypedStack::types copy_str_list branched_stack BranchedStack::set_after
-            tc TypeChecker::live TypedStack::origins copy_location_list branched_stack BranchedStack::set_after_origins
-            before copy_str_list tc TypeChecker::live TypedStack::set_types
-            branched_stack BranchedStack::before_origins copy_location_list tc TypeChecker::live TypedStack::set_origins
-            op Op::location branched_stack BranchedStack::set_current_branch_location
-            return
-        fi
-        op Op::location "Branches have incompatible stack effects" ErrorKind::StackMismatch add_error
     elif OpKind::OpIfEnd kind == then
-        tc TypeChecker::branched_stacks .pop = branched_stack
-        branched_stack BranchedStack::before = before
-        branched_stack BranchedStack::after = after
-        if tc TypeChecker::live TypedStack::types before stacks_equal before after stacks_equal && then
-            return
+        tc TypeChecker::branched_stacks .pop = top_frame
+        if top_frame BranchFrame::BranchIf(if_ctx) is then
+            if_ctx IfContext::before = if_before
+            if_ctx IfContext::after = if_after
+            if if_before tc TypeChecker::live ts_equals if_after if_before ts_equals && then
+                return
+            fi
+            if_after tc TypeChecker::live ts_unify_types = unified
+            if 0 unified .length != if_ctx IfContext::default_present && then
+                if_after tc TypeChecker::live ts_restore
+                unified tc TypeChecker::live TypedStack::set_types
+                return
+            fi
+            if_before tc TypeChecker::live ts_unify_types = unified_before
+            if 0 unified_before .length != if_ctx IfContext::default_present ! && then
+                if_before tc TypeChecker::live ts_restore
+                unified_before tc TypeChecker::live TypedStack::set_types
+                return
+            fi
+            op Op::location "Branches have incompatible stack effects" ErrorKind::StackMismatch add_error
         fi
-        tc TypeChecker::live TypedStack::types after stacks_compatible = unified
-        if 0 unified .length != branched_stack BranchedStack::default_present && then
-            unified tc TypeChecker::live TypedStack::set_types
-            branched_stack BranchedStack::after_origins copy_location_list tc TypeChecker::live TypedStack::set_origins
-            return
-        fi
-        tc TypeChecker::live TypedStack::types before stacks_compatible = unified_before
-        if 0 unified_before .length != branched_stack BranchedStack::default_present ! && then
-            unified_before tc TypeChecker::live TypedStack::set_types
-            branched_stack BranchedStack::before_origins copy_location_list tc TypeChecker::live TypedStack::set_origins
-            return
-        fi
-        op Op::location "Branches have incompatible stack effects" ErrorKind::StackMismatch add_error
     fi
 }
 
@@ -1002,13 +1055,18 @@ fn check_if_block tc:TypeChecker op:Op {
 fn check_while_block tc:TypeChecker op:Op {
     op Op::kind = kind
     if OpKind::OpWhileStart kind == then
-        tc TypeChecker::live TypedStack::origins tc TypeChecker::live TypedStack::types make_branched_stack = branched
-        branched tc TypeChecker::branched_stacks .push
+        make_while_context = while_ctx
+        tc TypeChecker::live while_ctx WhileContext::before ts_restore
+        op Op::location while_ctx WhileContext::set_current_branch_location
+        while_ctx BranchFrame::BranchWhile = while_frame
+        while_frame tc TypeChecker::branched_stacks .push
     elif OpKind::OpWhileCondition kind == then
         "bool" tc expect_type drop
         if 0 tc TypeChecker::branched_stacks .length == then return fi
-        tc TypeChecker::branched_stacks .length 1 - tc TypeChecker::branched_stacks .get = branched_stack
-        true branched_stack BranchedStack::set_condition_present
+        tc TypeChecker::branched_stacks .length 1 - tc TypeChecker::branched_stacks .get = top_frame
+        if top_frame BranchFrame::BranchWhile(while_ctx) is then
+            true while_ctx WhileContext::set_condition_present
+        fi
     elif
         OpKind::OpWhileBreak kind ==
         OpKind::OpWhileContinue kind == ||
@@ -1439,12 +1497,17 @@ fn check_function_ops tc:TypeChecker op:Op ops:List[Op] op_index:int function_op
     elif OpKind::OpFnReturn kind == then
         if tc TypeChecker::has_return_types ! then
             true tc TypeChecker::set_has_return_types
-            tc TypeChecker::live TypedStack::types copy_str_list tc TypeChecker::set_return_types
+            tc TypeChecker::live tc TypeChecker::return_types ts_restore
         fi
         if 0 tc TypeChecker::branched_stacks .length != then
-            tc TypeChecker::branched_stacks .length 1 - tc TypeChecker::branched_stacks .get = branched_stack
-            branched_stack BranchedStack::before copy_str_list tc TypeChecker::live TypedStack::set_types
-            branched_stack BranchedStack::before_origins copy_location_list tc TypeChecker::live TypedStack::set_origins
+            tc TypeChecker::branched_stacks .length 1 - tc TypeChecker::branched_stacks .get = top_frame
+            if top_frame BranchFrame::BranchIf(if_ctx) is then
+                if_ctx IfContext::before tc TypeChecker::live ts_restore
+            elif top_frame BranchFrame::BranchWhile(while_ctx) is then
+                while_ctx WhileContext::before tc TypeChecker::live ts_restore
+            elif top_frame BranchFrame::BranchMatch(match_ctx) is then
+                match_ctx MatchContext::before tc TypeChecker::live ts_restore
+            fi
         fi
     fi
     op_index
@@ -1665,286 +1728,287 @@ fn check_match tc:TypeChecker op:Op function_opt:Option[Function] {
     op Op::kind = kind
     if OpKind::OpMatchStart kind == then
         tc stack_pop = match_type
-        tc TypeChecker::live TypedStack::origins tc TypeChecker::live TypedStack::types make_branched_stack = branched
-        match_type branched BranchedStack::set_match_type
-        true branched BranchedStack::set_default_present
-        branched tc TypeChecker::branched_stacks .push
+        match_type make_match_context = match_ctx
+        op Op::location match_ctx MatchContext::set_current_branch_location
+        match_ctx BranchFrame::BranchMatch = match_frame
+        match_frame tc TypeChecker::branched_stacks .push
     elif OpKind::OpMatchArm kind == then
         if 0 tc TypeChecker::branched_stacks .length == then return fi
-        tc TypeChecker::branched_stacks .length 1 - tc TypeChecker::branched_stacks .get = branched_stack
-        branched_stack BranchedStack::match_type = match_subject_type
+        tc TypeChecker::branched_stacks .length 1 - tc TypeChecker::branched_stacks .get = top_frame
+        if top_frame BranchFrame::BranchMatch(match_ctx) is then
+            match_ctx MatchContext::match_type = match_subject_type
 
-        # Determine pattern type from annotation tag set by parser
-        op Op::value = pattern_ptr
-        op Op::type_annotation = pattern_tag
-        "" = covered_key
-        match_subject_type resolve_match_type = arm_base
-        false = is_wildcard
-        false = is_enum_pattern
+            # Determine pattern type from annotation tag set by parser
+            op Op::value = pattern_ptr
+            op Op::type_annotation = pattern_tag
+            "" = covered_key
+            match_subject_type resolve_match_type = arm_base
+            false = is_wildcard
+            false = is_enum_pattern
 
-        if "struct_pattern" pattern_tag == then
-            pattern_ptr (StructPattern) = struct_pat
-            f"__covered:{struct_pat StructPattern::struct_name}" = covered_key
-        elif "literal_pattern" pattern_tag == then
-            pattern_ptr (LiteralPattern) = literal_pat
-            f"__covered:{literal_pat LiteralPattern::raw}" = covered_key
-        else
-            # Enum variant (includes wildcard)
-            pattern_ptr (EnumVariant) = variant
-            true = is_enum_pattern
-            if MATCH_WILDCARD variant EnumVariant::variant_name == then
-                true = is_wildcard
-            fi
-            f"__covered:{variant EnumVariant::variant_name}" = covered_key
-            # Check for bare variant (no enum qualifier)
-            if
-                "" variant EnumVariant::enum_name ==
-                is_wildcard ! &&
-            then
-                arm_base tc.store.enums .get = bare_enum_opt
-                if bare_enum_opt .is_some then
-                    bare_enum_opt .unwrap = bare_enum
-                    variant EnumVariant::variant_name = bare_name
-                    # Check if the bare name is a variant of the matched enum
-                    bare_name bare_enum CasaEnum::variants string_list_index = bare_index
-                    if 0 bare_index >= then
-                        op Op::location f"Unqualified enum variant `{bare_name}`. Did you mean `{arm_base}::{bare_name}`?" ErrorKind::TypeMismatch raise_error
-                    else
-                        op Op::location f"Expected qualified enum variant (e.g. `{arm_base}::{0 bare_enum CasaEnum::variants .get}`) or `_`, got `{bare_name}`" ErrorKind::TypeMismatch raise_error
+            if "struct_pattern" pattern_tag == then
+                pattern_ptr (StructPattern) = struct_pat
+                f"__covered:{struct_pat StructPattern::struct_name}" = covered_key
+            elif "literal_pattern" pattern_tag == then
+                pattern_ptr (LiteralPattern) = literal_pat
+                f"__covered:{literal_pat LiteralPattern::raw}" = covered_key
+            else
+                # Enum variant (includes wildcard)
+                pattern_ptr (EnumVariant) = variant
+                true = is_enum_pattern
+                if MATCH_WILDCARD variant EnumVariant::variant_name == then
+                    true = is_wildcard
+                fi
+                f"__covered:{variant EnumVariant::variant_name}" = covered_key
+                # Check for bare variant (no enum qualifier)
+                if
+                    "" variant EnumVariant::enum_name ==
+                    is_wildcard ! &&
+                then
+                    arm_base tc.store.enums .get = bare_enum_opt
+                    if bare_enum_opt .is_some then
+                        bare_enum_opt .unwrap = bare_enum
+                        variant EnumVariant::variant_name = bare_name
+                        # Check if the bare name is a variant of the matched enum
+                        bare_name bare_enum CasaEnum::variants string_list_index = bare_index
+                        if 0 bare_index >= then
+                            op Op::location f"Unqualified enum variant `{bare_name}`. Did you mean `{arm_base}::{bare_name}`?" ErrorKind::TypeMismatch raise_error
+                        else
+                            op Op::location f"Expected qualified enum variant (e.g. `{arm_base}::{0 bare_enum CasaEnum::variants .get}`) or `_`, got `{bare_name}`" ErrorKind::TypeMismatch raise_error
+                        fi
                     fi
                 fi
             fi
-        fi
 
-        # Check for duplicate arms
-        if "" covered_key != then
-            0 = dup_index
-            while dup_index branched_stack BranchedStack::branch_records .length > do
-                dup_index branched_stack BranchedStack::branch_records .get = record
-                if covered_key record == then
+            # Check for duplicate arms
+            if "" covered_key != then
+                0 = dup_index
+                while dup_index match_ctx MatchContext::branch_records .length > do
+                    dup_index match_ctx MatchContext::branch_records .get = record
+                    if covered_key record == then
+                        op Op::location f"Duplicate match arm for `{covered_key}`" ErrorKind::DuplicateName raise_error
+                    fi
+                    1 += dup_index
+                done
+                if covered_key match_ctx MatchContext::current_branch_label == then
                     op Op::location f"Duplicate match arm for `{covered_key}`" ErrorKind::DuplicateName raise_error
                 fi
-                1 += dup_index
-            done
-            if covered_key branched_stack BranchedStack::current_branch_label == then
-                op Op::location f"Duplicate match arm for `{covered_key}`" ErrorKind::DuplicateName raise_error
             fi
-        fi
 
-        # Handle branch state
-        if branched_stack BranchedStack::condition_present then
-            # Record previous arm
-            if "" branched_stack BranchedStack::current_branch_label != then
-                branched_stack BranchedStack::current_branch_label branched_stack BranchedStack::branch_records .push
-            fi
-            if
-                tc TypeChecker::live TypedStack::types branched_stack BranchedStack::before stacks_equal
-                branched_stack BranchedStack::before branched_stack BranchedStack::after stacks_equal &&
-            then
-                0 drop
-            else
-                tc TypeChecker::live TypedStack::types branched_stack BranchedStack::after stacks_compatible = unified
-                if 0 unified .length != branched_stack BranchedStack::before branched_stack BranchedStack::after stacks_equal ! && then
-                    unified branched_stack BranchedStack::set_after
-                elif branched_stack BranchedStack::before branched_stack BranchedStack::after stacks_equal then
-                    tc TypeChecker::live TypedStack::types copy_str_list branched_stack BranchedStack::set_after
-                    tc TypeChecker::live TypedStack::origins copy_location_list branched_stack BranchedStack::set_after_origins
+            # Handle branch state
+            if match_ctx MatchContext::condition_present then
+                # Record previous arm
+                if "" match_ctx MatchContext::current_branch_label != then
+                    match_ctx MatchContext::current_branch_label match_ctx MatchContext::branch_records .push
+                fi
+                match_ctx MatchContext::before = match_before
+                match_ctx MatchContext::after = match_after
+                if
+                    match_before tc TypeChecker::live ts_equals
+                    match_after match_before ts_equals &&
+                then
+                    0 drop
                 else
-                    op Op::location "Match arms have incompatible stack effects" ErrorKind::StackMismatch add_error
+                    match_after tc TypeChecker::live ts_unify_types = unified
+                    if 0 unified .length != match_after match_before ts_equals ! && then
+                        unified match_after TypedStack::set_types
+                    elif match_after match_before ts_equals then
+                        tc TypeChecker::live match_after ts_restore
+                    else
+                        op Op::location "Match arms have incompatible stack effects" ErrorKind::StackMismatch add_error
+                    fi
                 fi
+                match_before tc TypeChecker::live ts_restore
+            else
+                true match_ctx MatchContext::set_condition_present
+                tc TypeChecker::live match_ctx MatchContext::before ts_restore
+                tc TypeChecker::live match_ctx MatchContext::after ts_restore
             fi
-            branched_stack BranchedStack::before copy_str_list tc TypeChecker::live TypedStack::set_types
-            branched_stack BranchedStack::before_origins copy_location_list tc TypeChecker::live TypedStack::set_origins
-        else
-            true branched_stack BranchedStack::set_condition_present
-            tc TypeChecker::live TypedStack::types copy_str_list branched_stack BranchedStack::set_before
-            tc TypeChecker::live TypedStack::origins copy_location_list branched_stack BranchedStack::set_before_origins
-            tc TypeChecker::live TypedStack::types copy_str_list branched_stack BranchedStack::set_after
-            tc TypeChecker::live TypedStack::origins copy_location_list branched_stack BranchedStack::set_after_origins
-        fi
 
-        # Set types on pattern bindings
-        if "struct_pattern" pattern_tag == then
-            # StructPattern bindings
-            pattern_ptr (StructPattern) = struct_pat2
-            struct_pat2 StructPattern::struct_name tc.store.structs .get .unwrap = matched_struct
-            struct_pat2 StructPattern::bindings .keys = binding_keys
-            0 = binding_index
-            while binding_index binding_keys .length > do
-                binding_index binding_keys .get = field_name
-                field_name struct_pat2 StructPattern::bindings .get .unwrap = bound_var
-                0 = member_index
-                while member_index matched_struct CasaStruct::members .length > do
-                    member_index matched_struct CasaStruct::members .get = member
-                    if field_name member Member::name == then
-                        function_opt member Member::typ bound_var set_binding_type
-                    fi
-                    1 += member_index
-                done
-                1 += binding_index
-            done
-        elif is_enum_pattern is_wildcard ! && then
-            pattern_ptr (EnumVariant) = variant
-            if 0 variant EnumVariant::bindings .length != then
-            # EnumVariant bindings
-            match_subject_type resolve_match_type = base_enum_name
-            base_enum_name tc.store.enums .get = enum_opt
-            if enum_opt .is_some then
-                enum_opt .unwrap = casa_enum
-                variant EnumVariant::variant_name casa_enum CasaEnum::variant_types .get = inner_opt
-                if inner_opt .is_some then
-                    inner_opt .unwrap = inner_types
-                    # Resolve generic type vars from match subject
-                    Map::new (Map[str str]) = type_bindings
-                    if 0 casa_enum CasaEnum::type_vars .length != then
-                        match_subject_type extract_generic_params = params_opt
-                        if params_opt .is_some then
-                            params_opt .unwrap = type_params
-                            0 = type_var_index
-                            while
-                                type_var_index casa_enum CasaEnum::type_vars .length >
-                                type_var_index type_params .length > &&
-                            do
-                                type_var_index casa_enum CasaEnum::type_vars .get type_var_index type_params .get type_bindings .set = type_bindings
-                                1 += type_var_index
-                            done
+            # Set types on pattern bindings
+            if "struct_pattern" pattern_tag == then
+                # StructPattern bindings
+                pattern_ptr (StructPattern) = struct_pat2
+                struct_pat2 StructPattern::struct_name tc.store.structs .get .unwrap = matched_struct
+                struct_pat2 StructPattern::bindings .keys = binding_keys
+                0 = binding_index
+                while binding_index binding_keys .length > do
+                    binding_index binding_keys .get = field_name
+                    field_name struct_pat2 StructPattern::bindings .get .unwrap = bound_var
+                    0 = member_index
+                    while member_index matched_struct CasaStruct::members .length > do
+                        member_index matched_struct CasaStruct::members .get = member
+                        if field_name member Member::name == then
+                            function_opt member Member::typ bound_var set_binding_type
                         fi
-                    fi
-                    0 = bind_index
-                    while
-                        bind_index variant EnumVariant::bindings .length >
-                        bind_index inner_types .length > &&
-                    do
-                        bind_index variant EnumVariant::bindings .get = binding_var
-                        bind_index inner_types .get = binding_type
-                        binding_type type_bindings .get = resolved_opt
-                        if resolved_opt .is_some then
-                            resolved_opt .unwrap = binding_type
-                        fi
-                        function_opt binding_type binding_var set_binding_type
-                        1 += bind_index
+                        1 += member_index
                     done
+                    1 += binding_index
+                done
+            elif is_enum_pattern is_wildcard ! && then
+                pattern_ptr (EnumVariant) = variant
+                if 0 variant EnumVariant::bindings .length != then
+                # EnumVariant bindings
+                match_subject_type resolve_match_type = base_enum_name
+                base_enum_name tc.store.enums .get = enum_opt
+                if enum_opt .is_some then
+                    enum_opt .unwrap = casa_enum
+                    variant EnumVariant::variant_name casa_enum CasaEnum::variant_types .get = inner_opt
+                    if inner_opt .is_some then
+                        inner_opt .unwrap = inner_types
+                        # Resolve generic type vars from match subject
+                        Map::new (Map[str str]) = type_bindings
+                        if 0 casa_enum CasaEnum::type_vars .length != then
+                            match_subject_type extract_generic_params = params_opt
+                            if params_opt .is_some then
+                                params_opt .unwrap = type_params
+                                0 = type_var_index
+                                while
+                                    type_var_index casa_enum CasaEnum::type_vars .length >
+                                    type_var_index type_params .length > &&
+                                do
+                                    type_var_index casa_enum CasaEnum::type_vars .get type_var_index type_params .get type_bindings .set = type_bindings
+                                    1 += type_var_index
+                                done
+                            fi
+                        fi
+                        0 = bind_index
+                        while
+                            bind_index variant EnumVariant::bindings .length >
+                            bind_index inner_types .length > &&
+                        do
+                            bind_index variant EnumVariant::bindings .get = binding_var
+                            bind_index inner_types .get = binding_type
+                            binding_type type_bindings .get = resolved_opt
+                            if resolved_opt .is_some then
+                                resolved_opt .unwrap = binding_type
+                            fi
+                            function_opt binding_type binding_var set_binding_type
+                            1 += bind_index
+                        done
+                    fi
+                fi
                 fi
             fi
-            fi
-        fi
 
-        covered_key branched_stack BranchedStack::set_current_branch_label
-        op Op::location branched_stack BranchedStack::set_current_branch_location
+            covered_key match_ctx MatchContext::set_current_branch_label
+            op Op::location match_ctx MatchContext::set_current_branch_location
+        fi
 
     elif OpKind::OpMatchEnd kind == then
-        tc TypeChecker::branched_stacks .pop = branched_stack
-        # Record last arm label
-        if "" branched_stack BranchedStack::current_branch_label != then
-            branched_stack BranchedStack::current_branch_label branched_stack BranchedStack::branch_records .push
-        fi
-        # Record last arm stack effect (same logic as next-arm recording)
-        if branched_stack BranchedStack::condition_present then
-            if
-                tc TypeChecker::live TypedStack::types branched_stack BranchedStack::before stacks_equal
-                branched_stack BranchedStack::before branched_stack BranchedStack::after stacks_equal &&
-            then
-                0 drop
-            else
-                tc TypeChecker::live TypedStack::types branched_stack BranchedStack::after stacks_compatible = last_unified
-                if 0 last_unified .length != branched_stack BranchedStack::before branched_stack BranchedStack::after stacks_equal ! && then
-                    last_unified branched_stack BranchedStack::set_after
-                elif branched_stack BranchedStack::before branched_stack BranchedStack::after stacks_equal then
-                    tc TypeChecker::live TypedStack::types copy_str_list branched_stack BranchedStack::set_after
-                    tc TypeChecker::live TypedStack::origins copy_location_list branched_stack BranchedStack::set_after_origins
+        tc TypeChecker::branched_stacks .pop = top_frame
+        if top_frame BranchFrame::BranchMatch(match_ctx) is then
+            # Record last arm label
+            if "" match_ctx MatchContext::current_branch_label != then
+                match_ctx MatchContext::current_branch_label match_ctx MatchContext::branch_records .push
+            fi
+            # Record last arm stack effect (same logic as next-arm recording)
+            if match_ctx MatchContext::condition_present then
+                match_ctx MatchContext::before = match_before
+                match_ctx MatchContext::after = match_after
+                if
+                    match_before tc TypeChecker::live ts_equals
+                    match_after match_before ts_equals &&
+                then
+                    0 drop
                 else
-                    op Op::location "Match arms have incompatible stack effects" ErrorKind::StackMismatch add_error
-                fi
-            fi
-            branched_stack BranchedStack::before copy_str_list tc TypeChecker::live TypedStack::set_types
-            branched_stack BranchedStack::before_origins copy_location_list tc TypeChecker::live TypedStack::set_origins
-        fi
-
-        branched_stack BranchedStack::match_type = end_match_type
-        end_match_type resolve_match_type = end_base
-
-        # Build covered set
-        Set::new (Set[str]) = covered_set
-        0 = covered_index
-        while covered_index branched_stack BranchedStack::branch_records .length > do
-            covered_index branched_stack BranchedStack::branch_records .get = record
-            if record "__covered:" str::starts_with then
-                record 10 record .length 10 - str::substring covered_set .add = covered_set
-            fi
-            1 += covered_index
-        done
-        MATCH_WILDCARD covered_set .has = has_wildcard
-
-        # Check exhaustiveness
-        if end_base tc.store.enums .get .is_some has_wildcard ! && then
-            end_base tc.store.enums .get .unwrap = end_enum
-            List::new (List[str]) = missing
-            0 = variant_index
-            while variant_index end_enum CasaEnum::variants .length > do
-                variant_index end_enum CasaEnum::variants .get = variant_name
-                if variant_name covered_set .has ! then
-                    variant_name missing .push
-                fi
-                1 += variant_index
-            done
-            if 0 missing .length != then
-                StringBuilder::new = missing_builder
-                0 = missing_index
-                while missing_index missing .length > do
-                    if 0 missing_index != then ", " missing_builder .append fi
-                    f"`{end_base}::{missing_index missing .get}`" missing_builder .append
-                    1 += missing_index
-                done
-                op Op::location f"Non-exhaustive match, missing arms: {missing_builder .build}" ErrorKind::TypeMismatch raise_error
-            fi
-        fi
-        if end_base tc.store.structs .get .is_some has_wildcard ! && then
-            if end_base covered_set .has ! then
-                op Op::location f"Non-exhaustive match on struct `{end_match_type}`" ErrorKind::TypeMismatch raise_error
-            fi
-        fi
-        # Literal exhaustiveness
-        if
-            "bool" end_base ==
-            "int" end_base == ||
-            "char" end_base == ||
-            "str" end_base == ||
-        then
-            if has_wildcard ! then
-                if "bool" end_base == then
-                    List::new (List[str]) = bool_missing
-                    if "true" covered_set .has ! then "true" bool_missing .push fi
-                    if "false" covered_set .has ! then "false" bool_missing .push fi
-                    if 0 bool_missing .length != then
-                        op Op::location "Non-exhaustive match on `bool`" ErrorKind::TypeMismatch raise_error
+                    match_after tc TypeChecker::live ts_unify_types = last_unified
+                    if 0 last_unified .length != match_after match_before ts_equals ! && then
+                        last_unified match_after TypedStack::set_types
+                    elif match_after match_before ts_equals then
+                        tc TypeChecker::live match_after ts_restore
+                    else
+                        op Op::location "Match arms have incompatible stack effects" ErrorKind::StackMismatch add_error
                     fi
-                else
-                    op Op::location f"Non-exhaustive match on type `{end_base}`. A wildcard `_` arm is required" ErrorKind::TypeMismatch raise_error
+                fi
+                match_before tc TypeChecker::live ts_restore
+            fi
+
+            match_ctx MatchContext::match_type = end_match_type
+            end_match_type resolve_match_type = end_base
+
+            # Build covered set
+            Set::new (Set[str]) = covered_set
+            0 = covered_index
+            while covered_index match_ctx MatchContext::branch_records .length > do
+                covered_index match_ctx MatchContext::branch_records .get = record
+                if record "__covered:" str::starts_with then
+                    record 10 record .length 10 - str::substring covered_set .add = covered_set
+                fi
+                1 += covered_index
+            done
+            MATCH_WILDCARD covered_set .has = has_wildcard
+
+            # Check exhaustiveness
+            if end_base tc.store.enums .get .is_some has_wildcard ! && then
+                end_base tc.store.enums .get .unwrap = end_enum
+                List::new (List[str]) = missing
+                0 = variant_index
+                while variant_index end_enum CasaEnum::variants .length > do
+                    variant_index end_enum CasaEnum::variants .get = variant_name
+                    if variant_name covered_set .has ! then
+                        variant_name missing .push
+                    fi
+                    1 += variant_index
+                done
+                if 0 missing .length != then
+                    StringBuilder::new = missing_builder
+                    0 = missing_index
+                    while missing_index missing .length > do
+                        if 0 missing_index != then ", " missing_builder .append fi
+                        f"`{end_base}::{missing_index missing .get}`" missing_builder .append
+                        1 += missing_index
+                    done
+                    op Op::location f"Non-exhaustive match, missing arms: {missing_builder .build}" ErrorKind::TypeMismatch raise_error
                 fi
             fi
-        fi
+            if end_base tc.store.structs .get .is_some has_wildcard ! && then
+                if end_base covered_set .has ! then
+                    op Op::location f"Non-exhaustive match on struct `{end_match_type}`" ErrorKind::TypeMismatch raise_error
+                fi
+            fi
+            # Literal exhaustiveness
+            if
+                "bool" end_base ==
+                "int" end_base == ||
+                "char" end_base == ||
+                "str" end_base == ||
+            then
+                if has_wildcard ! then
+                    if "bool" end_base == then
+                        List::new (List[str]) = bool_missing
+                        if "true" covered_set .has ! then "true" bool_missing .push fi
+                        if "false" covered_set .has ! then "false" bool_missing .push fi
+                        if 0 bool_missing .length != then
+                            op Op::location "Non-exhaustive match on `bool`" ErrorKind::TypeMismatch raise_error
+                        fi
+                    else
+                        op Op::location f"Non-exhaustive match on type `{end_base}`. A wildcard `_` arm is required" ErrorKind::TypeMismatch raise_error
+                    fi
+                fi
+            fi
 
-        # Apply final stack state
-        branched_stack BranchedStack::before = before
-        branched_stack BranchedStack::after = after
-        # When stack == before and before == after, nothing changed
-        if tc TypeChecker::live TypedStack::types before stacks_equal before after stacks_equal && then
-            return
+            # Apply final stack state
+            match_ctx MatchContext::before = final_before
+            match_ctx MatchContext::after = final_after
+            # When stack == before and before == after, nothing changed
+            if final_before tc TypeChecker::live ts_equals final_after final_before ts_equals && then
+                return
+            fi
+            # When stack == before but after differs (e.g. wildcard-only match),
+            # accept the after state directly
+            if final_before tc TypeChecker::live ts_equals final_after final_before ts_equals ! && then
+                final_after tc TypeChecker::live ts_restore
+                return
+            fi
+            final_after tc TypeChecker::live ts_unify_types = unified
+            if 0 unified .length != then
+                final_after tc TypeChecker::live ts_restore
+                unified tc TypeChecker::live TypedStack::set_types
+                return
+            fi
+            op Op::location "Match arms have incompatible stack effects" ErrorKind::StackMismatch add_error
         fi
-        # When stack == before but after differs (e.g. wildcard-only match),
-        # accept the after state directly
-        if tc TypeChecker::live TypedStack::types before stacks_equal before after stacks_equal ! && then
-            after tc TypeChecker::live TypedStack::set_types
-            branched_stack BranchedStack::after_origins copy_location_list tc TypeChecker::live TypedStack::set_origins
-            return
-        fi
-        tc TypeChecker::live TypedStack::types after stacks_compatible = unified
-        if 0 unified .length != then
-            unified tc TypeChecker::live TypedStack::set_types
-            branched_stack BranchedStack::after_origins copy_location_list tc TypeChecker::live TypedStack::set_origins
-            return
-        fi
-        op Op::location "Match arms have incompatible stack effects" ErrorKind::StackMismatch add_error
     fi
 }
 
