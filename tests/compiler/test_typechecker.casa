@@ -110,6 +110,24 @@ fn tc_check ops:List[Op] -> TypeChecker {
             "int" helper_tc stack_push
         elif OpKind::OpArgv helper_kind == then
             "ptr" helper_tc stack_push
+        # Branch ops — routed to real handlers so tests can exercise the
+        # BranchFrame sum type and the if/while/match branch algebra.
+        elif
+            OpKind::OpIfStart helper_kind ==
+            OpKind::OpIfCondition helper_kind == ||
+            OpKind::OpIfElif helper_kind == ||
+            OpKind::OpIfElse helper_kind == ||
+            OpKind::OpIfEnd helper_kind == ||
+        then
+            helper_op helper_tc check_if_block
+        elif
+            OpKind::OpWhileStart helper_kind ==
+            OpKind::OpWhileCondition helper_kind == ||
+            OpKind::OpWhileBreak helper_kind == ||
+            OpKind::OpWhileContinue helper_kind == ||
+            OpKind::OpWhileEnd helper_kind == ||
+        then
+            helper_op helper_tc check_while_block
         fi
 
         1 += helper_i
@@ -1580,6 +1598,157 @@ fn test_error_str_lt_comparison {
 }
 
 # ============================================================================
+# Tests: Branch frame machinery (RFC #81)
+# ============================================================================
+
+# An `if true then fi` block with an empty body leaves the live stack unchanged
+# and pops the BranchIf frame cleanly.
+fn test_branch_if_empty_body {
+    "branch_if_empty_body" test_start
+    List::new (List[Op]) = ops
+    empty_location OpKind::OpIfStart 0 make_op ops .push
+    empty_location OpKind::OpPushBool 1 make_op ops .push
+    empty_location OpKind::OpIfCondition 0 make_op ops .push
+    empty_location OpKind::OpIfEnd 0 make_op ops .push
+    ops tc_check = result_tc
+    "live empty after empty if" 0 result_tc TypeChecker::live TypedStack::types .length assert_eq
+    "frame stack empty" 0 result_tc TypeChecker::branched_stacks .length assert_eq
+}
+
+# `if cond then push_int else push_int fi` unifies to a single `int` on the live stack.
+fn test_branch_if_else_agree_int {
+    "branch_if_else_agree_int" test_start
+    List::new (List[Op]) = ops
+    empty_location OpKind::OpIfStart 0 make_op ops .push
+    empty_location OpKind::OpPushBool 1 make_op ops .push
+    empty_location OpKind::OpIfCondition 0 make_op ops .push
+    empty_location OpKind::OpPushInt 10 make_op ops .push
+    empty_location OpKind::OpIfElse 0 make_op ops .push
+    empty_location OpKind::OpPushInt 20 make_op ops .push
+    empty_location OpKind::OpIfEnd 0 make_op ops .push
+    ops tc_check = result_tc
+    "live has one item" 1 result_tc TypeChecker::live TypedStack::types .length assert_eq
+    "unified type is int" "int" 0 result_tc TypeChecker::live TypedStack::types .get assert_str_eq
+    "frame stack empty" 0 result_tc TypeChecker::branched_stacks .length assert_eq
+}
+
+# OpIfEnd must pop the BranchFrame from branched_stacks.
+fn test_branch_if_end_pops_frame {
+    "branch_if_end_pops_frame" test_start
+    List::new (List[Op]) = ops
+    empty_location OpKind::OpIfStart 0 make_op ops .push
+    empty_location OpKind::OpPushBool 1 make_op ops .push
+    empty_location OpKind::OpIfCondition 0 make_op ops .push
+    ops tc_check = result_tc
+    "frame pushed on OpIfStart" 1 result_tc TypeChecker::branched_stacks .length assert_eq
+    # Close the block
+    List::new (List[Op]) = close_ops
+    empty_location OpKind::OpIfEnd 0 make_op close_ops .push
+    0 = ci
+    while ci close_ops .length > do
+        ci close_ops .get result_tc check_if_block
+        1 += ci
+    done
+    "frame popped on OpIfEnd" 0 result_tc TypeChecker::branched_stacks .length assert_eq
+}
+
+# A `while cond do done` with an empty body pushes and pops a BranchWhile frame.
+fn test_branch_while_empty_body {
+    "branch_while_empty_body" test_start
+    List::new (List[Op]) = ops
+    empty_location OpKind::OpWhileStart 0 make_op ops .push
+    empty_location OpKind::OpPushBool 0 make_op ops .push
+    empty_location OpKind::OpWhileCondition 0 make_op ops .push
+    empty_location OpKind::OpWhileEnd 0 make_op ops .push
+    ops tc_check = result_tc
+    "live empty" 0 result_tc TypeChecker::live TypedStack::types .length assert_eq
+    "frame stack empty" 0 result_tc TypeChecker::branched_stacks .length assert_eq
+}
+
+# Direct exercise of the BranchFrame sum type: confirm that the top frame
+# destructures to the right variant and that mutation through the binding
+# persists on the frame stored in branched_stacks.
+fn test_branch_frame_kind_dispatch {
+    "branch_frame_kind_dispatch" test_start
+    make_typechecker = tc
+    List::new (List[Op]) = ops
+    empty_location OpKind::OpIfStart 0 make_op ops .push
+    0 = bd_i
+    while bd_i ops .length > do
+        bd_i ops .get tc check_if_block
+        1 += bd_i
+    done
+    "pushed BranchIf frame" 1 tc TypeChecker::branched_stacks .length assert_eq
+    tc TypeChecker::branched_stacks .length 1 - tc TypeChecker::branched_stacks .get = top_frame
+    false = is_if
+    false = is_while
+    false = is_match
+    if top_frame BranchFrame::BranchIf(bd_if_ctx) is then
+        true = is_if
+        # Mutate through the destructure binding — mutation must persist.
+        true bd_if_ctx IfContext::set_default_present
+    fi
+    if top_frame BranchFrame::BranchWhile(bd_while_ctx) is then
+        true = is_while
+    fi
+    if top_frame BranchFrame::BranchMatch(bd_match_ctx) is then
+        true = is_match
+    fi
+    "top frame is BranchIf" is_if assert_true
+    "top frame is not BranchWhile" is_while assert_false
+    "top frame is not BranchMatch" is_match assert_false
+    # Re-destructure to verify mutation persisted.
+    tc TypeChecker::branched_stacks .length 1 - tc TypeChecker::branched_stacks .get = top_frame2
+    false = default_present_after
+    if top_frame2 BranchFrame::BranchIf(bd_if_ctx2) is then
+        bd_if_ctx2 IfContext::default_present = default_present_after
+    fi
+    "mutation persists through binding" default_present_after assert_true
+}
+
+# OpFnReturn inside a branch restores live from the frame's `before` snapshot.
+fn test_branch_return_inside_if_restores_live {
+    "branch_return_inside_if_restores_live" test_start
+    make_typechecker = tc
+    # Seed the live stack with a single `int`.
+    "int" tc stack_push
+    # Begin an `if true then` block.
+    List::new (List[Op]) = begin_ops
+    empty_location OpKind::OpIfStart 0 make_op begin_ops .push
+    empty_location OpKind::OpPushBool 1 make_op begin_ops .push
+    empty_location OpKind::OpIfCondition 0 make_op begin_ops .push
+    0 = br_i
+    while br_i begin_ops .length > do
+        br_i begin_ops .get = br_op
+        br_op Op::kind = br_kind
+        if
+            OpKind::OpIfStart br_kind ==
+            OpKind::OpIfCondition br_kind == ||
+        then
+            br_op tc check_if_block
+        elif OpKind::OpPushBool br_kind == then
+            "bool" tc stack_push
+        fi
+        1 += br_i
+    done
+    # Body modifies the stack by pushing an extra `str`.
+    "str" tc stack_push
+    "stack grew inside branch" 2 tc TypeChecker::live TypedStack::types .length assert_eq
+    # Simulate OpFnReturn: first visit snapshots live into return_types, then
+    # restores live from the top frame's before snapshot.
+    "has_return_types starts false" tc TypeChecker::has_return_types assert_false
+    tc TypeChecker::live tc TypeChecker::return_types ts_restore
+    true tc TypeChecker::set_has_return_types
+    tc TypeChecker::branched_stacks .length 1 - tc TypeChecker::branched_stacks .get = ret_frame
+    if ret_frame BranchFrame::BranchIf(ret_if_ctx) is then
+        ret_if_ctx IfContext::before tc TypeChecker::live ts_restore
+    fi
+    "live restored to pre-branch state" 1 tc TypeChecker::live TypedStack::types .length assert_eq
+    "restored type is int" "int" 0 tc TypeChecker::live TypedStack::types .get assert_str_eq
+    "return_types snapshot captured full state" 2 tc TypeChecker::return_types TypedStack::types .length assert_eq
+}
+
+# ============================================================================
 # Run all tests
 # ============================================================================
 
@@ -1689,4 +1858,10 @@ test_type_cast_bool_to_int
 test_tc_pipeline_str_equality
 test_error_comparison_str_lt_int
 test_error_str_lt_comparison
+test_branch_if_empty_body
+test_branch_if_else_agree_int
+test_branch_if_end_pops_frame
+test_branch_while_empty_body
+test_branch_frame_kind_dispatch
+test_branch_return_inside_if_restores_live
 test_summary
