@@ -4,24 +4,26 @@
 # common.casa, error.casa, and lexer.casa.
 
 # ============================================================================
-# Global state
+# Parser struct and shared state
+#
+# `Parser` owns the `SymbolStore` plus parser-private `included_files`. A
+# single default parser is constructed at module load; the compiler entry
+# point and tests reuse it via `DEFAULT_PARSER`.
 # ============================================================================
 
-Map::new (Map[str Function]) = GLOBAL_FUNCTIONS
-Map::new (Map[str Variable]) = GLOBAL_VARIABLES
-Map::new (Map[str CasaEnum]) = GLOBAL_ENUMS
-Map::new (Map[str CasaStruct]) = GLOBAL_STRUCTS
-Map::new (Map[str CasaTrait]) = GLOBAL_TRAITS
-Set::new (Set[str]) = INCLUDED_FILES
-Set::new (Set[str]) = BUILTIN_TYPES
-"int" BUILTIN_TYPES .add = BUILTIN_TYPES
-"bool" BUILTIN_TYPES .add = BUILTIN_TYPES
-"str" BUILTIN_TYPES .add = BUILTIN_TYPES
-"char" BUILTIN_TYPES .add = BUILTIN_TYPES
-"cstr" BUILTIN_TYPES .add = BUILTIN_TYPES
-"ptr" BUILTIN_TYPES .add = BUILTIN_TYPES
-"array" BUILTIN_TYPES .add = BUILTIN_TYPES
-"any" BUILTIN_TYPES .add = BUILTIN_TYPES
+struct Parser {
+    store:          SymbolStore
+    included_files: Set[str]
+}
+
+fn make_parser store:SymbolStore -> Parser {
+    Set::new (Set[str])
+    store
+    Parser
+}
+
+symbol_store_new = DEFAULT_STORE
+DEFAULT_STORE make_parser = DEFAULT_PARSER
 
 # ============================================================================
 # Simple keyword -> OpKind mapping
@@ -418,7 +420,7 @@ fn get_op_array cursor:TokenCursor -> Op {
 # parse_block_ops - parse { ... } delimited block
 # ============================================================================
 
-fn parse_block_ops cursor:TokenCursor function_name:str -> List[Op] {
+fn parse_block_ops parser:Parser cursor:TokenCursor function_name:str -> List[Op] {
     "{" cursor expect_token_value = open_token
     List::new (List[Op]) = ops
     while true do
@@ -431,10 +433,10 @@ fn parse_block_ops cursor:TokenCursor function_name:str -> List[Op] {
             ops return
         fi
         if TokenKind::FstringStart token Token::kind == then
-            ops function_name cursor token handle_fstring
+            ops function_name cursor token parser handle_fstring
             continue
         fi
-        ops function_name cursor token token_to_op
+        ops function_name cursor token parser token_to_op
     done
     ops
 }
@@ -443,7 +445,7 @@ fn parse_block_ops cursor:TokenCursor function_name:str -> List[Op] {
 # handle_fstring - parse f-string tokens into ops
 # ============================================================================
 
-fn parse_fstring_expr cursor:TokenCursor function_name:str -> List[Op] {
+fn parse_fstring_expr parser:Parser cursor:TokenCursor function_name:str -> List[Op] {
     List::new (List[Op]) = ops
     while true do
         cursor tc_pop = token_opt
@@ -453,15 +455,15 @@ fn parse_fstring_expr cursor:TokenCursor function_name:str -> List[Op] {
             break
         fi
         if TokenKind::FstringStart token Token::kind == then
-            ops function_name cursor token handle_fstring
+            ops function_name cursor token parser handle_fstring
             continue
         fi
-        ops function_name cursor token token_to_op
+        ops function_name cursor token parser token_to_op
     done
     ops
 }
 
-fn handle_fstring start_token:Token cursor:TokenCursor function_name:str ops:List[Op] {
+fn handle_fstring parser:Parser start_token:Token cursor:TokenCursor function_name:str ops:List[Op] {
     0 = part_count
     while true do
         cursor tc_pop = token_opt
@@ -471,10 +473,10 @@ fn handle_fstring start_token:Token cursor:TokenCursor function_name:str ops:Lis
             token Token::location OpKind::OpPushStr token Token::value make_op_str ops .push
             1 += part_count
         elif TokenKind::FstringExprStart token Token::kind == then
-            function_name cursor parse_fstring_expr = expr_ops
+            function_name cursor parser parse_fstring_expr = expr_ops
             f"lambda__{function_name}_o{token Token::location Location::span Span::offset}" = lambda_name
             token Token::location expr_ops lambda_name make_function = lambda_function
-            lambda_name lambda_function GLOBAL_FUNCTIONS .set = GLOBAL_FUNCTIONS
+            lambda_name lambda_function parser.store.functions .set drop
             token Token::location OpKind::OpFnPush lambda_name make_op_str ops .push
             token Token::location OpKind::OpFnExec 0 make_op ops .push
             token Token::location OpKind::OpFstringToStr "" make_op_str ops .push
@@ -496,7 +498,7 @@ fn handle_fstring start_token:Token cursor:TokenCursor function_name:str ops:Lis
 # get_op_delimiter - convert delimiter token to op
 # ============================================================================
 
-fn get_op_delimiter token:Token cursor:TokenCursor function_name:str ops:List[Op] {
+fn get_op_delimiter parser:Parser token:Token cursor:TokenCursor function_name:str ops:List[Op] {
     token Token::value = value
 
     # Arrow -> set_field
@@ -517,10 +519,10 @@ fn get_op_delimiter token:Token cursor:TokenCursor function_name:str ops:List[Op
     # Open brace { -> lambda
     if "{" value == then
         cursor tc_retreat
-        function_name cursor parse_block_ops = lambda_ops
+        function_name cursor parser parse_block_ops = lambda_ops
         f"lambda__{function_name}_o{token Token::location Location::span Span::offset}" = lambda_name
         token Token::location lambda_ops lambda_name make_function = lambda_function
-        lambda_name lambda_function GLOBAL_FUNCTIONS .set = GLOBAL_FUNCTIONS
+        lambda_name lambda_function parser.store.functions .set drop
         token Token::location OpKind::OpFnPush lambda_name make_op_str ops .push
         return
     fi
@@ -688,7 +690,7 @@ fn parse_bound_type_args cursor:TokenCursor trait_token:Token -> List[str] {
     bound_args
 }
 
-fn parse_type_vars cursor:TokenCursor -> List[str] {
+fn parse_type_vars parser:Parser cursor:TokenCursor -> List[str] {
     "[" cursor expect_token_value drop
     List::new (List[str]) = vars
     Set::new (Set[str]) = seen
@@ -708,7 +710,7 @@ fn parse_type_vars cursor:TokenCursor -> List[str] {
         fi
         if "," token Token::value == then continue fi
         if TokenKind::Identifier token Token::kind == then
-            if token Token::value BUILTIN_TYPES .has then
+            if token Token::value parser.store.builtins .has then
                 token Token::location f"Type variable `{token Token::value}` shadows built-in type" ErrorKind::DuplicateName raise_error
             fi
             if token Token::value seen .has then
@@ -723,7 +725,7 @@ fn parse_type_vars cursor:TokenCursor -> List[str] {
                     cursor tc_pop drop  # consume :
                     TokenKind::Identifier cursor expect_token_kind = trait_token
                     trait_token Token::value = bound_trait_name
-                    bound_trait_name GLOBAL_TRAITS .get = bound_trait_def_opt
+                    bound_trait_name parser.store.traits .get = bound_trait_def_opt
                     if bound_trait_def_opt .is_none then
                         trait_token Token::location f"Trait `{bound_trait_name}` is not defined" ErrorKind::UndefinedName raise_error
                     fi
@@ -839,16 +841,16 @@ fn parse_signature cursor:TokenCursor -> Signature {
 # Walks the given trait bounds and returns a flat list of (var_name, fn_type)
 # pairs describing each hidden `__trait_{type_var}_{method}` parameter that
 # must be injected. Used by both parse_function and inject_impl_trait_params.
-# Bounds whose trait is not registered in GLOBAL_TRAITS are silently skipped,
+# Bounds whose trait is not registered in the store are silently skipped,
 # matching the pre-extraction behavior of both call sites.
-fn build_hidden_trait_methods trait_bounds:Map[str TraitBound] -> List[HiddenTraitMethod] {
+fn build_hidden_trait_methods parser:Parser trait_bounds:Map[str TraitBound] -> List[HiddenTraitMethod] {
     List::new (List[HiddenTraitMethod]) = result
     trait_bounds .keys = bound_keys
     0 = bound_index
     while bound_index bound_keys .length > do
         bound_index bound_keys .get = bound_type_var
         bound_type_var trait_bounds .get .unwrap = bound
-        bound TraitBound::name GLOBAL_TRAITS .get = bound_trait_opt
+        bound TraitBound::name parser.store.traits .get = bound_trait_opt
         if bound_trait_opt .is_some then
             bound_trait_opt .unwrap = bound_trait
             # Build substitution map from trait's declared type_params to the
@@ -882,7 +884,7 @@ fn build_hidden_trait_methods trait_bounds:Map[str TraitBound] -> List[HiddenTra
 # parse_function - parse function definition
 # ============================================================================
 
-fn parse_function cursor:TokenCursor -> Function {
+fn parse_function parser:Parser cursor:TokenCursor -> Function {
     "fn" cursor expect_token_value drop
     TokenKind::Identifier cursor expect_token_kind = name_token
 
@@ -891,7 +893,7 @@ fn parse_function cursor:TokenCursor -> Function {
     cursor tc_peek = tvars_opt
     if tvars_opt .is_some then
         if "[" tvars_opt .unwrap Token::value == then
-            cursor parse_type_vars = type_vars
+            cursor parser parse_type_vars = type_vars
         fi
     fi
 
@@ -914,7 +916,7 @@ fn parse_function cursor:TokenCursor -> Function {
     # Inject hidden __trait_* parameters for trait-bounded type vars
     if 0 sig Signature::trait_bounds .keys .length != then
         List::new (List[Parameter]) = hidden_params
-        sig Signature::trait_bounds build_hidden_trait_methods = hidden_methods
+        sig Signature::trait_bounds parser build_hidden_trait_methods = hidden_methods
         0 = hidden_index
         while hidden_index hidden_methods .length > do
             hidden_index hidden_methods .get = hidden
@@ -947,7 +949,7 @@ fn parse_function cursor:TokenCursor -> Function {
         1 += param_iter
     done
 
-    name_token Token::value cursor parse_block_ops = body_ops
+    name_token Token::value cursor parser parse_block_ops = body_ops
     0 = body_index
     while body_index body_ops .length > do
         body_index body_ops .get ops .push
@@ -963,7 +965,7 @@ fn parse_function cursor:TokenCursor -> Function {
 # parse_enum - parse enum definition
 # ============================================================================
 
-fn parse_enum cursor:TokenCursor -> CasaEnum {
+fn parse_enum parser:Parser cursor:TokenCursor -> CasaEnum {
     "enum" cursor expect_token_value drop
     TokenKind::Identifier cursor expect_token_kind = name_token
 
@@ -972,7 +974,7 @@ fn parse_enum cursor:TokenCursor -> CasaEnum {
     cursor tc_peek = tvars_opt
     if tvars_opt .is_some then
         if "[" tvars_opt .unwrap Token::value == then
-            cursor parse_type_vars = type_vars
+            cursor parser parse_type_vars = type_vars
         fi
     fi
 
@@ -1029,7 +1031,7 @@ fn parse_enum cursor:TokenCursor -> CasaEnum {
 # _create_member_accessor - create getter/setter for struct members
 # ============================================================================
 
-fn create_member_accessor struct_name:str member_name:str member_type:str member_index:int location:Location type_vars:List[str] {
+fn create_member_accessor parser:Parser struct_name:str member_name:str member_type:str member_index:int location:Location type_vars:List[str] {
     member_index 8 * = offset
 
     # Parameterize the struct name when the struct has type vars
@@ -1061,10 +1063,10 @@ fn create_member_accessor struct_name:str member_name:str member_type:str member
     sig_type_vars getter_sig Signature::set_type_vars
     getter_sig location getter_ops getter_name make_function_with_sig = getter
 
-    if getter_name GLOBAL_FUNCTIONS .get .is_some then
+    if getter_name parser.store.functions .get .is_some then
         location f"Function `{getter_name}` is already defined" ErrorKind::DuplicateName raise_error
     fi
-    getter_name getter GLOBAL_FUNCTIONS .set = GLOBAL_FUNCTIONS
+    getter_name getter parser.store.functions .set drop
 
     # Setter
     f"{struct_name}::set_{member_name}" = setter_name
@@ -1082,17 +1084,17 @@ fn create_member_accessor struct_name:str member_name:str member_type:str member
     sig_type_vars setter_sig Signature::set_type_vars
     setter_sig location setter_ops setter_name make_function_with_sig = setter
 
-    if setter_name GLOBAL_FUNCTIONS .get .is_some then
+    if setter_name parser.store.functions .get .is_some then
         location f"Function `{setter_name}` is already defined" ErrorKind::DuplicateName raise_error
     fi
-    setter_name setter GLOBAL_FUNCTIONS .set = GLOBAL_FUNCTIONS
+    setter_name setter parser.store.functions .set drop
 }
 
 # ============================================================================
 # parse_struct - parse struct definition
 # ============================================================================
 
-fn parse_struct cursor:TokenCursor -> CasaStruct {
+fn parse_struct parser:Parser cursor:TokenCursor -> CasaStruct {
     "struct" cursor expect_token_value drop
     TokenKind::Identifier cursor expect_token_kind = name_token
 
@@ -1101,7 +1103,7 @@ fn parse_struct cursor:TokenCursor -> CasaStruct {
     cursor tc_peek = tvars_opt
     if tvars_opt .is_some then
         if "[" tvars_opt .unwrap Token::value == then
-            cursor parse_type_vars = type_vars
+            cursor parser parse_type_vars = type_vars
             # Trait bounds are not allowed on struct definitions
             if 0 LAST_TRAIT_BOUNDS .keys .length != then
                 name_token Token::location "Trait bounds are not allowed on struct definitions. Use `impl[K: Bound] StructName[K]` instead" ErrorKind::UnexpectedToken raise_error
@@ -1121,7 +1123,7 @@ fn parse_struct cursor:TokenCursor -> CasaStruct {
         ":" cursor expect_token_value drop
         cursor parse_type = member_type
 
-        type_vars member_token Token::location members .length member_type member_token Token::value name_token Token::value create_member_accessor
+        type_vars member_token Token::location members .length member_type member_token Token::value name_token Token::value parser create_member_accessor
         member_type member_token Token::value Member members .push
     done
 
@@ -1248,7 +1250,7 @@ fn parse_trait cursor:TokenCursor -> CasaTrait {
 # parse_impl_block - parse impl Type { fn methods... }
 # ============================================================================
 
-fn inject_impl_trait_params function:Function type_vars:List[str] trait_bounds:Map[str TraitBound] {
+fn inject_impl_trait_params parser:Parser function:Function type_vars:List[str] trait_bounds:Map[str TraitBound] {
     function Function::signature = sig
 
     # Merge type vars into function signature
@@ -1275,7 +1277,7 @@ fn inject_impl_trait_params function:Function type_vars:List[str] trait_bounds:M
     # Inject hidden __trait_* parameters
     List::new (List[Parameter]) = hidden_params
     0 = insert_pos
-    sig Signature::trait_bounds build_hidden_trait_methods = hidden_methods
+    sig Signature::trait_bounds parser build_hidden_trait_methods = hidden_methods
     0 = hidden_index
     while hidden_index hidden_methods .length > do
         hidden_index hidden_methods .get = hidden
@@ -1300,7 +1302,7 @@ fn inject_impl_trait_params function:Function type_vars:List[str] trait_bounds:M
     fi
 }
 
-fn parse_impl_block cursor:TokenCursor {
+fn parse_impl_block parser:Parser cursor:TokenCursor {
     "impl" cursor expect_token_value drop
 
     # Parse optional type parameters with trait bounds
@@ -1309,7 +1311,7 @@ fn parse_impl_block cursor:TokenCursor {
     cursor tc_peek = tvars_opt
     if tvars_opt .is_some then
         if "[" tvars_opt .unwrap Token::value == then
-            cursor parse_type_vars = type_vars
+            cursor parser parse_type_vars = type_vars
             LAST_TRAIT_BOUNDS = trait_bounds
         fi
     fi
@@ -1329,17 +1331,17 @@ fn parse_impl_block cursor:TokenCursor {
         cursor tc_peek = fn_opt
         if fn_opt .is_none then break fi
         if "fn" fn_opt .unwrap Token::value != then break fi
-        cursor parse_function = function
+        cursor parser parse_function = function
         f"{base_type}::{function Function::name}" = fn_name
         fn_name function Function::set_name
         # Merge inherited type vars and trait bounds from impl block
         if 0 type_vars .length != then
-            trait_bounds type_vars function inject_impl_trait_params
+            trait_bounds type_vars function parser inject_impl_trait_params
         fi
-        if fn_name GLOBAL_FUNCTIONS .get .is_some then
+        if fn_name parser.store.functions .get .is_some then
             function Function::location f"Identifier `{fn_name}` is already defined" ErrorKind::DuplicateName raise_error
         fi
-        fn_name function GLOBAL_FUNCTIONS .set = GLOBAL_FUNCTIONS
+        fn_name function parser.store.functions .set drop
     done
     "}" cursor expect_token_value drop
 }
@@ -1354,7 +1356,7 @@ fn token_line token:Token -> int {
     token Token::location Location::span Span::offset source_opt .unwrap offset_to_line_col
 }
 
-fn is_match_arm_boundary cursor:TokenCursor -> bool {
+fn is_match_arm_boundary parser:Parser cursor:TokenCursor -> bool {
     cursor TokenCursor::pos = pos
     cursor TokenCursor::tokens = token_list
     if pos 1 + token_list .length < then false return fi
@@ -1373,7 +1375,7 @@ fn is_match_arm_boundary cursor:TokenCursor -> bool {
     # Identifier =>
     if "=>" next_token Token::value == then true return fi
     # StructName { ... } =>
-    if "{" next_token Token::value == token Token::value GLOBAL_STRUCTS .get .is_some && then
+    if "{" next_token Token::value == token Token::value parser.store.structs .get .is_some && then
         true return
     fi
     # EnumName::Variant(bindings) => pattern
@@ -1397,9 +1399,9 @@ fn is_match_arm_boundary cursor:TokenCursor -> bool {
     false
 }
 
-fn parse_struct_match_pattern name_token:Token cursor:TokenCursor -> StructPattern {
+fn parse_struct_match_pattern parser:Parser name_token:Token cursor:TokenCursor -> StructPattern {
     "{" cursor expect_token_value drop
-    name_token Token::value GLOBAL_STRUCTS .get = struct_opt
+    name_token Token::value parser.store.structs .get = struct_opt
     if struct_opt .is_none then
         name_token Token::location f"Struct `{name_token Token::value}` is not defined" ErrorKind::UndefinedName raise_error
     fi
@@ -1449,7 +1451,7 @@ fn parse_literal_match_pattern token:Token -> LiteralPattern {
     "" "int" 0 LiteralPattern
 }
 
-fn handle_keyword_match token:Token cursor:TokenCursor function_name:str -> List[Op] {
+fn handle_keyword_match parser:Parser token:Token cursor:TokenCursor function_name:str -> List[Op] {
     List::new (List[Op]) = ops
     token Token::location OpKind::OpMatchStart 0 make_op ops .push
 
@@ -1476,7 +1478,7 @@ fn handle_keyword_match token:Token cursor:TokenCursor function_name:str -> List
             arm_token Token::location "Expected match pattern or `_`" ErrorKind::UnexpectedToken raise_error
         elif cursor tc_peek .is_some "{" cursor tc_peek .unwrap Token::value == && then
             # Struct pattern
-            cursor arm_token parse_struct_match_pattern = struct_pattern
+            cursor arm_token parser parse_struct_match_pattern = struct_pattern
             "struct_pattern" arm_token Token::location OpKind::OpMatchArm struct_pattern (int) make_op_annotated ops .push
         elif arm_token Token::value "::" str::find 0 > then
             # Bare identifier
@@ -1517,7 +1519,7 @@ fn handle_keyword_match token:Token cursor:TokenCursor function_name:str -> List
         # Parse arm body
         cursor tc_peek = body_peek
         if body_peek .is_some "{" body_peek .unwrap Token::value == && then
-            function_name cursor parse_block_ops = block_ops
+            function_name cursor parser parse_block_ops = block_ops
             0 = block_index
             while block_index block_ops .length > do
                 block_index block_ops .get ops .push
@@ -1526,7 +1528,7 @@ fn handle_keyword_match token:Token cursor:TokenCursor function_name:str -> List
         else
             # Single-line arm body
             while cursor tc_is_finished ! do
-                if cursor is_match_arm_boundary then break fi
+                if cursor parser is_match_arm_boundary then break fi
                 cursor tc_peek = end_peek
                 if end_peek .is_some "end" end_peek .unwrap Token::value == && then
                     break
@@ -1535,10 +1537,10 @@ fn handle_keyword_match token:Token cursor:TokenCursor function_name:str -> List
                 if body_token_opt .is_none then break fi
                 body_token_opt .unwrap = body_token
                 if TokenKind::FstringStart body_token Token::kind == then
-                    ops function_name cursor body_token handle_fstring
+                    ops function_name cursor body_token parser handle_fstring
                     continue
                 fi
-                ops function_name cursor body_token token_to_op
+                ops function_name cursor body_token parser token_to_op
             done
         fi
     done
@@ -1661,7 +1663,7 @@ fn handle_keyword_include token:Token cursor:TokenCursor -> Op {
 # not collide. Nested `while`/`for` inside the body or the iterable
 # expression are detected via depth counting on `while`/`for` openers and
 # `done` closers so the enclosing `do`/`done` pair is identified correctly.
-fn handle_keyword_for token:Token cursor:TokenCursor function_name:str ops:List[Op] {
+fn handle_keyword_for parser:Parser token:Token cursor:TokenCursor function_name:str ops:List[Op] {
     TokenKind::Identifier cursor expect_token_kind = loop_var_token
     loop_var_token Token::value = loop_var_name
     "in" cursor expect_token_value drop
@@ -1694,10 +1696,10 @@ fn handle_keyword_for token:Token cursor:TokenCursor function_name:str ops:List[
         fi
         cursor tc_pop drop
         if TokenKind::FstringStart peeked_token Token::kind == then
-            ops function_name cursor peeked_token handle_fstring
+            ops function_name cursor peeked_token parser handle_fstring
             continue
         fi
-        ops function_name cursor peeked_token token_to_op
+        ops function_name cursor peeked_token parser token_to_op
     done
 
     # Loop preamble: store iterator into hidden local, then open the while
@@ -1736,10 +1738,10 @@ fn handle_keyword_for token:Token cursor:TokenCursor function_name:str ops:List[
         fi
         cursor tc_pop drop
         if TokenKind::FstringStart body_token Token::kind == then
-            ops function_name cursor body_token handle_fstring
+            ops function_name cursor body_token parser handle_fstring
             continue
         fi
-        ops function_name cursor body_token token_to_op
+        ops function_name cursor body_token parser token_to_op
     done
 }
 
@@ -1747,7 +1749,7 @@ fn handle_keyword_for token:Token cursor:TokenCursor function_name:str ops:List[
 # get_op_keyword - handle all keywords
 # ============================================================================
 
-fn get_op_keyword token:Token cursor:TokenCursor function_name:str ops:List[Op] {
+fn get_op_keyword parser:Parser token:Token cursor:TokenCursor function_name:str ops:List[Op] {
     token Token::value keyword_from_str = keyword_opt
     if keyword_opt .is_none then
         token Token::location f"Token `{token Token::value}` is not a keyword" ErrorKind::Syntax raise_error
@@ -1770,11 +1772,11 @@ fn get_op_keyword token:Token cursor:TokenCursor function_name:str ops:List[Op] 
     if KeywordKind::EnumKw keyword == then
         token Token::location "Enums" function_name require_global_scope
         cursor tc_retreat
-        cursor parse_enum = casa_enum
-        if casa_enum CasaEnum::name GLOBAL_ENUMS .get .is_some then
+        cursor parser parse_enum = casa_enum
+        if casa_enum CasaEnum::name parser.store.enums .get .is_some then
             casa_enum CasaEnum::location f"Enum `{casa_enum CasaEnum::name}` is already defined" ErrorKind::DuplicateName raise_error
         fi
-        casa_enum CasaEnum::name casa_enum GLOBAL_ENUMS .set = GLOBAL_ENUMS
+        casa_enum CasaEnum::name casa_enum parser.store.enums .set drop
         return
     fi
 
@@ -1782,11 +1784,11 @@ fn get_op_keyword token:Token cursor:TokenCursor function_name:str ops:List[Op] 
     if KeywordKind::Fn keyword == then
         token Token::location "Functions" function_name require_global_scope
         cursor tc_retreat
-        cursor parse_function = function
-        if function Function::name GLOBAL_FUNCTIONS .get .is_some then
+        cursor parser parse_function = function
+        if function Function::name parser.store.functions .get .is_some then
             function Function::location f"Identifier `{function Function::name}` is already defined" ErrorKind::DuplicateName raise_error
         fi
-        function Function::name function GLOBAL_FUNCTIONS .set = GLOBAL_FUNCTIONS
+        function Function::name function parser.store.functions .set drop
         return
     fi
 
@@ -1794,7 +1796,7 @@ fn get_op_keyword token:Token cursor:TokenCursor function_name:str ops:List[Op] 
     if KeywordKind::Impl keyword == then
         token Token::location "Implementation blocks" function_name require_global_scope
         cursor tc_retreat
-        cursor parse_impl_block
+        cursor parser parse_impl_block
         return
     fi
 
@@ -1811,7 +1813,7 @@ fn get_op_keyword token:Token cursor:TokenCursor function_name:str ops:List[Op] 
 
     # match
     if KeywordKind::Match keyword == then
-        function_name cursor token handle_keyword_match = match_ops
+        function_name cursor token parser handle_keyword_match = match_ops
         0 = match_index
         while match_index match_ops .length > do
             match_index match_ops .get ops .push
@@ -1824,14 +1826,14 @@ fn get_op_keyword token:Token cursor:TokenCursor function_name:str ops:List[Op] 
     if KeywordKind::StructKw keyword == then
         token Token::location "Structs" function_name require_global_scope
         cursor tc_retreat
-        cursor parse_struct = casa_struct
-        casa_struct CasaStruct::name casa_struct GLOBAL_STRUCTS .set = GLOBAL_STRUCTS
+        cursor parser parse_struct = casa_struct
+        casa_struct CasaStruct::name casa_struct parser.store.structs .set drop
         return
     fi
 
     # for
     if KeywordKind::For keyword == then
-        ops function_name cursor token handle_keyword_for
+        ops function_name cursor token parser handle_keyword_for
         return
     fi
 
@@ -1845,10 +1847,10 @@ fn get_op_keyword token:Token cursor:TokenCursor function_name:str ops:List[Op] 
         token Token::location "Traits" function_name require_global_scope
         cursor tc_retreat
         cursor parse_trait = casa_trait
-        if casa_trait CasaTrait::name GLOBAL_TRAITS .get .is_some then
+        if casa_trait CasaTrait::name parser.store.traits .get .is_some then
             casa_trait CasaTrait::location f"Trait `{casa_trait CasaTrait::name}` is already defined" ErrorKind::DuplicateName raise_error
         fi
-        casa_trait CasaTrait::name casa_trait GLOBAL_TRAITS .set = GLOBAL_TRAITS
+        casa_trait CasaTrait::name casa_trait parser.store.traits .set drop
         return
     fi
 }
@@ -1867,7 +1869,7 @@ fn is_struct_field_boundary cursor:TokenCursor member_names:List[str] -> bool {
     ":" pos 1 + token_list .get Token::value ==
 }
 
-fn parse_struct_field_value cursor:TokenCursor struct_name:str member_names:List[str] function_name:str all_ops:List[Op] {
+fn parse_struct_field_value parser:Parser cursor:TokenCursor struct_name:str member_names:List[str] function_name:str all_ops:List[Op] {
     while cursor tc_is_finished ! do
         cursor tc_peek = peek_opt
         if peek_opt .is_none then break fi
@@ -1877,16 +1879,16 @@ fn parse_struct_field_value cursor:TokenCursor struct_name:str member_names:List
         if value_opt .is_none then break fi
         value_opt .unwrap = value_token
         if TokenKind::FstringStart value_token Token::kind == then
-            all_ops function_name cursor value_token handle_fstring
+            all_ops function_name cursor value_token parser handle_fstring
             continue
         fi
-        all_ops function_name cursor value_token token_to_op
+        all_ops function_name cursor value_token parser token_to_op
     done
 }
 
-fn parse_struct_literal name_token:Token cursor:TokenCursor function_name:str -> List[Op] {
+fn parse_struct_literal parser:Parser name_token:Token cursor:TokenCursor function_name:str -> List[Op] {
     "{" cursor expect_token_value drop
-    name_token Token::value GLOBAL_STRUCTS .get .unwrap = casa_struct
+    name_token Token::value parser.store.structs .get .unwrap = casa_struct
     List::new (List[str]) = member_names
     0 = member_index
     while member_index casa_struct CasaStruct::members .length > do
@@ -1921,7 +1923,7 @@ fn parse_struct_literal name_token:Token cursor:TokenCursor function_name:str ->
         ":" cursor expect_token_value drop
 
         all_ops .length = ops_before
-        all_ops function_name member_names name_token Token::value cursor parse_struct_field_value
+        all_ops function_name member_names name_token Token::value cursor parser parse_struct_field_value
         if ops_before all_ops .length == then
             field_token Token::location f"Missing value for field `{field_token Token::value}`" ErrorKind::Syntax raise_error
         fi
@@ -1936,13 +1938,13 @@ fn parse_struct_literal name_token:Token cursor:TokenCursor function_name:str ->
 # token_to_op - main dispatch: token kind -> handler
 # ============================================================================
 
-fn token_to_op token:Token cursor:TokenCursor function_name:str ops:List[Op] {
+fn token_to_op parser:Parser token:Token cursor:TokenCursor function_name:str ops:List[Op] {
     token Token::kind = kind
 
     if TokenKind::Eof kind == then return fi
 
     if TokenKind::Delimiter kind == then
-        ops function_name cursor token get_op_delimiter
+        ops function_name cursor token parser get_op_delimiter
         return
     fi
 
@@ -1957,7 +1959,7 @@ fn token_to_op token:Token cursor:TokenCursor function_name:str ops:List[Op] {
     fi
 
     if TokenKind::Keyword kind == then
-        ops function_name cursor token get_op_keyword
+        ops function_name cursor token parser get_op_keyword
         return
     fi
 
@@ -1971,8 +1973,8 @@ fn token_to_op token:Token cursor:TokenCursor function_name:str ops:List[Op] {
         cursor tc_peek = next_opt
         if next_opt .is_some then
             if "{" next_opt .unwrap Token::value == then
-                if token Token::value GLOBAL_STRUCTS .get .is_some then
-                    function_name cursor token parse_struct_literal = struct_literal_ops
+                if token Token::value parser.store.structs .get .is_some then
+                    function_name cursor token parser parse_struct_literal = struct_literal_ops
                     0 = struct_index
                     while struct_index struct_literal_ops .length > do
                         struct_index struct_literal_ops .get ops .push
@@ -2013,7 +2015,7 @@ fn token_to_op token:Token cursor:TokenCursor function_name:str ops:List[Op] {
 # parse_ops - main parse loop
 # ============================================================================
 
-fn parse_ops tokens:List[Token] -> List[Op] {
+fn parse_ops parser:Parser tokens:List[Token] -> List[Op] {
     tokens tc_new = cursor
     List::new (List[Op]) = ops
     while cursor tc_is_finished ! do
@@ -2021,10 +2023,10 @@ fn parse_ops tokens:List[Token] -> List[Op] {
         if token_opt .is_none then break fi
         token_opt .unwrap = token
         if TokenKind::FstringStart token Token::kind == then
-            ops GLOBAL_SCOPE_LABEL cursor token handle_fstring
+            ops GLOBAL_SCOPE_LABEL cursor token parser handle_fstring
             continue
         fi
-        ops GLOBAL_SCOPE_LABEL cursor token token_to_op
+        ops GLOBAL_SCOPE_LABEL cursor token parser token_to_op
     done
     ops
 }
@@ -2033,7 +2035,7 @@ fn parse_ops tokens:List[Token] -> List[Op] {
 # resolve_identifiers - post-parse pass
 # ============================================================================
 
-fn gather_captures lambda_function:Function function:Function {
+fn gather_captures parser:Parser lambda_function:Function function:Function {
     0 = index
     while index lambda_function Function::ops .length > do
         index lambda_function Function::ops .get = op
@@ -2057,7 +2059,7 @@ fn gather_captures lambda_function:Function function:Function {
 
         if captured ! then
             # Check global variables
-            name GLOBAL_VARIABLES .get = global_var_opt
+            name parser.store.variables .get = global_var_opt
             if global_var_opt .is_some then
                 global_var_opt .unwrap lambda_function Function::captures .push
             fi
@@ -2066,19 +2068,19 @@ fn gather_captures lambda_function:Function function:Function {
     done
 }
 
-fn resolve_array_identifiers items:List[Op] function:Function errors:List[CasaError] {
+fn resolve_array_identifiers parser:Parser items:List[Op] function:Function errors:List[CasaError] {
     0 = rai_i
     while rai_i items .length > do
         rai_i items .get = rai_item
         if OpKind::OpPushArray rai_item Op::kind == then
-            errors function rai_item Op::value (List[Op]) resolve_array_identifiers
+            errors function rai_item Op::value (List[Op]) parser resolve_array_identifiers
         elif OpKind::OpIdentifier rai_item Op::kind == then
             rai_item op_str_value = rai_name
             if rai_name function Function::variables variable_list_contains then
                 OpKind::OpPushVar rai_item Op::set_kind
             elif rai_name function Function::captures variable_list_contains then
                 OpKind::OpPushCapture rai_item Op::set_kind
-            elif rai_name GLOBAL_VARIABLES .get .is_some then
+            elif rai_name parser.store.variables .get .is_some then
                 OpKind::OpPushVar rai_item Op::set_kind
             else
                 rai_item Op::location f"Identifier `{rai_name}` is not defined" ErrorKind::UndefinedName make_error errors .push
@@ -2088,10 +2090,10 @@ fn resolve_array_identifiers items:List[Op] function:Function errors:List[CasaEr
     done
 }
 
-fn resolve_enum_variant variant:EnumVariant op:Op function:Function errors:List[CasaError] {
+fn resolve_enum_variant parser:Parser variant:EnumVariant op:Op function:Function errors:List[CasaError] {
     # Resolve enum variant ordinal if still unresolved
     if variant EnumVariant::enum_name .length 0 != variant EnumVariant::ordinal .is_none && then
-        variant EnumVariant::enum_name GLOBAL_ENUMS .get = rev_enum_opt
+        variant EnumVariant::enum_name parser.store.enums .get = rev_enum_opt
         if rev_enum_opt .is_none then
             op Op::location f"Enum `{variant EnumVariant::enum_name}` is not defined" ErrorKind::UndefinedName make_error errors .push
         else
@@ -2111,7 +2113,7 @@ fn resolve_enum_variant variant:EnumVariant op:Op function:Function errors:List[
             rev_bi variant EnumVariant::bindings .get = rev_var_name
             rev_var_name make_variable = rev_var
             if GLOBAL_SCOPE_LABEL function Function::name == then
-                rev_var_name rev_var GLOBAL_VARIABLES .set = GLOBAL_VARIABLES
+                rev_var_name rev_var parser.store.variables .set drop
             else
                 if rev_var_name function Function::variables variable_list_contains ! then
                     rev_var function Function::variables .push
@@ -2122,17 +2124,17 @@ fn resolve_enum_variant variant:EnumVariant op:Op function:Function errors:List[
     fi
 }
 
-fn resolve_identifiers_global ops:List[Op] -> List[Op] {
+fn resolve_identifiers_global parser:Parser ops:List[Op] -> List[Op] {
     # Create a dummy function for global scope resolution
     empty_location List::new (List[Op]) GLOBAL_SCOPE_LABEL make_function = ri_dummy
-    ri_dummy ops resolve_identifiers_fn
+    ri_dummy ops parser resolve_identifiers_fn
 }
 
 fn resolve_identifiers ops:List[Op] function:Function -> List[Op] {
-    function ops resolve_identifiers_fn
+    function ops DEFAULT_PARSER resolve_identifiers_fn
 }
 
-fn resolve_identifiers_fn ops:List[Op] function:Function -> List[Op] {
+fn resolve_identifiers_fn parser:Parser ops:List[Op] function:Function -> List[Op] {
     0 = ri_index
     List::new (List[CasaError]) = ri_errors
     while ri_index ops .length > do
@@ -2144,14 +2146,14 @@ fn resolve_identifiers_fn ops:List[Op] function:Function -> List[Op] {
         if OpKind::OpAssignVar ri_kind == then
             ri_op op_str_value = ri_var_name
             ri_var_name make_variable = ri_var
-            # Global scope: store in GLOBAL_VARIABLES
+            # Global scope: store in parser.store.variables
             if GLOBAL_SCOPE_LABEL function Function::name == then
-                ri_var_name ri_var GLOBAL_VARIABLES .set = GLOBAL_VARIABLES
+                ri_var_name ri_var parser.store.variables .set drop
                 continue
             fi
             # Function scope: add to function variables if new
             if ri_var_name function Function::variables variable_list_contains ! then
-                if ri_var_name GLOBAL_VARIABLES .get .is_none then
+                if ri_var_name parser.store.variables .get .is_none then
                     ri_var function Function::variables .push
                 fi
             fi
@@ -2161,11 +2163,11 @@ fn resolve_identifiers_fn ops:List[Op] function:Function -> List[Op] {
         # FN_PUSH: resolve lambda captures and identifiers
         if OpKind::OpFnPush ri_kind == then
             ri_op op_str_value = ri_fn_name
-            ri_fn_name GLOBAL_FUNCTIONS .get = ri_lambda_opt
+            ri_fn_name parser.store.functions .get = ri_lambda_opt
             if ri_lambda_opt .is_some then
                 ri_lambda_opt .unwrap = ri_lambda
                 true ri_lambda Function::set_is_used
-                function ri_lambda gather_captures
+                function ri_lambda parser gather_captures
                 ri_lambda ri_lambda Function::ops resolve_identifiers = ri_lambda_resolved
                 ri_lambda_resolved ri_lambda Function::set_ops
             fi
@@ -2174,7 +2176,7 @@ fn resolve_identifiers_fn ops:List[Op] function:Function -> List[Op] {
 
         # PUSH_ARRAY: resolve identifiers inside array literals
         if OpKind::OpPushArray ri_kind == then
-            ri_errors function ri_op Op::value (List[Op]) resolve_array_identifiers
+            ri_errors function ri_op Op::value (List[Op]) parser resolve_array_identifiers
             continue
         fi
 
@@ -2203,7 +2205,7 @@ fn resolve_identifiers_fn ops:List[Op] function:Function -> List[Op] {
                     fi
                 fi
                 if ri_ref_is_trait ! then
-                    ri_ref_name GLOBAL_FUNCTIONS .get = ri_ref_fn_opt
+                    ri_ref_name parser.store.functions .get = ri_ref_fn_opt
                     if ri_ref_fn_opt .is_some then
                         OpKind::OpFnPush ri_op Op::set_kind
                         ri_ref_name (int) ri_op Op::set_value
@@ -2219,7 +2221,7 @@ fn resolve_identifiers_fn ops:List[Op] function:Function -> List[Op] {
             if ri_ident "::" str::find 0 <= then
                 ri_ident "::" str::find = ri_sep
                 ri_ident 0 ri_sep str::substring = ri_enum_name
-                ri_enum_name GLOBAL_ENUMS .get = ri_enum_opt
+                ri_enum_name parser.store.enums .get = ri_enum_opt
                 if ri_enum_opt .is_some then
                     ri_ident ri_sep 2 + ri_ident .length ri_sep - 2 - str::substring = ri_vname
                     ri_vname ri_enum_opt .unwrap CasaEnum::variants string_list_index = ri_ordinal
@@ -2258,7 +2260,7 @@ fn resolve_identifiers_fn ops:List[Op] function:Function -> List[Op] {
             fi
 
             # Global function
-            ri_ident GLOBAL_FUNCTIONS .get = ri_gfn_opt
+            ri_ident parser.store.functions .get = ri_gfn_opt
             if ri_gfn_opt .is_some then
                 OpKind::OpFnCall ri_op Op::set_kind
                 true ri_gfn_opt .unwrap Function::set_is_used
@@ -2272,13 +2274,13 @@ fn resolve_identifiers_fn ops:List[Op] function:Function -> List[Op] {
             fi
 
             # Global variable
-            if ri_ident GLOBAL_VARIABLES .get .is_some then
+            if ri_ident parser.store.variables .get .is_some then
                 OpKind::OpPushVar ri_op Op::set_kind
                 continue
             fi
 
             # Struct constructor
-            ri_ident GLOBAL_STRUCTS .get = ri_struct_opt
+            ri_ident parser.store.structs .get = ri_struct_opt
             if ri_struct_opt .is_some then
                 OpKind::OpStructNew ri_op Op::set_kind
                 ri_struct_opt .unwrap (int) ri_op Op::set_value
@@ -2286,7 +2288,7 @@ fn resolve_identifiers_fn ops:List[Op] function:Function -> List[Op] {
             fi
 
             # Enum name -> variant count
-            ri_ident GLOBAL_ENUMS .get = ri_enum2_opt
+            ri_ident parser.store.enums .get = ri_enum2_opt
             if ri_enum2_opt .is_some then
                 OpKind::OpPushInt ri_op Op::set_kind
                 ri_enum2_opt .unwrap CasaEnum::variants .length ri_op Op::set_value
@@ -2309,7 +2311,7 @@ fn resolve_identifiers_fn ops:List[Op] function:Function -> List[Op] {
                     ri_ma_si ri_ma_sp_keys .get ri_ma_sp StructPattern::bindings .get .unwrap = ri_ma_sv_name
                     ri_ma_sv_name make_variable = ri_ma_sv
                     if GLOBAL_SCOPE_LABEL function Function::name == then
-                        ri_ma_sv_name ri_ma_sv GLOBAL_VARIABLES .set = GLOBAL_VARIABLES
+                        ri_ma_sv_name ri_ma_sv parser.store.variables .set drop
                     else
                         if ri_ma_sv_name function Function::variables variable_list_contains ! then
                             ri_ma_sv function Function::variables .push
@@ -2320,7 +2322,7 @@ fn resolve_identifiers_fn ops:List[Op] function:Function -> List[Op] {
             elif "enum_variant" ri_ma_tag == then
                 # EnumVariant: resolve ordinal and register bindings
                 ri_op Op::value (EnumVariant) = ri_ma_ev
-                ri_errors function ri_op ri_ma_ev resolve_enum_variant
+                ri_errors function ri_op ri_ma_ev parser resolve_enum_variant
             fi
             # literal_pattern: no resolution needed
             continue
@@ -2329,17 +2331,17 @@ fn resolve_identifiers_fn ops:List[Op] function:Function -> List[Op] {
         # IS_CHECK: resolve enum variant
         if OpKind::OpIsCheck ri_kind == then
             ri_op Op::value (EnumVariant) = ri_is_ev
-            ri_errors function ri_op ri_is_ev resolve_enum_variant
+            ri_errors function ri_op ri_is_ev parser resolve_enum_variant
             continue
         fi
 
         # INCLUDE_FILE: process included file
         if OpKind::OpIncludeFile ri_kind == then
             ri_op op_str_value = ri_inc_path
-            if ri_inc_path INCLUDED_FILES .has ! then
-                ri_inc_path INCLUDED_FILES .add = INCLUDED_FILES
+            if ri_inc_path parser.included_files .has ! then
+                ri_inc_path parser.included_files .add drop
                 ri_inc_path lex_file = ri_inc_tokens
-                ri_inc_tokens parse_ops = ri_inc_ops
+                ri_inc_tokens parser parse_ops = ri_inc_ops
                 # Splice included ops at current position (before remaining ops)
                 # Build: ops[:ri_index] + inc_ops + ops[ri_index:]
                 List::new (List[Op]) = ri_new_ops

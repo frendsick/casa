@@ -59,9 +59,11 @@ struct BytecodeCompiler {
     locals_count:     int
     string_table:     List[str]
     constants_table:  List[str]
+    store:            SymbolStore
 }
 
-fn make_compiler ops:List[Op] -> BytecodeCompiler {
+fn make_compiler store:SymbolStore ops:List[Op] -> BytecodeCompiler {
+    store
     List::new (List[str])
     List::new (List[str])
     0
@@ -70,7 +72,8 @@ fn make_compiler ops:List[Op] -> BytecodeCompiler {
     BytecodeCompiler
 }
 
-fn make_compiler_with_tables ops:List[Op] function:int string_table:List[str] constants_table:List[str] -> BytecodeCompiler {
+fn make_compiler_with_tables store:SymbolStore ops:List[Op] function:int string_table:List[str] constants_table:List[str] -> BytecodeCompiler {
+    store
     constants_table
     string_table
     0
@@ -116,9 +119,9 @@ fn resolve_variable compiler:BytecodeCompiler variable_name:str -> ResolvedVaria
             local_index InstKind::InstLocalSet InstKind::InstLocalGet ResolvedVariable return
         fi
     fi
-    variable_name GLOBAL_VARIABLES .has = is_global
+    variable_name compiler.store.variables .has = is_global
     if is_global then
-        variable_name GLOBAL_VARIABLES .keys string_list_index = global_index
+        variable_name compiler.store.variables .keys string_list_index = global_index
         global_index InstKind::InstGlobalSet InstKind::InstGlobalGet ResolvedVariable return
     fi
     f"Variable `{variable_name}` is not defined\n" eprint
@@ -344,7 +347,7 @@ fn compile_while_block compiler:BytecodeCompiler op:Op op_index:int bytecode:Lis
 fn compile_match_arm_enum compiler:BytecodeCompiler pattern_ptr:int is_last:bool next_arm:Option[int] bytecode:List[Inst] {
     pattern_ptr (EnumVariant) = variant
     variant EnumVariant::enum_name = enum_name
-    enum_name GLOBAL_ENUMS .get .unwrap = casa_enum
+    enum_name compiler.store.enums .get .unwrap = casa_enum
 
     if is_last ! variant is_wildcard_variant ! && then
         InstKind::InstDup make_inst bytecode .push
@@ -395,7 +398,7 @@ fn compile_match_arm_literal compiler:BytecodeCompiler pattern_ptr:int is_last:b
 
 fn compile_match_arm_struct compiler:BytecodeCompiler pattern_ptr:int bytecode:List[Inst] {
     pattern_ptr (StructPattern) = pattern
-    pattern StructPattern::struct_name GLOBAL_STRUCTS .get .unwrap = casa_struct
+    pattern StructPattern::struct_name compiler.store.structs .get .unwrap = casa_struct
 
     # Build field offset map
     0 = index
@@ -463,8 +466,8 @@ fn compile_match_block compiler:BytecodeCompiler op:Op op_index:int bytecode:Lis
         elif "enum_variant" annotation == then
             pattern_ptr (EnumVariant) = variant
             variant EnumVariant::enum_name = enum_name
-            if "" enum_name != enum_name GLOBAL_ENUMS .has && then
-                enum_name GLOBAL_ENUMS .get .unwrap = casa_enum
+            if "" enum_name != enum_name compiler.store.enums .has && then
+                enum_name compiler.store.enums .get .unwrap = casa_enum
                 casa_enum has_inner_values = has_inner
                 if has_inner then
                     bytecode next_arm is_last pattern_ptr compiler compile_match_arm_enum
@@ -578,7 +581,7 @@ fn compile_enum_variant compiler:BytecodeCompiler variant:EnumVariant casa_enum:
 fn compile_is_check compiler:BytecodeCompiler op:Op bytecode:List[Inst] {
     op Op::value (EnumVariant) = variant
     variant EnumVariant::enum_name = enum_name
-    enum_name GLOBAL_ENUMS .get .unwrap = casa_enum
+    enum_name compiler.store.enums .get .unwrap = casa_enum
 
     if casa_enum has_inner_values ! then
         # Plain enum: compare ordinal directly
@@ -637,7 +640,7 @@ fn compile_is_check compiler:BytecodeCompiler op:Op bytecode:List[Inst] {
 
 fn compile_struct_literal compiler:BytecodeCompiler op:Op bytecode:List[Inst] {
     op Op::value (StructLiteral) = literal
-    literal StructLiteral::struct_name GLOBAL_STRUCTS .get .unwrap = casa_struct
+    literal StructLiteral::struct_name compiler.store.structs .get .unwrap = casa_struct
     casa_struct CasaStruct::members .length = count
 
     # Store all field values into temp locals (top of stack = last in field_order)
@@ -762,7 +765,7 @@ fn compile_function compiler:BytecodeCompiler function:Function op:Op {
     function Function::name COMPILED_FUNCTIONS .add = COMPILED_FUNCTIONS
 
     List::new (List[Inst]) = function_bytecode
-    compiler BytecodeCompiler::constants_table compiler BytecodeCompiler::string_table function (int) ops make_compiler_with_tables = function_compiler
+    compiler BytecodeCompiler::constants_table compiler BytecodeCompiler::string_table function (int) ops compiler.store make_compiler_with_tables = function_compiler
     function_bytecode function_compiler compile_ops
 
     # Handle locals
@@ -800,11 +803,11 @@ fn compile_function_ops compiler:BytecodeCompiler op:Op bytecode:List[Inst] {
     op op_str_value = name
 
     if OpKind::OpFnCall op Op::kind == then
-        name GLOBAL_FUNCTIONS .get .unwrap = function
+        name compiler.store.functions .get .unwrap = function
         op function compiler compile_function
         name InstKind::InstFnCall make_inst_str bytecode .push
     elif OpKind::OpFnPush op Op::kind == then
-        name GLOBAL_FUNCTIONS .get = function_opt
+        name compiler.store.functions .get = function_opt
         if function_opt .is_none then
             op Op::location f"Function `{name}` is not defined" ErrorKind::UndefinedName make_error ERRORS .push
             return
@@ -860,7 +863,7 @@ fn compile_op compiler:BytecodeCompiler op:Op op_index:int bytecode:List[Inst] {
             OpKind::OpGt kind == ||
             OpKind::OpGe kind == ||
             "" op Op::type_annotation != &&
-            op Op::type_annotation GLOBAL_ENUMS .has &&
+            op Op::type_annotation compiler.store.enums .has &&
         then
             bytecode op compiler compile_enum_comparison
             return
@@ -901,7 +904,7 @@ fn compile_op compiler:BytecodeCompiler op:Op op_index:int bytecode:List[Inst] {
         # Non-str cases are rewritten to OpMethodCall during type checking.
     elif OpKind::OpFnCall kind == OpKind::OpFnPush kind == || then
         if OpKind::OpFnPush kind == then
-            op op_str_value GLOBAL_FUNCTIONS .get = function_opt
+            op op_str_value compiler.store.functions .get = function_opt
             if function_opt .is_some then
                 function_opt .unwrap = function_check
                 if function_check Function::has_deferred_methods then
@@ -926,7 +929,7 @@ fn compile_op compiler:BytecodeCompiler op:Op op_index:int bytecode:List[Inst] {
         # No instruction emitted
     elif OpKind::OpPushEnumVariant kind == then
         op Op::value (EnumVariant) = variant
-        variant EnumVariant::enum_name GLOBAL_ENUMS .get .unwrap = casa_enum
+        variant EnumVariant::enum_name compiler.store.enums .get .unwrap = casa_enum
         if casa_enum has_inner_values then
             bytecode casa_enum variant compiler compile_enum_variant
         else
@@ -1024,15 +1027,15 @@ fn compile_ops compiler:BytecodeCompiler bytecode:List[Inst] {
 # Main entry: compile_bytecode
 # ============================================================================
 
-fn compile_bytecode ops:List[Op] -> Program {
+fn compile_bytecode store:SymbolStore ops:List[Op] -> Program {
     reset_labels
 
     List::new (List[Inst]) = bytecode
-    ops make_compiler = compiler
+    ops store make_compiler = compiler
 
     # Emit globals init if needed
-    if 0 GLOBAL_VARIABLES .length != then
-        GLOBAL_VARIABLES .length InstKind::InstGlobalsInit make_inst_int bytecode .push
+    if 0 compiler.store.variables .length != then
+        compiler.store.variables .length InstKind::InstGlobalsInit make_inst_int bytecode .push
     fi
 
     bytecode compiler compile_ops
@@ -1053,11 +1056,11 @@ fn compile_bytecode ops:List[Op] -> Program {
 
     # Compile all used functions
     Map::new (Map[str List[Inst]]) = functions
-    GLOBAL_FUNCTIONS .keys = function_names
+    compiler.store.functions .keys = function_names
     0 = function_index
     while function_index function_names .length > do
         function_index function_names .get = function_name
-        function_name GLOBAL_FUNCTIONS .get .unwrap = function
+        function_name compiler.store.functions .get .unwrap = function
         if 0 function Function::bytecode .length != then
             function_name function Function::bytecode functions .set = functions
         fi
@@ -1065,7 +1068,7 @@ fn compile_bytecode ops:List[Op] -> Program {
     done
 
     compiler BytecodeCompiler::constants_table .length
-    GLOBAL_VARIABLES .length
+    compiler.store.variables .length
     compiler BytecodeCompiler::string_table
     functions
     bytecode

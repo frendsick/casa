@@ -70,9 +70,11 @@ struct TypeChecker {
     current_op_context:  str
     current_expect_ctx:  str
     in_branch_condition: bool
+    store:               SymbolStore
 }
 
-fn make_typechecker -> TypeChecker {
+fn make_typechecker store:SymbolStore -> TypeChecker {
+    store                            # store
     false                            # in_branch_condition
     ""                               # current_expect_ctx
     ""                               # current_op_context
@@ -196,7 +198,7 @@ fn is_type_variable typ:str -> bool {
     # Check if it's a known type variable in enums
     typ extract_generic_base = itv_base
     if itv_base .is_some then
-        itv_base .unwrap GLOBAL_ENUMS .get .is_some return
+        itv_base .unwrap DEFAULT_PARSER.store.enums .get .is_some return
     fi
     false
 }
@@ -214,7 +216,7 @@ fn types_match_params expected:str actual:str -> bool {
     expected extract_generic_base = base_opt
     Set::new (Set[str]) = type_vars
     if base_opt .is_some then
-        base_opt .unwrap GLOBAL_ENUMS .get = enum_opt
+        base_opt .unwrap DEFAULT_PARSER.store.enums .get = enum_opt
         if enum_opt .is_some then
             0 = type_index
             while type_index enum_opt .unwrap CasaEnum::type_vars .length > do
@@ -222,7 +224,7 @@ fn types_match_params expected:str actual:str -> bool {
                 1 += type_index
             done
         fi
-        base_opt .unwrap GLOBAL_STRUCTS .get = struct_opt
+        base_opt .unwrap DEFAULT_PARSER.store.structs .get = struct_opt
         if struct_opt .is_some then
             0 = type_index
             while type_index struct_opt .unwrap CasaStruct::type_vars .length > do
@@ -401,7 +403,7 @@ fn bind_type_var tc:TypeChecker bindings:Map[str str] type_var:str actual:str ->
 fn is_enum_type_var typ:str -> bool {
     typ extract_generic_base = base
     if base .is_some then
-        base .unwrap GLOBAL_ENUMS .get .is_some
+        base .unwrap DEFAULT_PARSER.store.enums .get .is_some
     else
         false
     fi
@@ -619,15 +621,15 @@ fn check_comparison tc:TypeChecker op:Op {
     tc stack_pop = type2
     type1 resolve_match_type = base1
     type2 resolve_match_type = base2
-    base1 GLOBAL_ENUMS .get .is_some = is_enum1
-    base2 GLOBAL_ENUMS .get .is_some = is_enum2
+    base1 tc.store.enums .get .is_some = is_enum1
+    base2 tc.store.enums .get .is_some = is_enum2
     if is_enum1 is_enum2 || then
         if type1 type2 != then
             tc TypeChecker::current_location f"Cannot compare `{type2}` with `{type1}`" ErrorKind::TypeMismatch raise_error
         fi
         # Annotate for bytecode: data-carrying enums need heap tag comparison
         if is_enum1 then
-            base1 GLOBAL_ENUMS .get .unwrap = casa_enum
+            base1 tc.store.enums .get .unwrap = casa_enum
             if casa_enum has_inner_values then
                 base1 op Op::set_type_annotation
             fi
@@ -789,7 +791,7 @@ fn check_assignment tc:TypeChecker op:Op function_opt:Option[Function] {
     fi
 
     # Try global variables
-    var_name GLOBAL_VARIABLES .get = global_opt
+    var_name tc.store.variables .get = global_opt
     if global_opt .is_some then
         global_opt .unwrap = global_var
         if
@@ -827,7 +829,7 @@ fn simulate_trait_exec tc:TypeChecker function:Function var_name:str {
     trait_suffix trait_sep 1 + trait_suffix .length trait_sep - 1 - str::substring = trait_method_name
     trait_type_var function Function::signature Signature::trait_bounds .get = trait_bound_opt
     if trait_bound_opt .is_none then return fi
-    trait_bound_opt .unwrap TraitBound::name GLOBAL_TRAITS .get = trait_def_opt
+    trait_bound_opt .unwrap TraitBound::name tc.store.traits .get = trait_def_opt
     if trait_def_opt .is_none then return fi
     trait_def_opt .unwrap = trait_def
     0 = trait_lookup_index
@@ -884,7 +886,7 @@ fn check_push_var tc:TypeChecker op:Op function_opt:Option[Function] {
     fi
 
     # Check global variables
-    var_name GLOBAL_VARIABLES .get = global_opt
+    var_name tc.store.variables .get = global_opt
     if global_opt .is_some then
         global_opt .unwrap Variable::typ = global_type
         if "" global_type != then
@@ -1035,7 +1037,7 @@ fn type_satisfies_trait type_name:str trait_name:str function_opt:Option[Functio
     # Accept both bare ("Iterator") and concrete generic ("Iterator[int]") trait names.
     trait_name extract_generic_base = trait_base_opt
     if trait_base_opt .is_some then trait_base_opt .unwrap else trait_name fi = trait_lookup_name
-    trait_lookup_name GLOBAL_TRAITS .get = trait_opt
+    trait_lookup_name DEFAULT_PARSER.store.traits .get = trait_opt
     if trait_opt .is_none then false return fi
     trait_opt .unwrap = trait_def
     # Build substitution map from trait's type_params to concrete args from trait_name.
@@ -1066,14 +1068,14 @@ fn type_satisfies_trait type_name:str trait_name:str function_opt:Option[Functio
     while index trait_def CasaTrait::methods .length > do
         index trait_def CasaTrait::methods .get = method
         f"{type_name}::{method TraitMethod::name}" = fn_name
-        fn_name GLOBAL_FUNCTIONS .get = fn_opt
+        fn_name DEFAULT_PARSER.store.functions .get = fn_opt
         false = via_generic_base
         # Fall back to the generic base type (e.g. `Option::to_str` for `Option[int]`)
         if fn_opt .is_none then
             type_name extract_generic_base = base_opt
             if base_opt .is_some then
                 f"{base_opt .unwrap}::{method TraitMethod::name}" = fn_name
-                fn_name GLOBAL_FUNCTIONS .get = fn_opt
+                fn_name DEFAULT_PARSER.store.functions .get = fn_opt
                 true = via_generic_base
             fi
         fi
@@ -1206,7 +1208,7 @@ fn diff_method_sig bindings:Map[str str] sig:Signature tparams:List[str] bargs:L
 }
 
 fn method_diff_bind_for_bound bindings:Map[str str] sig:Signature bound:TraitBound concrete:str -> Map[str str] {
-    bound TraitBound::name GLOBAL_TRAITS .get = mdbb_trait_opt
+    bound TraitBound::name DEFAULT_PARSER.store.traits .get = mdbb_trait_opt
     if mdbb_trait_opt .is_none then bindings return fi
     mdbb_trait_opt .unwrap = mdbb_trait
     mdbb_trait CasaTrait::type_params = mdbb_tparams
@@ -1215,7 +1217,7 @@ fn method_diff_bind_for_bound bindings:Map[str str] sig:Signature bound:TraitBou
     0 = mdbb_method_idx
     while mdbb_method_idx mdbb_trait CasaTrait::methods .length > do
         mdbb_method_idx mdbb_trait CasaTrait::methods .get = mdbb_method
-        f"{concrete}::{mdbb_method TraitMethod::name}" GLOBAL_FUNCTIONS .get = mdbb_fn_opt
+        f"{concrete}::{mdbb_method TraitMethod::name}" DEFAULT_PARSER.store.functions .get = mdbb_fn_opt
         if mdbb_fn_opt .is_some then
             concrete mdbb_method TraitMethod::signature resolve_trait_sig = mdbb_trait_resolved
             mdbb_fn_opt .unwrap Function::signature mdbb_trait_resolved mdbb_bargs mdbb_tparams sig bindings diff_method_sig = bindings
@@ -1319,7 +1321,7 @@ fn inject_trait_fn_ptrs tc:TypeChecker sig:Signature ops:List[Op] op_index:int l
             continue
         fi
         concrete_opt .unwrap = concrete
-        trait_bound TraitBound::name GLOBAL_TRAITS .get .unwrap = trait_def
+        trait_bound TraitBound::name tc.store.traits .get .unwrap = trait_def
 
         # Check if forwarding (type var has same trait bound in calling function)
         false = is_forwarding
@@ -1357,7 +1359,7 @@ fn inject_trait_fn_ptrs tc:TypeChecker sig:Signature ops:List[Op] op_index:int l
             while 0 method_index >= do
                 method_index trait_def CasaTrait::methods .get = method
                 f"{concrete}::{method TraitMethod::name}" = fn_name
-                fn_name GLOBAL_FUNCTIONS .get = global_fn_opt
+                fn_name tc.store.functions .get = global_fn_opt
                 if global_fn_opt .is_none then
                     location f"Function `{fn_name}` required by trait `{trait_name}` not found" ErrorKind::TypeMismatch raise_error
                     method_index 1 - = method_index
@@ -1390,7 +1392,7 @@ fn check_function_ops tc:TypeChecker op:Op ops:List[Op] op_index:int function_op
     op Op::kind = kind
     if OpKind::OpFnCall kind == then
         op op_str_value = fn_name
-        fn_name GLOBAL_FUNCTIONS .get = fn_opt
+        fn_name tc.store.functions .get = fn_opt
         if fn_opt .is_some then
             fn_opt .unwrap = function
             function ensure_typechecked
@@ -1413,7 +1415,7 @@ fn check_function_ops tc:TypeChecker op:Op ops:List[Op] op_index:int function_op
         fi
     elif OpKind::OpFnPush kind == then
         op op_str_value = push_name
-        push_name GLOBAL_FUNCTIONS .get = push_fn_opt
+        push_name tc.store.functions .get = push_fn_opt
         if push_fn_opt .is_some then
             push_fn_opt .unwrap = push_fn
             push_fn ensure_typechecked
@@ -1517,7 +1519,7 @@ fn check_syscalls tc:TypeChecker op:Op {
 fn check_enum_variant tc:TypeChecker op:Op {
     op Op::value (EnumVariant) = variant
     variant EnumVariant::enum_name = enum_name
-    enum_name GLOBAL_ENUMS .get = enum_opt
+    enum_name tc.store.enums .get = enum_opt
     if enum_opt .is_none then
         enum_name tc stack_push
         return
@@ -1585,12 +1587,12 @@ fn check_enum_variant tc:TypeChecker op:Op {
 fn check_is tc:TypeChecker op:Op {
     tc stack_pop = typ
     typ resolve_match_type = base
-    if base GLOBAL_ENUMS .get .is_none then
+    if base tc.store.enums .get .is_none then
         tc TypeChecker::current_location f"`is` requires an enum type, got `{typ}`" ErrorKind::TypeMismatch raise_error
         "bool" tc stack_push
         return
     fi
-    base GLOBAL_ENUMS .get .unwrap = casa_enum
+    base tc.store.enums .get .unwrap = casa_enum
     op Op::value (EnumVariant) = variant
     # Validate the variant belongs to the correct enum
     if "" variant EnumVariant::enum_name != then
@@ -1616,11 +1618,11 @@ fn check_is tc:TypeChecker op:Op {
 # ============================================================================
 
 fn resolve_match_type typ:str -> str {
-    if typ GLOBAL_ENUMS .get .is_some then typ return fi
-    if typ GLOBAL_STRUCTS .get .is_some then typ return fi
+    if typ DEFAULT_PARSER.store.enums .get .is_some then typ return fi
+    if typ DEFAULT_PARSER.store.structs .get .is_some then typ return fi
     typ extract_generic_base = base
     if base .is_some then
-        if base .unwrap GLOBAL_ENUMS .get .is_some then
+        if base .unwrap DEFAULT_PARSER.store.enums .get .is_some then
             base .unwrap return
         fi
     fi
@@ -1640,7 +1642,7 @@ fn set_binding_type var_name:str field_type:str function_opt:Option[Function] {
             1 += index
         done
     fi
-    var_name GLOBAL_VARIABLES .get = global_opt
+    var_name DEFAULT_PARSER.store.variables .get = global_opt
     if global_opt .is_some then
         field_type global_opt .unwrap Variable::set_typ
     fi
@@ -1686,7 +1688,7 @@ fn check_match tc:TypeChecker op:Op function_opt:Option[Function] {
                 "" variant EnumVariant::enum_name ==
                 is_wildcard ! &&
             then
-                arm_base GLOBAL_ENUMS .get = bare_enum_opt
+                arm_base tc.store.enums .get = bare_enum_opt
                 if bare_enum_opt .is_some then
                     bare_enum_opt .unwrap = bare_enum
                     variant EnumVariant::variant_name = bare_name
@@ -1752,7 +1754,7 @@ fn check_match tc:TypeChecker op:Op function_opt:Option[Function] {
         if "struct_pattern" pattern_tag == then
             # StructPattern bindings
             pattern_ptr (StructPattern) = struct_pat2
-            struct_pat2 StructPattern::struct_name GLOBAL_STRUCTS .get .unwrap = matched_struct
+            struct_pat2 StructPattern::struct_name tc.store.structs .get .unwrap = matched_struct
             struct_pat2 StructPattern::bindings .keys = binding_keys
             0 = binding_index
             while binding_index binding_keys .length > do
@@ -1773,7 +1775,7 @@ fn check_match tc:TypeChecker op:Op function_opt:Option[Function] {
             if 0 variant EnumVariant::bindings .length != then
             # EnumVariant bindings
             match_subject_type resolve_match_type = base_enum_name
-            base_enum_name GLOBAL_ENUMS .get = enum_opt
+            base_enum_name tc.store.enums .get = enum_opt
             if enum_opt .is_some then
                 enum_opt .unwrap = casa_enum
                 variant EnumVariant::variant_name casa_enum CasaEnum::variant_types .get = inner_opt
@@ -1861,8 +1863,8 @@ fn check_match tc:TypeChecker op:Op function_opt:Option[Function] {
         MATCH_WILDCARD covered_set .has = has_wildcard
 
         # Check exhaustiveness
-        if end_base GLOBAL_ENUMS .get .is_some has_wildcard ! && then
-            end_base GLOBAL_ENUMS .get .unwrap = end_enum
+        if end_base tc.store.enums .get .is_some has_wildcard ! && then
+            end_base tc.store.enums .get .unwrap = end_enum
             List::new (List[str]) = missing
             0 = variant_index
             while variant_index end_enum CasaEnum::variants .length > do
@@ -1883,7 +1885,7 @@ fn check_match tc:TypeChecker op:Op function_opt:Option[Function] {
                 op Op::location f"Non-exhaustive match, missing arms: {missing_builder .build}" ErrorKind::TypeMismatch raise_error
             fi
         fi
-        if end_base GLOBAL_STRUCTS .get .is_some has_wildcard ! && then
+        if end_base tc.store.structs .get .is_some has_wildcard ! && then
             if end_base covered_set .has ! then
                 op Op::location f"Non-exhaustive match on struct `{end_match_type}`" ErrorKind::TypeMismatch raise_error
             fi
@@ -1972,7 +1974,7 @@ fn check_struct_new tc:TypeChecker op:Op {
 fn check_struct_literal tc:TypeChecker op:Op {
     op Op::value (StructLiteral) = literal
     literal StructLiteral::struct_name = name
-    name GLOBAL_STRUCTS .get = struct_opt
+    name tc.store.structs .get = struct_opt
     if struct_opt .is_none then
         name tc stack_push
         return
@@ -2003,7 +2005,7 @@ fn check_struct_literal tc:TypeChecker op:Op {
 
 fn find_method_by_name method_name:str -> Option[str] {
     f"::{method_name}" = suffix
-    GLOBAL_FUNCTIONS .keys = keys
+    DEFAULT_PARSER.store.functions .keys = keys
     "" = found
     "" = found_with_traits
     0 = index
@@ -2011,7 +2013,7 @@ fn find_method_by_name method_name:str -> Option[str] {
         index keys .get = key
         if key suffix str::ends_with then
             if key "lambda__" str::starts_with ! then
-                key GLOBAL_FUNCTIONS .get .unwrap = function
+                key DEFAULT_PARSER.store.functions .get .unwrap = function
                 if 0 function Function::signature Signature::trait_bounds .keys .length == then
                     if "" found == then
                         key = found
@@ -2050,7 +2052,7 @@ fn check_method_call tc:TypeChecker op:Op ops:List[Op] op_index:int function_opt
         if trait_opt .is_some then
             trait_opt .unwrap = bound
             bound TraitBound::name = trait_name
-            trait_name GLOBAL_TRAITS .get = trait_def_opt
+            trait_name tc.store.traits .get = trait_def_opt
             if trait_def_opt .is_some then
                 trait_def_opt .unwrap = trait_def
                 # Build substitution map from trait's type_params to the
@@ -2091,14 +2093,14 @@ fn check_method_call tc:TypeChecker op:Op ops:List[Op] op_index:int function_opt
 
     # Look up Type::method
     f"{receiver}::{method_name}" = fn_name
-    fn_name GLOBAL_FUNCTIONS .get = fn_opt
+    fn_name tc.store.functions .get = fn_opt
 
     # Try generic base type
     if fn_opt .is_none then
         receiver extract_generic_base = base_opt
         if base_opt .is_some then
             f"{base_opt .unwrap}::{method_name}" = fn_name
-            fn_name GLOBAL_FUNCTIONS .get = fn_opt
+            fn_name tc.store.functions .get = fn_opt
         fi
     fi
 
@@ -2108,7 +2110,7 @@ fn check_method_call tc:TypeChecker op:Op ops:List[Op] op_index:int function_opt
             method_name find_method_by_name = any_match_opt
             if any_match_opt .is_some then
                 any_match_opt .unwrap = fn_name
-                fn_name GLOBAL_FUNCTIONS .get = fn_opt
+                fn_name tc.store.functions .get = fn_opt
             fi
         fi
     fi
@@ -2173,7 +2175,7 @@ fn ensure_typechecked function:Function {
 # ============================================================================
 
 fn type_check_ops ops:List[Op] function_opt:Option[Function] -> Signature {
-    make_typechecker = checker
+    DEFAULT_PARSER.store make_typechecker = checker
     ERRORS .length = errors_before_ops
     0 = op_index
     while op_index ops .length > do
@@ -2466,11 +2468,11 @@ fn type_check_ops ops:List[Op] function_opt:Option[Function] -> Signature {
 # ============================================================================
 
 fn type_check_functions {
-    GLOBAL_FUNCTIONS .keys = function_keys
+    DEFAULT_PARSER.store.functions .keys = function_keys
     0 = func_index
     while func_index function_keys .length > do
         func_index function_keys .get = func_name
-        func_name GLOBAL_FUNCTIONS .get .unwrap = current_fn
+        func_name DEFAULT_PARSER.store.functions .get .unwrap = current_fn
         if current_fn Function::is_typechecked then
             1 += func_index
             continue
