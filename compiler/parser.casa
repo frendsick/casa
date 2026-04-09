@@ -1639,40 +1639,54 @@ fn handle_keyword_include token:Token cursor:TokenCursor -> Op {
 # handle_keyword_for - parse `for <ident> in <expr> do <body> done`
 # ============================================================================
 #
-# The for-loop is emitted as three dedicated ops: OpForStart carries the loop
-# variable name, OpForNext marks the end of the iterable expression and the
-# start of the body, and OpForEnd closes the loop. Between OpForStart and
-# OpForNext are the iterable expression ops; between OpForNext and OpForEnd
-# are the body ops. Nested while/for loops inside the body are detected via
-# depth counting on `while`/`for` openers and `done` closers so that the
-# enclosing `do`/`done` pair is identified correctly.
+# The for-loop is desugared at parse time into a `while` loop over the
+# iterator's `next` method. The synthesized ops use only existing op kinds,
+# so no new typechecker or bytecode support is required.
+#
+# Source `for x in <iter> do <body> done` lowers to roughly:
+#
+#     <iter_expr_ops>
+#     = __for_iter_N
+#     while
+#         __for_iter_N .next
+#         = __for_opt_N
+#         __for_opt_N .is_some
+#     do
+#         __for_opt_N .unwrap
+#         = x
+#         <body_ops>
+#     done
+#
+# The hidden variable names embed the source offset so nested for-loops do
+# not collide. Nested `while`/`for` inside the body or the iterable
+# expression are detected via depth counting on `while`/`for` openers and
+# `done` closers so the enclosing `do`/`done` pair is identified correctly.
 fn handle_keyword_for token:Token cursor:TokenCursor function_name:str ops:List[Op] {
     TokenKind::Identifier cursor expect_token_kind = loop_var_token
     loop_var_token Token::value = loop_var_name
     "in" cursor expect_token_value drop
 
+    token Token::location = for_loc
+    for_loc Location::span Span::offset = for_offset
+    f"__for_iter_{for_offset}" = hidden_iter_name
+    f"__for_opt_{for_offset}" = hidden_opt_name
+
     # Iterable-expression phase — emit ops until the matching `do`. These ops
-    # leave the iterator value on the stack; OpForStart (emitted below) then
-    # pops it and captures it into a hidden local during typecheck/bytecode.
+    # leave the iterator value on the stack, which the synthesized
+    # OpAssignVar below pops into the hidden iterator local.
     0 = hkf_depth
     while true do
         cursor tc_peek = hkf_peek
         if hkf_peek .is_none then
-            token Token::location "Unclosed `for` loop" ErrorKind::UnmatchedBlock raise_error
+            for_loc "Unclosed `for` loop" ErrorKind::UnmatchedBlock raise_error
             return
         fi
         hkf_peek .unwrap = hkf_tok
         if "do" hkf_tok Token::value == 0 hkf_depth == && then
             cursor tc_pop drop
-            # OpForStart's value encodes `{loop_var_name}|{hidden_iter_name}`
-            # so the typechecker can bind both locals from one op. The hidden
-            # name includes the source offset so nested for-loops stay unique.
-            token Token::location Location::span Span::offset = for_offset
-            f"{loop_var_name}|__for_iter_{for_offset}" = for_value
-            token Token::location OpKind::OpForStart for_value make_op_str ops .push
             break
         fi
-        if "while" hkf_tok Token::value == "for" hkf_tok Token::value == || then
+        if "while" hkf_tok Token::value == then
             1 += hkf_depth
         fi
         if "done" hkf_tok Token::value == 0 hkf_depth > && then
@@ -1686,21 +1700,35 @@ fn handle_keyword_for token:Token cursor:TokenCursor function_name:str ops:List[
         ops function_name cursor hkf_tok token_to_op
     done
 
-    # Body phase — emit ops until the matching `done`.
+    # Loop preamble: store iterator into hidden local, then open the while
+    # loop with the `next`/`is_some` condition.
+    for_loc OpKind::OpAssignVar hidden_iter_name make_op_str ops .push
+    for_loc OpKind::OpWhileStart 0 make_op ops .push
+    for_loc OpKind::OpPushVar hidden_iter_name make_op_str ops .push
+    for_loc OpKind::OpMethodCall "next" make_op_str ops .push
+    for_loc OpKind::OpAssignVar hidden_opt_name make_op_str ops .push
+    for_loc OpKind::OpPushVar hidden_opt_name make_op_str ops .push
+    for_loc OpKind::OpMethodCall "is_some" make_op_str ops .push
+    for_loc OpKind::OpWhileCondition 0 make_op ops .push
+    for_loc OpKind::OpPushVar hidden_opt_name make_op_str ops .push
+    for_loc OpKind::OpMethodCall "unwrap" make_op_str ops .push
+    for_loc OpKind::OpAssignVar loop_var_name make_op_str ops .push
+
+    # Body phase — emit ops until the matching `done`, then close the while.
     0 = hkf_body_depth
     while true do
         cursor tc_peek = hkf_body_peek
         if hkf_body_peek .is_none then
-            token Token::location "Unclosed `for` loop body" ErrorKind::UnmatchedBlock raise_error
+            for_loc "Unclosed `for` loop body" ErrorKind::UnmatchedBlock raise_error
             return
         fi
         hkf_body_peek .unwrap = hkf_body_tok
         if "done" hkf_body_tok Token::value == 0 hkf_body_depth == && then
             cursor tc_pop drop
-            hkf_body_tok Token::location OpKind::OpForEnd 0 make_op ops .push
+            hkf_body_tok Token::location OpKind::OpWhileEnd 0 make_op ops .push
             return
         fi
-        if "while" hkf_body_tok Token::value == "for" hkf_body_tok Token::value == || then
+        if "while" hkf_body_tok Token::value == then
             1 += hkf_body_depth
         fi
         if "done" hkf_body_tok Token::value == 0 hkf_body_depth > && then

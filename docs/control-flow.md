@@ -175,6 +175,79 @@ The stack state must be identical:
 
 The type checker enforces that loops do not accumulate or consume stack values across iterations.
 
+## For Loops
+
+Casa has `for`/`in`/`do`/`done` loops that iterate over any value whose type
+provides a `next` method returning `Option[T]`.
+
+### Syntax
+
+```
+for <ident> in <iterable> do
+    <body>
+done
+```
+
+The iterable expression is evaluated once. On each iteration the loop calls
+`<iterable_type>::next`; if it returns `Option::Some(value)`, `value` is
+bound to `<ident>` and the body runs. If it returns `Option::None`, the loop
+exits. `break` and `continue` work the same way as in `while`.
+
+### Iterating Standard Collections
+
+The standard library provides `.iter` for `array[T]` and `List[T]`, and
+`.chars` for `str`:
+
+```casa
+[1 2 3] = nums
+for n in nums.iter do
+    n print "\n" print
+done
+
+for c in "casa".chars do
+    c print "\n" print
+done
+```
+
+### Custom Iterators
+
+Any struct that provides a `next` method returning `Option[T]` can be used
+in a `for` loop. The `Iterator[T]` trait in `lib/std.casa` documents the
+contract:
+
+```casa
+trait Iterator[T] {
+    fn next self:self -> Option[T]
+}
+```
+
+A `Counter` that yields integers from `0` up to (but not including) a
+limit:
+
+```casa
+struct Counter { value:int limit:int }
+
+impl Counter {
+    fn next self:Counter -> Option[int] {
+        if self Counter::limit self Counter::value >= then
+            Option::None (Option[int]) return
+        fi
+        self Counter::value = current
+        self Counter::value 1 + self->value
+        current Option::Some
+    }
+}
+
+Counter { value: 0 limit: 5 } = c
+for x in c do
+    x print "\n" print
+done
+```
+
+Note that iterators are stateful: a single `Counter` instance can be
+consumed only once. Re-bind the iterable in each outer iteration if you
+want to restart it.
+
 ## Match
 
 Casa has exhaustive pattern matching using `match`/`end`. Match works with enum types, struct types, and literal types (`bool`, `int`, `char`, `str`).
