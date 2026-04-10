@@ -1180,6 +1180,20 @@ s.length print         # 2
 
 See [`examples/hash_map.casa`](../examples/hash_map.casa) for a full program using both Map and Set.
 
+## Stdout Output
+
+### `println`
+
+Writes a string followed by a newline to stdout.
+
+**Signature:** `println msg:str`
+
+**Stack effect:** `str -> None`
+
+```casa
+"Hello world!" println
+```
+
 ## Stderr Output
 
 ### `eprint`
@@ -1304,6 +1318,109 @@ include "../lib/log.casa"
 LogLevel::Info log_set_level
 "now this is visible" log_info
 "still visible" log_warning
+```
+
+## Timer
+
+The timer library is in `lib/timer.casa`. Include it with:
+
+```casa
+include "../lib/timer.casa"
+```
+
+It provides high-resolution timing using `clock_gettime` with `CLOCK_MONOTONIC`. Timer implements the `Display` trait, formatting elapsed time as fractional seconds (e.g., `"1.042s"`).
+
+### `Timer::new`
+
+Creates a new Timer and starts it immediately.
+
+**Signature:** `Timer::new -> Timer`
+
+**Stack effect:** `-> Timer`
+
+```casa
+Timer::new = timer
+```
+
+### `Timer.elapsed_ns`
+
+Returns elapsed nanoseconds since the Timer was created.
+
+**Signature:** `elapsed_ns self:Timer -> int`
+
+**Stack effect:** `Timer -> int`
+
+```casa
+timer .elapsed_ns print   # e.g. 42000000
+```
+
+### `Timer.elapsed_ms`
+
+Returns elapsed milliseconds since the Timer was created.
+
+**Signature:** `elapsed_ms self:Timer -> int`
+
+**Stack effect:** `Timer -> int`
+
+```casa
+timer .elapsed_ms print   # e.g. 42
+```
+
+### `Timer.to_str`
+
+Returns the elapsed time formatted as fractional seconds. Implements the `Display` trait, so Timer can be used directly in format strings.
+
+**Signature:** `to_str self:Timer -> str`
+
+**Stack effect:** `Timer -> str`
+
+```casa
+f"Elapsed: {timer}\n" print   # e.g. Elapsed: 1.042s
+```
+
+### Global Convenience Functions
+
+A global timer can be used without managing a Timer struct directly.
+
+#### `timer_start`
+
+Starts the global timer.
+
+**Signature:** `timer_start`
+
+**Stack effect:** `-> None`
+
+#### `timer_elapsed_ms`
+
+Returns elapsed milliseconds from the global timer. Exits with an error if `timer_start` has not been called.
+
+**Signature:** `timer_elapsed_ms -> int`
+
+**Stack effect:** `-> int`
+
+#### `timer_elapsed_ns`
+
+Returns elapsed nanoseconds from the global timer. Exits with an error if `timer_start` has not been called.
+
+**Signature:** `timer_elapsed_ns -> int`
+
+**Stack effect:** `-> int`
+
+### Complete Example
+
+```casa
+include "../lib/timer.casa"
+
+Timer::new = timer
+
+# Do some work
+0 = count
+while 100000 count > do
+    1 += count
+done
+
+f"Elapsed: {timer}\n" print
+f"Elapsed ms: {timer .elapsed_ms}\n" print
 ```
 
 ## Command-Line Arguments
