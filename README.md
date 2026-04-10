@@ -96,18 +96,11 @@ source → lex → parse → resolve → type check → bytecode → emit asm �
 | File | Description |
 |------|-------------|
 | [hello_world.casa](examples/hello_world.casa) | Print a string |
-| [fibonacci.casa](examples/fibonacci.casa) | Recursive Fibonacci function |
 | [fizzbuzz.casa](examples/fizzbuzz.casa) | FizzBuzz with functions, variables, and conditionals |
-| [struct.casa](examples/struct.casa) | Structs, getters, setters, and methods |
-| [euler01.casa](examples/euler01.casa) | Project Euler problem 1 — sum of multiples |
-| [string_operations.casa](examples/string_operations.casa) | String methods, char type, and cstr conversion |
-| [bitwise_operations.casa](examples/bitwise_operations.casa) | Bitwise AND, OR, XOR, and NOT operations |
-| [file_io.casa](examples/file_io.casa) | File I/O operations: read, write, and remove files |
-| [vec.casa](examples/vec.casa) | Generic `List[T]` with push, pop, get, set, slice |
 | [hash_map.casa](examples/hash_map.casa) | `Map[K V]` and `Set[K]` with the `Hashable` trait |
-| [type_annotations.casa](examples/type_annotations.casa) | Type annotations on variable assignments (`= name:type`) |
 | [enum.casa](examples/enum.casa) | Enum types with `match` pattern matching |
 | [parser.casa](examples/parser.casa) | Cursor-based text scanning and parsing |
+| [game_of_life.casa](examples/game_of_life.casa) | Conway's Game of Life with terminal rendering and resize handling |
 
 More examples: [examples](./examples/)
 
