@@ -10,6 +10,7 @@
 0 = LABEL_COUNTER
 Map::new (Map[int int]) = OP_LABEL_MAP
 Set::new (Set[str]) = COMPILED_FUNCTIONS
+Set::new (Set[str]) = INLINING_STACK
 
 fn new_label -> int {
     LABEL_COUNTER = value
@@ -21,6 +22,7 @@ fn reset_labels {
     0 = LABEL_COUNTER
     Map::new (Map[int int]) = OP_LABEL_MAP
     Set::new (Set[str]) = COMPILED_FUNCTIONS
+    Set::new (Set[str]) = INLINING_STACK
 }
 
 fn op_index_to_label op_index:int -> int {
@@ -764,9 +766,18 @@ fn compile_function compiler:BytecodeCompiler function:Function op:Op {
     # Mark as being compiled to prevent infinite recursion on recursive calls
     function Function::name COMPILED_FUNCTIONS .add = COMPILED_FUNCTIONS
 
+    # Track inline functions being compiled to detect recursive inlining
+    if function Function::is_inline then
+        function Function::name INLINING_STACK .add = INLINING_STACK
+    fi
+
     List::new (List[Inst]) = function_bytecode
     compiler BytecodeCompiler::constants_table compiler BytecodeCompiler::string_table function (int) ops compiler.store make_compiler_with_tables = function_compiler
     function_bytecode function_compiler compile_ops
+
+    if function Function::is_inline then
+        function Function::name INLINING_STACK .remove = INLINING_STACK
+    fi
 
     # Handle locals
     function_compiler BytecodeCompiler::locals_count = locals_count
@@ -805,7 +816,52 @@ fn compile_function_ops compiler:BytecodeCompiler op:Op bytecode:List[Inst] {
     if OpKind::OpFnCall op Op::kind == then
         name compiler.store.functions .get .unwrap = function
         op function compiler compile_function
-        name InstKind::InstFnCall make_inst_str bytecode .push
+        if function Function::is_inline then
+            if name INLINING_STACK .has then
+                op Op::location f"Recursive inline function `{name}` is not allowed" ErrorKind::Syntax raise_error
+            fi
+            name INLINING_STACK .add = INLINING_STACK
+            new_label = inline_end_label
+
+            # Build label remap table for this inline expansion
+            Map::new (Map[int int]) = label_remap
+            0 = scan_index
+            while scan_index function Function::bytecode .length > do
+                scan_index function Function::bytecode .get = scan_inst
+                if InstKind::InstLabel scan_inst Inst::kind == then
+                    if scan_inst Inst::int_arg label_remap .get .is_none then
+                        new_label = remapped_label
+                        scan_inst Inst::int_arg remapped_label label_remap .set = label_remap
+                    fi
+                fi
+                1 += scan_index
+            done
+
+            # Copy bytecode with remapped labels
+            0 = inline_index
+            while inline_index function Function::bytecode .length > do
+                inline_index function Function::bytecode .get = inline_inst
+                inline_inst Inst::kind = inline_kind
+                if InstKind::InstFnReturn inline_kind == then
+                    inline_end_label InstKind::InstJump make_inst_int bytecode .push
+                elif
+                    InstKind::InstLabel inline_kind ==
+                    InstKind::InstJump inline_kind == ||
+                    InstKind::InstJumpNe inline_kind == ||
+                then
+                    if inline_inst Inst::int_arg label_remap .get Option::Some(remapped_label) is then
+                        remapped_label inline_kind make_inst_int bytecode .push
+                    fi
+                else
+                    inline_inst bytecode .push
+                fi
+                1 += inline_index
+            done
+            inline_end_label InstKind::InstLabel make_inst_int bytecode .push
+            name INLINING_STACK .remove = INLINING_STACK
+        else
+            name InstKind::InstFnCall make_inst_str bytecode .push
+        fi
     elif OpKind::OpFnPush op Op::kind == then
         name compiler.store.functions .get = function_opt
         if function_opt .is_none then
@@ -1061,7 +1117,10 @@ fn compile_bytecode store:SymbolStore ops:List[Op] -> Program {
     while function_index function_names .length > do
         function_index function_names .get = function_name
         function_name compiler.store.functions .get .unwrap = function
-        if 0 function Function::bytecode .length != then
+        if
+            0 function Function::bytecode .length !=
+            function Function::is_inline ! function Function::has_fn_ref || &&
+        then
             function_name function Function::bytecode functions .set = functions
         fi
         1 += function_index

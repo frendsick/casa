@@ -119,6 +119,47 @@ fn fib number:int -> int {
 
 See [`examples/fibonacci.casa`](../examples/fibonacci.casa).
 
+### Inline Functions
+
+The `inline` keyword causes a function's body to be copied directly at each call site instead of generating a function call. This eliminates call overhead for small, frequently-used functions.
+
+```
+inline fn name param:type ... -> return_type ... {
+    body
+}
+```
+
+Example:
+
+```casa
+inline fn double x:int -> int {
+    x 2 *
+}
+
+5 double print   # 10
+```
+
+Inline functions work in `impl` blocks too:
+
+```casa
+impl Point {
+    inline fn sum self:Point -> int {
+        self Point::x self Point::y +
+    }
+}
+```
+
+Function references to inline functions are allowed. When a reference is taken with `&`, a standalone copy of the function is also emitted:
+
+```casa
+&double = double_ref
+7 double_ref exec print   # 14
+```
+
+Recursive inline functions are not allowed and will produce a compile error.
+
+See [`examples/inline.casa`](../examples/inline.casa).
+
 ### Generic Functions
 
 Functions can declare type variables in square brackets after the name. Type variables are resolved to concrete types at each call site, enabling type-safe polymorphism.
