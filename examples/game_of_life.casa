@@ -1,0 +1,209 @@
+# Conway's Game of Life
+# Runs fullscreen in the terminal with toroidal wrapping.
+# Adapts to terminal resize. Exit with Ctrl+C.
+
+include "../lib/std.casa"
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+16 = SYS_IOCTL
+35 = SYS_NANOSLEEP
+21523 = TIOCGWINSZ
+64 = ALIVE_THRESHOLD
+200 = FRAME_DELAY_MS
+
+# ---------------------------------------------------------------------------
+# Terminal helpers
+# ---------------------------------------------------------------------------
+
+fn write_stdout text:str {
+    text 1 file::write drop
+}
+
+# ---------------------------------------------------------------------------
+# Random
+# ---------------------------------------------------------------------------
+
+fn fill_random buffer:ptr size:int {
+    0 O_RDONLY "/dev/urandom" file::open = urandom_fd
+    size buffer urandom_fd file::read drop
+    urandom_fd file::close drop
+}
+
+fn randomize_grid grid:ptr size:int {
+    size grid fill_random
+    0 = index
+    while index size > do
+        if ALIVE_THRESHOLD grid index + load8 < then
+            1 grid index + store8
+        else
+            0 grid index + store8
+        fi
+        1 += index
+    done
+}
+
+# ---------------------------------------------------------------------------
+# Neighbor counting (toroidal wrap)
+# ---------------------------------------------------------------------------
+
+fn count_neighbors grid:ptr grid_width:int grid_height:int x:int y:int -> int {
+    0 = neighbor_count
+    -1 = dy
+    while dy 2 > do
+        -1 = dx
+        while dx 2 > do
+            if 0 dx == 0 dy == && then
+                1 += dx
+                continue
+            fi
+            y dy + grid_height + grid_height % = ny
+            x dx + grid_width + grid_width % = nx
+            grid ny grid_width * nx + + load8 += neighbor_count
+            1 += dx
+        done
+        1 += dy
+    done
+    neighbor_count
+}
+
+# ---------------------------------------------------------------------------
+# Rendering
+# ---------------------------------------------------------------------------
+
+fn render grid:ptr grid_width:int grid_height:int {
+    StringBuilder::new = frame
+    "\x1b[H" frame .append
+    0 = render_row
+    while render_row grid_height > do
+        0 = render_col
+        while render_col grid_width > do
+            if 0 grid render_row grid_width * render_col + + load8 != then
+                "\xe2\x96\x88" frame .append
+            else
+                " " frame .append
+            fi
+            1 += render_col
+        done
+        if render_row grid_height 1 - != then
+            "\n" frame .append
+        fi
+        1 += render_row
+    done
+    frame .build write_stdout
+}
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+# Allocate reusable buffers for ioctl and nanosleep
+8 alloc = winsize_buf
+16 alloc = timespec_buf
+0 timespec_buf (ptr) store64
+FRAME_DELAY_MS 1000000 * timespec_buf (ptr) 8 + store64
+
+# Get initial terminal size (exit if stdout is not a terminal)
+winsize_buf (int) TIOCGWINSZ 1 SYS_IOCTL syscall3 = ioctl_result
+if 0 ioctl_result < then
+    0 exit
+fi
+winsize_buf 2 + load16 = width
+winsize_buf load16 = height
+width height * = grid_size
+
+# Allocate and initialize grids
+grid_size alloc = current
+grid_size alloc = next_grid
+grid_size current randomize_grid
+
+# Clear screen
+"\x1b[2J" write_stdout
+
+# Game loop
+while true do
+    # Check for terminal resize
+    winsize_buf (int) TIOCGWINSZ 1 SYS_IOCTL syscall3 drop
+    winsize_buf 2 + load16 = new_width
+    winsize_buf load16 = new_height
+
+    if
+        new_width width !=
+        new_height height != ||
+    then
+        new_width new_height * = new_grid_size
+
+        # Allocate fresh buffers
+        new_grid_size alloc = new_current
+        new_grid_size alloc = new_next
+
+        # Fill new grid with random cells
+        new_grid_size new_current randomize_grid
+
+        # Zero the next buffer
+        0 = zero_index
+        while zero_index new_grid_size > do
+            0 new_next zero_index + store8
+            1 += zero_index
+        done
+
+        # Copy overlapping region from old grid
+        if new_width width > then new_width else width fi = copy_width
+        if new_height height > then new_height else height fi = copy_height
+        0 = copy_row
+        while copy_row copy_height > do
+            copy_width
+            current copy_row width * +
+            new_current copy_row new_width * +
+            memcpy
+            1 += copy_row
+        done
+
+        new_current = current
+        new_next = next_grid
+        new_width = width
+        new_height = height
+        width height * = grid_size
+
+        # Clear screen after resize
+        "\x1b[2J" write_stdout
+    fi
+
+    # Render current state
+    height width current render
+
+    # Compute next generation
+    0 = gen_y
+    while gen_y height > do
+        0 = gen_x
+        while gen_x width > do
+            gen_y gen_x height width current count_neighbors = neighbors
+            current gen_y width * gen_x + + load8 = cell_alive
+
+            if 0 cell_alive != then
+                if 2 neighbors == 3 neighbors == || then
+                    1 next_grid gen_y width * gen_x + + store8
+                else
+                    0 next_grid gen_y width * gen_x + + store8
+                fi
+            else
+                if 3 neighbors == then
+                    1 next_grid gen_y width * gen_x + + store8
+                else
+                    0 next_grid gen_y width * gen_x + + store8
+                fi
+            fi
+            1 += gen_x
+        done
+        1 += gen_y
+    done
+
+    # Swap buffers
+    current = swap_temp
+    next_grid = current
+    swap_temp = next_grid
+
+    # Sleep
+    0 (int) timespec_buf (int) SYS_NANOSLEEP syscall2 drop
+done

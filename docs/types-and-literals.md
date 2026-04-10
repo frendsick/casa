@@ -45,12 +45,14 @@ Characters support the following escape sequences:
 | `\'` | Single quote |
 | `\0` | Null byte |
 | `\r` | Carriage return |
+| `\xHH` | Hex byte (two hex digits, e.g. `\x1b`) |
 
 ```casa
 '\n' print     # prints a newline
 '\t' print     # prints a tab
 '\\' print     # prints a backslash
 '\'' print     # prints a single quote
+'\x41' print   # prints A (0x41 = 65)
 ```
 
 Invalid escape sequences (e.g. `\q`) produce a compile-time `SYNTAX` error. Empty char literals (`''`) are also errors.
@@ -83,11 +85,13 @@ Strings support the following escape sequences:
 | `\r` | Carriage return |
 | `\{` | Literal left brace |
 | `\}` | Literal right brace |
+| `\xHH` | Hex byte (two hex digits, e.g. `\x1b`) |
 
 ```casa
 "hello\nworld" print    # prints on two lines
 "say \"hi\"" print      # say "hi"
 "col1\tcol2" print      # tab-separated
+"\x1b[31mred\x1b[0m"    # ANSI escape: red text
 ```
 
 Invalid escape sequences (e.g. `\q`) produce a compile-time `SYNTAX` error.
@@ -136,7 +140,7 @@ Use `\{` and `\}` to produce literal braces:
 f"\{x\}" print    # {x}
 ```
 
-Escape sequences work inside f-strings just like regular strings (`\n`, `\t`, `\\`, `\"`, `\0`, `\r`):
+Escape sequences work inside f-strings just like regular strings (`\n`, `\t`, `\\`, `\"`, `\0`, `\r`, `\xHH`):
 
 ```casa
 f"line1\nline2" print

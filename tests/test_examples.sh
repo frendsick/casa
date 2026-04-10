@@ -48,8 +48,8 @@ for f in "$EXAMPLES_DIR"/*.casa; do
     # Compile
     "$COMPILER" "$f" -o "$binary"
 
-    # Run and capture output
-    output=$("$binary")
+    # Run and capture output (1s timeout for interactive examples)
+    output=$(timeout 1 "$binary") || true
 
     # Clean up binary
     rm -f "$binary"
