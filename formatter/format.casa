@@ -63,7 +63,14 @@ fn make_indent depth:int -> str {
 # ============================================================================
 
 fn is_eof_token token:Token -> bool {
-    token Token::value .length 0 ==
+    # Eof has empty value, but so can some f-string tokens
+    if 0 token Token::value .length != then false return fi
+    if TokenKind::FstringStart token Token::kind == then false return fi
+    if TokenKind::FstringEnd token Token::kind == then false return fi
+    if TokenKind::FstringText token Token::kind == then false return fi
+    if TokenKind::FstringExprStart token Token::kind == then false return fi
+    if TokenKind::FstringExprEnd token Token::kind == then false return fi
+    true
 }
 
 fn is_block_open_token token:Token -> bool {
@@ -93,12 +100,25 @@ fn is_dedent_keyword value:str -> bool {
     false
 }
 
-fn should_skip_space_before value:str -> bool {
-    if "." value == then true return fi
-    if ")" value == then true return fi
-    if "]" value == then true return fi
-    if "[" value == then true return fi
-    if ":" value == then true return fi
+fn is_fstring_interior kind:TokenKind -> bool {
+    if TokenKind::FstringText kind == then true return fi
+    if TokenKind::FstringExprStart kind == then true return fi
+    if TokenKind::FstringExprEnd kind == then true return fi
+    false
+}
+
+fn should_skip_space_before_tokens prev_kind:TokenKind cur_val:str cur_kind:TokenKind -> bool {
+    if "." cur_val == then true return fi
+    if ")" cur_val == then true return fi
+    if "]" cur_val == then true return fi
+    if "[" cur_val == then true return fi
+    if ":" cur_val == then true return fi
+    # No spaces inside f-string components:
+    # FstringStart + interior, interior + interior, interior + FstringEnd
+    if TokenKind::FstringStart prev_kind == then true return fi
+    if prev_kind is_fstring_interior then true return fi
+    if cur_kind is_fstring_interior then true return fi
+    if TokenKind::FstringEnd cur_kind == then true return fi
     false
 }
 
@@ -199,10 +219,13 @@ fn emit_line_tokens line:List[Token] depth:int source:str output:StringBuilder {
         source lt token_text output .append
         ti 1 + = next_ti
         if next_ti line .length > then
-            next_ti line .get Token::value = next_val
+            next_ti line .get = next_tok
+            next_tok Token::value = next_val
             true = need_space
             if lv should_skip_space_after then false = need_space fi
-            if next_val should_skip_space_before then false = need_space fi
+            if next_tok Token::kind next_val lt Token::kind should_skip_space_before_tokens then
+                false = need_space
+            fi
             # Colon in fn params: no space around it
             if ":" lv == then
                 if ti line is_fn_param_colon then false = need_space fi
@@ -226,10 +249,25 @@ fn measure_line_length line:List[Token] depth:int source:str -> int {
     depth 4 * = len
     0 = mi
     while mi line .length > do
-        source mi line .get token_text .length len + = len
+        mi line .get = m_tok
+        source m_tok token_text .length len + = len
         mi 1 + = m_next
         if m_next line .length > then
-            1 len + = len
+            m_tok Token::value = m_val
+            m_next line .get = m_next_tok
+            m_next_tok Token::value = m_next_val
+            true = m_space
+            if m_val should_skip_space_after then false = m_space fi
+            if m_next_tok Token::kind m_next_val m_tok Token::kind should_skip_space_before_tokens then
+                false = m_space
+            fi
+            if ":" m_val == then
+                if mi line is_fn_param_colon then false = m_space fi
+            fi
+            if ":" m_next_val == then
+                if m_next line is_fn_param_colon then false = m_space fi
+            fi
+            if m_space then 1 len + = len fi
         fi
         1 += mi
     done
@@ -325,6 +363,14 @@ fn emit_wrapped_fn_sig line:List[Token] depth:int source:str output:StringBuilde
                             if is_new_param then
                                 true = param_done
                             else
+                                wi line .get Token::value = type_val
+                                # Space before type token, respecting bracket and colon rules
+                                if "[" type_val != "]" type_val != && then
+                                    wi 1 - line .get Token::value = prev_tok_val
+                                    if "[" prev_tok_val != ":" prev_tok_val != && then
+                                        " " output .append
+                                    fi
+                                fi
                                 source wi line .get token_text output .append
                                 1 += wi
                             fi
@@ -460,6 +506,7 @@ fn format_tokens tokens:List[Token] source:str -> str {
     0 = consecutive_newlines
     false = prev_was_open
     false = prev_was_comment
+    false = prev_was_section_comment
 
     while pos tokens .length > do
         pos tokens .get = token
@@ -511,7 +558,11 @@ fn format_tokens tokens:List[Token] source:str -> str {
 
             if 0 blank_lines != then
                 if 0 line_tokens .get is_section_separator_comment then
-                    2 = allowed_blanks
+                    if prev_was_section_comment then
+                        0 = allowed_blanks
+                    else
+                        2 = allowed_blanks
+                    fi
                 elif 0 depth == then
                     1 = allowed_blanks
                 else
@@ -519,7 +570,11 @@ fn format_tokens tokens:List[Token] source:str -> str {
                 fi
             else
                 if 0 depth == then
-                    if TokenKind::Comment 0 line_tokens .get Token::kind != then
+                    if 0 line_tokens .get is_section_separator_comment then
+                        if prev_was_section_comment ! then
+                            2 = allowed_blanks
+                        fi
+                    elif TokenKind::Comment 0 line_tokens .get Token::kind != then
                         1 = allowed_blanks
                     elif prev_was_comment ! then
                         1 = allowed_blanks
@@ -557,6 +612,7 @@ fn format_tokens tokens:List[Token] source:str -> str {
                 0 = consecutive_newlines
                 false = prev_was_open
                 false = prev_was_comment
+                false = prev_was_section_comment
                 true = handled_struct
             fi
         fi
@@ -576,7 +632,7 @@ fn format_tokens tokens:List[Token] source:str -> str {
                 done
                 if has_open_brace ! then
                     # Incomplete fn signature — collect continuation lines
-                    # until we find a line ending with {
+                    # until we find { or end of signature
                     false = sig_complete
                     while pos tokens .length > sig_complete ! && do
                         pos tokens .get = sig_tok
@@ -584,6 +640,21 @@ fn format_tokens tokens:List[Token] source:str -> str {
                             true = sig_complete
                         elif TokenKind::Newline sig_tok Token::kind == then
                             1 += pos
+                        elif "}" sig_tok Token::value == then
+                            # Closing brace of enclosing block: stop, don't consume
+                            true = sig_complete
+                        elif TokenKind::Keyword sig_tok Token::kind == then
+                            # New keyword (fn, struct, etc): this fn has no body
+                            sig_tok Token::value = sig_kw
+                            if "fn" sig_kw == "struct" sig_kw == ||
+                                "enum" sig_kw == || "impl" sig_kw == ||
+                                "trait" sig_kw == ||
+                            then
+                                true = sig_complete
+                            else
+                                sig_tok line_tokens .push
+                                1 += pos
+                            fi
                         else
                             # Collect this continuation line
                             false = sig_line_done
@@ -642,8 +713,15 @@ fn format_tokens tokens:List[Token] source:str -> str {
             # Track if this line was a comment
             if TokenKind::Comment 0 line_tokens .get Token::kind == then
                 true = prev_was_comment
+                # Track section comment context (separator or comment between separators)
+                if 0 line_tokens .get is_section_separator_comment then
+                    true = prev_was_section_comment
+                elif prev_was_section_comment then
+                    # Comment between separators, keep the flag
+                fi
             else
                 false = prev_was_comment
+                false = prev_was_section_comment
             fi
 
             # else keyword: restore depth for body
@@ -666,13 +744,13 @@ fn main {
     read_all_stdin = source
 
     source fmt_lex = tokens_opt
-    if tokens_opt .is_none then
+    if tokens_opt Option::Some(tokens) is then
+        source tokens format_tokens = formatted
+        formatted print
+    else
         source print
         1 exit
     fi
-
-    source tokens_opt .unwrap format_tokens = formatted
-    formatted print
 }
 
 main
