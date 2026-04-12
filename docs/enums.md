@@ -162,23 +162,9 @@ Color::Green print   # 1
 Color::Blue print    # 2
 ```
 
-## Match Statement
+## Match
 
-The `match` keyword provides exhaustive pattern matching on enum values. It consumes the enum value from the stack and executes the matching arm. Match also works with literal types (`bool`, `int`, `char`, `str`) — see [Control Flow](control-flow.md#match) for details.
-
-### Syntax
-
-```
-<enum_value> match
-    EnumName::Variant1 => <body>
-    EnumName::Variant2 => <body>
-    ...
-end
-```
-
-The `match` keyword pops the enum value from the stack. Each arm specifies a variant pattern followed by `=>` and a body. The block is closed with `end`.
-
-### Basic Example
+Enums support exhaustive pattern matching with `match`/`end`. Variants with inner values can be destructured into bindings. All variants must be covered, or a wildcard `_` arm must be present.
 
 ```casa
 enum Color { Red Green Blue }
@@ -188,121 +174,9 @@ Color::Green match
     Color::Green => "green" print
     Color::Blue => "blue" print
 end
-# prints: green
 ```
 
-### Match with Destructuring
-
-For variants with inner values, use `(bindings)` after the variant name to bind the inner values to variables.
-
-```casa
-enum Shape {
-    Circle(int)
-    Rectangle(int int)
-    Point
-}
-
-10 Shape::Circle match
-    Shape::Circle(radius) => radius print
-    Shape::Rectangle(width height) => width height * print
-    Shape::Point => "point" print
-end
-# prints: 10
-```
-
-For generic enums, the binding types are inferred from the match subject type.
-
-```casa
-42 Option::Some match
-    Option::Some(value) => value print    # value has type int
-    Option::None => "nothing" print
-end
-```
-
-### Exhaustiveness
-
-All variants must be covered. Missing a variant is a compile-time error:
-
-```casa
-# ERROR: Non-exhaustive match, missing arms: `Color::Blue`
-Color::Red match
-    Color::Red => "red" print
-    Color::Green => "green" print
-end
-```
-
-Duplicate arms are also compile-time errors.
-
-### Wildcard Arm
-
-The `_ =>` wildcard arm matches any remaining variants. When used, it must be the last arm. No further arms are allowed after it.
-
-```casa
-enum Direction { North South East West }
-
-Direction::North match
-    Direction::North => "up" print
-    _ => "not up" print
-end
-```
-
-The wildcard satisfies exhaustiveness on its own, so you do not need to list every variant:
-
-```casa
-# Only handle one variant explicitly, catch the rest
-color match
-    Color::Red => "red" print
-    _ => "other" print
-end
-```
-
-Arms after a wildcard are unreachable and produce a compile-time error:
-
-```casa
-# ERROR: unreachable match arm after wildcard `_`
-color match
-    _ => "any" print
-    Color::Red => "red" print
-end
-```
-
-### Match as Expression
-
-Match arms can leave values on the stack. All arms must produce the same stack effect (same types).
-
-```casa
-Color::Green match
-    Color::Red => 10
-    Color::Green => 20
-    Color::Blue => 30
-end
-print    # 20
-```
-
-This is useful for mapping enum values to other types:
-
-```casa
-fn color_name c:Color -> str {
-    c match
-        Color::Red => "red"
-        Color::Green => "green"
-        Color::Blue => "blue"
-    end
-}
-```
-
-### Stack Consistency
-
-All arms must leave the stack in the same state. The following is a compile-time error:
-
-```casa
-# ERROR: arms produce different types
-Color::Red match
-    Color::Red => 1
-    Color::Green => "two"
-    Color::Blue => 3
-end
-```
+See [Control Flow -- Match](control-flow.md#match) for full syntax, destructuring, wildcard arms, match as expression, and exhaustiveness rules.
 
 ## Enums in Functions
 
