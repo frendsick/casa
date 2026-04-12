@@ -1,12 +1,25 @@
 # Operators
 
-Casa uses postfix (reverse Polish) notation. Operands are pushed onto the stack first, then the operator consumes them and pushes the result.
+Casa uses postfix (reverse Polish) notation. Operands are pushed onto the stack first, then the operator consumes them and pushes the result. There is no operator precedence.
 
-```casa
-3 4 +     # push 3, push 4, add → 7
+## Stack-Based Evaluation
+
+In most languages you write `(3 + 4) * 2`. In Casa, you write `3 4 + 2 *`. Here is how it evaluates step by step:
+
+```
+Step       Operation    Stack (top on right)
+────       ─────────    ────────────────────
+           start        [ ]
+3          push 3       [ 3 ]
+4          push 4       [ 3, 4 ]
++          add          [ 7 ]
+2          push 2       [ 7, 2 ]
+*          multiply     [ 14 ]
 ```
 
-There is no operator precedence — evaluation order is determined entirely by the order values appear on the stack.
+The stack replaces parentheses and precedence rules. Values are consumed left to right, and every operator immediately uses the top values on the stack.
+
+For binary operators, the **top of the stack is the first argument**. This means `1 0 >` asks "is `0` greater than `1`?", not "is `1` greater than `0`?". To check if 1 > 0, write `0 1 >`.
 
 ## Arithmetic
 
