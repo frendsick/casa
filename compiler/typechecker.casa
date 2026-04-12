@@ -1160,7 +1160,14 @@ fn type_satisfies_trait type_name:str trait_name:str function_opt:Option[Functio
                 true = via_generic_base
             fi
         fi
-        if fn_opt.is_none then false return fi
+        if fn_opt.is_none then
+            # Default methods (with a body) don't require a concrete implementation
+            if 0 method TraitMethod::default_ops.length != then
+                1 += index
+                continue
+            fi
+            false return
+        fi
         fn_opt.unwrap = function
         function ensure_typechecked
         if "None -> None" function Function::signature signature_to_str == then false return fi
@@ -2170,6 +2177,155 @@ fn find_method_by_name method_name:str -> Option[str] {
 }
 
 # ============================================================================
+# Instantiate default trait method for a concrete type
+# ============================================================================
+
+fn instantiate_default_trait_method function_opt:Option[Function] method_name:str receiver:str -> Option[str] {
+    DEFAULT_PARSER.store.traits.keys = trait_keys
+    0 = trait_index
+    while trait_index trait_keys.length > do
+        trait_index trait_keys.get = trait_key
+        trait_key DEFAULT_PARSER.store.traits.get.unwrap = trait_def
+
+        # Search for a default method with matching name
+        false = found_default
+        -1 = default_method_index
+        0 = search_index
+        while search_index trait_def CasaTrait::methods.length > do
+            search_index trait_def CasaTrait::methods.get = search_method
+            if method_name search_method TraitMethod::name == 0 search_method TraitMethod::default_ops.length != && then
+                true = found_default
+                search_index = default_method_index
+                break
+            fi
+            1 += search_index
+        done
+
+        if found_default ! then
+            1 += trait_index
+            continue
+        fi
+
+        # Check that receiver implements all abstract methods of this trait
+        true = all_abstract_present
+        0 = abs_index
+        while abs_index trait_def CasaTrait::methods.length > do
+            abs_index trait_def CasaTrait::methods.get = abs_method
+            if 0 abs_method TraitMethod::default_ops.length == then
+                f"{receiver}::{abs_method TraitMethod::name}" DEFAULT_PARSER.store.functions.get = abs_fn_opt
+                if abs_fn_opt.is_none then
+                    receiver extract_generic_base = abs_base_opt
+                    if abs_base_opt.is_some then
+                        f"{abs_base_opt.unwrap}::{abs_method TraitMethod::name}" DEFAULT_PARSER.store.functions.get = abs_fn_opt
+                    fi
+                fi
+                if abs_fn_opt.is_none then
+                    false = all_abstract_present
+                    break
+                fi
+            fi
+            1 += abs_index
+        done
+
+        if all_abstract_present ! then
+            1 += trait_index
+            continue
+        fi
+
+        default_method_index trait_def CasaTrait::methods.get = default_method
+
+        # Infer trait type parameter bindings from concrete implementations
+        Map::new (Map[str str]) = trait_subs
+        trait_def CasaTrait::type_params = type_params
+        Set::new (Set[str]) = type_param_set
+        0 = tp_index
+        while tp_index type_params.length > do
+            tp_index type_params.get type_param_set.add = type_param_set
+            1 += tp_index
+        done
+
+        0 = infer_index
+        while infer_index trait_def CasaTrait::methods.length > do
+            infer_index trait_def CasaTrait::methods.get = infer_method
+            if 0 infer_method TraitMethod::default_ops.length == then
+                f"{receiver}::{infer_method TraitMethod::name}" DEFAULT_PARSER.store.functions.get = infer_fn_opt
+                if infer_fn_opt.is_none then
+                    receiver extract_generic_base = infer_base_opt
+                    if infer_base_opt.is_some then
+                        f"{infer_base_opt.unwrap}::{infer_method TraitMethod::name}" DEFAULT_PARSER.store.functions.get = infer_fn_opt
+                    fi
+                fi
+                if infer_fn_opt.is_some then
+                    infer_fn_opt.unwrap = infer_fn
+                    infer_fn ensure_typechecked
+                    receiver infer_method TraitMethod::signature resolve_trait_sig = infer_trait_resolved
+                    # Match return types to infer bindings
+                    0 = ret_index
+                    while ret_index infer_trait_resolved Signature::return_types.length > ret_index infer_fn Function::signature Signature::return_types.length > && do
+                        type_param_set ret_index infer_fn Function::signature Signature::return_types.get ret_index infer_trait_resolved Signature::return_types.get trait_subs bind_generic_params_standalone = trait_subs
+                        1 += ret_index
+                    done
+                    # Match parameter types (skip self at index 0)
+                    1 = param_index
+                    while param_index infer_trait_resolved Signature::parameters.length > param_index infer_fn Function::signature Signature::parameters.length > && do
+                        type_param_set param_index infer_fn Function::signature Signature::parameters.get Parameter::typ param_index infer_trait_resolved Signature::parameters.get Parameter::typ trait_subs bind_generic_params_standalone = trait_subs
+                        1 += param_index
+                    done
+                fi
+            fi
+            1 += infer_index
+        done
+
+        # Build resolved signature for the default method
+        trait_subs receiver default_method TraitMethod::signature resolve_trait_sig apply_type_subs_to_sig = resolved_sig
+
+        # Add method-level type vars to signature
+        0 = mtv_index
+        while mtv_index default_method TraitMethod::type_vars.length > do
+            mtv_index default_method TraitMethod::type_vars.get resolved_sig Signature::type_vars.add = new_tvs
+            new_tvs resolved_sig Signature::set_type_vars
+            1 += mtv_index
+        done
+
+        # Build function ops: parameter assignments + cloned body
+        List::new (List[Op]) = synth_ops
+        List::new (List[Variable]) = synth_vars
+        0 = param_iter
+        while param_iter resolved_sig Signature::parameters.length > do
+            param_iter resolved_sig Signature::parameters.get = synth_param
+            if "" synth_param Parameter::name != then
+                synth_param Parameter::typ synth_param Parameter::name Variable synth_vars.push
+                empty_location OpKind::OpAssignVar synth_param Parameter::name make_op_str synth_ops.push
+            fi
+            1 += param_iter
+        done
+
+        default_method TraitMethod::default_ops clone_ops = cloned_body
+        trait_subs cloned_body substitute_ops_types
+        0 = body_index
+        while body_index cloned_body.length > do
+            body_index cloned_body.get synth_ops.push
+            1 += body_index
+        done
+
+        # Create and register the function
+        f"{receiver}::{method_name}" = synth_fn_name
+        resolved_sig empty_location synth_ops synth_fn_name make_function_with_sig = synth_fn
+        synth_vars synth_fn Function::set_variables
+        synth_fn_name synth_fn DEFAULT_PARSER.store.functions.set drop
+
+        # Resolve identifiers and typecheck
+        synth_fn synth_fn Function::ops resolve_identifiers synth_fn Function::set_ops
+        true synth_fn Function::set_is_used
+        synth_fn ensure_typechecked
+
+        synth_fn_name Option::Some return
+        1 += trait_index
+    done
+    Option::None (Option[str])
+}
+
+# ============================================================================
 # Check method call
 # ============================================================================
 
@@ -2250,6 +2406,15 @@ fn check_method_call
                 any_match_opt.unwrap = fn_name
                 fn_name tc.store.functions.get = fn_opt
             fi
+        fi
+    fi
+
+    # Try instantiating a default trait method
+    if fn_opt.is_none then
+        receiver method_name function_opt instantiate_default_trait_method = default_inst_opt
+        if default_inst_opt.is_some then
+            default_inst_opt.unwrap = fn_name
+            fn_name tc.store.functions.get = fn_opt
         fi
     fi
 
