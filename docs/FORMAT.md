@@ -42,8 +42,8 @@ fn fizzbuzz number:int {
 - Inside a function body, no more than **1 consecutive blank line** (SHOULD).
 
 ```casa
-include "../lib/std.casa"
-include "../lib/io.casa"
+include "path/to/lib/std.casa"
+include "path/to/lib/io.casa"
 
 16 = BUFFER_SIZE
 

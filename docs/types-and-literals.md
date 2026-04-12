@@ -13,7 +13,7 @@ Integer type. All integers are 64-bit signed values.
 -42 print      # -42
 ```
 
-Convert to string with `.to_str` (see [Standard Library](standard-library.md#type-conversions)).
+Convert to string with `.to_str` (see [Strings and IO](strings-and-io.md#type-conversions)).
 
 ### `bool`
 
@@ -24,7 +24,7 @@ true print     # 1
 false print    # 0
 ```
 
-Booleans are printed as integers (`1` for true, `0` for false). Convert to `"true"` or `"false"` with `.to_str` (see [Standard Library](standard-library.md#type-conversions)).
+Booleans are printed as integers (`1` for true, `0` for false). Convert to `"true"` or `"false"` with `.to_str` (see [Strings and IO](strings-and-io.md#type-conversions)).
 
 ### `char`
 
@@ -98,13 +98,13 @@ Invalid escape sequences (e.g. `\q`) produce a compile-time `SYNTAX` error.
 
 ### `cstr`
 
-Null-terminated C string type. There is no literal syntax for `cstr`. Create one from a `str` using `str::as_cstr` (see [Standard Library](standard-library.md#stras_cstr)). The `cstr` points directly to the byte data (no length prefix), terminated by a null byte.
+Null-terminated C string type. There is no literal syntax for `cstr`. Create one from a `str` using `str::as_cstr` (see [Strings and IO](strings-and-io.md#stras_cstr)). The `cstr` points directly to the byte data (no length prefix), terminated by a null byte.
 
 ```casa
 "hello" .as_cstr print    # hello
 ```
 
-Convert to `str` with `cstr::to_str` (see [Standard Library](standard-library.md#cstrto_str)).
+Convert to `str` with `cstr::to_str` (see [Strings and IO](strings-and-io.md#cstrto_str)).
 
 ### F-Strings (String Interpolation)
 
@@ -166,7 +166,7 @@ Heap pointer returned by `alloc`. Used with sized load/store intrinsics (`load8`
 buffer (ptr) load64 print      # 42
 ```
 
-Convert to string with `.to_str` (see [Standard Library](standard-library.md#type-conversions)).
+Convert to string with `.to_str` (see [Strings and IO](strings-and-io.md#type-conversions)).
 
 Pointer arithmetic is supported with `+` and `-` using byte offsets:
 
@@ -176,7 +176,7 @@ Pointer arithmetic is supported with `+` and `-` using byte offsets:
 buffer (ptr) 8 + load64 print  # 99
 ```
 
-See [Functions and Lambdas — Memory Intrinsics](functions-and-lambdas.md#memory-intrinsics) for details.
+See [Built-in Intrinsics -- Memory Intrinsics](intrinsics.md#memory-intrinsics) for details.
 
 ### `array[T]`
 
@@ -438,3 +438,11 @@ Line comments start with `#` and extend to the end of the line.
 ```
 
 There are no block comments.
+
+## See Also
+
+- [Operators](operators.md) -- arithmetic, comparison, and assignment operators
+- [Functions and Lambdas](functions-and-lambdas.md) -- function types, lambdas, and variables
+- [Structs and Methods](structs-and-methods.md) -- user-defined struct types
+- [Enums](enums.md) -- user-defined enum types
+- [Standard Library](standard-library.md) -- `Option`, `Result`, and array operations

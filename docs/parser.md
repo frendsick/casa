@@ -3,7 +3,7 @@
 The parser library provides cursor-based text scanning primitives for building parsers in Casa. It is in `lib/parser.casa`. Include it with:
 
 ```casa
-include "../lib/parser.casa"
+include "path/to/lib/parser.casa"
 ```
 
 The parser library includes the standard library (`lib/std.casa`) automatically.
@@ -311,8 +311,8 @@ Parses a single-quoted character literal with escape sequences. Consumes the ope
 ## Complete Example
 
 ```casa
-include "../lib/std.casa"
-include "../lib/parser.casa"
+include "path/to/lib/std.casa"
+include "path/to/lib/parser.casa"
 
 # Parse integers and identifiers from input
 "abc123" Cursor::new = cursor

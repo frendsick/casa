@@ -205,3 +205,10 @@ Reported when a type has a method with the right name but the wrong signature.
 ```
 error[TRAIT_SIGNATURE_MISMATCH]: Method signature does not match trait requirement
 ```
+
+## See Also
+
+- [Structs and Methods](structs-and-methods.md) -- `impl` blocks where trait methods are defined
+- [Functions and Lambdas](functions-and-lambdas.md) -- generic functions and trait bounds
+- [Collections](collections.md) -- Map and Set require the `Hashable` trait
+- [Strings and IO](strings-and-io.md) -- type conversions using the `Display` trait

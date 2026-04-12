@@ -77,17 +77,35 @@ source → lex → parse → resolve → type check → bytecode → emit asm �
 
 ## Documentation
 
+Start with the core language docs (1-8), then explore the library and tooling docs as needed.
+
+### Core Language
+
+| # | Document | Topics |
+|---|----------|--------|
+| 1 | [Types and Literals](docs/types-and-literals.md) | Primitive types, composite types, literals, type casting, comments |
+| 2 | [Operators](docs/operators.md) | Stack-based evaluation, arithmetic, comparison, boolean, assignment |
+| 3 | [Functions and Lambdas](docs/functions-and-lambdas.md) | Functions, lambdas, closures, variables |
+| 4 | [Control Flow](docs/control-flow.md) | Conditionals, loops, `for` iterators, `match` pattern matching |
+| 5 | [Structs and Methods](docs/structs-and-methods.md) | Struct definition, accessors, `impl` blocks, dot/arrow syntax |
+| 6 | [Enums](docs/enums.md) | Enum types, variant constructors, `is` destructuring |
+| 7 | [Traits](docs/traits.md) | Trait definitions, structural satisfaction, trait bounds, `Hashable` |
+| 8 | [Built-in Intrinsics](docs/intrinsics.md) | Stack manipulation, IO, memory, and syscall intrinsics |
+
+### Library
+
 | Document | Topics |
 |----------|--------|
-| [Types and Literals](docs/types-and-literals.md) | Primitive types, composite types, literals, type casting, comments |
-| [Operators](docs/operators.md) | Arithmetic, bitshift, bitwise, comparison, boolean, assignment |
-| [Control Flow](docs/control-flow.md) | Conditionals (`if`/`elif`/`else`/`fi`), loops (`while`/`do`/`done`), match (`match`/`end`) |
-| [Functions and Lambdas](docs/functions-and-lambdas.md) | Functions, lambdas, closures, variables, stack intrinsics, IO, memory |
-| [Structs and Methods](docs/structs-and-methods.md) | Struct definition, accessors, `impl` blocks, dot/arrow syntax |
-| [Enums](docs/enums.md) | Enum types, variant constructors, exhaustive `match` |
-| [Traits](docs/traits.md) | Trait definitions, structural satisfaction, trait bounds, `Hashable` |
-| [Standard Library](docs/standard-library.md) | `include`, `memcpy`, arrays (`map`, `filter`, `reduce`), `option[T]`, `result[T E]`, `List[T]`, `Map[K V]`, `Set[K]`, string methods, C string methods, file I/O, character classification, type conversions |
-| [Parser Library](docs/parser.md) | `Cursor`, `ParseError`, cursor scanning methods, `parse_int`, `parse_identifier`, `parse_quoted_string`, `parse_char_literal`, helper functions |
+| [Standard Library](docs/standard-library.md) | `include`, `memcpy`, arrays (`map`, `filter`, `reduce`), `Option[T]`, `Result[T E]` |
+| [Collections](docs/collections.md) | `List[T]`, `Map[K V]`, `Set[K]`, `StringBuilder` |
+| [Strings and IO](docs/strings-and-io.md) | String methods, file I/O, character classification, type conversions |
+| [Utilities](docs/utilities.md) | Logging, timer, argument parsing, process execution |
+| [Parser Library](docs/parser.md) | `Cursor`, `ParseError`, scanning methods, string/int/identifier parsers |
+
+### Tooling
+
+| Document | Topics |
+|----------|--------|
 | [Errors](docs/errors.md) | Error kinds, diagnostics format, multi-error collection |
 | [Language Server](docs/language-server.md) | LSP setup, editor configuration, diagnostics |
 
