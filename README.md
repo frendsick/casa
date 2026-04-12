@@ -152,11 +152,8 @@ Casa ships with `casafmt`, a self-hosted autoformatter. It reads Casa source fro
 ### Building the Formatter
 
 ```sh
-./casac casa.casa -o casac-stage1
-./casac-stage1 formatter/format.casa -o casafmt
+./casac formatter/format.casa -o casafmt
 ```
-
-Two stages are needed because the formatter extends `TokenKind` with variants that the release compiler does not yet know about.
 
 ### Manual Usage
 
