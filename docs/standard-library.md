@@ -108,7 +108,7 @@ my_list.iter           # Iter[T]
 
 ### `Iterable[T]` Default Methods
 
-All default methods are called on an `Iter[T]` value (the return of `.iter`).
+Default methods are available on any type satisfying `Iterable[T]`, including `Iter[T]` (the return of `.iter`) and custom iterators.
 
 #### `collect`
 

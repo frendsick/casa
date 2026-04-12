@@ -4,7 +4,7 @@ Traits define a set of required methods that a type must implement. They enable 
 
 ## Defining a Trait
 
-Use the `trait` keyword to declare a trait with one or more method signatures. Method bodies are not allowed in trait definitions. Use `self` as a placeholder for the implementing type.
+Use the `trait` keyword to declare a trait with one or more method signatures. Required methods have no body; default methods optionally include a body (see [Default Methods](#default-methods)). Use `self` as a placeholder for the implementing type.
 
 ```casa
 trait Hashable {
@@ -218,7 +218,7 @@ Here `next` is the only required method. `collect` and `count` are default metho
 
 ### Built-in Trait: `Iterable[T]`
 
-The standard library defines the `Iterable[T]` trait for iteration. Any type with a `next self:T -> Option[U]` method structurally satisfies `Iterable[U]` and gains all default methods.
+The standard library defines the `Iterable[T]` trait for iteration. Any type with a `next self:self -> Option[T]` method structurally satisfies `Iterable[T]` and gains all default methods.
 
 **Required method:**
 
