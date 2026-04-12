@@ -168,7 +168,7 @@ A temporary file is used because shell redirection (`> file.casa`) truncates the
 
 ### Neovim Integration
 
-Use [conform.nvim](https://github.com/stevearc/conform.nvim) to format on save:
+Any formatter plugin that supports stdin-based formatters will work. For example, with [conform.nvim](https://github.com/stevearc/conform.nvim):
 
 ```lua
 require('conform').setup({
