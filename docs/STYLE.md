@@ -59,7 +59,7 @@ see [FORMAT.md](./FORMAT.md).
   ```casa
   0 = i
   while i length > do
-      i items .get process
+      i items.get process
       1 += i
   done
   ```
@@ -214,8 +214,8 @@ without a type-name prefix is acceptable.
   direction match
       Direction::North => go_north
       Direction::South => go_south
-      Direction::East  => go_east
-      Direction::West  => go_west
+      Direction::East => go_east
+      Direction::West => go_west
   end
 
   # MUST NOT
@@ -295,6 +295,6 @@ without a type-name prefix is acceptable.
 
   # MUST NOT
   StringBuilder::new = msg
-  "Expected " msg .append ...
-  msg .build raise_error
+  "Expected " msg.append ...
+  msg.build raise_error
   ```
