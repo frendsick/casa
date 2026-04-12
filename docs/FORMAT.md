@@ -38,7 +38,7 @@ fn fizzbuzz number:int {
 - Consecutive plain top-level statements (global assignments, map `.set` chains)
   are grouped **without** blank lines.
 - Consecutive `include` statements are grouped **without** blank lines.
-- **2 blank lines** immediately before a section separator comment.
+- **1 blank line** immediately before a section separator comment.
 - Inside a function body, no more than **1 consecutive blank line** (SHOULD).
 
 ```casa
