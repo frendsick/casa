@@ -197,8 +197,7 @@ exits. `break` and `continue` work the same way as in `while`.
 
 ### Iterating Standard Collections
 
-The standard library provides `.iter` for `array[T]` and `List[T]`, and
-`.chars` for `str`:
+The standard library provides `.iter` for `array[T]`, `List[T]`, and `str`:
 
 ```casa
 [1 2 3] = nums
@@ -206,7 +205,7 @@ for n in nums.iter do
     n print "\n" print
 done
 
-for c in "casa".chars do
+for c in "casa".iter do
     c print "\n" print
 done
 ```
@@ -214,12 +213,15 @@ done
 ### Custom Iterators
 
 Any struct that provides a `next` method returning `Option[T]` can be used
-in a `for` loop. The `Iterator[T]` trait in `lib/std.casa` documents the
-contract:
+in a `for` loop. The `Iterable[T]` trait in `lib/std.casa` documents the
+contract and provides default methods like `collect`, `map`, `filter`, and
+others (see [Traits -- Iterable](traits.md#built-in-trait-iterablet)):
 
 ```casa
-trait Iterator[T] {
+trait Iterable[T] {
     fn next self:self -> Option[T]
+
+    # default methods: collect, map, filter, fold, count, any, all, find
 }
 ```
 
