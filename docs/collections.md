@@ -118,7 +118,7 @@ Returns an `array[T]` view into the list's data from index `start` (inclusive) t
 ```casa
 3 1 list.slice = sliced
 sliced.length print          # 2
-0 sliced array::nth print    # 200
+0 sliced array::nth print    # 2
 ```
 
 ### `List::to_array`

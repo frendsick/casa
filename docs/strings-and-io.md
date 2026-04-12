@@ -183,7 +183,7 @@ Opens a file and returns a file descriptor. Returns a negative value on error.
 **Stack effect:** `str int int -> int`
 
 ```casa
-0 O_RDONLY 0 "input.txt" file::open = fd
+0 O_RDONLY "input.txt" file::open = fd
 ```
 
 The `mode` parameter sets file permissions when creating a new file (e.g., 420 for `rw-r--r--`). It is ignored when opening an existing file.

@@ -124,7 +124,7 @@ Creates a new Timer and starts it immediately.
 Timer::new = timer
 ```
 
-### `Timer.elapsed_ns`
+### `Timer::elapsed_ns`
 
 Returns elapsed nanoseconds since the Timer was created.
 
@@ -136,7 +136,7 @@ Returns elapsed nanoseconds since the Timer was created.
 timer .elapsed_ns print   # e.g. 42000000
 ```
 
-### `Timer.elapsed_ms`
+### `Timer::elapsed_ms`
 
 Returns elapsed milliseconds since the Timer was created.
 
@@ -148,7 +148,7 @@ Returns elapsed milliseconds since the Timer was created.
 timer .elapsed_ms print   # e.g. 42
 ```
 
-### `Timer.to_str`
+### `Timer::to_str`
 
 Returns the elapsed time formatted as fractional seconds. Implements the `Display` trait, so Timer can be used directly in format strings.
 
