@@ -1,0 +1,678 @@
+# Casa autoformatter
+#
+# Reads Casa source from stdin, writes formatted source to stdout.
+# On parse error, echoes the original source unchanged and exits with code 1.
+
+include "../lib/std.casa"
+include "../lib/io.casa"
+include "../compiler/common.casa"
+include "../compiler/error.casa"
+include "../compiler/lexer.casa"
+
+
+# ============================================================================
+# Read all stdin into a string
+# ============================================================================
+
+fn read_all_stdin -> str {
+    StdinReader::new = reader
+    StringBuilder::new = builder
+    while true do
+        reader stdin_read_byte = byte
+        if 0 byte < then break fi
+        byte (char) builder .append_char
+    done
+    builder .build
+}
+
+
+# ============================================================================
+# Lex source in formatter mode, return tokens or None on error
+# ============================================================================
+
+fn fmt_lex source:str -> Option[List[Token]] {
+    true = RESILIENT_MODE
+    List::new (List[CasaError]) = ERRORS
+    "<stdin>" source lex_source_fmt = tokens
+    false = RESILIENT_MODE
+    if 0 ERRORS .length != then
+        ERRORS report_errors
+        Option::None (Option[List[Token]]) return
+    fi
+    tokens Option::Some
+}
+
+
+# ============================================================================
+# Indent helper
+# ============================================================================
+
+fn make_indent depth:int -> str {
+    StringBuilder::new = builder
+    0 = i
+    while i depth > do
+        "    " builder .append
+        1 += i
+    done
+    builder .build
+}
+
+
+# ============================================================================
+# Token classification helpers
+# ============================================================================
+
+fn is_eof_token token:Token -> bool {
+    token Token::value .length 0 ==
+}
+
+fn is_block_open_token token:Token -> bool {
+    token Token::kind = kind
+    token Token::value = value
+    if TokenKind::Keyword kind == then
+        if "then" value == then true return fi
+        if "do" value == then true return fi
+    fi
+    if TokenKind::Delimiter kind == then
+        if "{" value == then true return fi
+    fi
+    false
+}
+
+fn is_block_close_value value:str -> bool {
+    if "}" value == then true return fi
+    if "fi" value == then true return fi
+    if "done" value == then true return fi
+    if "end" value == then true return fi
+    false
+}
+
+fn is_dedent_keyword value:str -> bool {
+    if "else" value == then true return fi
+    if "elif" value == then true return fi
+    false
+}
+
+fn should_skip_space_before value:str -> bool {
+    if "." value == then true return fi
+    if ")" value == then true return fi
+    if "]" value == then true return fi
+    if "[" value == then true return fi
+    if ":" value == then true return fi
+    false
+}
+
+fn should_skip_space_after value:str -> bool {
+    if "." value == then true return fi
+    if "(" value == then true return fi
+    if "[" value == then true return fi
+    false
+}
+
+fn is_fn_param_colon line:List[Token] colon_idx:int -> bool {
+    if line .length 0 == then false return fi
+    0 line .get Token::value = first
+    if "fn" first != then false return fi
+    colon_idx 1 - = prev_idx
+    if 0 prev_idx < then false return fi
+    if TokenKind::Identifier prev_idx line .get Token::kind != then false return fi
+    true
+}
+
+fn is_section_separator_comment token:Token -> bool {
+    if TokenKind::Comment token Token::kind != then false return fi
+    token Token::value = value
+    if 6 value .length < then false return fi
+    if '#' 0 value .at != then false return fi
+    if ' ' 1 value .at != then false return fi
+    2 value .at = sep_char
+    if '=' sep_char != '-' sep_char != && then false return fi
+    3 = idx
+    while idx value .length > do
+        if sep_char idx value .at != then false return fi
+        1 += idx
+    done
+    true
+}
+
+
+# ============================================================================
+# Get original source text for a token
+# ============================================================================
+
+fn token_text token:Token source:str -> str {
+    token Token::kind = kind
+    # For literals, use original source to preserve escapes
+    if TokenKind::Literal kind == then
+        source token.location.span.offset token.location.span.length str::substring return
+    fi
+    if TokenKind::FstringStart kind == then
+        source token.location.span.offset token.location.span.length str::substring return
+    fi
+    if TokenKind::FstringText kind == then
+        source token.location.span.offset token.location.span.length str::substring return
+    fi
+    if TokenKind::FstringEnd kind == then
+        source token.location.span.offset token.location.span.length str::substring return
+    fi
+    if TokenKind::FstringExprStart kind == then
+        source token.location.span.offset token.location.span.length str::substring return
+    fi
+    if TokenKind::FstringExprEnd kind == then
+        source token.location.span.offset token.location.span.length str::substring return
+    fi
+    # Normalize comments: ensure space after #
+    if TokenKind::Comment kind == then
+        token Token::value = comment_val
+        if 2 comment_val .length < then comment_val return fi
+        if ' ' 1 comment_val .at == then comment_val return fi
+        if '!' 1 comment_val .at == then comment_val return fi
+        if '#' 1 comment_val .at == then comment_val return fi
+        f"# {comment_val 1 comment_val .length 1 - str::substring}" return
+    fi
+    token Token::value
+}
+
+
+# ============================================================================
+# Struct/enum field helpers
+# ============================================================================
+
+fn is_field_line line:List[Token] -> bool {
+    if 3 line .length < then false return fi
+    if TokenKind::Identifier 0 line .get Token::kind != then false return fi
+    if ":" 1 line .get Token::value != then false return fi
+    true
+}
+
+
+# ============================================================================
+# Emit a line of tokens with proper spacing
+# ============================================================================
+
+fn emit_line_tokens line:List[Token] depth:int source:str output:StringBuilder {
+    depth make_indent output .append
+    0 = ti
+    while ti line .length > do
+        ti line .get = lt
+        lt Token::value = lv
+        source lt token_text output .append
+        ti 1 + = next_ti
+        if next_ti line .length > then
+            next_ti line .get Token::value = next_val
+            true = need_space
+            if lv should_skip_space_after then false = need_space fi
+            if next_val should_skip_space_before then false = need_space fi
+            # Colon in fn params: no space around it
+            if ":" lv == then
+                if ti line is_fn_param_colon then false = need_space fi
+            fi
+            if ":" next_val == then
+                if next_ti line is_fn_param_colon then false = need_space fi
+            fi
+            if need_space then " " output .append fi
+        fi
+        1 += ti
+    done
+    "\n" output .append
+}
+
+
+# ============================================================================
+# Measure line length as it would be emitted
+# ============================================================================
+
+fn measure_line_length line:List[Token] depth:int source:str -> int {
+    depth 4 * = len
+    0 = mi
+    while mi line .length > do
+        source mi line .get token_text .length len + = len
+        mi 1 + = m_next
+        if m_next line .length > then
+            1 len + = len
+        fi
+        1 += mi
+    done
+    len
+}
+
+
+# ============================================================================
+# Emit a wrapped function signature
+# ============================================================================
+
+fn emit_wrapped_fn_sig line:List[Token] depth:int source:str output:StringBuilder {
+    # Line 1: fn name (and optional generics)
+    depth make_indent output .append
+    "fn " output .append
+    source 1 line .get token_text output .append
+
+    2 = wi
+    # Handle generics [T] or [T: Trait, V]
+    if wi line .length > then
+        if "[" wi line .get Token::value == then
+            while wi line .length > do
+                source wi line .get token_text output .append
+                if "]" wi line .get Token::value == then
+                    1 += wi
+                    "\n" output .append
+                    wi line .length + = wi
+                else
+                    1 += wi
+                fi
+            done
+            wi line .length - = wi
+        else
+            "\n" output .append
+        fi
+    else
+        "\n" output .append
+    fi
+
+    # Emit parameters, one per line
+    while wi line .length > do
+        wi line .get Token::value = wv
+
+        # -> starts the return type line
+        if "->" wv == then
+            depth make_indent output .append
+            while wi line .length > do
+                source wi line .get token_text output .append
+                wi 1 + = w_next
+                if w_next line .length > then
+                    " " output .append
+                fi
+                1 += wi
+            done
+            "\n" output .append
+            wi line .length + = wi
+            wi line .length - = wi
+        elif "{" wv == then
+            # No return type, emit just {
+            depth make_indent output .append
+            "{\n" output .append
+            wi line .length + = wi
+            wi line .length - = wi
+        else
+            # Parameter: name:Type
+            depth 1 + make_indent output .append
+            source wi line .get token_text output .append
+            1 += wi
+            # Colon
+            if wi line .length > then
+                if ":" wi line .get Token::value == then
+                    ":" output .append
+                    1 += wi
+                    # Type tokens until next param or -> or {
+                    false = param_done
+                    while wi line .length > param_done ! && do
+                        wi line .get Token::value = pv
+                        if "->" pv == then
+                            true = param_done
+                        elif "{" pv == then
+                            true = param_done
+                        else
+                            # Check if this is a new param (Identifier followed by :)
+                            false = is_new_param
+                            if TokenKind::Identifier wi line .get Token::kind == then
+                                wi 1 + = check_col
+                                if check_col line .length > then
+                                    if ":" check_col line .get Token::value == then
+                                        true = is_new_param
+                                    fi
+                                fi
+                            fi
+                            if is_new_param then
+                                true = param_done
+                            else
+                                source wi line .get token_text output .append
+                                1 += wi
+                            fi
+                        fi
+                    done
+                    "\n" output .append
+                else
+                    "\n" output .append
+                fi
+            else
+                "\n" output .append
+            fi
+        fi
+    done
+}
+
+
+# ============================================================================
+# Format struct/enum body with field alignment
+# ============================================================================
+
+fn format_struct_body tokens:List[Token] pos:int depth:int source:str output:StringBuilder -> int {
+    # Pass 1: scan for max field name length
+    pos = scan_pos
+    0 = max_name_len
+    false = scan_done
+    while scan_pos tokens .length > scan_done ! && do
+        scan_pos tokens .get = scan_tok
+        if scan_tok is_eof_token then
+            true = scan_done
+        elif TokenKind::Newline scan_tok Token::kind == then
+            1 += scan_pos
+        elif "}" scan_tok Token::value == then
+            true = scan_done
+        elif TokenKind::Identifier scan_tok Token::kind == then
+            scan_pos 1 + = colon_check
+            if colon_check tokens .length > then
+                if ":" colon_check tokens .get Token::value == then
+                    scan_tok Token::value .length = name_len
+                    if max_name_len name_len > then
+                        name_len = max_name_len
+                    fi
+                fi
+            fi
+            1 += scan_pos
+        else
+            1 += scan_pos
+        fi
+    done
+
+    # Pass 2: emit fields with alignment
+    false = emit_done
+    while pos tokens .length > emit_done ! && do
+        pos tokens .get = em_tok
+        if em_tok is_eof_token then
+            true = emit_done
+        elif TokenKind::Newline em_tok Token::kind == then
+            1 += pos
+        elif "}" em_tok Token::value == then
+            true = emit_done
+        else
+            # Collect one line
+            List::new (List[Token]) = em_line
+            false = em_line_done
+            while pos tokens .length > em_line_done ! && do
+                pos tokens .get = em_lt
+                if em_lt is_eof_token then
+                    true = em_line_done
+                elif TokenKind::Newline em_lt Token::kind == then
+                    true = em_line_done
+                else
+                    em_lt em_line .push
+                    1 += pos
+                fi
+            done
+
+            if em_line is_field_line then
+                # Aligned field: name:  Type
+                depth make_indent output .append
+                0 em_line .get Token::value output .append
+                ":" output .append
+                0 em_line .get Token::value .length = cur_name_len
+                max_name_len cur_name_len - 1 + = padding
+                0 = pad_i
+                while pad_i padding > do
+                    " " output .append
+                    1 += pad_i
+                done
+                2 = type_i
+                while type_i em_line .length > do
+                    source type_i em_line .get token_text output .append
+                    type_i 1 + = next_type_i
+                    if next_type_i em_line .length > then
+                        " " output .append
+                    fi
+                    1 += type_i
+                done
+                "\n" output .append
+            else
+                output source depth em_line emit_line_tokens
+            fi
+        fi
+    done
+
+    # Emit closing brace
+    depth 1 - make_indent output .append
+    "}\n" output .append
+
+    # Skip past closing brace and newline
+    if pos tokens .length > then
+        if "}" pos tokens .get Token::value == then
+            1 += pos
+        fi
+    fi
+    if pos tokens .length > then
+        if TokenKind::Newline pos tokens .get Token::kind == then
+            1 += pos
+        fi
+    fi
+
+    pos
+}
+
+
+# ============================================================================
+# Format tokens into a string
+# ============================================================================
+
+fn format_tokens tokens:List[Token] source:str -> str {
+    StringBuilder::new = output
+    0 = pos
+    0 = depth
+    0 = consecutive_newlines
+    false = prev_was_open
+    false = prev_was_comment
+
+    while pos tokens .length > do
+        pos tokens .get = token
+
+        # End of file
+        if token is_eof_token then
+            output .build return
+        fi
+
+        # Handle newline token
+        if TokenKind::Newline token Token::kind == then
+            1 += consecutive_newlines
+            1 += pos
+            continue
+        fi
+
+        # We have a non-newline, non-Eof token. Collect the full line.
+        List::new (List[Token]) = line_tokens
+        false = collect_done
+        while pos tokens .length > collect_done ! && do
+            pos tokens .get = cur
+            if cur is_eof_token then
+                true = collect_done
+            elif TokenKind::Newline cur Token::kind == then
+                true = collect_done
+            else
+                cur line_tokens .push
+                1 += pos
+            fi
+        done
+
+        if line_tokens .length 0 == then continue fi
+
+        # Get first token value for indent adjustments
+        0 line_tokens .get Token::value = first_value
+
+        # Decrease depth for closing/dedent keywords
+        if first_value is_block_close_value then
+            if 0 depth != then 1 -= depth fi
+        fi
+        if first_value is_dedent_keyword then
+            if 0 depth != then 1 -= depth fi
+        fi
+
+        # Blank line normalization
+        if 0 output .length != then
+            consecutive_newlines 1 - = blank_lines
+            0 = allowed_blanks
+
+            if 0 blank_lines != then
+                if 0 line_tokens .get is_section_separator_comment then
+                    2 = allowed_blanks
+                elif 0 depth == then
+                    1 = allowed_blanks
+                else
+                    1 = allowed_blanks
+                fi
+            else
+                if 0 depth == then
+                    if TokenKind::Comment 0 line_tokens .get Token::kind != then
+                        1 = allowed_blanks
+                    elif prev_was_comment ! then
+                        1 = allowed_blanks
+                    fi
+                fi
+            fi
+
+            if prev_was_open then
+                0 = allowed_blanks
+            fi
+            if first_value is_block_close_value then
+                0 = allowed_blanks
+            fi
+            if first_value is_dedent_keyword then
+                0 = allowed_blanks
+            fi
+
+            0 = nl_i
+            while nl_i allowed_blanks > do
+                "\n" output .append
+                1 += nl_i
+            done
+        fi
+        0 = consecutive_newlines
+
+        # Check if this is a struct/enum header — handle field alignment
+        false = handled_struct
+        if "struct" first_value == "enum" first_value == || then
+            line_tokens .length 1 - line_tokens .get = last_tok
+            if last_tok is_block_open_token then
+                output source depth line_tokens emit_line_tokens
+                1 += depth
+                output source depth pos tokens format_struct_body = pos
+                1 -= depth
+                0 = consecutive_newlines
+                false = prev_was_open
+                false = prev_was_comment
+                true = handled_struct
+            fi
+        fi
+
+        if handled_struct ! then
+            # Check if this is a fn signature (possibly wrapped across lines)
+            false = wrapped_fn
+            if "fn" first_value == then
+                # Check if this line contains { (complete signature)
+                false = has_open_brace
+                0 = brace_check
+                while brace_check line_tokens .length > do
+                    if "{" brace_check line_tokens .get Token::value == then
+                        true = has_open_brace
+                    fi
+                    1 += brace_check
+                done
+                if has_open_brace ! then
+                    # Incomplete fn signature — collect continuation lines
+                    # until we find a line ending with {
+                    false = sig_complete
+                    while pos tokens .length > sig_complete ! && do
+                        pos tokens .get = sig_tok
+                        if sig_tok is_eof_token then
+                            true = sig_complete
+                        elif TokenKind::Newline sig_tok Token::kind == then
+                            1 += pos
+                        else
+                            # Collect this continuation line
+                            false = sig_line_done
+                            while pos tokens .length > sig_line_done ! && do
+                                pos tokens .get = sl_tok
+                                if sl_tok is_eof_token then
+                                    true = sig_line_done
+                                elif TokenKind::Newline sl_tok Token::kind == then
+                                    true = sig_line_done
+                                else
+                                    sl_tok line_tokens .push
+                                    1 += pos
+                                    if "{" sl_tok Token::value == then
+                                        true = sig_complete
+                                        true = sig_line_done
+                                    fi
+                                fi
+                            done
+                        fi
+                    done
+                fi
+
+                # Now line_tokens has the full signature. Check length.
+                source depth line_tokens measure_line_length = sig_len
+                if sig_len 100 < then
+                    output source depth line_tokens emit_wrapped_fn_sig
+                    true = wrapped_fn
+                fi
+            fi
+
+            if wrapped_fn ! then
+                output source depth line_tokens emit_line_tokens
+            fi
+
+            # Increase depth for block-opening tokens
+            false = prev_was_open
+            line_tokens .length 1 - line_tokens .get = last_token
+            if last_token is_block_open_token then
+                1 += depth
+                true = prev_was_open
+            fi
+
+            # Check if line contains match keyword
+            0 = mi
+            while mi line_tokens .length > do
+                mi line_tokens .get = mt
+                if TokenKind::Keyword mt Token::kind == then
+                    if "match" mt Token::value == then
+                        1 += depth
+                        true = prev_was_open
+                    fi
+                fi
+                1 += mi
+            done
+
+            # Track if this line was a comment
+            if TokenKind::Comment 0 line_tokens .get Token::kind == then
+                true = prev_was_comment
+            else
+                false = prev_was_comment
+            fi
+
+            # else keyword: restore depth for body
+            if "else" first_value == then
+                1 += depth
+                true = prev_was_open
+            fi
+        fi
+    done
+
+    output .build
+}
+
+
+# ============================================================================
+# Entry point
+# ============================================================================
+
+fn main {
+    read_all_stdin = source
+
+    source fmt_lex = tokens_opt
+    if tokens_opt .is_none then
+        source print
+        1 exit
+    fi
+
+    source tokens_opt .unwrap format_tokens = formatted
+    formatted print
+}
+
+main
