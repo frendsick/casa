@@ -145,6 +145,47 @@ require('lspconfig').casa.setup({})
 | Rename | `<leader>rn` or equivalent |
 | Semantic tokens | Automatic |
 
+## Formatter
+
+Casa ships with `casafmt`, a self-hosted autoformatter. It reads Casa source from stdin and writes formatted output to stdout. On parse error it echoes the original source unchanged and exits with code 1.
+
+### Building the Formatter
+
+```sh
+./casac casa.casa -o casac-stage1
+./casac-stage1 formatter/format.casa -o casafmt
+```
+
+Two stages are needed because the formatter extends `TokenKind` with variants that the release compiler does not yet know about.
+
+### Manual Usage
+
+```sh
+./casafmt < file.casa > tmp && mv tmp file.casa
+```
+
+A temporary file is used because shell redirection (`> file.casa`) truncates the file before the formatter reads it. Writing to a temp file first keeps the original intact if the formatter fails.
+
+### Neovim Integration
+
+Use [conform.nvim](https://github.com/stevearc/conform.nvim) to format on save:
+
+```lua
+require('conform').setup({
+  formatters_by_ft = {
+    casa = { 'casafmt' },
+  },
+  formatters = {
+    casafmt = {
+      command = '/path/to/casa/casafmt',
+      stdin = true,
+    },
+  },
+})
+```
+
+See [FORMAT.md](docs/FORMAT.md) for the full list of formatting rules.
+
 ## Testing
 
 Run the example and compiler test suites from the root folder of the repository:
