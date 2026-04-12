@@ -1,6 +1,6 @@
 # Enums
 
-Enums define a type with a fixed set of named variants.
+Enums define a type with a fixed set of named variants. Variants can carry inner values, making enums suitable for modeling alternatives and tagged unions.
 
 ## Defining an Enum
 
@@ -247,3 +247,9 @@ Color print    # 3
 This is resolved at compile time.
 
 See [`examples/enum.casa`](../examples/enum.casa).
+
+## See Also
+
+- [Control Flow -- Match](control-flow.md#match) -- full match syntax, destructuring, and exhaustiveness rules
+- [Traits](traits.md) -- defining and implementing traits for enum types
+- [Types and Literals](types-and-literals.md) -- `Option[T]` and `Result[T E]` as built-in enums

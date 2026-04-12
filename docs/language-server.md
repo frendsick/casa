@@ -206,3 +206,8 @@ command = "./casa_lsp"
 - Dot-triggered method completion works for variables, literals, and method chains but not for arbitrary expressions
 - No code actions
 - The LSP uses alloc without freeing, so memory grows over long sessions
+
+## See Also
+
+- [Errors](errors.md) -- error kinds reported as diagnostics
+- [Structs and Methods](structs-and-methods.md) -- dot syntax and method completion

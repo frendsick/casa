@@ -137,7 +137,7 @@ arr.length print    # 3
 ### Complete Example
 
 ```casa
-include "../lib/std.casa"
+include "path/to/lib/std.casa"
 
 List::new = v
 10 v.push
@@ -282,7 +282,7 @@ m.values = val_list
 ### Complete Example
 
 ```casa
-include "../lib/std.casa"
+include "path/to/lib/std.casa"
 
 # Create a map from strings to ints
 Map::new (Map[str int]) = m
@@ -407,7 +407,7 @@ s.to_list = elements
 ### Complete Example
 
 ```casa
-include "../lib/std.casa"
+include "path/to/lib/std.casa"
 
 # Create a set of strings
 Set::new (Set[str]) = s

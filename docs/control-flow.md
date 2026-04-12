@@ -1,5 +1,7 @@
 # Control Flow
 
+Casa provides conditionals, loops, and pattern matching for controlling program flow. All conditions must leave a `bool` on the stack.
+
 ## Conditionals
 
 Casa uses `if`/`elif`/`else`/`fi` for branching. Each condition must be followed by `then`.
@@ -387,3 +389,9 @@ done
 ```
 
 See [`examples/fizzbuzz.casa`](../examples/fizzbuzz.casa) for the full program.
+
+## See Also
+
+- [Enums](enums.md) -- enum types and variant checking with `is`
+- [Functions and Lambdas](functions-and-lambdas.md) -- function definitions and lambdas
+- [Types and Literals](types-and-literals.md) -- `Option` and `Result` type unification in branches

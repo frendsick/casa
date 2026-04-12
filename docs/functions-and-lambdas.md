@@ -1,5 +1,7 @@
 # Functions and Lambdas
 
+Casa functions are defined with `fn` and called by name. Lambdas create anonymous functions as stack values. Both support closures and generics.
+
 ## Functions
 
 Functions are defined with `fn` at global scope. They can be called before their definition (forward references are allowed).

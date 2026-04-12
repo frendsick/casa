@@ -3,8 +3,10 @@
 The standard library provides core types and functions used by most Casa programs. It is in `lib/std.casa`. Include it with:
 
 ```casa
-include "../lib/std.casa"
+include "path/to/lib/std.casa"
 ```
+
+The path is relative to the source file. Adjust it based on your project layout.
 
 ## `include` Directive
 

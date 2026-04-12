@@ -248,3 +248,9 @@ A function parameter is declared but not used in the function body and is instea
 ```
 warning[UNUSED_PARAMETER]: Unused parameter `int` in function `add`
 ```
+
+## See Also
+
+- [Language Server](language-server.md) -- real-time diagnostics in your editor
+- [Types and Literals](types-and-literals.md) -- type system that generates these errors
+- [Traits](traits.md) -- trait-related error kinds

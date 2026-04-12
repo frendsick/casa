@@ -139,4 +139,10 @@ Option::None = empty:Option[int]    # narrow bare Option to Option[int]
 42 (any) = val:int          # narrow any to int
 ```
 
-Variables are created on first assignment. See [Functions and Lambdas — Variables](functions-and-lambdas.md#variables) for scoping rules.
+Variables are created on first assignment. See [Functions and Lambdas -- Variables](functions-and-lambdas.md#variables) for scoping rules.
+
+## See Also
+
+- [Types and Literals](types-and-literals.md) -- primitive types and type casting
+- [Functions and Lambdas](functions-and-lambdas.md) -- variables and scoping rules
+- [Control Flow](control-flow.md) -- using conditions in `if` and `while`

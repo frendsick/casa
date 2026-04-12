@@ -1,8 +1,8 @@
 # Structs and Methods
 
-## Defining a Struct
+Structs group named, typed fields into a single type. Methods are added via `impl` blocks, and dot/arrow syntax provides convenient access.
 
-Structs group named, typed fields into a single type.
+## Defining a Struct
 
 ```casa
 struct Person {
@@ -309,3 +309,10 @@ impl Point {
 
 # Point now satisfies Hashable and can be used as a Map key
 ```
+
+## See Also
+
+- [Traits](traits.md) -- defining and satisfying traits in `impl` blocks
+- [Enums](enums.md) -- enum types as an alternative to structs
+- [Control Flow -- Match](control-flow.md#match) -- struct destructuring in match expressions
+- [Collections](collections.md) -- List, Map, and Set built with structs
