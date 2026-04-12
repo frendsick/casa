@@ -124,6 +124,8 @@ fn expect_token cursor:TokenCursor -> Token {
     cursor.pop = result_opt
     if result_opt.is_none then
         empty_location "Unexpected end of input" ErrorKind::UnexpectedToken raise_error
+        # Return dummy token for resilient/test mode
+        empty_location TokenKind::Eof "" make_token return
     fi
     result_opt.unwrap = token
     if TokenKind::Eof token Token::kind == then
@@ -174,6 +176,7 @@ fn parse_type cursor:TokenCursor -> str {
     cursor.peek = peek_opt
     if peek_opt.is_none then
         empty_location "Expected type" ErrorKind::UnexpectedToken raise_error
+        "any" return
     fi
     peek_opt.unwrap = peek
 
@@ -1209,6 +1212,32 @@ fn parse_trait_method_signature cursor:TokenCursor -> Signature {
     returns params make_signature
 }
 
+fn parse_method_type_vars cursor:TokenCursor -> List[str] {
+    cursor.pop drop # consume [
+    List::new (List[str]) = mtv_vars
+    true = mtv_loop
+    while mtv_loop do
+        cursor.peek = mtv_opt
+        if mtv_opt.is_none then
+            empty_location "Unclosed method type parameter list" ErrorKind::UnmatchedBlock raise_error
+            false = mtv_loop
+        else
+            mtv_opt.unwrap = mtv_tok
+            if "]" mtv_tok Token::value == then
+                cursor.pop drop
+                false = mtv_loop
+            elif TokenKind::Identifier mtv_tok Token::kind != then
+                mtv_tok Token::location "Expected type parameter in trait method" ErrorKind::UnexpectedToken raise_error
+                false = mtv_loop
+            else
+                cursor.pop drop
+                mtv_tok Token::value mtv_vars.push
+            fi
+        fi
+    done
+    mtv_vars
+}
+
 fn parse_trait parser:Parser cursor:TokenCursor -> CasaTrait {
     "trait" cursor expect_token_value drop
     TokenKind::Identifier cursor expect_token_kind = name_token
@@ -1240,58 +1269,40 @@ fn parse_trait parser:Parser cursor:TokenCursor -> CasaTrait {
     List::new (List[TraitMethod]) = methods
     "{" cursor expect_token_value drop
 
-    while true do
+    true = parse_trait_loop
+    while parse_trait_loop do
         cursor.peek = next_opt
         if next_opt.is_none then
             name_token Token::location "Unclosed trait block" ErrorKind::UnmatchedBlock raise_error
-            break
-        fi
-        if "}" next_opt.unwrap Token::value == then
+            false = parse_trait_loop
+        elif "}" next_opt.unwrap Token::value == then
             cursor.pop drop
-            break
-        fi
-        if "fn" next_opt.unwrap Token::value != then
+            false = parse_trait_loop
+        elif "fn" next_opt.unwrap Token::value != then
             next_opt.unwrap Token::location "Expected method declaration in trait" ErrorKind::UnexpectedToken raise_error
-            break
+            false = parse_trait_loop
+        else
+            cursor.pop drop # consume fn
+            TokenKind::Identifier cursor expect_token_kind = method_name
+
+            # Parse optional method-level type parameters (e.g., fn map[U])
+            List::new (List[str]) = method_type_vars
+            cursor.peek = mtv_bracket_opt
+            if mtv_bracket_opt.is_some "[" mtv_bracket_opt.unwrap Token::value == && then
+                cursor parse_method_type_vars = method_type_vars
+            fi
+
+            cursor parse_trait_method_signature = method_sig
+
+            # Parse optional default method body
+            List::new (List[Op]) = default_ops
+            cursor.peek = body_peek_opt
+            if body_peek_opt.is_some "{" body_peek_opt.unwrap Token::value == && then
+                f"{name_token Token::value}::{method_name Token::value}" cursor parser parse_block_ops = default_ops
+            fi
+
+            method_type_vars default_ops method_sig method_name Token::value TraitMethod methods.push
         fi
-        cursor.pop drop # consume fn
-        TokenKind::Identifier cursor expect_token_kind = method_name
-
-        # Parse optional method-level type parameters (e.g., fn map[U])
-        List::new (List[str]) = method_type_vars
-        cursor.peek = mtv_bracket_opt
-        if mtv_bracket_opt.is_some "[" mtv_bracket_opt.unwrap Token::value == && then
-            cursor.pop drop # consume [
-            while true do
-                cursor.peek = mtv_opt
-                if mtv_opt.is_none then
-                    method_name Token::location "Unclosed method type parameter list" ErrorKind::UnmatchedBlock raise_error
-                    break
-                fi
-                mtv_opt.unwrap = mtv_tok
-                if "]" mtv_tok Token::value == then
-                    cursor.pop drop
-                    break
-                fi
-                if TokenKind::Identifier mtv_tok Token::kind != then
-                    mtv_tok Token::location "Expected type parameter in trait method" ErrorKind::UnexpectedToken raise_error
-                    break
-                fi
-                cursor.pop drop
-                mtv_tok Token::value method_type_vars.push
-            done
-        fi
-
-        cursor parse_trait_method_signature = method_sig
-
-        # Parse optional default method body
-        List::new (List[Op]) = default_ops
-        cursor.peek = body_peek_opt
-        if body_peek_opt.is_some "{" body_peek_opt.unwrap Token::value == && then
-            f"{name_token Token::value}::{method_name Token::value}" cursor parser parse_block_ops = default_ops
-        fi
-
-        method_type_vars default_ops method_sig method_name Token::value TraitMethod methods.push
     done
 
     name_token Token::location methods type_params name_token Token::value CasaTrait
