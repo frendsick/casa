@@ -1,7 +1,7 @@
 # Casa Format Guide
 
-Mechanical formatting rules for Casa source files. Every rule here is a MUST —
-the future autoformatter will enforce them all without exception.
+Mechanical formatting rules for Casa source files enforced by `casafmt`.
+All rules are MUST unless noted otherwise.
 
 See [STYLE.md](./STYLE.md) for naming conventions and idiomatic patterns.
 
@@ -33,13 +33,17 @@ fn fizzbuzz number:int {
 
 ## Blank lines
 
-- Exactly **1 blank line** between top-level items (functions, structs, impl blocks,
-  global constants, include statements).
-- **2 blank lines** immediately before a section separator comment.
+- **1 blank line** before and after top-level definitions (`fn`, `struct`, `enum`,
+  `impl`, `trait`) and include groups.
+- Consecutive plain top-level statements (global assignments, map `.set` chains)
+  are grouped **without** blank lines.
+- Consecutive `include` statements are grouped **without** blank lines.
+- **1 blank line** immediately before a section separator comment.
 - Inside a function body, no more than **1 consecutive blank line** (SHOULD).
 
 ```casa
 include "../lib/std.casa"
+include "../lib/io.casa"
 
 16 = BUFFER_SIZE
 
@@ -53,6 +57,10 @@ impl Foo {
         0 0 Foo
     }
 }
+
+Map::new (Map[str int]) = MY_MAP
+"a" 1 MY_MAP.set = MY_MAP
+"b" 2 MY_MAP.set = MY_MAP
 
 fn bar {
     # first group
@@ -241,9 +249,9 @@ done
 
 ```casa
 color match
-    Color::Red   => "red" print
+    Color::Red => "red" print
     Color::Green => "green" print
-    Color::Blue  => "blue" print
+    Color::Blue => "blue" print
 end
 
 shape match
@@ -274,10 +282,10 @@ Use `StringBuilder` for incremental or loop-based string construction:
 
 ```casa
 StringBuilder::new = builder
-items .length 0 == ! while
-    items .pop builder .append
+items.length 0 == ! while
+    items.pop builder.append
 done
-builder .build
+builder.build
 ```
 
 Never use `str::concat` for more than two strings.
