@@ -22,53 +22,6 @@ impl array {
         array (ptr) load64 (ptr) n 8 * + load64 (T)
     }
 
-    fn map[T1 T2] arr:array[T1] f:fn[T1 -> T2] -> array[T2] {
-        arr.length = source_length
-        source_length 2 + 8 * alloc = result_buf
-        # Store data_ptr (result_buf + 16) at offset 0
-        result_buf (ptr) 16 + result_buf (ptr) store64
-        # Store length at offset 8
-        source_length result_buf (ptr) 8 + store64
-        0 = map_index
-        while map_index source_length > do
-            map_index arr.nth f exec
-            result_buf (ptr) load64 (ptr) map_index 8 * + store64
-            1 += map_index
-        done
-        result_buf (array)
-    }
-
-    fn filter[T] arr:array[T] f:fn[T -> bool] -> array[T] {
-        arr.length = source_length
-        source_length 2 + 8 * alloc = result_buf
-        # Store data_ptr (result_buf + 16) at offset 0
-        result_buf (ptr) 16 + result_buf (ptr) store64
-        # Store initial length 0 at offset 8
-        0 result_buf (ptr) 8 + store64
-        0 = result_count
-        0 = filter_index
-        while filter_index source_length > do
-            filter_index arr.nth = element
-            if element f exec then
-                element result_buf (ptr) load64 (ptr) result_count 8 * + store64
-                1 += result_count
-            fi
-            1 += filter_index
-        done
-        # Update length at offset 8
-        result_count result_buf (ptr) 8 + store64
-        result_buf (array)
-    }
-
-    fn reduce[T1 T2] arr:array[T1] acc:T2 f:fn[T2 T1 -> T2] -> T2 {
-        arr.length = source_length
-        0 = reduce_index
-        while reduce_index source_length > do
-            reduce_index arr.nth acc f exec = acc
-            1 += reduce_index
-        done
-        acc
-    }
 }
 
 struct List {
@@ -581,82 +534,111 @@ trait Display {
     fn to_str self:self -> str
 }
 
-trait Iterator[T] {
+trait Iterable[T] {
     fn next self:self -> Option[T]
+
+    fn collect self:self -> List[T] {
+        List::new (List[T]) = iter_result
+        for iter_elem in self do
+            iter_elem iter_result.push
+        done
+        iter_result
+    }
+
+    fn map[U] self:self f:fn[T -> U] -> List[U] {
+        List::new (List[U]) = iter_result
+        for iter_elem in self do
+            iter_elem f exec iter_result.push
+        done
+        iter_result
+    }
+
+    fn filter self:self f:fn[T -> bool] -> List[T] {
+        List::new (List[T]) = iter_result
+        for iter_elem in self do
+            if iter_elem f exec then
+                iter_elem iter_result.push
+            fi
+        done
+        iter_result
+    }
+
+    fn fold[U] self:self acc:U f:fn[U T -> U] -> U {
+        for iter_elem in self do
+            iter_elem acc f exec = acc
+        done
+        acc
+    }
+
+    fn count self:self -> int {
+        0 = iter_count
+        for iter_elem in self do
+            1 += iter_count
+        done
+        iter_count
+    }
+
+    fn any self:self f:fn[T -> bool] -> bool {
+        for iter_elem in self do
+            if iter_elem f exec then true return fi
+        done
+        false
+    }
+
+    fn all self:self f:fn[T -> bool] -> bool {
+        for iter_elem in self do
+            if iter_elem f exec ! then false return fi
+        done
+        true
+    }
+
+    fn find self:self f:fn[T -> bool] -> Option[T] {
+        for iter_elem in self do
+            if iter_elem f exec then iter_elem Option::Some return fi
+        done
+        Option::None (Option[T])
+    }
 }
 
 # ---------------------------------------------------------------------------
-# Iterator wrappers used by `for x in ... do ... done`
+# Iter - generic iterator wrapper for collections
 # ---------------------------------------------------------------------------
 # A `for` loop calls `<value>::next` repeatedly until it returns `None`. The
-# wrappers below let the existing collection types be iterated by name via
-# the `.iter` / `.chars` methods. The structural dispatch on `next` means
-# that any user struct with a matching `next` method works in a for loop;
-# the `Iterator[T]` trait above documents the contract.
+# `Iter` struct wraps any collection by storing a getter function pointer and
+# length so all collection types share one iterator implementation.
 
-struct ArrayIter {
-    data:  array
-    index: int
+struct Iter {
+    get:    ptr
+    length: int
+    index:  int
 }
 
-impl[T] ArrayIter[T] {
-    fn next self:ArrayIter[T] -> Option[T] {
-        if self ArrayIter::data .length self ArrayIter::index >= then
+impl[T] Iter[T] {
+    fn next self:Iter[T] -> Option[T] {
+        if self Iter::length self Iter::index >= then
             Option::None (Option[T]) return
         fi
-        self ArrayIter::index self ArrayIter::data .nth = iter_value
-        self ArrayIter::index 1 + self->index
+        self Iter::index self Iter::get (fn[int -> T]) exec = iter_value
+        self Iter::index 1 + self->index
         iter_value Option::Some
     }
 }
 
 impl[T] array[T] {
-    fn iter self:array[T] -> ArrayIter[T] {
-        0 self ArrayIter (ArrayIter[T])
-    }
-}
-
-struct ListIter {
-    data:  List
-    index: int
-}
-
-impl[T] ListIter[T] {
-    fn next self:ListIter[T] -> Option[T] {
-        if self ListIter::data .length self ListIter::index >= then
-            Option::None (Option[T]) return
-        fi
-        self ListIter::index self ListIter::data .get = iter_value
-        self ListIter::index 1 + self->index
-        iter_value Option::Some
+    fn iter self:array[T] -> Iter[T] {
+        0 self.length { self.nth } (ptr) Iter (Iter[T])
     }
 }
 
 impl[T] List[T] {
-    fn iter self:List[T] -> ListIter[T] {
-        0 self ListIter (ListIter[T])
-    }
-}
-
-struct StrChars {
-    data:  str
-    index: int
-}
-
-impl StrChars {
-    fn next self:StrChars -> Option[char] {
-        if self StrChars::data .length self StrChars::index >= then
-            Option::None (Option[char]) return
-        fi
-        self StrChars::index self StrChars::data .at = iter_char
-        self StrChars::index 1 + self->index
-        iter_char Option::Some
+    fn iter self:List[T] -> Iter[T] {
+        0 self.length { self.get } (ptr) Iter (Iter[T])
     }
 }
 
 impl str {
-    fn chars self:str -> StrChars {
-        0 self StrChars
+    fn iter self:str -> Iter[char] {
+        0 self.length { self.at } (ptr) Iter (Iter[char])
     }
 }
 
