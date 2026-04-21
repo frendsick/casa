@@ -394,94 +394,106 @@ fn compile_while_block compiler:BytecodeCompiler op:Op op_index:int bytecode:Lis
 # ============================================================================
 # Compile match block
 # ============================================================================
+# compile_match_op — per-arm bytecode entry point dispatching on PatternKind.
+# Replaces the three former compile_match_arm_* helpers and consolidates
+# literal / enum / struct emission behind a single pattern-driven function.
 
-fn compile_match_arm_enum
+fn compile_match_op
     compiler:BytecodeCompiler
-    pattern_ptr:int
+    op:Op
     is_last:bool
     next_arm:Option[int]
     bytecode:List[Inst]
 {
-    pattern_ptr (EnumVariant) = variant
-    variant EnumVariant::enum_name = enum_name
-    enum_name compiler.store.enums.get.unwrap = casa_enum
+    op pattern_kind = kind
 
-    if is_last ! variant is_wildcard_variant ! && then
-        InstKind::InstDup make_inst bytecode.push
-        InstKind::InstLoad64 make_inst bytecode.push
-        variant EnumVariant::ordinal.unwrap InstKind::InstPush make_inst_int bytecode.push
-        InstKind::InstEq make_inst bytecode.push
-        next_arm.unwrap InstKind::InstJumpNe make_inst_int bytecode.push
+    if PatternKind::PatStruct kind == then
+        op Op::value (StructPattern) = struct_pattern
+        struct_pattern StructPattern::struct_name compiler.store.structs.get.unwrap = casa_struct
+        0 = index
+        while index casa_struct CasaStruct::members.length > do
+            index casa_struct CasaStruct::members.get Member::name = field_name
+            index 8 * = offset
+            if field_name struct_pattern StructPattern::bindings.get Option::Some (var_name) is then
+                InstKind::InstDup make_inst bytecode.push
+                if 0 offset > then
+                    offset InstKind::InstPush make_inst_int bytecode.push
+                    InstKind::InstAdd make_inst bytecode.push
+                fi
+                InstKind::InstLoad64 make_inst bytecode.push
+                var_name compiler resolve_variable = resolved
+                resolved ResolvedVariable::index resolved ResolvedVariable::set_kind make_inst_int bytecode.push
+            fi
+            1 += index
+        done
+        InstKind::InstDrop make_inst bytecode.push
+        return
     fi
 
-    # Extract bindings
-    0 = index
-    while index variant EnumVariant::bindings.length > do
-        index 1 + 8 * = offset
+    if PatternKind::PatLiteral kind == then
+        op Op::value (LiteralPattern) = literal_pattern
+        if is_last then
+            InstKind::InstDrop make_inst bytecode.push
+            return
+        fi
         InstKind::InstDup make_inst bytecode.push
-        offset InstKind::InstPush make_inst_int bytecode.push
-        InstKind::InstAdd make_inst bytecode.push
-        InstKind::InstLoad64 make_inst bytecode.push
-        index variant EnumVariant::bindings.get = var_name
-        var_name compiler resolve_variable = resolved
-        resolved ResolvedVariable::index resolved ResolvedVariable::set_kind make_inst_int bytecode.push
-        1 += index
-    done
-    InstKind::InstDrop make_inst bytecode.push
-}
+        if "str" literal_pattern LiteralPattern::typ == then
+            literal_pattern LiteralPattern::value (str) = str_value
+            str_value compiler intern_string = str_index
+            str_index InstKind::InstPushStr make_inst_int bytecode.push
+            InstKind::InstStrEq make_inst bytecode.push
+        elif "char" literal_pattern LiteralPattern::typ == then
+            literal_pattern LiteralPattern::value InstKind::InstPush make_inst_int bytecode.push
+            InstKind::InstEq make_inst bytecode.push
+        else
+            literal_pattern LiteralPattern::value InstKind::InstPush make_inst_int bytecode.push
+            InstKind::InstEq make_inst bytecode.push
+        fi
+        next_arm.unwrap InstKind::InstJumpNe make_inst_int bytecode.push
+        InstKind::InstDrop make_inst bytecode.push
+        return
+    fi
 
-fn compile_match_arm_literal
-    compiler:BytecodeCompiler
-    pattern_ptr:int
-    is_last:bool
-    next_arm:Option[int]
-    bytecode:List[Inst]
-{
-    pattern_ptr (LiteralPattern) = pattern
+    # Enum variant (wildcard or named).
+    op Op::value (EnumVariant) = variant
+    variant EnumVariant::enum_name = enum_name
+    op pattern_is_wildcard = is_wildcard
+    if "" enum_name != enum_name compiler.store.enums.has && then
+        enum_name compiler.store.enums.get.unwrap = casa_enum
+        casa_enum has_inner_values = has_inner
+        if has_inner then
+            if is_last ! is_wildcard ! && then
+                InstKind::InstDup make_inst bytecode.push
+                InstKind::InstLoad64 make_inst bytecode.push
+                variant EnumVariant::ordinal.unwrap InstKind::InstPush make_inst_int bytecode.push
+                InstKind::InstEq make_inst bytecode.push
+                next_arm.unwrap InstKind::InstJumpNe make_inst_int bytecode.push
+            fi
+            0 = index
+            while index variant EnumVariant::bindings.length > do
+                index 1 + 8 * = offset
+                InstKind::InstDup make_inst bytecode.push
+                offset InstKind::InstPush make_inst_int bytecode.push
+                InstKind::InstAdd make_inst bytecode.push
+                InstKind::InstLoad64 make_inst bytecode.push
+                index variant EnumVariant::bindings.get = var_name
+                var_name compiler resolve_variable = resolved
+                resolved ResolvedVariable::index resolved ResolvedVariable::set_kind make_inst_int bytecode.push
+                1 += index
+            done
+            InstKind::InstDrop make_inst bytecode.push
+            return
+        fi
+    fi
+
     if is_last then
         InstKind::InstDrop make_inst bytecode.push
         return
     fi
     InstKind::InstDup make_inst bytecode.push
-    if "str" pattern LiteralPattern::typ == then
-        pattern LiteralPattern::value (str) = str_value
-        str_value compiler intern_string = str_index
-        str_index InstKind::InstPushStr make_inst_int bytecode.push
-        InstKind::InstStrEq make_inst bytecode.push
-    elif "char" pattern LiteralPattern::typ == then
-        pattern LiteralPattern::value InstKind::InstPush make_inst_int bytecode.push
-        InstKind::InstEq make_inst bytecode.push
-    else
-        pattern LiteralPattern::value InstKind::InstPush make_inst_int bytecode.push
-        InstKind::InstEq make_inst bytecode.push
-    fi
+    variant EnumVariant::ordinal.unwrap InstKind::InstPush make_inst_int bytecode.push
+    InstKind::InstEq make_inst bytecode.push
     next_arm.unwrap InstKind::InstJumpNe make_inst_int bytecode.push
-    InstKind::InstDrop make_inst bytecode.push
-}
-
-fn compile_match_arm_struct compiler:BytecodeCompiler pattern_ptr:int bytecode:List[Inst] {
-    pattern_ptr (StructPattern) = pattern
-    pattern StructPattern::struct_name compiler.store.structs.get.unwrap = casa_struct
-
-    # Build field offset map
-    0 = index
-    while index casa_struct CasaStruct::members.length > do
-        index casa_struct CasaStruct::members.get Member::name = field_name
-        index 8 * = offset
-
-        # Check if this field is bound
-        if field_name pattern StructPattern::bindings.get Option::Some (var_name) is then
-            InstKind::InstDup make_inst bytecode.push
-            if 0 offset > then
-                offset InstKind::InstPush make_inst_int bytecode.push
-                InstKind::InstAdd make_inst bytecode.push
-            fi
-            InstKind::InstLoad64 make_inst bytecode.push
-            var_name compiler resolve_variable = resolved
-            resolved ResolvedVariable::index resolved ResolvedVariable::set_kind make_inst_int bytecode.push
-        fi
-        1 += index
-    done
     InstKind::InstDrop make_inst bytecode.push
 }
 
@@ -498,7 +510,6 @@ fn compile_match_block compiler:BytecodeCompiler op:Op op_index:int bytecode:Lis
 
         "`match` arm without matching `end`" loc end_targets OpKind::OpMatchEnd op_index ops require_matching_forward = end_label
 
-        # Check if this is the first arm (label not yet assigned)
         op_index ops.get (int) OP_LABEL_MAP.get = existing
         existing.is_some ! = is_first
 
@@ -507,50 +518,12 @@ fn compile_match_block compiler:BytecodeCompiler op:Op op_index:int bytecode:Lis
             existing.unwrap InstKind::InstLabel make_inst_int bytecode.push
         fi
 
-        # Find next arm
         List::new (List[OpKind]) = arm_targets
         OpKind::OpMatchArm arm_targets.push
         arm_targets OpKind::OpMatchEnd op_index ops find_matching_label_forward = next_arm
         next_arm.is_none = is_last
 
-        op Op::value = pattern_ptr
-
-        # Determine pattern type by checking enum_name field
-        # The pattern_ptr points to either EnumVariant, StructPattern, or LiteralPattern
-        # We use the type_annotation on the op to distinguish
-        op Op::type_annotation = annotation
-
-        if "struct_pattern" annotation == then
-            bytecode pattern_ptr compiler compile_match_arm_struct
-        elif "literal_pattern" annotation == then
-            bytecode next_arm is_last pattern_ptr compiler compile_match_arm_literal
-        elif "enum_variant" annotation == then
-            pattern_ptr (EnumVariant) = variant
-            variant EnumVariant::enum_name = enum_name
-            if "" enum_name != enum_name compiler.store.enums.has && then
-                enum_name compiler.store.enums.get.unwrap = casa_enum
-                casa_enum has_inner_values = has_inner
-                if has_inner then
-                    bytecode next_arm is_last pattern_ptr compiler compile_match_arm_enum
-                elif is_last then
-                    InstKind::InstDrop make_inst bytecode.push
-                else
-                    InstKind::InstDup make_inst bytecode.push
-                    variant EnumVariant::ordinal.unwrap InstKind::InstPush make_inst_int bytecode.push
-                    InstKind::InstEq make_inst bytecode.push
-                    next_arm.unwrap InstKind::InstJumpNe make_inst_int bytecode.push
-                    InstKind::InstDrop make_inst bytecode.push
-                fi
-            elif is_last then
-                InstKind::InstDrop make_inst bytecode.push
-            else
-                InstKind::InstDup make_inst bytecode.push
-                variant EnumVariant::ordinal.unwrap InstKind::InstPush make_inst_int bytecode.push
-                InstKind::InstEq make_inst bytecode.push
-                next_arm.unwrap InstKind::InstJumpNe make_inst_int bytecode.push
-                InstKind::InstDrop make_inst bytecode.push
-            fi
-        fi
+        bytecode next_arm is_last op compiler compile_match_op
     elif OpKind::OpMatchEnd op Op::kind == then
         op_index compiler BytecodeCompiler::ops op_ptr_to_label = end_match_label
         end_match_label InstKind::InstLabel make_inst_int bytecode.push
