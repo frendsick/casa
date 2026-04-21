@@ -124,6 +124,8 @@ fn expect_token cursor:TokenCursor -> Token {
     cursor.pop = result_opt
     if result_opt.is_none then
         empty_location "Unexpected end of input" ErrorKind::UnexpectedToken raise_error
+        # Return dummy token for resilient/test mode
+        empty_location TokenKind::Eof "" make_token return
     fi
     result_opt.unwrap = token
     if TokenKind::Eof token Token::kind == then
@@ -174,6 +176,7 @@ fn parse_type cursor:TokenCursor -> str {
     cursor.peek = peek_opt
     if peek_opt.is_none then
         empty_location "Expected type" ErrorKind::UnexpectedToken raise_error
+        "any" return
     fi
     peek_opt.unwrap = peek
 
@@ -627,7 +630,7 @@ fn require_global_scope function_name:str what:str location:Location {
 # Global to pass trait bounds from parse_type_vars (since we can't return tuples)
 Map::new (Map[str TraitBound]) = LAST_TRAIT_BOUNDS
 # Parse the `[arg1 arg2 ...]` type argument list that follows a generic trait
-# name in a trait bound (e.g. `I: Iterator[int]`). The caller has already
+# name in a trait bound (e.g. `I: Iterable[int]`). The caller has already
 # consumed the trait identifier. If the next token is not `[`, returns an
 # empty list. Otherwise consumes tokens up to the matching closing `]`,
 # splitting args at top-level `,` or whitespace and preserving nested
@@ -722,7 +725,7 @@ fn parse_type_vars parser:Parser cursor:TokenCursor -> List[str] {
             fi
             token Token::value vars.push
             token Token::value seen.add = seen
-            # Check for trait bound: K: Hashable  or  K: Iterator[int]
+            # Check for trait bound: K: Hashable  or  K: Iterable[int]
             cursor.peek = colon_opt
             if colon_opt.is_some then
                 if ":" colon_opt.unwrap Token::value == then
@@ -876,10 +879,13 @@ fn build_hidden_trait_methods
             0 = method_index
             while method_index bound_trait CasaTrait::methods.length > do
                 method_index bound_trait CasaTrait::methods.get = bound_method
-                f"__trait_{bound_type_var}_{bound_method TraitMethod::name}" = hidden_name
-                bound_subs bound_type_var bound_method TraitMethod::signature resolve_trait_sig apply_type_subs_to_sig = hidden_sig
-                f"fn[{hidden_sig signature_to_str}]" = hidden_type
-                hidden_type hidden_name HiddenTraitMethod result.push
+                # Skip default methods — only abstract methods need hidden fn ptrs
+                if 0 bound_method TraitMethod::default_ops.length == then
+                    f"__trait_{bound_type_var}_{bound_method TraitMethod::name}" = hidden_name
+                    bound_subs bound_type_var bound_method TraitMethod::signature resolve_trait_sig apply_type_subs_to_sig = hidden_sig
+                    f"fn[{hidden_sig signature_to_str}]" = hidden_type
+                    hidden_type hidden_name HiddenTraitMethod result.push
+                fi
                 1 += method_index
             done
         fi
@@ -1197,6 +1203,7 @@ fn parse_trait_method_signature cursor:TokenCursor -> Signature {
                 if
                 "fn" return_opt.unwrap Token::value ==
                 "}" return_opt.unwrap Token::value == ||
+                "{" return_opt.unwrap Token::value == ||
                 then
                     break
                 fi
@@ -1208,7 +1215,33 @@ fn parse_trait_method_signature cursor:TokenCursor -> Signature {
     returns params make_signature
 }
 
-fn parse_trait cursor:TokenCursor -> CasaTrait {
+fn parse_method_type_vars cursor:TokenCursor -> List[str] {
+    cursor.pop drop # consume [
+    List::new (List[str]) = mtv_vars
+    true = mtv_loop
+    while mtv_loop do
+        cursor.peek = mtv_opt
+        if mtv_opt.is_none then
+            empty_location "Unclosed method type parameter list" ErrorKind::UnmatchedBlock raise_error
+            false = mtv_loop
+        else
+            mtv_opt.unwrap = mtv_tok
+            if "]" mtv_tok Token::value == then
+                cursor.pop drop
+                false = mtv_loop
+            elif TokenKind::Identifier mtv_tok Token::kind != then
+                mtv_tok Token::location "Expected type parameter in trait method" ErrorKind::UnexpectedToken raise_error
+                false = mtv_loop
+            else
+                cursor.pop drop
+                mtv_tok Token::value mtv_vars.push
+            fi
+        fi
+    done
+    mtv_vars
+}
+
+fn parse_trait parser:Parser cursor:TokenCursor -> CasaTrait {
     "trait" cursor expect_token_value drop
     TokenKind::Identifier cursor expect_token_kind = name_token
 
@@ -1239,24 +1272,40 @@ fn parse_trait cursor:TokenCursor -> CasaTrait {
     List::new (List[TraitMethod]) = methods
     "{" cursor expect_token_value drop
 
-    while true do
+    true = parse_trait_loop
+    while parse_trait_loop do
         cursor.peek = next_opt
         if next_opt.is_none then
             name_token Token::location "Unclosed trait block" ErrorKind::UnmatchedBlock raise_error
-            break
-        fi
-        if "}" next_opt.unwrap Token::value == then
+            false = parse_trait_loop
+        elif "}" next_opt.unwrap Token::value == then
             cursor.pop drop
-            break
-        fi
-        if "fn" next_opt.unwrap Token::value != then
+            false = parse_trait_loop
+        elif "fn" next_opt.unwrap Token::value != then
             next_opt.unwrap Token::location "Expected method declaration in trait" ErrorKind::UnexpectedToken raise_error
-            break
+            false = parse_trait_loop
+        else
+            cursor.pop drop # consume fn
+            TokenKind::Identifier cursor expect_token_kind = method_name
+
+            # Parse optional method-level type parameters (e.g., fn map[U])
+            List::new (List[str]) = method_type_vars
+            cursor.peek = mtv_bracket_opt
+            if mtv_bracket_opt.is_some "[" mtv_bracket_opt.unwrap Token::value == && then
+                cursor parse_method_type_vars = method_type_vars
+            fi
+
+            cursor parse_trait_method_signature = method_sig
+
+            # Parse optional default method body
+            List::new (List[Op]) = default_ops
+            cursor.peek = body_peek_opt
+            if body_peek_opt.is_some "{" body_peek_opt.unwrap Token::value == && then
+                f"{name_token Token::value}::{method_name Token::value}" cursor parser parse_block_ops = default_ops
+            fi
+
+            method_type_vars default_ops method_sig method_name Token::value TraitMethod methods.push
         fi
-        cursor.pop drop # consume fn
-        TokenKind::Identifier cursor expect_token_kind = method_name
-        cursor parse_trait_method_signature = method_sig
-        method_sig method_name Token::value TraitMethod methods.push
     done
 
     name_token Token::location methods type_params name_token Token::value CasaTrait
@@ -1868,7 +1917,7 @@ fn get_op_keyword parser:Parser token:Token cursor:TokenCursor function_name:str
     if KeywordKind::TraitKw keyword == then
         token Token::location "Traits" function_name require_global_scope
         cursor.retreat
-        cursor parse_trait = casa_trait
+        cursor parser parse_trait = casa_trait
         if casa_trait CasaTrait::name parser.store.traits.get.is_some then
             casa_trait CasaTrait::location f"Trait `{casa_trait CasaTrait::name}` is already defined" ErrorKind::DuplicateName raise_error
         fi

@@ -74,49 +74,121 @@ Returns the nth element of an array (zero-indexed). This is a generic function t
 
 The return type matches the array's element type. For example, calling `nth` on an `array[int]` returns `int`, not `any`.
 
-### `array::map`
+## Iteration
 
-Applies a function to each element, returning a new array with the results.
+All standard collections provide a `.iter` method that returns an `Iter[T]` value. `Iter[T]` satisfies the `Iterable[T]` trait (see [Traits](traits.md#built-in-trait-iterablet)), so it inherits all default methods: `collect`, `map`, `filter`, `fold`, `count`, `any`, `all`, and `find`.
 
-**Signature:** `array::map[T1 T2] arr:array[T1] f:fn[T1 -> T2] -> array[T2]`
+### `Iter[T]`
 
-**Stack effect:** `array[T1] fn[T1 -> T2] -> array[T2]`
+A generic iterator wrapper returned by `.iter` on `array[T]`, `List[T]`, and `str`.
 
-```casa
-{ 2 * } [1, 2, 3].map
-# result: [2, 4, 6]
-```
-
-The return type is determined by the function's return type. For example, mapping `fn[int -> str]` over an `array[int]` produces `array[str]`.
-
-### `array::filter`
-
-Returns a new array containing only elements for which the function returns `true`.
-
-**Signature:** `array::filter[T] arr:array[T] f:fn[T -> bool] -> array[T]`
-
-**Stack effect:** `array[T] fn[T -> bool] -> array[T]`
+**Definition:**
 
 ```casa
-{ 2 % 0 == } [1, 2, 3, 4].filter
-# result: [2, 4]
+struct Iter {
+    get:    ptr
+    length: int
+    index:  int
+}
 ```
 
-### `array::reduce`
+### `.iter` on Collections
 
-Reduces an array to a single value by applying a function to an accumulator and each element.
-
-**Signature:** `array::reduce[T1 T2] arr:array[T1] acc:T2 f:fn[T2 T1 -> T2] -> T2`
-
-**Stack effect:** `array[T1] T2 fn[T2 T1 -> T2] -> T2`
-
-The accumulator is the initial value. The function receives the current accumulator and the current element, and returns the new accumulator.
+| Collection | Method | Returns |
+|------------|--------|---------|
+| `array[T]` | `array::iter` | `Iter[T]` |
+| `List[T]` | `List::iter` | `Iter[T]` |
+| `str` | `str::iter` | `Iter[char]` |
 
 ```casa
-{ + } 0 [1, 2, 3].reduce print    # 6
+[1 2 3].iter           # Iter[int]
+my_list.iter           # Iter[T]
+"hello".iter           # Iter[char]
 ```
 
-The accumulator type and the array element type can differ.
+### `Iterable[T]` Default Methods
+
+Default methods are available on any type satisfying `Iterable[T]`, including `Iter[T]` (the return of `.iter`) and custom iterators.
+
+#### `collect`
+
+Collects all elements into a `List[T]`.
+
+**Signature:** `Iter::collect self:Iter[T] -> List[T]`
+
+```casa
+[1 2 3].iter.collect    # List[int] with elements 1, 2, 3
+```
+
+#### `map`
+
+Applies a function to each element, returning a `List[U]`.
+
+**Signature:** `Iter::map[U] self:Iter[T] f:fn[T -> U] -> List[U]`
+
+```casa
+{ 2 * } [1 2 3].iter.map    # List[int] with elements 2, 4, 6
+```
+
+#### `filter`
+
+Returns a `List[T]` of elements for which the function returns `true`.
+
+**Signature:** `Iter::filter self:Iter[T] f:fn[T -> bool] -> List[T]`
+
+```casa
+{ 2 % 0 == } [1 2 3 4].iter.filter    # List[int] with elements 2, 4
+```
+
+#### `fold`
+
+Reduces to a single value using an accumulator and a function.
+
+**Signature:** `Iter::fold[U] self:Iter[T] acc:U f:fn[U T -> U] -> U`
+
+```casa
+{ + } 0 [1 2 3].iter.fold print    # 6
+```
+
+#### `count`
+
+Returns the number of elements.
+
+**Signature:** `Iter::count self:Iter[T] -> int`
+
+```casa
+[1 2 3].iter.count print    # 3
+```
+
+#### `any`
+
+Returns `true` if any element satisfies the predicate.
+
+**Signature:** `Iter::any self:Iter[T] f:fn[T -> bool] -> bool`
+
+```casa
+{ 3 == } [1 2 3].iter.any print    # 1
+```
+
+#### `all`
+
+Returns `true` if all elements satisfy the predicate.
+
+**Signature:** `Iter::all self:Iter[T] f:fn[T -> bool] -> bool`
+
+```casa
+{ 0 < } [1 2 3].iter.all print    # 1
+```
+
+#### `find`
+
+Returns the first element satisfying the predicate, or `Option::None`.
+
+**Signature:** `Iter::find self:Iter[T] f:fn[T -> bool] -> Option[T]`
+
+```casa
+{ 2 < } [1 2 3].iter.find .unwrap print    # 2
+```
 
 ## Option
 

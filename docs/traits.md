@@ -4,7 +4,7 @@ Traits define a set of required methods that a type must implement. They enable 
 
 ## Defining a Trait
 
-Use the `trait` keyword to declare a trait with one or more method signatures. Method bodies are not allowed in trait definitions. Use `self` as a placeholder for the implementing type.
+Use the `trait` keyword to declare a trait with one or more method signatures. Required methods have no body; default methods optionally include a body (see [Default Methods](#default-methods)). Use `self` as a placeholder for the implementing type.
 
 ```casa
 trait Hashable {
@@ -187,6 +187,59 @@ impl Point {
 1 2 Point = origin
 f"origin = {origin}\n" print    # origin = Point(1, 2)
 ```
+
+## Default Methods
+
+Traits can provide default method implementations. A default method has a body in the trait definition and is automatically available to any type that satisfies the trait (i.e. implements the required methods). Default methods can call the required methods using `self`.
+
+```casa
+trait Iterable[T] {
+    fn next self:self -> Option[T]
+
+    fn collect self:self -> List[T] {
+        List::new (List[T]) = iter_result
+        for iter_elem in self do
+            iter_elem iter_result.push
+        done
+        iter_result
+    }
+
+    fn count self:self -> int {
+        0 = iter_count
+        for iter_elem in self do
+            1 += iter_count
+        done
+        iter_count
+    }
+}
+```
+
+Here `next` is the only required method. `collect` and `count` are default methods: any type that implements `next` returning `Option[T]` automatically gets `collect` and `count` without writing them.
+
+### Built-in Trait: `Iterable[T]`
+
+The standard library defines the `Iterable[T]` trait for iteration. Any type with a `next self:self -> Option[T]` method structurally satisfies `Iterable[T]` and gains all default methods.
+
+**Required method:**
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `next` | `self:self -> Option[T]` | Return the next element, or `Option::None` when exhausted |
+
+**Default methods:**
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `collect` | `self:self -> List[T]` | Collect all elements into a `List[T]` |
+| `map` | `self:self f:fn[T -> U] -> List[U]` | Apply a function to each element, returning a new list |
+| `filter` | `self:self f:fn[T -> bool] -> List[T]` | Return a list of elements for which the function returns `true` |
+| `fold` | `self:self acc:U f:fn[U T -> U] -> U` | Reduce to a single value using an accumulator |
+| `count` | `self:self -> int` | Count the number of elements |
+| `any` | `self:self f:fn[T -> bool] -> bool` | Return `true` if any element satisfies the predicate |
+| `all` | `self:self f:fn[T -> bool] -> bool` | Return `true` if all elements satisfy the predicate |
+| `find` | `self:self f:fn[T -> bool] -> Option[T]` | Return the first element satisfying the predicate |
+
+The standard library `Iter[T]` struct (returned by `.iter` on `array[T]`, `List[T]`, and `str`) satisfies `Iterable[T]`. See [Standard Library](standard-library.md) for details on `Iter` and the default methods.
 
 ## Errors
 
