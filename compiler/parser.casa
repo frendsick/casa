@@ -1562,6 +1562,98 @@ fn parse_literal_match_pattern token:Token -> LiteralPattern {
     # Unreachable
     "" "int" 0 LiteralPattern
 }
+# Parse one match-arm pattern (wildcard, literal, struct, bare ident, or
+# Enum::Variant) plus its optional guard, append the OpMatchArm to `ops`.
+
+fn parse_match_arm_pattern
+    parser:Parser
+    arm_token:Token
+    cursor:TokenCursor
+    function_name:str
+    ops:List[Op]
+{
+    if MATCH_WILDCARD arm_token Token::value == then
+        function_name cursor parser parse_pattern_terminator = wildcard_guard_ops
+        Option::None MATCH_WILDCARD "" make_enum_variant = wildcard
+        wildcard_guard_ops wildcard (int) make_match_arm = wildcard_arm
+        PatternKind::PatEnumVariant arm_token Token::location OpKind::OpMatchArm wildcard_arm (int) make_op_pattern ops.push
+    elif TokenKind::Literal arm_token Token::kind == then
+        function_name cursor parser parse_pattern_terminator = literal_guard_ops
+        arm_token parse_literal_match_pattern = literal_pattern
+        literal_guard_ops literal_pattern (int) make_match_arm = literal_arm
+        PatternKind::PatLiteral arm_token Token::location OpKind::OpMatchArm literal_arm (int) make_op_pattern ops.push
+    elif TokenKind::Identifier arm_token Token::kind != then
+        arm_token Token::location "Expected match pattern or `_`" ErrorKind::UnexpectedToken raise_error
+    elif cursor.peek.is_some "{" cursor.peek.unwrap Token::value == && then
+        cursor arm_token parser parse_struct_match_pattern = struct_pattern
+        function_name cursor parser parse_pattern_terminator = struct_guard_ops
+        struct_guard_ops struct_pattern (int) make_match_arm = struct_arm
+        PatternKind::PatStruct arm_token Token::location OpKind::OpMatchArm struct_arm (int) make_op_pattern ops.push
+    elif arm_token Token::value "::" str::find 0 > then
+        function_name cursor parser parse_pattern_terminator = bare_guard_ops
+        Option::None arm_token Token::value "" make_enum_variant = bare_variant
+        bare_guard_ops bare_variant (int) make_match_arm = bare_arm
+        PatternKind::PatEnumVariant arm_token Token::location OpKind::OpMatchArm bare_arm (int) make_op_pattern ops.push
+    else
+        arm_token Token::value "::" str::find = separator
+        arm_token Token::value 0 separator str::substring = enum_name
+        arm_token Token::value separator 2 + arm_token Token::value.length separator - 2 - str::substring = variant_name
+
+        List::new (List[str]) = bindings
+        cursor.peek = paren_opt
+        if paren_opt.is_some "(" paren_opt.unwrap Token::value == && then
+            cursor.pop drop
+            while true do
+                cursor.peek = inner_opt
+                if inner_opt.is_none then
+                    arm_token Token::location "Unexpected end of input in match arm bindings" ErrorKind::UnexpectedToken raise_error
+                fi
+                if ")" inner_opt.unwrap Token::value == then
+                    cursor.pop drop
+                    break
+                fi
+                TokenKind::Identifier cursor expect_token_kind = binding_token
+                binding_token Token::value bindings.push
+            done
+        fi
+
+        function_name cursor parser parse_pattern_terminator = enum_guard_ops
+        Option::None variant_name enum_name make_enum_variant = variant
+        bindings variant EnumVariant::set_bindings
+        enum_guard_ops variant (int) make_match_arm = variant_arm
+        PatternKind::PatEnumVariant arm_token Token::location OpKind::OpMatchArm variant_arm (int) make_op_pattern ops.push
+    fi
+}
+# Parse a match-arm body (either a `{...}` block or a single-line expression
+# up to the next arm boundary / `end`) and append its ops to `ops`.
+
+fn parse_match_arm_body parser:Parser cursor:TokenCursor function_name:str ops:List[Op] {
+    cursor.peek = body_peek
+    if body_peek.is_some "{" body_peek.unwrap Token::value == && then
+        function_name cursor parser parse_block_ops = block_ops
+        0 = block_index
+        while block_index block_ops.length > do
+            block_index block_ops.get ops.push
+            1 += block_index
+        done
+        return
+    fi
+    while cursor.is_finished ! do
+        if cursor parser is_match_arm_boundary then break fi
+        cursor.peek = end_peek
+        if end_peek.is_some "end" end_peek.unwrap Token::value == && then
+            break
+        fi
+        cursor.pop = body_token_opt
+        if body_token_opt.is_none then break fi
+        body_token_opt.unwrap = body_token
+        if TokenKind::FstringStart body_token Token::kind == then
+            ops function_name cursor body_token parser handle_fstring
+            continue
+        fi
+        ops function_name cursor body_token parser token_to_op
+    done
+}
 
 fn parse_match_block parser:Parser token:Token cursor:TokenCursor function_name:str -> List[Op] {
     List::new (List[Op]) = ops
@@ -1569,98 +1661,12 @@ fn parse_match_block parser:Parser token:Token cursor:TokenCursor function_name:
 
     while true do
         cursor expect_token = arm_token
-
-        # end keyword
         if "end" arm_token Token::value == then
             arm_token Token::location OpKind::OpMatchEnd 0 make_op ops.push
             break
         fi
-
-        # Wildcard: _ =>
-        if MATCH_WILDCARD arm_token Token::value == then
-            function_name cursor parser parse_pattern_terminator = wildcard_guard_ops
-            Option::None MATCH_WILDCARD "" make_enum_variant = wildcard
-            wildcard_guard_ops wildcard (int) make_match_arm = wildcard_arm
-            PatternKind::PatEnumVariant arm_token Token::location OpKind::OpMatchArm wildcard_arm (int) make_op_pattern ops.push
-        elif TokenKind::Literal arm_token Token::kind == then
-            function_name cursor parser parse_pattern_terminator = literal_guard_ops
-            arm_token parse_literal_match_pattern = literal_pattern
-            literal_guard_ops literal_pattern (int) make_match_arm = literal_arm
-            PatternKind::PatLiteral arm_token Token::location OpKind::OpMatchArm literal_arm (int) make_op_pattern = literal_op
-            literal_op ops.push
-        elif TokenKind::Identifier arm_token Token::kind != then
-            arm_token Token::location "Expected match pattern or `_`" ErrorKind::UnexpectedToken raise_error
-        elif cursor.peek.is_some "{" cursor.peek.unwrap Token::value == && then
-            # Struct pattern
-            cursor arm_token parser parse_struct_match_pattern = struct_pattern
-            function_name cursor parser parse_pattern_terminator = struct_guard_ops
-            struct_guard_ops struct_pattern (int) make_match_arm = struct_arm
-            PatternKind::PatStruct arm_token Token::location OpKind::OpMatchArm struct_arm (int) make_op_pattern ops.push
-        elif arm_token Token::value "::" str::find 0 > then
-            # Bare identifier
-            function_name cursor parser parse_pattern_terminator = bare_guard_ops
-            Option::None arm_token Token::value "" make_enum_variant = bare_variant
-            bare_guard_ops bare_variant (int) make_match_arm = bare_arm
-            PatternKind::PatEnumVariant arm_token Token::location OpKind::OpMatchArm bare_arm (int) make_op_pattern ops.push
-        else
-            # Enum::Variant pattern
-            arm_token Token::value "::" str::find = separator
-            arm_token Token::value 0 separator str::substring = enum_name
-            arm_token Token::value separator 2 + arm_token Token::value.length separator - 2 - str::substring = variant_name
-
-            # Parse optional bindings
-            List::new (List[str]) = bindings
-            cursor.peek = paren_opt
-            if paren_opt.is_some "(" paren_opt.unwrap Token::value == && then
-                cursor.pop drop # consume (
-                while true do
-                    cursor.peek = inner_opt
-                    if inner_opt.is_none then
-                        arm_token Token::location "Unexpected end of input in match arm bindings" ErrorKind::UnexpectedToken raise_error
-                    fi
-                    if ")" inner_opt.unwrap Token::value == then
-                        cursor.pop drop
-                        break
-                    fi
-                    TokenKind::Identifier cursor expect_token_kind = binding_token
-                    binding_token Token::value bindings.push
-                done
-            fi
-
-            function_name cursor parser parse_pattern_terminator = enum_guard_ops
-            Option::None variant_name enum_name make_enum_variant = variant
-            bindings variant EnumVariant::set_bindings
-            enum_guard_ops variant (int) make_match_arm = variant_arm
-            PatternKind::PatEnumVariant arm_token Token::location OpKind::OpMatchArm variant_arm (int) make_op_pattern ops.push
-        fi
-
-        # Parse arm body
-        cursor.peek = body_peek
-        if body_peek.is_some "{" body_peek.unwrap Token::value == && then
-            function_name cursor parser parse_block_ops = block_ops
-            0 = block_index
-            while block_index block_ops.length > do
-                block_index block_ops.get ops.push
-                1 += block_index
-            done
-        else
-            # Single-line arm body
-            while cursor.is_finished ! do
-                if cursor parser is_match_arm_boundary then break fi
-                cursor.peek = end_peek
-                if end_peek.is_some "end" end_peek.unwrap Token::value == && then
-                    break
-                fi
-                cursor.pop = body_token_opt
-                if body_token_opt.is_none then break fi
-                body_token_opt.unwrap = body_token
-                if TokenKind::FstringStart body_token Token::kind == then
-                    ops function_name cursor body_token parser handle_fstring
-                    continue
-                fi
-                ops function_name cursor body_token parser token_to_op
-            done
-        fi
+        ops function_name cursor arm_token parser parse_match_arm_pattern
+        ops function_name cursor parser parse_match_arm_body
     done
     ops
 }
@@ -2318,6 +2324,86 @@ fn resolve_match_op parser:Parser function:Function op:Op errors:List[CasaError]
         resolved_guard arm MatchArm::set_guard_ops
     fi
 }
+# Try resolving `&name` and `&K::method` function references. Returns true
+# if the identifier begins with `&`, in which case the op has been rewritten
+# (or an error pushed) and the caller should skip further resolution.
+
+fn try_resolve_fn_ref
+    parser:Parser
+    function:Function
+    op:Op
+    ident:str
+    resolve_errors:List[CasaError]
+-> bool {
+    if '&' 0 ident.at != then false return fi
+    ident 1 ident.length 1 - str::substring = ref_name
+    if 0 ref_name.length == then
+        op Op::location "Expected function name after `&`" ErrorKind::Syntax make_error resolve_errors.push
+        true return
+    fi
+    if ref_name "::" str::find 0 <= then
+        ref_name 0 ref_name "::" str::find str::substring = ref_type_var
+        ref_type_var function Function::signature Signature::trait_bounds.get = ref_bound_opt
+        if ref_bound_opt.is_some then
+            ref_name ref_name "::" str::find 2 + ref_name.length ref_name "::" str::find - 2 - str::substring = ref_trait_method
+            f"__trait_{ref_type_var}_{ref_trait_method}" = ref_hidden
+            OpKind::OpPushVar op Op::set_kind
+            ref_hidden (int) op Op::set_value
+            true return
+        fi
+    fi
+    ref_name parser.store.functions.get = ref_fn_opt
+    if ref_fn_opt.is_some then
+        OpKind::OpFnPush op Op::set_kind
+        ref_name (int) op Op::set_value
+        true ref_fn_opt.unwrap Function::set_is_used
+    else
+        op Op::location f"Function `{ref_name}` is not defined" ErrorKind::UndefinedName make_error resolve_errors.push
+    fi
+    true
+}
+# Try resolving `Enum::Variant` identifiers. Returns true if the enum is
+# known (op rewritten, or undefined-variant error pushed).
+
+fn try_resolve_enum_variant_ident
+    parser:Parser
+    op:Op
+    ident:str
+    resolve_errors:List[CasaError]
+-> bool {
+    if ident "::" str::find 0 <= ! then false return fi
+    ident "::" str::find = separator
+    ident 0 separator str::substring = enum_name
+    enum_name parser.store.enums.get = enum_opt
+    if enum_opt.is_none then false return fi
+    ident separator 2 + ident.length separator - 2 - str::substring = binding_name
+    binding_name enum_opt.unwrap CasaEnum::variants string_list_index = ordinal
+    if 0 ordinal < then
+        op Op::location f"Variant `{binding_name}` is not defined in enum `{enum_name}`" ErrorKind::UndefinedName make_error resolve_errors.push
+    else
+        OpKind::OpPushEnumVariant op Op::set_kind
+        ordinal Option::Some binding_name enum_name make_enum_variant = enum_variant
+        enum_variant (int) op Op::set_value
+    fi
+    true
+}
+# Try resolving `K::method` trait-bound method calls. Returns true if K is
+# a trait-bound type variable on the enclosing function's signature.
+
+fn try_resolve_trait_method_call parser:Parser function:Function op:Op ident:str -> bool {
+    if ident "::" str::find 0 <= ! then false return fi
+    ident 0 ident "::" str::find str::substring = type_var
+    if type_var function Function::signature Signature::trait_bounds.get.is_some ! then false return fi
+    ident ident "::" str::find 2 + ident.length ident "::" str::find - 2 - str::substring = trait_method
+    f"__trait_{type_var}_{trait_method}" = hidden_var
+    if hidden_var function Function::variables variable_list_contains ! then
+        hidden_var make_variable function Function::variables.push
+    fi
+    OpKind::OpPushVar op Op::set_kind
+    hidden_var (int) op Op::set_value
+    "trait_exec" op Op::set_type_annotation
+    true
+}
 
 fn resolve_identifiers_fn parser:Parser ops:List[Op] function:Function -> List[Op] {
     0 = op_index
@@ -2368,75 +2454,9 @@ fn resolve_identifiers_fn parser:Parser ops:List[Op] function:Function -> List[O
         # IDENTIFIER: resolve to specific op kinds
         if OpKind::OpIdentifier op_kind == then
             current_op op_str_value = ident
-            # Function reference: &name
-            if '&' 0 ident.at == then
-                ident 1 ident.length 1 - str::substring = ref_name
-                # Empty & validation
-                if 0 ref_name.length == then
-                    current_op Op::location "Expected function name after `&`" ErrorKind::Syntax make_error resolve_errors.push
-                    continue
-                fi
-                # Check trait bound reference: &K::method
-                false = ref_is_trait
-                if ref_name "::" str::find 0 <= then
-                    ref_name 0 ref_name "::" str::find str::substring = ref_type_var
-                    ref_type_var function Function::signature Signature::trait_bounds.get = ref_bound_opt
-                    if ref_bound_opt.is_some then
-                        ref_name ref_name "::" str::find 2 + ref_name.length ref_name "::" str::find - 2 - str::substring = ref_trait_method
-                        f"__trait_{ref_type_var}_{ref_trait_method}" = ref_hidden
-                        OpKind::OpPushVar current_op Op::set_kind
-                        ref_hidden (int) current_op Op::set_value
-                        true = ref_is_trait
-                    fi
-                fi
-                if ref_is_trait ! then
-                    ref_name parser.store.functions.get = ref_fn_opt
-                    if ref_fn_opt.is_some then
-                        OpKind::OpFnPush current_op Op::set_kind
-                        ref_name (int) current_op Op::set_value
-                        true ref_fn_opt.unwrap Function::set_is_used
-                    else
-                        current_op Op::location f"Function `{ref_name}` is not defined" ErrorKind::UndefinedName make_error resolve_errors.push
-                    fi
-                fi
-                continue
-            fi
-
-            # Enum variant: Enum::Variant
-            if ident "::" str::find 0 <= then
-                ident "::" str::find = separator
-                ident 0 separator str::substring = enum_name
-                enum_name parser.store.enums.get = enum_opt
-                if enum_opt.is_some then
-                    ident separator 2 + ident.length separator - 2 - str::substring = binding_name
-                    binding_name enum_opt.unwrap CasaEnum::variants string_list_index = ordinal
-                    if 0 ordinal < then
-                        current_op Op::location f"Variant `{binding_name}` is not defined in enum `{enum_name}`" ErrorKind::UndefinedName make_error resolve_errors.push
-                    else
-                        OpKind::OpPushEnumVariant current_op Op::set_kind
-                        ordinal Option::Some binding_name enum_name make_enum_variant = enum_variant
-                        enum_variant (int) current_op Op::set_value
-                    fi
-                    continue
-                fi
-            fi
-
-            # Trait-bound call: K::method -> push hidden var (marked for exec)
-            if ident "::" str::find 0 <= then
-                ident 0 ident "::" str::find str::substring = type_var
-                if type_var function Function::signature Signature::trait_bounds.get.is_some then
-                    ident ident "::" str::find 2 + ident.length ident "::" str::find - 2 - str::substring = trait_method
-                    f"__trait_{type_var}_{trait_method}" = hidden_var
-                    if hidden_var function Function::variables variable_list_contains ! then
-                        hidden_var make_variable function Function::variables.push
-                    fi
-                    OpKind::OpPushVar current_op Op::set_kind
-                    hidden_var (int) current_op Op::set_value
-                    # Mark for exec: bytecode compiler emits FN_EXEC after push
-                    "trait_exec" current_op Op::set_type_annotation
-                    continue
-                fi
-            fi
+            if resolve_errors ident current_op function parser try_resolve_fn_ref then continue fi
+            if resolve_errors ident current_op parser try_resolve_enum_variant_ident then continue fi
+            if ident current_op function parser try_resolve_trait_method_call then continue fi
 
             # Local variable
             if ident function Function::variables variable_list_contains then
