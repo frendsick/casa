@@ -758,6 +758,20 @@ fn parse_type_vars parser:Parser cursor:TokenCursor -> List[str] {
 # ============================================================================
 # parse_parameters - parse name:type parameter pairs
 # ============================================================================
+# Given an identifier `token` just popped from `cursor`, produce either a
+# named parameter (`name:type`) if the next token is `:`, or an unnamed
+# parameter by rewinding and re-parsing as a type expression.
+
+fn parse_parameter_maybe_named cursor:TokenCursor token:Token -> Parameter {
+    cursor.peek = next_opt
+    if next_opt.is_some ":" next_opt.unwrap Token::value == && then
+        cursor.advance # consume :
+        cursor parse_type = param_type
+        token Token::value param_type make_named_param return
+    fi
+    cursor.retreat
+    cursor parse_type make_param
+}
 
 fn parse_parameters cursor:TokenCursor -> List[Parameter] {
     List::new (List[Parameter]) = params
@@ -785,20 +799,7 @@ fn parse_parameters cursor:TokenCursor -> List[Parameter] {
             token Token::location "Unexpected token in parameter list" ErrorKind::UnexpectedToken raise_error
         fi
 
-        # Check if named parameter: name:type
-        cursor.peek = next_opt
-        if next_opt.is_some then
-            if ":" next_opt.unwrap Token::value == then
-                cursor.advance # consume :
-                cursor parse_type = param_type
-                token Token::value param_type make_named_param params.push
-                continue
-            fi
-        fi
-
-        # Unnamed parameter - might be parameterized
-        cursor.retreat
-        cursor parse_type make_param params.push
+        token cursor parse_parameter_maybe_named params.push
     done
     params
 }
@@ -1181,15 +1182,7 @@ fn parse_trait_method_signature cursor:TokenCursor -> Signature {
             peek Token::location "Unexpected token in trait method parameter list" ErrorKind::UnexpectedToken raise_error
         fi
 
-        cursor.peek = next_opt
-        if next_opt.is_some ":" next_opt.unwrap Token::value == && then
-            cursor.pop drop # consume :
-            cursor parse_type = param_type
-            peek Token::value param_type make_named_param params.push
-        else
-            cursor.retreat
-            cursor parse_type make_param params.push
-        fi
+        peek cursor parse_parameter_maybe_named params.push
     done
 
     List::new (List[str]) = returns
@@ -1214,31 +1207,35 @@ fn parse_trait_method_signature cursor:TokenCursor -> Signature {
 
     returns params make_signature
 }
+# Parse a bracket-delimited identifier-only type-parameter list:
+# `[T1 T2 ...]`. `context` (e.g. "trait", "trait method") is interpolated
+# into error messages. Does *not* accept trait bounds; for those use
+# `parse_type_vars`.
 
-fn parse_method_type_vars cursor:TokenCursor -> List[str] {
+fn parse_simple_type_vars cursor:TokenCursor context:str -> List[str] {
     cursor.pop drop # consume [
-    List::new (List[str]) = mtv_vars
-    true = mtv_loop
-    while mtv_loop do
-        cursor.peek = mtv_opt
-        if mtv_opt.is_none then
-            empty_location "Unclosed method type parameter list" ErrorKind::UnmatchedBlock raise_error
-            false = mtv_loop
+    List::new (List[str]) = collected
+    true = loop_flag
+    while loop_flag do
+        cursor.peek = token_opt
+        if token_opt.is_none then
+            empty_location f"Unclosed {context} type parameter list" ErrorKind::UnmatchedBlock raise_error
+            false = loop_flag
         else
-            mtv_opt.unwrap = mtv_tok
-            if "]" mtv_tok Token::value == then
+            token_opt.unwrap = token
+            if "]" token Token::value == then
                 cursor.pop drop
-                false = mtv_loop
-            elif TokenKind::Identifier mtv_tok Token::kind != then
-                mtv_tok Token::location "Expected type parameter in trait method" ErrorKind::UnexpectedToken raise_error
-                false = mtv_loop
+                false = loop_flag
+            elif TokenKind::Identifier token Token::kind != then
+                token Token::location f"Expected type parameter identifier in {context}" ErrorKind::UnexpectedToken raise_error
+                false = loop_flag
             else
                 cursor.pop drop
-                mtv_tok Token::value mtv_vars.push
+                token Token::value collected.push
             fi
         fi
     done
-    mtv_vars
+    collected
 }
 
 fn parse_trait parser:Parser cursor:TokenCursor -> CasaTrait {
@@ -1248,25 +1245,7 @@ fn parse_trait parser:Parser cursor:TokenCursor -> CasaTrait {
     List::new (List[str]) = type_params
     cursor.peek = bracket_opt
     if bracket_opt.is_some "[" bracket_opt.unwrap Token::value == && then
-        cursor.pop drop # consume [
-        while true do
-            cursor.peek = tp_opt
-            if tp_opt.is_none then
-                name_token Token::location "Unclosed trait type parameter list" ErrorKind::UnmatchedBlock raise_error
-                break
-            fi
-            tp_opt.unwrap = tp_tok
-            if "]" tp_tok Token::value == then
-                cursor.pop drop
-                break
-            fi
-            if TokenKind::Identifier tp_tok Token::kind != then
-                tp_tok Token::location "Expected type parameter identifier in trait" ErrorKind::UnexpectedToken raise_error
-                break
-            fi
-            cursor.pop drop
-            tp_tok Token::value type_params.push
-        done
+        "trait" cursor parse_simple_type_vars = type_params
     fi
 
     List::new (List[TraitMethod]) = methods
@@ -1292,7 +1271,7 @@ fn parse_trait parser:Parser cursor:TokenCursor -> CasaTrait {
             List::new (List[str]) = method_type_vars
             if cursor.peek Option::Some (mtv_bracket) is then
                 if "[" mtv_bracket Token::value == then
-                    cursor parse_method_type_vars = method_type_vars
+                    "trait method" cursor parse_simple_type_vars = method_type_vars
                 fi
             fi
 
