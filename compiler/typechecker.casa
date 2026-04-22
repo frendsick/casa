@@ -151,6 +151,11 @@ fn make_typechecker store:SymbolStore -> TypeChecker {
     TypedStack::new # live
     TypeChecker
 }
+# Raise a TypeMismatch error at the type checker's current location.
+
+fn raise_type_mismatch tc:TypeChecker message:str {
+    tc TypeChecker::current_location message ErrorKind::TypeMismatch raise_error
+}
 
 # ============================================================================
 # Stack operations
@@ -459,7 +464,7 @@ fn bind_type_var tc:TypeChecker bindings:Map[str str] type_var:str actual:str ->
     ANY_TYPE bound != &&
     actual is_enum_type_var ! &&
     then
-        tc TypeChecker::current_location f"Type variable `{type_var}` bound to `{bound}` but got `{actual}`" ErrorKind::TypeMismatch raise_error
+        f"Type variable `{type_var}` bound to `{bound}` but got `{actual}`" tc raise_type_mismatch
     fi
     bindings
 }
@@ -516,7 +521,7 @@ fn bind_generic_param
                     true return
                 fi
             fi
-            tc TypeChecker::current_location "Type mismatch" ErrorKind::TypeMismatch raise_error
+            "Type mismatch" tc raise_type_mismatch
         fi
     fi
     if base actual == ANY_TYPE actual == || then
@@ -530,7 +535,7 @@ fn bind_generic_param
         done
         true return
     fi
-    tc TypeChecker::current_location "Type mismatch" ErrorKind::TypeMismatch raise_error
+    "Type mismatch" tc raise_type_mismatch
     true
 }
 
@@ -565,7 +570,7 @@ fn bind_fn_param tc:TypeChecker bindings:Map[str str] expected:Parameter sig:Sig
         true return
     fi
     if actual is_fn_type ! then
-        tc TypeChecker::current_location "Type mismatch" ErrorKind::TypeMismatch raise_error
+        "Type mismatch" tc raise_type_mismatch
         true return
     fi
     actual extract_fn_signature_str = actual_sig_opt
@@ -694,7 +699,7 @@ fn check_comparison tc:TypeChecker op:Op {
     base2 tc.store.enums.get.is_some = is_enum2
     if is_enum1 is_enum2 || then
         if type1 type2 != then
-            tc TypeChecker::current_location f"Cannot compare `{type2}` with `{type1}`" ErrorKind::TypeMismatch raise_error
+            f"Cannot compare `{type2}` with `{type1}`" tc raise_type_mismatch
         fi
         # Annotate for bytecode: data-carrying enums need heap tag comparison
         if is_enum1 then
@@ -705,13 +710,13 @@ fn check_comparison tc:TypeChecker op:Op {
         fi
     elif "str" type1 == "str" type2 == || then
         if type1 type2 != then
-            tc TypeChecker::current_location f"Cannot compare `{type2}` with `{type1}`" ErrorKind::TypeMismatch raise_error
+            f"Cannot compare `{type2}` with `{type1}`" tc raise_type_mismatch
         fi
         if
         OpKind::OpEq op Op::kind !=
         OpKind::OpNe op Op::kind != &&
         then
-            tc TypeChecker::current_location "Type `str` only supports `==` and `!=` comparison" ErrorKind::TypeMismatch raise_error
+            "Type `str` only supports `==` and `!=` comparison" tc raise_type_mismatch
         fi
         "str" op Op::set_type_annotation
     fi
@@ -819,6 +824,24 @@ fn check_memory tc:TypeChecker op:Op {
 # ============================================================================
 # Check assignment operations
 # ============================================================================
+# Unify the stored type of `variable` with the type being assigned to it.
+# `scope` ("local" / "global") is only used in the error message.
+
+fn unify_variable_assignment op:Op variable:Variable effective_type:str scope:str {
+    op op_str_value = var_name
+    if
+    "" variable Variable::typ ==
+    ANY_TYPE variable Variable::typ == effective_type ANY_TYPE != && ||
+    then
+        effective_type variable Variable::set_typ
+    fi
+    variable Variable::typ effective_type unify_type = unified
+    if "" unified == then
+        op Op::location f"Cannot override {scope} variable `{var_name}` of type `{variable Variable::typ}` with other type `{effective_type}`" ErrorKind::InvalidVariable add_error
+    else
+        unified variable Variable::set_typ
+    fi
+}
 
 fn check_assignment tc:TypeChecker op:Op function_opt:Option[Function] {
     if
@@ -842,18 +865,7 @@ fn check_assignment tc:TypeChecker op:Op function_opt:Option[Function] {
         var_name function Function::variables variable_list_index = local_index
         if 0 local_index >= then
             local_index function Function::variables.get = local_var
-            if
-            "" local_var Variable::typ ==
-            ANY_TYPE local_var Variable::typ == effective_type ANY_TYPE != && ||
-            then
-                effective_type local_var Variable::set_typ
-            fi
-            local_var Variable::typ effective_type unify_type = unified
-            if "" unified == then
-                op Op::location f"Cannot override local variable `{var_name}` of type `{local_var Variable::typ}` with other type `{effective_type}`" ErrorKind::InvalidVariable add_error
-            else
-                unified local_var Variable::set_typ
-            fi
+            "local" effective_type local_var op unify_variable_assignment
             effective_type tc expect_type drop
             return
         fi
@@ -863,18 +875,7 @@ fn check_assignment tc:TypeChecker op:Op function_opt:Option[Function] {
     var_name tc.store.variables.get = global_opt
     if global_opt.is_some then
         global_opt.unwrap = global_var
-        if
-        "" global_var Variable::typ ==
-        ANY_TYPE global_var Variable::typ == effective_type ANY_TYPE != && ||
-        then
-            effective_type global_var Variable::set_typ
-        fi
-        global_var Variable::typ effective_type unify_type = unified
-        if "" unified == then
-            op Op::location f"Cannot override global variable `{var_name}` of type `{global_var Variable::typ}` with other type `{effective_type}`" ErrorKind::InvalidVariable add_error
-        else
-            unified global_var Variable::set_typ
-        fi
+        "global" effective_type global_var op unify_variable_assignment
         effective_type tc expect_type drop
         return
     fi
@@ -1731,7 +1732,7 @@ fn check_is tc:TypeChecker op:Op {
     tc stack_pop = typ
     typ resolve_match_type = base
     if base tc.store.enums.get.is_none then
-        tc TypeChecker::current_location f"`is` requires an enum type, got `{typ}`" ErrorKind::TypeMismatch raise_error
+        f"`is` requires an enum type, got `{typ}`" tc raise_type_mismatch
         "bool" tc stack_push
         return
     fi
@@ -1740,7 +1741,7 @@ fn check_is tc:TypeChecker op:Op {
     # Validate the variant belongs to the correct enum
     if "" variant EnumVariant::enum_name != then
         if variant EnumVariant::enum_name casa_enum CasaEnum::name != then
-            tc TypeChecker::current_location f"Cannot check `{variant EnumVariant::enum_name}::{variant EnumVariant::variant_name}` on value of type `{typ}`" ErrorKind::TypeMismatch raise_error
+            f"Cannot check `{variant EnumVariant::enum_name}::{variant EnumVariant::variant_name}` on value of type `{typ}`" tc raise_type_mismatch
         fi
     fi
     # Validate binding count for data-carrying variants
@@ -1749,7 +1750,7 @@ fn check_is tc:TypeChecker op:Op {
         if inner_opt.is_some then
             inner_opt.unwrap = inner_types
             if variant EnumVariant::bindings.length inner_types.length != then
-                tc TypeChecker::current_location f"Variant `{variant EnumVariant::enum_name}::{variant EnumVariant::variant_name}` has {inner_types.length} inner value(s), but {variant EnumVariant::bindings.length} binding(s) provided" ErrorKind::TypeMismatch raise_error
+                f"Variant `{variant EnumVariant::enum_name}::{variant EnumVariant::variant_name}` has {inner_types.length} inner value(s), but {variant EnumVariant::bindings.length} binding(s) provided" tc raise_type_mismatch
             fi
         fi
     fi
