@@ -335,6 +335,37 @@ fn emit_syscall arg_count:int asm:StringBuilder {
 }
 
 # ============================================================================
+# Emit call-via-return-stack: push a return address onto r14, jump to target,
+# then emit the return label. Shared by FnCall, PrintInt, PrintStr, and
+# FstringConcat (all of which funnel into a shared asm subroutine).
+# ============================================================================
+
+fn emit_call_via_return_stack asm:StringBuilder jump_target:str label_prefix:str {
+    emit_uid = uid
+    f"leaq .L{label_prefix}_{uid}(%rip), %rax" asm emit_indent
+    "movq %rax, (%r14)" asm emit_indent
+    "addq $8, %r14" asm emit_indent
+    f"jmp {jump_target}" asm emit_indent
+    f".L{label_prefix}_{uid}:" asm emit_line
+}
+
+# ============================================================================
+# Emit memory load/store shared helpers
+# ============================================================================
+
+fn emit_load asm:StringBuilder mov_op:str dst_reg:str {
+    "popq %rax" asm emit_indent
+    f"{mov_op} (%rax), {dst_reg}" asm emit_indent
+    "pushq %rax" asm emit_indent
+}
+
+fn emit_store asm:StringBuilder mov_op:str src_reg:str {
+    "popq %rax" asm emit_indent
+    "popq %rbx" asm emit_indent
+    f"{mov_op} {src_reg}, (%rax)" asm emit_indent
+}
+
+# ============================================================================
 # Emit stack operations
 # ============================================================================
 
@@ -535,12 +566,7 @@ fn emit_control_flow asm:StringBuilder inst:Inst is_global:bool {
         }
         InstKind::InstFnCall => {
             inst Inst::str_arg sanitize_name = label
-            emit_uid = uid
-            f"leaq .Lret_{uid}(%rip), %rax" asm emit_indent
-            "movq %rax, (%r14)" asm emit_indent
-            "addq $8, %r14" asm emit_indent
-            f"jmp fn_{label}" asm emit_indent
-            f".Lret_{uid}:" asm emit_line
+            "ret" f"fn_{label}" asm emit_call_via_return_stack
         }
         InstKind::InstFnExec => {
             emit_uid = uid
@@ -588,46 +614,14 @@ fn emit_memory asm:StringBuilder inst:Inst {
             "addq %rax, %rcx" asm emit_indent
             "movq %rcx, heap_ptr(%rip)" asm emit_indent
         }
-        InstKind::InstLoad8 => {
-            "popq %rax" asm emit_indent
-            "movzbl (%rax), %eax" asm emit_indent
-            "pushq %rax" asm emit_indent
-        }
-        InstKind::InstLoad16 => {
-            "popq %rax" asm emit_indent
-            "movzwl (%rax), %eax" asm emit_indent
-            "pushq %rax" asm emit_indent
-        }
-        InstKind::InstLoad32 => {
-            "popq %rax" asm emit_indent
-            "movl (%rax), %eax" asm emit_indent
-            "pushq %rax" asm emit_indent
-        }
-        InstKind::InstLoad64 => {
-            "popq %rax" asm emit_indent
-            "movq (%rax), %rax" asm emit_indent
-            "pushq %rax" asm emit_indent
-        }
-        InstKind::InstStore8 => {
-            "popq %rax" asm emit_indent
-            "popq %rbx" asm emit_indent
-            "movb %bl, (%rax)" asm emit_indent
-        }
-        InstKind::InstStore16 => {
-            "popq %rax" asm emit_indent
-            "popq %rbx" asm emit_indent
-            "movw %bx, (%rax)" asm emit_indent
-        }
-        InstKind::InstStore32 => {
-            "popq %rax" asm emit_indent
-            "popq %rbx" asm emit_indent
-            "movl %ebx, (%rax)" asm emit_indent
-        }
-        InstKind::InstStore64 => {
-            "popq %rax" asm emit_indent
-            "popq %rbx" asm emit_indent
-            "movq %rbx, (%rax)" asm emit_indent
-        }
+        InstKind::InstLoad8 => "%eax" "movzbl" asm emit_load
+        InstKind::InstLoad16 => "%eax" "movzwl" asm emit_load
+        InstKind::InstLoad32 => "%eax" "movl" asm emit_load
+        InstKind::InstLoad64 => "%rax" "movq" asm emit_load
+        InstKind::InstStore8 => "%bl" "movb" asm emit_store
+        InstKind::InstStore16 => "%bx" "movw" asm emit_store
+        InstKind::InstStore32 => "%ebx" "movl" asm emit_store
+        InstKind::InstStore64 => "%rbx" "movq" asm emit_store
         _ => {
             "Internal error: emit_memory called with non-memory InstKind\n" eprint
             1 exit
@@ -642,13 +636,8 @@ fn emit_memory asm:StringBuilder inst:Inst {
 fn emit_io_ops asm:StringBuilder inst:Inst {
     inst Inst::kind match
         InstKind::InstPrintInt => {
-            emit_uid = uid
             "popq %rdi" asm emit_indent
-            f"leaq .Lprint_done_{uid}(%rip), %rax" asm emit_indent
-            "movq %rax, (%r14)" asm emit_indent
-            "addq $8, %r14" asm emit_indent
-            "jmp print_int" asm emit_indent
-            f".Lprint_done_{uid}:" asm emit_line
+            "print_done" "print_int" asm emit_call_via_return_stack
         }
         InstKind::InstPrintBool => {
             emit_uid = uid
@@ -667,13 +656,8 @@ fn emit_io_ops asm:StringBuilder inst:Inst {
             "syscall" asm emit_indent
         }
         InstKind::InstPrintStr => {
-            emit_uid = uid
             "popq %rdi" asm emit_indent
-            f"leaq .Lprint_done_{uid}(%rip), %rax" asm emit_indent
-            "movq %rax, (%r14)" asm emit_indent
-            "addq $8, %r14" asm emit_indent
-            "jmp print_str" asm emit_indent
-            f".Lprint_done_{uid}:" asm emit_line
+            "print_done" "print_str" asm emit_call_via_return_stack
         }
         InstKind::InstPrintChar => {
             "popq %rax" asm emit_indent
@@ -702,13 +686,8 @@ fn emit_io_ops asm:StringBuilder inst:Inst {
             "syscall" asm emit_indent
         }
         InstKind::InstFstringConcat => {
-            emit_uid = uid
             f"movq ${inst Inst::int_arg}, %rdi" asm emit_indent
-            f"leaq .Lconcat_done_{uid}(%rip), %rax" asm emit_indent
-            "movq %rax, (%r14)" asm emit_indent
-            "addq $8, %r14" asm emit_indent
-            "jmp str_concat" asm emit_indent
-            f".Lconcat_done_{uid}:" asm emit_line
+            "concat_done" "str_concat" asm emit_call_via_return_stack
         }
         _ => {
             "Internal error: emit_io_ops called with non-IO InstKind\n" eprint
