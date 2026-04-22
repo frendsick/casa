@@ -416,7 +416,6 @@ fn emit_struct_arm compiler:BytecodeCompiler struct_pattern:StructPattern byteco
         fi
         1 += index
     done
-    InstKind::InstDrop make_inst bytecode.push
 }
 
 fn emit_literal_arm
@@ -426,10 +425,7 @@ fn emit_literal_arm
     next_arm:Option[int]
     bytecode:List[Inst]
 {
-    if is_last then
-        InstKind::InstDrop make_inst bytecode.push
-        return
-    fi
+    if is_last then return fi
     InstKind::InstDup make_inst bytecode.push
     if "str" literal_pattern LiteralPattern::typ == then
         literal_pattern LiteralPattern::value (str) = str_value
@@ -441,7 +437,6 @@ fn emit_literal_arm
         InstKind::InstEq make_inst bytecode.push
     fi
     next_arm.unwrap InstKind::InstJumpNe make_inst_int bytecode.push
-    InstKind::InstDrop make_inst bytecode.push
 }
 
 fn emit_enum_arm
@@ -452,11 +447,12 @@ fn emit_enum_arm
     next_arm:Option[int]
     bytecode:List[Inst]
 {
+    if is_wildcard then return fi
     variant EnumVariant::enum_name = enum_name
     if "" enum_name != enum_name compiler.store.enums.has && then
         enum_name compiler.store.enums.get.unwrap = casa_enum
         if casa_enum has_inner_values then
-            if is_last ! is_wildcard ! && then
+            if is_last ! then
                 InstKind::InstDup make_inst bytecode.push
                 InstKind::InstLoad64 make_inst bytecode.push
                 variant EnumVariant::ordinal.unwrap InstKind::InstPush make_inst_int bytecode.push
@@ -468,15 +464,11 @@ fn emit_enum_arm
         fi
     fi
 
-    if is_last then
-        InstKind::InstDrop make_inst bytecode.push
-        return
-    fi
+    if is_last then return fi
     InstKind::InstDup make_inst bytecode.push
     variant EnumVariant::ordinal.unwrap InstKind::InstPush make_inst_int bytecode.push
     InstKind::InstEq make_inst bytecode.push
     next_arm.unwrap InstKind::InstJumpNe make_inst_int bytecode.push
-    InstKind::InstDrop make_inst bytecode.push
 }
 
 fn emit_enum_arm_bindings compiler:BytecodeCompiler bytecode:List[Inst] variant:EnumVariant {
@@ -492,7 +484,6 @@ fn emit_enum_arm_bindings compiler:BytecodeCompiler bytecode:List[Inst] variant:
         resolved ResolvedVariable::index resolved ResolvedVariable::set_kind make_inst_int bytecode.push
         1 += index
     done
-    InstKind::InstDrop make_inst bytecode.push
 }
 
 fn compile_match_op
@@ -504,24 +495,39 @@ fn compile_match_op
 {
     op pattern_kind match
         PatternKind::PatStruct => {
-            op Op::value (StructPattern) = struct_pattern
+            op pattern_value_of (StructPattern) = struct_pattern
             bytecode struct_pattern compiler emit_struct_arm
         }
         PatternKind::PatLiteral => {
-            op Op::value (LiteralPattern) = literal_pattern
+            op pattern_value_of (LiteralPattern) = literal_pattern
             bytecode next_arm is_last literal_pattern compiler emit_literal_arm
         }
         PatternKind::PatEnumVariant => {
-            op Op::value (EnumVariant) = variant
+            op pattern_value_of (EnumVariant) = variant
             op pattern_is_wildcard = is_wildcard
             bytecode next_arm is_last is_wildcard variant compiler emit_enum_arm
         }
-        PatternKind::PatWildcard => {
-            if is_last then
-                InstKind::InstDrop make_inst bytecode.push
-            fi
-        }
+        PatternKind::PatWildcard => 0 drop
     end
+    op pattern_guard_ops = guard_ops
+    if guard_ops.length 0 != then
+        0 = guard_index
+        while guard_index guard_ops.length > do
+            guard_index guard_ops.get = guard_op
+            bytecode guard_index guard_op compiler compile_op
+            1 += guard_index
+        done
+        # Guarded last-arm is rejected by the typechecker (a guarded arm
+        # does not cover its pattern, so a non-guarded fallback is
+        # required). Codegen may still run in RESILIENT_MODE after such
+        # an error, so skip the fail-jump rather than unwrapping None.
+        if next_arm.is_some then
+            next_arm.unwrap InstKind::InstJumpNe make_inst_int bytecode.push
+        else
+            InstKind::InstDrop make_inst bytecode.push
+        fi
+    fi
+    InstKind::InstDrop make_inst bytecode.push
 }
 
 fn compile_match_block compiler:BytecodeCompiler op:Op op_index:int bytecode:List[Inst] {
