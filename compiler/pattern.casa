@@ -13,13 +13,20 @@
 fn pattern_is_wildcard op:Op -> bool {
     op pattern_kind match
         PatternKind::PatEnumVariant => {
-            op Op::value (EnumVariant) = variant
+            op pattern_value_of (EnumVariant) = variant
             MATCH_WILDCARD variant EnumVariant::variant_name ==
         }
         PatternKind::PatStruct => false
         PatternKind::PatLiteral => false
         PatternKind::PatWildcard => true
     end
+}
+# pattern_is_guarded — true when the arm carries a guard expression.
+# Guarded arms never cover their pattern for duplicate-arm and
+# exhaustiveness analysis (they may still fail at runtime).
+
+fn pattern_is_guarded op:Op -> bool {
+    op pattern_guard_ops.length 0 !=
 }
 
 # ============================================================================
@@ -28,17 +35,18 @@ fn pattern_is_wildcard op:Op -> bool {
 # typechecker already produces.
 
 fn pattern_covered_key op:Op -> str {
+    if op pattern_is_guarded then "" return fi
     op pattern_kind match
         PatternKind::PatStruct => {
-            op Op::value (StructPattern) = struct_pat
+            op pattern_value_of (StructPattern) = struct_pat
             f"__covered:{struct_pat StructPattern::struct_name}"
         }
         PatternKind::PatLiteral => {
-            op Op::value (LiteralPattern) = literal_pat
+            op pattern_value_of (LiteralPattern) = literal_pat
             f"__covered:{literal_pat LiteralPattern::raw}"
         }
         PatternKind::PatEnumVariant => {
-            op Op::value (EnumVariant) = variant
+            op pattern_value_of (EnumVariant) = variant
             f"__covered:{variant EnumVariant::variant_name}"
         }
         PatternKind::PatWildcard => ""
@@ -54,7 +62,7 @@ fn pattern_bindings op:Op -> List[str] {
     List::new (List[str]) = out
     op pattern_kind match
         PatternKind::PatStruct => {
-            op Op::value (StructPattern) = struct_pat
+            op pattern_value_of (StructPattern) = struct_pat
             struct_pat StructPattern::bindings.keys = field_names
             0 = binding_index
             while binding_index field_names.length > do
@@ -64,7 +72,7 @@ fn pattern_bindings op:Op -> List[str] {
             done
         }
         PatternKind::PatEnumVariant => {
-            op Op::value (EnumVariant) = variant
+            op pattern_value_of (EnumVariant) = variant
             variant EnumVariant::bindings = names
             0 = enum_binding_index
             while enum_binding_index names.length > do
@@ -249,12 +257,12 @@ fn register_pattern_bindings
 {
     op pattern_kind match
         PatternKind::PatStruct => {
-            op Op::value (StructPattern) = struct_pattern
+            op pattern_value_of (StructPattern) = struct_pattern
             struct_pattern function_opt tc register_struct_pattern_bindings
         }
         PatternKind::PatEnumVariant => {
             if op pattern_is_wildcard then return fi
-            op Op::value (EnumVariant) = variant
+            op pattern_value_of (EnumVariant) = variant
             match_subject_type variant function_opt tc register_enum_pattern_bindings
         }
         PatternKind::PatLiteral => 0 drop
@@ -285,7 +293,7 @@ fn typecheck_match_op tc:TypeChecker function_opt:Option[Function] op:Op {
         is_enum_pattern
         is_wildcard ! &&
         then
-            op Op::value (EnumVariant) = variant
+            op pattern_value_of (EnumVariant) = variant
             arm_base variant op tc diagnose_bare_enum_pattern
         fi
 
@@ -300,6 +308,22 @@ fn typecheck_match_op tc:TypeChecker function_opt:Option[Function] op:Op {
         fi
 
         match_subject_type op function_opt tc register_pattern_bindings
+
+        if op pattern_is_guarded then
+            op pattern_guard_ops = guard_ops
+            DEFAULT_PARSER.store make_typechecker = guard_checker
+            function_opt guard_ops guard_checker run_type_check_ops
+            guard_checker TypeChecker::live TypedStack::types = guard_stack
+            false = guard_ok
+            if 1 guard_stack.length == then
+                if "bool" 0 guard_stack.get == then
+                    true = guard_ok
+                fi
+            fi
+            if guard_ok ! then
+                op Op::location "Guard expression must leave a single `bool` on the stack" ErrorKind::TypeMismatch add_error
+            fi
+        fi
 
         covered_key match_ctx MatchContext::set_current_branch_label
         op Op::location match_ctx MatchContext::set_current_branch_location

@@ -1435,22 +1435,25 @@ fn is_match_arm_boundary parser:Parser cursor:TokenCursor -> bool {
     pos token_list.get = token
     pos 1 + token_list.get = next_token
 
-    # _ =>
-    if MATCH_WILDCARD token Token::value == "=>" next_token Token::value == && then
-        true return
+    # _ => or _ if ...
+    if MATCH_WILDCARD token Token::value == then
+        if "=>" next_token Token::value == then true return fi
+        if "if" next_token Token::value == then true return fi
     fi
-    # literal =>
-    if TokenKind::Literal token Token::kind == "=>" next_token Token::value == && then
-        true return
+    # literal => or literal if ...
+    if TokenKind::Literal token Token::kind == then
+        if "=>" next_token Token::value == then true return fi
+        if "if" next_token Token::value == then true return fi
     fi
     if TokenKind::Identifier token Token::kind != then false return fi
-    # Identifier =>
+    # Identifier => or Identifier if ...
     if "=>" next_token Token::value == then true return fi
+    if "if" next_token Token::value == then true return fi
     # StructName { ... } =>
     if "{" next_token Token::value == token Token::value parser.store.structs.get.is_some && then
         true return
     fi
-    # EnumName::Variant(bindings) => pattern
+    # EnumName::Variant(bindings) => or EnumName::Variant(bindings) if ...
     if "(" next_token Token::value == then
         token Token::value "::" str::find = separator
         if 0 separator > then
@@ -1458,9 +1461,9 @@ fn is_match_arm_boundary parser:Parser cursor:TokenCursor -> bool {
             while scan_pos token_list.length > do
                 if ")" scan_pos token_list.get Token::value == then
                     if scan_pos 1 + token_list.length > then
-                        if "=>" scan_pos 1 + token_list.get Token::value == then
-                            true return
-                        fi
+                        scan_pos 1 + token_list.get Token::value = after_paren
+                        if "=>" after_paren == then true return fi
+                        if "if" after_paren == then true return fi
                     fi
                     break
                 fi
@@ -1494,8 +1497,45 @@ fn parse_struct_match_pattern parser:Parser name_token:Token cursor:TokenCursor 
         field_token Token::value var_token Token::value bindings.set = bindings
     done
 
-    "=>" cursor expect_token_value drop
     bindings name_token Token::value StructPattern
+}
+# parse_pattern_terminator — consume the `=>` that separates a match-arm
+# pattern from its body. If an `if` keyword appears first the guard
+# expression is collected until `=>`. Returns the (possibly empty) list of
+# guard ops. The trailing `=>` token is always consumed.
+#
+# The guard expression may contain a nested `match` block whose arms also
+# use `=>`; a match-depth counter skips those nested arrows so only the
+# outer arm terminator ends the guard.
+
+fn parse_pattern_terminator parser:Parser cursor:TokenCursor function_name:str -> List[Op] {
+    List::new (List[Op]) = guard_ops
+    cursor.peek = guard_peek
+    if guard_peek.is_some "if" guard_peek.unwrap Token::value == && then
+        cursor.pop drop # consume `if`
+        0 = match_depth
+        while cursor.is_finished ! do
+            cursor.peek = next_opt
+            if next_opt.is_none then break fi
+            next_opt.unwrap Token::value = next_value
+            if "=>" next_value == 0 match_depth == && then break fi
+            cursor.pop = guard_token_opt
+            if guard_token_opt.is_none then break fi
+            guard_token_opt.unwrap = guard_token
+            if "match" guard_token Token::value == then
+                1 += match_depth
+            elif "end" guard_token Token::value == 0 match_depth != && then
+                1 -= match_depth
+            fi
+            if TokenKind::FstringStart guard_token Token::kind == then
+                guard_ops function_name cursor guard_token parser handle_fstring
+                continue
+            fi
+            guard_ops function_name cursor guard_token parser token_to_op
+        done
+    fi
+    "=>" cursor expect_token_value drop
+    guard_ops
 }
 
 fn parse_literal_match_pattern token:Token -> LiteralPattern {
@@ -1538,25 +1578,30 @@ fn parse_match_block parser:Parser token:Token cursor:TokenCursor function_name:
 
         # Wildcard: _ =>
         if MATCH_WILDCARD arm_token Token::value == then
-            "=>" cursor expect_token_value drop
+            function_name cursor parser parse_pattern_terminator = wildcard_guard_ops
             Option::None MATCH_WILDCARD "" make_enum_variant = wildcard
-            PatternKind::PatEnumVariant arm_token Token::location OpKind::OpMatchArm wildcard (int) make_op_pattern ops.push
+            wildcard_guard_ops wildcard (int) make_match_arm = wildcard_arm
+            PatternKind::PatEnumVariant arm_token Token::location OpKind::OpMatchArm wildcard_arm (int) make_op_pattern ops.push
         elif TokenKind::Literal arm_token Token::kind == then
-            "=>" cursor expect_token_value drop
+            function_name cursor parser parse_pattern_terminator = literal_guard_ops
             arm_token parse_literal_match_pattern = literal_pattern
-            PatternKind::PatLiteral arm_token Token::location OpKind::OpMatchArm literal_pattern (int) make_op_pattern = literal_op
+            literal_guard_ops literal_pattern (int) make_match_arm = literal_arm
+            PatternKind::PatLiteral arm_token Token::location OpKind::OpMatchArm literal_arm (int) make_op_pattern = literal_op
             literal_op ops.push
         elif TokenKind::Identifier arm_token Token::kind != then
             arm_token Token::location "Expected match pattern or `_`" ErrorKind::UnexpectedToken raise_error
         elif cursor.peek.is_some "{" cursor.peek.unwrap Token::value == && then
             # Struct pattern
             cursor arm_token parser parse_struct_match_pattern = struct_pattern
-            PatternKind::PatStruct arm_token Token::location OpKind::OpMatchArm struct_pattern (int) make_op_pattern ops.push
+            function_name cursor parser parse_pattern_terminator = struct_guard_ops
+            struct_guard_ops struct_pattern (int) make_match_arm = struct_arm
+            PatternKind::PatStruct arm_token Token::location OpKind::OpMatchArm struct_arm (int) make_op_pattern ops.push
         elif arm_token Token::value "::" str::find 0 > then
             # Bare identifier
-            "=>" cursor expect_token_value drop
+            function_name cursor parser parse_pattern_terminator = bare_guard_ops
             Option::None arm_token Token::value "" make_enum_variant = bare_variant
-            PatternKind::PatEnumVariant arm_token Token::location OpKind::OpMatchArm bare_variant (int) make_op_pattern ops.push
+            bare_guard_ops bare_variant (int) make_match_arm = bare_arm
+            PatternKind::PatEnumVariant arm_token Token::location OpKind::OpMatchArm bare_arm (int) make_op_pattern ops.push
         else
             # Enum::Variant pattern
             arm_token Token::value "::" str::find = separator
@@ -1582,10 +1627,11 @@ fn parse_match_block parser:Parser token:Token cursor:TokenCursor function_name:
                 done
             fi
 
-            "=>" cursor expect_token_value drop
+            function_name cursor parser parse_pattern_terminator = enum_guard_ops
             Option::None variant_name enum_name make_enum_variant = variant
             bindings variant EnumVariant::set_bindings
-            PatternKind::PatEnumVariant arm_token Token::location OpKind::OpMatchArm variant (int) make_op_pattern ops.push
+            enum_guard_ops variant (int) make_match_arm = variant_arm
+            PatternKind::PatEnumVariant arm_token Token::location OpKind::OpMatchArm variant_arm (int) make_op_pattern ops.push
         fi
 
         # Parse arm body
@@ -2247,7 +2293,7 @@ fn register_struct_pattern_binding parser:Parser function:Function binding_name:
 fn resolve_match_op parser:Parser function:Function op:Op errors:List[CasaError] {
     op pattern_kind match
         PatternKind::PatStruct => {
-            op Op::value (StructPattern) = struct_pattern
+            op pattern_value_of (StructPattern) = struct_pattern
             struct_pattern StructPattern::bindings.keys = pattern_keys
             0 = field_index
             while field_index pattern_keys.length > do
@@ -2257,12 +2303,20 @@ fn resolve_match_op parser:Parser function:Function op:Op errors:List[CasaError]
             done
         }
         PatternKind::PatEnumVariant => {
-            op Op::value (EnumVariant) = variant
+            op pattern_value_of (EnumVariant) = variant
             errors function op variant parser resolve_enum_variant
         }
         PatternKind::PatLiteral => 0 drop
         PatternKind::PatWildcard => 0 drop
     end
+    # Resolve identifiers inside the guard expression (bindings registered
+    # by the pattern above are now in scope).
+    op pattern_guard_ops = guard_ops
+    if guard_ops.length 0 != then
+        function guard_ops parser resolve_identifiers_fn = resolved_guard
+        op match_arm_of = arm
+        resolved_guard arm MatchArm::set_guard_ops
+    fi
 }
 
 fn resolve_identifiers_fn parser:Parser ops:List[Op] function:Function -> List[Op] {

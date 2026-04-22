@@ -260,13 +260,13 @@ Casa has exhaustive pattern matching using `match`/`end`. Match works with enum 
 
 ```
 <value> match
-    <pattern1> => <body>
-    <pattern2> => <body>
+    <pattern1> [if <guard>] => <body>
+    <pattern2> [if <guard>] => <body>
     ...
 end
 ```
 
-The `match` keyword pops a value from the stack. Each arm specifies a pattern followed by `=>` and a body. The block is closed with `end`.
+The `match` keyword pops a value from the stack. Each arm specifies a pattern followed by `=>` and a body. An optional `if <guard>` between the pattern and `=>` adds a boolean condition that must also hold. The block is closed with `end`.
 
 ### Block Arm Bodies
 
@@ -348,6 +348,24 @@ color match
     _ => "other" print
 end
 ```
+
+### Guard Clauses
+
+An arm may carry an `if <cond>` guard between the pattern and `=>`. The arm fires only when the pattern matches AND the guard returns `true`. The guard expression is a regular Casa expression that must leave a single `bool` on the stack; pattern bindings are in scope inside the guard.
+
+```casa
+fn classify n:int -> str {
+    n match
+        _ if 0 n > => "positive"
+        _ if 0 n == => "zero"
+        _ => "negative"
+    end
+}
+```
+
+Guarded arms do not count toward exhaustiveness (the guard may fail at runtime), so an unguarded fallback — a wildcard arm or full enum coverage — is still required. Duplicate-arm detection also skips guarded arms, so a guarded literal may appear alongside an unguarded arm for the same value.
+
+See [`examples/match_guard.casa`](../examples/match_guard.casa) for a full program.
 
 ### Match as Expression
 

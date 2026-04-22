@@ -12,23 +12,27 @@ include "../../lib/test.casa"
 # ============================================================================
 
 fn arm_of_kind kind:PatternKind -> Op {
-    kind empty_location OpKind::OpMatchArm 0 make_op_pattern
+    List::new (List[Op]) 0 make_match_arm = empty_arm
+    kind empty_location OpKind::OpMatchArm empty_arm (int) make_op_pattern
 }
 
 fn make_enum_arm enum_name:str variant_name:str -> Op {
     Option::None variant_name enum_name make_enum_variant = variant
-    PatternKind::PatEnumVariant empty_location OpKind::OpMatchArm variant (int) make_op_pattern
+    List::new (List[Op]) variant (int) make_match_arm = arm
+    PatternKind::PatEnumVariant empty_location OpKind::OpMatchArm arm (int) make_op_pattern
 }
 
 fn make_struct_arm struct_name:str -> Op {
     Map::new (Map[str str]) = bindings
     bindings struct_name StructPattern = struct_pat
-    PatternKind::PatStruct empty_location OpKind::OpMatchArm struct_pat (int) make_op_pattern
+    List::new (List[Op]) struct_pat (int) make_match_arm = arm
+    PatternKind::PatStruct empty_location OpKind::OpMatchArm arm (int) make_op_pattern
 }
 
 fn make_literal_arm raw:str -> Op {
     raw "int" 0 LiteralPattern = literal_pat
-    PatternKind::PatLiteral empty_location OpKind::OpMatchArm literal_pat (int) make_op_pattern
+    List::new (List[Op]) literal_pat (int) make_match_arm = arm
+    PatternKind::PatLiteral empty_location OpKind::OpMatchArm arm (int) make_op_pattern
 }
 
 # ============================================================================
@@ -125,7 +129,8 @@ fn test_pattern_bindings_enum_with_payload {
     List::new (List[str]) = binds
     "x" binds.push
     binds variant EnumVariant::set_bindings
-    PatternKind::PatEnumVariant empty_location OpKind::OpMatchArm variant (int) make_op_pattern = op
+    List::new (List[Op]) variant (int) make_match_arm = arm
+    PatternKind::PatEnumVariant empty_location OpKind::OpMatchArm arm (int) make_op_pattern = op
     op pattern_bindings = out
     "count" 1 out.length assert_eq
     "name" "x" 0 out.get assert_str_eq
@@ -137,7 +142,8 @@ fn test_pattern_bindings_struct_fields {
     "row" "y" bindings.set drop
     "col" "x" bindings.set drop
     bindings "Point" StructPattern = struct_pat
-    PatternKind::PatStruct empty_location OpKind::OpMatchArm struct_pat (int) make_op_pattern = op
+    List::new (List[Op]) struct_pat (int) make_match_arm = arm
+    PatternKind::PatStruct empty_location OpKind::OpMatchArm arm (int) make_op_pattern = op
     op pattern_bindings = out
     "count" 2 out.length assert_eq
 }
@@ -176,6 +182,85 @@ fn test_duplicate_literal_arm_detected {
     "duplicate arm flagged" "Duplicate match arm" assert_error_contains
     disable_test_mode
 }
+
+# ============================================================================
+# Guard clauses (match arms with an `if` condition).
+# ============================================================================
+
+fn test_guard_parser_collects_ops {
+    "guard_parser_collects_ops" test_start
+    clear_global_state
+    "g" "0 match _ if 0 1 == => \"y\" _ => \"n\" end" lex_source = tokens
+    tokens DEFAULT_PARSER parse_ops = ops
+    0 = arm_index
+    0 = guarded_count
+    0 = unguarded_count
+    while arm_index ops.length > do
+        arm_index ops.get = arm_op
+        if OpKind::OpMatchArm arm_op Op::kind == then
+            if arm_op pattern_is_guarded then
+                1 += guarded_count
+            else
+                1 += unguarded_count
+            fi
+        fi
+        1 += arm_index
+    done
+    "one guarded" 1 guarded_count assert_eq
+    "one unguarded" 1 unguarded_count assert_eq
+}
+
+fn test_guard_excluded_from_covered_key {
+    "guard_excluded_from_covered_key" test_start
+    "42" make_literal_arm = unguarded
+    "covered when unguarded" "__covered:42" unguarded pattern_covered_key assert_str_eq
+    "42" "int" 0 LiteralPattern = literal_pat
+    List::new (List[Op]) = guard_ops
+    empty_location OpKind::OpPushBool 1 make_op guard_ops.push
+    guard_ops literal_pat (int) make_match_arm = arm
+    PatternKind::PatLiteral empty_location OpKind::OpMatchArm arm (int) make_op_pattern = guarded
+    "is guarded" guarded pattern_is_guarded assert_true
+    "empty key when guarded" "" guarded pattern_covered_key assert_str_eq
+}
+
+fn test_guard_allows_shadow_literal_arm {
+    "guard_allows_shadow_literal_arm" test_start
+    clear_global_state
+    enable_test_mode
+    clear_errors
+    "sg" "1 match 1 if 0 1 == => \"a\" 1 => \"b\" _ => \"c\" end" lex_source = sg_tokens
+    sg_tokens DEFAULT_PARSER parse_ops = sg_ops
+    sg_ops DEFAULT_PARSER resolve_identifiers_global = sg_ops
+    Option::None sg_ops type_check_ops drop
+    "guarded arm does not collide" assert_no_errors
+    disable_test_mode
+}
+
+fn test_guard_non_bool_rejected {
+    "guard_non_bool_rejected" test_start
+    clear_global_state
+    enable_test_mode
+    clear_errors
+    "nb" "1 match 1 if 42 => \"a\" _ => \"b\" end" lex_source = nb_tokens
+    nb_tokens DEFAULT_PARSER parse_ops = nb_ops
+    nb_ops DEFAULT_PARSER resolve_identifiers_global = nb_ops
+    Option::None nb_ops type_check_ops drop
+    "non-bool guard flagged" "Guard expression must leave a single `bool`" assert_error_contains
+    disable_test_mode
+}
+
+fn test_guard_non_exhaustive_without_fallback {
+    "guard_non_exhaustive_without_fallback" test_start
+    clear_global_state
+    enable_test_mode
+    clear_errors
+    "ne" "1 match 1 if 0 1 == => \"a\" end" lex_source = ne_tokens
+    ne_tokens DEFAULT_PARSER parse_ops = ne_ops
+    ne_ops DEFAULT_PARSER resolve_identifiers_global = ne_ops
+    Option::None ne_ops type_check_ops drop
+    "guard alone non-exhaustive" "Non-exhaustive match" assert_error_contains
+    disable_test_mode
+}
 test_pattern_kind_struct
 test_pattern_kind_enum_variant
 test_pattern_kind_literal
@@ -193,4 +278,9 @@ test_pattern_bindings_struct_fields
 test_pattern_bindings_literal_empty
 test_mixed_match_parses_and_typechecks
 test_duplicate_literal_arm_detected
+test_guard_parser_collects_ops
+test_guard_excluded_from_covered_key
+test_guard_allows_shadow_literal_arm
+test_guard_non_bool_rejected
+test_guard_non_exhaustive_without_fallback
 test_summary
