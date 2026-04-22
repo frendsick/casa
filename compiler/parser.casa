@@ -1419,7 +1419,7 @@ fn parse_impl_block parser:Parser cursor:TokenCursor {
 }
 
 # ============================================================================
-# _handle_keyword_match - parse match block with arms
+# parse_match_block - parse a full match construct (match ... end)
 # ============================================================================
 
 fn token_line token:Token -> int {
@@ -1523,7 +1523,7 @@ fn parse_literal_match_pattern token:Token -> LiteralPattern {
     "" "int" 0 LiteralPattern
 }
 
-fn handle_keyword_match parser:Parser token:Token cursor:TokenCursor function_name:str -> List[Op] {
+fn parse_match_block parser:Parser token:Token cursor:TokenCursor function_name:str -> List[Op] {
     List::new (List[Op]) = ops
     token Token::location OpKind::OpMatchStart 0 make_op ops.push
 
@@ -1540,23 +1540,23 @@ fn handle_keyword_match parser:Parser token:Token cursor:TokenCursor function_na
         if MATCH_WILDCARD arm_token Token::value == then
             "=>" cursor expect_token_value drop
             Option::None MATCH_WILDCARD "" make_enum_variant = wildcard
-            "enum_variant" arm_token Token::location OpKind::OpMatchArm wildcard (int) make_op_annotated ops.push
+            PatternKind::PatEnumVariant arm_token Token::location OpKind::OpMatchArm wildcard (int) make_op_pattern ops.push
         elif TokenKind::Literal arm_token Token::kind == then
             "=>" cursor expect_token_value drop
             arm_token parse_literal_match_pattern = literal_pattern
-            "literal_pattern" arm_token Token::location OpKind::OpMatchArm literal_pattern (int) make_op_annotated = literal_op
+            PatternKind::PatLiteral arm_token Token::location OpKind::OpMatchArm literal_pattern (int) make_op_pattern = literal_op
             literal_op ops.push
         elif TokenKind::Identifier arm_token Token::kind != then
             arm_token Token::location "Expected match pattern or `_`" ErrorKind::UnexpectedToken raise_error
         elif cursor.peek.is_some "{" cursor.peek.unwrap Token::value == && then
             # Struct pattern
             cursor arm_token parser parse_struct_match_pattern = struct_pattern
-            "struct_pattern" arm_token Token::location OpKind::OpMatchArm struct_pattern (int) make_op_annotated ops.push
+            PatternKind::PatStruct arm_token Token::location OpKind::OpMatchArm struct_pattern (int) make_op_pattern ops.push
         elif arm_token Token::value "::" str::find 0 > then
             # Bare identifier
             "=>" cursor expect_token_value drop
             Option::None arm_token Token::value "" make_enum_variant = bare_variant
-            "enum_variant" arm_token Token::location OpKind::OpMatchArm bare_variant (int) make_op_annotated ops.push
+            PatternKind::PatEnumVariant arm_token Token::location OpKind::OpMatchArm bare_variant (int) make_op_pattern ops.push
         else
             # Enum::Variant pattern
             arm_token Token::value "::" str::find = separator
@@ -1585,7 +1585,7 @@ fn handle_keyword_match parser:Parser token:Token cursor:TokenCursor function_na
             "=>" cursor expect_token_value drop
             Option::None variant_name enum_name make_enum_variant = variant
             bindings variant EnumVariant::set_bindings
-            "enum_variant" arm_token Token::location OpKind::OpMatchArm variant (int) make_op_annotated ops.push
+            PatternKind::PatEnumVariant arm_token Token::location OpKind::OpMatchArm variant (int) make_op_pattern ops.push
         fi
 
         # Parse arm body
@@ -1886,7 +1886,7 @@ fn get_op_keyword parser:Parser token:Token cursor:TokenCursor function_name:str
 
     # match
     if KeywordKind::Match keyword == then
-        function_name cursor token parser handle_keyword_match = match_ops
+        function_name cursor token parser parse_match_block = match_ops
         0 = match_index
         while match_index match_ops.length > do
             match_index match_ops.get ops.push
@@ -2228,6 +2228,42 @@ fn resolve_identifiers_global parser:Parser ops:List[Op] -> List[Op] {
 fn resolve_identifiers ops:List[Op] function:Function -> List[Op] {
     function ops DEFAULT_PARSER resolve_identifiers_fn
 }
+# resolve_match_op — per-arm identifier resolution entry point.
+# Registers struct-pattern field bindings as locals/globals and resolves
+# enum-variant ordinals (delegating to resolve_enum_variant). Literal and
+# wildcard arms need no resolution.
+
+fn register_struct_pattern_binding parser:Parser function:Function binding_name:str {
+    binding_name make_variable = match_struct_variant
+    if GLOBAL_SCOPE_LABEL function Function::name == then
+        binding_name match_struct_variant parser.store.variables.set drop
+    else
+        if binding_name function Function::variables variable_list_contains ! then
+            match_struct_variant function Function::variables.push
+        fi
+    fi
+}
+
+fn resolve_match_op parser:Parser function:Function op:Op errors:List[CasaError] {
+    op pattern_kind match
+        PatternKind::PatStruct => {
+            op Op::value (StructPattern) = struct_pattern
+            struct_pattern StructPattern::bindings.keys = pattern_keys
+            0 = field_index
+            while field_index pattern_keys.length > do
+                field_index pattern_keys.get struct_pattern StructPattern::bindings.get.unwrap = binding_name
+                binding_name function parser register_struct_pattern_binding
+                1 += field_index
+            done
+        }
+        PatternKind::PatEnumVariant => {
+            op Op::value (EnumVariant) = variant
+            errors function op variant parser resolve_enum_variant
+        }
+        PatternKind::PatLiteral => 0 drop
+        PatternKind::PatWildcard => 0 drop
+    end
+}
 
 fn resolve_identifiers_fn parser:Parser ops:List[Op] function:Function -> List[Op] {
     0 = op_index
@@ -2394,32 +2430,9 @@ fn resolve_identifiers_fn parser:Parser ops:List[Op] function:Function -> List[O
             continue
         fi
 
-        # MATCH_ARM: resolve enum variants and struct patterns
+        # MATCH_ARM: delegate to the pattern module.
         if OpKind::OpMatchArm op_kind == then
-            current_op Op::type_annotation = match_tag
-            if "struct_pattern" match_tag == then
-                # StructPattern: register field bindings as variables
-                current_op Op::value (StructPattern) = struct_pattern
-                struct_pattern StructPattern::bindings.keys = pattern_keys
-                0 = struct_field_index
-                while struct_field_index pattern_keys.length > do
-                    struct_field_index pattern_keys.get struct_pattern StructPattern::bindings.get.unwrap = match_variant_name
-                    match_variant_name make_variable = match_struct_variant
-                    if GLOBAL_SCOPE_LABEL function Function::name == then
-                        match_variant_name match_struct_variant parser.store.variables.set drop
-                    else
-                        if match_variant_name function Function::variables variable_list_contains ! then
-                            match_struct_variant function Function::variables.push
-                        fi
-                    fi
-                    1 += struct_field_index
-                done
-            elif "enum_variant" match_tag == then
-                # EnumVariant: resolve ordinal and register bindings
-                current_op Op::value (EnumVariant) = match_variant
-                resolve_errors function current_op match_variant parser resolve_enum_variant
-            fi
-            # literal_pattern: no resolution needed
+            resolve_errors current_op function parser resolve_match_op
             continue
         fi
 

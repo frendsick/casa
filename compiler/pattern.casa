@@ -1,0 +1,307 @@
+# pattern.casa — consolidated match-pattern module.
+#
+# Introspection primitives and per-phase entry points every compiler phase
+# (parser-resolve, typechecker, bytecode) uses to handle match patterns
+# without re-reading the legacy Op.type_annotation tag string.
+#
+# Included after common/error/lexer/parser and before typechecker/bytecode.
+
+# ============================================================================
+# pattern_is_wildcard: true only for a bare `_` wildcard arm.
+# Currently stored as an EnumVariant whose variant_name is "_".
+
+fn pattern_is_wildcard op:Op -> bool {
+    op pattern_kind match
+        PatternKind::PatEnumVariant => {
+            op Op::value (EnumVariant) = variant
+            MATCH_WILDCARD variant EnumVariant::variant_name ==
+        }
+        PatternKind::PatStruct => false
+        PatternKind::PatLiteral => false
+        PatternKind::PatWildcard => true
+    end
+}
+
+# ============================================================================
+# pattern_covered_key: stable key used for duplicate-arm detection and for
+# exhaustiveness bookkeeping. Mirrors the `__covered:{...}` keys the
+# typechecker already produces.
+
+fn pattern_covered_key op:Op -> str {
+    op pattern_kind match
+        PatternKind::PatStruct => {
+            op Op::value (StructPattern) = struct_pat
+            f"__covered:{struct_pat StructPattern::struct_name}"
+        }
+        PatternKind::PatLiteral => {
+            op Op::value (LiteralPattern) = literal_pat
+            f"__covered:{literal_pat LiteralPattern::raw}"
+        }
+        PatternKind::PatEnumVariant => {
+            op Op::value (EnumVariant) = variant
+            f"__covered:{variant EnumVariant::variant_name}"
+        }
+        PatternKind::PatWildcard => ""
+    end
+}
+
+# ============================================================================
+# pattern_bindings: names this pattern introduces into the enclosing scope.
+# Struct patterns bind field aliases; enum variants bind payload names;
+# literals and wildcards bind nothing.
+
+fn pattern_bindings op:Op -> List[str] {
+    List::new (List[str]) = out
+    op pattern_kind match
+        PatternKind::PatStruct => {
+            op Op::value (StructPattern) = struct_pat
+            struct_pat StructPattern::bindings.keys = field_names
+            0 = binding_index
+            while binding_index field_names.length > do
+                binding_index field_names.get struct_pat StructPattern::bindings.get.unwrap = bound_name
+                bound_name out.push
+                1 += binding_index
+            done
+        }
+        PatternKind::PatEnumVariant => {
+            op Op::value (EnumVariant) = variant
+            variant EnumVariant::bindings = names
+            0 = enum_binding_index
+            while enum_binding_index names.length > do
+                enum_binding_index names.get out.push
+                1 += enum_binding_index
+            done
+        }
+        PatternKind::PatLiteral => 0 drop
+        PatternKind::PatWildcard => 0 drop
+    end
+    out
+}
+
+# ============================================================================
+# diagnose_bare_enum_pattern — emit a targeted error if a match arm uses an
+# unqualified enum variant (e.g. `North =>` instead of `Direction::North =>`).
+
+fn diagnose_bare_enum_pattern tc:TypeChecker op:Op variant:EnumVariant arm_base:str {
+    if "" variant EnumVariant::enum_name != then return fi
+    if arm_base tc.store.enums.get Option::Some (bare_enum) is then
+        variant EnumVariant::variant_name = bare_name
+        bare_name bare_enum CasaEnum::variants string_list_index = bare_index
+        if 0 bare_index >= then
+            op Op::location f"Unqualified enum variant `{bare_name}`. Did you mean `{arm_base}::{bare_name}`?" ErrorKind::TypeMismatch raise_error
+        else
+            op Op::location f"Expected qualified enum variant (e.g. `{arm_base}::{0 bare_enum CasaEnum::variants.get}`) or `_`, got `{bare_name}`" ErrorKind::TypeMismatch raise_error
+        fi
+    fi
+}
+
+# ============================================================================
+# detect_duplicate_arm — raise an error if the current pattern's covered key
+# has already been recorded on this match context.
+
+fn detect_duplicate_arm match_ctx:MatchContext op:Op covered_key:str {
+    if "" covered_key == then return fi
+    0 = dup_index
+    while dup_index match_ctx MatchContext::branch_records.length > do
+        dup_index match_ctx MatchContext::branch_records.get = record
+        if covered_key record == then
+            op Op::location f"Duplicate match arm for `{covered_key}`" ErrorKind::DuplicateName raise_error
+        fi
+        1 += dup_index
+    done
+    if covered_key match_ctx MatchContext::current_branch_label == then
+        op Op::location f"Duplicate match arm for `{covered_key}`" ErrorKind::DuplicateName raise_error
+    fi
+}
+
+# ============================================================================
+# unify_arm_stacks — reconcile the stack effect of the arm just finished
+# against the arm template recorded on the MatchContext. Runs only when a
+# prior arm has already executed (condition_present).
+
+fn unify_arm_stacks tc:TypeChecker match_ctx:MatchContext op:Op {
+    if "" match_ctx MatchContext::current_branch_label != then
+        match_ctx MatchContext::current_branch_label match_ctx MatchContext::branch_records.push
+    fi
+    match_ctx MatchContext::before = match_before
+    match_ctx MatchContext::after = match_after
+    if
+    match_before tc TypeChecker::live.equals
+    match_after match_before.equals &&
+    then
+        0 drop
+    else
+        match_after tc TypeChecker::live.unify_types = unified
+        if 0 unified.length != match_after match_before.equals ! && then
+            unified match_after TypedStack::set_types
+        elif match_after match_before.equals then
+            tc TypeChecker::live match_after.restore
+        else
+            op Op::location "Match arms have incompatible stack effects" ErrorKind::StackMismatch add_error
+        fi
+    fi
+    match_before tc TypeChecker::live.restore
+}
+
+# ============================================================================
+# register_struct_pattern_bindings — attach field types to each local bound
+# by a struct destructure arm.
+
+fn assign_struct_binding_type
+    matched_struct:CasaStruct
+    field_name:str
+    bound_var:str
+    function_opt:Option[Function]
+{
+    0 = member_index
+    while member_index matched_struct CasaStruct::members.length > do
+        member_index matched_struct CasaStruct::members.get = member
+        if field_name member Member::name == then
+            function_opt member Member::typ bound_var set_binding_type
+        fi
+        1 += member_index
+    done
+}
+
+fn register_struct_pattern_bindings
+    tc:TypeChecker
+    function_opt:Option[Function]
+    struct_pattern:StructPattern
+{
+    struct_pattern StructPattern::struct_name tc.store.structs.get.unwrap = matched_struct
+    struct_pattern StructPattern::bindings.keys = binding_keys
+    0 = binding_index
+    while binding_index binding_keys.length > do
+        binding_index binding_keys.get = field_name
+        field_name struct_pattern StructPattern::bindings.get.unwrap = bound_var
+        function_opt bound_var field_name matched_struct assign_struct_binding_type
+        1 += binding_index
+    done
+}
+
+# ============================================================================
+# register_enum_pattern_bindings — attach payload types to each local bound
+# by an enum-variant destructure arm.
+
+fn register_enum_pattern_bindings
+    tc:TypeChecker
+    function_opt:Option[Function]
+    variant:EnumVariant
+    match_subject_type:str
+{
+    if 0 variant EnumVariant::bindings.length == then return fi
+    match_subject_type resolve_match_type = base_enum_name
+    if base_enum_name tc.store.enums.get Option::Some (casa_enum) is then
+        if variant EnumVariant::variant_name casa_enum CasaEnum::variant_types.get Option::Some (inner_types) is then
+            match_subject_type casa_enum build_enum_type_bindings = type_bindings
+            variant type_bindings inner_types function_opt tc apply_enum_bindings
+        fi
+    fi
+}
+
+fn build_enum_type_bindings casa_enum:CasaEnum match_subject_type:str -> Map[str str] {
+    Map::new (Map[str str]) = type_bindings
+    if 0 casa_enum CasaEnum::type_vars.length == then type_bindings return fi
+    if match_subject_type extract_generic_params Option::Some (raw_params) is then
+        raw_params (List[str]) = type_params
+        0 = type_var_index
+        while
+        type_var_index casa_enum CasaEnum::type_vars.length >
+        type_var_index type_params.length > &&
+        do
+            type_var_index casa_enum CasaEnum::type_vars.get type_var_index type_params.get type_bindings.set = type_bindings
+            1 += type_var_index
+        done
+    fi
+    type_bindings
+}
+
+fn apply_enum_bindings
+    tc:TypeChecker
+    function_opt:Option[Function]
+    inner_types:List[str]
+    type_bindings:Map[str str]
+    variant:EnumVariant
+{
+    0 = bind_index
+    while
+    bind_index variant EnumVariant::bindings.length >
+    bind_index inner_types.length > &&
+    do
+        bind_index variant EnumVariant::bindings.get = binding_var
+        bind_index inner_types.get = binding_type
+        if binding_type type_bindings.get Option::Some (resolved) is then
+            resolved = binding_type
+        fi
+        function_opt binding_type binding_var set_binding_type
+        1 += bind_index
+    done
+}
+
+# ============================================================================
+# register_pattern_bindings — dispatch binding registration by pattern kind.
+
+fn register_pattern_bindings
+    tc:TypeChecker
+    function_opt:Option[Function]
+    op:Op
+    match_subject_type:str
+{
+    op pattern_kind match
+        PatternKind::PatStruct => {
+            op Op::value (StructPattern) = struct_pattern
+            struct_pattern function_opt tc register_struct_pattern_bindings
+        }
+        PatternKind::PatEnumVariant => {
+            if op pattern_is_wildcard then return fi
+            op Op::value (EnumVariant) = variant
+            match_subject_type variant function_opt tc register_enum_pattern_bindings
+        }
+        PatternKind::PatLiteral => 0 drop
+        PatternKind::PatWildcard => 0 drop
+    end
+}
+
+# ============================================================================
+# typecheck_match_op — per-arm typecheck entry point.
+#
+# Handles pattern-shape validation, duplicate-arm detection, match-arm
+# stack unification, and binding-type registration for a single OpMatchArm.
+# Callers (currently check_match) delegate the entire arm body to this
+# function; start/end of the match block remain in check_match.
+
+fn typecheck_match_op tc:TypeChecker function_opt:Option[Function] op:Op {
+    if 0 tc TypeChecker::branched_stacks.length == then return fi
+    tc TypeChecker::branched_stacks.length 1 - tc TypeChecker::branched_stacks.get = top_frame
+    if top_frame BranchFrame::BranchMatch (match_ctx) is then
+        match_ctx MatchContext::match_type = match_subject_type
+        op pattern_kind = kind
+        op pattern_covered_key = covered_key
+        match_subject_type resolve_match_type = arm_base
+        op pattern_is_wildcard = is_wildcard
+        PatternKind::PatEnumVariant kind == = is_enum_pattern
+
+        if
+        is_enum_pattern
+        is_wildcard ! &&
+        then
+            op Op::value (EnumVariant) = variant
+            arm_base variant op tc diagnose_bare_enum_pattern
+        fi
+
+        covered_key op match_ctx detect_duplicate_arm
+
+        if match_ctx MatchContext::condition_present then
+            op match_ctx tc unify_arm_stacks
+        else
+            true match_ctx MatchContext::set_condition_present
+            tc TypeChecker::live match_ctx MatchContext::before.restore
+            tc TypeChecker::live match_ctx MatchContext::after.restore
+        fi
+
+        match_subject_type op function_opt tc register_pattern_bindings
+
+        covered_key match_ctx MatchContext::set_current_branch_label
+        op Op::location match_ctx MatchContext::set_current_branch_location
+    fi
+}
