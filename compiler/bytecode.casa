@@ -147,69 +147,43 @@ fn is_block_end_kind kind:OpKind -> bool {
     OpKind::OpWhileEnd kind == ||
     OpKind::OpMatchEnd kind == ||
 }
+# Search for matching block label respecting nesting. `backward` = true scans
+# toward index 0, false scans toward ops.length. `boundary_kind` is the
+# opening/closing kind at which to give up (end_kind going forward,
+# start_kind going backward).
 
-fn find_matching_label_forward
+fn find_matching_label
     ops:List[Op]
     op_index:int
-    end_kind:OpKind
+    boundary_kind:OpKind
     target_kinds:List[OpKind]
+    backward:bool
 -> Option[int] {
-    # Search forward from op_index+1 for matching target, respecting nesting.
+    if backward then -1 else 1 fi = step
+    0 step - = neg_step
     1 = depth
-    op_index 1 + = index
-    while index ops.length > do
+    op_index step + = index
+    while
+    if backward then 0 index >= else index ops.length > fi
+    do
         index ops.get = other_op
         other_op Op::kind = kind
         if 1 depth <= then
-            kind target_kinds opkind_list_contains = found
-            if found then
+            if kind target_kinds opkind_list_contains then
                 index ops op_ptr_to_label Option::Some return
             fi
         fi
         if kind is_block_start_kind then
-            1 += depth
+            step += depth
         elif kind is_block_end_kind then
-            depth 1 - = depth
+            neg_step += depth
         fi
         if 1 depth < then
-            if end_kind kind == then
+            if boundary_kind kind == then
                 Option::None return
             fi
         fi
-        1 += index
-    done
-    Option::None
-}
-
-fn find_matching_label_reverse
-    ops:List[Op]
-    op_index:int
-    start_kind:OpKind
-    target_kinds:List[OpKind]
--> Option[int] {
-    # Search backward from op_index-1 for matching target, respecting nesting.
-    1 = depth
-    op_index 1 - = index
-    while 0 index >= do
-        index ops.get = other_op
-        other_op Op::kind = kind
-        if 1 depth <= then
-            kind target_kinds opkind_list_contains = found
-            if found then
-                index ops op_ptr_to_label Option::Some return
-            fi
-        fi
-        if kind is_block_start_kind then
-            depth 1 - = depth
-        elif kind is_block_end_kind then
-            1 += depth
-        fi
-        if 1 depth < then
-            if start_kind kind == then
-                Option::None return
-            fi
-        fi
-        index 1 - = index
+        step += index
     done
     Option::None
 }
@@ -225,32 +199,16 @@ fn opkind_list_contains items:List[OpKind] value:OpKind -> bool {
     false
 }
 
-fn require_matching_forward
+fn require_matching
     ops:List[Op]
     op_index:int
-    end_kind:OpKind
+    boundary_kind:OpKind
     target_kinds:List[OpKind]
     location:Location
     message:str
+    backward:bool
 -> int {
-    target_kinds end_kind op_index ops find_matching_label_forward = result
-    if result.is_none then
-        location message ErrorKind::UnmatchedBlock make_error ERRORS.push
-        0
-    else
-        result.unwrap
-    fi
-}
-
-fn require_matching_reverse
-    ops:List[Op]
-    op_index:int
-    start_kind:OpKind
-    target_kinds:List[OpKind]
-    location:Location
-    message:str
--> int {
-    target_kinds start_kind op_index ops find_matching_label_reverse = result
+    backward target_kinds boundary_kind op_index ops find_matching_label = result
     if result.is_none then
         location message ErrorKind::UnmatchedBlock make_error ERRORS.push
         0
@@ -314,30 +272,30 @@ fn compile_if_block compiler:BytecodeCompiler op:Op op_index:int bytecode:List[I
 
     op Op::kind match
         OpKind::OpIfCondition => {
-            "`then` without matching `if`" loc start_targets OpKind::OpIfStart op_index ops require_matching_reverse drop
-            "`then` without matching `fi`" loc elif_else_end OpKind::OpIfEnd op_index ops require_matching_forward = end_label
+            true "`then` without matching `if`" loc start_targets OpKind::OpIfStart op_index ops require_matching drop
+            false "`then` without matching `fi`" loc elif_else_end OpKind::OpIfEnd op_index ops require_matching = end_label
             end_label InstKind::InstJumpNe make_inst_int bytecode.push
         }
         OpKind::OpIfElif => {
-            "`elif` without parent `if`" loc start_targets OpKind::OpIfStart op_index ops require_matching_reverse drop
+            true "`elif` without parent `if`" loc start_targets OpKind::OpIfStart op_index ops require_matching drop
             op_index compiler BytecodeCompiler::ops op_ptr_to_label = elif_label
-            "`elif` without matching `fi`" loc end_targets OpKind::OpIfEnd op_index ops require_matching_forward = end_label_2
+            false "`elif` without matching `fi`" loc end_targets OpKind::OpIfEnd op_index ops require_matching = end_label_2
             end_label_2 InstKind::InstJump make_inst_int bytecode.push
             elif_label InstKind::InstLabel make_inst_int bytecode.push
         }
         OpKind::OpIfElse => {
-            "`else` without parent `if`" loc start_targets OpKind::OpIfStart op_index ops require_matching_reverse drop
+            true "`else` without parent `if`" loc start_targets OpKind::OpIfStart op_index ops require_matching drop
             op_index compiler BytecodeCompiler::ops op_ptr_to_label = else_label
-            "`else` without matching `fi`" loc end_targets OpKind::OpIfEnd op_index ops require_matching_forward = end_label_3
+            false "`else` without matching `fi`" loc end_targets OpKind::OpIfEnd op_index ops require_matching = end_label_3
             end_label_3 InstKind::InstJump make_inst_int bytecode.push
             else_label InstKind::InstLabel make_inst_int bytecode.push
         }
         OpKind::OpIfEnd => {
-            "`fi` without parent `if`" loc start_targets OpKind::OpIfStart op_index ops require_matching_reverse drop
+            true "`fi` without parent `if`" loc start_targets OpKind::OpIfStart op_index ops require_matching drop
             op_index compiler BytecodeCompiler::ops op_ptr_to_label = fi_label
             fi_label InstKind::InstLabel make_inst_int bytecode.push
         }
-        OpKind::OpIfStart => "`if` without matching `fi`" loc end_targets OpKind::OpIfEnd op_index ops require_matching_forward drop
+        OpKind::OpIfStart => false "`if` without matching `fi`" loc end_targets OpKind::OpIfEnd op_index ops require_matching drop
         _ => {
             "Internal error: compile_if_block called with non-if OpKind\n" eprint
             1 exit
@@ -361,22 +319,22 @@ fn compile_while_block compiler:BytecodeCompiler op:Op op_index:int bytecode:Lis
 
     op Op::kind match
         OpKind::OpWhileBreak => {
-            "`break` without parent `while`" loc start_targets OpKind::OpWhileStart op_index ops require_matching_reverse drop
-            "`break` without matching `done`" loc end_targets OpKind::OpWhileEnd op_index ops require_matching_forward = end_label
+            true "`break` without parent `while`" loc start_targets OpKind::OpWhileStart op_index ops require_matching drop
+            false "`break` without matching `done`" loc end_targets OpKind::OpWhileEnd op_index ops require_matching = end_label
             end_label InstKind::InstJump make_inst_int bytecode.push
         }
         OpKind::OpWhileCondition => {
-            "`do` without parent `while`" loc start_targets OpKind::OpWhileStart op_index ops require_matching_reverse drop
-            "`do` without matching `done`" loc end_targets OpKind::OpWhileEnd op_index ops require_matching_forward = end_label_2
+            true "`do` without parent `while`" loc start_targets OpKind::OpWhileStart op_index ops require_matching drop
+            false "`do` without matching `done`" loc end_targets OpKind::OpWhileEnd op_index ops require_matching = end_label_2
             end_label_2 InstKind::InstJumpNe make_inst_int bytecode.push
         }
         OpKind::OpWhileContinue => {
-            "`continue` without parent `while`" loc start_targets OpKind::OpWhileStart op_index ops require_matching_reverse = continue_target
+            true "`continue` without parent `while`" loc start_targets OpKind::OpWhileStart op_index ops require_matching = continue_target
             continue_target InstKind::InstJump make_inst_int bytecode.push
         }
         OpKind::OpWhileEnd => {
             op_index compiler BytecodeCompiler::ops op_ptr_to_label = while_label
-            "`done` without parent `while`" loc start_targets OpKind::OpWhileStart op_index ops require_matching_reverse = loop_start
+            true "`done` without parent `while`" loc start_targets OpKind::OpWhileStart op_index ops require_matching = loop_start
             loop_start InstKind::InstJump make_inst_int bytecode.push
             while_label InstKind::InstLabel make_inst_int bytecode.push
         }
@@ -541,7 +499,7 @@ fn compile_match_block compiler:BytecodeCompiler op:Op op_index:int bytecode:Lis
         List::new (List[OpKind]) = end_targets
         OpKind::OpMatchEnd end_targets.push
 
-        "`match` arm without matching `end`" loc end_targets OpKind::OpMatchEnd op_index ops require_matching_forward = end_label
+        false "`match` arm without matching `end`" loc end_targets OpKind::OpMatchEnd op_index ops require_matching = end_label
 
         op_index ops.get (int) OP_LABEL_MAP.get = existing
         existing.is_some ! = is_first
@@ -553,7 +511,7 @@ fn compile_match_block compiler:BytecodeCompiler op:Op op_index:int bytecode:Lis
 
         List::new (List[OpKind]) = arm_targets
         OpKind::OpMatchArm arm_targets.push
-        arm_targets OpKind::OpMatchEnd op_index ops find_matching_label_forward = next_arm
+        false arm_targets OpKind::OpMatchEnd op_index ops find_matching_label = next_arm
         next_arm.is_none = is_last
 
         bytecode next_arm is_last op compiler compile_match_op
