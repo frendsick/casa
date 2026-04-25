@@ -79,6 +79,13 @@ struct FindOpState {
     best_len: int
 }
 
+struct CompileResult {
+    document_state: DocumentState
+    errors:         List[CasaError]
+    warnings:       List[CasaWarning]
+    source_cache:   Map[str str]
+}
+
 # ============================================================================
 # LSP constants
 # ============================================================================
@@ -279,7 +286,10 @@ fn send_notification method:str params:JsonValue {
 # Compilation pipeline
 # ============================================================================
 
-fn clear_compilation_state {
+fn compile_document file_path:str source:str open_docs:Map[str DocumentState] -> CompileResult {
+    true = RESILIENT_MODE
+
+    # Reset compiler globals
     Map::new(Map[str str]) = SOURCE_CACHE
     List::new(List[CasaError]) = ERRORS
     List::new(List[CasaWarning]) = WARNINGS
@@ -289,26 +299,21 @@ fn clear_compilation_state {
     Map::new(Map[str CasaStruct]) DEFAULT_PARSER Parser::store SymbolStore::set_structs
     Map::new(Map[str CasaTrait]) DEFAULT_PARSER Parser::store SymbolStore::set_traits
     Set::new(Set[str]) DEFAULT_PARSER Parser::set_included_files
-}
 
-fn run_pipeline file_path:str source:str -> DocumentState {
-    true = RESILIENT_MODE
-    clear_compilation_state
-
-    # Pre-populate SOURCE_CACHE with open document sources
-    DOCUMENT_STATES.keys = uris
+    # Seed SOURCE_CACHE from peer open documents
+    open_docs.keys = uris
     0 = uri_index
     while uri_index uris.length > do
         uri_index uris.get = uri
-        uri DOCUMENT_STATES.get.unwrap = cached_state
+        uri open_docs.get.unwrap = cached_state
         if cached_state DocumentState::file_path file_path != then
-            cached_state DocumentState::source cached_state DocumentState::file_path SOURCE_CACHE.set = SOURCE_CACHE
+            cached_state DocumentState::file_path cached_state DocumentState::source SOURCE_CACHE.set = SOURCE_CACHE
         fi
         1 += uri_index
     done
 
     # Lex
-    source file_path SOURCE_CACHE.set = SOURCE_CACHE
+    file_path source SOURCE_CACHE.set = SOURCE_CACHE
     file_path source lex_source = tokens
 
     # Parse
@@ -321,7 +326,7 @@ fn run_pipeline file_path:str source:str -> DocumentState {
         type_check_functions
     fi
 
-    # Snapshot state
+    # Snapshot file source (post-include)
     file_path SOURCE_CACHE.get = source_opt
     if source_opt.is_some then
         source_opt.unwrap
@@ -330,6 +335,7 @@ fn run_pipeline file_path:str source:str -> DocumentState {
     fi
     = final_source
 
+    # Snapshot store maps into a DocumentState
     file_path
     final_source
     Map::new(Map[str Variable]) = vars_copy
@@ -378,20 +384,35 @@ fn run_pipeline file_path:str source:str -> DocumentState {
 
     ops
 
-    DocumentState
+    DocumentState = state
+
+    # Drain compiler globals into the result so callers never read them
+    SOURCE_CACHE
+    WARNINGS
+    ERRORS
+    state
+    CompileResult
 }
 
-fn compute_diagnostics uri:str source:str -> List[LspDiagnostic] {
+fn ingest_document uri:str source:str -> List[LspDiagnostic] {
     uri uri_to_path = path
-    source path run_pipeline = state
-    uri state DOCUMENT_STATES.set = DOCUMENT_STATES
+    DOCUMENT_STATES source path compile_document = result
+    uri result CompileResult::document_state DOCUMENT_STATES.set = DOCUMENT_STATES
+    path result diagnostics_from
+}
+
+fn diagnostics_from result:CompileResult path:str -> List[LspDiagnostic] {
+    result CompileResult::errors = errors
+    result CompileResult::warnings = warnings
+    result CompileResult::source_cache = source_cache
+    result CompileResult::document_state DocumentState::source = fallback_source
 
     List::new(List[LspDiagnostic]) = diagnostics
 
     # Convert errors
     0 = error_index
-    while error_index ERRORS.length > do
-        error_index ERRORS.get = error
+    while error_index errors.length > do
+        error_index errors.get = error
         if
         "" error CasaError::location Location::file !=
         error CasaError::location Location::file path != &&
@@ -399,11 +420,11 @@ fn compute_diagnostics uri:str source:str -> List[LspDiagnostic] {
             1 += error_index
             continue
         fi
-        error CasaError::location Location::file SOURCE_CACHE.get = source_opt
+        error CasaError::location Location::file source_cache.get = source_opt
         if source_opt.is_some then
             source_opt.unwrap = error_source
         else
-            state DocumentState::source = error_source
+            fallback_source = error_source
         fi
 
         # Build message
@@ -431,8 +452,8 @@ fn compute_diagnostics uri:str source:str -> List[LspDiagnostic] {
 
     # Convert warnings
     0 = warn_index
-    while warn_index WARNINGS.length > do
-        warn_index WARNINGS.get = warning
+    while warn_index warnings.length > do
+        warn_index warnings.get = warning
         if
         "" warning CasaWarning::location Location::file !=
         warning CasaWarning::location Location::file path != &&
@@ -440,11 +461,11 @@ fn compute_diagnostics uri:str source:str -> List[LspDiagnostic] {
             1 += warn_index
             continue
         fi
-        warning CasaWarning::location Location::file SOURCE_CACHE.get = warn_source_opt
+        warning CasaWarning::location Location::file source_cache.get = warn_source_opt
         if warn_source_opt.is_some then
             warn_source_opt.unwrap = warn_source
         else
-            state DocumentState::source = warn_source
+            fallback_source = warn_source
         fi
         DIAGNOSTIC_WARNING
         warning CasaWarning::message
@@ -456,11 +477,6 @@ fn compute_diagnostics uri:str source:str -> List[LspDiagnostic] {
     done
 
     diagnostics
-}
-
-fn run_diagnostics uri:str source:str {
-    source uri compute_diagnostics = diagnostics
-    diagnostics uri publish_diagnostics
 }
 
 fn publish_diagnostics uri:str diagnostics:List[LspDiagnostic] {
@@ -689,7 +705,8 @@ fn handle_did_open message:JsonValue {
     "textDocument" params json_get_object.unwrap = text_document
     "uri" text_document json_get_str.unwrap = uri
     "text" text_document json_get_str.unwrap = text
-    text uri run_diagnostics
+    text uri ingest_document = diagnostics
+    diagnostics uri publish_diagnostics
 }
 
 fn handle_did_change message:JsonValue {
@@ -699,7 +716,8 @@ fn handle_did_change message:JsonValue {
     "contentChanges" params json_get_array.unwrap = changes
     0 changes.get = change
     "text" change json_get_str.unwrap = text
-    text uri run_diagnostics
+    text uri ingest_document = diagnostics
+    diagnostics uri publish_diagnostics
 }
 
 fn handle_did_save message:JsonValue {
@@ -710,7 +728,8 @@ fn handle_did_save message:JsonValue {
         return
     fi
     read_result.unwrap = saved_source
-    saved_source uri run_diagnostics
+    saved_source uri ingest_document = diagnostics
+    diagnostics uri publish_diagnostics
 }
 
 # ============================================================================
