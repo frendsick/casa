@@ -243,6 +243,34 @@ without a type-name prefix is acceptable.
 
 ---
 
+## Loops
+
+- **SHOULD** prefer `for x in <iter> do … done` over the equivalent `while`
+  loop whenever the loop walks every element of a collection or iterator. The
+  `for` form is shorter, makes the intent obvious, and removes the off-by-one
+  trap of manual index bookkeeping.
+
+  ```casa
+  # SHOULD
+  for token in tokens.iter do
+      token process
+  done
+
+  # SHOULD NOT — manual indexing where `for` works
+  0 = index
+  while index tokens.length > do
+      index tokens.get process
+      1 += index
+  done
+  ```
+
+- Reach for `while` only when `for` cannot express the loop: condition-driven
+  iteration, parallel iteration over multiple sources, mid-loop mutation of the
+  collection being iterated, or early termination that depends on state outside
+  the iterator.
+
+---
+
 ## Maximum nesting depth
 
 - **MUST NOT** nest `if`, `while`, `match`, or other block constructs more than
