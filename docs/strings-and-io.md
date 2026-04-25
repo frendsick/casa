@@ -262,6 +262,20 @@ Deletes a file. Returns 0 on success, or a negative value on error.
 "temp.txt" file::remove drop
 ```
 
+### `file::exists`
+
+Returns `true` when the path can be opened for reading, `false` otherwise (missing file, permission denied). Does not abort the process on a missing file, so it is safe to use as a probe (unlike `file::read_all`).
+
+**Signature:** `file::exists path:str -> bool`
+
+**Stack effect:** `str -> bool`
+
+```casa
+if "config.toml" file::exists then
+    "config.toml" file::read_all = config
+fi
+```
+
 See [`examples/file_io.casa`](../examples/file_io.casa) for a full program using file I/O.
 
 ## Character Classification
