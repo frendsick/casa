@@ -155,6 +155,26 @@ The server provides full semantic token highlighting. Each token is classified i
 
 Intrinsics are highlighted as `macro` to visually distinguish them from user-defined functions. The `fn` keyword before function definitions is highlighted as a keyword.
 
+## Initialization options
+
+Clients may pass these LSP `initializationOptions` to the server:
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `libraryPaths` | `string[]` | Directories searched for module-style imports (`import "name"`). Equivalent to passing `-L path` to `casac`. Missing or empty means no extra search paths. Non-string entries are ignored. |
+
+The configured paths persist across buffer changes; the server preserves them when it resets compilation state.
+
+Example `initialize` request body:
+
+```json
+{
+  "initializationOptions": {
+    "libraryPaths": ["/path/to/casa/lib", "/abs/vendor"]
+  }
+}
+```
+
 ## Editor Configuration
 
 ### Neovim (nvim-lspconfig)
