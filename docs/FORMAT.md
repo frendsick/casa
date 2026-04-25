@@ -34,16 +34,16 @@ fn fizzbuzz number:int {
 ## Blank lines
 
 - **1 blank line** before and after top-level definitions (`fn`, `struct`, `enum`,
-  `impl`, `trait`) and include groups.
+  `impl`, `trait`) and import groups.
 - Consecutive plain top-level statements (global assignments, map `.set` chains)
   are grouped **without** blank lines.
-- Consecutive `include` statements are grouped **without** blank lines.
+- Consecutive `import` statements are grouped **without** blank lines.
 - **1 blank line** immediately before a section separator comment.
 - Inside a function body, no more than **1 consecutive blank line** (SHOULD).
 
 ```casa
-include "path/to/lib/std.casa"
-include "path/to/lib/io.casa"
+import "path/to/lib/std.casa"
+import "path/to/lib/io.casa"
 
 16 = BUFFER_SIZE
 

@@ -1,22 +1,22 @@
 # Standard Library
 
-The standard library provides core types and functions used by most Casa programs. It is in `lib/std.casa`. Include it with:
+The standard library provides core types and functions used by most Casa programs. It is in `lib/std.casa`. Import it with:
 
 ```casa
-include "path/to/lib/std.casa"
+import "path/to/lib/std.casa"
 ```
 
 The path is relative to the source file. Adjust it based on your project layout.
 
-## `include` Directive
+## `import` Directive
 
-`include` loads another Casa source file. Each file is included at most once, regardless of how many times it appears.
+`import` loads another Casa source file. Each file is imported at most once, regardless of how many times it appears.
 
 ```casa
-include "relative/path/to/file.casa"
+import "relative/path/to/file.casa"
 ```
 
-Paths are resolved relative to the file containing the `include` directive. All functions, structs, and global variables defined in the included file become available.
+Paths are resolved relative to the file containing the `import` directive. All functions, structs, and global variables defined in the imported file become available.
 
 ## `memcpy`
 
