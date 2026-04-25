@@ -58,7 +58,7 @@ impl Foo {
     }
 }
 
-Map::new (Map[str int]) = MY_MAP
+Map::new(Map[str int]) = MY_MAP
 "a" 1 MY_MAP.set = MY_MAP
 "b" 2 MY_MAP.set = MY_MAP
 
