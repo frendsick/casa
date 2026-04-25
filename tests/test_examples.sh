@@ -33,7 +33,7 @@ for f in "$EXAMPLES_DIR"/*.casa; do
 
     # Examples with .err files are expected to fail compilation
     if [ -f "$err_file" ]; then
-        error_output=$("$COMPILER" "$f" -o "$binary" 2>&1 || true)
+        error_output=$("$COMPILER" -L "$ROOT_DIR/lib" "$f" -o "$binary" 2>&1 || true)
         if echo "$error_output" | diff -u - "$err_file"; then
             echo "${GREEN}[OK]${RESET} Passed: $base (expected error)"
             pass=$((pass+1))
@@ -46,7 +46,7 @@ for f in "$EXAMPLES_DIR"/*.casa; do
     fi
 
     # Compile
-    "$COMPILER" "$f" -o "$binary"
+    "$COMPILER" -L "$ROOT_DIR/lib" "$f" -o "$binary"
 
     # Run and capture output (1s timeout for interactive examples)
     output=$(timeout 1 "$binary") || true
