@@ -849,18 +849,20 @@ fn compile_function_ops compiler:BytecodeCompiler op:Op bytecode:List[Inst] {
             function_opt.unwrap = lambda
             op lambda compiler compile_function
 
-            # Push each capture's value onto the data stack so InstClosureRecord
-            # can pack them into the heap-allocated closure record together with
-            # the function pointer.
-            0 = capture_index
-            while capture_index lambda Function::captures.length > do
-                capture_index lambda Function::captures.get Variable::name = capture_name
-                capture_name compiler resolve_variable = capture_resolved
-                capture_resolved ResolvedVariable::index capture_resolved ResolvedVariable::get_kind make_inst_int bytecode.push
-                1 += capture_index
-            done
-            name InstKind::InstFnPush make_inst_str bytecode.push
-            lambda Function::captures.length InstKind::InstClosureRecord make_inst_int bytecode.push
+            # Zero-capture closures share a single static record so trait
+            # dispatch and named-function pushes do not allocate per call.
+            if 0 lambda Function::captures.length == then
+                name InstKind::InstFnPushStatic make_inst_str bytecode.push
+            else
+                # Captures are pushed before the function pointer so InstClosureRecord
+                # pops fn_ptr first into record[0] and then captures into record[1..].
+                for capture in lambda Function::captures.iter do
+                    capture Variable::name compiler resolve_variable = capture_resolved
+                    capture_resolved ResolvedVariable::index capture_resolved ResolvedVariable::get_kind make_inst_int bytecode.push
+                done
+                name InstKind::InstFnPush make_inst_str bytecode.push
+                lambda Function::captures.length InstKind::InstClosureRecord make_inst_int bytecode.push
+            fi
         }
         _ => {
             "Internal error: compile_function_ops called with non-function OpKind\n" eprint
@@ -1001,17 +1003,8 @@ fn compile_op compiler:BytecodeCompiler op:Op op_index:int bytecode:List[Inst] {
         op op_int_value InstKind::InstPushChar make_inst_int bytecode.push
     elif OpKind::OpPushCapture kind == then
         op op_str_value = capture_name
-        compiler BytecodeCompiler::function = function_ptr
-        if 0 function_ptr == then
-            f"Internal error: OpPushCapture `{capture_name}` outside lambda body\n" eprint
-            1 exit
-        fi
-        function_ptr (Function) = function
+        compiler BytecodeCompiler::function(Function) = function
         capture_name function Function::captures variable_list_index = capture_index
-        if 0 capture_index < then
-            f"Internal error: capture `{capture_name}` not found in lambda `{function Function::name}`\n" eprint
-            1 exit
-        fi
         capture_index InstKind::InstCaptureLoad make_inst_int bytecode.push
     elif OpKind::OpPushInt kind == then
         op op_int_value InstKind::InstPush make_inst_int bytecode.push

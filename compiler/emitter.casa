@@ -147,6 +147,16 @@ fn emit_data asm:StringBuilder program:Program {
     done
     "bool_true: .ascii \"true\"" asm emit_line
     "bool_false: .ascii \"false\"" asm emit_line
+    "env_stack_overflow_msg: .ascii \"error: env stack overflow\\n\"" asm emit_line
+    ".equ env_stack_overflow_msg_len, . - env_stack_overflow_msg" asm emit_line
+    # Static closure record per function: a 1-word [fn_ptr] used by
+    # InstFnPushStatic for zero-capture closures (trait dispatch, named
+    # function references). Avoids a heap allocation per push site.
+    for name in program Program::functions.keys.iter do
+        name sanitize_name = label
+        ".align 8" asm emit_line
+        f"closure_{label}: .quad fn_{label}" asm emit_line
+    done
     "" asm emit_line
 }
 
@@ -255,6 +265,18 @@ fn emit_helpers asm:StringBuilder {
     "pushq %r13" asm emit_indent
     "subq $8, %r14" asm emit_indent
     "jmpq *(%r14)" asm emit_indent
+    "" asm emit_line
+
+    # env_stack overflow handler: write error to fd 2 and exit(1).
+    "env_stack_overflow:" asm emit_line
+    "leaq env_stack_overflow_msg(%rip), %rsi" asm emit_indent
+    "movq $env_stack_overflow_msg_len, %rdx" asm emit_indent
+    "movq $2, %rdi" asm emit_indent
+    "movq $1, %rax" asm emit_indent
+    "syscall" asm emit_indent
+    "movq $1, %rdi" asm emit_indent
+    "movq $60, %rax" asm emit_indent
+    "syscall" asm emit_indent
     "" asm emit_line
 }
 
@@ -576,6 +598,8 @@ fn emit_control_flow asm:StringBuilder inst:Inst is_global:bool {
             "popq %rax" asm emit_indent
             "movq current_env(%rip), %rbx" asm emit_indent
             "movq env_sp(%rip), %rcx" asm emit_indent
+            f"cmpq ${RETURN_STACK_SIZE}, %rcx" asm emit_indent
+            "jge env_stack_overflow" asm emit_indent
             "movq %rbx, env_stack(%rcx)" asm emit_indent
             "addq $8, %rcx" asm emit_indent
             "movq %rcx, env_sp(%rip)" asm emit_indent
@@ -625,6 +649,11 @@ fn emit_control_flow asm:StringBuilder inst:Inst is_global:bool {
         InstKind::InstFnPush => {
             inst Inst::str_arg sanitize_name = label
             f"leaq fn_{label}(%rip), %rax" asm emit_indent
+            "pushq %rax" asm emit_indent
+        }
+        InstKind::InstFnPushStatic => {
+            inst Inst::str_arg sanitize_name = label
+            f"leaq closure_{label}(%rip), %rax" asm emit_indent
             "pushq %rax" asm emit_indent
         }
         InstKind::InstFnReturn => {
@@ -819,6 +848,7 @@ fn emit_inst asm:StringBuilder inst:Inst is_global:bool {
         InstKind::InstFnCall => is_global inst asm emit_control_flow
         InstKind::InstFnExec => is_global inst asm emit_control_flow
         InstKind::InstFnPush => is_global inst asm emit_control_flow
+        InstKind::InstFnPushStatic => is_global inst asm emit_control_flow
         InstKind::InstFnReturn => is_global inst asm emit_control_flow
 
         # Memory operations
