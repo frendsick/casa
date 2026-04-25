@@ -38,7 +38,7 @@ A specifier without `/` and without a `.casa` suffix is treated as a module name
 1. the directory of the importing file, then
 2. each directory passed via `-L` / `--library-path`, in CLI order.
 
-The first existing match wins. If no candidate exists, the compiler reports an error listing every directory searched.
+The first existing match wins. A same-directory candidate that resolves to the importing file itself is skipped, so an example file `examples/argparse.casa` can `import "argparse"` and reach the library copy via `-L`. If no candidate exists, the compiler reports an error listing every directory searched.
 
 ### `-L` / `--library-path`
 
