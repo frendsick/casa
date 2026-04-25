@@ -1,22 +1,53 @@
 # Standard Library
 
-The standard library provides core types and functions used by most Casa programs. It is in `lib/std.casa`. Import it with:
+The standard library provides core types and functions used by most Casa programs. It is in `lib/std.casa`. Import it as a module:
+
+```casa
+import "std"
+```
+
+…and pass `-L path/to/lib` to `casac`. Or import by path:
 
 ```casa
 import "path/to/lib/std.casa"
 ```
 
-The path is relative to the source file. Adjust it based on your project layout.
-
 ## `import` Directive
 
-`import` loads another Casa source file. Each file is imported at most once, regardless of how many times it appears.
+`import` loads another Casa source file. Each file is imported at most once, regardless of how many times it appears, and the deduplication uses the canonicalized resolved path.
+
+There are two forms:
+
+### Path-style
 
 ```casa
 import "relative/path/to/file.casa"
+import "/absolute/path/to/file.casa"
 ```
 
-Paths are resolved relative to the file containing the `import` directive. All functions, structs, and global variables defined in the imported file become available.
+A specifier is treated as a path when it contains `/` or ends with `.casa`. Relative paths resolve from the directory of the importing file. Absolute paths are used as-is. No search is performed.
+
+### Module-style
+
+```casa
+import "std"
+```
+
+A specifier without `/` and without a `.casa` suffix is treated as a module name. The resolver looks for `<module>.casa` in:
+
+1. the directory of the importing file, then
+2. each directory passed via `-L` / `--library-path`, in CLI order.
+
+The first existing match wins. If no candidate exists, the compiler reports an error listing every directory searched.
+
+### `-L` / `--library-path`
+
+Repeatable. Adds a directory to the module search path:
+
+```sh
+casac -L lib program.casa
+casac -L lib -L vendor program.casa
+```
 
 ## `memcpy`
 

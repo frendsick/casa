@@ -1,8 +1,9 @@
 #!/usr/bin/env sh
 set -eu
 
-ROOT_DIR=$(git rev-parse --show-toplevel)
+ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd)
 TESTS_DIR="$ROOT_DIR/tests/compiler"
+cd "$ROOT_DIR"
 
 # Accept optional compiler path as first argument
 if [ $# -ge 1 ]; then

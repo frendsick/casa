@@ -14,9 +14,11 @@
 struct Parser {
     store:          SymbolStore
     included_files: Set[str]
+    search_paths:   List[str]
 }
 
 fn make_parser store:SymbolStore -> Parser {
+    List::new (List[str])
     Set::new (Set[str])
     store
     Parser
@@ -1706,38 +1708,80 @@ fn normalize_path path:str -> str {
     builder.build
 }
 
-fn handle_keyword_import token:Token cursor:TokenCursor -> Op {
+fn is_path_specifier spec:str -> bool {
+    spec ".casa" str::ends_with
+    spec "/" str::contains ||
+}
+
+fn dir_of_path path:str -> str {
+    -1 = last_slash
+    0 = scan
+    while scan path.length > do
+        if '/' scan path.at == then
+            scan = last_slash
+        fi
+        1 += scan
+    done
+    if 0 last_slash >= then
+        path 0 last_slash 1 + str::substring
+        return
+    fi
+    ""
+}
+
+fn resolve_import parser:Parser importing_file:str spec:str location:Location -> str {
+    importing_file dir_of_path = source_dir
+    # Path-style: keep existing semantics (no existence check).
+    if spec is_path_specifier then
+        if spec "/" str::starts_with then
+            spec
+            return
+        fi
+        f"{source_dir}{spec}" normalize_path
+        return
+    fi
+    # Module-style: probe source dir, then each search path. First hit wins.
+    # `searched` accumulates probed dirs for the not-found error message.
+    f"{source_dir}{spec}.casa" normalize_path = source_candidate
+    if source_candidate file::exists then
+        source_candidate
+        return
+    fi
+    if 0 source_dir.length == then
+        "."
+    else
+        source_dir
+    fi
+    = first_dir
+    f"\n  {first_dir}" = searched
+    0 = path_index
+    while path_index parser.search_paths.length > do
+        path_index parser.search_paths.get = base
+        f"{searched}\n  {base}" = searched
+        f"{base}/{spec}.casa" normalize_path = candidate
+        if candidate file::exists then
+            candidate
+            return
+        fi
+        1 += path_index
+    done
+    location f"module `{spec}` not found, searched:{searched}" ErrorKind::Syntax raise_error
+    ""
+}
+
+fn handle_keyword_import parser:Parser cursor:TokenCursor -> Op {
     TokenKind::Literal cursor expect_token_kind = path_token
     path_token get_op_literal = literal_op
     if OpKind::OpPushStr literal_op Op::kind != then
         path_token Token::location "Expected string literal for import path" ErrorKind::UnexpectedToken raise_error
     fi
-    literal_op op_str_value = path
+    literal_op op_str_value = spec
 
-    # Resolve relative path from the token's file location
-    token Token::location Location::file = base_file
-    # Find the directory part of the base file (last / position)
-    -1 = last_slash
-    0 = file_index
-    while file_index base_file.length > do
-        if '/' file_index base_file.at == then
-            file_index = last_slash
-        fi
-        1 += file_index
-    done
-    if 0 last_slash >= then
-        base_file 0 last_slash 1 + str::substring = directory
-    else
-        "" = directory
-    fi
-    # Only prepend directory for relative paths
-    if path "/" str::starts_with then
-        path = resolved
-    else
-        f"{directory}{path}" normalize_path = resolved
-    fi
+    path_token Token::location = path_location
+    path_location Location::file = importing_file
+    path_location spec importing_file parser resolve_import = resolved
 
-    path_token Token::location OpKind::OpImportFile resolved make_op_str
+    path_location OpKind::OpImportFile resolved make_op_str
 }
 
 # ============================================================================
@@ -1906,7 +1950,7 @@ fn get_op_keyword parser:Parser token:Token cursor:TokenCursor function_name:str
 
     # import
     if KeywordKind::Import keyword == then
-        cursor token handle_keyword_import ops.push
+        cursor parser handle_keyword_import ops.push
         return
     fi
 
