@@ -298,6 +298,18 @@ Adds an option that takes a string value.
 "output binary name" "--output" "-o" "output" parser .add_option
 ```
 
+### `ArgParser::add_multi_option`
+
+Adds an option that takes a string value and may appear multiple times. Each occurrence appends its value to a list retrieved with `ParsedArgs::get_multi`.
+
+**Signature:** `ArgParser::add_multi_option self:ArgParser name:str short_flag:str long_flag:str help_text:str`
+
+**Stack effect:** `ArgParser str str str str -> None`
+
+```casa
+"library search path" "--library-path" "-L" "library_path" parser .add_multi_option
+```
+
 ### `ArgParser::parse_args`
 
 Parses `argc`/`argv` and returns the results. Automatically handles `-h`/`--help` (prints help and exits). Prints a usage error and exits on unrecognized arguments or missing positionals.
@@ -333,6 +345,18 @@ Returns `true` if the flag was set, `false` otherwise.
 
 ```casa
 "verbose" args .get_flag = is_verbose
+```
+
+### `ParsedArgs::get_multi`
+
+Returns `Option::Some` wrapping the collected `List[str]` for a registered multi-option (the list is empty if the flag was never given). Returns `Option::None` if the name was never registered as a multi-option, mirroring `ParsedArgs::get`.
+
+**Signature:** `ParsedArgs::get_multi self:ParsedArgs name:str -> Option[List[str]]`
+
+**Stack effect:** `ParsedArgs str -> Option[List[str]]`
+
+```casa
+"library_path" args .get_multi .unwrap = library_paths
 ```
 
 ### Complete Example

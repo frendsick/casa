@@ -59,12 +59,13 @@ Compile with a custom output name:
 ## CLI Usage
 
 ```
-./casac <file> [-o name] [--keep-asm] [-r] [-v]
+./casac <file> [-o name] [-L path]... [--keep-asm] [-r] [-v]
 ```
 
 | Flag | Description |
 |------|-------------|
 | `-o`, `--output` | Output binary name (default: input file stem) |
+| `-L`, `--library-path` | Add a directory to the module import search path (repeatable, e.g. `-L lib`) |
 | `--keep-asm` | Keep the generated `.s` assembly file |
 | `-r`, `--run` | Execute the binary after compilation |
 | `-v`, `--verbose` | Enable verbose logging |
