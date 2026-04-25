@@ -3,6 +3,7 @@ set -eu
 
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd)
 TESTS_DIR="$ROOT_DIR/tests/compiler"
+LIB_DIR="$ROOT_DIR/lib"
 cd "$ROOT_DIR"
 
 # Accept optional compiler path as first argument
@@ -25,7 +26,7 @@ for f in "$TESTS_DIR"/test_*.casa; do
 
     printf "Running: %s ... " "$base"
 
-    if ! $COMPILER "$f" -o "$binary" 2>/tmp/casa_compile_err; then
+    if ! $COMPILER -L "$LIB_DIR" "$f" -o "$binary" 2>/tmp/casa_compile_err; then
         printf "${RED}COMPILE FAIL${RESET}\n"
         cat /tmp/casa_compile_err
         fail=$((fail+1))
@@ -53,18 +54,18 @@ stage1="/tmp/casa_stage1"
 stage2="/tmp/casa_stage2"
 stage2_test_bin="/tmp/casa_stage2_test"
 
-if ! $COMPILER "$ROOT_DIR/casa.casa" -o "$stage1" 2>/tmp/casa_compile_err; then
+if ! $COMPILER -L "$LIB_DIR" "$ROOT_DIR/casa.casa" -o "$stage1" 2>/tmp/casa_compile_err; then
     printf "${RED}STAGE1 COMPILE FAIL${RESET}\n"
     cat /tmp/casa_compile_err
     fail=$((fail+1))
 else
-    if ! "$stage1" "$ROOT_DIR/casa.casa" -o "$stage2" 2>/tmp/casa_compile_err; then
+    if ! "$stage1" -L "$LIB_DIR" "$ROOT_DIR/casa.casa" -o "$stage2" 2>/tmp/casa_compile_err; then
         printf "${RED}STAGE2 COMPILE FAIL${RESET}\n"
         cat /tmp/casa_compile_err
         fail=$((fail+1))
     else
         # Verify stage2 can compile and run a program
-        if ! "$stage2" "$ROOT_DIR/examples/hello_world.casa" -o "$stage2_test_bin" 2>/tmp/casa_compile_err; then
+        if ! "$stage2" -L "$LIB_DIR" "$ROOT_DIR/examples/hello_world.casa" -o "$stage2_test_bin" 2>/tmp/casa_compile_err; then
             printf "${RED}STAGE2 COMPILE OUTPUT FAIL${RESET}\n"
             cat /tmp/casa_compile_err
             fail=$((fail+1))
@@ -92,17 +93,17 @@ stage1="/tmp/casa_fp_stage1"
 stage2="/tmp/casa_fp_stage2"
 stage3="/tmp/casa_fp_stage3"
 
-if ! $COMPILER "$ROOT_DIR/casa.casa" -o "$stage1" 2>/tmp/casa_compile_err; then
+if ! $COMPILER -L "$LIB_DIR" "$ROOT_DIR/casa.casa" -o "$stage1" 2>/tmp/casa_compile_err; then
     printf "${RED}STAGE1 COMPILE FAIL${RESET}\n"
     cat /tmp/casa_compile_err
     fail=$((fail+1))
 else
-    if ! "$stage1" "$ROOT_DIR/casa.casa" -o "$stage2" --keep-asm 2>/tmp/casa_compile_err; then
+    if ! "$stage1" -L "$LIB_DIR" "$ROOT_DIR/casa.casa" -o "$stage2" --keep-asm 2>/tmp/casa_compile_err; then
         printf "${RED}STAGE2 COMPILE FAIL${RESET}\n"
         cat /tmp/casa_compile_err
         fail=$((fail+1))
     else
-        if ! "$stage2" "$ROOT_DIR/casa.casa" -o "$stage3" --keep-asm 2>/tmp/casa_compile_err; then
+        if ! "$stage2" -L "$LIB_DIR" "$ROOT_DIR/casa.casa" -o "$stage3" --keep-asm 2>/tmp/casa_compile_err; then
             printf "${RED}STAGE3 COMPILE FAIL${RESET}\n"
             cat /tmp/casa_compile_err
             fail=$((fail+1))
