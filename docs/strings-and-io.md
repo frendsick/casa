@@ -225,26 +225,48 @@ Closes a file descriptor. Returns 0 on success, or a negative value on error.
 fd file::close drop
 ```
 
-### `file::read_all`
+### `FileError`
 
-Reads the entire contents of a file into a string. Prints an error and exits if the file cannot be opened.
-
-**Signature:** `file::read_all path:str -> str`
-
-**Stack effect:** `str -> str`
+The high-level file operations (`file::read_all`, `file::write_all`, `file::remove`) report failures through a `FileError` enum wrapped in `Result`:
 
 ```casa
-"input.txt" file::read_all = content
-content print
+enum FileError {
+    NotFound
+    PermissionDenied
+    AlreadyExists
+    IsDirectory
+    NotDirectory
+    BadFd
+    Other (int)    # raw errno for cases not covered above
+}
 ```
+
+`FileError` implements `Display`, so it can be printed with `to_str` or interpolated in f-strings. The free function `errno_to_file_error` converts a negative syscall return value to the appropriate `FileError`.
+
+### `file::read_all`
+
+Reads the entire contents of a file into a string. Returns `Result::Ok(content)` on success or `Result::Error(FileError)` if the file cannot be opened or read.
+
+**Signature:** `file::read_all path:str -> Result[str FileError]`
+
+**Stack effect:** `str -> Result[str FileError]`
+
+```casa
+"input.txt" file::read_all match
+    Result::Ok(content)  => content print
+    Result::Error(read_err) => f"read failed: {read_err.to_str}\n" eprint
+end
+```
+
+Match directly on the `Result` rather than probing with `file::exists` first; the latter introduces a TOCTOU race because the file can disappear between the two calls.
 
 ### `file::write_all`
 
-Writes a string to a file, creating or truncating it. Returns `true` on success, `false` if the file cannot be opened.
+Writes a string to a file, creating or truncating it. Returns `Result::Ok(true)` on success or `Result::Error(FileError)` if the file cannot be opened.
 
-**Signature:** `file::write_all path:str content:str -> bool`
+**Signature:** `file::write_all path:str content:str -> Result[bool FileError]`
 
-**Stack effect:** `str str -> bool`
+**Stack effect:** `str str -> Result[bool FileError]`
 
 ```casa
 "Hello, world!\n" "output.txt" file::write_all drop
@@ -252,11 +274,11 @@ Writes a string to a file, creating or truncating it. Returns `true` on success,
 
 ### `file::remove`
 
-Deletes a file. Returns 0 on success, or a negative value on error.
+Deletes a file. Returns `Result::Ok(true)` on success or `Result::Error(FileError)` if the syscall fails (e.g. the file is missing).
 
-**Signature:** `file::remove path:str -> int`
+**Signature:** `file::remove path:str -> Result[bool FileError]`
 
-**Stack effect:** `str -> int`
+**Stack effect:** `str -> Result[bool FileError]`
 
 ```casa
 "temp.txt" file::remove drop
@@ -264,16 +286,14 @@ Deletes a file. Returns 0 on success, or a negative value on error.
 
 ### `file::exists`
 
-Returns `true` when the path can be opened for reading, `false` otherwise (missing file, permission denied). Does not abort the process on a missing file, so it is safe to use as a probe (unlike `file::read_all`).
+Returns `true` when the path can be opened for reading, `false` otherwise (missing file, permission denied). Safe to use as a probe when the existence check is needed for control flow that does not later read the file (to read the file, match on `file::read_all` directly to avoid a TOCTOU race).
 
 **Signature:** `file::exists path:str -> bool`
 
 **Stack effect:** `str -> bool`
 
 ```casa
-if "config.toml" file::exists then
-    "config.toml" file::read_all = config
-fi
+"/tmp/casa.lock" file::exists.to_str print
 ```
 
 See [`examples/file_io.casa`](../examples/file_io.casa) for a full program using file I/O.
