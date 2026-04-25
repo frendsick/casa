@@ -4,10 +4,10 @@ Application-level utilities for logging, timing, command-line argument parsing, 
 
 ## Logging
 
-The logging library is in `lib/log.casa`. Include it with:
+The logging library is in `lib/log.casa`. Import it with:
 
 ```casa
-include "path/to/lib/log.casa"
+import "path/to/lib/log.casa"
 ```
 
 It provides leveled logging to stderr. Messages above the current log level (more verbose) are suppressed. The default level is `LogLevel::Warning`.
@@ -90,7 +90,7 @@ f"token count: {count .to_str}" log_debug
 ### Complete Example
 
 ```casa
-include "path/to/lib/log.casa"
+import "path/to/lib/log.casa"
 
 # Default level is Warning — only Error and Warning are shown
 "this is hidden" log_info
@@ -104,10 +104,10 @@ LogLevel::Info log_set_level
 
 ## Timer
 
-The timer library is in `lib/timer.casa`. Include it with:
+The timer library is in `lib/timer.casa`. Import it with:
 
 ```casa
-include "path/to/lib/timer.casa"
+import "path/to/lib/timer.casa"
 ```
 
 It provides high-resolution timing using `clock_gettime` with `CLOCK_MONOTONIC`. Timer implements the `Display` trait, formatting elapsed time as fractional seconds (e.g., `"1.042s"`).
@@ -191,7 +191,7 @@ Returns elapsed nanoseconds from the global timer. Exits with an error if `timer
 ### Complete Example
 
 ```casa
-include "path/to/lib/timer.casa"
+import "path/to/lib/timer.casa"
 
 Timer::new = timer
 
@@ -242,10 +242,10 @@ Returns the nth command-line argument as a string (zero-indexed). Prints an erro
 
 ## Argument Parser
 
-The argument parser library is in `lib/argparse.casa`. Include it with:
+The argument parser library is in `lib/argparse.casa`. Import it with:
 
 ```casa
-include "path/to/lib/argparse.casa"
+import "path/to/lib/argparse.casa"
 ```
 
 It provides a declarative API for defining and parsing CLI arguments, with auto-generated help output similar to Python's `argparse`.
@@ -338,7 +338,7 @@ Returns `true` if the flag was set, `false` otherwise.
 ### Complete Example
 
 ```casa
-include "path/to/lib/argparse.casa"
+import "path/to/lib/argparse.casa"
 
 ArgParser::new = parser
 "input file" "input" parser .add_positional
@@ -394,6 +394,6 @@ Converts a `List[char]` to a `str`. Used internally by `StringBuilder::build`.
 
 ## See Also
 
-- [Standard Library](standard-library.md) -- arrays, Option, Result, and the `include` directive
+- [Standard Library](standard-library.md) -- arrays, Option, Result, and the `import` directive
 - [Collections](collections.md) -- List, Map, Set, and StringBuilder
 - [Strings and IO](strings-and-io.md) -- string methods and file I/O

@@ -1,6 +1,6 @@
 # Strings and IO
 
-String operations, character classification, file I/O, output functions, and type conversions. All functions are defined in `lib/std.casa` and available via `include`.
+String operations, character classification, file I/O, output functions, and type conversions. All functions are defined in `lib/std.casa` and available via `import`.
 
 ## String Methods
 
@@ -522,7 +522,7 @@ Returns the absolute value of an integer, for use as a hash.
 
 ## See Also
 
-- [Standard Library](standard-library.md) -- arrays, Option, Result, and the `include` directive
+- [Standard Library](standard-library.md) -- arrays, Option, Result, and the `import` directive
 - [Collections](collections.md) -- List, Map, Set, and StringBuilder
 - [Traits](traits.md) -- the `Display` trait used by type conversions
 - [Types and Literals](types-and-literals.md) -- primitive type definitions

@@ -32,7 +32,7 @@ The server runs the full compiler pipeline (lex, parse, resolve, type check) on 
 
 Errors appear with severity **Error** and warnings with severity **Warning**. All diagnostics include the source location (line, column, span) so the editor can underline the problematic code.
 
-When a file uses `include`, only diagnostics originating from the open file are shown. Errors in included files are filtered out.
+When a file uses `import`, only diagnostics originating from the open file are shown. Errors in imported files are filtered out.
 
 ### Error details
 

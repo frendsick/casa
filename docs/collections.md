@@ -1,6 +1,6 @@
 # Collections
 
-Casa provides generic container types for dynamic data. All collections are defined in `lib/std.casa` and available via `include`.
+Casa provides generic container types for dynamic data. All collections are defined in `lib/std.casa` and available via `import`.
 
 ## `List[T]`
 
@@ -137,7 +137,7 @@ arr.length print    # 3
 ### Complete Example
 
 ```casa
-include "path/to/lib/std.casa"
+import "path/to/lib/std.casa"
 
 List::new = v
 10 v.push
@@ -282,7 +282,7 @@ m.values = val_list
 ### Complete Example
 
 ```casa
-include "path/to/lib/std.casa"
+import "path/to/lib/std.casa"
 
 # Create a map from strings to ints
 Map::new (Map[str int]) = m
@@ -407,7 +407,7 @@ s.to_list = elements
 ### Complete Example
 
 ```casa
-include "path/to/lib/std.casa"
+import "path/to/lib/std.casa"
 
 # Create a set of strings
 Set::new (Set[str]) = s
@@ -500,6 +500,6 @@ Returns the number of characters in the builder.
 
 ## See Also
 
-- [Standard Library](standard-library.md) -- arrays, Option, Result, and the `include` directive
+- [Standard Library](standard-library.md) -- arrays, Option, Result, and the `import` directive
 - [Strings and IO](strings-and-io.md) -- string methods, file I/O, and type conversions
 - [Traits](traits.md) -- the `Hashable` trait required by Map and Set keys

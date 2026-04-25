@@ -1,6 +1,6 @@
 # Built-in Intrinsics
 
-Intrinsics are operations built into the compiler. They are available in every Casa program without any `include` directive.
+Intrinsics are operations built into the compiler. They are available in every Casa program without any `import` directive.
 
 ## Stack Intrinsics
 

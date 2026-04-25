@@ -96,7 +96,7 @@ Start with the core language docs (1-8), then explore the library and tooling do
 
 | Document | Topics |
 |----------|--------|
-| [Standard Library](docs/standard-library.md) | `include`, `memcpy`, arrays (`map`, `filter`, `reduce`), `Option[T]`, `Result[T E]` |
+| [Standard Library](docs/standard-library.md) | `import`, `memcpy`, arrays (`map`, `filter`, `reduce`), `Option[T]`, `Result[T E]` |
 | [Collections](docs/collections.md) | `List[T]`, `Map[K V]`, `Set[K]`, `StringBuilder` |
 | [Strings and IO](docs/strings-and-io.md) | String methods, file I/O, character classification, type conversions |
 | [Utilities](docs/utilities.md) | Logging, timer, argument parsing, process execution |
