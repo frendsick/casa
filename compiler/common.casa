@@ -449,48 +449,53 @@ fn make_token value:str kind:TokenKind location:Location -> Token {
 # ============================================================================
 # Op value types
 #
-# Since Casa does not have union types, Op values are stored as int (ptr).
-# The OpKind determines how to interpret the value:
-#   - PUSH_INT, PUSH_CHAR, FSTRING_CONCAT: value is the integer directly
-#   - PUSH_BOOL: value is 0 or 1
-#   - PUSH_STR, FN_CALL, FN_PUSH, etc.: value is a ptr to a str
-#   - PUSH_ENUM_VARIANT, IS_CHECK: value is a ptr to EnumVariant
-#   - MATCH_ARM: value is a ptr to EnumVariant, StructPattern, or LiteralPattern
-#   - STRUCT_NEW: value is a ptr to CasaStruct
-#   - STRUCT_LITERAL: value is a ptr to StructLiteral
-#   - PUSH_ARRAY: value is a ptr to List[Op]
-#   - Control flow / intrinsics: value unused (0)
+# Op carries its payload in `value: OpValue`, a tagged enum where the
+# variant tag identifies the payload type and `kind: OpKind` discriminates
+# among Ops that share a payload type. Mapping from OpKind to payload:
+#   - PUSH_ENUM_VARIANT, IS_CHECK: OpValue::EnumVariant(EnumVariant)
+#   - PUSH_ARRAY: OpValue::OpList(List[Op])
+#   - STRUCT_NEW: OpValue::Struct(CasaStruct)
+#   - STRUCT_LITERAL: OpValue::StructLit(StructLiteral)
+#   - MATCH_ARM: OpValue::Match(MatchArm)
+#   - PUSH_STR, FN_CALL, FN_PUSH, IDENTIFIER, IMPORT_FILE, ASSIGN_VAR,
+#     PUSH_VAR, PUSH_CAPTURE, ASSIGN_DEC, ASSIGN_INC, TYPE_CAST:
+#     OpValue::Str(str)
+#   - PUSH_INT, PUSH_CHAR, PUSH_BOOL, FSTRING_CONCAT: OpValue::Int(int)
+#   - Control flow / intrinsics: OpValue::None
 # ============================================================================
 
 struct Op {
-    value:                int
     kind:                 OpKind
     location:             Location
     type_annotation:      str
     deferred_return_type: str
-    pattern_kind:         PatternKind
+    value:                OpValue
 }
 
-fn make_op value:int kind:OpKind location:Location -> Op {
-    PatternKind::PatWildcard "" "" location kind value Op
+fn make_op kind:OpKind location:Location -> Op {
+    OpValue::None "" "" location kind Op
 }
 
 fn make_op_str value:str kind:OpKind location:Location -> Op {
-    PatternKind::PatWildcard "" "" location kind value (int) Op
+    value OpValue::Str "" "" location kind Op
 }
 
-fn make_op_annotated value:int kind:OpKind location:Location annotation:str -> Op {
-    PatternKind::PatWildcard "" annotation location kind value Op
+fn make_op_int value:int kind:OpKind location:Location -> Op {
+    value OpValue::Int "" "" location kind Op
 }
 
-fn make_op_pattern value:int kind:OpKind location:Location pattern_kind:PatternKind -> Op {
-    pattern_kind "" "" location kind value Op
+fn make_op_annotated kind:OpKind location:Location annotation:str -> Op {
+    OpValue::None "" annotation location kind Op
+}
+
+fn make_op_v value:OpValue kind:OpKind location:Location -> Op {
+    value "" "" location kind Op
 }
 
 fn clone_ops ops:List[Op] -> List[Op] {
     List::new(List[Op]) = result
     for source_op in ops.iter do
-        source_op Op::pattern_kind source_op Op::deferred_return_type source_op Op::type_annotation source_op Op::location source_op Op::kind source_op Op::value Op result.push
+        source_op.value source_op.deferred_return_type source_op.type_annotation source_op.location source_op.kind Op result.push
     done
     result
 }
@@ -499,7 +504,7 @@ fn substitute_ops_types ops:List[Op] subs:Map[str str] {
     for sub_op in ops.iter do
         if OpKind::OpTypeCast sub_op Op::kind == then
             subs sub_op op_str_value substitute_type_params = new_cast_type
-            new_cast_type (int) sub_op Op::set_value
+            new_cast_type OpValue::Str sub_op Op::set_value
         fi
         if "" sub_op Op::type_annotation != then
             subs sub_op Op::type_annotation substitute_type_params = new_annot
@@ -513,11 +518,21 @@ fn substitute_ops_types ops:List[Op] subs:Map[str str] {
 }
 
 fn op_str_value op:Op -> str {
-    op Op::value(str)
+    if op.value OpValue::Str(value) is then
+        value return
+    fi
+    "Internal error: op_str_value called on non-Str op\n" eprint
+    1 exit
+    ""
 }
 
 fn op_int_value op:Op -> int {
-    op Op::value
+    if op.value OpValue::Int(value) is then
+        value return
+    fi
+    "Internal error: op_int_value called on non-Int op\n" eprint
+    1 exit
+    0
 }
 
 # ============================================================================
@@ -635,57 +650,107 @@ struct StructPattern {
     bindings:    Map[str str]
 }
 
+enum LiteralValue {
+    Int (int)
+    Str (str)
+    Bool (bool)
+    Char (int)
+}
+
 struct LiteralPattern {
-    value: int
-    typ:   str
+    value: LiteralValue
     raw:   str
 }
 
+# PatternValue — tagged-union payload carried by OpMatchArm. Each match arm
+# stores one of these in MatchArm::pattern_value; the variant tag both
+# discriminates pattern shape and provides a typed payload.
+
+enum PatternValue {
+    Struct (StructPattern)
+    EnumVariant (EnumVariant)
+    Literal (LiteralPattern)
+}
+
+# OpValue — tagged-union payload carried by every Op (#133). The variant
+# tag identifies the payload type; `kind: OpKind` discriminates among Ops
+# that share a payload type. `None` is used by ops without a payload
+# (control flow, intrinsics, arithmetic).
+
+enum OpValue {
+    None
+    EnumVariant (EnumVariant)
+    OpList (List[Op])
+    Struct (CasaStruct)
+    StructLit (StructLiteral)
+    Match (MatchArm)
+    Str (str)
+    Int (int)
+}
+
+fn enum_variant_of op:Op -> EnumVariant {
+    if op.value OpValue::EnumVariant(variant) is then
+        variant return
+    fi
+    "Internal error: enum_variant_of called on non-EnumVariant op\n" eprint
+    1 exit
+    Option::None(Option[int]) "" "" make_enum_variant
+}
+
+fn op_list_of op:Op -> List[Op] {
+    if op.value OpValue::OpList(items) is then
+        items return
+    fi
+    "Internal error: op_list_of called on non-OpList op\n" eprint
+    1 exit
+    List::new(List[Op])
+}
+
+fn casa_struct_of op:Op -> CasaStruct {
+    if op.value OpValue::Struct(casa_struct) is then
+        casa_struct return
+    fi
+    "Internal error: casa_struct_of called on non-Struct op\n" eprint
+    1 exit
+    List::new(List[str]) empty_location List::new(List[Member]) "" CasaStruct
+}
+
+fn struct_literal_of op:Op -> StructLiteral {
+    if op.value OpValue::StructLit(literal) is then
+        literal return
+    fi
+    "Internal error: struct_literal_of called on non-StructLit op\n" eprint
+    1 exit
+    List::new(List[str]) "" StructLiteral
+}
 # MatchArm — wrapper stored on OpMatchArm.value. Carries the pattern payload
-# pointer (StructPattern / EnumVariant / LiteralPattern, interpreted per
-# Op.pattern_kind) and an optional guard expression. `guard_ops` is empty for
-# unguarded arms; when non-empty it is compiled after pattern bindings and
-# produces a bool that diverts execution to the next arm when false.
+# (typed via PatternValue) and an optional guard expression. `guard_ops` is
+# empty for unguarded arms; when non-empty it is compiled after pattern
+# bindings and produces a bool that diverts execution to the next arm when
+# false.
 
 struct MatchArm {
-    pattern_value: int
+    pattern_value: PatternValue
     guard_ops:     List[Op]
 }
 
-fn make_match_arm pattern_value:int guard_ops:List[Op] -> MatchArm {
+fn make_match_arm pattern_value:PatternValue guard_ops:List[Op] -> MatchArm {
     guard_ops pattern_value MatchArm
 }
 
-# ============================================================================
-# PatternKind — discriminator for OpMatchArm pattern shape.
-#
-# Every match-arm Op carries its PatternKind directly in Op.pattern_kind.
-# Ops of other kinds keep a default of PatternKind::PatWildcard; the field
-# is only meaningful when Op.kind == OpKind::OpMatchArm.
-# ============================================================================
-
-enum PatternKind {
-    PatStruct
-    PatEnumVariant
-    PatLiteral
-    PatWildcard
-}
-
-impl PatternKind {
-    fn hash self:PatternKind -> int { self (int) int_hash }
-    fn eq self:PatternKind other:PatternKind -> bool { self other == }
-}
-
-fn pattern_kind op:Op -> PatternKind {
-    op Op::pattern_kind
-}
-
 fn match_arm_of op:Op -> MatchArm {
-    op Op::value(MatchArm)
+    if op.value OpValue::Match(arm) is then
+        arm return
+    fi
+    "Internal error: match_arm_of called on non-Match op\n" eprint
+    1 exit
+    List::new(List[Op])
+    "" 0 LiteralValue::Int LiteralPattern PatternValue::Literal
+    make_match_arm
 }
 
-fn pattern_value_of op:Op -> int {
-    op match_arm_of MatchArm::pattern_value
+fn pattern_value_of op:Op -> PatternValue {
+    op match_arm_of.pattern_value
 }
 
 fn pattern_guard_ops op:Op -> List[Op] {

@@ -352,7 +352,7 @@ fn compile_while_block compiler:BytecodeCompiler op:Op op_index:int bytecode:Lis
 # ============================================================================
 # Compile match block
 # ============================================================================
-# compile_match_op — per-arm bytecode entry point dispatching on PatternKind.
+# compile_match_op — per-arm bytecode entry point dispatching on PatternValue.
 # Replaces the three former compile_match_arm_* helpers and consolidates
 # literal / enum / struct emission behind a single pattern-driven function.
 
@@ -376,6 +376,11 @@ fn emit_struct_arm compiler:BytecodeCompiler struct_pattern:StructPattern byteco
     done
 }
 
+fn emit_int_eq value:int bytecode:List[Inst] {
+    value InstKind::InstPush make_inst_int bytecode.push
+    InstKind::InstEq make_inst bytecode.push
+}
+
 fn emit_literal_arm
     compiler:BytecodeCompiler
     literal_pattern:LiteralPattern
@@ -385,15 +390,16 @@ fn emit_literal_arm
 {
     if is_last then return fi
     InstKind::InstDup make_inst bytecode.push
-    if "str" literal_pattern LiteralPattern::typ == then
-        literal_pattern LiteralPattern::value(str) = str_value
-        str_value compiler intern_string = str_index
-        str_index InstKind::InstPushStr make_inst_int bytecode.push
-        InstKind::InstStrEq make_inst bytecode.push
-    else
-        literal_pattern LiteralPattern::value InstKind::InstPush make_inst_int bytecode.push
-        InstKind::InstEq make_inst bytecode.push
-    fi
+    literal_pattern.value match
+        LiteralValue::Str(str_value) => {
+            str_value compiler intern_string = str_index
+            str_index InstKind::InstPushStr make_inst_int bytecode.push
+            InstKind::InstStrEq make_inst bytecode.push
+        }
+        LiteralValue::Int(int_value) => { bytecode int_value emit_int_eq }
+        LiteralValue::Char(char_value) => { bytecode char_value emit_int_eq }
+        LiteralValue::Bool(bool_value) => { bytecode bool_value (int) emit_int_eq }
+    end
     next_arm.unwrap InstKind::InstJumpNe make_inst_int bytecode.push
 }
 
@@ -451,21 +457,17 @@ fn compile_match_op
     next_arm:Option[int]
     bytecode:List[Inst]
 {
-    op pattern_kind match
-        PatternKind::PatStruct => {
-            op pattern_value_of (StructPattern) = struct_pattern
+    op pattern_value_of match
+        PatternValue::Struct(struct_pattern) => {
             bytecode struct_pattern compiler emit_struct_arm
         }
-        PatternKind::PatLiteral => {
-            op pattern_value_of (LiteralPattern) = literal_pattern
+        PatternValue::Literal(literal_pattern) => {
             bytecode next_arm is_last literal_pattern compiler emit_literal_arm
         }
-        PatternKind::PatEnumVariant => {
-            op pattern_value_of (EnumVariant) = variant
+        PatternValue::EnumVariant(variant) => {
             op pattern_is_wildcard = is_wildcard
             bytecode next_arm is_last is_wildcard variant compiler emit_enum_arm
         }
-        PatternKind::PatWildcard => { }
     end
     op pattern_guard_ops = guard_ops
     if guard_ops.length 0 != then
@@ -526,7 +528,7 @@ fn compile_match_block compiler:BytecodeCompiler op:Op op_index:int bytecode:Lis
 # ============================================================================
 
 fn compile_struct_new compiler:BytecodeCompiler op:Op bytecode:List[Inst] {
-    op Op::value(CasaStruct) = casa_struct
+    op casa_struct_of = casa_struct
     casa_struct CasaStruct::members.length = count
     count WORD_SIZE * InstKind::InstPush make_inst_int bytecode.push
     InstKind::InstHeapAlloc make_inst bytecode.push
@@ -609,7 +611,7 @@ fn compile_enum_variant
 # ============================================================================
 
 fn compile_is_check compiler:BytecodeCompiler op:Op bytecode:List[Inst] {
-    op Op::value(EnumVariant) = variant
+    op enum_variant_of = variant
     variant EnumVariant::enum_name = enum_name
     enum_name compiler.store.enums.get.unwrap = casa_enum
 
@@ -669,7 +671,7 @@ fn compile_is_check compiler:BytecodeCompiler op:Op bytecode:List[Inst] {
 # ============================================================================
 
 fn compile_struct_literal compiler:BytecodeCompiler op:Op bytecode:List[Inst] {
-    op Op::value(StructLiteral) = literal
+    op struct_literal_of = literal
     literal StructLiteral::struct_name compiler.store.structs.get.unwrap = casa_struct
     casa_struct CasaStruct::members.length = count
 
@@ -712,7 +714,7 @@ fn compile_struct_literal compiler:BytecodeCompiler op:Op bytecode:List[Inst] {
 # ============================================================================
 
 fn compile_push_array compiler:BytecodeCompiler op:Op bytecode:List[Inst] {
-    op Op::value(List[Op]) = items
+    op op_list_of = items
     items.length = length
 
     # Compile items in reverse order
@@ -961,7 +963,7 @@ fn compile_op compiler:BytecodeCompiler op:Op op_index:int bytecode:List[Inst] {
     elif OpKind::OpImportFile kind == OpKind::OpTypeCast kind == || then
         # No instruction emitted
     elif OpKind::OpPushEnumVariant kind == then
-        op Op::value(EnumVariant) = variant
+        op enum_variant_of = variant
         variant EnumVariant::enum_name compiler.store.enums.get.unwrap = casa_enum
         if casa_enum has_inner_values then
             bytecode casa_enum variant compiler compile_enum_variant
