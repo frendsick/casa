@@ -160,6 +160,46 @@ Map::new (Map[str int]) = m
 
 The compiler sees that `Map::new` requires `[K: Hashable, V]`, determines `K=str` from the type cast `(Map[str int])`, verifies that `str` satisfies `Hashable`, and injects `&str::hash` and `&str::eq` behind the scenes.
 
+## Built-in Trait: `Eq`
+
+Equality comparison. The required method is `eq`; the trait provides a default `ne` implemented as `!eq`.
+
+```casa
+trait Eq {
+    fn eq self:self other:self -> bool
+    fn ne self:self other:self -> bool { other self.eq ! }
+}
+```
+
+Built-in implementations: `int`, `bool`, `char`, `str`, `cstr`, `ptr`.
+
+A type satisfies `Eq` by providing `Type::eq self:Type other:Type -> bool`. The `ne` default is auto-instantiated for any satisfying type, so `x.ne y` works without writing it.
+
+## Built-in Trait: `Ord`
+
+Total ordering. The required method is `lt`; the defaults `le`, `gt`, and `ge` are derived from it.
+
+```casa
+trait Ord {
+    fn lt self:self other:self -> bool
+    fn le self:self other:self -> bool { self other.lt ! }
+    fn gt self:self other:self -> bool { self other.lt }
+    fn ge self:self other:self -> bool { other self.lt ! }
+}
+```
+
+Built-in implementations: `int`, `char`. Lexicographic ordering for `str` is intentionally out of scope.
+
+## Built-in Trait: `Word`
+
+Marker trait for register-sized values that fit in one stack slot. It declares no methods:
+
+```casa
+trait Word { }
+```
+
+It is used as a bound on builtins that require single-slot operands (for example, syscall and `store*` arguments). Primitive types, enums, struct refs, and array refs satisfy `Word`; multi-slot value types do not.
+
 ## Built-in Trait: `Hashable`
 
 The standard library defines the `Hashable` trait and provides implementations for `str` and `int`:
