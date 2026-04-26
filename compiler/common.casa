@@ -449,57 +449,53 @@ fn make_token value:str kind:TokenKind location:Location -> Token {
 # ============================================================================
 # Op value types
 #
-# Migration in progress (#133): Op::value:int + Op::kind:OpKind are being
-# replaced by `value_v: OpValue`, a tagged enum with typed payloads. During
-# transition both fields exist on every Op. Migrated kinds carry their
-# payload in `value_v` and leave `value:int = 0`. The remaining ops are
-# control-flow / intrinsics that do not carry a payload.
-# Migrated payloads:
-#   - PUSH_ENUM_VARIANT, IS_CHECK: value_v = OpValue::EnumVariant(EnumVariant)
-#   - PUSH_ARRAY: value_v = OpValue::OpList(List[Op])
-#   - STRUCT_NEW: value_v = OpValue::Struct(CasaStruct)
-#   - STRUCT_LITERAL: value_v = OpValue::StructLit(StructLiteral)
-#   - MATCH_ARM: value_v = OpValue::Match(MatchArm)
+# Op carries its payload in `value: OpValue`, a tagged enum where the
+# variant tag identifies the payload type and `kind: OpKind` discriminates
+# among Ops that share a payload type. Mapping from OpKind to payload:
+#   - PUSH_ENUM_VARIANT, IS_CHECK: OpValue::EnumVariant(EnumVariant)
+#   - PUSH_ARRAY: OpValue::OpList(List[Op])
+#   - STRUCT_NEW: OpValue::Struct(CasaStruct)
+#   - STRUCT_LITERAL: OpValue::StructLit(StructLiteral)
+#   - MATCH_ARM: OpValue::Match(MatchArm)
 #   - PUSH_STR, FN_CALL, FN_PUSH, IDENTIFIER, IMPORT_FILE, ASSIGN_VAR,
 #     PUSH_VAR, PUSH_CAPTURE, ASSIGN_DEC, ASSIGN_INC, TYPE_CAST:
-#     value_v = OpValue::Str(str)
-#   - PUSH_INT, PUSH_CHAR, PUSH_BOOL, FSTRING_CONCAT:
-#     value_v = OpValue::Int(int)
+#     OpValue::Str(str)
+#   - PUSH_INT, PUSH_CHAR, PUSH_BOOL, FSTRING_CONCAT: OpValue::Int(int)
+#   - Control flow / intrinsics: OpValue::None
 # ============================================================================
 
 struct Op {
-    value:                int
     kind:                 OpKind
     location:             Location
     type_annotation:      str
     deferred_return_type: str
-    value_v:              OpValue
+    value:                OpValue
 }
 
-fn make_op value:int kind:OpKind location:Location -> Op {
-    OpValue::None "" "" location kind value Op
+fn make_op kind:OpKind location:Location -> Op {
+    OpValue::None "" "" location kind Op
 }
 
 fn make_op_str value:str kind:OpKind location:Location -> Op {
-    value OpValue::Str "" "" location kind 0 Op
+    value OpValue::Str "" "" location kind Op
 }
 
 fn make_op_int value:int kind:OpKind location:Location -> Op {
-    value OpValue::Int "" "" location kind 0 Op
+    value OpValue::Int "" "" location kind Op
 }
 
-fn make_op_annotated value:int kind:OpKind location:Location annotation:str -> Op {
-    OpValue::None "" annotation location kind value Op
+fn make_op_annotated kind:OpKind location:Location annotation:str -> Op {
+    OpValue::None "" annotation location kind Op
 }
 
 fn make_op_v value:OpValue kind:OpKind location:Location -> Op {
-    value "" "" location kind 0 Op
+    value "" "" location kind Op
 }
 
 fn clone_ops ops:List[Op] -> List[Op] {
     List::new(List[Op]) = result
     for source_op in ops.iter do
-        source_op.value_v source_op.deferred_return_type source_op.type_annotation source_op.location source_op.kind source_op.value Op result.push
+        source_op.value source_op.deferred_return_type source_op.type_annotation source_op.location source_op.kind Op result.push
     done
     result
 }
@@ -508,7 +504,7 @@ fn substitute_ops_types ops:List[Op] subs:Map[str str] {
     for sub_op in ops.iter do
         if OpKind::OpTypeCast sub_op Op::kind == then
             subs sub_op op_str_value substitute_type_params = new_cast_type
-            new_cast_type OpValue::Str sub_op Op::set_value_v
+            new_cast_type OpValue::Str sub_op Op::set_value
         fi
         if "" sub_op Op::type_annotation != then
             subs sub_op Op::type_annotation substitute_type_params = new_annot
@@ -522,7 +518,7 @@ fn substitute_ops_types ops:List[Op] subs:Map[str str] {
 }
 
 fn op_str_value op:Op -> str {
-    if op.value_v OpValue::Str(value) is then
+    if op.value OpValue::Str(value) is then
         value return
     fi
     "Internal error: op_str_value called on non-Str op\n" eprint
@@ -531,7 +527,7 @@ fn op_str_value op:Op -> str {
 }
 
 fn op_int_value op:Op -> int {
-    if op.value_v OpValue::Int(value) is then
+    if op.value OpValue::Int(value) is then
         value return
     fi
     "Internal error: op_int_value called on non-Int op\n" eprint
@@ -676,10 +672,10 @@ enum PatternValue {
     Literal (LiteralPattern)
 }
 
-# OpValue — tagged-union payload carried by Op, replacing the polymorphic
-# Op::value:int + Op::kind discriminator pair (#133). Migrated incrementally:
-# each commit adds one variant for the matching OpKind(s). `None` is the
-# default for ops whose value still lives in `value:int` during transition.
+# OpValue — tagged-union payload carried by every Op (#133). The variant
+# tag identifies the payload type; `kind: OpKind` discriminates among Ops
+# that share a payload type. `None` is used by ops without a payload
+# (control flow, intrinsics, arithmetic).
 
 enum OpValue {
     None
@@ -693,7 +689,7 @@ enum OpValue {
 }
 
 fn enum_variant_of op:Op -> EnumVariant {
-    if op.value_v OpValue::EnumVariant(variant) is then
+    if op.value OpValue::EnumVariant(variant) is then
         variant return
     fi
     "Internal error: enum_variant_of called on non-EnumVariant op\n" eprint
@@ -702,7 +698,7 @@ fn enum_variant_of op:Op -> EnumVariant {
 }
 
 fn op_list_of op:Op -> List[Op] {
-    if op.value_v OpValue::OpList(items) is then
+    if op.value OpValue::OpList(items) is then
         items return
     fi
     "Internal error: op_list_of called on non-OpList op\n" eprint
@@ -711,7 +707,7 @@ fn op_list_of op:Op -> List[Op] {
 }
 
 fn casa_struct_of op:Op -> CasaStruct {
-    if op.value_v OpValue::Struct(casa_struct) is then
+    if op.value OpValue::Struct(casa_struct) is then
         casa_struct return
     fi
     "Internal error: casa_struct_of called on non-Struct op\n" eprint
@@ -720,7 +716,7 @@ fn casa_struct_of op:Op -> CasaStruct {
 }
 
 fn struct_literal_of op:Op -> StructLiteral {
-    if op.value_v OpValue::StructLit(literal) is then
+    if op.value OpValue::StructLit(literal) is then
         literal return
     fi
     "Internal error: struct_literal_of called on non-StructLit op\n" eprint
@@ -743,7 +739,7 @@ fn make_match_arm pattern_value:PatternValue guard_ops:List[Op] -> MatchArm {
 }
 
 fn match_arm_of op:Op -> MatchArm {
-    if op.value_v OpValue::Match(arm) is then
+    if op.value OpValue::Match(arm) is then
         arm return
     fi
     "Internal error: match_arm_of called on non-Match op\n" eprint
