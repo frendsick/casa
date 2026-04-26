@@ -433,7 +433,17 @@ The `(TypeName)` syntax casts the top of the stack to the given type. This is a 
 buffer (ptr) load64 (int)    # cast int -> int (no-op here, but useful for generic data)
 ```
 
-This is useful when working with generic data structures that return `any`.
+## Printing Values
+
+`print` requires the value's type to implement the [`Display` trait](traits.md). The primitives `int`, `bool`, `char`, `str`, and `cstr` are dispatched directly to specialized output instructions; user types must provide a `to_str self -> str` method, which the compiler invokes before printing the resulting string.
+
+```casa
+struct Point { x: int y: int }
+impl Point {
+    fn to_str self:Point -> str { f"({self.x}, {self.y})" }
+}
+1 2 Point print    # (1, 2)
+```
 
 ## Comments
 

@@ -40,13 +40,13 @@ See [`examples/stack_operations.casa`](../examples/stack_operations.casa).
 
 ### `print`
 
-Prints the top of the stack to stdout.
+Prints the top of the stack to stdout. Requires the value's type to implement the `Display` trait.
 
-**Signature:** `print a:any`
+**Signature:** `print[T: Display] a:T`
 
 **Stack effect:** `a -> None`
 
-Integers print as decimal numbers. Booleans print as `true` or `false`. Strings, characters, and C strings print as text.
+The primitives `int`, `bool`, `char`, `str`, and `cstr` already implement `Display` and are emitted through specialized output instructions. Other types must implement `Display` (a `to_str self -> str` method); the compiler lowers `value print` to `value to_str` followed by a string print.
 
 ```casa
 42 print                    # 42
