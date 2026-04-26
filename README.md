@@ -56,6 +56,16 @@ Compile with a custom output name:
 # 6765
 ```
 
+### Building the Compiler from Source
+
+The compiler is self-hosted. From the repo root, build it with the existing `casac`:
+
+```sh
+./casac casa.casa -o casac -L lib
+```
+
+The `-L lib` flag adds `lib/` to the module import search path so `compiler/` sources can resolve `import "std"` and similar module-style imports.
+
 ## CLI Usage
 
 ```
@@ -129,10 +139,10 @@ Casa ships with an LSP language server written in Casa. It provides diagnostics,
 
 ### Building the Language Server
 
-Compile the LSP server with the Casa compiler:
+Compile the LSP server with the Casa compiler from the repo root:
 
 ```sh
-./casac lsp.casa -o casa_lsp
+./casac lsp.casa -o casa_lsp -L lib
 ```
 
 ### Editor Configuration
@@ -170,8 +180,10 @@ Casa ships with `casafmt`, a self-hosted autoformatter. It reads Casa source fro
 
 ### Building the Formatter
 
+From the repo root:
+
 ```sh
-./casac formatter/format.casa -o casafmt
+./casac formatter/format.casa -o casafmt -L lib
 ```
 
 ### Manual Usage

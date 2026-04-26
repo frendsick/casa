@@ -4,10 +4,10 @@ Casa includes an LSP language server that provides real-time compiler diagnostic
 
 ## Setup
 
-Compile the Casa language server:
+Compile the Casa language server from the repo root:
 
 ```sh
-./casac lsp.casa -o casa_lsp
+./casac lsp.casa -o casa_lsp -L lib
 ```
 
 ## Running
