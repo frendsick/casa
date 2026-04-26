@@ -234,10 +234,9 @@ A variable's type is set on first assignment and cannot change:
 "hi" = x     # ERROR: cannot assign str to int variable
 ```
 
-The `= name:type` form annotates the variable type explicitly. The type checker verifies the stack value is compatible and uses the annotated type for the variable. This is useful for narrowing `any` or bare `Option` to a concrete type:
+The `= name:type` form annotates the variable type explicitly. The type checker verifies the stack value is compatible and uses the annotated type for the variable. This is useful for narrowing a bare `Option` (or other unresolved generic) to a concrete type:
 
 ```casa
-42 (any) = x:int            # narrow any to int
 Option::None = empty:Option[int]    # narrow bare Option to Option[int]
 ```
 

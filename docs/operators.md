@@ -149,7 +149,6 @@ The `= name:type` form lets you annotate the type of a variable at assignment ti
 ```casa
 42 = x:int                  # explicit int annotation
 Option::None = empty:Option[int]    # narrow bare Option to Option[int]
-42 (any) = val:int          # narrow any to int
 ```
 
 Variables are created on first assignment. See [Functions and Lambdas -- Variables](functions-and-lambdas.md#variables) for scoping rules.
