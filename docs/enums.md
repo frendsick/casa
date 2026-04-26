@@ -248,6 +248,10 @@ This is resolved at compile time.
 
 See [`examples/enum.casa`](../examples/enum.casa).
 
+## Auto-derived `Hashable`
+
+Enums whose variants carry no inner values are automatically `Hashable`, so they can be used as `Map` keys or `Set` elements without writing an `impl` block. See [Traits -- Auto-derived `Hashable` for Payload-Free Enums](traits.md#auto-derived-hashable-for-payload-free-enums).
+
 ## See Also
 
 - [Control Flow -- Match](control-flow.md#match) -- full match syntax, destructuring, and exhaustiveness rules

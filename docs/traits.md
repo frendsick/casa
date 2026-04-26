@@ -55,6 +55,22 @@ impl Point {
 
 `Point` now satisfies `Hashable` and can be used as a `Map` key or `Set` element.
 
+## Auto-derived `Hashable` for Payload-Free Enums
+
+Enums whose variants carry no inner values automatically satisfy `Hashable` — no manual `impl` block is needed. The compiler synthesizes `hash` from the variant discriminant and `eq` from `==`:
+
+```casa
+enum Color { Red Green Blue }
+
+# Works without writing impl Color { fn hash ... fn eq ... }
+Map::new(Map[Color int]) = scores
+Color::Red 10 scores.set = scores
+```
+
+Enums with payload-bearing variants (`Some(T)`, `Circle(int)`, etc.) are not auto-derived; for those, write an explicit `impl` if needed.
+
+A user-written `impl` always wins. If you define `Color::hash` or `Color::eq` manually, the synthesized version is suppressed and your implementation is used.
+
 ## Trait Bounds
 
 Functions and `impl` blocks declare trait bounds on type variables using the `K: TraitName` syntax inside square brackets. Multiple type variables are separated by commas.
