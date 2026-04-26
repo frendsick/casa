@@ -175,6 +175,8 @@ Built-in implementations: `int`, `bool`, `char`, `str`, `cstr`, `ptr`.
 
 A type satisfies `Eq` by providing `Type::eq self:Type other:Type -> bool`. The `ne` default is auto-instantiated for any satisfying type, so `x.ne y` works without writing it.
 
+The `==` and `!=` operators are bounded by `Eq`. Built-in primitives and enums get direct bytecode comparison, but a user-defined struct used with `==` must provide `impl T { fn eq ... }`; the operator then lowers to `T::eq`. Comparing values whose type does not satisfy `Eq` is a compile-time error.
+
 ## Built-in Trait: `Ord`
 
 Total ordering. The required method is `lt`; the defaults `le`, `gt`, and `ge` are derived from it.
@@ -189,6 +191,8 @@ trait Ord {
 ```
 
 Built-in implementations: `int`, `char`. Lexicographic ordering for `str` is intentionally out of scope.
+
+The `<`, `<=`, `>`, and `>=` operators are bounded by `Ord`. Built-in primitives (excluding `str`) and enums use direct bytecode ordering; user-defined types must provide `impl T { fn lt ... }` and the operator lowers to the corresponding trait method (`lt`, `le`, `gt`, `ge`). A type with `impl Eq` but no `impl Ord` is rejected at compile time when used with an ordering operator.
 
 ## Built-in Trait: `Word`
 

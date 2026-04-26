@@ -684,38 +684,103 @@ fn check_arithmetic tc:TypeChecker op:Op {
 # ============================================================================
 # Check comparison operations
 # ============================================================================
+# Primitive types whose `==`/`<` etc. are emitted as direct bytecode rather
+# than dispatched through Eq/Ord trait methods. `str` is handled separately
+# because it only supports `==`/`!=` and carries a type annotation.
 
-fn check_comparison tc:TypeChecker op:Op {
+fn is_primitive_compare_type typ:str -> bool {
+    "int" typ ==
+    "bool" typ == ||
+    "char" typ == ||
+    "cstr" typ == ||
+    "ptr" typ == ||
+}
+
+fn comparison_method_name cmp_value:OpValue -> str {
+    if cmp_value OpValue::Eq is then "eq" return fi
+    if cmp_value OpValue::Ne is then "ne" return fi
+    if cmp_value OpValue::Lt is then "lt" return fi
+    if cmp_value OpValue::Le is then "le" return fi
+    if cmp_value OpValue::Gt is then "gt" return fi
+    "ge"
+}
+
+fn comparison_op_str cmp_value:OpValue -> str {
+    if cmp_value OpValue::Eq is then "==" return fi
+    if cmp_value OpValue::Ne is then "!=" return fi
+    if cmp_value OpValue::Lt is then "<" return fi
+    if cmp_value OpValue::Le is then "<=" return fi
+    if cmp_value OpValue::Gt is then ">" return fi
+    ">="
+}
+
+fn check_comparison
+    tc:TypeChecker
+    op:Op
+    ops:List[Op]
+    op_index:int
+    function_opt:Option[Function]
+-> int {
+    op.value = cmp_value
+    cmp_value OpValue::Eq is cmp_value OpValue::Ne is || = is_eq_op
+    if is_eq_op then "Eq" else "Ord" fi = trait_name
     tc stack_pop = type1
     tc stack_pop = type2
+    # Stack-underflow placeholder on either side: defer to caller-level
+    # inference (lambda param synthesis, generic body deferral). Skip both
+    # the same-type rule and the trait-bound check.
+    if TYPE_UNKNOWN type1 == TYPE_UNKNOWN type2 == || then
+        "bool" tc stack_push
+        op_index return
+    fi
     type1 resolve_match_type = base1
     type2 resolve_match_type = base2
     base1 tc.store.enums.get.is_some = is_enum1
     base2 tc.store.enums.get.is_some = is_enum2
+    # Same-type rule applies before any specialization.
+    if type1 type2 != then
+        f"Cannot compare `{type2}` with `{type1}`" tc raise_type_mismatch
+        "bool" tc stack_push
+        op_index return
+    fi
+    # Enums: tag comparison via bytecode; data-carrying variants need annotation.
     if is_enum1 is_enum2 || then
-        if type1 type2 != then
-            f"Cannot compare `{type2}` with `{type1}`" tc raise_type_mismatch
-        fi
-        # Annotate for bytecode: data-carrying enums need heap tag comparison
         if is_enum1 then
             base1 tc.store.enums.get.unwrap = casa_enum
             if casa_enum has_inner_values then
                 base1 op Op::set_type_annotation
             fi
         fi
-    elif "str" type1 == "str" type2 == || then
-        if type1 type2 != then
-            f"Cannot compare `{type2}` with `{type1}`" tc raise_type_mismatch
-        fi
-        if
-        op.value OpValue::Eq is !
-        op.value OpValue::Ne is ! &&
-        then
+        "bool" tc stack_push
+        op_index return
+    fi
+    # str: only ==/!=, annotated for the bytecode emitter.
+    if "str" type1 == then
+        if is_eq_op ! then
             "Type `str` only supports `==` and `!=` comparison" tc raise_type_mismatch
         fi
         "str" op Op::set_type_annotation
+        "bool" tc stack_push
+        op_index return
     fi
-    "bool" tc stack_push
+    # Other primitives: bytecode handles the comparison directly.
+    if type1 is_primitive_compare_type then
+        "bool" tc stack_push
+        op_index return
+    fi
+    # User-defined types must satisfy Eq (or Ord) explicitly.
+    if function_opt trait_name type1 type_satisfies_trait ! then
+        cmp_value comparison_op_str = cmp_str
+        op Op::location f"Type `{type1}` cannot be compared with `{cmp_str}`: does not satisfy trait `{trait_name}`" ErrorKind::MissingTraitMethod add_error
+        "bool" tc stack_push
+        op_index return
+    fi
+    # Lower the operator to the corresponding trait method call.
+    cmp_value comparison_method_name = method_name
+    type2 tc stack_push
+    type1 tc stack_push
+    method_name OpValue::MethodCall op Op::set_value
+    function_opt op_index ops op tc check_method_call
 }
 
 # ============================================================================
@@ -2429,7 +2494,7 @@ fn run_type_check_ops checker:TypeChecker ops:List[Op] function_opt:Option[Funct
         op_value OpValue::Gt is ||
         op_value OpValue::Ge is ||
         then
-            current_op checker check_comparison
+            function_opt op_index ops current_op checker check_comparison = op_index
             continue
         fi
 
