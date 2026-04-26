@@ -8,19 +8,23 @@ import "std"
 # Types
 # ---------------------------------------------------------------------------
 
-enum ArgKind {
-    Positional
-    Flag
-    Option
-    MultiOption
+struct PositionalArg {
+    name:      str
+    help_text: str
 }
 
-struct ArgDef {
+struct FlaggedArg {
     name:       str
     short_flag: str
     long_flag:  str
     help_text:  str
-    kind:       ArgKind
+}
+
+enum ArgDef {
+    Positional (PositionalArg)
+    Flag (FlaggedArg)
+    Option (FlaggedArg)
+    MultiOption (FlaggedArg)
 }
 
 struct ArgParser {
@@ -51,43 +55,19 @@ impl ArgParser {
     }
 
     fn add_positional self:ArgParser name:str help_text:str {
-        ArgDef {
-            name: name
-            short_flag: ""
-            long_flag: ""
-            help_text: help_text
-            kind: ArgKind::Positional
-        } self.definitions.push
+        help_text name PositionalArg ArgDef::Positional self.definitions.push
     }
 
     fn add_flag self:ArgParser name:str short_flag:str long_flag:str help_text:str {
-        ArgDef {
-            name: name
-            short_flag: short_flag
-            long_flag: long_flag
-            help_text: help_text
-            kind: ArgKind::Flag
-        } self.definitions.push
+        help_text long_flag short_flag name FlaggedArg ArgDef::Flag self.definitions.push
     }
 
     fn add_option self:ArgParser name:str short_flag:str long_flag:str help_text:str {
-        ArgDef {
-            name: name
-            short_flag: short_flag
-            long_flag: long_flag
-            help_text: help_text
-            kind: ArgKind::Option
-        } self.definitions.push
+        help_text long_flag short_flag name FlaggedArg ArgDef::Option self.definitions.push
     }
 
     fn add_multi_option self:ArgParser name:str short_flag:str long_flag:str help_text:str {
-        ArgDef {
-            name: name
-            short_flag: short_flag
-            long_flag: long_flag
-            help_text: help_text
-            kind: ArgKind::MultiOption
-        } self.definitions.push
+        help_text long_flag short_flag name FlaggedArg ArgDef::MultiOption self.definitions.push
     }
 
     fn parse_args self:ArgParser -> ParsedArgs {
@@ -96,11 +76,14 @@ impl ArgParser {
 
         # Initialize flag defaults and multi-option lists
         for init_def in self.definitions.iter do
-            if init_def.kind ArgKind::Flag == then
-                init_def.name "0" values.set = values
-            elif init_def.kind ArgKind::MultiOption == then
-                init_def.name List::new(List[str]) multi_values.set = multi_values
-            fi
+            init_def match
+                ArgDef::Flag(init_flag) => init_flag.name "0" values.set = values
+                ArgDef::MultiOption(init_multi) => {
+                    init_multi.name List::new(List[str]) multi_values.set = multi_values
+                }
+                ArgDef::Positional => { }
+                ArgDef::Option => { }
+            end
         done
 
         0 = pos_index
@@ -134,22 +117,25 @@ impl ArgParser {
         arg_value:str
     -> Map[str str] Map[str List[str]] int {
         if arg_value self.find_def Option::Some(matched_def) is then
-            if matched_def.kind ArgKind::Flag == then
-                matched_def.name "1" values.set = values
-            elif matched_def.kind ArgKind::Option == then
-                1 += arg_index
-                if argc arg_index >= then
-                    f"argument {arg_value}: expected one argument" self.print_usage_error
-                fi
-                matched_def.name arg_index get_arg values.set = values
-            elif matched_def.kind ArgKind::MultiOption == then
-                1 += arg_index
-                if argc arg_index >= then
-                    f"argument {arg_value}: expected one argument" self.print_usage_error
-                fi
-                matched_def.name multi_values.get.unwrap = multi_list
-                arg_index get_arg multi_list.push
-            fi
+            matched_def match
+                ArgDef::Flag(flag_def) => flag_def.name "1" values.set = values
+                ArgDef::Option(option_def) => {
+                    1 += arg_index
+                    if argc arg_index >= then
+                        f"argument {arg_value}: expected one argument" self.print_usage_error
+                    fi
+                    option_def.name arg_index get_arg values.set = values
+                }
+                ArgDef::MultiOption(multi_def) => {
+                    1 += arg_index
+                    if argc arg_index >= then
+                        f"argument {arg_value}: expected one argument" self.print_usage_error
+                    fi
+                    multi_def.name multi_values.get.unwrap = multi_list
+                    arg_index get_arg multi_list.push
+                }
+                ArgDef::Positional => { }
+            end
         else
             f"unrecognized arguments: {arg_value}" self.print_usage_error
         fi
@@ -158,12 +144,14 @@ impl ArgParser {
 
     fn find_def self:ArgParser arg_value:str -> Option[ArgDef] {
         for find_def in self.definitions.iter do
-            if
-            arg_value find_def.short_flag ==
-            arg_value find_def.long_flag == ||
-            then
-                find_def Option::Some
-                return
+            if find_def.flagged Option::Some(found_flag) is then
+                if
+                arg_value found_flag.short_flag ==
+                arg_value found_flag.long_flag == ||
+                then
+                    find_def Option::Some
+                    return
+                fi
             fi
         done
         Option::None(Option[ArgDef])
@@ -186,7 +174,7 @@ impl ArgParser {
     fn count_positionals self:ArgParser -> int {
         0 = count
         for count_def in self.definitions.iter do
-            if count_def.kind ArgKind::Positional == then
+            if count_def ArgDef::Positional is then
                 1 += count
             fi
         done
@@ -196,9 +184,9 @@ impl ArgParser {
     fn nth_positional_name self:ArgParser target:int -> str {
         0 = nth_count
         for nth_def in self.definitions.iter do
-            if nth_def.kind ArgKind::Positional == then
+            if nth_def ArgDef::Positional(nth_pos) is then
                 if nth_count target == then
-                    nth_def.name return
+                    nth_pos.name return
                 fi
                 1 += nth_count
             fi
@@ -220,14 +208,14 @@ impl ArgParser {
         " [-h]" usage_sb.append
         # Optional arguments
         for usage_def in self.definitions.iter do
-            if usage_def.kind ArgKind::Positional != then
+            if usage_def ArgDef::Positional is ! then
                 usage_def usage_sb append_usage_optional
             fi
         done
         # Positional arguments
         for usage_def in self.definitions.iter do
-            if usage_def.kind ArgKind::Positional == then
-                f" {usage_def.name}" usage_sb.append
+            if usage_def ArgDef::Positional(usage_pos) is then
+                f" {usage_pos.name}" usage_sb.append
             fi
         done
         usage_sb.build
@@ -235,8 +223,8 @@ impl ArgParser {
 
     fn print_help_positionals self:ArgParser {
         for help_def in self.definitions.iter do
-            if help_def.kind ArgKind::Positional == then
-                help_def.help_text help_def.name print_help_line
+            if help_def ArgDef::Positional(help_pos) is then
+                help_pos.help_text help_pos.name print_help_line
             fi
         done
     }
@@ -244,8 +232,8 @@ impl ArgParser {
     fn print_help_options self:ArgParser {
         "show this help message and exit" "-h, --help" print_help_line
         for help_def in self.definitions.iter do
-            if help_def.kind ArgKind::Positional != then
-                help_def.help_text help_def build_flag_column print_help_line
+            if help_def.flagged Option::Some(opt_flag) is then
+                opt_flag.help_text help_def build_flag_column print_help_line
             fi
         done
     }
@@ -266,6 +254,24 @@ impl ArgParser {
         self.build_usage_line eprintln
         f"{self.program_name}: error: {message}" eprintln
         2 exit
+    }
+}
+
+# ---------------------------------------------------------------------------
+# ArgDef helpers
+# ---------------------------------------------------------------------------
+
+impl ArgDef {
+    fn flagged self:ArgDef -> Option[FlaggedArg] {
+        if self ArgDef::Flag(flag_arg) is then flag_arg Option::Some return fi
+        if self ArgDef::Option(opt_arg) is then opt_arg Option::Some return fi
+        if self ArgDef::MultiOption(multi_arg) is then multi_arg Option::Some return fi
+        Option::None(Option[FlaggedArg])
+    }
+
+    fn takes_value self:ArgDef -> bool {
+        self ArgDef::Option is
+        self ArgDef::MultiOption is ||
     }
 }
 
@@ -292,18 +298,16 @@ impl ParsedArgs {
 # ---------------------------------------------------------------------------
 
 fn append_usage_optional usage_sb:StringBuilder definition:ArgDef {
+    if definition.flagged Option::Some(opt_flag) is ! then return fi
     " [" usage_sb.append
-    if "" definition.short_flag != then
-        definition.short_flag usage_sb.append
+    if "" opt_flag.short_flag != then
+        opt_flag.short_flag usage_sb.append
     else
-        definition.long_flag usage_sb.append
+        opt_flag.long_flag usage_sb.append
     fi
-    if
-    definition.kind ArgKind::Option ==
-    definition.kind ArgKind::MultiOption == ||
-    then
+    if definition.takes_value then
         " " usage_sb.append
-        definition.name metavar usage_sb.append
+        opt_flag.name metavar usage_sb.append
     fi
     "]" usage_sb.append
 }
@@ -324,21 +328,19 @@ fn metavar name:str -> str {
 
 fn build_flag_column definition:ArgDef -> str {
     StringBuilder::new = col_sb
-    if "" definition.short_flag != then
-        definition.short_flag col_sb.append
-        if "" definition.long_flag != then
+    if definition.flagged Option::Some(col_flag) is ! then col_sb.build return fi
+    if "" col_flag.short_flag != then
+        col_flag.short_flag col_sb.append
+        if "" col_flag.long_flag != then
             ", " col_sb.append
         fi
     fi
-    if "" definition.long_flag != then
-        definition.long_flag col_sb.append
+    if "" col_flag.long_flag != then
+        col_flag.long_flag col_sb.append
     fi
-    if
-    definition.kind ArgKind::Option ==
-    definition.kind ArgKind::MultiOption == ||
-    then
+    if definition.takes_value then
         " " col_sb.append
-        definition.name metavar col_sb.append
+        col_flag.name metavar col_sb.append
     fi
     col_sb.build
 }
