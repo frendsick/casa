@@ -133,121 +133,9 @@ enum OperatorKind {
     AssignInc
 }
 
-# ============================================================================
-# OpKind enum (87 variants)
-# ============================================================================
-
-enum OpKind {
-    # Stack
-    OpDrop
-    OpDup
-    OpOver
-    OpRot
-    OpSwap
-    # IO
-    OpPrint
-    OpPrintBool
-    OpPrintChar
-    OpPrintCstr
-    OpPrintInt
-    OpPrintStr
-    OpTypeof
-    # Memory
-    OpHeapAlloc
-    OpLoad8
-    OpLoad16
-    OpLoad32
-    OpLoad64
-    OpStore8
-    OpStore16
-    OpStore32
-    OpStore64
-    # Syscalls
-    OpSyscall0
-    OpSyscall1
-    OpSyscall2
-    OpSyscall3
-    OpSyscall4
-    OpSyscall5
-    OpSyscall6
-    # Literals
-    OpPushArray
-    OpPushBool
-    OpPushChar
-    OpPushInt
-    OpPushStr
-    # Arithmetic
-    OpAdd
-    OpSub
-    OpMul
-    OpDiv
-    OpMod
-    # Bitshift
-    OpShl
-    OpShr
-    # Bitwise
-    OpBitAnd
-    OpBitOr
-    OpBitXor
-    OpBitNot
-    # Boolean
-    OpAnd
-    OpOr
-    OpNot
-    # Comparison
-    OpEq
-    OpGe
-    OpGt
-    OpLe
-    OpLt
-    OpNe
-    # Functions
-    OpFnCall
-    OpFnExec
-    OpFnPush
-    OpFnReturn
-    OpMethodCall
-    # Loops
-    OpWhileStart
-    OpWhileCondition
-    OpWhileBreak
-    OpWhileContinue
-    OpWhileEnd
-    # Conditionals
-    OpIfStart
-    OpIfCondition
-    OpIfElif
-    OpIfElse
-    OpIfEnd
-    # Variables
-    OpAssignDec
-    OpAssignInc
-    OpAssignVar
-    OpPushCapture
-    OpPushVar
-    # Enums
-    OpPushEnumVariant
-    OpIsCheck
-    # Match
-    OpMatchStart
-    OpMatchArm
-    OpMatchEnd
-    # Structs
-    OpStructNew
-    OpStructLiteral
-    # Types
-    OpTypeCast
-    # Import
-    OpImportFile
-    # F-strings
-    OpFstringConcat
-    OpFstringToStr
-    # Command-line arguments
-    OpArgc
-    OpArgv
-    # Identifier (should be resolved by parser)
-    OpIdentifier
-}
+# OpValue is defined later (after CasaStruct / EnumVariant / MatchArm / StructLiteral
+# are introduced) and discriminates every Op via 87 variants — payload-bearing
+# variants carry typed inner values, payloadless variants stand alone.
 
 # ============================================================================
 # InstKind enum (69 variants)
@@ -404,11 +292,6 @@ impl OperatorKind {
     fn eq self:OperatorKind other:OperatorKind -> bool { self other == }
 }
 
-impl OpKind {
-    fn hash self:OpKind -> int { self (int) int_hash }
-    fn eq self:OpKind other:OpKind -> bool { self other == }
-}
-
 impl InstKind {
     fn hash self:InstKind -> int { self (int) int_hash }
     fn eq self:InstKind other:InstKind -> bool { self other == }
@@ -449,62 +332,39 @@ fn make_token value:str kind:TokenKind location:Location -> Token {
 # ============================================================================
 # Op value types
 #
-# Op carries its payload in `value: OpValue`, a tagged enum where the
-# variant tag identifies the payload type and `kind: OpKind` discriminates
-# among Ops that share a payload type. Mapping from OpKind to payload:
-#   - PUSH_ENUM_VARIANT, IS_CHECK: OpValue::EnumVariant(EnumVariant)
-#   - PUSH_ARRAY: OpValue::OpList(List[Op])
-#   - STRUCT_NEW: OpValue::Struct(CasaStruct)
-#   - STRUCT_LITERAL: OpValue::StructLit(StructLiteral)
-#   - MATCH_ARM: OpValue::Match(MatchArm)
-#   - PUSH_STR, FN_CALL, FN_PUSH, IDENTIFIER, IMPORT_FILE, ASSIGN_VAR,
-#     PUSH_VAR, PUSH_CAPTURE, ASSIGN_DEC, ASSIGN_INC, TYPE_CAST:
-#     OpValue::Str(str)
-#   - PUSH_INT, PUSH_CHAR, PUSH_BOOL, FSTRING_CONCAT: OpValue::Int(int)
-#   - Control flow / intrinsics: OpValue::None
+# Op carries its discriminator and payload in `value: OpValue`, a tagged enum
+# whose 87 variants enumerate every opcode. Variants without inner values
+# stand alone (Add, Drop, IfStart, ...); payload-bearing variants pack the
+# inner value directly so call sites destructure with `is`/`match`.
 # ============================================================================
 
 struct Op {
-    kind:                 OpKind
     location:             Location
     type_annotation:      str
     deferred_return_type: str
     value:                OpValue
 }
 
-fn make_op kind:OpKind location:Location -> Op {
-    OpValue::None "" "" location kind Op
+fn make_op value:OpValue location:Location -> Op {
+    value "" "" location Op
 }
 
-fn make_op_str value:str kind:OpKind location:Location -> Op {
-    value OpValue::Str "" "" location kind Op
-}
-
-fn make_op_int value:int kind:OpKind location:Location -> Op {
-    value OpValue::Int "" "" location kind Op
-}
-
-fn make_op_annotated kind:OpKind location:Location annotation:str -> Op {
-    OpValue::None "" annotation location kind Op
-}
-
-fn make_op_v value:OpValue kind:OpKind location:Location -> Op {
-    value "" "" location kind Op
+fn make_op_annotated value:OpValue location:Location annotation:str -> Op {
+    value "" annotation location Op
 }
 
 fn clone_ops ops:List[Op] -> List[Op] {
     List::new(List[Op]) = result
     for source_op in ops.iter do
-        source_op.value source_op.deferred_return_type source_op.type_annotation source_op.location source_op.kind Op result.push
+        source_op.value source_op.deferred_return_type source_op.type_annotation source_op.location Op result.push
     done
     result
 }
 
 fn substitute_ops_types ops:List[Op] subs:Map[str str] {
     for sub_op in ops.iter do
-        if OpKind::OpTypeCast sub_op Op::kind == then
-            subs sub_op op_str_value substitute_type_params = new_cast_type
-            new_cast_type OpValue::Str sub_op Op::set_value
+        if sub_op.value OpValue::TypeCast(cast_type) is then
+            subs cast_type substitute_type_params OpValue::TypeCast sub_op Op::set_value
         fi
         if "" sub_op Op::type_annotation != then
             subs sub_op Op::type_annotation substitute_type_params = new_annot
@@ -515,24 +375,6 @@ fn substitute_ops_types ops:List[Op] subs:Map[str str] {
             new_deferred sub_op Op::set_deferred_return_type
         fi
     done
-}
-
-fn op_str_value op:Op -> str {
-    if op.value OpValue::Str(value) is then
-        value return
-    fi
-    "Internal error: op_str_value called on non-Str op\n" eprint
-    1 exit
-    ""
-}
-
-fn op_int_value op:Op -> int {
-    if op.value OpValue::Int(value) is then
-        value return
-    fi
-    "Internal error: op_int_value called on non-Int op\n" eprint
-    1 exit
-    0
 }
 
 # ============================================================================
@@ -672,58 +514,192 @@ enum PatternValue {
     Literal (LiteralPattern)
 }
 
-# OpValue — tagged-union payload carried by every Op (#133). The variant
-# tag identifies the payload type; `kind: OpKind` discriminates among Ops
-# that share a payload type. `None` is used by ops without a payload
-# (control flow, intrinsics, arithmetic).
+# OpValue — single tagged enum that classifies every Op. Each of the 87
+# variants represents a distinct opcode; payload-bearing variants carry the
+# typed inner value directly so call sites can destructure with `is`/`match`.
 
 enum OpValue {
-    None
-    EnumVariant (EnumVariant)
-    OpList (List[Op])
-    Struct (CasaStruct)
-    StructLit (StructLiteral)
-    Match (MatchArm)
-    Str (str)
-    Int (int)
+    # Stack
+    Drop
+    Dup
+    Over
+    Rot
+    Swap
+    # IO
+    Print
+    PrintBool
+    PrintChar
+    PrintCstr
+    PrintInt
+    PrintStr
+    Typeof
+    # Memory
+    HeapAlloc
+    Load8
+    Load16
+    Load32
+    Load64
+    Store8
+    Store16
+    Store32
+    Store64
+    # Syscalls
+    Syscall0
+    Syscall1
+    Syscall2
+    Syscall3
+    Syscall4
+    Syscall5
+    Syscall6
+    # Literals
+    PushArray (List[Op])
+    PushBool (int)
+    PushChar (int)
+    PushInt (int)
+    PushStr (str)
+    # Arithmetic
+    Add
+    Sub
+    Mul
+    Div
+    Mod
+    # Bitshift
+    Shl
+    Shr
+    # Bitwise
+    BitAnd
+    BitOr
+    BitXor
+    BitNot
+    # Boolean
+    And
+    Or
+    Not
+    # Comparison
+    Eq
+    Ge
+    Gt
+    Le
+    Lt
+    Ne
+    # Functions
+    FnCall (str)
+    FnExec
+    FnPush (str)
+    FnReturn
+    MethodCall (str)
+    # Loops
+    WhileStart
+    WhileCondition
+    WhileBreak
+    WhileContinue
+    WhileEnd
+    # Conditionals
+    IfStart
+    IfCondition
+    IfElif
+    IfElse
+    IfEnd
+    # Variables
+    AssignDec (str)
+    AssignInc (str)
+    AssignVar (str)
+    PushCapture (str)
+    PushVar (str)
+    # Enums
+    PushEnumVariant (EnumVariant)
+    IsCheck (EnumVariant)
+    # Match
+    MatchStart
+    MatchArm (MatchArm)
+    MatchEnd
+    # Structs
+    StructNew (CasaStruct)
+    StructLiteral (StructLiteral)
+    # Types
+    TypeCast (str)
+    # Import
+    ImportFile (str)
+    # F-strings
+    FstringConcat (int)
+    FstringToStr
+    # Command-line arguments
+    Argc
+    Argv
+    # Identifier (resolved by parser)
+    Identifier (str)
+}
+
+# ============================================================================
+# OpValue accessors — extract a typed payload from any variant in a payload
+# family (str, int, etc.). Aborts when the op carries a different payload
+# type. Workaround for is-binding-type bug: direct destructure infers the
+# binding as `any`, so call sites pipe through these typed helpers instead.
+# ============================================================================
+
+fn op_str_value op:Op -> str {
+    if op.value OpValue::FnCall(value) is then value return fi
+    if op.value OpValue::FnPush(value) is then value return fi
+    if op.value OpValue::MethodCall(value) is then value return fi
+    if op.value OpValue::PushStr(value) is then value return fi
+    if op.value OpValue::PushVar(value) is then value return fi
+    if op.value OpValue::PushCapture(value) is then value return fi
+    if op.value OpValue::AssignVar(value) is then value return fi
+    if op.value OpValue::AssignDec(value) is then value return fi
+    if op.value OpValue::AssignInc(value) is then value return fi
+    if op.value OpValue::TypeCast(value) is then value return fi
+    if op.value OpValue::ImportFile(value) is then value return fi
+    if op.value OpValue::Identifier(value) is then value return fi
+    "Internal error: op_str_value called on non-str op\n" eprint
+    1 exit
+    ""
+}
+
+fn op_int_value op:Op -> int {
+    if op.value OpValue::PushBool(value) is then value return fi
+    if op.value OpValue::PushChar(value) is then value return fi
+    if op.value OpValue::PushInt(value) is then value return fi
+    if op.value OpValue::FstringConcat(value) is then value return fi
+    "Internal error: op_int_value called on non-int op\n" eprint
+    1 exit
+    0
+}
+
+fn op_list_of op:Op -> List[Op] {
+    if op.value OpValue::PushArray(items) is then
+        items return
+    fi
+    "Internal error: op_list_of called on non-PushArray op\n" eprint
+    1 exit
+    List::new(List[Op])
 }
 
 fn enum_variant_of op:Op -> EnumVariant {
-    if op.value OpValue::EnumVariant(variant) is then
-        variant return
-    fi
+    if op.value OpValue::PushEnumVariant(variant) is then variant return fi
+    if op.value OpValue::IsCheck(variant) is then variant return fi
     "Internal error: enum_variant_of called on non-EnumVariant op\n" eprint
     1 exit
     Option::None(Option[int]) "" "" make_enum_variant
 }
 
-fn op_list_of op:Op -> List[Op] {
-    if op.value OpValue::OpList(items) is then
-        items return
-    fi
-    "Internal error: op_list_of called on non-OpList op\n" eprint
-    1 exit
-    List::new(List[Op])
-}
-
 fn casa_struct_of op:Op -> CasaStruct {
-    if op.value OpValue::Struct(casa_struct) is then
+    if op.value OpValue::StructNew(casa_struct) is then
         casa_struct return
     fi
-    "Internal error: casa_struct_of called on non-Struct op\n" eprint
+    "Internal error: casa_struct_of called on non-StructNew op\n" eprint
     1 exit
     List::new(List[str]) empty_location List::new(List[Member]) "" CasaStruct
 }
 
 fn struct_literal_of op:Op -> StructLiteral {
-    if op.value OpValue::StructLit(literal) is then
+    if op.value OpValue::StructLiteral(literal) is then
         literal return
     fi
-    "Internal error: struct_literal_of called on non-StructLit op\n" eprint
+    "Internal error: struct_literal_of called on non-StructLiteral op\n" eprint
     1 exit
     List::new(List[str]) "" StructLiteral
 }
-# MatchArm — wrapper stored on OpMatchArm.value. Carries the pattern payload
+# MatchArm — wrapper stored on OpValue::MatchArm. Carries the pattern payload
 # (typed via PatternValue) and an optional guard expression. `guard_ops` is
 # empty for unguarded arms; when non-empty it is compiled after pattern
 # bindings and produces a bool that diverts execution to the next arm when
@@ -739,10 +715,10 @@ fn make_match_arm pattern_value:PatternValue guard_ops:List[Op] -> MatchArm {
 }
 
 fn match_arm_of op:Op -> MatchArm {
-    if op.value OpValue::Match(arm) is then
+    if op.value OpValue::MatchArm(arm) is then
         arm return
     fi
-    "Internal error: match_arm_of called on non-Match op\n" eprint
+    "Internal error: match_arm_of called on non-MatchArm op\n" eprint
     1 exit
     List::new(List[Op])
     "" 0 LiteralValue::Int LiteralPattern PatternValue::Literal
@@ -1414,90 +1390,99 @@ fi
 }
 
 # ============================================================================
-# Intrinsic to OpKind mapping
+# IntrinsicKind -> OpValue lookup
 # ============================================================================
-Map::new(Map[IntrinsicKind OpKind]) = INTRINSIC_TO_OPKIND
-IntrinsicKind::Alloc OpKind::OpHeapAlloc INTRINSIC_TO_OPKIND.set = INTRINSIC_TO_OPKIND
-IntrinsicKind::Drop OpKind::OpDrop INTRINSIC_TO_OPKIND.set = INTRINSIC_TO_OPKIND
-IntrinsicKind::Dup OpKind::OpDup INTRINSIC_TO_OPKIND.set = INTRINSIC_TO_OPKIND
-IntrinsicKind::Exec OpKind::OpFnExec INTRINSIC_TO_OPKIND.set = INTRINSIC_TO_OPKIND
-IntrinsicKind::Load8 OpKind::OpLoad8 INTRINSIC_TO_OPKIND.set = INTRINSIC_TO_OPKIND
-IntrinsicKind::Load16 OpKind::OpLoad16 INTRINSIC_TO_OPKIND.set = INTRINSIC_TO_OPKIND
-IntrinsicKind::Load32 OpKind::OpLoad32 INTRINSIC_TO_OPKIND.set = INTRINSIC_TO_OPKIND
-IntrinsicKind::Load64 OpKind::OpLoad64 INTRINSIC_TO_OPKIND.set = INTRINSIC_TO_OPKIND
-IntrinsicKind::Over OpKind::OpOver INTRINSIC_TO_OPKIND.set = INTRINSIC_TO_OPKIND
-IntrinsicKind::Print OpKind::OpPrint INTRINSIC_TO_OPKIND.set = INTRINSIC_TO_OPKIND
-IntrinsicKind::Rot OpKind::OpRot INTRINSIC_TO_OPKIND.set = INTRINSIC_TO_OPKIND
-IntrinsicKind::Store8 OpKind::OpStore8 INTRINSIC_TO_OPKIND.set = INTRINSIC_TO_OPKIND
-IntrinsicKind::Store16 OpKind::OpStore16 INTRINSIC_TO_OPKIND.set = INTRINSIC_TO_OPKIND
-IntrinsicKind::Store32 OpKind::OpStore32 INTRINSIC_TO_OPKIND.set = INTRINSIC_TO_OPKIND
-IntrinsicKind::Store64 OpKind::OpStore64 INTRINSIC_TO_OPKIND.set = INTRINSIC_TO_OPKIND
-IntrinsicKind::Swap OpKind::OpSwap INTRINSIC_TO_OPKIND.set = INTRINSIC_TO_OPKIND
-IntrinsicKind::Typeof OpKind::OpTypeof INTRINSIC_TO_OPKIND.set = INTRINSIC_TO_OPKIND
-IntrinsicKind::Syscall0 OpKind::OpSyscall0 INTRINSIC_TO_OPKIND.set = INTRINSIC_TO_OPKIND
-IntrinsicKind::Syscall1 OpKind::OpSyscall1 INTRINSIC_TO_OPKIND.set = INTRINSIC_TO_OPKIND
-IntrinsicKind::Syscall2 OpKind::OpSyscall2 INTRINSIC_TO_OPKIND.set = INTRINSIC_TO_OPKIND
-IntrinsicKind::Syscall3 OpKind::OpSyscall3 INTRINSIC_TO_OPKIND.set = INTRINSIC_TO_OPKIND
-IntrinsicKind::Syscall4 OpKind::OpSyscall4 INTRINSIC_TO_OPKIND.set = INTRINSIC_TO_OPKIND
-IntrinsicKind::Syscall5 OpKind::OpSyscall5 INTRINSIC_TO_OPKIND.set = INTRINSIC_TO_OPKIND
-IntrinsicKind::Syscall6 OpKind::OpSyscall6 INTRINSIC_TO_OPKIND.set = INTRINSIC_TO_OPKIND
-IntrinsicKind::Argc OpKind::OpArgc INTRINSIC_TO_OPKIND.set = INTRINSIC_TO_OPKIND
-IntrinsicKind::Argv OpKind::OpArgv INTRINSIC_TO_OPKIND.set = INTRINSIC_TO_OPKIND
+
+fn intrinsic_to_op_value intrinsic_kind:IntrinsicKind -> Option[OpValue] {
+    intrinsic_kind match
+        IntrinsicKind::Alloc => OpValue::HeapAlloc Option::Some
+        IntrinsicKind::Drop => OpValue::Drop Option::Some
+        IntrinsicKind::Dup => OpValue::Dup Option::Some
+        IntrinsicKind::Exec => OpValue::FnExec Option::Some
+        IntrinsicKind::Load8 => OpValue::Load8 Option::Some
+        IntrinsicKind::Load16 => OpValue::Load16 Option::Some
+        IntrinsicKind::Load32 => OpValue::Load32 Option::Some
+        IntrinsicKind::Load64 => OpValue::Load64 Option::Some
+        IntrinsicKind::Over => OpValue::Over Option::Some
+        IntrinsicKind::Print => OpValue::Print Option::Some
+        IntrinsicKind::Rot => OpValue::Rot Option::Some
+        IntrinsicKind::Store8 => OpValue::Store8 Option::Some
+        IntrinsicKind::Store16 => OpValue::Store16 Option::Some
+        IntrinsicKind::Store32 => OpValue::Store32 Option::Some
+        IntrinsicKind::Store64 => OpValue::Store64 Option::Some
+        IntrinsicKind::Swap => OpValue::Swap Option::Some
+        IntrinsicKind::Typeof => OpValue::Typeof Option::Some
+        IntrinsicKind::Syscall0 => OpValue::Syscall0 Option::Some
+        IntrinsicKind::Syscall1 => OpValue::Syscall1 Option::Some
+        IntrinsicKind::Syscall2 => OpValue::Syscall2 Option::Some
+        IntrinsicKind::Syscall3 => OpValue::Syscall3 Option::Some
+        IntrinsicKind::Syscall4 => OpValue::Syscall4 Option::Some
+        IntrinsicKind::Syscall5 => OpValue::Syscall5 Option::Some
+        IntrinsicKind::Syscall6 => OpValue::Syscall6 Option::Some
+        IntrinsicKind::Argc => OpValue::Argc Option::Some
+        IntrinsicKind::Argv => OpValue::Argv Option::Some
+    end
+}
 
 # ============================================================================
-# OpKind to InstKind direct mapping
+# Direct OpValue -> InstKind lowering (for ops that translate 1:1)
 # ============================================================================
-Map::new(Map[OpKind InstKind]) = DIRECT_OP_TO_INST
-OpKind::OpAdd InstKind::InstAdd DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpAnd InstKind::InstAnd DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpBitAnd InstKind::InstBitAnd DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpBitNot InstKind::InstBitNot DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpBitOr InstKind::InstBitOr DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpBitXor InstKind::InstBitXor DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpDiv InstKind::InstDiv DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpDrop InstKind::InstDrop DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpDup InstKind::InstDup DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpEq InstKind::InstEq DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpFnExec InstKind::InstFnExec DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpFnReturn InstKind::InstFnReturn DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpGe InstKind::InstGe DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpGt InstKind::InstGt DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpHeapAlloc InstKind::InstHeapAlloc DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpLe InstKind::InstLe DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpLoad8 InstKind::InstLoad8 DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpLoad16 InstKind::InstLoad16 DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpLoad32 InstKind::InstLoad32 DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpLoad64 InstKind::InstLoad64 DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpLt InstKind::InstLt DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpMod InstKind::InstMod DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpMul InstKind::InstMul DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpNe InstKind::InstNe DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpNot InstKind::InstNot DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpOr InstKind::InstOr DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpOver InstKind::InstOver DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpPrintBool InstKind::InstPrintBool DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpPrintChar InstKind::InstPrintChar DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpPrintCstr InstKind::InstPrintCstr DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpPrintInt InstKind::InstPrintInt DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpPrintStr InstKind::InstPrintStr DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpRot InstKind::InstRot DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpShl InstKind::InstShl DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpShr InstKind::InstShr DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpStore8 InstKind::InstStore8 DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpStore16 InstKind::InstStore16 DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpStore32 InstKind::InstStore32 DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpStore64 InstKind::InstStore64 DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpSub InstKind::InstSub DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpSwap InstKind::InstSwap DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpSyscall0 InstKind::InstSyscall0 DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpSyscall1 InstKind::InstSyscall1 DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpSyscall2 InstKind::InstSyscall2 DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpSyscall3 InstKind::InstSyscall3 DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpSyscall4 InstKind::InstSyscall4 DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpSyscall5 InstKind::InstSyscall5 DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpSyscall6 InstKind::InstSyscall6 DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpArgc InstKind::InstArgc DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
-OpKind::OpArgv InstKind::InstArgv DIRECT_OP_TO_INST.set = DIRECT_OP_TO_INST
+
+fn direct_op_to_inst value:OpValue -> Option[InstKind] {
+    value match
+        OpValue::Add => InstKind::InstAdd Option::Some
+        OpValue::And => InstKind::InstAnd Option::Some
+        OpValue::BitAnd => InstKind::InstBitAnd Option::Some
+        OpValue::BitNot => InstKind::InstBitNot Option::Some
+        OpValue::BitOr => InstKind::InstBitOr Option::Some
+        OpValue::BitXor => InstKind::InstBitXor Option::Some
+        OpValue::Div => InstKind::InstDiv Option::Some
+        OpValue::Drop => InstKind::InstDrop Option::Some
+        OpValue::Dup => InstKind::InstDup Option::Some
+        OpValue::Eq => InstKind::InstEq Option::Some
+        OpValue::FnExec => InstKind::InstFnExec Option::Some
+        OpValue::FnReturn => InstKind::InstFnReturn Option::Some
+        OpValue::Ge => InstKind::InstGe Option::Some
+        OpValue::Gt => InstKind::InstGt Option::Some
+        OpValue::HeapAlloc => InstKind::InstHeapAlloc Option::Some
+        OpValue::Le => InstKind::InstLe Option::Some
+        OpValue::Load8 => InstKind::InstLoad8 Option::Some
+        OpValue::Load16 => InstKind::InstLoad16 Option::Some
+        OpValue::Load32 => InstKind::InstLoad32 Option::Some
+        OpValue::Load64 => InstKind::InstLoad64 Option::Some
+        OpValue::Lt => InstKind::InstLt Option::Some
+        OpValue::Mod => InstKind::InstMod Option::Some
+        OpValue::Mul => InstKind::InstMul Option::Some
+        OpValue::Ne => InstKind::InstNe Option::Some
+        OpValue::Not => InstKind::InstNot Option::Some
+        OpValue::Or => InstKind::InstOr Option::Some
+        OpValue::Over => InstKind::InstOver Option::Some
+        OpValue::PrintBool => InstKind::InstPrintBool Option::Some
+        OpValue::PrintChar => InstKind::InstPrintChar Option::Some
+        OpValue::PrintCstr => InstKind::InstPrintCstr Option::Some
+        OpValue::PrintInt => InstKind::InstPrintInt Option::Some
+        OpValue::PrintStr => InstKind::InstPrintStr Option::Some
+        OpValue::Rot => InstKind::InstRot Option::Some
+        OpValue::Shl => InstKind::InstShl Option::Some
+        OpValue::Shr => InstKind::InstShr Option::Some
+        OpValue::Store8 => InstKind::InstStore8 Option::Some
+        OpValue::Store16 => InstKind::InstStore16 Option::Some
+        OpValue::Store32 => InstKind::InstStore32 Option::Some
+        OpValue::Store64 => InstKind::InstStore64 Option::Some
+        OpValue::Sub => InstKind::InstSub Option::Some
+        OpValue::Swap => InstKind::InstSwap Option::Some
+        OpValue::Syscall0 => InstKind::InstSyscall0 Option::Some
+        OpValue::Syscall1 => InstKind::InstSyscall1 Option::Some
+        OpValue::Syscall2 => InstKind::InstSyscall2 Option::Some
+        OpValue::Syscall3 => InstKind::InstSyscall3 Option::Some
+        OpValue::Syscall4 => InstKind::InstSyscall4 Option::Some
+        OpValue::Syscall5 => InstKind::InstSyscall5 Option::Some
+        OpValue::Syscall6 => InstKind::InstSyscall6 Option::Some
+        OpValue::Argc => InstKind::InstArgc Option::Some
+        OpValue::Argv => InstKind::InstArgv Option::Some
+        _ => Option::None(Option[InstKind])
+    end
+}
 
 # ============================================================================
 # List helpers for variables
