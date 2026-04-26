@@ -147,6 +147,18 @@ fn first[T1 T2] a:T1 b:T2 -> T1 { a }
 fn wrap[T] T -> T int { 42 }
 ```
 
+The built-in stack intrinsics use the same generic surface syntax:
+
+```casa
+# drop[T]         T -> None
+# dup[T]          T -> T T
+# swap[T1 T2]     T1 T2 -> T2 T1
+# over[T1 T2]     T1 T2 -> T2 T1 T2
+# rot[T1 T2 T3]   T1 T2 T3 -> T3 T1 T2
+fn keep_top[T1 T2] T1 T2 -> T1 { swap drop }
+42 "kept" keep_top         # "kept" (deeper int dropped, top str kept)
+```
+
 The type checker enforces consistency — if the same type variable appears multiple times in the parameters, all occurrences must bind to the same type:
 
 ```casa

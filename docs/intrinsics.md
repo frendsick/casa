@@ -6,13 +6,16 @@ Intrinsics are operations built into the compiler. They are available in every C
 
 Operations for manipulating the stack directly.
 
-| Intrinsic | Stack Effect | Description |
-|-----------|-------------|-------------|
-| `drop` | `a ->` | Discard top of stack |
-| `dup` | `a -> a a` | Duplicate top of stack |
-| `swap` | `a b -> b a` | Swap top two values |
-| `over` | `a b -> a b a` | Copy second value to top |
-| `rot` | `a b c -> b c a` | Rotate top three values |
+| Intrinsic | Generic signature | Description |
+|-----------|-------------------|-------------|
+| `drop` | `[T] T -> None` | Discard top of stack |
+| `dup` | `[T] T -> T T` | Duplicate top of stack |
+| `swap` | `[T1 T2] T1 T2 -> T2 T1` | Swap top two values |
+| `over` | `[T1 T2] T1 T2 -> T2 T1 T2` | Copy second value to top |
+| `rot` | `[T1 T2 T3] T1 T2 T3 -> T3 T1 T2` | Rotate top three values |
+
+Type variables resolve at the call site, so the same intrinsic works on any value type:
+`42 dup` produces two `int`s on the stack, `"hi" dup` produces two `str`s.
 
 ### Examples
 
