@@ -791,8 +791,37 @@ fn check_stack_ops tc:TypeChecker op:Op {
 # ============================================================================
 # Check memory operations
 # ============================================================================
+# Returns true if `bound` names `Word` directly or transitively via supertraits.
 
-fn check_memory tc:TypeChecker op:Op {
+fn bound_implies_word bound:TraitBound -> bool {
+    bound TraitBound::name = bound_name
+    if "Word" bound_name == then true return fi
+    bound_name DEFAULT_PARSER.store.traits.get = bound_trait_opt
+    if bound_trait_opt.is_none then false return fi
+    for super_bound in bound_trait_opt.unwrap CasaTrait::supertraits.iter do
+        if super_bound bound_implies_word then true return fi
+    done
+    false
+}
+# Validate that `type_name` satisfies the `Word` marker trait at the given op
+# location. Concrete single-slot types always satisfy `Word` in current Casa.
+# A type variable from the enclosing function satisfies `Word` only when its
+# declared bound is `Word` itself or a trait that extends `Word`. An unbounded
+# type variable is allowed; the concrete type bound at the call site will
+# satisfy `Word` automatically.
+
+fn assert_word_bound tc:TypeChecker op:Op type_name:str function_opt:Option[Function] {
+    if type_name TYPE_UNKNOWN == then return fi
+    if function_opt.is_none then return fi
+    function_opt.unwrap Function::signature = word_sig
+    if type_name word_sig Signature::type_vars.has ! then return fi
+    type_name word_sig Signature::trait_bounds.get = word_bound_opt
+    if word_bound_opt.is_none then return fi
+    if word_bound_opt.unwrap bound_implies_word then return fi
+    op Op::location f"Type variable `{type_name}` does not satisfy `Word` bound; add `[{type_name}: Word]` (or a trait that extends `Word`) to the function's type parameters" ErrorKind::TypeMismatch raise_error
+}
+
+fn check_memory tc:TypeChecker op:Op function_opt:Option[Function] {
     op.value = mem_value
     if
     mem_value OpValue::Load8 is
@@ -809,7 +838,8 @@ fn check_memory tc:TypeChecker op:Op {
     mem_value OpValue::Store64 is ||
     then
         "ptr" tc expect_type drop
-        tc stack_pop drop
+        tc stack_pop = stored_type
+        function_opt stored_type op tc assert_word_bound
     elif mem_value OpValue::HeapAlloc is then
         "int" tc expect_type drop
         "ptr" tc stack_push
@@ -1632,7 +1662,7 @@ fn check_typeof tc:TypeChecker op:Op {
 # Check syscalls
 # ============================================================================
 
-fn check_syscalls tc:TypeChecker op:Op {
+fn check_syscalls tc:TypeChecker op:Op function_opt:Option[Function] {
     op.value match
         OpValue::Syscall0 => 0
         OpValue::Syscall1 => 1
@@ -1646,7 +1676,8 @@ fn check_syscalls tc:TypeChecker op:Op {
     "int" tc expect_type drop
     0 = index
     while index arg_count > do
-        tc stack_pop drop
+        tc stack_pop = arg_type
+        function_opt arg_type op tc assert_word_bound
         1 += index
     done
     "int" tc stack_push
@@ -2425,7 +2456,7 @@ fn run_type_check_ops checker:TypeChecker ops:List[Op] function_opt:Option[Funct
         op_value OpValue::Store64 is ||
         op_value OpValue::HeapAlloc is ||
         then
-            current_op checker check_memory
+            function_opt current_op checker check_memory
             continue
         fi
 
@@ -2518,7 +2549,7 @@ fn run_type_check_ops checker:TypeChecker ops:List[Op] function_opt:Option[Funct
         op_value OpValue::Syscall5 is ||
         op_value OpValue::Syscall6 is ||
         then
-            current_op checker check_syscalls
+            function_opt current_op checker check_syscalls
             continue
         fi
 

@@ -84,10 +84,12 @@ Low-level byte-addressed memory access for building data structures. All load/st
 | `load16` | `ptr -> int` | Load 16-bit value from address (zero-extended) |
 | `load32` | `ptr -> int` | Load 32-bit value from address (zero-extended) |
 | `load64` | `ptr -> int` | Load 64-bit value from address |
-| `store8` | `any ptr -> None` | Store 8-bit value to address |
-| `store16` | `any ptr -> None` | Store 16-bit value to address |
-| `store32` | `any ptr -> None` | Store 32-bit value to address |
-| `store64` | `any ptr -> None` | Store 64-bit value to address |
+| `store8` | `[T: Word] T ptr -> None` | Store 8-bit value to address |
+| `store16` | `[T: Word] T ptr -> None` | Store 16-bit value to address |
+| `store32` | `[T: Word] T ptr -> None` | Store 32-bit value to address |
+| `store64` | `[T: Word] T ptr -> None` | Store 64-bit value to address |
+
+The value type must satisfy the [`Word`](traits.md#word) marker trait, which constrains it to a single-slot value. Every primitive, enum variant, struct reference, and array reference satisfies `Word` automatically.
 
 ### Examples
 
@@ -107,17 +109,17 @@ Values are addressed by byte offset. Use pointer arithmetic (`+`) to access diff
 
 ## Syscall Intrinsics
 
-Direct Linux system call access. Each intrinsic pops N+1 values from the stack (the syscall number on top, then arguments in order) and pushes the kernel return value as `int`. The syscall number must be `int`. Arguments have no type constraints.
+Direct Linux system call access. Each intrinsic pops N+1 values from the stack (the syscall number on top, then arguments in order) and pushes the kernel return value as `int`. The syscall number must be `int`. Each argument must satisfy the [`Word`](traits.md#word) marker trait so that exactly one register-sized value lands in the corresponding syscall register.
 
 | Intrinsic | Stack Effect | Description |
 |-----------|-------------|-------------|
 | `syscall0` | `nr -> int` | Syscall with 0 args |
-| `syscall1` | `a1 nr -> int` | Syscall with 1 arg |
-| `syscall2` | `a2 a1 nr -> int` | Syscall with 2 args |
-| `syscall3` | `a3 a2 a1 nr -> int` | Syscall with 3 args |
-| `syscall4` | `a4 a3 a2 a1 nr -> int` | Syscall with 4 args |
-| `syscall5` | `a5 a4 a3 a2 a1 nr -> int` | Syscall with 5 args |
-| `syscall6` | `a6 a5 a4 a3 a2 a1 nr -> int` | Syscall with 6 args |
+| `syscall1` | `[A1: Word] A1 nr -> int` | Syscall with 1 arg |
+| `syscall2` | `[A1: Word A2: Word] A2 A1 nr -> int` | Syscall with 2 args |
+| `syscall3` | `[A1: Word A2: Word A3: Word] A3 A2 A1 nr -> int` | Syscall with 3 args |
+| `syscall4` | `[A1: Word ... A4: Word] A4 A3 A2 A1 nr -> int` | Syscall with 4 args |
+| `syscall5` | `[A1: Word ... A5: Word] A5 A4 A3 A2 A1 nr -> int` | Syscall with 5 args |
+| `syscall6` | `[A1: Word ... A6: Word] A6 A5 A4 A3 A2 A1 nr -> int` | Syscall with 6 args |
 
 ### Register Mapping
 

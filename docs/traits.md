@@ -200,12 +200,14 @@ trait Word { }
 
 It is used as a bound on builtins that require single-slot operands (for example, syscall and `store*` arguments). Primitive types, enums, struct refs, and array refs satisfy `Word`; multi-slot value types do not.
 
+`Hashable` and `Display` both extend `Word` as supertraits, so any type that satisfies one of them automatically satisfies `Word`.
+
 ## Built-in Trait: `Hashable`
 
-The standard library defines the `Hashable` trait as an extension of `Eq`. Any `Hashable` type therefore also satisfies `Eq` (see [Supertraits](#supertraits)). The trait declares only `hash`; equality is reused from `Eq`:
+The standard library defines the `Hashable` trait as an extension of `Eq` and `Word`. Any `Hashable` type therefore also satisfies both `Eq` and `Word` (see [Supertraits](#supertraits)). The trait declares only `hash`; equality is reused from `Eq`:
 
 ```casa
-trait Hashable: Eq {
+trait Hashable: Eq + Word {
     fn hash self:self -> int
 }
 ```
@@ -217,10 +219,10 @@ Built-in implementations:
 
 ## Built-in Trait: `Display`
 
-The standard library defines a `Display` trait used by f-string interpolation to convert values to strings:
+The standard library defines a `Display` trait used by f-string interpolation to convert values to strings. `Display` extends `Word`, so any displayable type also satisfies `Word`:
 
 ```casa
-trait Display {
+trait Display: Word {
     fn to_str self:self -> str
 }
 ```
@@ -251,16 +253,18 @@ trait Eq {
     fn eq self:self other:self -> bool
 }
 
-trait Hashable: Eq {
+trait Word { }
+
+trait Hashable: Eq + Word {
     fn hash self:self -> int
 }
 ```
 
-A type satisfies `Hashable` only if it satisfies every supertrait (here `Eq`) in addition to providing `Hashable`'s own required methods. Concretely, the type's `impl` block must contain `eq` (from `Eq`) and `hash` (from `Hashable`).
+Multiple supertraits are listed with `+`. A type satisfies `Hashable` only if it satisfies every supertrait (here `Eq` and `Word`) in addition to providing `Hashable`'s own required methods. Concretely, the type's `impl` block must contain `eq` (from `Eq`) and `hash` (from `Hashable`); `Word` is a marker with no required methods, so its satisfaction is automatic.
 
 Trait-bounded code may call methods declared by any supertrait directly. For example, inside a function bounded by `K: Hashable`, both `K::hash` and `K::eq` resolve correctly.
 
-Supertraits are checked at the trait's declaration site: the supertrait must already be defined.
+Supertraits are checked at the trait's declaration site: each supertrait must already be defined.
 
 ## Default Methods
 

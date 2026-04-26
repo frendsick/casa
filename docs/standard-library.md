@@ -388,9 +388,9 @@ The standard library declares traits with primitive implementations. See [Traits
 |-------|----------|----------|----------------|
 | `Eq` | `eq self other -> bool` | `ne` | `int`, `bool`, `char`, `str`, `cstr`, `ptr` |
 | `Ord` | `lt self other -> bool` | `le`, `gt`, `ge` | `int`, `char` |
-| `Display` | `to_str self -> str` | -- | `int`, `bool`, `char`, `str`, `cstr`, `ptr`, `array[T]`, `List[T]`, `Option[T]`, `Result[T E]` |
+| `Display: Word` | `to_str self -> str` (extends `Word`) | -- | `int`, `bool`, `char`, `str`, `cstr`, `ptr`, `array[T]`, `List[T]`, `Option[T]`, `Result[T E]` |
 | `Word` | (marker) | -- | every single-slot type |
-| `Hashable: Eq` | `hash self -> int` (extends `Eq`) | -- | `int`, `str`, payload-free enums (auto-derived) |
+| `Hashable: Eq + Word` | `hash self -> int` (extends `Eq`, `Word`) | -- | `int`, `str`, payload-free enums (auto-derived) |
 | `Iterable[T]` | `next self -> Option[T]` | `collect`, `map`, `filter`, `fold`, `count`, `any`, `all`, `find` | `Iter[T]` |
 
 ## See Also
