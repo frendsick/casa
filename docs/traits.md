@@ -202,20 +202,18 @@ It is used as a bound on builtins that require single-slot operands (for example
 
 ## Built-in Trait: `Hashable`
 
-The standard library defines the `Hashable` trait and provides implementations for `str` and `int`:
+The standard library defines the `Hashable` trait as an extension of `Eq`. Any `Hashable` type therefore also satisfies `Eq` (see [Supertraits](#supertraits)). The trait declares only `hash`; equality is reused from `Eq`:
 
 ```casa
-trait Hashable {
+trait Hashable: Eq {
     fn hash self:self -> int
-    fn eq self:self other:self -> bool
 }
 ```
 
 Built-in implementations:
 - `str::hash` uses the djb2 hash algorithm (via `str_hash`)
-- `str::eq` compares strings by content
 - `int::hash` returns the absolute value (via `int_hash`)
-- `int::eq` compares integers with `==`
+- `Eq::eq` for `str` and `int` is provided by their respective `impl` blocks
 
 ## Built-in Trait: `Display`
 
@@ -243,6 +241,26 @@ impl Point {
 1 2 Point = origin
 f"origin = {origin}\n" print    # origin = Point(1, 2)
 ```
+
+## Supertraits
+
+A trait can require its implementors to also satisfy one or more *supertraits*. Declare supertraits with `:` after the trait name (and optional type parameters), separating multiple supertraits with `+`:
+
+```casa
+trait Eq {
+    fn eq self:self other:self -> bool
+}
+
+trait Hashable: Eq {
+    fn hash self:self -> int
+}
+```
+
+A type satisfies `Hashable` only if it satisfies every supertrait (here `Eq`) in addition to providing `Hashable`'s own required methods. Concretely, the type's `impl` block must contain `eq` (from `Eq`) and `hash` (from `Hashable`).
+
+Trait-bounded code may call methods declared by any supertrait directly. For example, inside a function bounded by `K: Hashable`, both `K::hash` and `K::eq` resolve correctly.
+
+Supertraits are checked at the trait's declaration site: the supertrait must already be defined.
 
 ## Default Methods
 

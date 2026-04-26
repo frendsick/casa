@@ -868,6 +868,37 @@ fn parse_signature cursor:TokenCursor -> Signature {
 # Bounds whose trait is not registered in the store are silently skipped,
 # matching the pre-extraction behavior of both call sites.
 
+fn collect_trait_methods_into
+    seen:Set[str]
+    result:List[TraitMethod]
+    parser:Parser
+    trait_def:CasaTrait
+-> Set[str] {
+    for ctm_method in trait_def CasaTrait::methods.iter do
+        if ctm_method TraitMethod::name seen.has ! then
+            ctm_method TraitMethod::name seen.add = seen
+            ctm_method result.push
+        fi
+    done
+    for ctm_super in trait_def CasaTrait::supertraits.iter do
+        ctm_super TraitBound::name parser.store.traits.get = ctm_super_opt
+        if ctm_super_opt.is_some then
+            ctm_super_opt.unwrap parser result seen collect_trait_methods_into = seen
+        fi
+    done
+    seen
+}
+# Returns all methods (abstract + default) from `trait_def` and its
+# transitive supertraits, deduplicated by name. The trait's own methods
+# come first; supertrait methods follow in declaration order.
+
+fn collect_trait_methods parser:Parser trait_def:CasaTrait -> List[TraitMethod] {
+    List::new(List[TraitMethod]) = result
+    Set::new(Set[str]) = seen
+    trait_def parser result seen collect_trait_methods_into drop
+    result
+}
+
 fn build_hidden_trait_methods
     parser:Parser
     trait_bounds:Map[str TraitBound]
@@ -891,7 +922,7 @@ fn build_hidden_trait_methods
                     1 += bhtm_sub_index
                 done
             fi
-            for bound_method in bound_trait CasaTrait::methods.iter do
+            for bound_method in bound_trait parser collect_trait_methods.iter do
                 # Skip default methods — only abstract methods need hidden fn ptrs
                 if 0 bound_method TraitMethod::default_ops.length == then
                     f"__trait_{bound_type_var}_{bound_method TraitMethod::name}" = hidden_name
@@ -1288,6 +1319,35 @@ fn parse_trait parser:Parser cursor:TokenCursor -> CasaTrait {
         "trait" cursor parse_simple_type_vars = type_params
     fi
 
+    List::new(List[TraitBound]) = supertraits
+    cursor.peek = colon_opt
+    if colon_opt.is_some ":" colon_opt.unwrap Token::value == && then
+        cursor.pop drop
+        true = parse_super_loop
+        while parse_super_loop do
+            TokenKind::Identifier cursor expect_token_kind = super_token
+            super_token Token::value = super_name
+            super_name parser.store.traits.get = super_def_opt
+            if super_def_opt.is_none then
+                super_token Token::location f"Supertrait `{super_name}` is not defined" ErrorKind::UndefinedName raise_error
+            fi
+            super_token cursor parse_bound_type_args = super_args
+            if super_def_opt.is_some then
+                super_def_opt.unwrap CasaTrait::type_params = super_params
+                if super_args.length super_params.length != then
+                    super_token Token::location f"Supertrait `{super_name}` expects {super_params.length} type argument(s), got {super_args.length}" ErrorKind::Syntax raise_error
+                fi
+            fi
+            super_args super_name TraitBound supertraits.push
+            cursor.peek = plus_opt
+            if plus_opt.is_some "+" plus_opt.unwrap Token::value == && then
+                cursor.pop drop
+            else
+                false = parse_super_loop
+            fi
+        done
+    fi
+
     List::new(List[TraitMethod]) = methods
     "{" cursor expect_token_value drop
 
@@ -1329,7 +1389,7 @@ fn parse_trait parser:Parser cursor:TokenCursor -> CasaTrait {
         fi
     done
 
-    name_token Token::location methods type_params name_token Token::value CasaTrait
+    name_token Token::location supertraits methods type_params name_token Token::value CasaTrait
 }
 
 # ============================================================================
