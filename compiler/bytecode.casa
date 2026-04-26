@@ -198,11 +198,10 @@ fn op_value_list_contains items:List[OpValue] value:OpValue -> bool {
     done
     false
 }
-
-# Forward search for the next OpMatchArm or OpMatchEnd within the current
-# match block, respecting nested blocks. Returns the matching label or None
-# when the boundary is reached. Specialized to avoid constructing a
-# payload-carrying OpValue::MatchArm sentinel.
+# find_matching_label needs a sentinel value in target_values, but
+# OpValue::MatchArm carries a payload that cannot be constructed bare for
+# tag-only equality. This forward scan tracks depth and returns the label
+# of the next OpMatchArm or None on OpMatchEnd at depth 0.
 
 fn find_next_match_arm_or_end ops:List[Op] op_index:int -> Option[int] {
     1 = depth
@@ -259,21 +258,24 @@ fn compile_assignment compiler:BytecodeCompiler op:Op bytecode:List[Inst] {
     resolved ResolvedVariable::set_kind = set_kind
     resolved ResolvedVariable::index = var_index
 
-    if op.value OpValue::AssignDec is then
-        var_index get_kind make_inst_int bytecode.push
-        InstKind::InstSwap make_inst bytecode.push
-        InstKind::InstSub make_inst bytecode.push
-        var_index set_kind make_inst_int bytecode.push
-    elif op.value OpValue::AssignInc is then
-        var_index get_kind make_inst_int bytecode.push
-        InstKind::InstAdd make_inst bytecode.push
-        var_index set_kind make_inst_int bytecode.push
-    elif op.value OpValue::AssignVar is then
-        var_index set_kind make_inst_int bytecode.push
-    else
-        "Internal error: compile_assignment called with non-assignment OpValue\n" eprint
-        1 exit
-    fi
+    op.value match
+        OpValue::AssignDec => {
+            var_index get_kind make_inst_int bytecode.push
+            InstKind::InstSwap make_inst bytecode.push
+            InstKind::InstSub make_inst bytecode.push
+            var_index set_kind make_inst_int bytecode.push
+        }
+        OpValue::AssignInc => {
+            var_index get_kind make_inst_int bytecode.push
+            InstKind::InstAdd make_inst bytecode.push
+            var_index set_kind make_inst_int bytecode.push
+        }
+        OpValue::AssignVar => var_index set_kind make_inst_int bytecode.push
+        _ => {
+            "Internal error: compile_assignment called with non-assignment OpValue\n" eprint
+            1 exit
+        }
+    end
 }
 
 # ============================================================================
@@ -854,51 +856,55 @@ fn compile_function compiler:BytecodeCompiler function:Function op:Op {
 fn compile_function_ops compiler:BytecodeCompiler op:Op bytecode:List[Inst] {
     op op_str_value = name
 
-    if op.value OpValue::FnCall is then
-        name compiler.store.functions.get.unwrap = function
-        op function compiler compile_function
-        name InstKind::InstFnCall make_inst_str bytecode.push
-    elif op.value OpValue::FnPush is then
-        name compiler.store.functions.get = function_opt
-        if function_opt.is_none then
-            op Op::location f"Function `{name}` is not defined" ErrorKind::UndefinedName make_error ERRORS.push
-            return
-        fi
-        function_opt.unwrap = lambda
-        op lambda compiler compile_function
+    op.value match
+        OpValue::FnCall => {
+            name compiler.store.functions.get.unwrap = function
+            op function compiler compile_function
+            name InstKind::InstFnCall make_inst_str bytecode.push
+        }
+        OpValue::FnPush => {
+            name compiler.store.functions.get = function_opt
+            if function_opt.is_none then
+                op Op::location f"Function `{name}` is not defined" ErrorKind::UndefinedName make_error ERRORS.push
+                return
+            fi
+            function_opt.unwrap = lambda
+            op lambda compiler compile_function
 
-        # Zero-capture closures share a single static record so trait
-        # dispatch and named-function pushes do not allocate per call.
-        if 0 lambda Function::captures.length == then
-            name InstKind::InstFnPushStatic make_inst_str bytecode.push
-        else
-            # Captures are pushed before the function pointer so InstClosureRecord
-            # pops fn_ptr first into record[0] and then captures into record[1..].
-            for capture in lambda Function::captures.iter do
-                capture Variable::name compiler resolve_variable = capture_resolved
-                capture_resolved ResolvedVariable::index capture_resolved ResolvedVariable::get_kind make_inst_int bytecode.push
-            done
-            name InstKind::InstFnPush make_inst_str bytecode.push
-            lambda Function::captures.length InstKind::InstClosureRecord make_inst_int bytecode.push
-        fi
-    else
-        "Internal error: compile_function_ops called with non-function OpValue\n" eprint
-        1 exit
-    fi
+            # Zero-capture closures share a single static record so trait
+            # dispatch and named-function pushes do not allocate per call.
+            if 0 lambda Function::captures.length == then
+                name InstKind::InstFnPushStatic make_inst_str bytecode.push
+            else
+                # Captures are pushed before the function pointer so InstClosureRecord
+                # pops fn_ptr first into record[0] and then captures into record[1..].
+                for capture in lambda Function::captures.iter do
+                    capture Variable::name compiler resolve_variable = capture_resolved
+                    capture_resolved ResolvedVariable::index capture_resolved ResolvedVariable::get_kind make_inst_int bytecode.push
+                done
+                name InstKind::InstFnPush make_inst_str bytecode.push
+                lambda Function::captures.length InstKind::InstClosureRecord make_inst_int bytecode.push
+            fi
+        }
+        _ => {
+            "Internal error: compile_function_ops called with non-function OpValue\n" eprint
+            1 exit
+        }
+    end
 }
 
 # ============================================================================
 # Compile enum comparison (data-carrying enums)
 # ============================================================================
 
-fn compile_enum_comparison compiler:BytecodeCompiler op:Op bytecode:List[Inst] {
+fn compile_enum_comparison compiler:BytecodeCompiler compare_kind:InstKind bytecode:List[Inst] {
     compiler.locals_count = local_a
     compiler.locals_count 1 + compiler->locals_count
     local_a InstKind::InstLocalSet make_inst_int bytecode.push
     InstKind::InstLoad64 make_inst bytecode.push
     local_a InstKind::InstLocalGet make_inst_int bytecode.push
     InstKind::InstLoad64 make_inst bytecode.push
-    op.value direct_op_to_inst.unwrap make_inst bytecode.push
+    compare_kind make_inst bytecode.push
 }
 
 # ============================================================================
@@ -922,7 +928,7 @@ fn compile_op compiler:BytecodeCompiler op:Op op_index:int bytecode:List[Inst] {
         "" op Op::type_annotation != &&
         op Op::type_annotation compiler.store.enums.has &&
         then
-            bytecode op compiler compile_enum_comparison
+            bytecode direct_inst_opt.unwrap compiler compile_enum_comparison
             return
         fi
         # String content comparison
