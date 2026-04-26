@@ -201,10 +201,17 @@ All items must have the same type. Heterogeneous arrays are compile-time errors:
 [1, "hello"]        # TYPE_MISMATCH error
 ```
 
-An empty array has type `array[any]`:
+An empty array literal has an unresolved element type. The compiler infers it from the first constraining use — an explicit cast or a typed binding:
 
 ```casa
-[]                  # type: array[any]
+[] (array[int])               # explicit cast resolves element type
+[] = xs:array[str]            # type annotation on the binding resolves it
+```
+
+If the inference frame closes without resolution, the compiler emits a `TYPE_MISMATCH` error:
+
+```casa
+[] = xs xs drop               # error: cannot infer element type of empty array
 ```
 
 Arrays can be nested. The element type is inferred recursively:

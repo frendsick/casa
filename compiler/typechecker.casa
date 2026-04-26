@@ -474,6 +474,19 @@ fn is_enum_type_var typ:str -> bool {
         false
     fi
 }
+# True when typ has TYPE_UNKNOWN inside any parametric position. Used to
+# detect empty array literals whose element type was never constrained by an
+# annotation, cast, or surrounding use.
+
+fn type_has_unresolved typ:str -> bool {
+    typ extract_generic_params = params_opt
+    if params_opt.is_none then false return fi
+    for param in params_opt.unwrap.iter do
+        if TYPE_UNKNOWN param == then true return fi
+        if param type_has_unresolved then true return fi
+    done
+    false
+}
 
 fn bind_generic_param
     tc:TypeChecker
@@ -839,6 +852,9 @@ fn check_assignment tc:TypeChecker op:Op function_opt:Option[Function] {
     stack_type = effective_type
     if has_annotation then
         op Op::type_annotation = effective_type
+    fi
+    if has_annotation ! stack_type type_has_unresolved && then
+        op Op::location f"Cannot infer element type of empty array literal assigned to `{var_name}`; add a type annotation (e.g. `= {var_name}:array[int]`) or an explicit cast (e.g. `[] (array[int])`)." ErrorKind::TypeMismatch raise_error
     fi
 
     # Try local variables first
@@ -1540,7 +1556,7 @@ fn check_function_ops
 # Check literal push operations
 # ============================================================================
 
-fn check_literals tc:TypeChecker op:Op {
+fn check_literals tc:TypeChecker op:Op function_opt:Option[Function] {
     op.value = literal_value
     if literal_value OpValue::PushInt is then
         "int" tc stack_push
@@ -1550,9 +1566,29 @@ fn check_literals tc:TypeChecker op:Op {
         "bool" tc stack_push
     elif literal_value OpValue::PushChar is then
         "char" tc stack_push
-    elif literal_value OpValue::PushArray is then
-        # Array literals: pop N items of same type
-        "array[any]" tc stack_push
+    elif literal_value OpValue::PushArray(items) is then
+        if 0 items.length == then
+            List::new(List[str]) = empty_params
+            TYPE_UNKNOWN empty_params.push
+            empty_params "array" build_parameterized_type tc stack_push
+        else
+            function_opt items tc run_type_check_ops
+            TYPE_UNKNOWN = elem_type
+            0 = items_idx
+            while items_idx items.length > do
+                tc stack_pop = item_type
+                elem_type item_type unify_type = unified
+                if "" unified == then
+                    op Op::location f"Heterogeneous array literal: cannot unify `{elem_type}` and `{item_type}`" ErrorKind::TypeMismatch raise_error
+                else
+                    unified = elem_type
+                fi
+                1 += items_idx
+            done
+            List::new(List[str]) = item_params
+            elem_type item_params.push
+            item_params "array" build_parameterized_type tc stack_push
+        fi
     elif literal_value OpValue::FstringConcat(count) is then
         0 = index
         while index count > do
@@ -2456,7 +2492,7 @@ fn run_type_check_ops checker:TypeChecker ops:List[Op] function_opt:Option[Funct
         op_value OpValue::PushArray is ||
         op_value OpValue::FstringConcat is ||
         then
-            current_op checker check_literals
+            function_opt current_op checker check_literals
             continue
         fi
 
