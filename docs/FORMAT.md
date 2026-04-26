@@ -148,7 +148,7 @@ When the signature would exceed 100 characters, wrap as follows:
 fn make_compiler_with_tables
     store:SymbolStore
     ops:List[Op]
-    function:int
+    function:Option[Function]
     string_table:List[str]
     constants_table:List[str]
 -> BytecodeCompiler {

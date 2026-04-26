@@ -97,6 +97,34 @@ person.name print                  # John Doe (dot on variable)
 "Jane Doe" person->name    # same as: "Jane Doe" person Person::set_name
 ```
 
+## Struct-Typed Fields
+
+A struct field can be declared with another struct type. Reads and writes are type-checked — no manual cast at the use site.
+
+```casa
+struct Node {
+    value: int
+    next:  Node
+}
+
+0 (Node) 42 Node = first      # next=null, value=42
+0 (Node) 99 Node = second
+second first->next            # first.next now points at second
+```
+
+Self-referential and mutually recursive struct types are supported. The null sentinel for "no value" is `0 (StructName)`. For optional references, prefer `Option[StructName]`, which makes absence explicit:
+
+```casa
+struct BytecodeCompiler {
+    ops:      List[Op]
+    function: Option[Function]
+}
+
+if compiler BytecodeCompiler::function Option::Some(function) is then
+    function Function::variables.length print
+fi
+```
+
 ## Generic Structs
 
 Structs can have type parameters. These are declared in square brackets after the struct name.
