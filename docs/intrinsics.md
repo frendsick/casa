@@ -58,7 +58,7 @@ true print                  # true
 
 Consumes the top of the stack and prints its type name to stdout.
 
-**Signature:** `typeof a:any`
+**Signature:** `[T] T -> str`
 
 **Stack effect:** `a -> None`
 
