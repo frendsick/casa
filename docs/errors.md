@@ -157,12 +157,12 @@ error[STACK_MISMATCH]: Branches have incompatible stack effects
    |
 27 |     fi
    |     ^^
-  Note: `if` branch has signature `any -> any int int`
+  Note: `if` branch has signature `? -> ? int int`
   --> examples/multi_error.casa:23:5
    |
 23 |     if dup then
    |     ^^
-  Note: `else` branch has signature `any -> any int`
+  Note: `else` branch has signature `? -> ? int`
   --> examples/multi_error.casa:25:5
    |
 25 |     else
@@ -181,7 +181,7 @@ bad
 ```
 error[SIGNATURE_MISMATCH]: Invalid signature for function `bad`
   Expected: int -> str
-  Inferred: any -> int
+  Inferred: ? -> int
 ```
 
 ### `INVALID_VARIABLE`

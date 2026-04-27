@@ -117,9 +117,9 @@ String `==` and `!=` compare by content (byte-by-byte), not by pointer identity.
 
 | Operator | Stack Effect | Description |
 |----------|-------------|-------------|
-| `&&` | `any any -> bool` | Logical AND |
-| `\|\|` | `any any -> bool` | Logical OR |
-| `!`  | `any -> bool` | Logical NOT |
+| `&&` | `bool bool -> bool` | Logical AND |
+| `\|\|` | `bool bool -> bool` | Logical OR |
+| `!`  | `bool -> bool` | Logical NOT |
 
 ```casa
 true true && print    # 1

@@ -233,7 +233,7 @@ Function type representing a lambda or function reference. The signature inside 
 ```casa
 { 2 * }           # type: fn[int -> int]
 { 1 + }           # type: fn[int -> int]
-{ drop "hi" }     # type: fn[any -> str]
+{ drop "hi" }     # type: fn[T -> str]
 ```
 
 Call a function value with `exec`:
@@ -315,17 +315,17 @@ Result type representing either a success value (`Result::Ok`) or an error value
 enum Result[T E] { Error(E) Ok(T) }
 ```
 
-`Result::Ok` wraps the top-of-stack value into a result. The resulting type is `Result[T any]` where `T` is the type of the wrapped value.
+`Result::Ok` wraps the top-of-stack value into a result. The resulting type is `Result[T E]` where `T` is the type of the wrapped value and `E` remains an unbound type variable until constrained by a use site or annotation.
 
-**Stack effect:** `T -> Result[T any]`
+**Stack effect:** `T -> Result[T E]`
 
-`Result::Error` wraps the top-of-stack value into an error result. The resulting type is `Result[any E]` where `E` is the type of the error value.
+`Result::Error` wraps the top-of-stack value into an error result. The resulting type is `Result[T E]` where `E` is the type of the error value and `T` remains unbound.
 
-**Stack effect:** `E -> Result[any E]`
+**Stack effect:** `E -> Result[T E]`
 
 ```casa
-42 Result::Ok            # type: Result[int any]
-"not found" Result::Error # type: Result[any str]
+42 Result::Ok            # type: Result[int E]
+"not found" Result::Error # type: Result[T str]
 ```
 
 At runtime, a result is heap-allocated as 16 bytes: `[tag, value]` where each field is 8 bytes. The tag is `1` for `Ok` and `0` for `Error`.
@@ -333,8 +333,8 @@ At runtime, a result is heap-allocated as 16 bytes: `[tag, value]` where each fi
 Results stored in variables retain their type:
 
 ```casa
-42 Result::Ok = x                    # x has type Result[int any]
-"not found" Result::Error = y        # y has type Result[any str]
+42 Result::Ok = x                    # x has type Result[int E]
+"not found" Result::Error = y        # y has type Result[T str]
 ```
 
 Type annotations can narrow the type to specify both type parameters:
@@ -347,7 +347,7 @@ A bare `Result` type matches any `Result[T E]` in function signatures, similar t
 
 ```casa
 fn check res:Result -> bool { true }
-42 Result::Ok check    # works: Result[int any] matches bare Result
+42 Result::Ok check    # works: Result[int E] matches bare Result
 ```
 
 `Result::Ok` and `Result::Error` can appear in different branches of a conditional. The type checker unifies them to the more specific `Result[T E]`:
@@ -412,16 +412,6 @@ fn hash_key[K: Hashable] key:K -> int {
 ```
 
 Type variables are purely compile-time, including trait bounds. See [Functions and Lambdas — Generic Functions](functions-and-lambdas.md#generic-functions) and [Traits](traits.md) for details.
-
-## The `any` Type
-
-`any` is a special wildcard type that matches any other type. It is used as an escape hatch when the type system cannot determine a precise type.
-
-```casa
-32 alloc = buffer
-42 buffer (ptr) store64
-buffer (ptr) load64    # type: int
-```
 
 ## Type Casting
 

@@ -190,7 +190,7 @@ Multiple type variables are separated by commas. Variables without a `:` have no
 
 Every type variable must appear in at least one parameter (return-only type variables are not allowed).
 
-Type variable names must not collide with built-in types (`int`, `bool`, `char`, `cstr`, `str`, `ptr`, `array`, `any`) or user-defined struct names:
+Type variable names must not collide with built-in types (`int`, `bool`, `char`, `cstr`, `str`, `ptr`, `array`) or user-defined struct names:
 
 ```casa
 fn bad[int] int -> int { }     # ERROR: shadows built-in type
