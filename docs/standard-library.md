@@ -380,6 +380,19 @@ Use `match` with destructuring to handle Result values:
 end
 ```
 
+## Built-in Traits
+
+The standard library declares traits with primitive implementations. See [Traits](traits.md) for details.
+
+| Trait | Required | Defaults | Built-in impls |
+|-------|----------|----------|----------------|
+| `Eq` | `eq self other -> bool` | `ne` | `int`, `bool`, `char`, `str`, `cstr`, `ptr` |
+| `Ord` | `lt self other -> bool` | `le`, `gt`, `ge` | `int`, `char` |
+| `Display: Word` | `to_str self -> str` (extends `Word`) | -- | `int`, `bool`, `char`, `str`, `cstr`, `ptr`, `array[T]`, `List[T]`, `Option[T]`, `Result[T E]` |
+| `Word` | (marker) | -- | every single-slot type |
+| `Hashable: Eq + Word` | `hash self -> int` (extends `Eq`, `Word`) | -- | `int`, `str`, payload-free enums (auto-derived) |
+| `Iterable[T]` | `next self -> Option[T]` | `collect`, `map`, `filter`, `fold`, `count`, `any`, `all`, `find` | `Iter[T]` |
+
 ## See Also
 
 - [Collections](collections.md) -- List, Map, Set, and StringBuilder

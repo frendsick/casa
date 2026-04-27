@@ -43,7 +43,9 @@ fn tc_check ops:List[Op] -> TypeChecker {
         helper_kind OpValue::Gt is ||
         helper_kind OpValue::Ge is ||
         then
-            helper_op helper_tc check_comparison
+            1 += helper_i
+            Option::None(Option[Function]) helper_i ops helper_op helper_tc check_comparison = helper_i
+            continue
             # Boolean
         elif
         helper_kind OpValue::And is
@@ -82,10 +84,12 @@ fn tc_check ops:List[Op] -> TypeChecker {
         helper_kind OpValue::Store64 is ||
         helper_kind OpValue::HeapAlloc is ||
         then
-            helper_op helper_tc check_memory
+            Option::None(Option[Function]) helper_op helper_tc check_memory
             # Print
         elif helper_kind OpValue::Print is then
-            helper_op helper_tc check_io
+            1 += helper_i
+            Option::None(Option[Function]) helper_i ops helper_op helper_tc check_io = helper_i
+            continue
             # Typeof
         elif helper_kind OpValue::Typeof is then
             helper_op helper_tc check_typeof
@@ -103,7 +107,7 @@ fn tc_check ops:List[Op] -> TypeChecker {
         helper_kind OpValue::Syscall5 is ||
         helper_kind OpValue::Syscall6 is ||
         then
-            helper_op helper_tc check_syscalls
+            Option::None(Option[Function]) helper_op helper_tc check_syscalls
             # Argc / Argv
         elif helper_kind OpValue::Argc is then
             "int" helper_tc stack_push
@@ -393,7 +397,7 @@ fn test_print_dispatch {
 }
 
 # ============================================================================
-# Tests: Typeof pops any, pushes str
+# Tests: Typeof pops a generic value, pushes str
 # ============================================================================
 
 fn test_typeof_effect {
@@ -474,8 +478,8 @@ fn test_argc_argv {
 fn test_types_match {
     "types_match" test_start
     "same types" "int" "int" types_match assert_true
-    "any matches int" "int" "any" types_match assert_true
-    "int matches any" "any" "int" types_match assert_true
+    "TYPE_UNKNOWN matches int" "int" TYPE_UNKNOWN types_match assert_true
+    "int matches TYPE_UNKNOWN" TYPE_UNKNOWN "int" types_match assert_true
     "different types" "str" "int" types_match ! assert_true
     "fn base matches fn type" "fn[int -> int]" "fn" types_match assert_true
     "generic base matches" "List[int]" "List" types_match assert_true
@@ -488,8 +492,8 @@ fn test_types_match {
 fn test_unify_type {
     "unify_type" test_start
     "same" "int" "int" "int" unify_type assert_str_eq
-    "any + int" "int" "int" "any" unify_type assert_str_eq
-    "int + any" "int" "any" "int" unify_type assert_str_eq
+    "unknown + int" "int" "int" TYPE_UNKNOWN unify_type assert_str_eq
+    "int + unknown" "int" TYPE_UNKNOWN "int" unify_type assert_str_eq
     "incompatible" "" "str" "int" unify_type assert_str_eq
 }
 
@@ -1007,7 +1011,7 @@ fn test_tc_pipeline_div_mod {
 
 fn test_types_match_extended {
     "types_match_extended" test_start
-    "both any" "any" "any" types_match assert_true
+    "both unknown" TYPE_UNKNOWN TYPE_UNKNOWN types_match assert_true
     "str str" "str" "str" types_match assert_true
     "bool bool" "bool" "bool" types_match assert_true
     "ptr ptr" "ptr" "ptr" types_match assert_true
@@ -1016,17 +1020,17 @@ fn test_types_match_extended {
 }
 
 # ============================================================================
-# Tests: stacks_compatible with any type
+# Tests: stacks_compatible with TYPE_UNKNOWN sentinel
 # ============================================================================
 
-fn test_stacks_compatible_with_any {
-    "stacks_compatible_with_any" test_start
+fn test_stacks_compatible_with_unknown {
+    "stacks_compatible_with_unknown" test_start
     List::new(List[str]) = stack_a
     "int" stack_a.push
     List::new(List[str]) = stack_b
-    "any" stack_b.push
+    TYPE_UNKNOWN stack_b.push
     stack_b stack_a stacks_compatible = result
-    "any matches int" 1 result.length assert_eq
+    "TYPE_UNKNOWN matches int" 1 result.length assert_eq
 }
 
 fn test_stacks_compatible_empty {
@@ -1200,6 +1204,79 @@ fn test_error_syscall3_non_int_number {
     "0 0 0 \"not_a_number\" syscall3" tc_string_error drop
     "has errors" assert_has_errors
     "type mismatch" ErrorKind::TypeMismatch assert_error_kind
+    clear_errors
+    disable_test_mode
+}
+
+# ============================================================================
+# Tests: Word-bound on syscall and store builtins
+# ============================================================================
+
+fn tc_full code:str {
+    clear_global_state
+    enable_test_mode
+    clear_errors
+    "test" code lex_source = tokens
+    tokens DEFAULT_PARSER parse_ops = ops
+    ops DEFAULT_PARSER resolve_identifiers_global = ops
+    Option::None(Option[Function]) ops type_check_ops drop
+    type_check_functions
+}
+
+fn test_error_syscall_non_word_bound_type_var {
+    "error_syscall_non_word_bound_type_var" test_start
+    "trait Word { } trait NotWord { } fn fail_syscall[T: NotWord] arg:T -> int { arg 1 syscall1 } 42 fail_syscall drop" tc_full
+    "has errors" assert_has_errors
+    "mentions Word" "Word" assert_error_contains
+    clear_errors
+    disable_test_mode
+}
+
+fn test_syscall_word_bound_explicit_passes {
+    "syscall_word_bound_explicit_passes" test_start
+    "trait Word { } fn ok_syscall[T: Word] arg:T -> int { arg 1 syscall1 } 42 ok_syscall drop" tc_full
+    "no errors" 0 ERRORS.length assert_eq
+    clear_errors
+    disable_test_mode
+}
+
+fn test_syscall_unbound_type_var_passes {
+    "syscall_unbound_type_var_passes" test_start
+    "trait Word { } fn deferred_syscall[T] arg:T -> int { arg 1 syscall1 } 42 deferred_syscall drop" tc_full
+    "no errors" 0 ERRORS.length assert_eq
+    clear_errors
+    disable_test_mode
+}
+
+fn test_error_store64_non_word_bound_type_var {
+    "error_store64_non_word_bound_type_var" test_start
+    "trait Word { } trait NotWord { } fn fail_store[T: NotWord] destination:ptr value:T -> None { value destination store64 } 42 1 alloc fail_store" tc_full
+    "has errors" assert_has_errors
+    "mentions Word" "Word" assert_error_contains
+    clear_errors
+    disable_test_mode
+}
+
+fn test_store64_word_bound_explicit_passes {
+    "store64_word_bound_explicit_passes" test_start
+    "trait Word { } fn ok_store[T: Word] destination:ptr value:T -> None { value destination store64 } 42 1 alloc ok_store" tc_full
+    "no errors" 0 ERRORS.length assert_eq
+    clear_errors
+    disable_test_mode
+}
+
+fn test_store64_unbound_type_var_passes {
+    "store64_unbound_type_var_passes" test_start
+    "trait Word { } fn deferred_store[T] destination:ptr value:T -> None { value destination store64 } 42 1 alloc deferred_store" tc_full
+    "no errors" 0 ERRORS.length assert_eq
+    clear_errors
+    disable_test_mode
+}
+
+fn test_store64_supertrait_word_passes {
+    "store64_supertrait_word_passes" test_start
+    "trait Word { } trait Inner: Word { } fn super_store[T: Inner] destination:ptr value:T -> None { value destination store64 } 42 1 alloc super_store" tc_full
+    "no errors" 0 ERRORS.length assert_eq
     clear_errors
     disable_test_mode
 }
@@ -1509,18 +1586,22 @@ fn test_types_match_array_types {
 }
 
 # ============================================================================
-# Tests: Print dispatch for ptr (falls to print_int)
+# Tests: Print dispatch on a non-Display type adds an error
 # ============================================================================
 
-fn test_print_dispatch_ptr {
-    "print_dispatch_ptr" test_start
+fn test_print_dispatch_no_display {
+    "print_dispatch_no_display" test_start
+    enable_test_mode
+    clear_errors
     List::new(List[Op]) = ops
     empty_location 10 OpValue::PushInt make_op ops.push
     empty_location OpValue::HeapAlloc make_op ops.push
     empty_location OpValue::Print make_op ops.push
     ops tc_check drop
-    # ptr falls through to print_int
-    "print ptr resolved" 2 ops.get.value OpValue::PrintInt is assert_true
+    "ptr without Display impl raises an error" assert_has_errors
+    "error mentions Display trait" "Display" assert_error_contains
+    clear_errors
+    disable_test_mode
 }
 
 # ============================================================================
@@ -1702,6 +1783,65 @@ fn test_branch_frame_kind_dispatch {
     fi
     "mutation persists through binding" default_present_after assert_true
 }
+
+# ============================================================================
+# Tests: Array literal element-type inference
+# ============================================================================
+
+fn test_array_literal_int_inference {
+    "array_literal_int_inference" test_start
+    "[1 2 3]" tc_string = sig
+    "one return" 1 sig Signature::return_types.length assert_eq
+    "array[int]" "array[int]" 0 sig Signature::return_types.get assert_str_eq
+}
+
+fn test_array_literal_str_inference {
+    "array_literal_str_inference" test_start
+    "[\"a\" \"b\"]" tc_string = sig
+    "array[str]" "array[str]" 0 sig Signature::return_types.get assert_str_eq
+}
+
+fn test_array_literal_bool_inference {
+    "array_literal_bool_inference" test_start
+    "[true false]" tc_string = sig
+    "array[bool]" "array[bool]" 0 sig Signature::return_types.get assert_str_eq
+}
+
+fn test_array_literal_empty {
+    "array_literal_empty" test_start
+    "[] (array[int])" tc_string = sig
+    "explicit cast resolves" "array[int]" 0 sig Signature::return_types.get assert_str_eq
+}
+
+fn test_array_literal_empty_with_annotation {
+    "array_literal_empty_with_annotation" test_start
+    "[] = xs:array[int] xs" tc_string = sig
+    "annotation resolves" "array[int]" 0 sig Signature::return_types.get assert_str_eq
+}
+
+fn test_array_literal_empty_with_cast_then_assign {
+    "array_literal_empty_with_cast_then_assign" test_start
+    "[] (array[str]) = xs xs" tc_string = sig
+    "cast then assign" "array[str]" 0 sig Signature::return_types.get assert_str_eq
+}
+
+fn test_error_array_literal_heterogeneous {
+    "error_array_literal_heterogeneous" test_start
+    "[1 \"a\"]" tc_string_error drop
+    "has errors" assert_has_errors
+    "type mismatch" ErrorKind::TypeMismatch assert_error_kind
+    clear_errors
+    disable_test_mode
+}
+
+fn test_error_array_literal_unresolved_assignment {
+    "error_array_literal_unresolved_assignment" test_start
+    "[] = xs xs drop" tc_string_error drop
+    "has errors" assert_has_errors
+    "type mismatch" ErrorKind::TypeMismatch assert_error_kind
+    clear_errors
+    disable_test_mode
+}
 # OpFnReturn inside a branch restores live from the frame's `before` snapshot.
 
 fn test_branch_return_inside_if_restores_live {
@@ -1808,7 +1948,7 @@ test_tc_pipeline_bitshift
 test_tc_pipeline_syscall_remaining
 test_tc_pipeline_div_mod
 test_types_match_extended
-test_stacks_compatible_with_any
+test_stacks_compatible_with_unknown
 test_stacks_compatible_empty
 test_error_arithmetic_str_int
 test_error_arithmetic_bool_int
@@ -1821,6 +1961,13 @@ test_error_store_non_ptr
 test_error_syscall_non_int_number
 test_error_syscall1_non_int_number
 test_error_syscall3_non_int_number
+test_error_syscall_non_word_bound_type_var
+test_syscall_word_bound_explicit_passes
+test_syscall_unbound_type_var_passes
+test_error_store64_non_word_bound_type_var
+test_store64_word_bound_explicit_passes
+test_store64_unbound_type_var_passes
+test_store64_supertrait_word_passes
 test_store_accepts_any_value_type
 test_memory_store64
 test_syscall_any_arg_type
@@ -1847,7 +1994,7 @@ test_tc_pipeline_print_pops
 test_stacks_compatible_different_types
 test_types_match_fn_types
 test_types_match_array_types
-test_print_dispatch_ptr
+test_print_dispatch_no_display
 test_typeof_annotation
 test_type_cast_str_to_int
 test_type_cast_bool_to_int
@@ -1860,4 +2007,12 @@ test_branch_if_end_pops_frame
 test_branch_while_empty_body
 test_branch_frame_kind_dispatch
 test_branch_return_inside_if_restores_live
+test_array_literal_int_inference
+test_array_literal_str_inference
+test_array_literal_bool_inference
+test_array_literal_empty
+test_array_literal_empty_with_annotation
+test_array_literal_empty_with_cast_then_assign
+test_error_array_literal_heterogeneous
+test_error_array_literal_unresolved_assignment
 test_summary

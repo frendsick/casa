@@ -78,7 +78,7 @@ Hover over a symbol to see type and signature information in a code block.
 | Integer, string, bool, or char literal | Type and value (e.g. `(int) 42`) |
 | Assignment | `= name: type` (with inferred type) |
 | Operator | Name and stack effect (e.g. `+: int int -> int`) |
-| Intrinsic | Name and stack effect (e.g. `drop: any -> None`) |
+| Intrinsic | Name and stack effect (e.g. `drop: [T] T -> None`) |
 
 All operators and intrinsics show their stack effects on hover, including arithmetic, comparison, boolean, bitwise, stack manipulation, memory, syscall, and IO operations.
 
