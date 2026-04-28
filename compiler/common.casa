@@ -839,6 +839,209 @@ struct Program {
 8 = WORD_SIZE
 
 # ============================================================================
+# Type AST
+#
+# Structured representation of types. Foundation for replacing string-based
+# type slots (Parameter.typ, Variable.typ, Member.typ, Signature.return_types,
+# TypedStack.types) — see PRD #140.
+# ============================================================================
+
+enum BuiltinType {
+    Int
+    Bool
+    Char
+    Cstr
+    Str
+    Ptr
+}
+
+impl BuiltinType {
+    fn format self:BuiltinType -> str {
+        self match
+            BuiltinType::Int => { "int" }
+            BuiltinType::Bool => { "bool" }
+            BuiltinType::Char => { "char" }
+            BuiltinType::Cstr => { "cstr" }
+            BuiltinType::Str => { "str" }
+            BuiltinType::Ptr => { "ptr" }
+        end
+    }
+}
+
+fn builtin_from_str source:str -> Option[BuiltinType] {
+    if "int" source == then BuiltinType::Int Option::Some return fi
+    if "bool" source == then BuiltinType::Bool Option::Some return fi
+    if "char" source == then BuiltinType::Char Option::Some return fi
+    if "cstr" source == then BuiltinType::Cstr Option::Some return fi
+    if "str" source == then BuiltinType::Str Option::Some return fi
+    if "ptr" source == then BuiltinType::Ptr Option::Some return fi
+    Option::None
+}
+
+struct GenericType {
+    base:   str
+    params: List[Type]
+}
+
+struct FunctionType {
+    parameters:   List[Type]
+    return_types: List[Type]
+}
+
+enum Type {
+    Builtin (BuiltinType)
+    Generic (GenericType)
+    Function (FunctionType)
+    TypeVar (str)
+}
+
+fn parse_generic_params source:str -> List[Type] {
+    # Recursively parse space-separated type tokens from inside brackets.
+    List::new(List[Type]) = params
+    StringBuilder::new = current
+    0 = depth
+    for ch in source.iter do
+        if '[' ch == then
+            1 += depth
+            ch current.append_char
+        elif ']' ch == then
+            depth 1 - = depth
+            ch current.append_char
+        elif ' ' ch == 0 depth == && then
+            if 0 current.length != then
+                current.build parse_type_str params.push
+                StringBuilder::new = current
+            fi
+        else
+            ch current.append_char
+        fi
+    done
+    if 0 current.length != then
+        current.build parse_type_str params.push
+    fi
+    params
+}
+
+impl Type {
+    fn format self:Type -> str {
+        self match
+            Type::Builtin(builtin) => { builtin.format }
+            Type::TypeVar(name) => { name }
+            Type::Generic(generic) => {
+                if 0 generic.params.length == then
+                    generic.base return
+                fi
+                StringBuilder::new = builder
+                generic.base builder.append
+                "[" builder.append
+                0 = index
+                while index generic.params.length > do
+                    if 0 index != then " " builder.append fi
+                    index generic.params.get.format builder.append
+                    1 += index
+                done
+                "]" builder.append
+                builder.build
+            }
+            Type::Function(fn_type) => {
+                if 0 fn_type.parameters.length == 0 fn_type.return_types.length == && then
+                    "fn" return
+                fi
+                StringBuilder::new = builder
+                "fn[" builder.append
+                0 = index
+                while index fn_type.parameters.length > do
+                    if 0 index != then " " builder.append fi
+                    index fn_type.parameters.get.format builder.append
+                    1 += index
+                done
+                if 0 fn_type.return_types.length != then
+                    if 0 fn_type.parameters.length != then " " builder.append fi
+                    "->" builder.append
+                    for return_type in fn_type.return_types.iter do
+                        " " builder.append
+                        return_type.format builder.append
+                    done
+                fi
+                "]" builder.append
+                builder.build
+            }
+        end
+    }
+}
+
+fn parse_type_str source:str -> Type {
+    if source builtin_from_str Option::Some(builtin) is then
+        builtin Type::Builtin return
+    fi
+    # TypeVar: single uppercase letter
+    if 1 source.length == then
+        if 0 source.at.is_upper then
+            source Type::TypeVar return
+        fi
+    fi
+    # Function type: bare "fn" or "fn[...]"
+    if "fn" source == then
+        List::new(List[Type]) List::new(List[Type]) FunctionType Type::Function return
+    fi
+    if "fn[" source str::starts_with source "]" str::ends_with && then
+        source.length 4 - = inner_length
+        source 3 inner_length str::substring = fn_inner
+        List::new(List[Type]) = fn_params
+        List::new(List[Type]) = fn_returns
+        false = past_arrow
+        StringBuilder::new = current
+        0 = depth
+        for ch in fn_inner.iter do
+            if '[' ch == then
+                1 += depth
+                ch current.append_char
+            elif ']' ch == then
+                depth 1 - = depth
+                ch current.append_char
+            elif ' ' ch == 0 depth == && then
+                if 0 current.length != then
+                    current.build = token
+                    if "->" token == then
+                        true = past_arrow
+                    elif past_arrow then
+                        token parse_type_str fn_returns.push
+                    else
+                        token parse_type_str fn_params.push
+                    fi
+                    StringBuilder::new = current
+                fi
+            else
+                ch current.append_char
+            fi
+        done
+        if 0 current.length != then
+            current.build = last_token
+            if "->" last_token == then
+                # bare arrow at end — nothing
+            elif past_arrow then
+                last_token parse_type_str fn_returns.push
+            else
+                last_token parse_type_str fn_params.push
+            fi
+        fi
+        fn_returns fn_params FunctionType Type::Function return
+    fi
+    # Generic: Name[params]
+    if "[" source str::contains source "]" str::ends_with && then
+        "[" source str::find = bracket_pos
+        source 0 bracket_pos str::substring = base
+        source.length base.length - 2 - = inner_len
+        source base.length 1 + inner_len str::substring = inner
+        inner parse_generic_params = params
+        params base GenericType Type::Generic return
+    fi
+    # Named type with no params (user struct/enum)
+    List::new(List[Type]) = empty_params
+    empty_params source GenericType Type::Generic
+}
+
+# ============================================================================
 # Type utility functions
 # ============================================================================
 
