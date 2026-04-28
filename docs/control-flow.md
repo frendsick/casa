@@ -80,7 +80,7 @@ fi
 # result type: Option[int]
 ```
 
-The same applies to bare `array` and `array[T]`, and to `any` with any concrete type.
+The same applies to bare `array` and `array[T]`.
 
 If there is no `else` branch, the `if`/`elif` branches must not change the stack at all (since the "no match" path leaves the stack unchanged).
 

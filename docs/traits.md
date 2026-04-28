@@ -160,29 +160,73 @@ Map::new (Map[str int]) = m
 
 The compiler sees that `Map::new` requires `[K: Hashable, V]`, determines `K=str` from the type cast `(Map[str int])`, verifies that `str` satisfies `Hashable`, and injects `&str::hash` and `&str::eq` behind the scenes.
 
-## Built-in Trait: `Hashable`
+## Built-in Trait: `Eq`
 
-The standard library defines the `Hashable` trait and provides implementations for `str` and `int`:
+Equality comparison. The required method is `eq`; the trait provides a default `ne` implemented as `!eq`.
 
 ```casa
-trait Hashable {
-    fn hash self:self -> int
+trait Eq {
     fn eq self:self other:self -> bool
+    fn ne self:self other:self -> bool { other self.eq ! }
+}
+```
+
+Built-in implementations: `int`, `bool`, `char`, `str`, `cstr`, `ptr`.
+
+A type satisfies `Eq` by providing `Type::eq self:Type other:Type -> bool`. The `ne` default is auto-instantiated for any satisfying type, so `x.ne y` works without writing it.
+
+The `==` and `!=` operators are bounded by `Eq`. Built-in primitives and enums get direct bytecode comparison, but a user-defined struct used with `==` must provide `impl T { fn eq ... }`; the operator then lowers to `T::eq`. Comparing values whose type does not satisfy `Eq` is a compile-time error.
+
+## Built-in Trait: `Ord`
+
+Total ordering. The required method is `lt`; the defaults `le`, `gt`, and `ge` are derived from it.
+
+```casa
+trait Ord {
+    fn lt self:self other:self -> bool
+    fn le self:self other:self -> bool { self other.lt ! }
+    fn gt self:self other:self -> bool { self other.lt }
+    fn ge self:self other:self -> bool { other self.lt ! }
+}
+```
+
+Built-in implementations: `int`, `char`. Lexicographic ordering for `str` is intentionally out of scope.
+
+The `<`, `<=`, `>`, and `>=` operators are bounded by `Ord`. Built-in primitives (excluding `str`) and enums use direct bytecode ordering; user-defined types must provide `impl T { fn lt ... }` and the operator lowers to the corresponding trait method (`lt`, `le`, `gt`, `ge`). A type with `impl Eq` but no `impl Ord` is rejected at compile time when used with an ordering operator.
+
+## Built-in Trait: `Word`
+
+Marker trait for register-sized values that fit in one stack slot. It declares no methods:
+
+```casa
+trait Word { }
+```
+
+It is used as a bound on builtins that require single-slot operands (for example, syscall and `store*` arguments). Primitive types, enums, struct refs, and array refs satisfy `Word`; multi-slot value types do not.
+
+`Hashable` and `Display` both extend `Word` as supertraits, so any type that satisfies one of them automatically satisfies `Word`.
+
+## Built-in Trait: `Hashable`
+
+The standard library defines the `Hashable` trait as an extension of `Eq` and `Word`. Any `Hashable` type therefore also satisfies both `Eq` and `Word` (see [Supertraits](#supertraits)). The trait declares only `hash`; equality is reused from `Eq`:
+
+```casa
+trait Hashable: Eq + Word {
+    fn hash self:self -> int
 }
 ```
 
 Built-in implementations:
 - `str::hash` uses the djb2 hash algorithm (via `str_hash`)
-- `str::eq` compares strings by content
 - `int::hash` returns the absolute value (via `int_hash`)
-- `int::eq` compares integers with `==`
+- `Eq::eq` for `str` and `int` is provided by their respective `impl` blocks
 
 ## Built-in Trait: `Display`
 
-The standard library defines a `Display` trait used by f-string interpolation to convert values to strings:
+The standard library defines a `Display` trait used by f-string interpolation to convert values to strings. `Display` extends `Word`, so any displayable type also satisfies `Word`:
 
 ```casa
-trait Display {
+trait Display: Word {
     fn to_str self:self -> str
 }
 ```
@@ -203,6 +247,28 @@ impl Point {
 1 2 Point = origin
 f"origin = {origin}\n" print    # origin = Point(1, 2)
 ```
+
+## Supertraits
+
+A trait can require its implementors to also satisfy one or more *supertraits*. Declare supertraits with `:` after the trait name (and optional type parameters), separating multiple supertraits with `+`:
+
+```casa
+trait Eq {
+    fn eq self:self other:self -> bool
+}
+
+trait Word { }
+
+trait Hashable: Eq + Word {
+    fn hash self:self -> int
+}
+```
+
+Multiple supertraits are listed with `+`. A type satisfies `Hashable` only if it satisfies every supertrait (here `Eq` and `Word`) in addition to providing `Hashable`'s own required methods. Concretely, the type's `impl` block must contain `eq` (from `Eq`) and `hash` (from `Hashable`); `Word` is a marker with no required methods, so its satisfaction is automatic.
+
+Trait-bounded code may call methods declared by any supertrait directly. For example, inside a function bounded by `K: Hashable`, both `K::hash` and `K::eq` resolve correctly.
+
+Supertraits are checked at the trait's declaration site: each supertrait must already be defined.
 
 ## Default Methods
 

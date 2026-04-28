@@ -83,16 +83,18 @@ buf (ptr) 8 + load64 print  # 42
 
 ## Comparison
 
-All comparison operators consume two values and push a `bool`.
+All comparison operators consume two values of the same type and push a `bool`. Equality operators require the operand type to satisfy the `Eq` trait; ordering operators require `Ord`.
 
 | Operator | Stack Effect | Description |
 |----------|-------------|-------------|
-| `==` | `any any -> bool` | Equal |
-| `!=` | `any any -> bool` | Not equal |
-| `<`  | `any any -> bool` | Less than |
-| `<=` | `any any -> bool` | Less than or equal |
-| `>`  | `any any -> bool` | Greater than |
-| `>=` | `any any -> bool` | Greater than or equal |
+| `==` | `[T: Eq] T T -> bool` | Equal |
+| `!=` | `[T: Eq] T T -> bool` | Not equal |
+| `<`  | `[T: Ord] T T -> bool` | Less than |
+| `<=` | `[T: Ord] T T -> bool` | Less than or equal |
+| `>`  | `[T: Ord] T T -> bool` | Greater than |
+| `>=` | `[T: Ord] T T -> bool` | Greater than or equal |
+
+Built-in primitives (`int`, `bool`, `char`, `cstr`, `ptr`) and enums get direct bytecode comparison. User-defined types must provide `impl T { fn eq ... }` (and `fn lt ...` for ordering); the operator then lowers to the corresponding trait method call. See [traits.md](traits.md) for `Eq` and `Ord`.
 
 ```casa
 1 1 == print    # 1 (true)
@@ -115,9 +117,9 @@ String `==` and `!=` compare by content (byte-by-byte), not by pointer identity.
 
 | Operator | Stack Effect | Description |
 |----------|-------------|-------------|
-| `&&` | `any any -> bool` | Logical AND |
-| `\|\|` | `any any -> bool` | Logical OR |
-| `!`  | `any -> bool` | Logical NOT |
+| `&&` | `bool bool -> bool` | Logical AND |
+| `\|\|` | `bool bool -> bool` | Logical OR |
+| `!`  | `bool -> bool` | Logical NOT |
 
 ```casa
 true true && print    # 1
@@ -149,7 +151,6 @@ The `= name:type` form lets you annotate the type of a variable at assignment ti
 ```casa
 42 = x:int                  # explicit int annotation
 Option::None = empty:Option[int]    # narrow bare Option to Option[int]
-42 (any) = val:int          # narrow any to int
 ```
 
 Variables are created on first assignment. See [Functions and Lambdas -- Variables](functions-and-lambdas.md#variables) for scoping rules.

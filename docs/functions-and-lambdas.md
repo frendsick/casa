@@ -147,6 +147,18 @@ fn first[T1 T2] a:T1 b:T2 -> T1 { a }
 fn wrap[T] T -> T int { 42 }
 ```
 
+The built-in stack intrinsics use the same generic surface syntax:
+
+```casa
+# drop[T]         T -> None
+# dup[T]          T -> T T
+# swap[T1 T2]     T1 T2 -> T2 T1
+# over[T1 T2]     T1 T2 -> T2 T1 T2
+# rot[T1 T2 T3]   T1 T2 T3 -> T3 T1 T2
+fn keep_top[T1 T2] T1 T2 -> T1 { swap drop }
+42 "kept" keep_top         # "kept" (deeper int dropped, top str kept)
+```
+
 The type checker enforces consistency — if the same type variable appears multiple times in the parameters, all occurrences must bind to the same type:
 
 ```casa
@@ -178,7 +190,7 @@ Multiple type variables are separated by commas. Variables without a `:` have no
 
 Every type variable must appear in at least one parameter (return-only type variables are not allowed).
 
-Type variable names must not collide with built-in types (`int`, `bool`, `char`, `cstr`, `str`, `ptr`, `array`, `any`) or user-defined struct names:
+Type variable names must not collide with built-in types (`int`, `bool`, `char`, `cstr`, `str`, `ptr`, `array`) or user-defined struct names:
 
 ```casa
 fn bad[int] int -> int { }     # ERROR: shadows built-in type
@@ -234,10 +246,9 @@ A variable's type is set on first assignment and cannot change:
 "hi" = x     # ERROR: cannot assign str to int variable
 ```
 
-The `= name:type` form annotates the variable type explicitly. The type checker verifies the stack value is compatible and uses the annotated type for the variable. This is useful for narrowing `any` or bare `Option` to a concrete type:
+The `= name:type` form annotates the variable type explicitly. The type checker verifies the stack value is compatible and uses the annotated type for the variable. This is useful for narrowing a bare `Option` (or other unresolved generic) to a concrete type:
 
 ```casa
-42 (any) = x:int            # narrow any to int
 Option::None = empty:Option[int]    # narrow bare Option to Option[int]
 ```
 

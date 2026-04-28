@@ -168,9 +168,6 @@ without a type-name prefix is acceptable.
   # Required: bare Option needs narrowing
   Option::None = empty:Option[int]
 
-  # Required: narrowing any to a concrete type
-  42 (any) = x:int
-
   # MUST NOT: inference works fine, annotation is noise
   42 = x:int
   ```
