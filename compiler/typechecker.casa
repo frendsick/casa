@@ -130,19 +130,23 @@ fn make_match_context match_type:str -> MatchContext {
 # ============================================================================
 
 struct TypeChecker {
-    live:                TypedStack
-    parameters:          List[Parameter]
-    return_types:        TypedStack
-    has_return_types:    bool
-    branched_stacks:     List[BranchFrame]
-    current_location:    Location
-    current_op_context:  str
-    current_expect_ctx:  str
-    in_branch_condition: bool
-    store:               SymbolStore
+    live:                       TypedStack
+    parameters:                 List[Parameter]
+    return_types:               TypedStack
+    has_return_types:           bool
+    branched_stacks:            List[BranchFrame]
+    current_location:           Location
+    current_op_context:         str
+    current_expect_ctx:         str
+    in_branch_condition:        bool
+    store:                      SymbolStore
+    param_cap:                  int
+    underflow_reported_this_op: bool
 }
 
 fn make_typechecker store:SymbolStore -> TypeChecker {
+    false # underflow_reported_this_op
+    -1 # param_cap (-1 = unlimited until type_check_ops sets a real cap)
     store # store
     false # in_branch_condition
     "" # current_expect_ctx
@@ -154,6 +158,11 @@ fn make_typechecker store:SymbolStore -> TypeChecker {
     List::new(List[Parameter]) # parameters
     TypedStack::new # live
     TypeChecker
+}
+
+fn within_param_cap tc:TypeChecker -> bool {
+    if -1 tc TypeChecker::param_cap == then true return fi
+    tc TypeChecker::param_cap tc TypeChecker::parameters.length <
 }
 # Raise a TypeMismatch error at the type checker's current location.
 
@@ -175,17 +184,39 @@ fn stack_push_origin tc:TypeChecker typ:str origin:Location {
     origin tc TypeChecker::live TypedStack::origins.push
 }
 
+fn report_stack_underflow tc:TypeChecker message:str {
+    if tc TypeChecker::underflow_reported_this_op then return fi
+    tc TypeChecker::current_location message ErrorKind::StackUnderflow add_error
+    true tc TypeChecker::set_underflow_reported_this_op
+}
+
+fn stack_underflow_message tc:TypeChecker -> str {
+    tc TypeChecker::current_expect_ctx = expect_what
+    if "" expect_what == then
+        "Stack underflow: expected a value but stack is empty" return
+    fi
+    f"Stack underflow: expected {expect_what} but stack is empty"
+}
+
 fn stack_peek tc:TypeChecker -> str {
     if 0 tc TypeChecker::live TypedStack::types.length == then
-        TYPE_UNKNOWN return
+        if tc within_param_cap then
+            TYPE_UNKNOWN return
+        fi
+        tc stack_underflow_message tc report_stack_underflow
+        TYPE_ERROR return
     fi
     tc TypeChecker::live TypedStack::types.length 1 - tc TypeChecker::live TypedStack::types.get
 }
 
 fn stack_pop tc:TypeChecker -> str {
     if 0 tc TypeChecker::live TypedStack::types.length == then
-        TYPE_UNKNOWN make_param tc TypeChecker::parameters.push
-        TYPE_UNKNOWN return
+        if tc within_param_cap then
+            TYPE_UNKNOWN make_param tc TypeChecker::parameters.push
+            TYPE_UNKNOWN return
+        fi
+        tc stack_underflow_message tc report_stack_underflow
+        TYPE_ERROR return
     fi
     tc TypeChecker::live TypedStack::origins.pop drop
     tc TypeChecker::live TypedStack::types.pop
@@ -193,8 +224,12 @@ fn stack_pop tc:TypeChecker -> str {
 
 fn expect_type tc:TypeChecker expected:str -> str {
     if 0 tc TypeChecker::live TypedStack::types.length == then
-        expected make_param tc TypeChecker::parameters.push
-        expected return
+        if tc within_param_cap then
+            expected make_param tc TypeChecker::parameters.push
+            expected return
+        fi
+        f"Stack underflow: expected `{expected}` but stack is empty" tc report_stack_underflow
+        TYPE_ERROR return
     fi
     tc TypeChecker::live TypedStack::origins.pop = et_origin
     tc TypeChecker::live TypedStack::types.pop = et_actual
@@ -222,6 +257,8 @@ fn types_match expected:str actual:str -> bool {
     if expected actual == then true return fi
     if TYPE_UNKNOWN expected == then true return fi
     if TYPE_UNKNOWN actual == then true return fi
+    if TYPE_ERROR expected == then true return fi
+    if TYPE_ERROR actual == then true return fi
     # Check fn type matching
     if "fn" expected == then
         if actual is_fn_type then true return fi
@@ -723,12 +760,18 @@ fn check_comparison
     op.value = cmp_value
     cmp_value OpValue::Eq is cmp_value OpValue::Ne is || = is_eq_op
     if is_eq_op then "Eq" else "Ord" fi = trait_name
+    f"trait `{trait_name}`" tc TypeChecker::set_current_expect_ctx
     tc stack_pop = type1
     tc stack_pop = type2
     # Stack-underflow placeholder on either side: defer to caller-level
     # inference (lambda param synthesis, generic body deferral). Skip both
     # the same-type rule and the trait-bound check.
-    if TYPE_UNKNOWN type1 == TYPE_UNKNOWN type2 == || then
+    if
+    TYPE_UNKNOWN type1 ==
+    TYPE_UNKNOWN type2 == ||
+    TYPE_ERROR type1 == ||
+    TYPE_ERROR type2 == ||
+    then
         "bool" tc stack_push
         op_index return
     fi
@@ -1698,6 +1741,7 @@ fn check_literals tc:TypeChecker op:Op function_opt:Option[Function] {
 # ============================================================================
 
 fn check_io tc:TypeChecker op:Op ops:List[Op] op_index:int function_opt:Option[Function] -> int {
+    "trait `Display`" tc TypeChecker::set_current_expect_ctx
     tc stack_peek = typ
     if "str" typ == then
         tc stack_pop drop
@@ -1722,6 +1766,10 @@ fn check_io tc:TypeChecker op:Op ops:List[Op] op_index:int function_opt:Option[F
     if "int" typ == then
         tc stack_pop drop
         OpValue::PrintInt op Op::set_value
+        op_index return
+    fi
+    if TYPE_ERROR typ == then
+        tc stack_pop drop
         op_index return
     fi
     if function_opt "Display" typ type_satisfies_trait ! then
@@ -1905,14 +1953,17 @@ fn check_match tc:TypeChecker op:Op function_opt:Option[Function] {
     op.value = match_value
     if match_value OpValue::MatchStart is then
         if 0 tc TypeChecker::live TypedStack::types.length == then
-            true = inferring_signature
+            tc within_param_cap = inferring_signature
             if function_opt.is_some then
-                "None -> None" function_opt.unwrap Function::signature signature_to_str == = inferring_signature
+                if function_opt.unwrap Function::name "lambda__" str::starts_with ! then
+                    false = inferring_signature
+                fi
             else
                 false = inferring_signature
             fi
             if inferring_signature ! then
                 op Op::location "`match` requires a subject value on the stack" ErrorKind::StackUnderflow add_error
+                true tc TypeChecker::set_underflow_reported_this_op
             fi
         fi
         tc stack_pop = match_type
@@ -2385,8 +2436,14 @@ fn check_fstring_to_str
     op_index:int
     function_opt:Option[Function]
 -> int {
+    "trait `Display`" tc TypeChecker::set_current_expect_ctx
     tc stack_peek = fstring_type
     if "str" fstring_type == then
+        op_index return
+    fi
+    if TYPE_ERROR fstring_type == then
+        tc stack_pop drop
+        "str" tc stack_push
         op_index return
     fi
     if function_opt "Display" fstring_type type_satisfies_trait ! then
@@ -2425,6 +2482,7 @@ fn run_type_check_ops checker:TypeChecker ops:List[Op] function_opt:Option[Funct
         1 += op_index
         current_op Op::location checker TypeChecker::set_current_location
         "" checker TypeChecker::set_current_expect_ctx
+        false checker TypeChecker::set_underflow_reported_this_op
         current_op.value = op_value
         # Arithmetic
         if
@@ -2683,6 +2741,14 @@ fn run_type_check_ops checker:TypeChecker ops:List[Op] function_opt:Option[Funct
 
 fn type_check_ops ops:List[Op] function_opt:Option[Function] -> Signature {
     DEFAULT_PARSER.store make_typechecker = checker
+    -1 = budget
+    if function_opt.is_some then
+        function_opt.unwrap = the_function
+        if the_function Function::name "lambda__" str::starts_with ! then
+            the_function Function::signature Signature::parameters.length = budget
+        fi
+    fi
+    budget checker TypeChecker::set_param_cap
     ERRORS.length = errors_before_ops
     function_opt ops checker run_type_check_ops
 
