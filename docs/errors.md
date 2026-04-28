@@ -124,6 +124,29 @@ fn outer {
 error[INVALID_SCOPE]: Implementation blocks should be defined in the global scope
 ```
 
+### `STACK_UNDERFLOW`
+
+An operation tried to consume a value (or values) from the stack but the stack was empty.
+
+```casa
+fn foo { print rot }
+```
+
+```
+error[STACK_UNDERFLOW]: Stack underflow: expected value with trait `Display` but stack is empty
+error[STACK_UNDERFLOW]: Stack underflow: expected argument 1 of `rot` but stack is empty
+```
+
+The expectation phrase identifies what the operation needed:
+
+- `value with trait `T`` — operations that dispatch on a trait (e.g. `print`, `==`, `<`)
+- `argument N of `op`` — stack intrinsics that consume more than one value (`swap`, `over`, `rot`); `N` counts from the top of the stack (1 = topmost)
+- `value for `op`` — single-value stack intrinsics (`drop`, `dup`)
+- `parameter N of `name`` — function call missing arguments
+- `value` — generic fallback when no operation-specific context is available
+
+When a slot cannot be filled, downstream operations may show `<missing>` for the absent value. See [Cascade Errors](#cascade-errors).
+
 ### `TYPE_MISMATCH`
 
 A type does not match what was expected.
@@ -136,6 +159,8 @@ fn bad[T] T T -> T T { }
 ```
 error[TYPE_MISMATCH]: Type variable `T` bound to `str` but got `int`
 ```
+
+If `got` shows `<missing>`, an earlier error left the slot without a real type — fix the earlier error first. See [Cascade Errors](#cascade-errors).
 
 ### `STACK_MISMATCH`
 
@@ -209,6 +234,25 @@ if true then
 ```
 error[UNMATCHED_BLOCK]: `if` without matching `fi`
 ```
+
+## Cascade Errors
+
+When the compiler reports an error that consumes a value from the stack — most commonly `STACK_UNDERFLOW` — the affected slot is tagged with the placeholder type `<missing>` so type checking can keep going. If a later operation reads that slot, you may see `<missing>` in its diagnostic:
+
+```casa
+fn two_generics[T] a:T b:T { }
+fn foo {
+    print           # underflow: nothing to print
+    2 two_generics  # this also fails because the underflow tainted the stack
+}
+```
+
+```
+error[STACK_UNDERFLOW]: Stack underflow: expected value with trait `Display` but stack is empty
+error[TYPE_MISMATCH]: Type variable `T` bound to `int` but got `<missing>`
+```
+
+The second error is a *cascade* — its real cause is the underflow above. Fix the upstream error first; the cascade error usually disappears on its own. `<missing>` is distinct from `?` (an unconstrained type that the compiler is still inferring).
 
 ## Multi-Error Collection
 
