@@ -188,15 +188,14 @@ fn expect_delimiter cursor:TokenCursor expected_value:str -> bool {
 # parse_type - parse a type expression
 # ============================================================================
 
-fn parse_type cursor:TokenCursor -> str {
+fn parse_type_ast cursor:TokenCursor -> Type {
     cursor.peek = peek_opt
     if peek_opt.is_none then
         empty_location "Expected type" ErrorKind::UnexpectedToken raise_error
-        "" return
+        Type::Unknown return
     fi
     peek_opt.unwrap = peek
 
-    # Allow fn keyword as type base
     if "fn" peek Token::value == then
         cursor.pop drop
         "fn" = base
@@ -208,45 +207,39 @@ fn parse_type cursor:TokenCursor -> str {
         base_token Token::value = base
     fi
 
-    # Check for parameterized type
     cursor.peek = next_opt
-    if next_opt.is_none then base return fi
-    if "[" next_opt.unwrap Token::value != then base return fi
+    if next_opt.is_none then base parse_type_str return fi
+    if "[" next_opt.unwrap Token::value != then base parse_type_str return fi
     cursor.advance # consume [
 
-    # fn types: balanced bracket tracking
     if "fn" base == then
-        StringBuilder::new = fn_builder
-        0 = fn_depth
+        List::new(List[Type]) = fn_params
+        List::new(List[Type]) = fn_returns
+        false = past_arrow
         while cursor.is_finished ! do
-            cursor.pop = fn_token_opt
-            if fn_token_opt.is_none then break fi
-            fn_token_opt.unwrap = fn_token
-            if "[" fn_token Token::value == then
-                1 += fn_depth
-                "[" fn_builder.append
-            elif "]" fn_token Token::value == then
-                if 0 fn_depth == then break fi
-                fn_depth 1 - = fn_depth
-                "]" fn_builder.append
+            cursor.peek = inner_opt
+            if inner_opt.is_none then break fi
+            inner_opt.unwrap Token::value = ival
+            if "]" ival == then
+                cursor.pop drop
+                break
+            fi
+            if "->" ival == then
+                cursor.pop drop
+                true = past_arrow
+                continue
+            fi
+            cursor parse_type_ast = inner_type
+            if past_arrow then
+                inner_type fn_returns.push
             else
-                if 0 fn_builder.length != then
-                    fn_builder.build = fn_prev
-                    if fn_prev.length 0 != then
-                        fn_prev.length 1 - fn_prev.at = fn_last
-                        if '[' fn_last != "]" fn_token Token::value != && then
-                            " " fn_builder.append
-                        fi
-                    fi
-                fi
-                fn_token Token::value fn_builder.append
+                inner_type fn_params.push
             fi
         done
-        f"fn[{fn_builder.build}]" return
+        fn_returns fn_params FunctionType Type::Function return
     fi
 
-    # Regular parameterized type
-    List::new(List[str]) = inner_types
+    List::new(List[Type]) = inner_types
     while true do
         cursor.peek = inner_opt
         if inner_opt.is_some then
@@ -255,21 +248,16 @@ fn parse_type cursor:TokenCursor -> str {
                 break
             fi
         fi
-        cursor parse_type inner_types.push
+        cursor parse_type_ast inner_types.push
     done
     if 0 inner_types.length == then
         empty_location f"Expected type parameter inside `{base}[...]`" ErrorKind::UnexpectedToken raise_error
     fi
+    inner_types base GenericType Type::Generic
+}
 
-    # Join inner types with spaces
-    StringBuilder::new = join_builder
-    0 = join_index
-    while join_index inner_types.length > do
-        if 0 join_index != then " " join_builder.append fi
-        join_index inner_types.get join_builder.append
-        1 += join_index
-    done
-    f"{base}[{join_builder.build}]"
+fn parse_type cursor:TokenCursor -> str {
+    cursor parse_type_ast.format
 }
 
 # ============================================================================
@@ -783,7 +771,7 @@ fn parse_parameter_maybe_named cursor:TokenCursor token:Token -> Parameter {
     cursor.peek = next_opt
     if next_opt.is_some ":" next_opt.unwrap Token::value == && then
         cursor.advance # consume :
-        cursor parse_type parse_type_str = param_type
+        cursor parse_type_ast = param_type
         token Token::value param_type make_named_param return
     fi
     cursor.retreat
@@ -835,7 +823,7 @@ fn parse_return_types cursor:TokenCursor -> List[Type] {
         if "{" peek_opt.unwrap Token::value == then
             types return
         fi
-        cursor parse_type parse_type_str types.push
+        cursor parse_type_ast types.push
     done
     types
 }
@@ -1272,7 +1260,7 @@ fn parse_trait_method_signature cursor:TokenCursor -> Signature {
                 then
                     break
                 fi
-                cursor parse_type parse_type_str returns.push
+                cursor parse_type_ast returns.push
             done
         fi
     fi
