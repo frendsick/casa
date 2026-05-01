@@ -174,9 +174,13 @@ fn raise_type_mismatch tc:TypeChecker message:str {
 # Stack operations
 # ============================================================================
 
-fn stack_push tc:TypeChecker typ:str {
-    typ parse_type_str tc TypeChecker::live TypedStack::types.push
+fn stack_push_type tc:TypeChecker typ:Type {
+    typ tc TypeChecker::live TypedStack::types.push
     tc TypeChecker::current_location tc TypeChecker::live TypedStack::origins.push
+}
+
+fn stack_push tc:TypeChecker typ:str {
+    typ parse_type_str tc stack_push_type
 }
 
 fn report_stack_underflow tc:TypeChecker message:str {
@@ -217,6 +221,43 @@ fn stack_pop tc:TypeChecker -> str {
     tc TypeChecker::live TypedStack::types.pop.format
 }
 
+fn stack_peek_type tc:TypeChecker -> Type {
+    if 0 tc TypeChecker::live TypedStack::types.length == then
+        if tc within_param_cap then
+            TYPE_UNKNOWN_T return
+        fi
+        tc stack_underflow_message tc report_stack_underflow
+        TYPE_MISSING_T return
+    fi
+    tc TypeChecker::live TypedStack::types.length 1 - tc TypeChecker::live TypedStack::types.get
+}
+
+fn stack_pop_type tc:TypeChecker -> Type {
+    if 0 tc TypeChecker::live TypedStack::types.length == then
+        if tc within_param_cap then
+            TYPE_UNKNOWN make_param tc TypeChecker::parameters.push
+            TYPE_UNKNOWN_T return
+        fi
+        tc stack_underflow_message tc report_stack_underflow
+        TYPE_MISSING_T return
+    fi
+    tc TypeChecker::live TypedStack::origins.pop drop
+    tc TypeChecker::live TypedStack::types.pop
+}
+
+fn stack_pop_drop tc:TypeChecker {
+    if 0 tc TypeChecker::live TypedStack::types.length == then
+        if tc within_param_cap then
+            TYPE_UNKNOWN make_param tc TypeChecker::parameters.push
+            return
+        fi
+        tc stack_underflow_message tc report_stack_underflow
+        return
+    fi
+    tc TypeChecker::live TypedStack::origins.pop drop
+    tc TypeChecker::live TypedStack::types.pop drop
+}
+
 fn expect_type tc:TypeChecker expected:str -> str {
     if 0 tc TypeChecker::live TypedStack::types.length == then
         if tc within_param_cap then
@@ -242,6 +283,29 @@ fn expect_type tc:TypeChecker expected:str -> str {
     fi
     et_actual expected tc TypeChecker::current_location et_message ErrorKind::TypeMismatch add_error_expected
     expected
+}
+
+fn expect_type_t tc:TypeChecker expected:Type {
+    if 0 tc TypeChecker::live TypedStack::types.length == then
+        if tc within_param_cap then
+            expected.format make_param tc TypeChecker::parameters.push
+            return
+        fi
+        f"Stack underflow: expected `{expected.format}` but stack is empty" tc report_stack_underflow
+        return
+    fi
+    tc TypeChecker::live TypedStack::origins.pop drop
+    tc TypeChecker::live TypedStack::types.pop = et_actual_t
+    if expected et_actual_t.eq then return fi
+    et_actual_t.format = et_actual
+    expected.format = et_expected
+    if et_expected et_actual types_match then return fi
+    if et_actual et_expected types_match then return fi
+    "Type mismatch" = et_message
+    if "" tc TypeChecker::current_op_context != then
+        f"Type mismatch in {tc TypeChecker::current_op_context}" = et_message
+    fi
+    et_actual et_expected tc TypeChecker::current_location et_message ErrorKind::TypeMismatch add_error_expected
 }
 
 # ============================================================================
@@ -460,11 +524,15 @@ fn stacks_compatible stack_a:List[Type] stack_b:List[Type] -> List[Type] {
     List::new(List[Type]) = result
     0 = index
     while index stack_a.length > do
-        index stack_b.get.format index stack_a.get.format unify_type = unified
-        if "" unified == then
-            List::new(List[Type]) return
+        if index stack_b.get index stack_a.get.eq then
+            index stack_a.get result.push
+        else
+            index stack_b.get.format index stack_a.get.format unify_type = unified
+            if "" unified == then
+                List::new(List[Type]) return
+            fi
+            unified parse_type_str result.push
         fi
-        unified parse_type_str result.push
         1 += index
     done
     result
@@ -474,7 +542,7 @@ fn stacks_equal stack_a:List[Type] stack_b:List[Type] -> bool {
     if stack_a.length stack_b.length != then false return fi
     0 = index
     while index stack_a.length > do
-        if index stack_a.get.format index stack_b.get.format != then false return fi
+        if index stack_b.get index stack_a.get.eq ! then false return fi
         1 += index
     done
     true
@@ -684,12 +752,12 @@ fn apply_signature tc:TypeChecker sig:Signature name:str {
             if "" name != then
                 f"parameter {index 1 +} of `{name}`" tc TypeChecker::set_current_expect_ctx
             fi
-            index sig Signature::parameters.get Parameter::typ.format tc expect_type drop
+            index sig Signature::parameters.get Parameter::typ tc expect_type_t
             1 += index
         done
         "" tc TypeChecker::set_current_expect_ctx
         for return_type in sig Signature::return_types.iter do
-            return_type.format tc stack_push
+            return_type tc stack_push_type
         done
         return
     fi
@@ -746,13 +814,12 @@ fn check_arithmetic tc:TypeChecker op:Op {
     op_value OpValue::Add is
     op_value OpValue::Sub is ||
     then
-        "int" tc expect_type drop
-        tc stack_pop = top_type
-        top_type tc stack_push
+        TYPE_INT_T tc expect_type_t
+        tc stack_pop_type tc stack_push_type
     else
-        "int" tc expect_type drop
-        "int" tc expect_type drop
-        "int" tc stack_push
+        TYPE_INT_T tc expect_type_t
+        TYPE_INT_T tc expect_type_t
+        TYPE_INT_T tc stack_push_type
     fi
 }
 
@@ -811,7 +878,7 @@ fn check_comparison
     TYPE_MISSING type1 == ||
     TYPE_MISSING type2 == ||
     then
-        "bool" tc stack_push
+        TYPE_BOOL_T tc stack_push_type
         op_index return
     fi
     type1 resolve_match_type = base1
@@ -821,7 +888,7 @@ fn check_comparison
     # Same-type rule applies before any specialization.
     if type1 type2 != then
         f"Cannot compare `{type2}` with `{type1}`" tc raise_type_mismatch
-        "bool" tc stack_push
+        TYPE_BOOL_T tc stack_push_type
         op_index return
     fi
     # Enums: tag comparison via bytecode; data-carrying variants need annotation.
@@ -832,7 +899,7 @@ fn check_comparison
                 base1 op Op::set_type_annotation
             fi
         fi
-        "bool" tc stack_push
+        TYPE_BOOL_T tc stack_push_type
         op_index return
     fi
     # str: only ==/!=, annotated for the bytecode emitter.
@@ -841,19 +908,19 @@ fn check_comparison
             "Type `str` only supports `==` and `!=` comparison" tc raise_type_mismatch
         fi
         "str" op Op::set_type_annotation
-        "bool" tc stack_push
+        TYPE_BOOL_T tc stack_push_type
         op_index return
     fi
     # Other primitives: bytecode handles the comparison directly.
     if type1 is_primitive_compare_type then
-        "bool" tc stack_push
+        TYPE_BOOL_T tc stack_push_type
         op_index return
     fi
     # User-defined types must satisfy Eq (or Ord) explicitly.
     if function_opt trait_name type1 type_satisfies_trait ! then
         cmp_value comparison_op_str = cmp_str
         op Op::location f"Type `{type1}` cannot be compared with `{cmp_str}`: does not satisfy trait `{trait_name}`" ErrorKind::MissingTraitMethod add_error
-        "bool" tc stack_push
+        TYPE_BOOL_T tc stack_push_type
         op_index return
     fi
     # Lower the operator to the corresponding trait method call.
@@ -870,12 +937,12 @@ fn check_comparison
 
 fn check_boolean tc:TypeChecker op:Op {
     if op.value OpValue::Not is then
-        tc stack_pop drop
+        tc stack_pop_drop
     else
-        tc stack_pop drop
-        tc stack_pop drop
+        tc stack_pop_drop
+        tc stack_pop_drop
     fi
-    "bool" tc stack_push
+    TYPE_BOOL_T tc stack_push_type
 }
 
 # ============================================================================
@@ -885,19 +952,18 @@ fn check_boolean tc:TypeChecker op:Op {
 fn check_bitwise tc:TypeChecker op:Op {
     op.value = bitwise_value
     if bitwise_value OpValue::BitNot is then
-        "int" tc expect_type drop
-        "int" tc stack_push
+        TYPE_INT_T tc expect_type_t
+        TYPE_INT_T tc stack_push_type
     elif
     bitwise_value OpValue::Shl is
     bitwise_value OpValue::Shr is ||
     then
-        "int" tc expect_type drop
-        tc stack_pop = shift_top
-        shift_top tc stack_push
+        TYPE_INT_T tc expect_type_t
+        tc stack_pop_type tc stack_push_type
     else
-        "int" tc expect_type drop
-        "int" tc expect_type drop
-        "int" tc stack_push
+        TYPE_INT_T tc expect_type_t
+        TYPE_INT_T tc expect_type_t
+        TYPE_INT_T tc stack_push_type
     fi
 }
 
@@ -909,7 +975,7 @@ fn check_stack_ops tc:TypeChecker op:Op {
     op.value = stack_value
     if stack_value OpValue::Drop is then
         "value for `drop`" tc TypeChecker::set_current_expect_ctx
-        tc stack_pop drop
+        tc stack_pop_drop
     elif stack_value OpValue::Dup is then
         "value for `dup`" tc TypeChecker::set_current_expect_ctx
         tc stack_pop = typ
@@ -917,11 +983,11 @@ fn check_stack_ops tc:TypeChecker op:Op {
         typ tc stack_push
     elif stack_value OpValue::Swap is then
         "argument 1 of `swap`" tc TypeChecker::set_current_expect_ctx
-        tc stack_pop = type1
+        tc stack_pop_type = type1_t
         "argument 2 of `swap`" tc TypeChecker::set_current_expect_ctx
-        tc stack_pop = type2
-        type1 tc stack_push
-        type2 tc stack_push
+        tc stack_pop_type = type2_t
+        type1_t tc stack_push_type
+        type2_t tc stack_push_type
     elif stack_value OpValue::Over is then
         "argument 1 of `over`" tc TypeChecker::set_current_expect_ctx
         tc stack_pop = type1
@@ -932,14 +998,14 @@ fn check_stack_ops tc:TypeChecker op:Op {
         type2 tc stack_push
     elif stack_value OpValue::Rot is then
         "argument 1 of `rot`" tc TypeChecker::set_current_expect_ctx
-        tc stack_pop = type1
+        tc stack_pop_type = type1_t
         "argument 2 of `rot`" tc TypeChecker::set_current_expect_ctx
-        tc stack_pop = type2
+        tc stack_pop_type = type2_t
         "argument 3 of `rot`" tc TypeChecker::set_current_expect_ctx
-        tc stack_pop = type3
-        type2 tc stack_push
-        type1 tc stack_push
-        type3 tc stack_push
+        tc stack_pop_type = type3_t
+        type2_t tc stack_push_type
+        type1_t tc stack_push_type
+        type3_t tc stack_push_type
     fi
 }
 
@@ -984,20 +1050,20 @@ fn check_memory tc:TypeChecker op:Op function_opt:Option[Function] {
     mem_value OpValue::Load32 is ||
     mem_value OpValue::Load64 is ||
     then
-        "ptr" tc expect_type drop
-        "int" tc stack_push
+        TYPE_PTR_T tc expect_type_t
+        TYPE_INT_T tc stack_push_type
     elif
     mem_value OpValue::Store8 is
     mem_value OpValue::Store16 is ||
     mem_value OpValue::Store32 is ||
     mem_value OpValue::Store64 is ||
     then
-        "ptr" tc expect_type drop
+        TYPE_PTR_T tc expect_type_t
         tc stack_pop = stored_type
         function_opt stored_type op tc assert_word_bound
     elif mem_value OpValue::HeapAlloc is then
-        "int" tc expect_type drop
-        "ptr" tc stack_push
+        TYPE_INT_T tc expect_type_t
+        TYPE_PTR_T tc stack_push_type
     fi
 }
 
@@ -1009,9 +1075,10 @@ fn check_memory tc:TypeChecker op:Op function_opt:Option[Function] {
 
 fn unify_variable_assignment op:Op variable:Variable effective_type:str scope:str {
     variable Variable::name = var_name
+    variable Variable::typ.format = pre_str
     if
-    "" variable Variable::typ.format ==
-    TYPE_UNKNOWN variable Variable::typ.format == effective_type TYPE_UNKNOWN != && ||
+    "" pre_str ==
+    TYPE_UNKNOWN pre_str == effective_type TYPE_UNKNOWN != && ||
     then
         effective_type parse_type_str variable Variable::set_typ
     fi
@@ -1028,7 +1095,7 @@ fn check_assignment tc:TypeChecker op:Op function_opt:Option[Function] {
     op.value OpValue::AssignDec is
     op.value OpValue::AssignInc is ||
     then
-        "int" tc expect_type drop
+        TYPE_INT_T tc expect_type_t
         return
     fi
     if op.value OpValue::AssignVar(var_name) is ! then return fi
@@ -1087,7 +1154,7 @@ fn simulate_trait_exec tc:TypeChecker function:Function var_name:str {
     trait_def_opt.unwrap = trait_def
     for trait_method_entry in trait_def DEFAULT_PARSER collect_trait_methods.iter do
         if trait_method_name trait_method_entry TraitMethod::name == then
-            tc stack_pop drop
+            tc stack_pop_drop
             trait_type_var trait_method_entry TraitMethod::signature resolve_trait_sig = resolved_exec_sig
             f"{trait_type_var}::{trait_method_name}" resolved_exec_sig tc apply_signature
             return
@@ -1101,14 +1168,13 @@ fn check_push_var tc:TypeChecker op:Op function_opt:Option[Function] {
             function_opt.unwrap = function
             capture_name function Function::captures variable_list_index = capture_index
             if 0 capture_index >= then
-                capture_index function Function::captures.get Variable::typ.format = capture_type
-                if "" capture_type != then
-                    capture_type tc stack_push
+                if capture_index function Function::captures.get Variable::typ.is_unknown ! then
+                    capture_index function Function::captures.get Variable::typ tc stack_push_type
                     return
                 fi
             fi
         fi
-        TYPE_UNKNOWN tc stack_push
+        TYPE_UNKNOWN_T tc stack_push_type
         return
     fi
 
@@ -1121,11 +1187,10 @@ fn check_push_var tc:TypeChecker op:Op function_opt:Option[Function] {
         function_opt.unwrap = function
         var_name function Function::variables variable_list_index = local_index
         if 0 local_index >= then
-            local_index function Function::variables.get Variable::typ.format = local_type
-            if "" local_type != then
-                local_type tc stack_push
+            if local_index function Function::variables.get Variable::typ.is_unknown ! then
+                local_index function Function::variables.get Variable::typ tc stack_push_type
             else
-                TYPE_UNKNOWN tc stack_push
+                TYPE_UNKNOWN_T tc stack_push_type
             fi
             if is_trait_exec then
                 var_name function tc simulate_trait_exec
@@ -1137,11 +1202,10 @@ fn check_push_var tc:TypeChecker op:Op function_opt:Option[Function] {
     # Check global variables
     var_name tc.store.variables.get = global_opt
     if global_opt.is_some then
-        global_opt.unwrap Variable::typ.format = global_type
-        if "" global_type != then
-            global_type tc stack_push
+        if global_opt.unwrap Variable::typ.is_unknown ! then
+            global_opt.unwrap Variable::typ tc stack_push_type
         else
-            TYPE_UNKNOWN tc stack_push
+            TYPE_UNKNOWN_T tc stack_push_type
         fi
         return
     fi
@@ -1163,7 +1227,7 @@ fn check_if_block tc:TypeChecker op:Op {
         true tc TypeChecker::set_in_branch_condition
     elif if_value OpValue::IfCondition is then
         false tc TypeChecker::set_in_branch_condition
-        "bool" tc expect_type drop
+        TYPE_BOOL_T tc expect_type_t
         if 0 tc TypeChecker::branched_stacks.length == then return fi
         tc TypeChecker::branched_stacks.length 1 - tc TypeChecker::branched_stacks.get = top_frame
         if top_frame BranchFrame::BranchIf(if_ctx) is then
@@ -1246,7 +1310,7 @@ fn check_while_block tc:TypeChecker op:Op {
         while_ctx BranchFrame::BranchWhile = while_frame
         while_frame tc TypeChecker::branched_stacks.push
     elif while_value OpValue::WhileCondition is then
-        "bool" tc expect_type drop
+        TYPE_BOOL_T tc expect_type_t
         if 0 tc TypeChecker::branched_stacks.length == then return fi
         tc TypeChecker::branched_stacks.length 1 - tc TypeChecker::branched_stacks.get = top_frame
         if top_frame BranchFrame::BranchWhile(while_ctx) is then
@@ -1634,7 +1698,7 @@ fn inject_trait_fn_ptrs
                     1 += insert_pos
                     1 += inserted
                     concrete method TraitMethod::signature resolve_trait_sig = forward_sig
-                    f"fn[{forward_sig signature_to_str}]" tc stack_push
+                    forward_sig signature_to_function_type tc stack_push_type
                 fi
                 method_index 1 - = method_index
             done
@@ -1662,7 +1726,7 @@ fn inject_trait_fn_ptrs
                         insert_pos push_op ops.insert
                         1 += insert_pos
                         1 += inserted
-                        f"fn[{global_fn Function::signature signature_to_str}]" tc stack_push
+                        global_fn Function::signature signature_to_function_type tc stack_push_type
                     else
                         location f"Function `{fn_name}` required by trait `{trait_name}` not found" ErrorKind::TypeMismatch raise_error
                     fi
@@ -1714,7 +1778,7 @@ fn check_function_ops
         if push_fn_opt.is_some then
             push_fn_opt.unwrap = push_fn
             push_fn ensure_typechecked
-            f"fn[{push_fn Function::signature signature_to_str}]" tc stack_push
+            push_fn Function::signature signature_to_function_type tc stack_push_type
         else
             "fn" tc stack_push
         fi
@@ -1744,13 +1808,13 @@ fn check_function_ops
 fn check_literals tc:TypeChecker op:Op function_opt:Option[Function] {
     op.value = literal_value
     if literal_value OpValue::PushInt is then
-        "int" tc stack_push
+        TYPE_INT_T tc stack_push_type
     elif literal_value OpValue::PushStr is then
-        "str" tc stack_push
+        TYPE_STR_T tc stack_push_type
     elif literal_value OpValue::PushBool is then
-        "bool" tc stack_push
+        TYPE_BOOL_T tc stack_push_type
     elif literal_value OpValue::PushChar is then
-        "char" tc stack_push
+        TYPE_CHAR_T tc stack_push_type
     elif literal_value OpValue::PushArray(items) is then
         if 0 items.length == then
             List::new(List[str]) = empty_params
@@ -1777,10 +1841,10 @@ fn check_literals tc:TypeChecker op:Op function_opt:Option[Function] {
     elif literal_value OpValue::FstringConcat(count) is then
         0 = index
         while index count > do
-            "str" tc expect_type drop
+            TYPE_STR_T tc expect_type_t
             1 += index
         done
-        "str" tc stack_push
+        TYPE_STR_T tc stack_push_type
     fi
 }
 
@@ -1790,39 +1854,40 @@ fn check_literals tc:TypeChecker op:Op function_opt:Option[Function] {
 
 fn check_io tc:TypeChecker op:Op ops:List[Op] op_index:int function_opt:Option[Function] -> int {
     "value with trait `Display`" tc TypeChecker::set_current_expect_ctx
-    tc stack_peek = typ
+    tc stack_peek_type = peek_t
+    peek_t.format = typ
     if "str" typ == then
-        tc stack_pop drop
+        tc stack_pop_drop
         OpValue::PrintStr op Op::set_value
         op_index return
     fi
     if "bool" typ == then
-        tc stack_pop drop
+        tc stack_pop_drop
         OpValue::PrintBool op Op::set_value
         op_index return
     fi
     if "char" typ == then
-        tc stack_pop drop
+        tc stack_pop_drop
         OpValue::PrintChar op Op::set_value
         op_index return
     fi
     if "cstr" typ == then
-        tc stack_pop drop
+        tc stack_pop_drop
         OpValue::PrintCstr op Op::set_value
         op_index return
     fi
     if "int" typ == then
-        tc stack_pop drop
+        tc stack_pop_drop
         OpValue::PrintInt op Op::set_value
         op_index return
     fi
     if TYPE_MISSING typ == then
-        tc stack_pop drop
+        tc stack_pop_drop
         op_index return
     fi
     if function_opt "Display" typ type_satisfies_trait ! then
         op Op::location f"Type `{typ}` cannot be printed: does not satisfy trait `Display`" ErrorKind::MissingTraitMethod add_error
-        tc stack_pop drop
+        tc stack_pop_drop
         op_index return
     fi
     "to_str" OpValue::MethodCall op Op::set_value
@@ -1839,7 +1904,7 @@ fn check_io tc:TypeChecker op:Op ops:List[Op] op_index:int function_opt:Option[F
 fn check_typeof tc:TypeChecker op:Op {
     tc stack_pop = typ
     typ op Op::set_type_annotation
-    "str" tc stack_push
+    TYPE_STR_T tc stack_push_type
 }
 
 # ============================================================================
@@ -1857,14 +1922,14 @@ fn check_syscalls tc:TypeChecker op:Op function_opt:Option[Function] {
         OpValue::Syscall6 => 6
         _ => -1
     end = arg_count
-    "int" tc expect_type drop
+    TYPE_INT_T tc expect_type_t
     0 = index
     while index arg_count > do
         tc stack_pop = arg_type
         function_opt arg_type op tc assert_word_bound
         1 += index
     done
-    "int" tc stack_push
+    TYPE_INT_T tc stack_push_type
 }
 
 # ============================================================================
@@ -1876,7 +1941,7 @@ fn check_enum_variant tc:TypeChecker op:Op {
     variant EnumVariant::enum_name = enum_name
     enum_name tc.store.enums.get = enum_opt
     if enum_opt.is_none then
-        enum_name tc stack_push
+        enum_name make_named_type tc stack_push_type
         return
     fi
     enum_opt.unwrap = casa_enum
@@ -1886,7 +1951,7 @@ fn check_enum_variant tc:TypeChecker op:Op {
         if 0 casa_enum CasaEnum::type_vars.length != then
             casa_enum CasaEnum::type_vars enum_name build_parameterized_type tc stack_push
         else
-            enum_name tc stack_push
+            enum_name make_named_type tc stack_push_type
         fi
         return
     fi
@@ -1895,7 +1960,7 @@ fn check_enum_variant tc:TypeChecker op:Op {
         if 0 casa_enum CasaEnum::type_vars.length != then
             casa_enum CasaEnum::type_vars enum_name build_parameterized_type tc stack_push
         else
-            enum_name tc stack_push
+            enum_name make_named_type tc stack_push_type
         fi
         return
     fi
@@ -1924,7 +1989,7 @@ fn check_enum_variant tc:TypeChecker op:Op {
         for inner_type in inner_types.iter do
             inner_type tc expect_type drop
         done
-        enum_name tc stack_push
+        enum_name make_named_type tc stack_push_type
     fi
 }
 
@@ -1937,12 +2002,12 @@ fn check_is tc:TypeChecker op:Op function_opt:Option[Function] {
     typ resolve_match_type = base
     if base tc.store.enums.get.is_none then
         f"`is` requires an enum type, got `{typ}`" tc raise_type_mismatch
-        "bool" tc stack_push
+        TYPE_BOOL_T tc stack_push_type
         return
     fi
     base tc.store.enums.get.unwrap = casa_enum
     if op.value OpValue::IsCheck(variant) is ! then
-        "bool" tc stack_push
+        TYPE_BOOL_T tc stack_push_type
         return
     fi
     # Validate the variant belongs to the correct enum
@@ -1962,7 +2027,7 @@ fn check_is tc:TypeChecker op:Op function_opt:Option[Function] {
         fi
     fi
     typ variant function_opt tc register_enum_pattern_bindings
-    "bool" tc stack_push
+    TYPE_BOOL_T tc stack_push_type
 }
 
 # ============================================================================
@@ -2156,7 +2221,7 @@ fn check_struct_new tc:TypeChecker op:Op {
     done
     # Construct the result type
     if 0 casa_struct CasaStruct::type_vars.length == then
-        name tc stack_push
+        name make_named_type tc stack_push_type
     else
         bindings casa_struct CasaStruct::type_vars name build_resolved_type tc stack_push
     fi
@@ -2171,7 +2236,7 @@ fn check_struct_literal tc:TypeChecker op:Op {
     literal StructLiteral::struct_name = name
     name tc.store.structs.get = struct_opt
     if struct_opt.is_none then
-        name tc stack_push
+        name make_named_type tc stack_push_type
         return
     fi
     struct_opt.unwrap = casa_struct
@@ -2182,13 +2247,13 @@ fn check_struct_literal tc:TypeChecker op:Op {
         # Find member type
         for member in casa_struct CasaStruct::members.iter do
             if field_name member Member::name == then
-                member Member::typ.format tc expect_type drop
+                member Member::typ tc expect_type_t
                 break
             fi
         done
         index 1 - = index
     done
-    name tc stack_push
+    name make_named_type tc stack_push_type
 }
 
 # ============================================================================
@@ -2417,7 +2482,7 @@ fn check_method_call
                 for trait_method in trait_def DEFAULT_PARSER collect_trait_methods.iter do
                     if method_name trait_method TraitMethod::name == then
                         f"__trait_{receiver}_{method_name}" = hidden_var
-                        tc stack_pop drop
+                        tc stack_pop_drop
                         constraint_subs receiver trait_method TraitMethod::signature resolve_trait_sig apply_type_subs_to_sig = resolved_sig
                         receiver tc stack_push
                         f"{receiver}::{method_name}" resolved_sig tc apply_signature
@@ -2485,19 +2550,19 @@ fn check_fstring_to_str
     function_opt:Option[Function]
 -> int {
     "value with trait `Display`" tc TypeChecker::set_current_expect_ctx
-    tc stack_peek = fstring_type
-    if "str" fstring_type == then
+    if TYPE_STR_T tc stack_peek_type.eq then
         op_index return
     fi
+    tc stack_peek = fstring_type
     if TYPE_MISSING fstring_type == then
-        tc stack_pop drop
-        "str" tc stack_push
+        tc stack_pop_drop
+        TYPE_STR_T tc stack_push_type
         op_index return
     fi
     if function_opt "Display" fstring_type type_satisfies_trait ! then
         op Op::location f"Type `{fstring_type}` cannot be used in f-string: does not satisfy trait `Display`" ErrorKind::MissingTraitMethod add_error
-        tc stack_pop drop
-        "str" tc stack_push
+        tc stack_pop_drop
+        TYPE_STR_T tc stack_push_type
         op_index return
     fi
     "to_str" OpValue::MethodCall op Op::set_value
@@ -2703,11 +2768,11 @@ fn run_type_check_ops checker:TypeChecker ops:List[Op] function_opt:Option[Funct
 
         # Argc / Argv
         if op_value OpValue::Argc is then
-            "int" checker stack_push
+            TYPE_INT_T checker stack_push_type
             continue
         fi
         if op_value OpValue::Argv is then
-            "ptr" checker stack_push
+            TYPE_PTR_T checker stack_push_type
             continue
         fi
 
