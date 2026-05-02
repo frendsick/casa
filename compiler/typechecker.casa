@@ -415,6 +415,33 @@ fn is_type_variable typ:str -> bool {
     false
 }
 
+fn is_enum_type_var_t typ:Type -> bool {
+    typ.base = base_opt
+    if base_opt.is_some then
+        base_opt.unwrap DEFAULT_PARSER.store.enums.get.is_some
+    else
+        false
+    fi
+}
+
+fn is_type_variable_t typ:Type -> bool {
+    typ match
+        Type::TypeVar(_) => { true }
+        Type::Generic(generic) => {
+            if 0 generic.params.length == then
+                if 1 generic.base.length == then
+                    0 generic.base.at.is_upper
+                else
+                    false
+                fi
+            else
+                generic.base DEFAULT_PARSER.store.enums.get.is_some
+            fi
+        }
+        _ => { false }
+    end
+}
+
 fn types_match_params expected:str actual:str -> bool {
     expected extract_generic_params = expected_params_opt
     actual extract_generic_params = actual_params_opt
@@ -552,59 +579,67 @@ fn stacks_equal stack_a:List[Type] stack_b:List[Type] -> bool {
 # Apply signature — pop params, push returns, with type variable binding
 # ============================================================================
 
-fn resolve_return_type bindings:Map[str str] ret:str -> str {
-    # Direct type variable
-    ret bindings.get = bound_opt
-    if bound_opt.is_some then
-        bound_opt.unwrap return
-    fi
-    # Parameterized type with type vars
-    ret extract_generic_base = base_opt
-    if base_opt.is_some then
-        base_opt.unwrap = base
-        ret extract_generic_params = params_opt
-        if params_opt.is_some then
-            params_opt.unwrap = params
-            List::new(List[str]) = resolved
-            false = changed
-            for param in params.iter do
-                param bindings.get = param_bound_opt
-                if param_bound_opt.is_some then
-                    param_bound_opt.unwrap resolved.push
-                    true = changed
-                else
-                    param resolved.push
-                fi
-            done
-            if changed then
-                resolved base build_parameterized_type return
+fn resolve_return_type_t bindings:Map[str Type] ret:Type -> Type {
+    ret match
+        Type::TypeVar(name) => {
+            if name bindings.get Option::Some(bound) is then
+                bound
+            else
+                name Type::TypeVar
             fi
-        fi
-    fi
-    ret
+        }
+        Type::Generic(generic) => {
+            if 0 generic.params.length == then
+                if generic.base bindings.get Option::Some(bound) is then
+                    bound return
+                fi
+                generic.params generic.base GenericType Type::Generic return
+            fi
+            List::new(List[Type]) = new_params
+            for param in generic.params.iter do
+                param bindings resolve_return_type_t new_params.push
+            done
+            new_params generic.base GenericType Type::Generic
+        }
+        Type::Function(fn_type) => {
+            List::new(List[Type]) = new_params
+            for param in fn_type.parameters.iter do
+                param bindings resolve_return_type_t new_params.push
+            done
+            List::new(List[Type]) = new_returns
+            for ret_inner in fn_type.return_types.iter do
+                ret_inner bindings resolve_return_type_t new_returns.push
+            done
+            new_returns new_params FunctionType Type::Function
+        }
+        Type::Unknown => { Type::Unknown }
+        Type::Builtin(builtin) => { builtin Type::Builtin }
+    end
 }
 
-fn bind_type_var tc:TypeChecker bindings:Map[str str] type_var:str actual:str -> Map[str str] {
+fn bind_type_var tc:TypeChecker bindings:Map[str Type] type_var:str actual:Type -> Map[str Type] {
     type_var bindings.get = existing
     if existing.is_none then
         type_var actual bindings.set return
     fi
     existing.unwrap = bound
+    actual.is_unknown_placeholder = actual_unknown
+    bound.is_unknown_placeholder = bound_unknown
+    bound is_type_variable_t = bound_is_var
     if
-    TYPE_UNKNOWN bound ==
-    bound is_enum_type_var ||
-    bound is_type_variable ||
-    TYPE_UNKNOWN actual != &&
+    bound_unknown
+    bound_is_var ||
+    actual_unknown ! &&
     then
         type_var actual bindings.set return
     fi
     if
-    actual bound !=
-    TYPE_UNKNOWN actual != &&
-    TYPE_UNKNOWN bound != &&
-    actual is_enum_type_var ! &&
+    bound actual.eq !
+    actual_unknown ! &&
+    bound_unknown ! &&
+    actual is_enum_type_var_t ! &&
     then
-        f"Type variable `{type_var}` bound to `{bound}` but got `{actual}`" tc raise_type_mismatch
+        f"Type variable `{type_var}` bound to `{bound.format}` but got `{actual.format}`" tc raise_type_mismatch
     fi
     bindings
 }
@@ -633,65 +668,84 @@ fn type_has_unresolved typ:str -> bool {
 
 fn bind_generic_param
     tc:TypeChecker
-    bindings:Map[str str]
+    bindings:Map[str Type]
     expected:Parameter
     sig:Signature
 -> bool {
     # Bind type vars from a parameterized param like Map[K V].
-    expected Parameter::typ.format extract_generic_base = base_opt
+    expected Parameter::typ.base = base_opt
     if base_opt.is_none then false return fi
-    expected Parameter::typ.format extract_generic_params = expected_params_opt
+    expected Parameter::typ.type_params = expected_params_opt
     if expected_params_opt.is_none then false return fi
     expected_params_opt.unwrap = expected_params
     # Check if any param is a type variable
     false = has_type_var
     for expected_param in expected_params.iter do
-        if expected_param sig Signature::type_vars.has then
-            true = has_type_var
+        if expected_param.type_var_name Option::Some(probe_name) is then
+            if probe_name sig Signature::type_vars.has then
+                true = has_type_var
+            fi
         fi
     done
     if has_type_var ! then false return fi
 
-    tc stack_pop = actual
-    actual extract_generic_base = actual_base
     base_opt.unwrap = base
-    if actual_base.is_some then
-        if base actual_base.unwrap == then
-            actual extract_generic_params = actual_params_opt
-            if actual_params_opt.is_some then
-                actual_params_opt.unwrap = actual_params
-                if actual_params.length expected_params.length == then
-                    0 = bind_index
-                    while bind_index expected_params.length > do
-                        bind_index expected_params.get = expected_param
-                        if expected_param sig Signature::type_vars.has then
-                            bind_index actual_params.get expected_param bindings tc bind_type_var = bindings
-                        fi
-                        1 += bind_index
-                    done
-                    true return
+    tc stack_pop_type match
+        Type::Generic(actual_g) => {
+            if 0 actual_g.params.length == then
+                expected_params bindings sig tc bind_unknowns = bindings
+                true return
+            fi
+            if base actual_g.base != then
+                "Type mismatch" tc raise_type_mismatch
+                true return
+            fi
+            if actual_g.params.length expected_params.length != then
+                "Type mismatch" tc raise_type_mismatch
+                true return
+            fi
+            0 = bind_index
+            while bind_index expected_params.length > do
+                if bind_index expected_params.get.type_var_name Option::Some(bind_name) is then
+                    if bind_name sig Signature::type_vars.has then
+                        bind_index actual_g.params.get bind_name bindings tc bind_type_var = bindings
+                    fi
                 fi
-            fi
+                1 += bind_index
+            done
+            true return
+        }
+        Type::Unknown => {
+            expected_params bindings sig tc bind_unknowns = bindings
+            true return
+        }
+        _ => {
             "Type mismatch" tc raise_type_mismatch
-        fi
-    fi
-    if base actual == TYPE_UNKNOWN actual == || then
-        for expected_param in expected_params.iter do
-            if expected_param sig Signature::type_vars.has then
-                TYPE_UNKNOWN expected_param bindings tc bind_type_var = bindings
-            fi
-        done
-        true return
-    fi
-    "Type mismatch" tc raise_type_mismatch
+        }
+    end
     true
 }
 
-fn bind_fn_param tc:TypeChecker bindings:Map[str str] expected:Parameter sig:Signature -> bool {
+fn bind_unknowns
+    tc:TypeChecker
+    sig:Signature
+    bindings:Map[str Type]
+    expected_params:List[Type]
+-> Map[str Type] {
+    for expected_param in expected_params.iter do
+        if expected_param.type_var_name Option::Some(unk_name) is then
+            if unk_name sig Signature::type_vars.has then
+                TYPE_UNKNOWN_T unk_name bindings tc bind_type_var = bindings
+            fi
+        fi
+    done
+    bindings
+}
+
+fn bind_fn_param tc:TypeChecker bindings:Map[str Type] expected:Parameter sig:Signature -> bool {
     # Bind type vars from a fn[sig] param like fn[T -> T].
-    expected Parameter::typ.format extract_fn_signature_str = fn_sig_opt
-    if fn_sig_opt.is_none then false return fi
-    fn_sig_opt.unwrap = fn_sig_str
+    if expected Parameter::typ.is_fn_type_t ! then false return fi
+    expected Parameter::typ.format = fn_sig_str
     # Check if any type var appears in the fn signature
     false = has_type_var
     sig Signature::type_vars.to_list = type_var_list
@@ -702,45 +756,55 @@ fn bind_fn_param tc:TypeChecker bindings:Map[str str] expected:Parameter sig:Sig
     done
     if has_type_var ! then false return fi
 
-    tc stack_pop = actual
-    if TYPE_UNKNOWN actual == then
+    tc stack_pop_type = actual
+    if actual.is_unknown_placeholder then
         for type_var2 in type_var_list.iter do
             if fn_sig_str type_var2 str::find 0 <= then
-                TYPE_UNKNOWN type_var2 bindings tc bind_type_var = bindings
+                TYPE_UNKNOWN_T type_var2 bindings tc bind_type_var = bindings
             fi
         done
         true return
     fi
-    if actual is_fn_type ! then
+    if actual.is_fn_type_t ! then
         "Type mismatch" tc raise_type_mismatch
         true return
     fi
-    actual extract_fn_signature_str = actual_sig_opt
-    if actual_sig_opt.is_none then true return fi
-    fn_sig_str signature_from_str = expected_sig
-    actual_sig_opt.unwrap signature_from_str = actual_sig
-    0 = param_index
-    while
-    param_index expected_sig Signature::parameters.length >
-    param_index actual_sig Signature::parameters.length > &&
-    do
-        param_index expected_sig Signature::parameters.get Parameter::typ.format = expected_param
-        if expected_param sig Signature::type_vars.has then
-            param_index actual_sig Signature::parameters.get Parameter::typ.format expected_param bindings tc bind_type_var = bindings
-        fi
-        1 += param_index
-    done
-    0 = return_index
-    while
-    return_index expected_sig Signature::return_types.length >
-    return_index actual_sig Signature::return_types.length > &&
-    do
-        return_index expected_sig Signature::return_types.get.format = expected_return
-        if expected_return sig Signature::type_vars.has then
-            return_index actual_sig Signature::return_types.get.format expected_return bindings tc bind_type_var = bindings
-        fi
-        1 += return_index
-    done
+    expected Parameter::typ match
+        Type::Function(expected_fn) => {
+            actual match
+                Type::Function(actual_fn) => {
+                    expected_fn.parameters = expected_fn_params
+                    actual_fn.parameters = actual_fn_params
+                    0 = param_index
+                    while
+                    param_index expected_fn_params.length >
+                    param_index actual_fn_params.length > &&
+                    do
+                        param_index expected_fn_params.get.format = expected_param_name
+                        if expected_param_name sig Signature::type_vars.has then
+                            param_index actual_fn_params.get expected_param_name bindings tc bind_type_var = bindings
+                        fi
+                        1 += param_index
+                    done
+                    expected_fn.return_types = expected_fn_returns
+                    actual_fn.return_types = actual_fn_returns
+                    0 = return_index
+                    while
+                    return_index expected_fn_returns.length >
+                    return_index actual_fn_returns.length > &&
+                    do
+                        return_index expected_fn_returns.get.format = expected_return_name
+                        if expected_return_name sig Signature::type_vars.has then
+                            return_index actual_fn_returns.get expected_return_name bindings tc bind_type_var = bindings
+                        fi
+                        1 += return_index
+                    done
+                }
+                _ => { }
+            end
+        }
+        _ => { }
+    end
     true
 }
 
@@ -763,22 +827,23 @@ fn apply_signature tc:TypeChecker sig:Signature name:str {
     fi
 
     # Generic case: bind type variables
-    Map::new(Map[str str]) = bindings
+    Map::new(Map[str Type]) = bindings
     0 = index
     while index sig Signature::parameters.length > do
         index sig Signature::parameters.get = param
-        param Parameter::typ.format = expected
 
         if "" name != then
             f"parameter {index 1 +} of `{name}`" tc TypeChecker::set_current_expect_ctx
         fi
 
         # Direct type variable (e.g. T)
-        if expected sig Signature::type_vars.has then
-            tc stack_pop = actual_type_var
-            actual_type_var expected bindings tc bind_type_var = bindings
-            1 += index
-            continue
+        if param Parameter::typ.type_var_name Option::Some(direct_tv) is then
+            if direct_tv sig Signature::type_vars.has then
+                tc stack_pop_type = actual_type_var_t
+                actual_type_var_t direct_tv bindings tc bind_type_var = bindings
+                1 += index
+                continue
+            fi
         fi
 
         # Parameterized type with type vars (e.g. Option[T], Map[K V])
@@ -793,14 +858,14 @@ fn apply_signature tc:TypeChecker sig:Signature name:str {
             continue
         fi
 
-        expected tc expect_type drop
+        param Parameter::typ tc expect_type_t
         1 += index
     done
     "" tc TypeChecker::set_current_expect_ctx
 
     # Push resolved return types
     for return_type in sig Signature::return_types.iter do
-        return_type.format bindings resolve_return_type tc stack_push
+        return_type bindings resolve_return_type_t tc stack_push_type
     done
 }
 
@@ -1969,21 +2034,21 @@ fn check_enum_variant tc:TypeChecker op:Op {
     if 0 casa_enum CasaEnum::type_vars.length != then
         # Generic enum variant (e.g. Option::Some with T)
         # Bind type vars from inner values
-        Map::new(Map[str str]) = bindings
+        Map::new(Map[str Type]) = bindings
         Set::new(Set[str]) = type_vars
         for type_var in casa_enum CasaEnum::type_vars.iter do
             type_var type_vars.add = type_vars
         done
         for expected in inner_types.iter do
             if expected type_vars.has then
-                tc stack_pop = actual
-                actual expected bindings tc bind_type_var = bindings
+                tc stack_pop_type = actual_t
+                actual_t expected bindings tc bind_type_var = bindings
             else
                 expected tc expect_type drop
             fi
         done
         # Build resolved type name
-        bindings casa_enum CasaEnum::type_vars enum_name build_resolved_type tc stack_push
+        bindings casa_enum CasaEnum::type_vars enum_name build_resolved_type_t tc stack_push_type
     else
         # Non-generic variant: pop inner values directly
         for inner_type in inner_types.iter do
