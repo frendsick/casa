@@ -188,15 +188,14 @@ fn expect_delimiter cursor:TokenCursor expected_value:str -> bool {
 # parse_type - parse a type expression
 # ============================================================================
 
-fn parse_type cursor:TokenCursor -> str {
+fn parse_type_ast cursor:TokenCursor -> Type {
     cursor.peek = peek_opt
     if peek_opt.is_none then
         empty_location "Expected type" ErrorKind::UnexpectedToken raise_error
-        "" return
+        Type::Unknown return
     fi
     peek_opt.unwrap = peek
 
-    # Allow fn keyword as type base
     if "fn" peek Token::value == then
         cursor.pop drop
         "fn" = base
@@ -208,45 +207,39 @@ fn parse_type cursor:TokenCursor -> str {
         base_token Token::value = base
     fi
 
-    # Check for parameterized type
     cursor.peek = next_opt
-    if next_opt.is_none then base return fi
-    if "[" next_opt.unwrap Token::value != then base return fi
+    if next_opt.is_none then base parse_type_str return fi
+    if "[" next_opt.unwrap Token::value != then base parse_type_str return fi
     cursor.advance # consume [
 
-    # fn types: balanced bracket tracking
     if "fn" base == then
-        StringBuilder::new = fn_builder
-        0 = fn_depth
+        List::new(List[Type]) = fn_params
+        List::new(List[Type]) = fn_returns
+        false = past_arrow
         while cursor.is_finished ! do
-            cursor.pop = fn_token_opt
-            if fn_token_opt.is_none then break fi
-            fn_token_opt.unwrap = fn_token
-            if "[" fn_token Token::value == then
-                1 += fn_depth
-                "[" fn_builder.append
-            elif "]" fn_token Token::value == then
-                if 0 fn_depth == then break fi
-                fn_depth 1 - = fn_depth
-                "]" fn_builder.append
+            cursor.peek = inner_opt
+            if inner_opt.is_none then break fi
+            inner_opt.unwrap Token::value = ival
+            if "]" ival == then
+                cursor.pop drop
+                break
+            fi
+            if "->" ival == then
+                cursor.pop drop
+                true = past_arrow
+                continue
+            fi
+            cursor parse_type_ast = inner_type
+            if past_arrow then
+                inner_type fn_returns.push
             else
-                if 0 fn_builder.length != then
-                    fn_builder.build = fn_prev
-                    if fn_prev.length 0 != then
-                        fn_prev.length 1 - fn_prev.at = fn_last
-                        if '[' fn_last != "]" fn_token Token::value != && then
-                            " " fn_builder.append
-                        fi
-                    fi
-                fi
-                fn_token Token::value fn_builder.append
+                inner_type fn_params.push
             fi
         done
-        f"fn[{fn_builder.build}]" return
+        fn_returns fn_params FunctionType Type::Function return
     fi
 
-    # Regular parameterized type
-    List::new(List[str]) = inner_types
+    List::new(List[Type]) = inner_types
     while true do
         cursor.peek = inner_opt
         if inner_opt.is_some then
@@ -255,21 +248,16 @@ fn parse_type cursor:TokenCursor -> str {
                 break
             fi
         fi
-        cursor parse_type inner_types.push
+        cursor parse_type_ast inner_types.push
     done
     if 0 inner_types.length == then
         empty_location f"Expected type parameter inside `{base}[...]`" ErrorKind::UnexpectedToken raise_error
     fi
+    inner_types base GenericType Type::Generic
+}
 
-    # Join inner types with spaces
-    StringBuilder::new = join_builder
-    0 = join_index
-    while join_index inner_types.length > do
-        if 0 join_index != then " " join_builder.append fi
-        join_index inner_types.get join_builder.append
-        1 += join_index
-    done
-    f"{base}[{join_builder.build}]"
+fn parse_type cursor:TokenCursor -> str {
+    cursor parse_type_ast.format
 }
 
 # ============================================================================
@@ -783,7 +771,7 @@ fn parse_parameter_maybe_named cursor:TokenCursor token:Token -> Parameter {
     cursor.peek = next_opt
     if next_opt.is_some ":" next_opt.unwrap Token::value == && then
         cursor.advance # consume :
-        cursor parse_type = param_type
+        cursor parse_type_ast = param_type
         token Token::value param_type make_named_param return
     fi
     cursor.retreat
@@ -825,8 +813,8 @@ fn parse_parameters cursor:TokenCursor -> List[Parameter] {
 # parse_return_types - parse return types after ->
 # ============================================================================
 
-fn parse_return_types cursor:TokenCursor -> List[str] {
-    List::new(List[str]) = types
+fn parse_return_types cursor:TokenCursor -> List[Type] {
+    List::new(List[Type]) = types
     while true do
         cursor.peek = peek_opt
         if peek_opt.is_none then
@@ -835,7 +823,7 @@ fn parse_return_types cursor:TokenCursor -> List[str] {
         if "{" peek_opt.unwrap Token::value == then
             types return
         fi
-        cursor parse_type types.push
+        cursor parse_type_ast types.push
     done
     types
 }
@@ -846,7 +834,7 @@ fn parse_return_types cursor:TokenCursor -> List[str] {
 
 fn parse_signature cursor:TokenCursor -> Signature {
     cursor parse_parameters = params
-    List::new(List[str]) = returns
+    List::new(List[Type]) = returns
 
     cursor.peek = next_opt
     if next_opt.is_none then
@@ -928,7 +916,7 @@ fn build_hidden_trait_methods
                 if 0 bound_method TraitMethod::default_ops.length == then
                     f"__trait_{bound_type_var}_{bound_method TraitMethod::name}" = hidden_name
                     bound_subs bound_type_var bound_method TraitMethod::signature resolve_trait_sig apply_type_subs_to_sig = hidden_sig
-                    f"fn[{hidden_sig signature_to_str}]" = hidden_type
+                    hidden_sig signature_to_function_type = hidden_type
                     hidden_type hidden_name HiddenTraitMethod result.push
                 fi
             done
@@ -1088,8 +1076,8 @@ fn synthesize_hashable_for_enum parser:Parser casa_enum:CasaEnum {
         location "int" OpValue::TypeCast make_op hash_ops.push
         List::new(List[Parameter]) = hash_params
         enum_name make_param hash_params.push
-        List::new(List[str]) = hash_returns
-        "int" hash_returns.push
+        List::new(List[Type]) = hash_returns
+        "int" parse_type_str hash_returns.push
         hash_returns hash_params make_signature = hash_sig
         hash_sig location hash_ops hash_name make_function_with_sig = hash_fn
         hash_name hash_fn parser.store.functions.set drop
@@ -1102,8 +1090,8 @@ fn synthesize_hashable_for_enum parser:Parser casa_enum:CasaEnum {
         List::new(List[Parameter]) = eq_params
         enum_name make_param eq_params.push
         enum_name make_param eq_params.push
-        List::new(List[str]) = eq_returns
-        "bool" eq_returns.push
+        List::new(List[Type]) = eq_returns
+        "bool" parse_type_str eq_returns.push
         eq_returns eq_params make_signature = eq_sig
         eq_sig location eq_ops eq_name make_function_with_sig = eq_fn
         eq_name eq_fn parser.store.functions.set drop
@@ -1152,8 +1140,8 @@ fn create_member_accessor
 
     List::new(List[Parameter]) = getter_params
     param_type make_param getter_params.push
-    List::new(List[str]) = getter_returns
-    member_type getter_returns.push
+    List::new(List[Type]) = getter_returns
+    member_type parse_type_str getter_returns.push
     getter_returns getter_params make_signature = getter_sig
     sig_type_vars getter_sig Signature::set_type_vars
     getter_sig location getter_ops getter_name make_function_with_sig = getter
@@ -1174,7 +1162,7 @@ fn create_member_accessor
     List::new(List[Parameter]) = setter_params
     param_type make_param setter_params.push
     member_type make_param setter_params.push
-    List::new(List[str]) = setter_returns
+    List::new(List[Type]) = setter_returns
     setter_returns setter_params make_signature = setter_sig
     sig_type_vars setter_sig Signature::set_type_vars
     setter_sig location setter_ops setter_name make_function_with_sig = setter
@@ -1219,7 +1207,7 @@ fn parse_struct parser:Parser cursor:TokenCursor -> CasaStruct {
         cursor parse_type = member_type
 
         type_vars member_token Token::location members.length member_type member_token Token::value name_token Token::value parser create_member_accessor
-        member_type member_token Token::value Member members.push
+        member_type parse_type_str member_token Token::value Member members.push
     done
 
     type_vars name_token Token::location members name_token Token::value CasaStruct
@@ -1257,7 +1245,7 @@ fn parse_trait_method_signature cursor:TokenCursor -> Signature {
         peek cursor parse_parameter_maybe_named params.push
     done
 
-    List::new(List[str]) = returns
+    List::new(List[Type]) = returns
     cursor.peek = arrow_opt
     if arrow_opt.is_some then
         if "->" arrow_opt.unwrap Token::value == then
@@ -1272,7 +1260,7 @@ fn parse_trait_method_signature cursor:TokenCursor -> Signature {
                 then
                     break
                 fi
-                cursor parse_type returns.push
+                cursor parse_type_ast returns.push
             done
         fi
     fi
@@ -1490,12 +1478,6 @@ fn parse_impl_block parser:Parser cursor:TokenCursor {
 # ============================================================================
 # parse_match_block - parse a full match construct (match ... end)
 # ============================================================================
-
-fn token_line token:Token -> int {
-    token Token::location Location::file SOURCE_CACHE.get = source_opt
-    if source_opt.is_none then 0 return fi
-    token Token::location Location::span Span::offset source_opt.unwrap offset_to_line_col
-}
 
 fn is_match_arm_boundary parser:Parser cursor:TokenCursor -> bool {
     cursor TokenCursor::pos = pos
