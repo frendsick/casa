@@ -174,6 +174,44 @@ without a type-name prefix is acceptable.
 
 ---
 
+## Function parameters
+
+### Order: primary data first, config flags last
+
+- **MUST** put primary data parameters first and config/flag/mode parameters last.
+- Casa's RPN means param 1 is the topmost stack slot — the first argument pushed last.
+  That position belongs to the primary data being operated on. A config flag in param 1
+  forces every call site to push the flag immediately before the function name, burying
+  the important argument under a trailing literal.
+
+  ```casa
+  # MUST — primary data first, flag last
+  fn find_matching_label
+      ops:List[Op]
+      op_index:int
+      boundary:int
+      target:OpKind
+      backward:bool
+  -> int { ... }
+
+  # MUST NOT — flag in first position
+  fn find_matching_label
+      backward:bool
+      ops:List[Op]
+      ...
+  -> int { ... }
+  ```
+
+### Flag types match the value range
+
+- **MUST** pick the parameter type matching the actual value set. Two states = `bool`.
+  Arbitrary integer = `int`. Don't use `int` as a stand-in for "one of two values".
+- `int` tells the reader "any integer" and invites misuse. If only `1` and `-1` are
+  ever valid, the type lies about the domain. Use `bool` and derive the integer
+  internally (`if backward then -1 else 1 fi = step`).
+
+---
+
 ## Option and Result
 
 - **MUST** use `Option[T]` for values that may be absent. Never return a sentinel
