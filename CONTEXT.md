@@ -4,6 +4,14 @@ Casa is a self-hosted programming language and compiler. Its CI vocabulary descr
 
 ## Language
 
+**Type AST**:
+The compiler-owned structural representation of a Casa type after parsing.
+_Avoid_: Type string, source type text
+
+**Source type syntax**:
+The user-written type expression before the parser converts it into the **Type AST**.
+_Avoid_: Type annotation metadata, internal type string
+
 **Bootstrap compiler**:
 The latest stable released `casac` binary used to compile the compiler source on a branch.
 _Avoid_: Temporary compiler, release compiler
@@ -42,6 +50,8 @@ _Avoid_: Release lint, tag lint
 
 ## Relationships
 
+- **Source type syntax** is parsed into the **Type AST** before compiler analysis.
+- Compiler analysis should operate on the **Type AST**, not reparsed or reformatted type strings.
 - A **Bootstrap compiler** builds exactly one **Branch compiler** at the start of CI.
 - A **Branch compiler** must self-compile and reach a **Fixed point** before the branch is considered releasable.
 - A **Temporary compiler release** must not replace the **Bootstrap compiler** as the normal PR CI input.
@@ -58,5 +68,6 @@ _Avoid_: Release lint, tag lint
 
 ## Flagged Ambiguities
 
+- "`Op.type_annotation` / `Op.deferred_return_type` as source text" was used to justify keeping parsed type metadata as strings. Resolved: user-written type expressions are **Source type syntax** only before parsing; after parsing, compiler-owned metadata should use the **Type AST**.
 - "release compiler" was used to mean both the stable compiler downloaded by CI and an ad hoc temporary compiler. Resolved: use **Bootstrap compiler** for the stable CI input; temporary releases are exceptional escape hatches.
 - "temporary release" was considered as a normal CI mechanism. Resolved: use **Temporary compiler release** only as an exception, not as the default bootstrap path.
