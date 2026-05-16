@@ -218,6 +218,26 @@ fn global_add -> int {
 }
 ```
 
+### Global Declarations
+
+By default, `= X` inside a function **always creates a local**, even if a global named `X` exists.
+To write to a global from inside a function, declare it with `global X` at the top of the function body:
+
+```casa
+0 = counter
+
+fn increment {
+    global counter
+    1 += counter
+}
+```
+
+**Rules:**
+- `global X` must appear before any other statements in the function body.
+- `global X` is not allowed at the top level or inside a lambda.
+- `global X` requires that `X` is already declared as a global variable.
+- Multiple `global` declarations are allowed, one per line.
+
 ### Local Variables
 
 Declared inside a function, scoped to that function:

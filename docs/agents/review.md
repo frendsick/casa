@@ -8,10 +8,8 @@ Before opening a pull request:
 
 1. Run the `simplify` skill on the diff. Apply any reuse, quality, or efficiency fixes
    it finds.
-2. Review the changes with the `feature-dev:code-reviewer` agent.
-3. **MUST** fix every issue the reviewer reports — must-fix, should-fix, and consider
-   alike — without pausing, asking, or surfacing the review output to the user as a
-   stopping point. Treat reviewer output as an internal todo list.
+2. Review the changes.
+3. **MUST** fix every issue the reviewer reports without pausing, asking, or surfacing the review output to the user as a stopping point.
 4. Re-run the reviewer on the fixed diff.
 5. Loop steps 3–4 until the reviewer reports no must-fix or should-fix issues.
 6. Only then open the PR. See [git.md](./git.md).

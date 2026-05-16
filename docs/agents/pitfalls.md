@@ -12,17 +12,6 @@ for Enter. When the script is run non-interactively the suite hangs forever.
 - **Workaround:** redirect stdin — `tests/test_compiler.sh < /dev/null`.
 - **Tracking:** [#170](https://github.com/frendsick/casa/issues/170).
 
-## Locals in `lib/*.casa` impl methods leak to global scope
-
-Variables declared inside `impl` methods in `lib/*.casa` create global bindings that
-clash with user code. Renaming `ai_value` / `li_value` / `sc_value` in `lib/std.casa`
-to plain `value` breaks any user code that does `for value in ... do`.
-
-- **Workaround:** keep distinct prefixed names (`ai_value`, `li_value`, `sc_value`)
-  inside lib impl methods. Don't "simplify" them to generic names like `value`,
-  `index`, or `item` that user code is likely to reuse.
-- **Tracking:** [#171](https://github.com/frendsick/casa/issues/171).
-
 ## Type enum methods may consume the value (context-dependent)
 
 Casa enum values (`Type`, `Option[T]`) are usually safe to call methods on multiple
