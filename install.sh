@@ -5,7 +5,8 @@ set -e
 
 # Configuration
 GITHUB_REPO="frendsick/casa"
-RELEASE_VERSION="latest"
+RELEASE_ENV_FILE="casa-release.env"
+RELEASE_ENV_URL="https://raw.githubusercontent.com/$GITHUB_REPO/main/$RELEASE_ENV_FILE"
 CASA_COMPILER="casac"
 
 # List of dependencies
@@ -13,7 +14,9 @@ DEPENDENCIES="as ld"
 
 # Script entry point
 main() {
-    # Fetch latest release from the Github REST API
+    load_release_tag
+
+    # Fetch configured release from the Github REST API
     # https://docs.github.com/en/rest/releases/releases
     log "INFO" "List assets from Github" "$GITHUB_REPO"
     release_json=$(
@@ -21,7 +24,7 @@ main() {
             --silent \
             --fail \
             --header "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/$GITHUB_REPO/releases/$RELEASE_VERSION"
+            "https://api.github.com/repos/$GITHUB_REPO/releases/tags/$CASAC_RELEASE_TAG"
     ) || { log "ERROR" "Failed to fetch release info" "$GITHUB_REPO"; exit 1; }
 
     # Parse asset name and URL pairs
@@ -70,6 +73,44 @@ main() {
     fi
 
     log "SUCCESS" "All set. Happy hacking!" ""
+}
+
+load_release_tag() {
+    if [ -f "$RELEASE_ENV_FILE" ]; then
+        release_env=$(cat "$RELEASE_ENV_FILE")
+    else
+        release_env=$(
+            curl \
+                --silent \
+                --location \
+                --fail \
+                "$RELEASE_ENV_URL"
+        ) || { log "ERROR" "Failed to fetch release config" "$RELEASE_ENV_URL"; exit 1; }
+    fi
+
+    release_line=$(echo "$release_env" | sed -n '/^CASAC_RELEASE_TAG=/p')
+    line_count=$(echo "$release_line" | grep -c '^CASAC_RELEASE_TAG=' || true)
+    if [ "$line_count" -ne 1 ]; then
+        log "ERROR" "Invalid release config" "$RELEASE_ENV_FILE must contain exactly one CASAC_RELEASE_TAG entry"
+        exit 1
+    fi
+
+    CASAC_RELEASE_TAG=${release_line#CASAC_RELEASE_TAG=}
+
+    if [ -z "$CASAC_RELEASE_TAG" ]; then
+        log "ERROR" "Missing release tag" "$RELEASE_ENV_FILE"
+        exit 1
+    fi
+    if ! echo "$CASAC_RELEASE_TAG" | grep -Eq '^[A-Za-z0-9._-]+$'; then
+        log "ERROR" "Invalid release tag" "$CASAC_RELEASE_TAG"
+        exit 1
+    fi
+    if ! echo "$CASAC_RELEASE_TAG" | grep -Eq '^v[0-9]+[.][0-9]+[.][0-9]+([.-][A-Za-z0-9._-]+)?$'; then
+        log "ERROR" "Invalid release tag" "$CASAC_RELEASE_TAG"
+        exit 1
+    fi
+
+    log "INFO" "Use Casa release" "$CASAC_RELEASE_TAG"
 }
 
 are_you_sure() {

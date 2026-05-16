@@ -28,6 +28,16 @@ Rules for running and updating tests.
   ./casac -L lib casa.casa -o casac
   ```
 
+## CI bootstrap compiler
+
+- `casa-release.env` is the single tracked source for the release tag used by CI
+  and `install.sh`.
+- Consumers must parse and validate `casa-release.env` as data. Do not source it or
+  append it directly to `$GITHUB_ENV`.
+- PR CI should use a stable released bootstrap compiler by default.
+- Temporary or prerelease bootstrap compilers require the `bootstrap-override` PR
+  label and must be cleaned up back to a stable release tag.
+
 ## When examples change
 
 See [examples.md](./examples.md).

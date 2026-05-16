@@ -1,0 +1,72 @@
+name: Bootstrap policy
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+    - name: Validate bootstrap compiler release
+      env:
+        HAS_BOOTSTRAP_OVERRIDE: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'bootstrap-override') }}
+      run: |
+        set -euo pipefail
+
+        release_line=$(grep -E '^CASAC_RELEASE_TAG=' casa-release.env || true)
+        line_count=$(printf '%s\n' "$release_line" | grep -c '^CASAC_RELEASE_TAG=' || true)
+        if [ "$line_count" -ne 1 ]; then
+          echo "casa-release.env must contain exactly one CASAC_RELEASE_TAG entry" >&2
+          exit 1
+        fi
+
+        CASAC_RELEASE_TAG=${release_line#CASAC_RELEASE_TAG=}
+
+        if [ -z "${CASAC_RELEASE_TAG:-}" ]; then
+          echo "CASAC_RELEASE_TAG is missing from casa-release.env" >&2
+          exit 1
+        fi
+        if ! printf '%s\n' "$CASAC_RELEASE_TAG" | grep -Eq '^[A-Za-z0-9._-]+$'; then
+          echo "CASAC_RELEASE_TAG contains unsupported characters: ${CASAC_RELEASE_TAG}" >&2
+          exit 1
+        fi
+        if ! printf '%s\n' "$CASAC_RELEASE_TAG" | grep -Eq '^v[0-9]+[.][0-9]+[.][0-9]+([.-][A-Za-z0-9._-]+)?$'; then
+          echo "CASAC_RELEASE_TAG must look like a Casa release tag: ${CASAC_RELEASE_TAG}" >&2
+          exit 1
+        fi
+
+        is_temporary=false
+        if [[ "$CASAC_RELEASE_TAG" =~ (temp|prerelease|bootstrap) ]]; then
+          is_temporary=true
+        fi
+
+        release_json=$(
+          curl --silent --location --fail \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${CASAC_RELEASE_TAG}"
+        )
+        is_prerelease=$(echo "$release_json" | jq -r '.prerelease')
+
+        has_override=false
+        if [ "${GITHUB_EVENT_NAME}" = "pull_request" ] && [ "${HAS_BOOTSTRAP_OVERRIDE}" = "true" ]; then
+          has_override=true
+        fi
+
+        if [ "$is_temporary" = "true" ] || [ "$is_prerelease" = "true" ]; then
+          if [ "$has_override" != "true" ]; then
+            echo "casa-release.env points to temporary or prerelease bootstrap compiler: ${CASAC_RELEASE_TAG}" >&2
+            echo "Use a stable release tag, or add the bootstrap-override label for staged bootstrap repair." >&2
+            exit 1
+          fi
+          echo "Temporary bootstrap compiler allowed by bootstrap-override label: ${CASAC_RELEASE_TAG}"
+        else
+          echo "Stable bootstrap compiler release: ${CASAC_RELEASE_TAG}"
+        fi
