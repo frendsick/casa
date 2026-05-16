@@ -312,17 +312,17 @@ fn make_token value:str kind:TokenKind location:Location -> Token {
 
 struct Op {
     location:             Location
-    type_annotation:      str
-    deferred_return_type: str
+    type_hint:            Option[Type]
+    deferred_return_hint: Option[Type]
     value:                OpValue
 }
 
 fn make_op value:OpValue location:Location -> Op {
-    value "" "" location Op
+    value Option::None(Option[Type]) Option::None(Option[Type]) location Op
 }
 
-fn make_op_annotated value:OpValue location:Location annotation:str -> Op {
-    value "" annotation location Op
+fn make_op_with_type_hint value:OpValue location:Location type_hint:Type -> Op {
+    value Option::None(Option[Type]) type_hint Option::Some location Op
 }
 # Op identity is its heap address: two Op values compare equal iff the same
 # allocation. Required so labels map by Op identity (Map[Op int]), not by an
@@ -336,23 +336,21 @@ impl Op {
 fn clone_ops ops:List[Op] -> List[Op] {
     List::new(List[Op]) = result
     for source_op in ops.iter do
-        source_op.value source_op.deferred_return_type source_op.type_annotation source_op.location Op result.push
+        source_op.value source_op.deferred_return_hint source_op.type_hint source_op.location Op result.push
     done
     result
 }
 
-fn substitute_ops_types ops:List[Op] subs:Map[str str] {
+fn substitute_ops_types ops:List[Op] subs:Map[str Type] {
     for sub_op in ops.iter do
         if sub_op.value OpValue::TypeCast(cast_type) is then
-            subs cast_type substitute_type_params OpValue::TypeCast sub_op Op::set_value
+            subs cast_type.substitute_t OpValue::TypeCast sub_op Op::set_value
         fi
-        if "" sub_op Op::type_annotation != then
-            subs sub_op Op::type_annotation substitute_type_params = new_annot
-            new_annot sub_op Op::set_type_annotation
+        if sub_op Op::type_hint Option::Some(hint) is then
+            subs hint.substitute_t Option::Some sub_op Op::set_type_hint
         fi
-        if "" sub_op Op::deferred_return_type != then
-            subs sub_op Op::deferred_return_type substitute_type_params = new_deferred
-            new_deferred sub_op Op::set_deferred_return_type
+        if sub_op Op::deferred_return_hint Option::Some(deferred_hint) is then
+            subs deferred_hint.substitute_t Option::Some sub_op Op::set_deferred_return_hint
         fi
     done
 }
@@ -565,6 +563,7 @@ enum OpValue {
     FnPush (str)
     FnReturn
     MethodCall (str)
+    TraitMethodCall (str)
     # Loops
     WhileStart
     WhileCondition
@@ -595,7 +594,7 @@ enum OpValue {
     StructNew (CasaStruct)
     StructLiteral (StructLiteral)
     # Types
-    TypeCast (str)
+    TypeCast (Type)
     # Import
     ImportFile (str)
     # F-strings
@@ -616,13 +615,13 @@ fn op_str_value op:Op -> str {
     if op.value OpValue::FnCall(value) is then value return fi
     if op.value OpValue::FnPush(value) is then value return fi
     if op.value OpValue::MethodCall(value) is then value return fi
+    if op.value OpValue::TraitMethodCall(value) is then value return fi
     if op.value OpValue::PushStr(value) is then value return fi
     if op.value OpValue::PushVar(value) is then value return fi
     if op.value OpValue::PushCapture(value) is then value return fi
     if op.value OpValue::AssignVar(value) is then value return fi
     if op.value OpValue::AssignDec(value) is then value return fi
     if op.value OpValue::AssignInc(value) is then value return fi
-    if op.value OpValue::TypeCast(value) is then value return fi
     if op.value OpValue::ImportFile(value) is then value return fi
     if op.value OpValue::Identifier(value) is then value return fi
     "Internal error: op_str_value called on non-str op\n" eprint
@@ -769,6 +768,14 @@ fn trait_bound_to_str bound:TraitBound -> str {
     done
     "]" builder.append
     builder.build
+}
+
+fn trait_bound_to_type bound:TraitBound -> Type {
+    List::new(List[Type]) = type_args
+    for type_arg in bound TraitBound::type_args.iter do
+        type_arg parse_type_str type_args.push
+    done
+    type_args bound TraitBound::name GenericType Type::Generic
 }
 
 fn trait_bound_eq a:TraitBound b:TraitBound -> bool {
@@ -994,45 +1001,6 @@ impl Type {
         end
     }
 
-    fn substitute self:Type subs:Map[str str] -> Type {
-        self match
-            Type::Unknown => { Type::Unknown }
-            Type::Builtin(builtin) => { builtin Type::Builtin }
-            Type::TypeVar(name) => {
-                if name subs.get Option::Some(bound) is then
-                    bound parse_type_str
-                else
-                    name Type::TypeVar
-                fi
-            }
-            Type::Generic(generic) => {
-                generic.base = base
-                if 0 generic.params.length == then
-                    if base subs.get Option::Some(bound) is then
-                        bound parse_type_str return
-                    fi
-                    generic.params base GenericType Type::Generic return
-                fi
-                List::new(List[Type]) = new_params
-                for param in generic.params.iter do
-                    subs param.substitute new_params.push
-                done
-                new_params base GenericType Type::Generic
-            }
-            Type::Function(fn_type) => {
-                List::new(List[Type]) = new_params
-                for param in fn_type.parameters.iter do
-                    subs param.substitute new_params.push
-                done
-                List::new(List[Type]) = new_returns
-                for ret in fn_type.return_types.iter do
-                    subs ret.substitute new_returns.push
-                done
-                new_returns new_params FunctionType Type::Function
-            }
-        end
-    }
-
     fn substitute_t self:Type bindings:Map[str Type] -> Type {
         self match
             Type::Unknown => { Type::Unknown }
@@ -1132,6 +1100,97 @@ impl Type {
         self match
             Type::Function(_) => { true }
             _ => { false }
+        end
+    }
+
+    fn is_builtin_type_t self:Type -> bool {
+        self match
+            Type::Builtin(_) => { true }
+            Type::Generic(generic) => {
+                0 generic.params.length == "array" generic.base == &&
+            }
+            _ => { false }
+        end
+    }
+
+    fn is_primitive_compare_type_t self:Type -> bool {
+        self match
+            Type::Builtin(builtin) => {
+                builtin BuiltinType::Int ==
+                builtin BuiltinType::Bool == ||
+                builtin BuiltinType::Char == ||
+                builtin BuiltinType::Cstr == ||
+                builtin BuiltinType::Ptr == ||
+            }
+            _ => { false }
+        end
+    }
+
+    fn match_base self:Type -> str {
+        self match
+            Type::Generic(generic) => { generic.base }
+            _ => { self.format }
+        end
+    }
+
+    fn has_unresolved self:Type -> bool {
+        self match
+            Type::Generic(generic) => {
+                if 0 generic.params.length == then
+                    false
+                else
+                    for param in generic.params.iter do
+                        if param.is_unknown_placeholder then true return fi
+                        if param.has_unresolved then true return fi
+                    done
+                    false
+                fi
+            }
+            Type::Function(fn_type) => {
+                for param in fn_type.parameters.iter do
+                    if param.has_unresolved then true return fi
+                done
+                for ret in fn_type.return_types.iter do
+                    if ret.has_unresolved then true return fi
+                done
+                false
+            }
+            Type::Unknown => { false }
+            _ => { false }
+        end
+    }
+
+    fn exists_recursive self:Type function_opt:Option[Function] -> bool {
+        self match
+            Type::Unknown => { false }
+            Type::Builtin(_) => { true }
+            Type::TypeVar(name) => {
+                if function_opt Option::Some(check_fn) is then
+                    name check_fn Function::signature Signature::type_vars.has return
+                fi
+                false
+            }
+            Type::Generic(generic) => {
+                for param in generic.params.iter do
+                    if function_opt param.exists_recursive ! then false return fi
+                done
+                if generic.base DEFAULT_PARSER.store.structs.get.is_some then true return fi
+                if generic.base DEFAULT_PARSER.store.enums.get.is_some then true return fi
+                if "array" generic.base == then true return fi
+                if function_opt Option::Some(check_fn) is then
+                    if generic.base check_fn Function::signature Signature::type_vars.has then true return fi
+                fi
+                false
+            }
+            Type::Function(fn_type) => {
+                for param in fn_type.parameters.iter do
+                    if function_opt param.exists_recursive ! then false return fi
+                done
+                for ret in fn_type.return_types.iter do
+                    if function_opt ret.exists_recursive ! then false return fi
+                done
+                true
+            }
         end
     }
 
@@ -1290,38 +1349,6 @@ fn parse_type_str source:str -> Type {
 # Type utility functions
 # ============================================================================
 
-fn extract_generic_base typ:str -> Option[str] {
-    # For 'array[int]' returns 'array', for 'List[int]' returns 'List'.
-    # Returns None for fn types and non-parameterized types.
-    typ "[" str::find = bracket
-    if 0 bracket <= then
-        Option::None
-        return
-    fi
-    if typ "]" str::ends_with ! then
-        Option::None
-        return
-    fi
-    typ 0 bracket str::substring = base
-    if "fn" base == then
-        Option::None
-    else
-        base Option::Some
-    fi
-}
-
-fn extract_generic_inner typ:str -> Option[str] {
-    # For 'array[int]' returns 'int'.
-    typ extract_generic_base = base_opt
-    if base_opt.is_none then
-        Option::None
-        return
-    fi
-    base_opt.unwrap = base
-    typ.length base.length - 2 - = inner_length
-    typ base.length 1 + inner_length str::substring Option::Some
-}
-
 fn split_type_tokens s:str -> List[str] {
     # Split a space-separated type string into tokens, respecting brackets.
     List::new(List[str]) = tokens
@@ -1347,37 +1374,6 @@ fn split_type_tokens s:str -> List[str] {
         current.build tokens.push
     fi
     tokens
-}
-
-fn extract_generic_params typ:str -> Option[List[str]] {
-    # For 'Map[str int]' returns ['str', 'int'].
-    typ extract_generic_base = base_opt
-    if base_opt.is_none then
-        Option::None
-        return
-    fi
-    base_opt.unwrap = base
-    typ.length base.length - 2 - = inner_length
-    typ base.length 1 + inner_length str::substring split_type_tokens Option::Some
-}
-
-fn is_fn_type typ:str -> bool {
-    "fn" typ == typ "fn[" str::starts_with ||
-}
-
-fn extract_fn_signature_str typ:str -> Option[str] {
-    # Returns None for bare 'fn' or non-fn types.
-    if typ "fn[" str::starts_with ! then
-        Option::None
-        return
-    fi
-    if typ "]" str::ends_with ! then
-        Option::None
-        return
-    fi
-    # Extract between fn[ and ]
-    typ.length 4 - = length
-    typ 3 length str::substring Option::Some
 }
 
 fn build_parameterized_type base:str params:List[str] -> str {
@@ -1418,16 +1414,6 @@ fn build_resolved_type_t base:str type_vars:List[str] bindings:Map[str Type] -> 
         fi
     done
     params base GenericType Type::Generic
-}
-
-fn is_builtin_type typ:str -> bool {
-    "int" typ ==
-    "bool" typ == ||
-    "char" typ == ||
-    "cstr" typ == ||
-    "str" typ == ||
-    "ptr" typ == ||
-    "array" typ == ||
 }
 
 # ============================================================================
@@ -1476,6 +1462,14 @@ fn signature_to_function_type sig:Signature -> Type {
     fn_returns fn_params FunctionType Type::Function
 }
 
+fn function_type_to_signature fn_type:FunctionType -> Signature {
+    List::new(List[Parameter]) = params
+    for param_type in fn_type FunctionType::parameters.iter do
+        "" param_type Parameter params.push
+    done
+    fn_type FunctionType::return_types params make_signature
+}
+
 fn signature_from_str sig_str:str -> Signature {
     # Parse "param1 param2 -> ret1 ret2" into Signature
     sig_str split_type_tokens = tokens
@@ -1517,6 +1511,126 @@ fn signature_from_str sig_str:str -> Signature {
     returns params make_signature
 }
 
+fn signature_type_param_matches expected:Type actual:Type type_vars:Set[str] -> bool {
+    if expected actual.eq then true return fi
+    if expected.is_unknown_placeholder then true return fi
+    if actual.is_unknown_placeholder then true return fi
+    if expected.type_var_name Option::Some(expected_name) is then
+        if expected_name type_vars.has then true return fi
+    fi
+    if actual.type_var_name Option::Some(actual_name) is then
+        if actual_name type_vars.has then true return fi
+    fi
+    false
+}
+
+fn signature_type_matches expected:Type actual:Type -> bool {
+    if expected actual.eq then true return fi
+    if expected.is_unknown_placeholder then true return fi
+    if actual.is_unknown_placeholder then true return fi
+    expected match
+        Type::Function(_) => { }
+        Type::Generic(expected_generic) => {
+            if 0 expected_generic.params.length == then
+                actual match
+                    Type::Generic(actual_generic) => {
+                        if 0 actual_generic.params.length != expected_generic.base actual_generic.base == && then
+                            true return
+                        fi
+                    }
+                    _ => { }
+                end
+            fi
+        }
+        _ => { }
+    end
+    actual match
+        Type::Function(_) => { }
+        Type::Generic(actual_generic) => {
+            if 0 actual_generic.params.length == then
+                expected match
+                    Type::Generic(expected_generic) => {
+                        if 0 expected_generic.params.length != actual_generic.base expected_generic.base == && then
+                            true return
+                        fi
+                    }
+                    _ => { }
+                end
+            fi
+        }
+        _ => { }
+    end
+    expected match
+        Type::Function(expected_fn) => {
+            actual match
+                Type::Function(actual_fn) => {
+                    if 0 expected_fn.parameters.length == 0 expected_fn.return_types.length == && then
+                        true return
+                    fi
+                    if 0 actual_fn.parameters.length == 0 actual_fn.return_types.length == && then
+                        true return
+                    fi
+                    if expected_fn.parameters.length actual_fn.parameters.length != then false return fi
+                    if expected_fn.return_types.length actual_fn.return_types.length != then false return fi
+                    0 = fn_index
+                    while fn_index expected_fn.parameters.length > do
+                        if fn_index actual_fn.parameters.get fn_index expected_fn.parameters.get signature_type_matches ! then
+                            false return
+                        fi
+                        1 += fn_index
+                    done
+                    0 = fn_index
+                    while fn_index expected_fn.return_types.length > do
+                        if fn_index actual_fn.return_types.get fn_index expected_fn.return_types.get signature_type_matches ! then
+                            false return
+                        fi
+                        1 += fn_index
+                    done
+                    true return
+                }
+                _ => { }
+            end
+        }
+        Type::Generic(expected_generic) => {
+            actual match
+                Type::Generic(actual_generic) => {
+                    if expected_generic.base actual_generic.base != then false return fi
+                    if expected_generic.params.length actual_generic.params.length != then false return fi
+                    Set::new(Set[str]) = type_vars
+                    expected_generic.base DEFAULT_PARSER.store.enums.get = enum_opt
+                    if enum_opt.is_some then
+                        for type_var in enum_opt.unwrap CasaEnum::type_vars.iter do
+                            type_var type_vars.add = type_vars
+                        done
+                    fi
+                    expected_generic.base DEFAULT_PARSER.store.structs.get = struct_opt
+                    if struct_opt.is_some then
+                        for type_var in struct_opt.unwrap CasaStruct::type_vars.iter do
+                            type_var type_vars.add = type_vars
+                        done
+                    fi
+                    0 = param_index
+                    while param_index expected_generic.params.length > do
+                        if
+                        type_vars
+                        param_index actual_generic.params.get
+                        param_index expected_generic.params.get
+                        signature_type_param_matches !
+                        then
+                            false return
+                        fi
+                        1 += param_index
+                    done
+                    true return
+                }
+                _ => { }
+            end
+        }
+        _ => { }
+    end
+    false
+}
+
 fn signature_matches sig_a:Signature sig_b:Signature -> bool {
     # Check if two signatures are compatible, respecting any types.
     if sig_a Signature::parameters.length sig_b Signature::parameters.length != then
@@ -1528,132 +1642,25 @@ fn signature_matches sig_a:Signature sig_b:Signature -> bool {
 
     0 = index
     while index sig_a Signature::parameters.length > do
-        index sig_a Signature::parameters.get Parameter::typ.format = type_a
-        index sig_b Signature::parameters.get Parameter::typ.format = type_b
-        if type_a type_b != TYPE_UNKNOWN type_a != && TYPE_UNKNOWN type_b != && then
-            type_b extract_generic_base = base_b
-            type_a extract_generic_base = base_a
-            if base_b.is_some type_a base_b.unwrap_or "" == && ! then
-                if base_a.is_some type_b base_a.unwrap_or "" == && ! then
-                    false return
-                fi
-            fi
+        index sig_a Signature::parameters.get Parameter::typ = type_a
+        index sig_b Signature::parameters.get Parameter::typ = type_b
+        if type_b type_a signature_type_matches ! then
+            false return
         fi
         1 += index
     done
 
     0 = index
     while index sig_a Signature::return_types.length > do
-        index sig_a Signature::return_types.get.format = return_a
-        index sig_b Signature::return_types.get.format = return_b
-        if return_a return_b != TYPE_UNKNOWN return_a != && TYPE_UNKNOWN return_b != && then
-            return_b extract_generic_base = return_base_b
-            return_a extract_generic_base = return_base_a
-            if return_base_b.is_some return_base_a.is_some && return_base_b.unwrap return_base_a.unwrap == && then
-                # Same base — check params are compatible (allow type vars)
-                return_a extract_generic_params = params_a_opt
-                return_b extract_generic_params = params_b_opt
-                if params_a_opt.is_some params_b_opt.is_some && then
-                    params_a_opt.unwrap = params_a
-                    params_b_opt.unwrap = params_b
-                    if params_a.length params_b.length == then
-                        0 = param_index
-                        while param_index params_a.length > do
-                            param_index params_a.get = param_a
-                            param_index params_b.get = param_b
-                            if
-                            param_a param_b !=
-                            TYPE_UNKNOWN param_a != &&
-                            TYPE_UNKNOWN param_b != &&
-                            param_a.length 1 != &&
-                            param_b.length 1 != &&
-                            then
-                                false return
-                            fi
-                            1 += param_index
-                        done
-                    fi
-                fi
-            elif return_base_b.is_some return_a return_base_b.unwrap_or "" == && ! then
-                if return_base_a.is_some return_b return_base_a.unwrap_or "" == && ! then
-                    false return
-                fi
-            fi
+        index sig_a Signature::return_types.get = return_a
+        index sig_b Signature::return_types.get = return_b
+        if return_b return_a signature_type_matches ! then
+            false return
         fi
         1 += index
     done
 
     true
-}
-
-fn substitute_type_params typ:str subs:Map[str str] -> str {
-    # Replace any occurrence of a substitution key within a type expression.
-    # E.g. with subs {T: int}, "T" -> "int", "Option[T]" -> "Option[int]".
-    if typ subs.get Option::Some(substituted) is then
-        substituted return
-    fi
-    # Handle function types: fn[T -> U] -> fn[int -> U]
-    if typ "fn[" str::starts_with typ "]" str::ends_with && then
-        typ.length 4 - = fn_inner_len
-        typ 3 fn_inner_len str::substring = fn_inner
-        fn_inner split_type_tokens = fn_tokens
-        StringBuilder::new = fn_builder
-        "fn[" fn_builder.append
-        0 = fn_tok_index
-        while fn_tok_index fn_tokens.length > do
-            if 0 fn_tok_index != then
-                " " fn_builder.append
-            fi
-            fn_tok_index fn_tokens.get = fn_tok
-            if "->" fn_tok == then
-                "->" fn_builder.append
-            else
-                subs fn_tok substitute_type_params fn_builder.append
-            fi
-            1 += fn_tok_index
-        done
-        "]" fn_builder.append
-        fn_builder.build return
-    fi
-    typ extract_generic_base = base_opt
-    if base_opt.is_none then
-        typ return
-    fi
-    base_opt.unwrap = base
-    typ extract_generic_params = params_opt
-    if params_opt.is_none then
-        typ return
-    fi
-    params_opt.unwrap = params
-    StringBuilder::new = builder
-    base builder.append
-    "[" builder.append
-    0 = index
-    while index params.length > do
-        if 0 index != then
-            " " builder.append
-        fi
-        subs index params.get substitute_type_params builder.append
-        1 += index
-    done
-    "]" builder.append
-    builder.build
-}
-
-fn apply_type_subs_to_sig sig:Signature subs:Map[str str] -> Signature {
-    if 0 subs.length == then
-        sig return
-    fi
-    List::new(List[Parameter]) = params
-    for param in sig Signature::parameters.iter do
-        subs param Parameter::typ.substitute = new_typ
-        param Parameter::name new_typ make_named_param params.push
-    done
-    List::new(List[Type]) = returns
-    for return_type in sig Signature::return_types.iter do
-        subs return_type.substitute returns.push
-    done
-    returns params make_signature
 }
 
 fn apply_type_subs_to_sig_t sig:Signature subs:Map[str Type] -> Signature {

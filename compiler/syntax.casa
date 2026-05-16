@@ -266,7 +266,7 @@ fn parse_type cursor:TokenCursor -> str {
 
 fn get_op_type_cast cursor:TokenCursor -> Op {
     "(" cursor expect_token_value = open_token
-    cursor parse_type = cast_type
+    cursor parse_type_ast = cast_type
     ")" cursor expect_token_value = close_token
 
     open_token Token::location Location::span Span::offset = open_offset
@@ -347,17 +347,17 @@ fn get_op_operator token:Token cursor:TokenCursor function_name:str -> Op {
         name_token Token::value = var_name
 
         # Optional type annotation: = varname : type
-        "" = type_annotation
+        Option::None(Option[Type]) = type_hint
         cursor.peek = colon_opt
         if colon_opt.is_some then
             if ":" colon_opt.unwrap Token::value == then
                 cursor.advance
-                cursor parse_type = type_annotation
+                cursor parse_type_ast Option::Some = type_hint
             fi
         fi
         name_token Token::location var_name OpValue::AssignVar make_op = assign_op
-        if "" type_annotation != then
-            type_annotation assign_op->type_annotation
+        if type_hint Option::Some(hint) is then
+            hint Option::Some assign_op->type_hint
         fi
         assign_op
         return
@@ -902,13 +902,13 @@ fn build_hidden_trait_methods
             bound_trait_opt.unwrap = bound_trait
             # Build substitution map from trait's declared type_params to the
             # concrete type_args carried on the bound.
-            Map::new(Map[str str]) = bound_subs
+            Map::new(Map[str Type]) = bound_subs
             bound_trait CasaTrait::type_params = bhtm_params
             bound TraitBound::type_args = bhtm_args
             if bhtm_params.length bhtm_args.length == then
                 0 = bhtm_sub_index
                 while bhtm_sub_index bhtm_params.length > do
-                    bhtm_sub_index bhtm_params.get bhtm_sub_index bhtm_args.get bound_subs.set = bound_subs
+                    bhtm_sub_index bhtm_params.get bhtm_sub_index bhtm_args.get parse_type_str bound_subs.set = bound_subs
                     1 += bhtm_sub_index
                 done
             fi
@@ -916,7 +916,7 @@ fn build_hidden_trait_methods
                 # Skip default methods — only abstract methods need hidden fn ptrs
                 if 0 bound_method TraitMethod::default_ops.length == then
                     f"__trait_{bound_type_var}_{bound_method TraitMethod::name}" = hidden_name
-                    bound_subs bound_type_var bound_method TraitMethod::signature resolve_trait_sig apply_type_subs_to_sig = hidden_sig
+                    bound_subs bound_type_var bound_method TraitMethod::signature resolve_trait_sig apply_type_subs_to_sig_t = hidden_sig
                     hidden_sig signature_to_function_type = hidden_type
                     hidden_type hidden_name HiddenTraitMethod result.push
                 fi
@@ -966,7 +966,9 @@ fn parse_function parser:Parser cursor:TokenCursor -> Function {
             hidden HiddenTraitMethod::fn_type = hidden_type
             hidden_name hidden_type make_named_param hidden_params.push
             hidden_type hidden_name Variable variables.push
-            name_token Token::location hidden_name OpValue::AssignVar make_op ops.push
+            name_token Token::location hidden_name OpValue::AssignVar make_op = hidden_assign
+            hidden_type Option::Some hidden_assign Op::set_type_hint
+            hidden_assign ops.push
         done
         # Prepend hidden params to signature parameters
         for sig_parameter in sig Signature::parameters.iter do
@@ -1074,7 +1076,7 @@ fn synthesize_hashable_for_enum parser:Parser casa_enum:CasaEnum {
     f"{enum_name}::hash" = hash_name
     if hash_name parser.store.functions.get.is_none then
         List::new(List[Op]) = hash_ops
-        location "int" OpValue::TypeCast make_op hash_ops.push
+        location TYPE_INT_T OpValue::TypeCast make_op hash_ops.push
         List::new(List[Parameter]) = hash_params
         enum_name make_param hash_params.push
         List::new(List[Type]) = hash_returns
@@ -1133,11 +1135,11 @@ fn create_member_accessor
     # Getter
     f"{struct_name}::{member_name}" = getter_name
     List::new(List[Op]) = getter_ops
-    location "ptr" OpValue::TypeCast make_op getter_ops.push
+    location TYPE_PTR_T OpValue::TypeCast make_op getter_ops.push
     location offset OpValue::PushInt make_op getter_ops.push
     location OpValue::Add make_op getter_ops.push
     location OpValue::Load64 make_op getter_ops.push
-    location member_type OpValue::TypeCast make_op getter_ops.push
+    location member_type parse_type_str OpValue::TypeCast make_op getter_ops.push
 
     List::new(List[Parameter]) = getter_params
     param_type make_param getter_params.push
@@ -1155,7 +1157,7 @@ fn create_member_accessor
     # Setter
     f"{struct_name}::set_{member_name}" = setter_name
     List::new(List[Op]) = setter_ops
-    location "ptr" OpValue::TypeCast make_op setter_ops.push
+    location TYPE_PTR_T OpValue::TypeCast make_op setter_ops.push
     location offset OpValue::PushInt make_op setter_ops.push
     location OpValue::Add make_op setter_ops.push
     location OpValue::Store64 make_op setter_ops.push
@@ -1419,6 +1421,7 @@ fn inject_impl_trait_params
         hidden_name hidden_type make_named_param hidden_params.push
         hidden_name make_variable function Function::variables.push
         function Function::location hidden_name OpValue::AssignVar make_op = assign_op
+        hidden_type Option::Some assign_op Op::set_type_hint
         insert_pos assign_op function Function::ops.insert
         1 += insert_pos
     done
@@ -2481,8 +2484,7 @@ fn try_resolve_trait_method_call parser:Parser function:Function op:Op ident:str
     if hidden_var function Function::variables variable_list_contains ! then
         hidden_var make_variable function Function::variables.push
     fi
-    hidden_var OpValue::PushVar op Op::set_value
-    "trait_exec" op Op::set_type_annotation
+    hidden_var OpValue::TraitMethodCall op Op::set_value
     true
 }
 # Resolve a bare identifier after `&`-ref, enum-variant, and trait-method

@@ -297,10 +297,10 @@ fn expect_type_t tc:TypeChecker expected:Type {
     tc TypeChecker::live TypedStack::origins.pop drop
     tc TypeChecker::live TypedStack::types.pop = et_actual_t
     if expected et_actual_t.eq then return fi
+    if et_actual_t expected types_match_t then return fi
+    if expected et_actual_t types_match_t then return fi
     et_actual_t.format = et_actual
     expected.format = et_expected
-    if et_expected et_actual types_match then return fi
-    if et_actual et_expected types_match then return fi
     "Type mismatch" = et_message
     if "" tc TypeChecker::current_op_context != then
         f"Type mismatch in {tc TypeChecker::current_op_context}" = et_message
@@ -313,106 +313,7 @@ fn expect_type_t tc:TypeChecker expected:Type {
 # ============================================================================
 
 fn types_match expected:str actual:str -> bool {
-    if expected actual == then true return fi
-    if TYPE_UNKNOWN expected == then true return fi
-    if TYPE_UNKNOWN actual == then true return fi
-    if TYPE_MISSING expected == then true return fi
-    if TYPE_MISSING actual == then true return fi
-    # Check fn type matching
-    if "fn" expected == then
-        if actual is_fn_type then true return fi
-    fi
-    if "fn" actual == then
-        if expected is_fn_type then true return fi
-    fi
-    # Check generic base matching: expected is base, actual is parameterized
-    actual extract_generic_base = actual_base
-    if actual_base.is_some then
-        if expected actual_base.unwrap == then true return fi
-    fi
-    expected extract_generic_base = expected_base
-    if expected_base.is_some then
-        if actual expected_base.unwrap == then true return fi
-    fi
-    # Check parameterized generics with same base
-    if expected_base.is_some then
-        if actual_base.is_some then
-            if expected_base.unwrap actual_base.unwrap == then
-                expected actual types_match_params = params_ok
-                if params_ok then true return fi
-            fi
-        fi
-    fi
-    # Check fn signature matching
-    expected extract_fn_signature_str = expected_fn_opt
-    if expected_fn_opt.is_some then
-        actual extract_fn_signature_str = actual_fn_opt
-        if actual_fn_opt.is_some then
-            actual_fn_opt.unwrap signature_from_str expected_fn_opt.unwrap signature_from_str signature_matches = sig_ok
-            if sig_ok then true return fi
-        fi
-    fi
-    false
-}
-
-fn base_type_exists base:str function_opt:Option[Function] -> bool {
-    if base is_builtin_type then true return fi
-    if base DEFAULT_PARSER.store.structs.get.is_some then true return fi
-    if base DEFAULT_PARSER.store.enums.get.is_some then true return fi
-    if function_opt Option::Some(check_fn) is then
-        if base check_fn Function::signature Signature::type_vars.has then true return fi
-    fi
-    false
-}
-
-fn type_exists_recursive typ:str function_opt:Option[Function] -> bool {
-    if typ.length 0 == then false return fi
-
-    if typ is_fn_type then
-        typ extract_fn_signature_str = function_inner_opt
-        if function_inner_opt Option::Some(function_inner) is then
-            for function_token in function_inner split_type_tokens.iter do
-                if "->" function_token != then
-                    if function_opt function_token type_exists_recursive ! then false return fi
-                fi
-            done
-        fi
-        true return
-    fi
-
-    typ extract_generic_base = base_opt
-    if base_opt Option::Some(generic_base) is then
-        generic_base.length = base_length
-        typ.length base_length - 2 - = inner_length
-        typ base_length 1 + inner_length str::substring split_type_tokens = generic_params
-        for generic_param in generic_params.iter do
-            if function_opt generic_param type_exists_recursive ! then false return fi
-        done
-        function_opt generic_base base_type_exists return
-    fi
-
-    function_opt typ base_type_exists
-}
-
-fn validate_type_exists typ:str function_opt:Option[Function] location:Location {
-    if function_opt typ type_exists_recursive then return fi
-    location f"type `{typ}` does not exist" ErrorKind::Syntax raise_error
-}
-
-fn is_type_variable typ:str -> bool {
-    # Check if the type is a type variable (single uppercase letter or
-    # registered as a type var in a generic enum/struct)
-    if typ.length 0 == then false return fi
-    # Single uppercase letter is a type variable
-    if typ.length 1 == then
-        0 typ.at.is_upper return
-    fi
-    # Check if it's a known type variable in enums
-    typ extract_generic_base = itv_base
-    if itv_base.is_some then
-        itv_base.unwrap DEFAULT_PARSER.store.enums.get.is_some return
-    fi
-    false
+    actual parse_type_str expected parse_type_str types_match_t
 }
 
 fn is_enum_type_var_t typ:Type -> bool {
@@ -442,102 +343,69 @@ fn is_type_variable_t typ:Type -> bool {
     end
 }
 
-fn types_match_params expected:str actual:str -> bool {
-    expected extract_generic_params = expected_params_opt
-    actual extract_generic_params = actual_params_opt
-    if expected_params_opt.is_none then false return fi
-    if actual_params_opt.is_none then false return fi
-    expected_params_opt.unwrap = expected_params
-    actual_params_opt.unwrap = actual_params
-    if expected_params.length actual_params.length != then false return fi
+fn types_match_t expected:Type actual:Type -> bool {
+    actual expected signature_type_matches
+}
 
-    # Collect type variables from the expected type's base (if it's a generic struct/enum)
-    expected extract_generic_base = base_opt
-    Set::new(Set[str]) = type_vars
-    if base_opt.is_some then
-        base_opt.unwrap DEFAULT_PARSER.store.enums.get = enum_opt
-        if enum_opt.is_some then
-            for type_var in enum_opt.unwrap CasaEnum::type_vars.iter do
-                type_var type_vars.add = type_vars
-            done
-        fi
-        base_opt.unwrap DEFAULT_PARSER.store.structs.get = struct_opt
-        if struct_opt.is_some then
-            for type_var in struct_opt.unwrap CasaStruct::type_vars.iter do
-                type_var type_vars.add = type_vars
-            done
-        fi
-    fi
-
-    0 = index
-    while index expected_params.length > do
-        index expected_params.get = expected_param
-        index actual_params.get = actual_param
-        if expected_param actual_param != then
-            if
-            TYPE_UNKNOWN expected_param !=
-            TYPE_UNKNOWN actual_param != &&
-            expected_param type_vars.has ! &&
-            actual_param type_vars.has ! &&
-            expected_param is_type_variable ! &&
-            actual_param is_type_variable ! &&
-            then
-                false return
-            fi
-        fi
-        1 += index
-    done
-    true
+fn validate_type_exists typ:Type function_opt:Option[Function] location:Location {
+    if function_opt typ.exists_recursive then return fi
+    location f"type `{typ.format}` does not exist" ErrorKind::Syntax raise_error
 }
 
 # ============================================================================
 # Unify types — returns the more specific type, or "" on incompatibility
 # ============================================================================
 
-fn unify_generic_params type_a:str type_b:str -> str {
-    type_a extract_generic_params = params_a_opt
-    type_b extract_generic_params = params_b_opt
-    if params_a_opt.is_none then type_b return fi
-    if params_b_opt.is_none then type_a return fi
+fn unify_generic_params_t type_a:Type type_b:Type -> Option[Type] {
+    type_a.type_params = params_a_opt
+    type_b.type_params = params_b_opt
+    if params_a_opt.is_none then type_b Option::Some return fi
+    if params_b_opt.is_none then type_a Option::Some return fi
     params_a_opt.unwrap = params_a
     params_b_opt.unwrap = params_b
-    if params_a.length params_b.length != then "" return fi
-    List::new(List[str]) = unified
+    if params_a.length params_b.length != then Option::None(Option[Type]) return fi
+    List::new(List[Type]) = unified
     0 = index
     while index params_a.length > do
-        index params_b.get index params_a.get unify_type = unified_type
-        if "" unified_type == then "" return fi
-        unified_type unified.push
+        index params_b.get index params_a.get unify_type_t = unified_opt
+        if unified_opt.is_none then Option::None(Option[Type]) return fi
+        unified_opt.unwrap unified.push
         1 += index
     done
-    type_a extract_generic_base.unwrap = base
-    unified base build_parameterized_type
+    type_a.base.unwrap = base
+    unified base GenericType Type::Generic Option::Some
 }
 
 fn unify_type type_a:str type_b:str -> str {
-    if type_a type_b == then type_a return fi
-    if TYPE_UNKNOWN type_a == then type_b return fi
-    if TYPE_UNKNOWN type_b == then type_a return fi
-    # Enum type variables unify with concrete types
-    if type_a is_enum_type_var then type_b return fi
-    if type_b is_enum_type_var then type_a return fi
-    type_a extract_generic_base = base_a
-    type_b extract_generic_base = base_b
+    type_b parse_type_str type_a parse_type_str unify_type_t = unified_opt
+    if unified_opt.is_none then "" return fi
+    unified_opt.unwrap.format
+}
+
+fn unify_type_t type_a:Type type_b:Type -> Option[Type] {
+    if type_a type_b.eq then type_a Option::Some return fi
+    if type_a.is_unknown_placeholder then type_b Option::Some return fi
+    if type_b.is_unknown_placeholder then type_a Option::Some return fi
+    # Enum type variables unify with concrete types.
+    if type_a is_enum_type_var_t then type_b Option::Some return fi
+    if type_b is_enum_type_var_t then type_a Option::Some return fi
+    type_a.base = base_a
+    type_b.base = base_b
     if base_a.is_some then
         if base_b.is_some then
             if base_a.unwrap base_b.unwrap == then
-                type_b type_a unify_generic_params = generic_result
-                if "" generic_result != then generic_result return fi
+                type_b type_a unify_generic_params_t = generic_result
+                if generic_result.is_some then generic_result return fi
             fi
         fi
     fi
     if base_a.is_some then
-        if base_a.unwrap type_b == then type_a return fi
+        if base_a.unwrap type_b.format == then type_a Option::Some return fi
     fi
     if base_b.is_some then
-        if base_b.unwrap type_a == then type_b return fi
+        if base_b.unwrap type_a.format == then type_b Option::Some return fi
     fi
-    ""
+    Option::None(Option[Type])
 }
 
 # ============================================================================
@@ -554,11 +422,11 @@ fn stacks_compatible stack_a:List[Type] stack_b:List[Type] -> List[Type] {
         if index stack_b.get index stack_a.get.eq then
             index stack_a.get result.push
         else
-            index stack_b.get.format index stack_a.get.format unify_type = unified
-            if "" unified == then
+            index stack_b.get index stack_a.get unify_type_t = unified
+            if unified.is_none then
                 List::new(List[Type]) return
             fi
-            unified parse_type_str result.push
+            unified.unwrap result.push
         fi
         1 += index
     done
@@ -642,28 +510,6 @@ fn bind_type_var tc:TypeChecker bindings:Map[str Type] type_var:str actual:Type 
         f"Type variable `{type_var}` bound to `{bound.format}` but got `{actual.format}`" tc raise_type_mismatch
     fi
     bindings
-}
-
-fn is_enum_type_var typ:str -> bool {
-    typ extract_generic_base = base
-    if base.is_some then
-        base.unwrap DEFAULT_PARSER.store.enums.get.is_some
-    else
-        false
-    fi
-}
-# True when typ has TYPE_UNKNOWN inside any parametric position. Used to
-# detect empty array literals whose element type was never constrained by an
-# annotation, cast, or surrounding use.
-
-fn type_has_unresolved typ:str -> bool {
-    typ extract_generic_params = params_opt
-    if params_opt.is_none then false return fi
-    for param in params_opt.unwrap.iter do
-        if TYPE_UNKNOWN param == then true return fi
-        if param type_has_unresolved then true return fi
-    done
-    false
 }
 
 fn bind_generic_param
@@ -890,17 +736,8 @@ fn check_arithmetic tc:TypeChecker op:Op {
 # ============================================================================
 # Check comparison operations
 # ============================================================================
-# Primitive types whose `==`/`<` etc. are emitted as direct bytecode rather
-# than dispatched through Eq/Ord trait methods. `str` is handled separately
-# because it only supports `==`/`!=` and carries a type annotation.
-
-fn is_primitive_compare_type typ:str -> bool {
-    "int" typ ==
-    "bool" typ == ||
-    "char" typ == ||
-    "cstr" typ == ||
-    "ptr" typ == ||
-}
+# Primitive comparisons are emitted as direct bytecode. `str` is handled
+# separately because it only supports `==`/`!=` and carries a type hint.
 
 fn comparison_method_name cmp_value:OpValue -> str {
     if cmp_value OpValue::Eq is then "eq" return fi
@@ -931,8 +768,10 @@ fn check_comparison
     cmp_value OpValue::Eq is cmp_value OpValue::Ne is || = is_eq_op
     if is_eq_op then "Eq" else "Ord" fi = trait_name
     f"value with trait `{trait_name}`" tc TypeChecker::set_current_expect_ctx
-    tc stack_pop = type1
-    tc stack_pop = type2
+    tc stack_pop_type = type1_t
+    tc stack_pop_type = type2_t
+    type1_t.format = type1
+    type2_t.format = type2
     # Stack-underflow placeholder on either side: defer to caller-level
     # inference (lambda param synthesis, generic body deferral). Skip both
     # the same-type rule and the trait-bound check.
@@ -945,12 +784,12 @@ fn check_comparison
         TYPE_BOOL_T tc stack_push_type
         op_index return
     fi
-    type1 resolve_match_type = base1
-    type2 resolve_match_type = base2
+    type1_t.match_base = base1
+    type2_t.match_base = base2
     base1 tc.store.enums.get.is_some = is_enum1
     base2 tc.store.enums.get.is_some = is_enum2
     # Same-type rule applies before any specialization.
-    if type1 type2 != then
+    if type1_t type2_t.eq ! then
         f"Cannot compare `{type2}` with `{type1}`" tc raise_type_mismatch
         TYPE_BOOL_T tc stack_push_type
         op_index return
@@ -960,7 +799,7 @@ fn check_comparison
         if is_enum1 then
             base1 tc.store.enums.get.unwrap = casa_enum
             if casa_enum has_inner_values then
-                base1 op Op::set_type_annotation
+                base1 make_named_type Option::Some op Op::set_type_hint
             fi
         fi
         TYPE_BOOL_T tc stack_push_type
@@ -971,12 +810,12 @@ fn check_comparison
         if is_eq_op ! then
             "Type `str` only supports `==` and `!=` comparison" tc raise_type_mismatch
         fi
-        "str" op Op::set_type_annotation
+        TYPE_STR_T Option::Some op Op::set_type_hint
         TYPE_BOOL_T tc stack_push_type
         op_index return
     fi
     # Other primitives: bytecode handles the comparison directly.
-    if type1 is_primitive_compare_type then
+    if type1_t.is_primitive_compare_type_t then
         TYPE_BOOL_T tc stack_push_type
         op_index return
     fi
@@ -989,8 +828,8 @@ fn check_comparison
     fi
     # Lower the operator to the corresponding trait method call.
     cmp_value comparison_method_name = method_name
-    type2 tc stack_push
-    type1 tc stack_push
+    type2_t tc stack_push_type
+    type1_t tc stack_push_type
     method_name OpValue::MethodCall op Op::set_value
     function_opt op_index ops op tc check_method_call
 }
@@ -1137,20 +976,18 @@ fn check_memory tc:TypeChecker op:Op function_opt:Option[Function] {
 # Unify the stored type of `variable` with the type being assigned to it.
 # `scope` ("local" / "global") is only used in the error message.
 
-fn unify_variable_assignment op:Op variable:Variable effective_type:str scope:str {
+fn unify_variable_assignment op:Op variable:Variable effective_type:Type scope:str {
     variable Variable::name = var_name
-    variable Variable::typ.format = pre_str
-    if
-    "" pre_str ==
-    TYPE_UNKNOWN pre_str == effective_type TYPE_UNKNOWN != && ||
-    then
-        effective_type parse_type_str variable Variable::set_typ
+    variable Variable::typ = pre_type
+    pre_type.is_unknown pre_type.is_unknown_placeholder || = pre_unknown
+    if pre_unknown effective_type.is_unknown_placeholder ! && then
+        effective_type variable Variable::set_typ
     fi
-    variable Variable::typ.format effective_type unify_type = unified
-    if "" unified == then
-        op Op::location f"Cannot override {scope} variable `{var_name}` of type `{variable Variable::typ.format}` with other type `{effective_type}`" ErrorKind::InvalidVariable add_error
+    effective_type variable Variable::typ unify_type_t = unified
+    if unified.is_none then
+        op Op::location f"Cannot override {scope} variable `{var_name}` of type `{variable Variable::typ.format}` with other type `{effective_type.format}`" ErrorKind::InvalidVariable add_error
     else
-        unified parse_type_str variable Variable::set_typ
+        unified.unwrap variable Variable::set_typ
     fi
 }
 
@@ -1163,13 +1000,13 @@ fn check_assignment tc:TypeChecker op:Op function_opt:Option[Function] {
         return
     fi
     if op.value OpValue::AssignVar(var_name) is ! then return fi
-    tc stack_peek = stack_type
-    "" op Op::type_annotation != = has_annotation
-    stack_type = effective_type
+    tc stack_peek_type = stack_type_t
+    op Op::type_hint.is_some = has_annotation
+    stack_type_t = effective_type_t
     if has_annotation then
-        op Op::type_annotation = effective_type
+        op Op::type_hint.unwrap = effective_type_t
     fi
-    if has_annotation ! stack_type type_has_unresolved && then
+    if has_annotation ! stack_type_t.has_unresolved && then
         op Op::location f"Cannot infer element type of empty array literal assigned to `{var_name}`; add a type annotation (e.g. `= {var_name}:array[int]`) or an explicit cast (e.g. `[] (array[int])`)." ErrorKind::TypeMismatch raise_error
     fi
 
@@ -1179,8 +1016,8 @@ fn check_assignment tc:TypeChecker op:Op function_opt:Option[Function] {
         var_name function Function::variables variable_list_index = local_index
         if 0 local_index >= then
             local_index function Function::variables.get = local_var
-            "local" effective_type local_var op unify_variable_assignment
-            effective_type tc expect_type drop
+            "local" effective_type_t local_var op unify_variable_assignment
+            effective_type_t tc expect_type_t
             return
         fi
     fi
@@ -1189,11 +1026,11 @@ fn check_assignment tc:TypeChecker op:Op function_opt:Option[Function] {
     var_name tc.store.variables.get = global_opt
     if global_opt.is_some then
         global_opt.unwrap = global_var
-        "global" effective_type global_var op unify_variable_assignment
-        effective_type tc expect_type drop
+        "global" effective_type_t global_var op unify_variable_assignment
+        effective_type_t tc expect_type_t
         return
     fi
-    effective_type tc expect_type drop
+    effective_type_t tc expect_type_t
 }
 
 # ============================================================================
@@ -1201,11 +1038,11 @@ fn check_assignment tc:TypeChecker op:Op function_opt:Option[Function] {
 # ============================================================================
 # Simulate the FnExec emitted by the bytecode pass for trait-bound namespace calls
 # like `K::hash`. The parser rewrites these to an OpPushVar of the hidden
-# `__trait_{type_var}_{method}` variable, annotated as "trait_exec". At typecheck
-# time we pop the fn-pointer type we just pushed and apply the resolved trait
-# method signature so the correct return type lands on the stack.
+# `__trait_{type_var}_{method}` variable. At typecheck time we pop the
+# fn-pointer type we just pushed and apply the resolved trait method signature
+# so the correct return type lands on the stack.
 
-fn simulate_trait_exec tc:TypeChecker function:Function var_name:str {
+fn simulate_trait_method_call tc:TypeChecker function:Function var_name:str {
     var_name 8 var_name.length 8 - str::substring = trait_suffix
     trait_suffix "_" str::find = trait_sep
     if trait_sep 0 >= then return fi
@@ -1242,9 +1079,25 @@ fn check_push_var tc:TypeChecker op:Op function_opt:Option[Function] {
         return
     fi
 
+    if op.value OpValue::TraitMethodCall(trait_var_name) is then
+        if function_opt Option::Some(function) is then
+            trait_var_name function Function::variables variable_list_index = trait_index
+            if 0 trait_index >= then
+                if trait_index function Function::variables.get Variable::typ.is_unknown ! then
+                    trait_index function Function::variables.get Variable::typ tc stack_push_type
+                else
+                    TYPE_UNKNOWN_T tc stack_push_type
+                fi
+            else
+                TYPE_UNKNOWN_T tc stack_push_type
+            fi
+            trait_var_name function tc simulate_trait_method_call
+        fi
+        return
+    fi
+
     # PUSH_VARIABLE
     if op.value OpValue::PushVar(var_name) is ! then return fi
-    "trait_exec" op Op::type_annotation == = is_trait_exec
 
     # Check local variables first
     if function_opt.is_some then
@@ -1255,9 +1108,6 @@ fn check_push_var tc:TypeChecker op:Op function_opt:Option[Function] {
                 local_index function Function::variables.get Variable::typ tc stack_push_type
             else
                 TYPE_UNKNOWN_T tc stack_push_type
-            fi
-            if is_trait_exec then
-                var_name function tc simulate_trait_exec
             fi
             return
         fi
@@ -1423,15 +1273,16 @@ fn bind_generic_params_standalone
 
 fn type_satisfies_trait type_name:str trait_name:str function_opt:Option[Function] -> bool {
     # Accept both bare ("Iterable") and concrete generic ("Iterable[int]") trait names.
-    trait_name extract_generic_base = trait_base_opt
+    trait_name parse_type_str = trait_type
+    trait_type.base = trait_base_opt
     if trait_base_opt.is_some then trait_base_opt.unwrap else trait_name fi = trait_lookup_name
     trait_lookup_name DEFAULT_PARSER.store.traits.get = trait_opt
     if trait_opt.is_none then false return fi
     trait_opt.unwrap = trait_def
     # Build substitution map from trait's type_params to concrete args from trait_name.
-    Map::new(Map[str str]) = trait_subs
+    Map::new(Map[str Type]) = trait_subs
     if trait_base_opt.is_some then
-        trait_name extract_generic_params = trait_args_opt
+        trait_type.type_params = trait_args_opt
         if trait_args_opt.is_some then
             trait_args_opt.unwrap = trait_args
             trait_def CasaTrait::type_params = tparams
@@ -1458,7 +1309,7 @@ fn type_satisfies_trait type_name:str trait_name:str function_opt:Option[Functio
         false = via_generic_base
         # Fall back to the generic base type (e.g. `Option::to_str` for `Option[int]`)
         if fn_opt.is_none then
-            type_name extract_generic_base = base_opt
+            type_name parse_type_str.base = base_opt
             if base_opt.is_some then
                 f"{base_opt.unwrap}::{method TraitMethod::name}" = fn_name
                 fn_name DEFAULT_PARSER.store.functions.get = fn_opt
@@ -1480,7 +1331,7 @@ fn type_satisfies_trait type_name:str trait_name:str function_opt:Option[Functio
         if via_generic_base then
             continue
         fi
-        trait_subs type_name method TraitMethod::signature resolve_trait_sig apply_type_subs_to_sig = resolved
+        trait_subs type_name method TraitMethod::signature resolve_trait_sig apply_type_subs_to_sig_t = resolved
         if function Function::signature Signature::parameters.length resolved Signature::parameters.length != then
             false return
         fi
@@ -1489,26 +1340,18 @@ fn type_satisfies_trait type_name:str trait_name:str function_opt:Option[Functio
         fi
         0 = param_index
         while param_index resolved Signature::parameters.length > do
-            param_index function Function::signature Signature::parameters.get Parameter::typ.format = actual_param
-            param_index resolved Signature::parameters.get Parameter::typ.format = expected_param
-            if
-            actual_param expected_param !=
-            TYPE_UNKNOWN actual_param != &&
-            TYPE_UNKNOWN expected_param != &&
-            then
+            param_index function Function::signature Signature::parameters.get Parameter::typ = actual_param
+            param_index resolved Signature::parameters.get Parameter::typ = expected_param
+            if expected_param actual_param types_match_t ! then
                 false return
             fi
             1 += param_index
         done
         0 = return_index
         while return_index resolved Signature::return_types.length > do
-            return_index function Function::signature Signature::return_types.get.format = actual_return
-            return_index resolved Signature::return_types.get.format = expected_return
-            if
-            actual_return expected_return !=
-            TYPE_UNKNOWN actual_return != &&
-            TYPE_UNKNOWN expected_return != &&
-            then
+            return_index function Function::signature Signature::return_types.get = actual_return
+            return_index resolved Signature::return_types.get = expected_return
+            if expected_return actual_return types_match_t ! then
                 false return
             fi
             1 += return_index
@@ -1710,17 +1553,10 @@ fn inject_trait_fn_ptrs
         op_index ops.get = next_op
         if next_op.value OpValue::TypeCast(cast_type) is then
             for return_type in sig Signature::return_types.iter do
-                sig Signature::type_vars cast_type parse_type_str return_type bindings bind_generic_params_standalone = bindings
+                sig Signature::type_vars cast_type return_type bindings bind_generic_params_standalone = bindings
             done
         fi
     fi
-
-    # Build str-view of bindings for the per-bound substitute_type_params call.
-    Map::new(Map[str str]) = bindings_str
-    for binding_key in bindings.keys.iter do
-        binding_key bindings.get.unwrap.format = binding_value
-        binding_key binding_value bindings_str.set = bindings_str
-    done
 
     # Inject FN_PUSH ops for each trait bound.
     # Iterate type vars in reverse so the first param in the signature (which
@@ -1735,7 +1571,8 @@ fn inject_trait_fn_ptrs
         type_var sig Signature::trait_bounds.get.unwrap = trait_bound
         # Resolve trait type args against current bindings so that
         # `Carrier[T]` becomes `Carrier[int]` once T has been bound.
-        bindings_str trait_bound trait_bound_to_str substitute_type_params = trait_name
+        trait_bound trait_bound_to_type = trait_bound_type
+        bindings trait_bound_type.substitute_t.format = trait_name
         type_var bindings.get = concrete_opt
         if concrete_opt.is_none then
             location f"Cannot determine concrete type for type variable `{type_var}`" ErrorKind::TypeMismatch raise_error
@@ -1836,13 +1673,15 @@ fn check_function_ops
             fn_name sig tc apply_signature
         fi
     elif fn_value OpValue::FnExec is then
-        tc stack_peek = fn_ptr_type
-        if TYPE_UNKNOWN fn_ptr_type == then "fn" = fn_ptr_type fi
-        fn_ptr_type tc expect_type drop
-        if "fn" fn_ptr_type != then
-            fn_ptr_type extract_fn_signature_str = sig_str_opt
-            if sig_str_opt.is_some then
-                "exec" sig_str_opt.unwrap signature_from_str tc apply_signature
+        tc stack_peek_type = fn_ptr_type
+        if fn_ptr_type.is_unknown_placeholder then
+            TYPE_UNKNOWN_T tc expect_type_t
+        else
+            fn_ptr_type tc expect_type_t
+            if fn_ptr_type Type::Function(fn_type) is then
+                if 0 fn_type FunctionType::parameters.length != 0 fn_type FunctionType::return_types.length != || then
+                    "exec" fn_type function_type_to_signature tc apply_signature
+                fi
             fi
         fi
     elif fn_value OpValue::FnPush(push_name) is then
@@ -1975,7 +1814,7 @@ fn check_io tc:TypeChecker op:Op ops:List[Op] op_index:int function_opt:Option[F
 
 fn check_typeof tc:TypeChecker op:Op {
     tc stack_pop = typ
-    typ op Op::set_type_annotation
+    typ parse_type_str Option::Some op Op::set_type_hint
     TYPE_STR_T tc stack_push_type
 }
 
@@ -2070,10 +1909,10 @@ fn check_enum_variant tc:TypeChecker op:Op {
 # ============================================================================
 
 fn check_is tc:TypeChecker op:Op function_opt:Option[Function] {
-    tc stack_pop = typ
-    typ resolve_match_type = base
+    tc stack_pop_type = typ
+    typ.match_base = base
     if base tc.store.enums.get.is_none then
-        f"`is` requires an enum type, got `{typ}`" tc raise_type_mismatch
+        f"`is` requires an enum type, got `{typ.format}`" tc raise_type_mismatch
         TYPE_BOOL_T tc stack_push_type
         return
     fi
@@ -2085,7 +1924,7 @@ fn check_is tc:TypeChecker op:Op function_opt:Option[Function] {
     # Validate the variant belongs to the correct enum
     if "" variant EnumVariant::enum_name != then
         if variant EnumVariant::enum_name casa_enum CasaEnum::name != then
-            f"Cannot check `{variant EnumVariant::enum_name}::{variant EnumVariant::variant_name}` on value of type `{typ}`" tc raise_type_mismatch
+            f"Cannot check `{variant EnumVariant::enum_name}::{variant EnumVariant::variant_name}` on value of type `{typ.format}`" tc raise_type_mismatch
         fi
     fi
     # Validate binding count for data-carrying variants
@@ -2098,25 +1937,13 @@ fn check_is tc:TypeChecker op:Op function_opt:Option[Function] {
             fi
         fi
     fi
-    typ variant function_opt tc register_enum_pattern_bindings
+    typ.format variant function_opt tc register_enum_pattern_bindings
     TYPE_BOOL_T tc stack_push_type
 }
 
 # ============================================================================
 # Check match blocks
 # ============================================================================
-
-fn resolve_match_type typ:str -> str {
-    if typ DEFAULT_PARSER.store.enums.get.is_some then typ return fi
-    if typ DEFAULT_PARSER.store.structs.get.is_some then typ return fi
-    typ extract_generic_base = base
-    if base.is_some then
-        if base.unwrap DEFAULT_PARSER.store.enums.get.is_some then
-            base.unwrap return
-        fi
-    fi
-    typ
-}
 
 fn set_binding_type var_name:str field_type:str function_opt:Option[Function] {
     if function_opt.is_some then
@@ -2191,7 +2018,7 @@ fn check_match tc:TypeChecker op:Op function_opt:Option[Function] {
             fi
 
             match_ctx MatchContext::match_type = end_match_type
-            end_match_type resolve_match_type = end_base
+            end_match_type parse_type_str.match_base = end_base
 
             # Build covered set
             Set::new(Set[str]) = covered_set
@@ -2363,7 +2190,7 @@ fn check_abstract_methods_present receiver:str trait_def:CasaTrait -> bool {
         if 0 cam_method TraitMethod::default_ops.length == then
             f"{receiver}::{cam_method TraitMethod::name}" DEFAULT_PARSER.store.functions.get = cam_fn_opt
             if cam_fn_opt.is_none then
-                receiver extract_generic_base = cam_base_opt
+                receiver parse_type_str.base = cam_base_opt
                 if cam_base_opt.is_some then
                     f"{cam_base_opt.unwrap}::{cam_method TraitMethod::name}" DEFAULT_PARSER.store.functions.get = cam_fn_opt
                 fi
@@ -2388,7 +2215,7 @@ fn instantiate_default_trait_method
         f"{receiver}::{method_name}" Option::Some return
     fi
     # Also check generic base
-    receiver extract_generic_base = already_base_opt
+    receiver parse_type_str.base = already_base_opt
     if already_base_opt.is_some then
         f"{already_base_opt.unwrap}::{method_name}" DEFAULT_PARSER.store.functions.get = already_base_fn_opt
         if already_base_fn_opt.is_some then
@@ -2422,7 +2249,7 @@ fn instantiate_default_trait_method
     trait_def CasaTrait::type_params = type_params
 
     # Determine function name and whether to use generic or concrete form
-    receiver extract_generic_base = fn_base_opt
+    receiver parse_type_str.base = fn_base_opt
     if fn_base_opt.is_some then fn_base_opt.unwrap else receiver fi = fn_type_name
     f"{fn_type_name}::{method_name}" = synth_fn_name
 
@@ -2497,12 +2324,7 @@ fn instantiate_default_trait_method
 
     default_method TraitMethod::default_ops clone_ops = cloned_body
     if 0 trait_subs.length != then
-        Map::new(Map[str str]) = trait_subs_str
-        for sub_key in trait_subs.keys.iter do
-            sub_key trait_subs.get.unwrap.format = sub_value
-            sub_key sub_value trait_subs_str.set = trait_subs_str
-        done
-        trait_subs_str cloned_body substitute_ops_types
+        trait_subs cloned_body substitute_ops_types
     fi
     for body_op in cloned_body.iter do
         body_op synth_ops.push
@@ -2547,13 +2369,13 @@ fn check_method_call
                 # bound's concrete type_args, so that a trait method like
                 # `next self:self -> Option[T]` with bound `I: Iterable[int]`
                 # resolves to `next self:I -> Option[int]` at the call site.
-                Map::new(Map[str str]) = constraint_subs
+                Map::new(Map[str Type]) = constraint_subs
                 trait_def CasaTrait::type_params = constraint_params
                 bound TraitBound::type_args = constraint_args
                 if constraint_params.length constraint_args.length == then
                     0 = constraint_index
                     while constraint_index constraint_params.length > do
-                        constraint_index constraint_params.get constraint_index constraint_args.get constraint_subs.set = constraint_subs
+                        constraint_index constraint_params.get constraint_index constraint_args.get parse_type_str constraint_subs.set = constraint_subs
                         1 += constraint_index
                     done
                 fi
@@ -2561,7 +2383,7 @@ fn check_method_call
                     if method_name trait_method TraitMethod::name == then
                         f"__trait_{receiver}_{method_name}" = hidden_var
                         tc stack_pop_drop
-                        constraint_subs receiver trait_method TraitMethod::signature resolve_trait_sig apply_type_subs_to_sig = resolved_sig
+                        constraint_subs receiver trait_method TraitMethod::signature resolve_trait_sig apply_type_subs_to_sig_t = resolved_sig
                         receiver tc stack_push
                         f"{receiver}::{method_name}" resolved_sig tc apply_signature
                         hidden_var OpValue::PushVar op Op::set_value
@@ -2581,7 +2403,7 @@ fn check_method_call
 
     # Try generic base type
     if fn_opt.is_none then
-        receiver extract_generic_base = base_opt
+        receiver parse_type_str.base = base_opt
         if base_opt.is_some then
             f"{base_opt.unwrap}::{method_name}" = fn_name
             fn_name tc.store.functions.get = fn_opt
@@ -2894,6 +2716,12 @@ fn run_type_check_ops checker:TypeChecker ops:List[Op] function_opt:Option[Funct
             continue
         fi
 
+        # Trait-bound method call
+        if op_value OpValue::TraitMethodCall is then
+            function_opt current_op checker check_push_var
+            continue
+        fi
+
         # F-string expression -> str conversion (Display trait)
         if op_value OpValue::FstringToStr is then
             function_opt op_index ops current_op checker check_fstring_to_str = op_index
@@ -2904,7 +2732,7 @@ fn run_type_check_ops checker:TypeChecker ops:List[Op] function_opt:Option[Funct
         if op_value OpValue::TypeCast(cast_type) is then
             current_op Op::location function_opt cast_type validate_type_exists
             checker stack_pop drop
-            cast_type checker stack_push
+            cast_type checker stack_push_type
             continue
         fi
 
