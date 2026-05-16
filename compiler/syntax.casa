@@ -532,8 +532,8 @@ fn get_op_delimiter parser:Parser token:Token cursor:TokenCursor function_name:s
     # Open brace { -> lambda
     if "{" value == then
         cursor.retreat
-        function_name cursor parser parse_block_ops = lambda_ops
         f"lambda__{function_name}_o{token Token::location Location::span Span::offset}" = lambda_name
+        lambda_name cursor parser parse_block_ops = lambda_ops
         token Token::location lambda_ops lambda_name make_function = lambda_function
         lambda_name lambda_function parser.store.functions.set drop
         token Token::location lambda_name OpValue::FnPush make_op ops.push
@@ -703,6 +703,7 @@ fn parse_bound_type_args cursor:TokenCursor trait_token:Token -> List[str] {
 }
 
 fn parse_type_vars parser:Parser cursor:TokenCursor -> List[str] {
+    global LAST_TRAIT_BOUNDS
     "[" cursor expect_token_value drop
     List::new(List[str]) = vars
     Set::new(Set[str]) = seen
@@ -2054,6 +2055,28 @@ fn get_op_keyword parser:Parser token:Token cursor:TokenCursor function_name:str
         token Token::location "`in` is only valid inside a `for` loop header" ErrorKind::Syntax raise_error
     fi
 
+    # global — compile-time declaration; emits DeclareGlobal op
+    if KeywordKind::Global keyword == then
+        if GLOBAL_SCOPE_LABEL function_name == then
+            token Token::location "`global` declaration is only valid inside a function body" ErrorKind::InvalidScope raise_error
+            return
+        fi
+        if function_name "lambda__" str::starts_with then
+            token Token::location "`global` declaration is not allowed inside a lambda" ErrorKind::InvalidScope raise_error
+            return
+        fi
+        # Placement check: all ops so far must be DeclareGlobal
+        for existing_op in ops.iter do
+            if existing_op.value OpValue::DeclareGlobal is ! then
+                token Token::location "`global` declaration must appear before any other statement in the function body" ErrorKind::Syntax raise_error
+                return
+            fi
+        done
+        TokenKind::Identifier cursor expect_token_kind = name_token
+        token Token::location name_token Token::value OpValue::DeclareGlobal make_op ops.push
+        return
+    fi
+
     # trait
     if KeywordKind::TraitKw keyword == then
         token Token::location "Traits" function_name require_global_scope
@@ -2513,11 +2536,19 @@ fn resolve_plain_identifier
 fn resolve_identifiers_fn parser:Parser ops:List[Op] function:Function -> List[Op] {
     0 = op_index
     List::new(List[CasaError]) = resolve_errors
+    Set::new(Set[str]) = declared_globals
     while op_index ops.length > do
         op_index ops.get = current_op
         1 += op_index
 
-        # ASSIGN_VARIABLE: register variable
+        if current_op.value OpValue::DeclareGlobal(global_name) is then
+            if global_name parser.store.variables.get.is_none then
+                current_op Op::location f"`{global_name}` is not a global variable" ErrorKind::UndefinedGlobal make_error resolve_errors.push
+            fi
+            global_name declared_globals.add = declared_globals
+            continue
+        fi
+
         if current_op.value OpValue::AssignVar(var_name) is then
             var_name make_variable = variable
             # Global scope: store in parser.store.variables
@@ -2525,9 +2556,9 @@ fn resolve_identifiers_fn parser:Parser ops:List[Op] function:Function -> List[O
                 var_name variable parser.store.variables.set drop
                 continue
             fi
-            # Function scope: add to function variables if new
+            # Always register as local UNLESS explicitly declared global.
             if var_name function Function::variables variable_list_contains ! then
-                if var_name parser.store.variables.get.is_none then
+                if var_name declared_globals.has ! then
                     variable function Function::variables.push
                 fi
             fi

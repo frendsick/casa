@@ -47,6 +47,27 @@ for f in "$TESTS_DIR"/test_*.casa; do
     rm -f "$binary"
 done
 
+# Error-fixture tests: files in errors/ must fail to compile with a specific tag
+for f in "$TESTS_DIR"/errors/*.casa; do
+    [ -f "$f" ] || continue
+    base=$(basename "$f" .casa)
+    expected_tag=$(head -1 "$f" | sed 's/^# expect: //')
+
+    printf "Running: error/%s ... " "$base"
+
+    if $COMPILER -L "$LIB_DIR" "$f" -o /dev/null 2>/tmp/casa_err; then
+        printf "${RED}EXPECTED COMPILE FAIL${RESET}\n"
+        fail=$((fail+1))
+    elif ! grep -q "$expected_tag" /tmp/casa_err; then
+        printf "${RED}WRONG ERROR (expected %s)${RESET}\n" "$expected_tag"
+        cat /tmp/casa_err
+        fail=$((fail+1))
+    else
+        printf "${GREEN}OK${RESET}\n"
+        pass=$((pass+1))
+    fi
+done
+
 # Self-compilation test: stage1 (released casac) compiles itself to stage2
 printf "Running: self_compilation ... "
 
