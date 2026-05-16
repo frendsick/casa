@@ -25,7 +25,7 @@ Casa compiles to x86-64 Linux executables via GNU assembly. It features static t
 
 ## Installation
 
-Clone the repository and run the install script to download the latest compiler binary:
+Clone the repository and run the install script to download the configured compiler binary from `casa-release.env`:
 
 ```sh
 git clone https://github.com/frendsick/casa.git
