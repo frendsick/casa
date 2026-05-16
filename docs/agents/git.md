@@ -20,5 +20,4 @@ Rules for commits, branches, and pull requests in this repo.
 ## Workflow
 
 - **MUST** make a commit once a planned change is finished.
-- **MUST** open a pull request once `feature-dev:code-reviewer` finds no more issues to
-  fix. See [review.md](./review.md) for the review loop.
+- **MUST** open a pull request once code review finds no more issues to fix. See [review.md](./review.md) for the review loop.

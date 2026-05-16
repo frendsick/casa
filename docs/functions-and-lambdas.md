@@ -224,11 +224,11 @@ By default, `= X` inside a function **always creates a local**, even if a global
 To write to a global from inside a function, declare it with `global X` at the top of the function body:
 
 ```casa
-0 = counter
+0 = COUNTER
 
 fn increment {
-    global counter
-    1 += counter
+    global COUNTER
+    1 += COUNTER
 }
 ```
 
