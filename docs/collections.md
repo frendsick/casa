@@ -107,6 +107,19 @@ list.pop print          # 4
 list.length print       # 3
 ```
 
+### `List::insert`
+
+Inserts an item at the given index, shifting subsequent elements right. Prints an error and exits if the index is out of bounds.
+
+**Signature:** `List::insert[T] self:List[T] item:T index:int`
+
+**Stack effect:** `List[T] T int -> None`
+
+```casa
+99 1 list.insert
+1 list.get print    # 99
+```
+
 ### `List::slice`
 
 Returns an `array[T]` view into the list's data from index `start` (inclusive) to `stop` (exclusive). This is a zero-copy operation. Prints an error and exits if the range is out of bounds.
@@ -214,7 +227,7 @@ Looks up a key and returns `Option[V]`. Returns `Option::Some` with the value if
 
 ```casa
 "hello" m.get .unwrap print    # prints the value for "hello"
-"missing" m.get .is_none print # 1
+"missing" m.get .is_none print # true
 ```
 
 ### `Map::has`

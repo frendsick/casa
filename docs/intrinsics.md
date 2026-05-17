@@ -61,8 +61,6 @@ true print                  # true
 
 Consumes the top of the stack and prints its type name to stdout.
 
-**Signature:** `[T] T -> str`
-
 **Stack effect:** `a -> None`
 
 Works with all types: `int`, `bool`, `str`, `char`, `ptr`, `array`, `fn`, structs, and enums.
@@ -89,7 +87,7 @@ Low-level byte-addressed memory access for building data structures. All load/st
 | `store32` | `[T: Word] T ptr -> None` | Store 32-bit value to address |
 | `store64` | `[T: Word] T ptr -> None` | Store 64-bit value to address |
 
-The value type must satisfy the [`Word`](traits.md#word) marker trait, which constrains it to a single-slot value. Every primitive, enum variant, struct reference, and array reference satisfies `Word` automatically.
+The value type must satisfy the [`Word`](traits.md#built-in-trait-word) marker trait, which constrains it to a single-slot value. Every primitive, enum variant, struct reference, and array reference satisfies `Word` automatically.
 
 ### Examples
 
@@ -109,7 +107,7 @@ Values are addressed by byte offset. Use pointer arithmetic (`+`) to access diff
 
 ## Syscall Intrinsics
 
-Direct Linux system call access. Each intrinsic pops N+1 values from the stack (the syscall number on top, then arguments in order) and pushes the kernel return value as `int`. The syscall number must be `int`. Each argument must satisfy the [`Word`](traits.md#word) marker trait so that exactly one register-sized value lands in the corresponding syscall register.
+Direct Linux system call access. Each intrinsic pops N+1 values from the stack (the syscall number on top, then arguments in order) and pushes the kernel return value as `int`. The syscall number must be `int`. Each argument must satisfy the [`Word`](traits.md#built-in-trait-word) marker trait so that exactly one register-sized value lands in the corresponding syscall register.
 
 | Intrinsic | Stack Effect | Description |
 |-----------|-------------|-------------|

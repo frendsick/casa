@@ -128,7 +128,7 @@ Timer::new = timer
 
 Returns elapsed nanoseconds since the Timer was created.
 
-**Signature:** `elapsed_ns self:Timer -> int`
+**Signature:** `Timer::elapsed_ns self:Timer -> int`
 
 **Stack effect:** `Timer -> int`
 
@@ -140,7 +140,7 @@ timer .elapsed_ns print   # e.g. 42000000
 
 Returns elapsed milliseconds since the Timer was created.
 
-**Signature:** `elapsed_ms self:Timer -> int`
+**Signature:** `Timer::elapsed_ms self:Timer -> int`
 
 **Stack effect:** `Timer -> int`
 
@@ -152,7 +152,7 @@ timer .elapsed_ms print   # e.g. 42
 
 Returns the elapsed time formatted as fractional seconds. Implements the `Display` trait, so Timer can be used directly in format strings.
 
-**Signature:** `to_str self:Timer -> str`
+**Signature:** `Timer::to_str self:Timer -> str`
 
 **Stack effect:** `Timer -> str`
 

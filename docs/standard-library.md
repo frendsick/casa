@@ -163,7 +163,7 @@ Returns `true` if any element satisfies the predicate.
 **Signature:** `Iter::any self:Iter[T] f:fn[T -> bool] -> bool`
 
 ```casa
-{ 3 == } [1 2 3].iter.any print    # 1
+{ 3 == } [1 2 3].iter.any print    # true
 ```
 
 #### `all`
@@ -173,7 +173,7 @@ Returns `true` if all elements satisfy the predicate.
 **Signature:** `Iter::all self:Iter[T] f:fn[T -> bool] -> bool`
 
 ```casa
-{ 0 < } [1 2 3].iter.all print    # 1
+{ 0 < } [1 2 3].iter.all print    # true
 ```
 
 #### `find`
@@ -205,8 +205,8 @@ Returns `true` if the option contains a value.
 **Stack effect:** `Option -> bool`
 
 ```casa
-42 Option::Some .is_some print       # 1
-Option::None .is_some print          # 0
+42 Option::Some .is_some print       # true
+Option::None .is_some print          # false
 ```
 
 ### `Option::is_none`
@@ -218,8 +218,8 @@ Returns `true` if the option is empty.
 **Stack effect:** `Option -> bool`
 
 ```casa
-42 Option::Some .is_none print       # 0
-Option::None .is_none print          # 1
+42 Option::Some .is_none print       # false
+Option::None .is_none print          # true
 ```
 
 ### `Option::unwrap`
@@ -278,8 +278,8 @@ Returns `true` if the result contains a success value.
 **Stack effect:** `Result -> bool`
 
 ```casa
-42 Result::Ok .is_ok print                  # 1
-"error" Result::Error .is_ok print          # 0
+42 Result::Ok .is_ok print                  # true
+"error" Result::Error .is_ok print          # false
 ```
 
 ### `Result::is_error`
@@ -291,8 +291,8 @@ Returns `true` if the result contains an error value.
 **Stack effect:** `Result -> bool`
 
 ```casa
-42 Result::Ok .is_error print               # 0
-"error" Result::Error .is_error print       # 1
+42 Result::Ok .is_error print               # false
+"error" Result::Error .is_error print       # true
 ```
 
 ### `Result::unwrap`

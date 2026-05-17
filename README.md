@@ -94,7 +94,7 @@ Start with the core language docs (1-9), then explore the library and tooling do
 
 | # | Document | Topics |
 |---|----------|--------|
-| 1 | [Types and Literals](docs/types-and-literals.md) | Primitive types, composite types, literals, type casting, comments |
+| 1 | [Types and Literals](docs/types-and-literals.md) | Primitive types, composite types, literals, constants, type casting, comments |
 | 2 | [Operators](docs/operators.md) | Stack-based evaluation, arithmetic, comparison, boolean, assignment |
 | 3 | [Modules](docs/modules.md) | Import directives, module resolution, selective imports, library paths |
 | 4 | [Functions and Lambdas](docs/functions-and-lambdas.md) | Functions, lambdas, closures, variables |

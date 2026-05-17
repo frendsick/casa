@@ -70,8 +70,8 @@ Compares two strings by content. Returns `true` if they have the same length and
 **Stack effect:** `str str -> bool`
 
 ```casa
-"hello" "hello" str::eq print    # 1
-"hello" "world" str::eq print    # 0
+"hello" "hello" str::eq print    # true
+"hello" "world" str::eq print    # false
 ```
 
 ### `str::substring`
@@ -108,8 +108,8 @@ Returns `true` if the string starts with the given prefix.
 **Stack effect:** `str str -> bool`
 
 ```casa
-"hel" "hello".starts_with print    # 1
-"xyz" "hello".starts_with print    # 0
+"hel" "hello".starts_with print    # true
+"xyz" "hello".starts_with print    # false
 ```
 
 ### `str::ends_with`
@@ -121,8 +121,8 @@ Returns `true` if the string ends with the given suffix.
 **Stack effect:** `str str -> bool`
 
 ```casa
-"llo" "hello".ends_with print    # 1
-"xyz" "hello".ends_with print    # 0
+"llo" "hello".ends_with print    # true
+"xyz" "hello".ends_with print    # false
 ```
 
 ### `str::concat`
@@ -135,6 +135,57 @@ Concatenates two strings, returning a new string.
 
 ```casa
 "world" "hello " str::concat print    # hello world
+```
+
+### `str::contains`
+
+Returns `true` if the string contains the given substring.
+
+**Signature:** `str::contains needle:str s:str -> bool`
+
+**Stack effect:** `str str -> bool`
+
+```casa
+"ell" "hello".contains print    # true
+"xyz" "hello".contains print    # false
+```
+
+### `str::split`
+
+Splits a string by a delimiter, returning a `List[str]` of the parts.
+
+**Signature:** `str::split delimiter:str s:str -> List[str]`
+
+**Stack effect:** `str str -> List[str]`
+
+```casa
+"," "a,b,c".split = parts
+parts.length print    # 3
+0 parts.get print     # a
+```
+
+### `str::trim`
+
+Removes leading and trailing whitespace (spaces, tabs, newlines, carriage returns).
+
+**Signature:** `str::trim s:str -> str`
+
+**Stack effect:** `str -> str`
+
+```casa
+"  hello  ".trim print    # hello
+```
+
+### `str::replace`
+
+Replaces all occurrences of `old` with `new_str`, returning a new string.
+
+**Signature:** `str::replace old:str new_str:str s:str -> str`
+
+**Stack effect:** `str str str -> str`
+
+```casa
+"world" "there" "hello there".replace print    # hello world
 ```
 
 ## C String Methods
@@ -311,8 +362,8 @@ Returns `true` if the character is an ASCII digit (`'0'`-`'9'`).
 **Stack effect:** `char -> bool`
 
 ```casa
-'0'.is_digit print    # 1
-'A'.is_digit print    # 0
+'0'.is_digit print    # true
+'A'.is_digit print    # false
 ```
 
 ### `char::is_upper`
@@ -324,8 +375,8 @@ Returns `true` if the character is an uppercase ASCII letter (`'A'`-`'Z'`).
 **Stack effect:** `char -> bool`
 
 ```casa
-'A'.is_upper print    # 1
-'a'.is_upper print    # 0
+'A'.is_upper print    # true
+'a'.is_upper print    # false
 ```
 
 ### `char::is_lower`
@@ -337,8 +388,8 @@ Returns `true` if the character is a lowercase ASCII letter (`'a'`-`'z'`).
 **Stack effect:** `char -> bool`
 
 ```casa
-'a'.is_lower print    # 1
-'A'.is_lower print    # 0
+'a'.is_lower print    # true
+'A'.is_lower print    # false
 ```
 
 ### `char::is_alpha`
@@ -350,8 +401,8 @@ Returns `true` if the character is an ASCII letter (uppercase or lowercase).
 **Stack effect:** `char -> bool`
 
 ```casa
-'A'.is_alpha print    # 1
-'0'.is_alpha print    # 0
+'A'.is_alpha print    # true
+'0'.is_alpha print    # false
 ```
 
 ### `char::is_space`
@@ -363,8 +414,8 @@ Returns `true` if the character is ASCII whitespace (space, tab, newline, or car
 **Stack effect:** `char -> bool`
 
 ```casa
-' '.is_space print    # 1
-'A'.is_space print    # 0
+' '.is_space print    # true
+'A'.is_space print    # false
 ```
 
 ## Stdout Output
