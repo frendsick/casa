@@ -64,7 +64,7 @@ enum Color { Red Green Blue }
 
 # Works without writing impl Color { fn hash ... fn eq ... }
 Map::new(Map[Color int]) = scores
-Color::Red 10 scores.set = scores
+10 Color::Red scores.set = scores
 ```
 
 Enums with payload-bearing variants (`Some(T)`, `Circle(int)`, etc.) are not auto-derived; for those, write an explicit `impl` if needed.

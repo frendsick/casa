@@ -59,8 +59,8 @@ impl Foo {
 }
 
 Map::new(Map[str int]) = MY_MAP
-"a" 1 MY_MAP.set = MY_MAP
-"b" 2 MY_MAP.set = MY_MAP
+1 "a" MY_MAP.set = MY_MAP
+2 "b" MY_MAP.set = MY_MAP
 
 fn bar {
     # first group

@@ -246,15 +246,13 @@ Returns `true` if the key exists in the map.
 
 Inserts or updates a key-value pair. Returns the updated map. Automatically resizes at 75% load factor.
 
-**Signature:** `Map::set self:Map[K V] value:V key:K -> Map[K V]`
+**Signature:** `Map::set self:Map[K V] key:K value:V -> Map[K V]`
 
 **Stack effect:** `Map[K V] V K -> Map[K V]`
 
 ```casa
-"one" 1 m.set = m
+1 "one" m.set = m
 ```
-
-Note: the key is on top of the stack, the value is below it, and the map is below the value.
 
 ### `Map::delete`
 
@@ -301,9 +299,9 @@ import "path/to/lib/std.casa"
 Map::new (Map[str int]) = m
 
 # Insert key-value pairs
-"one" 1 m.set = m
-"two" 2 m.set = m
-"three" 3 m.set = m
+1 "one" m.set = m
+2 "two" m.set = m
+3 "three" m.set = m
 
 # Look up values
 "one" m.get .unwrap print      # 1
@@ -314,7 +312,7 @@ Map::new (Map[str int]) = m
 "four" m.has print             # false
 
 # Update a value
-"one" 42 m.set = m
+42 "one" m.set = m
 "one" m.get .unwrap print      # 42
 
 # Delete a key
@@ -323,7 +321,7 @@ m.length print                 # 2
 
 # Integer keys work too
 Map::new (Map[int str]) = m2
-1 "hello" m2.set = m2
+"hello" 1 m2.set = m2
 1 m2.get .unwrap print         # hello
 ```
 
