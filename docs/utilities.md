@@ -27,8 +27,6 @@ An enum with four variants, ordered from least to most verbose:
 
 Sets the global log level. Messages at or below this level are printed.
 
-**Signature:** `log_set_level level:LogLevel`
-
 **Stack effect:** `LogLevel -> None`
 
 ```casa
@@ -38,8 +36,6 @@ LogLevel::Info log_set_level
 ### `log_error`
 
 Logs a message at ERROR level.
-
-**Signature:** `log_error msg:str`
 
 **Stack effect:** `str -> None`
 
@@ -52,8 +48,6 @@ Logs a message at ERROR level.
 
 Logs a message at WARNING level.
 
-**Signature:** `log_warning msg:str`
-
 **Stack effect:** `str -> None`
 
 ```casa
@@ -65,8 +59,6 @@ Logs a message at WARNING level.
 
 Logs a message at INFO level.
 
-**Signature:** `log_info msg:str`
-
 **Stack effect:** `str -> None`
 
 ```casa
@@ -77,8 +69,6 @@ Logs a message at INFO level.
 ### `log_debug`
 
 Logs a message at DEBUG level.
-
-**Signature:** `log_debug msg:str`
 
 **Stack effect:** `str -> None`
 
@@ -116,8 +106,6 @@ It provides high-resolution timing using `clock_gettime` with `CLOCK_MONOTONIC`.
 
 Creates a new Timer and starts it immediately.
 
-**Signature:** `Timer::new -> Timer`
-
 **Stack effect:** `-> Timer`
 
 ```casa
@@ -127,8 +115,6 @@ Timer::new = timer
 ### `Timer::elapsed_ns`
 
 Returns elapsed nanoseconds since the Timer was created.
-
-**Signature:** `Timer::elapsed_ns self:Timer -> int`
 
 **Stack effect:** `Timer -> int`
 
@@ -140,8 +126,6 @@ timer .elapsed_ns print   # e.g. 42000000
 
 Returns elapsed milliseconds since the Timer was created.
 
-**Signature:** `Timer::elapsed_ms self:Timer -> int`
-
 **Stack effect:** `Timer -> int`
 
 ```casa
@@ -151,8 +135,6 @@ timer .elapsed_ms print   # e.g. 42
 ### `Timer::to_str`
 
 Returns the elapsed time formatted as fractional seconds. Implements the `Display` trait, so Timer can be used directly in format strings.
-
-**Signature:** `Timer::to_str self:Timer -> str`
 
 **Stack effect:** `Timer -> str`
 
@@ -168,23 +150,17 @@ A global timer can be used without managing a Timer struct directly.
 
 Starts the global timer.
 
-**Signature:** `timer_start`
-
 **Stack effect:** `-> None`
 
 #### `timer_elapsed_ms`
 
 Returns elapsed milliseconds from the global timer. Exits with an error if `timer_start` has not been called.
 
-**Signature:** `timer_elapsed_ms -> int`
-
 **Stack effect:** `-> int`
 
 #### `timer_elapsed_ns`
 
 Returns elapsed nanoseconds from the global timer. Exits with an error if `timer_start` has not been called.
-
-**Signature:** `timer_elapsed_ns -> int`
 
 **Stack effect:** `-> int`
 
@@ -211,8 +187,6 @@ f"Elapsed ms: {timer .elapsed_ms}\n" print
 
 Pushes the number of command-line arguments onto the stack.
 
-**Signature:** `argc -> int`
-
 **Stack effect:** `-> int`
 
 ```casa
@@ -223,15 +197,11 @@ argc print    # prints the argument count
 
 Pushes a pointer to the argument array onto the stack.
 
-**Signature:** `argv -> ptr`
-
 **Stack effect:** `-> ptr`
 
 ### `get_arg`
 
 Returns the nth command-line argument as a string (zero-indexed). Prints an error to stderr and exits if the index is out of bounds.
-
-**Signature:** `get_arg n:int -> str`
 
 **Stack effect:** `int -> str`
 
@@ -254,8 +224,6 @@ It provides a declarative API for defining and parsing CLI arguments, with auto-
 
 Creates a new argument parser. The program name used in help/error output is derived from `basename(argv[0])`.
 
-**Signature:** `ArgParser::new -> ArgParser`
-
 **Stack effect:** `-> ArgParser`
 
 ```casa
@@ -265,8 +233,6 @@ ArgParser::new = parser
 ### `ArgParser::add_positional`
 
 Adds a required positional argument.
-
-**Signature:** `ArgParser::add_positional self:ArgParser name:str help_text:str`
 
 **Stack effect:** `ArgParser str str -> None`
 
@@ -278,8 +244,6 @@ Adds a required positional argument.
 
 Adds a boolean flag (store-true). Pass `""` for `short_flag` or `long_flag` if only one form is needed.
 
-**Signature:** `ArgParser::add_flag self:ArgParser name:str short_flag:str long_flag:str help_text:str`
-
 **Stack effect:** `ArgParser str str str str -> None`
 
 ```casa
@@ -289,8 +253,6 @@ Adds a boolean flag (store-true). Pass `""` for `short_flag` or `long_flag` if o
 ### `ArgParser::add_option`
 
 Adds an option that takes a string value.
-
-**Signature:** `ArgParser::add_option self:ArgParser name:str short_flag:str long_flag:str help_text:str`
 
 **Stack effect:** `ArgParser str str str str -> None`
 
@@ -302,8 +264,6 @@ Adds an option that takes a string value.
 
 Adds an option that takes a string value and may appear multiple times. Each occurrence appends its value to a list retrieved with `ParsedArgs::get_multi`.
 
-**Signature:** `ArgParser::add_multi_option self:ArgParser name:str short_flag:str long_flag:str help_text:str`
-
 **Stack effect:** `ArgParser str str str str -> None`
 
 ```casa
@@ -314,8 +274,6 @@ Adds an option that takes a string value and may appear multiple times. Each occ
 
 Parses `argc`/`argv` and returns the results. Automatically handles `-h`/`--help` (prints help and exits). Prints a usage error and exits on unrecognized arguments or missing positionals.
 
-**Signature:** `ArgParser::parse_args self:ArgParser -> ParsedArgs`
-
 **Stack effect:** `ArgParser -> ParsedArgs`
 
 ```casa
@@ -325,8 +283,6 @@ parser .parse_args = args
 ### `ParsedArgs::get`
 
 Returns an `Option[str]` for the named argument. Returns `Option::Some` with the value if provided, `Option::None` if not.
-
-**Signature:** `ParsedArgs::get self:ParsedArgs name:str -> Option[str]`
 
 **Stack effect:** `ParsedArgs str -> Option[str]`
 
@@ -339,8 +295,6 @@ Returns an `Option[str]` for the named argument. Returns `Option::Some` with the
 
 Returns `true` if the flag was set, `false` otherwise.
 
-**Signature:** `ParsedArgs::get_flag self:ParsedArgs name:str -> bool`
-
 **Stack effect:** `ParsedArgs str -> bool`
 
 ```casa
@@ -350,8 +304,6 @@ Returns `true` if the flag was set, `false` otherwise.
 ### `ParsedArgs::get_multi`
 
 Returns `Option::Some` wrapping the collected `List[str]` for a registered multi-option (the list is empty if the flag was never given). Returns `Option::None` if the name was never registered as a multi-option, mirroring `ParsedArgs::get`.
-
-**Signature:** `ParsedArgs::get_multi self:ParsedArgs name:str -> Option[List[str]]`
 
 **Stack effect:** `ParsedArgs str -> Option[List[str]]`
 
@@ -395,8 +347,6 @@ options:
 
 Executes an external command using fork/execve/wait4. Takes a `List[str]` where the first element is the executable path and the remaining elements are arguments. Returns the child process exit code.
 
-**Signature:** `run_command args:List[str] -> int`
-
 **Stack effect:** `List[str] -> int`
 
 ```casa
@@ -411,8 +361,6 @@ Prints an error to stderr and exits if fork fails. If execve fails (command not 
 ### `chars_to_str`
 
 Converts a `List[char]` to a `str`. Used internally by `StringBuilder::build`.
-
-**Signature:** `chars_to_str chars:List[char] -> str`
 
 **Stack effect:** `List[char] -> str`
 

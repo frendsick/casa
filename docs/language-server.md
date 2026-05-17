@@ -67,7 +67,7 @@ For qualified names like `Point::get_x`, the server checks where the cursor fall
 
 ### Hover
 
-Hover over a symbol to see type and signature information in a code block.
+Hover over a symbol to see type and stack effect information in a code block.
 
 | Symbol | Displayed info |
 |--------|---------------|
@@ -78,7 +78,7 @@ Hover over a symbol to see type and signature information in a code block.
 | Integer, string, bool, or char literal | Type and value (e.g. `(int) 42`) |
 | Assignment | `= name: type` (with inferred type) |
 | Operator | Name and stack effect (e.g. `+: int int -> int`) |
-| Intrinsic | Name and stack effect (e.g. `drop: [T] T -> None`) |
+| Intrinsic | Name and stack effect (e.g. `drop: T -> None`) |
 
 All operators and intrinsics show their stack effects on hover, including arithmetic, comparison, boolean, bitwise, stack manipulation, memory, syscall, and IO operations.
 
@@ -88,7 +88,7 @@ Trigger completion to get context-aware suggestions. The server provides the fol
 
 | Kind | Items |
 |------|-------|
-| Functions | All user-defined functions (excluding internal lambdas) with signatures |
+| Functions | All user-defined functions (excluding internal lambdas) with stack effects |
 | Structs | Struct names with member details |
 | Enum variants | All `EnumName::Variant` entries |
 | Local variables | Variables from the function the cursor is inside, with types |

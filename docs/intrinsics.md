@@ -6,13 +6,13 @@ Intrinsics are operations built into the compiler. They are available in every C
 
 Operations for manipulating the stack directly.
 
-| Intrinsic | Generic signature | Description |
-|-----------|-------------------|-------------|
-| `drop` | `[T] T -> None` | Discard top of stack |
-| `dup` | `[T] T -> T T` | Duplicate top of stack |
-| `swap` | `[T1 T2] T1 T2 -> T2 T1` | Swap top two values |
-| `over` | `[T1 T2] T1 T2 -> T2 T1 T2` | Copy second value to top |
-| `rot` | `[T1 T2 T3] T1 T2 T3 -> T3 T1 T2` | Rotate top three values |
+| Intrinsic | Stack effect | Description |
+|-----------|-------------|-------------|
+| `drop` | `T -> None` | Discard top of stack |
+| `dup` | `T -> T T` | Duplicate top of stack |
+| `swap` | `T1 T2 -> T2 T1` | Swap top two values |
+| `over` | `T1 T2 -> T2 T1 T2` | Copy second value to top |
+| `rot` | `T1 T2 T3 -> T3 T1 T2` | Rotate top three values |
 
 Type variables resolve at the call site, so the same intrinsic works on any value type:
 `42 dup` produces two `int`s on the stack, `"hi" dup` produces two `str`s.
@@ -42,9 +42,7 @@ See [`examples/stack_operations.casa`](../examples/stack_operations.casa).
 
 Prints the top of the stack to stdout. Requires the value's type to implement the `Display` trait.
 
-**Signature:** `print[T: Display] a:T`
-
-**Stack effect:** `a -> None`
+**Stack effect:** `[T: Display] T -> None`
 
 The primitives `int`, `bool`, `char`, `str`, and `cstr` already implement `Display` and are emitted through specialized output instructions. Other types must implement `Display` (a `to_str self -> str` method); the compiler lowers `value print` to `value to_str` followed by a string print.
 

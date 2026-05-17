@@ -1,6 +1,6 @@
 # Types and Literals
 
-Casa is a statically typed language. Types are checked at compile time and most can be inferred automatically — you rarely need to write type annotations outside of function signatures.
+Casa is a statically typed language. Types are checked at compile time and most can be inferred automatically — you rarely need to write type annotations outside of function declarations.
 
 ## Primitive Types
 
@@ -218,7 +218,7 @@ Arrays can be nested. The element type is inferred recursively:
 [[1, 2], [3, 4]]   # type: array[array[int]]
 ```
 
-The bare type name `array` matches any `array[T]` for backward compatibility (e.g. in function signatures).
+The bare type name `array` matches any `array[T]` for backward compatibility (e.g. in function declarations).
 
 Each array has a 16-byte header: the data pointer at offset 0 and the length at offset 8. Elements are stored contiguously in the data area, each taking 8 bytes.
 
@@ -226,7 +226,7 @@ See [Standard Library — Arrays](standard-library.md#arrays) for `array::length
 
 ### `fn[sig]`
 
-Function type representing a lambda or function reference. The signature inside the brackets describes the parameter and return types.
+Function type representing a lambda or function reference. The brackets contain a stack effect that describes the consumed and produced types.
 
 ```casa
 { 2 * }           # type: fn[int -> int]
@@ -284,7 +284,7 @@ Options stored in variables retain their type:
 Option::None = y         # y has type Option (bare)
 ```
 
-A bare `Option` type matches any `Option[T]` in function signatures, similar to how bare `array` matches any `array[T]`:
+A bare `Option` type matches any `Option[T]` in function declarations, similar to how bare `array` matches any `array[T]`:
 
 ```casa
 fn check opt:Option -> bool { true }
@@ -341,7 +341,7 @@ Type annotations can narrow the type to specify both type parameters:
 42 Result::Ok = x:Result[int str]    # x has type Result[int str]
 ```
 
-A bare `Result` type matches any `Result[T E]` in function signatures, similar to how bare `Option` matches any `Option[T]`:
+A bare `Result` type matches any `Result[T E]` in function declarations, similar to how bare `Option` matches any `Option[T]`:
 
 ```casa
 fn check res:Result -> bool { true }

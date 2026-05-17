@@ -32,7 +32,7 @@ When `34 35 local_add` is called, `35` is assigned to `a` (first param, popped f
 
 ### No Parameters
 
-Functions can have no explicit parameters. They can still consume values from the stack if the body does so, and the type checker will infer the signature.
+Functions can have no explicit parameters. They can still consume values from the stack if the body does so, and the type checker will infer the stack effect.
 
 ```casa
 fn global_add -> int {
@@ -50,18 +50,18 @@ fn greet name:str {
 }
 ```
 
-### Signature Inference
+### Stack effect inference
 
-Type annotations are optional. The type checker can infer the full signature by replaying the function's operations on a symbolic stack.
+Type annotations are optional. The type checker can infer the full stack effect by replaying the function's operations on a symbolic stack.
 
 ```casa
 fn double {
     2 *
 }
-# Inferred signature: int -> int
+# Inferred stack effect: int -> int
 ```
 
-When both an explicit signature and inference are available, the type checker verifies that they match.
+When both an explicit stack effect and an inferred one are available, the type checker verifies that they match.
 
 ### Calling Functions
 
@@ -201,7 +201,7 @@ fn good[T] T -> T { }         # OK
 ### Restrictions
 
 - Functions must be defined at **global scope** — no nested function definitions (use lambdas instead).
-- A function's signature mismatch is detected when the function is **called**, not at its definition.
+- A function's stack effect mismatch is detected when the function is **called**, not at its definition.
 
 ## Variables
 
@@ -254,8 +254,8 @@ fn fizzbuzz number:int {
 
 | Operator | Stack Effect | Description |
 |----------|-------------|-------------|
-| `= name` | `a -> None` | Assign top of stack to `name` |
-| `= name:type` | `a -> None` | Assign with type annotation |
+| `= name` | `T -> None` | Assign top of stack to `name` |
+| `= name:type` | `T -> None` | Assign with type annotation |
 | `+= name` | `int -> None` | Add to `name` |
 | `-= name` | `int -> None` | Subtract from `name` |
 

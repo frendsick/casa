@@ -164,7 +164,7 @@ If `got` shows `<missing>`, an earlier error left the slot without a real type â
 
 ### `STACK_MISMATCH`
 
-Branches of a conditional or loop leave the stack in inconsistent states. The error shows each branch's stack signature so you can see which branch diverges.
+Branches of a conditional or loop leave the stack in inconsistent states. The error shows each branch's stack effect so you can see which branch diverges.
 
 ```casa
 fn branchy bool -> int {
@@ -196,7 +196,7 @@ error[STACK_MISMATCH]: Branches have incompatible stack effects
 
 ### `SIGNATURE_MISMATCH`
 
-A function's declared signature does not match the inferred signature from its body.
+A function's declared stack effect does not match the inferred stack effect from its body.
 
 ```casa
 fn bad a:int -> str { a 1 + }
@@ -275,7 +275,7 @@ error[MISSING_TRAIT_METHOD]: Type `Foo` does not satisfy trait `Hashable`
 
 ### `TRAIT_SIGNATURE_MISMATCH`
 
-A type has a method with the right name for a trait, but its signature does not match the trait's requirement.
+A type has a method with the right name for a trait, but its stack effect does not match the trait's requirement.
 
 ```
 error[TRAIT_SIGNATURE_MISMATCH]: Method signature does not match trait requirement

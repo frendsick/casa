@@ -10,8 +10,6 @@ Methods for working with `str` values. Method calls on any `str` receiver are re
 
 Returns the length of a string in bytes.
 
-**Signature:** `str::length s:str -> int`
-
 **Stack effect:** `str -> int`
 
 ```casa
@@ -23,8 +21,6 @@ Returns the length of a string in bytes.
 
 Returns the character at the given index.
 
-**Signature:** `str::at s:str index:int -> char`
-
 **Stack effect:** `str int -> char`
 
 ```casa
@@ -35,8 +31,6 @@ Returns the character at the given index.
 ### `str::set`
 
 Writes a character at the given index in a string (mutates in place).
-
-**Signature:** `str::set s:str index:int c:char`
 
 **Stack effect:** `str int char -> None`
 
@@ -53,8 +47,6 @@ buf print    # Hi
 
 Returns a `cstr` pointing to the string's byte data (skipping the 8-byte length prefix). The returned `cstr` is null-terminated.
 
-**Signature:** `str::as_cstr s:str -> cstr`
-
 **Stack effect:** `str -> cstr`
 
 ```casa
@@ -64,8 +56,6 @@ Returns a `cstr` pointing to the string's byte data (skipping the 8-byte length 
 ### `str::eq`
 
 Compares two strings by content. Returns `true` if they have the same length and identical bytes.
-
-**Signature:** `str::eq b:str a:str -> bool`
 
 **Stack effect:** `str str -> bool`
 
@@ -78,8 +68,6 @@ Compares two strings by content. Returns `true` if they have the same length and
 
 Extracts a substring starting at `start` with the given `len`.
 
-**Signature:** `str::substring len:int start:int s:str -> str`
-
 **Stack effect:** `int int str -> str`
 
 ```casa
@@ -89,8 +77,6 @@ Extracts a substring starting at `start` with the given `len`.
 ### `str::find`
 
 Finds the first occurrence of `needle` in the string. Returns the index, or -1 if not found.
-
-**Signature:** `str::find needle:str s:str -> int`
 
 **Stack effect:** `str str -> int`
 
@@ -103,8 +89,6 @@ Finds the first occurrence of `needle` in the string. Returns the index, or -1 i
 
 Returns `true` if the string starts with the given prefix.
 
-**Signature:** `str::starts_with prefix:str s:str -> bool`
-
 **Stack effect:** `str str -> bool`
 
 ```casa
@@ -115,8 +99,6 @@ Returns `true` if the string starts with the given prefix.
 ### `str::ends_with`
 
 Returns `true` if the string ends with the given suffix.
-
-**Signature:** `str::ends_with suffix:str s:str -> bool`
 
 **Stack effect:** `str str -> bool`
 
@@ -129,8 +111,6 @@ Returns `true` if the string ends with the given suffix.
 
 Concatenates two strings, returning a new string.
 
-**Signature:** `str::concat b:str a:str -> str`
-
 **Stack effect:** `str str -> str`
 
 ```casa
@@ -140,8 +120,6 @@ Concatenates two strings, returning a new string.
 ### `str::contains`
 
 Returns `true` if the string contains the given substring.
-
-**Signature:** `str::contains needle:str s:str -> bool`
 
 **Stack effect:** `str str -> bool`
 
@@ -153,8 +131,6 @@ Returns `true` if the string contains the given substring.
 ### `str::split`
 
 Splits a string by a delimiter, returning a `List[str]` of the parts.
-
-**Signature:** `str::split delimiter:str s:str -> List[str]`
 
 **Stack effect:** `str str -> List[str]`
 
@@ -168,8 +144,6 @@ parts.length print    # 3
 
 Removes leading and trailing whitespace (spaces, tabs, newlines, carriage returns).
 
-**Signature:** `str::trim s:str -> str`
-
 **Stack effect:** `str -> str`
 
 ```casa
@@ -179,8 +153,6 @@ Removes leading and trailing whitespace (spaces, tabs, newlines, carriage return
 ### `str::replace`
 
 Replaces all occurrences of `old` with `new_str`, returning a new string.
-
-**Signature:** `str::replace old:str new_str:str s:str -> str`
 
 **Stack effect:** `str str str -> str`
 
@@ -195,8 +167,6 @@ Methods for working with `cstr` values. Method calls on any `cstr` receiver are 
 ### `cstr::to_str`
 
 Converts a null-terminated C string to a `str`. Scans for the null byte to determine length, then allocates a new string with a length prefix and copies the bytes.
-
-**Signature:** `cstr::to_str s:cstr -> str`
 
 **Stack effect:** `cstr -> str`
 
@@ -229,8 +199,6 @@ O_WRONLY O_CREAT | O_TRUNC |    # open for writing, create if needed, truncate
 
 Opens a file and returns a file descriptor. Returns a negative value on error.
 
-**Signature:** `file::open path:str flags:int mode:int -> int`
-
 **Stack effect:** `str int int -> int`
 
 ```casa
@@ -243,8 +211,6 @@ The `mode` parameter sets file permissions when creating a new file (e.g., 420 f
 
 Reads up to `size` bytes from a file descriptor into a buffer. Returns the number of bytes read, or a negative value on error.
 
-**Signature:** `file::read fd:int buf:ptr size:int -> int`
-
 **Stack effect:** `int ptr int -> int`
 
 ```casa
@@ -256,8 +222,6 @@ Reads up to `size` bytes from a file descriptor into a buffer. Returns the numbe
 
 Writes a string to a file descriptor. Returns the number of bytes written, or a negative value on error.
 
-**Signature:** `file::write fd:int data:str -> int`
-
 **Stack effect:** `int str -> int`
 
 ```casa
@@ -267,8 +231,6 @@ Writes a string to a file descriptor. Returns the number of bytes written, or a 
 ### `file::close`
 
 Closes a file descriptor. Returns 0 on success, or a negative value on error.
-
-**Signature:** `file::close fd:int -> int`
 
 **Stack effect:** `int -> int`
 
@@ -298,8 +260,6 @@ enum FileError {
 
 Reads the entire contents of a file into a string. Returns `Result::Ok(content)` on success or `Result::Error(FileError)` if the file cannot be opened or read.
 
-**Signature:** `file::read_all path:str -> Result[str FileError]`
-
 **Stack effect:** `str -> Result[str FileError]`
 
 ```casa
@@ -315,8 +275,6 @@ Match directly on the `Result` rather than probing with `file::exists` first; th
 
 Writes a string to a file, creating or truncating it. Returns `Result::Ok(true)` on success or `Result::Error(FileError)` if the file cannot be opened.
 
-**Signature:** `file::write_all path:str content:str -> Result[bool FileError]`
-
 **Stack effect:** `str str -> Result[bool FileError]`
 
 ```casa
@@ -327,8 +285,6 @@ Writes a string to a file, creating or truncating it. Returns `Result::Ok(true)`
 
 Deletes a file. Returns `Result::Ok(true)` on success or `Result::Error(FileError)` if the syscall fails (e.g. the file is missing).
 
-**Signature:** `file::remove path:str -> Result[bool FileError]`
-
 **Stack effect:** `str -> Result[bool FileError]`
 
 ```casa
@@ -338,8 +294,6 @@ Deletes a file. Returns `Result::Ok(true)` on success or `Result::Error(FileErro
 ### `file::exists`
 
 Returns `true` when the path can be opened for reading, `false` otherwise (missing file, permission denied). Safe to use as a probe when the existence check is needed for control flow that does not later read the file (to read the file, match on `file::read_all` directly to avoid a TOCTOU race).
-
-**Signature:** `file::exists path:str -> bool`
 
 **Stack effect:** `str -> bool`
 
@@ -357,8 +311,6 @@ Methods on `char` for classifying ASCII characters.
 
 Returns `true` if the character is an ASCII digit (`'0'`-`'9'`).
 
-**Signature:** `char::is_digit c:char -> bool`
-
 **Stack effect:** `char -> bool`
 
 ```casa
@@ -369,8 +321,6 @@ Returns `true` if the character is an ASCII digit (`'0'`-`'9'`).
 ### `char::is_upper`
 
 Returns `true` if the character is an uppercase ASCII letter (`'A'`-`'Z'`).
-
-**Signature:** `char::is_upper c:char -> bool`
 
 **Stack effect:** `char -> bool`
 
@@ -383,8 +333,6 @@ Returns `true` if the character is an uppercase ASCII letter (`'A'`-`'Z'`).
 
 Returns `true` if the character is a lowercase ASCII letter (`'a'`-`'z'`).
 
-**Signature:** `char::is_lower c:char -> bool`
-
 **Stack effect:** `char -> bool`
 
 ```casa
@@ -396,8 +344,6 @@ Returns `true` if the character is a lowercase ASCII letter (`'a'`-`'z'`).
 
 Returns `true` if the character is an ASCII letter (uppercase or lowercase).
 
-**Signature:** `char::is_alpha c:char -> bool`
-
 **Stack effect:** `char -> bool`
 
 ```casa
@@ -408,8 +354,6 @@ Returns `true` if the character is an ASCII letter (uppercase or lowercase).
 ### `char::is_space`
 
 Returns `true` if the character is ASCII whitespace (space, tab, newline, or carriage return).
-
-**Signature:** `char::is_space c:char -> bool`
 
 **Stack effect:** `char -> bool`
 
@@ -424,8 +368,6 @@ Returns `true` if the character is ASCII whitespace (space, tab, newline, or car
 
 Writes a string followed by a newline to stdout.
 
-**Signature:** `println msg:str`
-
 **Stack effect:** `str -> None`
 
 ```casa
@@ -438,8 +380,6 @@ Writes a string followed by a newline to stdout.
 
 Writes a string to stderr (file descriptor 2).
 
-**Signature:** `eprint msg:str`
-
 **Stack effect:** `str -> None`
 
 ```casa
@@ -449,8 +389,6 @@ Writes a string to stderr (file descriptor 2).
 ### `eprintln`
 
 Writes a string followed by a newline to stderr.
-
-**Signature:** `eprintln msg:str`
 
 **Stack effect:** `str -> None`
 
@@ -466,8 +404,6 @@ Convert values to their string representation. All `to_str` methods can be calle
 
 Converts a single digit (0-9) to its string representation. This is a helper used internally by `int::to_str`.
 
-**Signature:** `digit_to_str d:int -> str`
-
 **Stack effect:** `int -> str`
 
 ```casa
@@ -477,8 +413,6 @@ Converts a single digit (0-9) to its string representation. This is a helper use
 ### `int::to_str`
 
 Converts an integer to its string representation. Handles negative numbers and zero.
-
-**Signature:** `int::to_str n:int -> str`
 
 **Stack effect:** `int -> str`
 
@@ -492,8 +426,6 @@ Converts an integer to its string representation. Handles negative numbers and z
 
 Converts a boolean to `"true"` or `"false"`.
 
-**Signature:** `bool::to_str b:bool -> str`
-
 **Stack effect:** `bool -> str`
 
 ```casa
@@ -505,8 +437,6 @@ false.to_str print      # false
 
 Identity function. Returns the string unchanged.
 
-**Signature:** `str::to_str s:str -> str`
-
 **Stack effect:** `str -> str`
 
 ```casa
@@ -516,8 +446,6 @@ Identity function. Returns the string unchanged.
 ### `ptr::to_str`
 
 Converts a pointer to a string by casting its address to an integer and converting that.
-
-**Signature:** `ptr::to_str p:ptr -> str`
 
 **Stack effect:** `ptr -> str`
 
@@ -530,8 +458,6 @@ buf.to_str print        # prints the address as a decimal number
 
 Wraps a single character in a one-character string.
 
-**Signature:** `char::to_str c:char -> str`
-
 **Stack effect:** `char -> str`
 
 ```casa
@@ -542,7 +468,7 @@ Wraps a single character in a one-character string.
 
 Formats an array as `[elem1, elem2, ...]`. Requires `T` to satisfy the `Display` trait.
 
-**Signature:** `array::to_str self:array[T] -> str` (with `T: Display`)
+**Stack effect:** `[T: Display] array[T] -> str`
 
 ```casa
 [1, 2, 3] (array[int]) .to_str print    # [1, 2, 3]
@@ -552,13 +478,13 @@ Formats an array as `[elem1, elem2, ...]`. Requires `T` to satisfy the `Display`
 
 Formats a `List` the same way as an array. Requires `T` to satisfy the `Display` trait.
 
-**Signature:** `List::to_str self:List[T] -> str` (with `T: Display`)
+**Stack effect:** `[T: Display] List[T] -> str`
 
 ### `Option[T]::to_str`
 
 Formats an `Option` as `Some(value)` or `None`. Requires `T` to satisfy the `Display` trait.
 
-**Signature:** `Option::to_str self:Option[T] -> str` (with `T: Display`)
+**Stack effect:** `[T: Display] Option[T] -> str`
 
 ```casa
 5 Option::Some .to_str print                # Some(5)
@@ -569,7 +495,7 @@ Option::None (Option[int]) .to_str print    # None
 
 Formats a `Result` as `Ok(value)` or `Error(err)`. Requires both `T` and `E` to satisfy the `Display` trait.
 
-**Signature:** `Result::to_str self:Result[T E] -> str` (with `T: Display, E: Display`)
+**Stack effect:** `[T: Display, E: Display] Result[T E] -> str`
 
 ```casa
 99 Result::Ok (Result[int str]) .to_str print       # Ok(99)
@@ -584,8 +510,6 @@ Standalone hash functions used by the built-in `Hashable` trait implementations.
 
 Computes a hash for a string using the djb2 algorithm. Returns a non-negative integer.
 
-**Signature:** `str_hash s:str -> int`
-
 **Stack effect:** `str -> int`
 
 ```casa
@@ -595,8 +519,6 @@ Computes a hash for a string using the djb2 algorithm. Returns a non-negative in
 ### `int_hash`
 
 Returns the absolute value of an integer, for use as a hash.
-
-**Signature:** `int_hash n:int -> int`
 
 **Stack effect:** `int -> int`
 

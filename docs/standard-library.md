@@ -18,8 +18,6 @@ For full import resolution rules, selective imports, and `-L` search paths, see 
 
 Copies `n` bytes from one pointer to another.
 
-**Signature:** `memcpy dst:ptr src:ptr n:int`
-
 **Stack effect:** `dst src n -> None`
 
 ```casa
@@ -44,8 +42,6 @@ Arrays are fixed-size heap-allocated sequences created with bracket syntax. Each
 
 Returns the length of an array.
 
-**Signature:** `array::length array -> int`
-
 **Stack effect:** `array -> int`
 
 ```casa
@@ -56,8 +52,6 @@ arr.length print    # 3
 ### `array::nth`
 
 Returns the nth element of an array (zero-indexed). This is a generic function that returns the element type of the array.
-
-**Signature:** `array::nth[T] array:array[T] n:int -> T`
 
 **Stack effect:** `array[T] n -> T`
 
@@ -72,7 +66,7 @@ The return type matches the array's element type. For example, calling `nth` on 
 
 ## Iteration
 
-All standard collections provide a `.iter` method that returns an `Iter[T]` value. `Iter[T]` satisfies the `Iterable[T]` trait (see [Traits](traits.md#built-in-trait-iterablet)), so it inherits all default methods: `collect`, `map`, `filter`, `fold`, `count`, `any`, `all`, and `find`.
+All standard collections provide a `.iter` method that returns an `Iter[T]` value. `Iter[T]` satisfies the `Iterable[T]` trait (see [Traits](traits.md#built-in-trait-iterablet)), so the default methods `collect`, `map`, `filter`, `fold`, `count`, `any`, `all`, and `find` are available.
 
 ### `Iter[T]`
 
@@ -110,7 +104,7 @@ Default methods are available on any type satisfying `Iterable[T]`, including `I
 
 Collects all elements into a `List[T]`.
 
-**Signature:** `Iter::collect self:Iter[T] -> List[T]`
+**Stack effect:** `Iter[T] -> List[T]`
 
 ```casa
 [1 2 3].iter.collect    # List[int] with elements 1, 2, 3
@@ -120,7 +114,7 @@ Collects all elements into a `List[T]`.
 
 Applies a function to each element, returning a `List[U]`.
 
-**Signature:** `Iter::map[U] self:Iter[T] f:fn[T -> U] -> List[U]`
+**Stack effect:** `Iter[T] fn[T -> U] -> List[U]`
 
 ```casa
 { 2 * } [1 2 3].iter.map    # List[int] with elements 2, 4, 6
@@ -130,7 +124,7 @@ Applies a function to each element, returning a `List[U]`.
 
 Returns a `List[T]` of elements for which the function returns `true`.
 
-**Signature:** `Iter::filter self:Iter[T] f:fn[T -> bool] -> List[T]`
+**Stack effect:** `Iter[T] fn[T -> bool] -> List[T]`
 
 ```casa
 { 2 % 0 == } [1 2 3 4].iter.filter    # List[int] with elements 2, 4
@@ -140,7 +134,7 @@ Returns a `List[T]` of elements for which the function returns `true`.
 
 Reduces to a single value using an accumulator and a function.
 
-**Signature:** `Iter::fold[U] self:Iter[T] acc:U f:fn[U T -> U] -> U`
+**Stack effect:** `Iter[T] U fn[U T -> U] -> U`
 
 ```casa
 { + } 0 [1 2 3].iter.fold print    # 6
@@ -150,7 +144,7 @@ Reduces to a single value using an accumulator and a function.
 
 Returns the number of elements.
 
-**Signature:** `Iter::count self:Iter[T] -> int`
+**Stack effect:** `Iter[T] -> int`
 
 ```casa
 [1 2 3].iter.count print    # 3
@@ -160,7 +154,7 @@ Returns the number of elements.
 
 Returns `true` if any element satisfies the predicate.
 
-**Signature:** `Iter::any self:Iter[T] f:fn[T -> bool] -> bool`
+**Stack effect:** `Iter[T] fn[T -> bool] -> bool`
 
 ```casa
 { 3 == } [1 2 3].iter.any print    # true
@@ -170,7 +164,7 @@ Returns `true` if any element satisfies the predicate.
 
 Returns `true` if all elements satisfy the predicate.
 
-**Signature:** `Iter::all self:Iter[T] f:fn[T -> bool] -> bool`
+**Stack effect:** `Iter[T] fn[T -> bool] -> bool`
 
 ```casa
 { 0 < } [1 2 3].iter.all print    # true
@@ -180,7 +174,7 @@ Returns `true` if all elements satisfy the predicate.
 
 Returns the first element satisfying the predicate, or `Option::None`.
 
-**Signature:** `Iter::find self:Iter[T] f:fn[T -> bool] -> Option[T]`
+**Stack effect:** `Iter[T] fn[T -> bool] -> Option[T]`
 
 ```casa
 { 2 < } [1 2 3].iter.find .unwrap print    # 2
@@ -200,8 +194,6 @@ Methods are resolved via `Option::method`.
 
 Returns `true` if the option contains a value.
 
-**Signature:** `Option::is_some self:Option -> bool`
-
 **Stack effect:** `Option -> bool`
 
 ```casa
@@ -212,8 +204,6 @@ Option::None .is_some print          # false
 ### `Option::is_none`
 
 Returns `true` if the option is empty.
-
-**Signature:** `Option::is_none self:Option -> bool`
 
 **Stack effect:** `Option -> bool`
 
@@ -226,8 +216,6 @@ Option::None .is_none print          # true
 
 Extracts the contained value. Prints an error and exits with code 60 if called on `None`.
 
-**Signature:** `Option::unwrap[T] self:Option[T] -> T`
-
 **Stack effect:** `Option[T] -> T`
 
 ```casa
@@ -238,8 +226,6 @@ Option::None .unwrap                 # error: called unwrap on None
 ### `Option::unwrap_or`
 
 Returns the contained value, or a default if the option is empty.
-
-**Signature:** `Option::unwrap_or[T] self:Option[T] default:T -> T`
 
 **Stack effect:** `Option[T] T -> T`
 
@@ -273,8 +259,6 @@ Methods are resolved via `Result::method`.
 
 Returns `true` if the result contains a success value.
 
-**Signature:** `Result::is_ok self:Result -> bool`
-
 **Stack effect:** `Result -> bool`
 
 ```casa
@@ -285,8 +269,6 @@ Returns `true` if the result contains a success value.
 ### `Result::is_error`
 
 Returns `true` if the result contains an error value.
-
-**Signature:** `Result::is_error self:Result -> bool`
 
 **Stack effect:** `Result -> bool`
 
@@ -299,8 +281,6 @@ Returns `true` if the result contains an error value.
 
 Extracts the success value. Prints an error and exits with code 60 if called on an `Error` result.
 
-**Signature:** `Result::unwrap[T E] self:Result[T E] -> T`
-
 **Stack effect:** `Result[T E] -> T`
 
 ```casa
@@ -312,8 +292,6 @@ Extracts the success value. Prints an error and exits with code 60 if called on 
 
 Extracts the error value. Prints an error and exits with code 60 if called on an `Ok` result.
 
-**Signature:** `Result::unwrap_error[T E] self:Result[T E] -> E`
-
 **Stack effect:** `Result[T E] -> E`
 
 ```casa
@@ -324,8 +302,6 @@ Extracts the error value. Prints an error and exits with code 60 if called on an
 ### `Result::unwrap_or`
 
 Returns the success value, or a default if the result is an error.
-
-**Signature:** `Result::unwrap_or[T E] self:Result[T E] default:T -> T`
 
 **Stack effect:** `Result[T E] T -> T`
 

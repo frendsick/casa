@@ -144,8 +144,8 @@ Assignment operators pop a value from the stack and store it in a named variable
 
 | Operator | Stack Effect | Description |
 |----------|-------------|-------------|
-| `= name` | `a -> None` | Assign top of stack to variable `name` |
-| `= name:type` | `a -> None` | Assign with type annotation, verifies and narrows the type |
+| `= name` | `T -> None` | Assign top of stack to variable `name` |
+| `= name:type` | `T -> None` | Assign with type annotation, verifies and narrows the type |
 | `+= name` | `int -> None` | Add top of stack to variable `name` |
 | `-= name` | `int -> None` | Subtract top of stack from variable `name` |
 

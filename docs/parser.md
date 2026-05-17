@@ -38,8 +38,6 @@ struct ParseError {
 
 Creates a cursor at position 0.
 
-**Signature:** `Cursor::new source:str -> Cursor`
-
 **Stack effect:** `str -> Cursor`
 
 ```casa
@@ -49,8 +47,6 @@ Creates a cursor at position 0.
 ### `Cursor::is_eof`
 
 Returns `true` if the cursor is at or past the end of the source string.
-
-**Signature:** `Cursor::is_eof self:Cursor -> bool`
 
 **Stack effect:** `Cursor -> bool`
 
@@ -62,8 +58,6 @@ Returns `true` if the cursor is at or past the end of the source string.
 
 Returns the current character without advancing the cursor. Returns `Option::None` at EOF.
 
-**Signature:** `Cursor::peek self:Cursor -> Option[char]`
-
 **Stack effect:** `Cursor -> Option[char]`
 
 ```casa
@@ -74,8 +68,6 @@ Returns the current character without advancing the cursor. Returns `Option::Non
 
 Returns the character at `pos + offset` without advancing the cursor. Returns `Option::None` if out of bounds.
 
-**Signature:** `Cursor::peek_at self:Cursor offset:int -> Option[char]`
-
 **Stack effect:** `Cursor int -> Option[char]`
 
 ```casa
@@ -85,8 +77,6 @@ Returns the character at `pos + offset` without advancing the cursor. Returns `O
 ### `Cursor::advance`
 
 Returns the current character and advances the cursor by one. Returns `Option::None` at EOF.
-
-**Signature:** `Cursor::advance self:Cursor -> Option[char]`
 
 **Stack effect:** `Cursor -> Option[char]`
 
@@ -100,8 +90,6 @@ cursor.advance .unwrap print    # e
 
 Checks if the remaining input (from the current position) starts with the given prefix.
 
-**Signature:** `Cursor::starts_with self:Cursor prefix:str -> bool`
-
 **Stack effect:** `Cursor str -> bool`
 
 ```casa
@@ -114,8 +102,6 @@ Checks if the remaining input (from the current position) starts with the given 
 
 Consumes the next character if it matches `expected`. Returns `Result::Ok` with the character on success, or `Result::Error` with a `ParseError` on mismatch or EOF.
 
-**Signature:** `Cursor::expect_char self:Cursor expected:char -> Result[char ParseError]`
-
 **Stack effect:** `Cursor char -> Result[char ParseError]`
 
 ```casa
@@ -126,8 +112,6 @@ Consumes the next character if it matches `expected`. Returns `Result::Ok` with 
 ### `Cursor::skip`
 
 Advances the cursor position by `n` characters without returning them.
-
-**Signature:** `Cursor::skip self:Cursor n:int`
 
 **Stack effect:** `Cursor int -> None`
 
@@ -141,8 +125,6 @@ cursor.peek .unwrap print    # l
 
 Consumes the exact target string if the remaining input starts with it. Returns `Result::Ok` with the matched string on success, or `Result::Error` with a `ParseError` on mismatch.
 
-**Signature:** `Cursor::take_string self:Cursor target:str -> Result[str ParseError]`
-
 **Stack effect:** `Cursor str -> Result[str ParseError]`
 
 ```casa
@@ -153,8 +135,6 @@ Consumes the exact target string if the remaining input starts with it. Returns 
 ### `Cursor::skip_while`
 
 Advances the cursor while the predicate returns `true` for the current character.
-
-**Signature:** `Cursor::skip_while self:Cursor pred:fn[char -> bool]`
 
 **Stack effect:** `Cursor fn[char -> bool] -> None`
 
@@ -168,8 +148,6 @@ cursor.peek .unwrap print    # h
 
 Collects characters while the predicate returns `true`, returning them as a substring. Uses `str::substring` internally, so no character-by-character allocation is needed.
 
-**Signature:** `Cursor::take_while self:Cursor pred:fn[char -> bool] -> str`
-
 **Stack effect:** `Cursor fn[char -> bool] -> str`
 
 ```casa
@@ -182,15 +160,11 @@ Collects characters while the predicate returns `true`, returning them as a subs
 
 Returns the current cursor position for later backtracking.
 
-**Signature:** `Cursor::save self:Cursor -> int`
-
 **Stack effect:** `Cursor -> int`
 
 ### `Cursor::restore`
 
 Sets the cursor position back to a previously saved value.
-
-**Signature:** `Cursor::restore self:Cursor saved:int`
 
 **Stack effect:** `Cursor int -> None`
 
@@ -209,15 +183,11 @@ cursor.peek .unwrap print    # t
 
 Converts a `List[char]` to a `str`. Allocates a new string with the correct length and null terminator.
 
-**Signature:** `chars_to_str chars:List[char] -> str`
-
 **Stack effect:** `List[char] -> str`
 
 ### `str_to_int`
 
 Converts a digit string to an integer. Handles optional leading `-` for negative numbers.
-
-**Signature:** `str_to_int s:str -> int`
 
 **Stack effect:** `str -> int`
 
@@ -230,15 +200,11 @@ Converts a digit string to an integer. Handles optional leading `-` for negative
 
 Returns `true` if the character is alphabetic or an underscore. Suitable for the first character of an identifier.
 
-**Signature:** `is_ident_start c:char -> bool`
-
 **Stack effect:** `char -> bool`
 
 ### `is_ident_char`
 
 Returns `true` if the character is alphanumeric or an underscore. Suitable for subsequent characters of an identifier.
-
-**Signature:** `is_ident_char c:char -> bool`
 
 **Stack effect:** `char -> bool`
 
@@ -247,8 +213,6 @@ Returns `true` if the character is alphanumeric or an underscore. Suitable for s
 ### `skip_whitespace`
 
 Skips spaces, tabs, newlines, and carriage returns.
-
-**Signature:** `skip_whitespace cursor:Cursor`
 
 **Stack effect:** `Cursor -> None`
 
@@ -262,8 +226,6 @@ cursor.pos print    # 3
 
 Parses an integer with optional leading `-`. Returns `Result::Error` if no digits are found. Restores cursor position on failure.
 
-**Signature:** `parse_int cursor:Cursor -> Result[int ParseError]`
-
 **Stack effect:** `Cursor -> Result[int ParseError]`
 
 ```casa
@@ -276,8 +238,6 @@ Parses an integer with optional leading `-`. Returns `Result::Error` if no digit
 
 Parses an identifier matching `[a-zA-Z_][a-zA-Z0-9_]*`. Returns `Result::Error` if the current character is not a valid identifier start. Restores cursor position on failure.
 
-**Signature:** `parse_identifier cursor:Cursor -> Result[str ParseError]`
-
 **Stack effect:** `Cursor -> Result[str ParseError]`
 
 ```casa
@@ -288,23 +248,17 @@ Parses an identifier matching `[a-zA-Z_][a-zA-Z0-9_]*`. Returns `Result::Error` 
 
 Parses an escape sequence after the `\` has been consumed. Recognizes: `\n`, `\t`, `\\`, `\"`, `\'`, `\0`, `\r`, `\{`, `\}`.
 
-**Signature:** `parse_escape cursor:Cursor -> Result[char ParseError]`
-
 **Stack effect:** `Cursor -> Result[char ParseError]`
 
 ### `parse_quoted_string`
 
 Parses a double-quoted string with escape sequences. Consumes the opening and closing `"` characters. Returns the string contents (with escapes processed).
 
-**Signature:** `parse_quoted_string cursor:Cursor -> Result[str ParseError]`
-
 **Stack effect:** `Cursor -> Result[str ParseError]`
 
 ### `parse_char_literal`
 
 Parses a single-quoted character literal with escape sequences. Consumes the opening and closing `'` characters. Returns the character value.
-
-**Signature:** `parse_char_literal cursor:Cursor -> Result[char ParseError]`
 
 **Stack effect:** `Cursor -> Result[char ParseError]`
 
