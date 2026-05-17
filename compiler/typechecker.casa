@@ -313,11 +313,45 @@ fn is_type_variable_t typ:Type -> bool {
 }
 
 fn types_match_t expected:Type actual:Type -> bool {
-    actual expected signature_type_matches
+    actual expected stack_effect_type_matches
+}
+
+fn type_exists_recursive_t typ:Type function_opt:Option[Function] store:SymbolStore -> bool {
+    typ match
+        Type::Unknown => { false }
+        Type::Builtin(_) => { true }
+        Type::TypeVar(name) => {
+            if function_opt Option::Some(check_fn) is then
+                name check_fn Function::stack_effect StackEffect::type_vars.has return
+            fi
+            false
+        }
+        Type::Generic(generic) => {
+            for param in generic.params.iter do
+                if store function_opt param type_exists_recursive_t ! then false return fi
+            done
+            if generic.base store.structs.get.is_some then true return fi
+            if generic.base store.enums.get.is_some then true return fi
+            if "array" generic.base == then true return fi
+            if function_opt Option::Some(check_fn) is then
+                if generic.base check_fn Function::stack_effect StackEffect::type_vars.has then true return fi
+            fi
+            false
+        }
+        Type::Function(fn_type) => {
+            for param in fn_type.parameters.iter do
+                if store function_opt param type_exists_recursive_t ! then false return fi
+            done
+            for ret in fn_type.return_types.iter do
+                if store function_opt ret type_exists_recursive_t ! then false return fi
+            done
+            true
+        }
+    end
 }
 
 fn validate_type_exists typ:Type function_opt:Option[Function] location:Location {
-    if function_opt typ.exists_recursive then return fi
+    if DEFAULT_PARSER.store function_opt typ type_exists_recursive_t then return fi
     location f"type `{typ.format}` does not exist" ErrorKind::Syntax raise_error
 }
 
@@ -407,7 +441,7 @@ fn stacks_equal stack_a:List[Type] stack_b:List[Type] -> bool {
 }
 
 # ============================================================================
-# Apply signature — pop params, push returns, with type variable binding
+# Apply stack effect: pop params, push returns, with type variable binding.
 # ============================================================================
 
 fn resolve_return_type_t bindings:Map[str Type] ret:Type -> Type {
@@ -479,7 +513,7 @@ fn bind_generic_param
     tc:TypeChecker
     bindings:Map[str Type]
     expected:Parameter
-    sig:Signature
+    effect:StackEffect
 -> bool {
     # Bind type vars from a parameterized param like Map[K V].
     expected Parameter::typ.base = base_opt
@@ -491,7 +525,7 @@ fn bind_generic_param
     false = has_type_var
     for expected_param in expected_params.iter do
         if expected_param.type_var_name Option::Some(probe_name) is then
-            if probe_name sig Signature::type_vars.has then
+            if probe_name effect StackEffect::type_vars.has then
                 true = has_type_var
             fi
         fi
@@ -502,7 +536,7 @@ fn bind_generic_param
     tc stack_pop_type match
         Type::Generic(actual_g) => {
             if 0 actual_g.params.length == then
-                expected_params bindings sig tc bind_unknowns = bindings
+                expected_params bindings effect tc bind_unknowns = bindings
                 true return
             fi
             if base actual_g.base != then
@@ -516,7 +550,7 @@ fn bind_generic_param
             0 = bind_index
             while bind_index expected_params.length > do
                 if bind_index expected_params.get.type_var_name Option::Some(bind_name) is then
-                    if bind_name sig Signature::type_vars.has then
+                    if bind_name effect StackEffect::type_vars.has then
                         bind_index actual_g.params.get bind_name bindings tc bind_type_var = bindings
                     fi
                 fi
@@ -525,7 +559,7 @@ fn bind_generic_param
             true return
         }
         Type::Unknown => {
-            expected_params bindings sig tc bind_unknowns = bindings
+            expected_params bindings effect tc bind_unknowns = bindings
             true return
         }
         _ => {
@@ -537,13 +571,13 @@ fn bind_generic_param
 
 fn bind_unknowns
     tc:TypeChecker
-    sig:Signature
+    effect:StackEffect
     bindings:Map[str Type]
     expected_params:List[Type]
 -> Map[str Type] {
     for expected_param in expected_params.iter do
         if expected_param.type_var_name Option::Some(unk_name) is then
-            if unk_name sig Signature::type_vars.has then
+            if unk_name effect StackEffect::type_vars.has then
                 TYPE_UNKNOWN_T unk_name bindings tc bind_type_var = bindings
             fi
         fi
@@ -551,12 +585,17 @@ fn bind_unknowns
     bindings
 }
 
-fn bind_fn_param tc:TypeChecker bindings:Map[str Type] expected:Parameter sig:Signature -> bool {
-    # Bind type vars from a fn[sig] param like fn[T -> T].
+fn bind_fn_param
+    tc:TypeChecker
+    bindings:Map[str Type]
+    expected:Parameter
+    effect:StackEffect
+-> bool {
+    # Bind type vars from a function-type param like fn[T -> T].
     if expected Parameter::typ.is_fn_type_t ! then false return fi
-    # Check if any type var appears in the fn signature
+    # Check if any type var appears in the function type.
     false = has_type_var
-    sig Signature::type_vars.to_list = type_var_list
+    effect StackEffect::type_vars.to_list = type_var_list
     for type_var in type_var_list.iter do
         if type_var expected Parameter::typ.type_contains_var then
             true = has_type_var
@@ -589,7 +628,7 @@ fn bind_fn_param tc:TypeChecker bindings:Map[str Type] expected:Parameter sig:Si
                     param_index actual_fn_params.length > &&
                     do
                         param_index expected_fn_params.get.format = expected_param_name
-                        if expected_param_name sig Signature::type_vars.has then
+                        if expected_param_name effect StackEffect::type_vars.has then
                             param_index actual_fn_params.get expected_param_name bindings tc bind_type_var = bindings
                         fi
                         1 += param_index
@@ -602,7 +641,7 @@ fn bind_fn_param tc:TypeChecker bindings:Map[str Type] expected:Parameter sig:Si
                     return_index actual_fn_returns.length > &&
                     do
                         return_index expected_fn_returns.get.format = expected_return_name
-                        if expected_return_name sig Signature::type_vars.has then
+                        if expected_return_name effect StackEffect::type_vars.has then
                             return_index actual_fn_returns.get expected_return_name bindings tc bind_type_var = bindings
                         fi
                         1 += return_index
@@ -616,19 +655,19 @@ fn bind_fn_param tc:TypeChecker bindings:Map[str Type] expected:Parameter sig:Si
     true
 }
 
-fn apply_signature tc:TypeChecker sig:Signature name:str {
+fn apply_stack_effect tc:TypeChecker effect:StackEffect name:str {
     # Simple case: no type variables
-    if 0 sig Signature::type_vars.length == then
+    if 0 effect StackEffect::type_vars.length == then
         0 = index
-        while index sig Signature::parameters.length > do
+        while index effect StackEffect::parameters.length > do
             if "" name != then
                 f"parameter {index 1 +} of `{name}`" tc TypeChecker::set_current_expect_ctx
             fi
-            index sig Signature::parameters.get Parameter::typ tc expect_type_t
+            index effect StackEffect::parameters.get Parameter::typ tc expect_type_t
             1 += index
         done
         "" tc TypeChecker::set_current_expect_ctx
-        for return_type in sig Signature::return_types.iter do
+        for return_type in effect StackEffect::return_types.iter do
             return_type tc stack_push_type
         done
         return
@@ -637,8 +676,8 @@ fn apply_signature tc:TypeChecker sig:Signature name:str {
     # Generic case: bind type variables
     Map::new(Map[str Type]) = bindings
     0 = index
-    while index sig Signature::parameters.length > do
-        index sig Signature::parameters.get = param
+    while index effect StackEffect::parameters.length > do
+        index effect StackEffect::parameters.get = param
 
         if "" name != then
             f"parameter {index 1 +} of `{name}`" tc TypeChecker::set_current_expect_ctx
@@ -646,7 +685,7 @@ fn apply_signature tc:TypeChecker sig:Signature name:str {
 
         # Direct type variable (e.g. T)
         if param Parameter::typ.type_var_name Option::Some(direct_tv) is then
-            if direct_tv sig Signature::type_vars.has then
+            if direct_tv effect StackEffect::type_vars.has then
                 tc stack_pop_type = actual_type_var_t
                 actual_type_var_t direct_tv bindings tc bind_type_var = bindings
                 1 += index
@@ -655,13 +694,13 @@ fn apply_signature tc:TypeChecker sig:Signature name:str {
         fi
 
         # Parameterized type with type vars (e.g. Option[T], Map[K V])
-        if sig param bindings tc bind_generic_param then
+        if effect param bindings tc bind_generic_param then
             1 += index
             continue
         fi
 
         # Function type with type vars (e.g. fn[T -> T])
-        if sig param bindings tc bind_fn_param then
+        if effect param bindings tc bind_fn_param then
             1 += index
             continue
         fi
@@ -672,7 +711,7 @@ fn apply_signature tc:TypeChecker sig:Signature name:str {
     "" tc TypeChecker::set_current_expect_ctx
 
     # Push resolved return types
-    for return_type in sig Signature::return_types.iter do
+    for return_type in effect StackEffect::return_types.iter do
         return_type bindings resolve_return_type_t tc stack_push_type
     done
 }
@@ -900,9 +939,9 @@ fn bound_implies_word bound:TraitBound -> bool {
 fn assert_word_bound tc:TypeChecker op:Op type_name:str function_opt:Option[Function] {
     if type_name TYPE_UNKNOWN == then return fi
     if function_opt.is_none then return fi
-    function_opt.unwrap Function::signature = word_sig
-    if type_name word_sig Signature::type_vars.has ! then return fi
-    type_name word_sig Signature::trait_bounds.get = word_bound_opt
+    function_opt.unwrap Function::stack_effect = word_stack_effect
+    if type_name word_stack_effect StackEffect::type_vars.has ! then return fi
+    type_name word_stack_effect StackEffect::trait_bounds.get = word_bound_opt
     if word_bound_opt.is_none then return fi
     if word_bound_opt.unwrap bound_implies_word then return fi
     op Op::location f"Type variable `{type_name}` does not satisfy `Word` bound; add `[{type_name}: Word]` (or a trait that extends `Word`) to the function's type parameters" ErrorKind::TypeMismatch raise_error
@@ -1002,7 +1041,7 @@ fn check_assignment tc:TypeChecker op:Op function_opt:Option[Function] {
 # Simulate the FnExec emitted by the bytecode pass for trait-bound namespace calls
 # like `K::hash`. The parser rewrites these to an OpPushVar of the hidden
 # `__trait_{type_var}_{method}` variable. At typecheck time we pop the
-# fn-pointer type we just pushed and apply the resolved trait method signature
+# fn-pointer type we just pushed and apply the resolved trait method stack effect
 # so the correct return type lands on the stack.
 
 fn simulate_trait_method_call tc:TypeChecker function:Function var_name:str {
@@ -1011,7 +1050,7 @@ fn simulate_trait_method_call tc:TypeChecker function:Function var_name:str {
     if trait_sep 0 >= then return fi
     trait_suffix 0 trait_sep str::substring = trait_type_var
     trait_suffix trait_sep 1 + trait_suffix.length trait_sep - 1 - str::substring = trait_method_name
-    trait_type_var function Function::signature Signature::trait_bounds.get = trait_bound_opt
+    trait_type_var function Function::stack_effect StackEffect::trait_bounds.get = trait_bound_opt
     if trait_bound_opt.is_none then return fi
     trait_bound_opt.unwrap TraitBound::name tc.store.traits.get = trait_def_opt
     if trait_def_opt.is_none then return fi
@@ -1019,8 +1058,8 @@ fn simulate_trait_method_call tc:TypeChecker function:Function var_name:str {
     for trait_method_entry in trait_def DEFAULT_PARSER collect_trait_methods.iter do
         if trait_method_name trait_method_entry TraitMethod::name == then
             tc stack_pop_drop
-            trait_type_var trait_method_entry TraitMethod::signature resolve_trait_sig = resolved_exec_sig
-            f"{trait_type_var}::{trait_method_name}" resolved_exec_sig tc apply_signature
+            trait_type_var trait_method_entry TraitMethod::stack_effect resolve_trait_stack_effect = resolved_exec_effect
+            f"{trait_type_var}::{trait_method_name}" resolved_exec_effect tc apply_stack_effect
             return
         fi
     done
@@ -1261,7 +1300,7 @@ fn type_satisfies_trait type_name:Type trait_name:str function_opt:Option[Functi
     fi
     # Type variable with matching bound satisfies the trait
     if function_opt.is_some then
-        function_opt.unwrap Function::signature Signature::trait_bounds = bounds
+        function_opt.unwrap Function::stack_effect StackEffect::trait_bounds = bounds
         type_name_str bounds.get = bound_opt
         if bound_opt.is_some then
             if trait_name bound_opt.unwrap trait_bound_to_str == then true return fi
@@ -1289,32 +1328,32 @@ fn type_satisfies_trait type_name:Type trait_name:str function_opt:Option[Functi
         fi
         fn_opt.unwrap = function
         function ensure_typechecked
-        if "None -> None" function Function::signature signature_to_str == then false return fi
-        # When satisfying via the generic base, skip strict signature comparison —
+        if "None -> None" function Function::stack_effect stack_effect_to_str == then false return fi
+        # When satisfying via the generic base, skip strict stack-effect comparison:
         # the concrete trait bounds are verified at the actual call site.
         if via_generic_base then
             continue
         fi
-        trait_subs type_name_str method TraitMethod::signature resolve_trait_sig apply_type_subs_to_sig_t = resolved
-        if function Function::signature Signature::parameters.length resolved Signature::parameters.length != then
+        trait_subs type_name_str method TraitMethod::stack_effect resolve_trait_stack_effect apply_type_subs_to_stack_effect = resolved
+        if function Function::stack_effect StackEffect::parameters.length resolved StackEffect::parameters.length != then
             false return
         fi
-        if function Function::signature Signature::return_types.length resolved Signature::return_types.length != then
+        if function Function::stack_effect StackEffect::return_types.length resolved StackEffect::return_types.length != then
             false return
         fi
         0 = param_index
-        while param_index resolved Signature::parameters.length > do
-            param_index function Function::signature Signature::parameters.get Parameter::typ = actual_param
-            param_index resolved Signature::parameters.get Parameter::typ = expected_param
+        while param_index resolved StackEffect::parameters.length > do
+            param_index function Function::stack_effect StackEffect::parameters.get Parameter::typ = actual_param
+            param_index resolved StackEffect::parameters.get Parameter::typ = expected_param
             if expected_param actual_param types_match_t ! then
                 false return
             fi
             1 += param_index
         done
         0 = return_index
-        while return_index resolved Signature::return_types.length > do
-            return_index function Function::signature Signature::return_types.get = actual_return
-            return_index resolved Signature::return_types.get = expected_return
+        while return_index resolved StackEffect::return_types.length > do
+            return_index function Function::stack_effect StackEffect::return_types.get = actual_return
+            return_index resolved StackEffect::return_types.get = expected_return
             if expected_return actual_return types_match_t ! then
                 false return
             fi
@@ -1338,23 +1377,23 @@ fn find_tparam_index tparams:List[str] name:str -> int {
 
 fn try_bind_caller_tvar
     bindings:Map[str Type]
-    sig:Signature
+    effect:StackEffect
     caller_ref:str
     concrete:Type
 -> Map[str Type] {
-    if caller_ref sig Signature::type_vars.has ! then bindings return fi
+    if caller_ref effect StackEffect::type_vars.has ! then bindings return fi
     if caller_ref bindings.get.is_some then bindings return fi
     concrete caller_ref bindings.set return
 }
 # Given a single (trait-side expected type, concrete-side actual type) pair
-# from a method signature diff, if the expected type references a trait
+# from a method stack-effect diff, if the expected type references a trait
 # type parameter that maps (via the current bound's type args) to an unbound
 # caller type variable, bind it to the actual type. Handles both direct
 # references (`T`) and one-level nested generics (`Option[T]` vs `Option[int]`).
 
 fn bind_from_type_slot
     bindings:Map[str Type]
-    sig:Signature
+    effect:StackEffect
     tparams:List[str]
     bargs:List[str]
     expected:Type
@@ -1364,7 +1403,7 @@ fn bind_from_type_slot
         direct_tv_name tparams find_tparam_index = direct_tp_idx
         if 0 direct_tp_idx >= then
             direct_tp_idx bargs.get = direct_caller_ref
-            actual direct_caller_ref sig bindings try_bind_caller_tvar return
+            actual direct_caller_ref effect bindings try_bind_caller_tvar return
         fi
         bindings return
     fi
@@ -1380,7 +1419,7 @@ fn bind_from_type_slot
             nested_name tparams find_tparam_index = nested_tp_idx
             if 0 nested_tp_idx >= then
                 nested_tp_idx bargs.get = nested_caller_ref
-                slot_index actual_g.params.get nested_caller_ref sig bindings try_bind_caller_tvar = bindings
+                slot_index actual_g.params.get nested_caller_ref effect bindings try_bind_caller_tvar = bindings
             fi
         fi
         1 += slot_index
@@ -1388,32 +1427,32 @@ fn bind_from_type_slot
     bindings
 }
 
-fn diff_method_sig
+fn diff_method_stack_effect
     bindings:Map[str Type]
-    sig:Signature
+    effect:StackEffect
     tparams:List[str]
     bargs:List[str]
-    trait_resolved:Signature
-    impl_sig:Signature
+    trait_resolved:StackEffect
+    impl_stack_effect:StackEffect
 -> Map[str Type] {
     0 = param_index
     while
-    param_index trait_resolved Signature::parameters.length >
-    param_index impl_sig Signature::parameters.length > &&
+    param_index trait_resolved StackEffect::parameters.length >
+    param_index impl_stack_effect StackEffect::parameters.length > &&
     do
-        param_index trait_resolved Signature::parameters.get Parameter::typ = expected_param
-        param_index impl_sig Signature::parameters.get Parameter::typ = actual_param
-        actual_param expected_param bargs tparams sig bindings bind_from_type_slot = bindings
+        param_index trait_resolved StackEffect::parameters.get Parameter::typ = expected_param
+        param_index impl_stack_effect StackEffect::parameters.get Parameter::typ = actual_param
+        actual_param expected_param bargs tparams effect bindings bind_from_type_slot = bindings
         1 += param_index
     done
     0 = return_index
     while
-    return_index trait_resolved Signature::return_types.length >
-    return_index impl_sig Signature::return_types.length > &&
+    return_index trait_resolved StackEffect::return_types.length >
+    return_index impl_stack_effect StackEffect::return_types.length > &&
     do
-        return_index trait_resolved Signature::return_types.get = expected_return
-        return_index impl_sig Signature::return_types.get = actual_return
-        actual_return expected_return bargs tparams sig bindings bind_from_type_slot = bindings
+        return_index trait_resolved StackEffect::return_types.get = expected_return
+        return_index impl_stack_effect StackEffect::return_types.get = actual_return
+        actual_return expected_return bargs tparams effect bindings bind_from_type_slot = bindings
         1 += return_index
     done
     bindings
@@ -1421,7 +1460,7 @@ fn diff_method_sig
 
 fn method_diff_bind_for_bound
     bindings:Map[str Type]
-    sig:Signature
+    effect:StackEffect
     bound:TraitBound
     concrete:str
 -> Map[str Type] {
@@ -1434,24 +1473,24 @@ fn method_diff_bind_for_bound
     for trait_method in trait_def CasaTrait::methods.iter do
         f"{concrete}::{trait_method TraitMethod::name}" DEFAULT_PARSER.store.functions.get = concrete_fn_opt
         if concrete_fn_opt.is_some then
-            concrete trait_method TraitMethod::signature resolve_trait_sig = trait_resolved
-            concrete_fn_opt.unwrap Function::signature trait_resolved bound_args trait_params sig bindings diff_method_sig = bindings
+            concrete trait_method TraitMethod::stack_effect resolve_trait_stack_effect = trait_resolved
+            concrete_fn_opt.unwrap Function::stack_effect trait_resolved bound_args trait_params effect bindings diff_method_stack_effect = bindings
         fi
     done
     bindings
 }
 
 fn method_diff_bind_all
-    sig:Signature
+    effect:StackEffect
     function_opt:Option[Function]
     bindings:Map[str Type]
 -> Map[str Type] {
-    sig Signature::trait_bounds.keys = bound_keys
+    effect StackEffect::trait_bounds.keys = bound_keys
     for bound_type_var in bound_keys.iter do
-        bound_type_var sig Signature::trait_bounds.get.unwrap = bound_constraint
+        bound_type_var effect StackEffect::trait_bounds.get.unwrap = bound_constraint
         bound_type_var bindings.get = concrete_opt
         if concrete_opt.is_some then
-            concrete_opt.unwrap.format bound_constraint sig bindings method_diff_bind_for_bound = bindings
+            concrete_opt.unwrap.format bound_constraint effect bindings method_diff_bind_for_bound = bindings
         fi
     done
     bindings
@@ -1459,7 +1498,7 @@ fn method_diff_bind_all
 
 fn inject_trait_fn_ptrs
     tc:TypeChecker
-    sig:Signature
+    effect:StackEffect
     ops:List[Op]
     op_index:int
     location:Location
@@ -1470,7 +1509,7 @@ fn inject_trait_fn_ptrs
 
     # Collect non-hidden parameters
     List::new(List[Parameter]) = non_hidden
-    for param in sig Signature::parameters.iter do
+    for param in effect StackEffect::parameters.iter do
         if param Parameter::name "__trait_" str::starts_with ! then
             param non_hidden.push
         fi
@@ -1485,7 +1524,7 @@ fn inject_trait_fn_ptrs
             index non_hidden.get = stack_param
             stack_index tc TypeChecker::live TypedStack::types.get = actual
             if stack_param Parameter::typ.type_var_name Option::Some(binding_type_var) is then
-                if binding_type_var sig Signature::type_vars.has then
+                if binding_type_var effect StackEffect::type_vars.has then
                     binding_type_var bindings.get = existing_binding_opt
                     if existing_binding_opt.is_none then
                         actual binding_type_var bindings.set = bindings
@@ -1496,43 +1535,43 @@ fn inject_trait_fn_ptrs
                         fi
                     fi
                 else
-                    sig Signature::type_vars actual stack_param Parameter::typ bindings bind_generic_params_standalone = bindings
+                    effect StackEffect::type_vars actual stack_param Parameter::typ bindings bind_generic_params_standalone = bindings
                 fi
             else
-                sig Signature::type_vars actual stack_param Parameter::typ bindings bind_generic_params_standalone = bindings
+                effect StackEffect::type_vars actual stack_param Parameter::typ bindings bind_generic_params_standalone = bindings
             fi
         fi
         1 += index
     done
 
-    # Method-signature-diff binding for bounds with type-var args.
+    # Method stack-effect diff binding for bounds with type-var args.
     # For a bound like `I: Iterable[T]` where T is still unbound but I is
     # bound from the stack, inspect the concrete type's implementation of
-    # each trait method and diff its signature against the trait's declared
-    # signature to bind T. Single pass in declaration order.
-    bindings function_opt sig method_diff_bind_all = bindings
+    # each trait method and diff its stack effect against the trait's declared
+    # stack effect to bind T. Single pass in declaration order.
+    bindings function_opt effect method_diff_bind_all = bindings
 
     # Check TYPE_CAST lookahead for return type binding
     if op_index ops.length > then
         op_index ops.get = next_op
         if next_op.value OpValue::TypeCast(cast_type) is then
-            for return_type in sig Signature::return_types.iter do
-                sig Signature::type_vars cast_type return_type bindings bind_generic_params_standalone = bindings
+            for return_type in effect StackEffect::return_types.iter do
+                effect StackEffect::type_vars cast_type return_type bindings bind_generic_params_standalone = bindings
             done
         fi
     fi
 
     # Inject FN_PUSH ops for each trait bound.
-    # Iterate type vars in reverse so the first param in the signature (which
+    # Iterate type vars in reverse so the first param in the stack effect (which
     # the parser prepends in forward key order) ends up on the top of the stack,
-    # matching the order apply_signature pops parameters in.
+    # matching the order apply_stack_effect pops parameters in.
     0 = inserted
     op_index 1 - = insert_pos
-    sig Signature::trait_bounds.keys = type_var_keys
+    effect StackEffect::trait_bounds.keys = type_var_keys
     type_var_keys.length 1 - = type_index
     while 0 type_index >= do
         type_index type_var_keys.get = type_var
-        type_var sig Signature::trait_bounds.get.unwrap = trait_bound
+        type_var effect StackEffect::trait_bounds.get.unwrap = trait_bound
         # Resolve trait type args against current bindings so that
         # `Carrier[T]` becomes `Carrier[int]` once T has been bound.
         trait_bound trait_bound_to_type = trait_bound_type
@@ -1550,7 +1589,7 @@ fn inject_trait_fn_ptrs
         # Check if forwarding (type var has same trait bound in calling function)
         false = is_forwarding
         if function_opt.is_some then
-            concrete function_opt.unwrap Function::signature Signature::trait_bounds.get = caller_bound_opt
+            concrete function_opt.unwrap Function::stack_effect StackEffect::trait_bounds.get = caller_bound_opt
             if caller_bound_opt.is_some then
                 caller_bound_opt.unwrap = caller_bound_val
                 if trait_bound caller_bound_val trait_bound_eq then
@@ -1571,8 +1610,8 @@ fn inject_trait_fn_ptrs
                     insert_pos push_op ops.insert
                     1 += insert_pos
                     1 += inserted
-                    concrete method TraitMethod::signature resolve_trait_sig = forward_sig
-                    forward_sig signature_to_function_type tc stack_push_type
+                    concrete method TraitMethod::stack_effect resolve_trait_stack_effect = forward_stack_effect
+                    forward_stack_effect stack_effect_to_function_type tc stack_push_type
                 fi
                 method_index 1 - = method_index
             done
@@ -1600,7 +1639,7 @@ fn inject_trait_fn_ptrs
                         insert_pos push_op ops.insert
                         1 += insert_pos
                         1 += inserted
-                        global_fn Function::signature signature_to_function_type tc stack_push_type
+                        global_fn Function::stack_effect stack_effect_to_function_type tc stack_push_type
                     else
                         location f"Function `{fn_name}` required by trait `{trait_name}` not found" ErrorKind::TypeMismatch raise_error
                     fi
@@ -1630,12 +1669,12 @@ fn check_function_ops
         if fn_opt.is_some then
             fn_opt.unwrap = function
             function ensure_typechecked
-            function Function::signature = sig
-            if 0 sig Signature::trait_bounds.keys.length != then
-                function_opt op Op::location op_index ops sig tc inject_trait_fn_ptrs = injected
+            function Function::stack_effect = effect
+            if 0 effect StackEffect::trait_bounds.keys.length != then
+                function_opt op Op::location op_index ops effect tc inject_trait_fn_ptrs = injected
                 injected += op_index
             fi
-            fn_name sig tc apply_signature
+            fn_name effect tc apply_stack_effect
         fi
     elif fn_value OpValue::FnExec is then
         tc stack_peek_type = fn_ptr_type
@@ -1645,7 +1684,7 @@ fn check_function_ops
             fn_ptr_type tc expect_type_t
             if fn_ptr_type Type::Function(fn_type) is then
                 if 0 fn_type FunctionType::parameters.length != 0 fn_type FunctionType::return_types.length != || then
-                    "exec" fn_type function_type_to_signature tc apply_signature
+                    "exec" fn_type function_type_to_stack_effect tc apply_stack_effect
                 fi
             fi
         fi
@@ -1654,7 +1693,7 @@ fn check_function_ops
         if push_fn_opt.is_some then
             push_fn_opt.unwrap = push_fn
             push_fn ensure_typechecked
-            push_fn Function::signature signature_to_function_type tc stack_push_type
+            push_fn Function::stack_effect stack_effect_to_function_type tc stack_push_type
         else
             "fn" tc stack_push
         fi
@@ -1930,15 +1969,15 @@ fn check_match tc:TypeChecker op:Op function_opt:Option[Function] {
     op.value = match_value
     if match_value OpValue::MatchStart is then
         if 0 tc TypeChecker::live TypedStack::types.length == then
-            tc within_param_cap = inferring_signature
+            tc within_param_cap = inferring_stack_effect
             if function_opt.is_some then
                 if function_opt.unwrap Function::name "lambda__" str::starts_with ! then
-                    false = inferring_signature
+                    false = inferring_stack_effect
                 fi
             else
-                false = inferring_signature
+                false = inferring_stack_effect
             fi
-            if inferring_signature ! then
+            if inferring_stack_effect ! then
                 op Op::location "`match` requires a subject value on the stack" ErrorKind::StackUnderflow add_error
                 true tc TypeChecker::set_underflow_reported_this_op
             fi
@@ -2238,9 +2277,9 @@ fn instantiate_default_trait_method
         else
             base_name = generic_self_type
         fi
-        generic_self_type default_method TraitMethod::signature resolve_trait_sig = resolved_sig
+        generic_self_type default_method TraitMethod::stack_effect resolve_trait_stack_effect = resolved_stack_effect
     else
-        # Infer trait type params from concrete method signatures
+        # Infer trait type params from concrete method stack effects
         Set::new(Set[str]) = type_param_set
         for type_param in type_params.iter do
             type_param type_param_set.add = type_param_set
@@ -2251,36 +2290,36 @@ fn instantiate_default_trait_method
                 if infer_fn_opt.is_some then
                     infer_fn_opt.unwrap = infer_fn
                     infer_fn ensure_typechecked
-                    receiver infer_method TraitMethod::signature resolve_trait_sig = infer_trait_resolved
+                    receiver infer_method TraitMethod::stack_effect resolve_trait_stack_effect = infer_trait_resolved
                     0 = ret_index
-                    while ret_index infer_trait_resolved Signature::return_types.length > ret_index infer_fn Function::signature Signature::return_types.length > && do
-                        type_param_set ret_index infer_fn Function::signature Signature::return_types.get ret_index infer_trait_resolved Signature::return_types.get trait_subs bind_generic_params_standalone = trait_subs
+                    while ret_index infer_trait_resolved StackEffect::return_types.length > ret_index infer_fn Function::stack_effect StackEffect::return_types.length > && do
+                        type_param_set ret_index infer_fn Function::stack_effect StackEffect::return_types.get ret_index infer_trait_resolved StackEffect::return_types.get trait_subs bind_generic_params_standalone = trait_subs
                         1 += ret_index
                     done
                 fi
             fi
         done
-        trait_subs receiver default_method TraitMethod::signature resolve_trait_sig apply_type_subs_to_sig_t = resolved_sig
+        trait_subs receiver default_method TraitMethod::stack_effect resolve_trait_stack_effect apply_type_subs_to_stack_effect = resolved_stack_effect
     fi
 
     # Add trait type params as function type vars for generic receivers
     if fn_base_opt.is_some then
         for type_param in type_params.iter do
-            type_param resolved_sig Signature::type_vars.add = new_tvs
-            new_tvs resolved_sig Signature::set_type_vars
+            type_param resolved_stack_effect StackEffect::type_vars.add = new_tvs
+            new_tvs resolved_stack_effect StackEffect::set_type_vars
         done
     fi
 
-    # Add method-level type vars to signature
+    # Add method-level type vars to stack effect
     for method_type_var in default_method TraitMethod::type_vars.iter do
-        method_type_var resolved_sig Signature::type_vars.add = new_tvs
-        new_tvs resolved_sig Signature::set_type_vars
+        method_type_var resolved_stack_effect StackEffect::type_vars.add = new_tvs
+        new_tvs resolved_stack_effect StackEffect::set_type_vars
     done
 
     # Build function ops: parameter assignments + cloned body
     List::new(List[Op]) = synth_ops
     List::new(List[Variable]) = synth_vars
-    for synth_param in resolved_sig Signature::parameters.iter do
+    for synth_param in resolved_stack_effect StackEffect::parameters.iter do
         if "" synth_param Parameter::name != then
             synth_param Parameter::typ synth_param Parameter::name Variable synth_vars.push
             empty_location synth_param Parameter::name OpValue::AssignVar make_op synth_ops.push
@@ -2296,7 +2335,7 @@ fn instantiate_default_trait_method
     done
 
     # Create, register, and typecheck the function
-    resolved_sig empty_location synth_ops synth_fn_name make_function_with_sig = synth_fn
+    resolved_stack_effect empty_location synth_ops synth_fn_name make_function_with_stack_effect = synth_fn
     synth_vars synth_fn Function::set_variables
     true synth_fn Function::set_is_used
     synth_fn synth_fn_name DEFAULT_PARSER.store.functions.set drop
@@ -2322,7 +2361,7 @@ fn check_method_call
 
     # Check if receiver is a trait-bounded type variable
     if function_opt.is_some then
-        function_opt.unwrap Function::signature Signature::trait_bounds = bounds
+        function_opt.unwrap Function::stack_effect StackEffect::trait_bounds = bounds
         receiver bounds.get = trait_opt
         if trait_opt.is_some then
             trait_opt.unwrap = bound
@@ -2348,9 +2387,9 @@ fn check_method_call
                     if method_name trait_method TraitMethod::name == then
                         f"__trait_{receiver}_{method_name}" = hidden_var
                         tc stack_pop_drop
-                        constraint_subs receiver trait_method TraitMethod::signature resolve_trait_sig apply_type_subs_to_sig_t = resolved_sig
+                        constraint_subs receiver trait_method TraitMethod::stack_effect resolve_trait_stack_effect apply_type_subs_to_stack_effect = resolved_stack_effect
                         receiver tc stack_push
-                        f"{receiver}::{method_name}" resolved_sig tc apply_signature
+                        f"{receiver}::{method_name}" resolved_stack_effect tc apply_stack_effect
                         hidden_var OpValue::PushVar op Op::set_value
                         # Insert FN_EXEC op after the PUSH_VARIABLE
                         op Op::location OpValue::FnExec make_op = exec_op
@@ -2391,11 +2430,11 @@ fn check_method_call
             true function Function::set_is_used
         fi
         function ensure_typechecked
-        function Function::signature = sig
-        if 0 sig Signature::trait_bounds.keys.length != then
-            function_opt op Op::location op_index ops sig tc inject_trait_fn_ptrs += op_index
+        function Function::stack_effect = effect
+        if 0 effect StackEffect::trait_bounds.keys.length != then
+            function_opt op Op::location op_index ops effect tc inject_trait_fn_ptrs += op_index
         fi
-        fn_name sig tc apply_signature
+        fn_name effect tc apply_stack_effect
         fn_name OpValue::FnCall op Op::set_value
     else
         op Op::location f"Method `{fn_name}` does not exist" ErrorKind::UndefinedName raise_error
@@ -2444,9 +2483,9 @@ fn ensure_typechecked function:Function {
     true function Function::set_is_typechecked
     function function Function::ops resolve_identifiers = resolved_ops
     resolved_ops function Function::set_ops
-    function Option::Some resolved_ops type_check_ops = inferred_sig
-    if function Function::signature signature_to_str "None -> None" == then
-        inferred_sig function Function::set_signature
+    function Option::Some resolved_ops type_check_ops = inferred_stack_effect
+    if function Function::stack_effect stack_effect_to_str "None -> None" == then
+        inferred_stack_effect function Function::set_stack_effect
     fi
 }
 
@@ -2729,41 +2768,41 @@ fn run_type_check_ops checker:TypeChecker ops:List[Op] function_opt:Option[Funct
     done
 }
 
-fn type_check_ops ops:List[Op] function_opt:Option[Function] -> Signature {
+fn type_check_ops ops:List[Op] function_opt:Option[Function] -> StackEffect {
     DEFAULT_PARSER.store make_typechecker = checker
     -1 = budget
     if function_opt.is_some then
         function_opt.unwrap = the_function
         if the_function Function::name "lambda__" str::starts_with ! then
-            the_function Function::signature Signature::parameters.length = budget
+            the_function Function::stack_effect StackEffect::parameters.length = budget
         fi
     fi
     budget checker TypeChecker::set_param_cap
     ERRORS.length = errors_before_ops
     function_opt ops checker run_type_check_ops
 
-    # Build inferred signature
+    # Build inferred stack effect
     List::new(List[Type]) = inferred_returns
     for inferred_type in checker TypeChecker::live TypedStack::types.iter do
         inferred_type inferred_returns.push
     done
-    inferred_returns checker TypeChecker::parameters make_signature = inferred
+    inferred_returns checker TypeChecker::parameters make_stack_effect = inferred
 
-    # Verify against declared signature if function has one
+    # Verify against declared stack effect if function has one
     ERRORS.length errors_before_ops < = had_type_errors
     if function_opt.is_some had_type_errors ! && then
         function_opt.unwrap = declared_function
-        declared_function Function::signature = declared
+        declared_function Function::stack_effect = declared
         if
-        declared signature_to_str "None -> None" !=
-        0 declared Signature::type_vars.length == &&
+        declared stack_effect_to_str "None -> None" !=
+        0 declared StackEffect::type_vars.length == &&
         then
-            if inferred declared signature_matches ! then
-                declared_function Function::location f"Invalid signature for function `{declared_function Function::name}`" ErrorKind::SignatureMismatch add_error
+            if inferred declared stack_effect_matches ! then
+                declared_function Function::location f"Invalid stack effect for function `{declared_function Function::name}`" ErrorKind::SignatureMismatch add_error
             fi
         fi
-        # Update inferred signature with declared return types for type var functions
-        if 0 declared Signature::type_vars.length != then
+        # Update inferred stack effect with declared return types for type-var functions
+        if 0 declared StackEffect::type_vars.length != then
             declared = inferred
         fi
     fi
@@ -2789,17 +2828,17 @@ fn type_check_functions {
         current_fn current_fn Function::ops resolve_identifiers = resolved_ops
         resolved_ops current_fn Function::set_ops
         # Skip type checking for functions with trait bounds (checked on demand)
-        if 0 current_fn Function::signature Signature::trait_bounds.keys.length != then
+        if 0 current_fn Function::stack_effect StackEffect::trait_bounds.keys.length != then
             continue
         fi
         ERRORS.length = errors_before
-        current_fn Option::Some current_fn Function::ops type_check_ops = inferred_sig
+        current_fn Option::Some current_fn Function::ops type_check_ops = inferred_stack_effect
         ERRORS.length errors_before < = had_errors
         if had_errors then
             continue
         fi
-        if current_fn Function::signature signature_to_str "None -> None" == then
-            inferred_sig current_fn Function::set_signature
+        if current_fn Function::stack_effect stack_effect_to_str "None -> None" == then
+            inferred_stack_effect current_fn Function::set_stack_effect
         fi
     done
     flush_errors
