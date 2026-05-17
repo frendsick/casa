@@ -81,6 +81,32 @@ fn operator_to_op_value operator_kind:OperatorKind -> Option[OpValue] {
     end
 }
 
+fn op_value_to_operator_kind op_value:OpValue -> Option[OperatorKind] {
+    op_value match
+        OpValue::Add => OperatorKind::Plus Option::Some
+        OpValue::Sub => OperatorKind::Minus Option::Some
+        OpValue::Mul => OperatorKind::Mul Option::Some
+        OpValue::Div => OperatorKind::Div Option::Some
+        OpValue::Mod => OperatorKind::Mod Option::Some
+        OpValue::Shl => OperatorKind::Shl Option::Some
+        OpValue::Shr => OperatorKind::Shr Option::Some
+        OpValue::BitAnd => OperatorKind::BitAnd Option::Some
+        OpValue::BitOr => OperatorKind::BitOr Option::Some
+        OpValue::BitXor => OperatorKind::BitXor Option::Some
+        OpValue::BitNot => OperatorKind::BitNot Option::Some
+        OpValue::And => OperatorKind::And Option::Some
+        OpValue::Or => OperatorKind::Or Option::Some
+        OpValue::Not => OperatorKind::Not Option::Some
+        OpValue::Eq => OperatorKind::Eq Option::Some
+        OpValue::Ge => OperatorKind::Ge Option::Some
+        OpValue::Gt => OperatorKind::Gt Option::Some
+        OpValue::Le => OperatorKind::Le Option::Some
+        OpValue::Lt => OperatorKind::Lt Option::Some
+        OpValue::Ne => OperatorKind::Ne Option::Some
+        _ => Option::None(Option[OperatorKind])
+    end
+}
+
 # ============================================================================
 # Token cursor
 # ============================================================================
@@ -924,6 +950,370 @@ fn build_hidden_trait_methods
         fi
     done
     result
+}
+
+# ============================================================================
+# parse_literal_to_constant_value - parse a raw literal string to ConstantValue
+# ============================================================================
+
+fn parse_literal_to_constant_value raw:str -> ConstantValue {
+    if "true" raw == then
+        1 ConstantValue::Bool return
+    fi
+    if "false" raw == then
+        0 ConstantValue::Bool return
+    fi
+    if '"' 0 raw.at == then
+        raw 1 raw.length 2 - str::substring ConstantValue::Str return
+    fi
+    if '\'' 0 raw.at == then
+        1 raw.at (int) ConstantValue::Char return
+    fi
+    raw str_to_int ConstantValue::Int
+}
+
+# ============================================================================
+# try_fold_const_fn_call - constant-fold a const fn call with all-literal args
+# ============================================================================
+
+fn try_fold_const_fn_call parser:Parser ops:List[Op] op_index:int fn_name:str current_op:Op -> int {
+    fn_name parser.store.functions.get = fold_fn_opt
+    if fold_fn_opt.is_none then op_index return fi
+    if fold_fn_opt.unwrap Function::is_const_fn ! then op_index return fi
+    fold_fn_opt.unwrap Function::signature Signature::parameters.length = fold_param_count
+    op_index 1 - = call_idx
+    call_idx fold_param_count - = first_arg_idx
+    if 0 first_arg_idx > then op_index return fi
+    first_arg_idx = check_idx
+    while check_idx call_idx > do
+        check_idx ops.get Op::value = check_val
+        if check_val OpValue::PushInt is ! check_val OpValue::PushStr is ! && check_val OpValue::PushBool is ! && check_val OpValue::PushChar is ! && then
+            op_index return
+        fi
+        1 += check_idx
+    done
+    List::new(List[ConstantValue]) = fold_stack
+    List::new(List[str]) = fold_eval_stack
+    first_arg_idx = load_idx
+    while load_idx call_idx > do
+        load_idx ops.get Op::value = load_val
+        if load_val OpValue::PushInt(li) is then
+            li ConstantValue::Int fold_stack.push
+        elif load_val OpValue::PushStr(ls) is then
+            ls ConstantValue::Str fold_stack.push
+        elif load_val OpValue::PushBool(lb) is then
+            lb ConstantValue::Bool fold_stack.push
+        elif load_val OpValue::PushChar(lc) is then
+            lc ConstantValue::Char fold_stack.push
+        fi
+        1 += load_idx
+    done
+    fold_eval_stack current_op Op::location fold_stack fn_name parser eval_const_fn
+    fold_stack.pop = fold_result
+    fold_result match
+        ConstantValue::Int(ri) => { ri OpValue::PushInt first_arg_idx ops.get Op::set_value }
+        ConstantValue::Str(rs) => { rs OpValue::PushStr first_arg_idx ops.get Op::set_value }
+        ConstantValue::Bool(rb) => { rb OpValue::PushBool first_arg_idx ops.get Op::set_value }
+        ConstantValue::Char(rc) => { rc OpValue::PushChar first_arg_idx ops.get Op::set_value }
+    end
+    first_arg_idx 1 + = shift_dst
+    call_idx 1 + = shift_src
+    while shift_src ops.length > do
+        shift_src ops.get shift_dst ops.set
+        1 += shift_src
+        1 += shift_dst
+    done
+    0 = pop_count
+    while pop_count fold_param_count > do
+        ops.pop drop
+        1 += pop_count
+    done
+    first_arg_idx 1 +
+}
+
+# ============================================================================
+# validate_const_fn_body - ensure const fn body has no disallowed ops
+# ============================================================================
+
+fn validate_const_fn_body function:Function {
+    for op in function Function::ops.iter do
+        op Op::value = v
+        if v OpValue::IfStart is then
+            op Op::location "Control flow (`if`) is not allowed in const fn" ErrorKind::Syntax raise_error
+        fi
+        if v OpValue::WhileStart is then
+            op Op::location "Control flow (`while`) is not allowed in const fn" ErrorKind::Syntax raise_error
+        fi
+        if v OpValue::DeclareGlobal is then
+            op Op::location "Global access is not allowed in const fn" ErrorKind::Syntax raise_error
+        fi
+    done
+}
+
+# ============================================================================
+# eval_const_block - compile-time evaluation of const { ... } expressions
+# ============================================================================
+
+fn const_eval_apply_operator stack:List[ConstantValue] operator_kind:OperatorKind location:Location {
+    if operator_kind OperatorKind::Not == then
+        if 0 stack.length == then
+            location "Stack underflow in const expression" ErrorKind::Syntax raise_error
+        fi
+        stack.pop = a_val
+        if a_val ConstantValue::Bool(a_bool) is then
+            if 0 a_bool != then 0 else 1 fi ConstantValue::Bool stack.push
+        elif a_val ConstantValue::Int(a_int) is then
+            if 0 a_int != then 0 else 1 fi ConstantValue::Bool stack.push
+        else
+            location "Operator `!` requires bool or int operand" ErrorKind::Syntax raise_error
+        fi
+        return
+    fi
+    if operator_kind OperatorKind::BitNot == then
+        if 0 stack.length == then
+            location "Stack underflow in const expression" ErrorKind::Syntax raise_error
+        fi
+        stack.pop = bitnot_val
+        if bitnot_val ConstantValue::Int(bitnot_int) is then
+            bitnot_int ~ ConstantValue::Int stack.push
+        else
+            location "Operator `~` requires int operand" ErrorKind::Syntax raise_error
+        fi
+        return
+    fi
+    if 2 stack.length < then
+        location "Stack underflow in const expression" ErrorKind::Syntax raise_error
+    fi
+    stack.pop = b_val
+    stack.pop = a_val
+    if a_val ConstantValue::Int(a_int) is then
+        if b_val ConstantValue::Int(b_int) is then
+            if operator_kind OperatorKind::Plus == then
+                a_int b_int + ConstantValue::Int stack.push return
+            fi
+            if operator_kind OperatorKind::Minus == then
+                a_int b_int - ConstantValue::Int stack.push return
+            fi
+            if operator_kind OperatorKind::Mul == then
+                a_int b_int * ConstantValue::Int stack.push return
+            fi
+            if operator_kind OperatorKind::Div == then
+                a_int b_int / ConstantValue::Int stack.push return
+            fi
+            if operator_kind OperatorKind::Mod == then
+                a_int b_int % ConstantValue::Int stack.push return
+            fi
+            if operator_kind OperatorKind::Shl == then
+                a_int b_int << ConstantValue::Int stack.push return
+            fi
+            if operator_kind OperatorKind::Shr == then
+                a_int b_int >> ConstantValue::Int stack.push return
+            fi
+            if operator_kind OperatorKind::BitAnd == then
+                a_int b_int & ConstantValue::Int stack.push return
+            fi
+            if operator_kind OperatorKind::BitOr == then
+                a_int b_int | ConstantValue::Int stack.push return
+            fi
+            if operator_kind OperatorKind::BitXor == then
+                a_int b_int ^ ConstantValue::Int stack.push return
+            fi
+            if operator_kind OperatorKind::Eq == then
+                if a_int b_int == then 1 else 0 fi ConstantValue::Bool stack.push return
+            fi
+            if operator_kind OperatorKind::Ne == then
+                if a_int b_int != then 1 else 0 fi ConstantValue::Bool stack.push return
+            fi
+            if operator_kind OperatorKind::Lt == then
+                if a_int b_int < then 1 else 0 fi ConstantValue::Bool stack.push return
+            fi
+            if operator_kind OperatorKind::Le == then
+                if a_int b_int <= then 1 else 0 fi ConstantValue::Bool stack.push return
+            fi
+            if operator_kind OperatorKind::Gt == then
+                if a_int b_int > then 1 else 0 fi ConstantValue::Bool stack.push return
+            fi
+            if operator_kind OperatorKind::Ge == then
+                if a_int b_int >= then 1 else 0 fi ConstantValue::Bool stack.push return
+            fi
+            location "Unsupported operator for int operands in const expression" ErrorKind::Syntax raise_error
+        fi
+    fi
+    if a_val ConstantValue::Bool(a_bool) is then
+        if b_val ConstantValue::Bool(b_bool) is then
+            if operator_kind OperatorKind::And == then
+                if 0 a_bool != 0 b_bool != && then 1 else 0 fi ConstantValue::Bool stack.push return
+            fi
+            if operator_kind OperatorKind::Or == then
+                if 0 a_bool != 0 b_bool != || then 1 else 0 fi ConstantValue::Bool stack.push return
+            fi
+            if operator_kind OperatorKind::Eq == then
+                if a_bool b_bool == then 1 else 0 fi ConstantValue::Bool stack.push return
+            fi
+            if operator_kind OperatorKind::Ne == then
+                if a_bool b_bool != then 1 else 0 fi ConstantValue::Bool stack.push return
+            fi
+            location "Unsupported operator for bool operands in const expression" ErrorKind::Syntax raise_error
+        fi
+    fi
+    location "Type mismatch in const expression" ErrorKind::Syntax raise_error
+}
+
+fn eval_const_fn parser:Parser fn_name:str stack:List[ConstantValue] location:Location eval_stack:List[str] {
+    if fn_name eval_stack string_list_contains then
+        location f"Cycle detected in const evaluation: `{fn_name}`" ErrorKind::Syntax raise_error
+    fi
+    fn_name parser.store.functions.get = fn_opt
+    if fn_opt.is_none then
+        location f"`{fn_name}` is not a const fn" ErrorKind::Syntax raise_error
+    fi
+    fn_opt.unwrap = function
+    if function Function::is_const_fn ! then
+        location f"`{fn_name}` is not a const fn" ErrorKind::Syntax raise_error
+    fi
+    fn_name eval_stack.push
+    function Function::signature Signature::parameters.length = param_count
+    List::new(List[ConstantValue]) = fn_stack
+    Map::new(Map[str ConstantValue]) = locals
+    if param_count stack.length < then
+        location f"Not enough arguments for const fn `{fn_name}`" ErrorKind::Syntax raise_error
+    fi
+    0 = pi
+    while pi param_count > do
+        stack.pop fn_stack.push
+        1 += pi
+    done
+    function Function::ops = fn_ops
+    0 = oi
+    while oi fn_ops.length > do
+        oi fn_ops.get = fn_op
+        1 += oi
+        fn_op Op::value = op_value
+        if op_value OpValue::PushInt(push_int) is then
+            push_int ConstantValue::Int fn_stack.push
+            continue
+        fi
+        if op_value OpValue::PushStr(push_str) is then
+            push_str ConstantValue::Str fn_stack.push
+            continue
+        fi
+        if op_value OpValue::PushBool(push_bool) is then
+            push_bool ConstantValue::Bool fn_stack.push
+            continue
+        fi
+        if op_value OpValue::PushChar(push_char) is then
+            push_char ConstantValue::Char fn_stack.push
+            continue
+        fi
+        op_value op_value_to_operator_kind = eval_op_kind_opt
+        if eval_op_kind_opt.is_some then
+            fn_op Op::location eval_op_kind_opt.unwrap fn_stack const_eval_apply_operator
+            continue
+        fi
+        if op_value OpValue::FnReturn is then
+            break
+        fi
+        if op_value OpValue::FnCall(call_name) is then
+            eval_stack fn_op Op::location fn_stack call_name parser eval_const_fn
+            continue
+        fi
+        if op_value OpValue::AssignVar(assign_name) is then
+            if 0 fn_stack.length != then
+                assign_name fn_stack.pop locals.set = locals
+            fi
+            continue
+        fi
+        if op_value OpValue::PushVar(var_name) is then
+            var_name locals.get = local_opt
+            if local_opt.is_some then
+                local_opt.unwrap fn_stack.push
+                continue
+            fi
+            var_name parser.store.constants.get = inner_const_opt
+            if inner_const_opt.is_some then
+                inner_const_opt.unwrap Constant::value fn_stack.push
+                continue
+            fi
+            fn_op Op::location f"Cannot use variable `{var_name}` in const fn evaluation" ErrorKind::Syntax raise_error
+        fi
+        if op_value OpValue::Identifier(ident_name) is then
+            ident_name locals.get = local_opt
+            if local_opt.is_some then
+                local_opt.unwrap fn_stack.push
+                continue
+            fi
+            ident_name parser.store.constants.get = inner_const_opt
+            if inner_const_opt.is_some then
+                inner_const_opt.unwrap Constant::value fn_stack.push
+                continue
+            fi
+            ident_name parser.store.functions.get = inner_fn_opt
+            if inner_fn_opt.is_some then
+                if inner_fn_opt.unwrap Function::is_const_fn then
+                    eval_stack fn_op Op::location fn_stack ident_name parser eval_const_fn
+                    continue
+                fi
+            fi
+            fn_op Op::location f"Cannot use `{ident_name}` in const fn evaluation" ErrorKind::Syntax raise_error
+        fi
+        fn_op Op::location "Unsupported operation in const fn" ErrorKind::Syntax raise_error
+    done
+    eval_stack.pop drop
+    if 0 fn_stack.length == then
+        location f"Const fn `{fn_name}` produced no value" ErrorKind::Syntax raise_error
+    fi
+    fn_stack.pop stack.push
+}
+
+fn eval_const_block parser:Parser cursor:TokenCursor location:Location -> ConstantValue {
+    "{" cursor expect_token_value drop
+    List::new(List[ConstantValue]) = stack
+    List::new(List[str]) = eval_stack
+    while true do
+        cursor.pop = tok_opt
+        if tok_opt.is_none then
+            location "Unclosed const block expression" ErrorKind::Syntax raise_error
+        fi
+        tok_opt.unwrap = tok
+        if "}" tok Token::value == then break fi
+        if TokenKind::Comment tok Token::kind == then continue fi
+        if TokenKind::Newline tok Token::kind == then continue fi
+        if TokenKind::Literal tok Token::kind == then
+            tok Token::value parse_literal_to_constant_value stack.push
+            continue
+        fi
+        if TokenKind::Operator tok Token::kind == then
+            tok Token::value operator_from_str = op_kind_opt
+            if op_kind_opt.is_some then
+                tok Token::location op_kind_opt.unwrap stack const_eval_apply_operator
+            fi
+            continue
+        fi
+        if TokenKind::Identifier tok Token::kind == then
+            tok Token::value = ident
+            ident parser.store.constants.get = c_opt
+            if c_opt.is_some then
+                c_opt.unwrap Constant::value stack.push
+                continue
+            fi
+            ident parser.store.functions.get = f_opt
+            if f_opt.is_some then
+                if f_opt.unwrap Function::is_const_fn then
+                    eval_stack tok Token::location stack ident parser eval_const_fn
+                    continue
+                fi
+            fi
+            tok Token::location f"Cannot use `{ident}` in const block expression" ErrorKind::Syntax raise_error
+        fi
+        if TokenKind::Keyword tok Token::kind == then
+            tok Token::location "Control flow is not allowed in const block expressions" ErrorKind::Syntax raise_error
+        fi
+        tok Token::location f"Unexpected token in const block expression: `{tok Token::value}`" ErrorKind::Syntax raise_error
+    done
+    if 0 stack.length == then
+        location "Const block expression produced no value" ErrorKind::Syntax raise_error
+    fi
+    stack.pop
 }
 
 # ============================================================================
@@ -2083,6 +2473,20 @@ fn get_op_keyword parser:Parser token:Token cursor:TokenCursor function_name:str
     # const
     if KeywordKind::Const keyword == then
         token Token::location "Constants" function_name require_global_scope
+        # const fn — compile-time evaluable function
+        cursor.peek = const_next_opt
+        if const_next_opt.is_some then
+            if "fn" const_next_opt.unwrap Token::value == then
+                cursor parser parse_function = function
+                true function Function::set_is_const_fn
+                function validate_const_fn_body
+                if function Function::name parser.store.functions.get.is_some then
+                    function Function::location f"Identifier `{function Function::name}` is already defined" ErrorKind::DuplicateName raise_error
+                fi
+                function Function::name function parser.store.functions.set drop
+                return
+            fi
+        fi
         TokenKind::Identifier cursor expect_token_kind = const_name_token
         const_name_token Token::value = const_name
         if const_name parser.store.constants.get.is_some then
@@ -2102,32 +2506,20 @@ fn get_op_keyword parser:Parser token:Token cursor:TokenCursor function_name:str
         fi
         cursor.pop = const_value_token_opt
         if const_value_token_opt.is_none then
-            token Token::location "Expected a literal value after constant name" ErrorKind::Syntax raise_error
+            token Token::location "Expected a literal value or block expression after constant name" ErrorKind::Syntax raise_error
         fi
         const_value_token_opt.unwrap = const_value_token
-        if TokenKind::Literal const_value_token Token::kind == then
-            const_value_token Token::value = const_raw
-            if "true" const_raw == then
-                token Token::location 1 ConstantValue::Bool const_name Constant = casa_const
-                const_name casa_const parser.store.constants.set drop
-            elif "false" const_raw == then
-                token Token::location 0 ConstantValue::Bool const_name Constant = casa_const
-                const_name casa_const parser.store.constants.set drop
-            elif '"' 0 const_raw.at == then
-                const_raw 1 const_raw.length 2 - str::substring = const_str_val
-                token Token::location const_str_val ConstantValue::Str const_name Constant = casa_const
-                const_name casa_const parser.store.constants.set drop
-            elif '\'' 0 const_raw.at == then
-                1 const_raw.at (int) = const_char_val
-                token Token::location const_char_val ConstantValue::Char const_name Constant = casa_const
-                const_name casa_const parser.store.constants.set drop
-            else
-                const_raw str_to_int = const_int_val
-                token Token::location const_int_val ConstantValue::Int const_name Constant = casa_const
-                const_name casa_const parser.store.constants.set drop
-            fi
+        if "{" const_value_token Token::value == then
+            cursor.retreat
+            token Token::location cursor parser eval_const_block = const_block_val
+            token Token::location const_block_val const_name Constant = casa_const
+            const_name casa_const parser.store.constants.set drop
+        elif TokenKind::Literal const_value_token Token::kind == then
+            const_value_token Token::value parse_literal_to_constant_value = const_lit_val
+            token Token::location const_lit_val const_name Constant = casa_const
+            const_name casa_const parser.store.constants.set drop
         else
-            token Token::location f"Expected a literal value for constant `{const_name}`" ErrorKind::Syntax raise_error
+            token Token::location f"Expected a literal value or block expression for constant `{const_name}`" ErrorKind::Syntax raise_error
         fi
         return
     fi
@@ -2682,6 +3074,9 @@ fn resolve_identifiers_fn parser:Parser ops:List[Op] function:Function -> List[O
             if resolve_errors ident current_op parser try_resolve_enum_variant_ident then continue fi
             if ident current_op function parser try_resolve_trait_method_call then continue fi
             resolve_errors ident current_op function parser resolve_plain_identifier
+            if current_op.value OpValue::FnCall(resolved_fn_name) is then
+                current_op resolved_fn_name op_index ops parser try_fold_const_fn_call = op_index
+            fi
             continue
         fi
 
