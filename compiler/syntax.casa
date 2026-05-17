@@ -1054,7 +1054,11 @@ fn validate_const_fn_body function:Function {
 # eval_const_block - compile-time evaluation of const { ... } expressions
 # ============================================================================
 
-fn const_eval_apply_operator stack:List[ConstantValue] operator_kind:OperatorKind location:Location {
+fn const_eval_apply_operator
+    stack:List[ConstantValue]
+    operator_kind:OperatorKind
+    location:Location
+{
     if operator_kind OperatorKind::Not == then
         if 0 stack.length == then
             location "Stack underflow in const expression" ErrorKind::Syntax raise_error
@@ -1159,7 +1163,13 @@ fn const_eval_apply_operator stack:List[ConstantValue] operator_kind:OperatorKin
     location "Type mismatch in const expression" ErrorKind::Syntax raise_error
 }
 
-fn eval_const_fn parser:Parser fn_name:str stack:List[ConstantValue] location:Location eval_stack:List[str] {
+fn eval_const_fn
+    parser:Parser
+    fn_name:str
+    stack:List[ConstantValue]
+    location:Location
+    eval_stack:List[str]
+{
     if fn_name eval_stack string_list_contains then
         location f"Cycle detected in const evaluation: `{fn_name}`" ErrorKind::Syntax raise_error
     fi
@@ -2229,6 +2239,31 @@ fn resolve_import parser:Parser importing_file:str spec:str location:Location ->
     ""
 }
 
+fn parse_selective_import_symbols cursor:TokenCursor location:Location -> List[str] {
+    List::new(List[str]) = symbols
+    "{" cursor expect_token_value drop
+    while true do
+        cursor.pop = symbol_opt
+        if symbol_opt.is_none then
+            location "Unclosed selective import list" ErrorKind::UnmatchedBlock raise_error
+        fi
+        symbol_opt.unwrap = symbol_token
+        if TokenKind::Comment symbol_token Token::kind == then continue fi
+        if TokenKind::Newline symbol_token Token::kind == then continue fi
+        if "}" symbol_token Token::value == then
+            if 0 symbols.length == then
+                symbol_token Token::location "Selective import list cannot be empty" ErrorKind::Syntax raise_error
+            fi
+            symbols return
+        fi
+        if TokenKind::Identifier symbol_token Token::kind != then
+            symbol_token Token::location "Expected identifier in selective import list" ErrorKind::UnexpectedToken raise_error
+        fi
+        symbol_token Token::value symbols.push
+    done
+    symbols
+}
+
 fn handle_keyword_import parser:Parser cursor:TokenCursor -> Op {
     TokenKind::Literal cursor expect_token_kind = path_token
     path_token get_op_literal = literal_op
@@ -2237,11 +2272,216 @@ fn handle_keyword_import parser:Parser cursor:TokenCursor -> Op {
         path_location Location::file = importing_file
         path_location spec importing_file parser resolve_import = resolved
 
+        cursor.peek = next_opt
+        if next_opt.is_some "{" next_opt.unwrap Token::value == && then
+            path_location cursor parse_selective_import_symbols = symbols
+            symbols resolved SelectiveImport = selective
+            path_location selective OpValue::ImportFileSelective make_op return
+        fi
         path_location resolved OpValue::ImportFile make_op return
     fi
     path_token Token::location "Expected string literal for import path" ErrorKind::UnexpectedToken raise_error
     # Unreachable - raise_error exits
     path_token Token::location "" OpValue::ImportFile make_op
+}
+
+fn selective_import_type_dependencies
+    parser:Parser
+    import_parser:Parser
+    typ:Type
+    location:Location
+    imported:Set[str]
+{
+    typ match
+        Type::Generic(generic) => {
+            generic GenericType::base = base_name
+            if
+            base_name import_parser.store.structs.has
+            base_name import_parser.store.enums.has ||
+            base_name import_parser.store.traits.has ||
+            then
+                imported location base_name import_parser parser selective_import_symbol
+            fi
+            for param_type in generic GenericType::params.iter do
+                imported location param_type import_parser parser selective_import_type_dependencies
+            done
+        }
+        Type::Function(fn_type) => {
+            for param_type in fn_type FunctionType::parameters.iter do
+                imported location param_type import_parser parser selective_import_type_dependencies
+            done
+            for return_type in fn_type FunctionType::return_types.iter do
+                imported location return_type import_parser parser selective_import_type_dependencies
+            done
+        }
+        _ => { }
+    end
+}
+
+fn selective_import_signature_dependencies
+    parser:Parser
+    import_parser:Parser
+    function:Function
+    location:Location
+    imported:Set[str]
+{
+    function Function::signature = sig
+    for param in sig Signature::parameters.iter do
+        imported location param Parameter::typ import_parser parser selective_import_type_dependencies
+    done
+    for return_type in sig Signature::return_types.iter do
+        imported location return_type import_parser parser selective_import_type_dependencies
+    done
+}
+
+fn selective_import_op_dependencies
+    parser:Parser
+    import_parser:Parser
+    op:Op
+    location:Location
+    imported:Set[str]
+{
+    if op.value OpValue::FnCall(dep_name) is then
+        imported location dep_name import_parser parser selective_import_symbol
+        return
+    fi
+    if op.value OpValue::FnPush(dep_push_name) is then
+        imported location dep_push_name import_parser parser selective_import_symbol
+        return
+    fi
+    if op.value OpValue::StructNew(dep_struct) is then
+        imported location dep_struct CasaStruct::name import_parser parser selective_import_symbol
+        return
+    fi
+    if op.value OpValue::StructLiteral(dep_literal) is then
+        imported location dep_literal StructLiteral::struct_name import_parser parser selective_import_symbol
+        return
+    fi
+    if op.value OpValue::PushEnumVariant(dep_variant) is then
+        imported location dep_variant EnumVariant::enum_name import_parser parser selective_import_symbol
+        return
+    fi
+    if op.value OpValue::IsCheck(dep_is_variant) is then
+        imported location dep_is_variant EnumVariant::enum_name import_parser parser selective_import_symbol
+        return
+    fi
+    if op.value OpValue::TypeCast(dep_type) is then
+        imported location dep_type import_parser parser selective_import_type_dependencies
+    fi
+}
+
+fn selective_import_methods
+    parser:Parser
+    import_parser:Parser
+    symbol:str
+    location:Location
+    imported:Set[str]
+{
+    f"{symbol}::" = method_prefix
+    for fn_name in import_parser.store.functions.keys.iter do
+        if fn_name method_prefix str::starts_with then
+            imported location fn_name import_parser parser selective_import_symbol
+        fi
+    done
+}
+
+fn selective_import_symbol
+    parser:Parser
+    import_parser:Parser
+    symbol:str
+    location:Location
+    imported:Set[str]
+{
+    if symbol imported.has then
+        return
+    fi
+    symbol imported.add = imported
+
+    symbol import_parser.store.functions.get = fn_opt
+    if fn_opt.is_some then
+        fn_opt.unwrap = imported_fn
+        if symbol parser.store.functions.has then
+            location f"Imported symbol `{symbol}` conflicts with an existing function" ErrorKind::DuplicateName raise_error
+        fi
+        imported_fn imported_fn Function::ops import_parser resolve_identifiers_fn = resolved_ops
+        resolved_ops imported_fn Function::set_ops
+        imported location imported_fn import_parser parser selective_import_signature_dependencies
+        for resolved_op in resolved_ops.iter do
+            if resolved_op.value OpValue::PushVar(var_name) is then
+                if var_name imported_fn Function::variables variable_list_contains ! var_name import_parser.store.variables.has && then
+                    resolved_op Op::location f"Selective import `{symbol}` depends on global variable `{var_name}`" ErrorKind::InvalidVariable raise_error
+                fi
+            fi
+        done
+        symbol imported_fn parser.store.functions.set drop
+        for resolved_op in resolved_ops.iter do
+            imported location resolved_op import_parser parser selective_import_op_dependencies
+        done
+        return
+    fi
+
+    symbol import_parser.store.constants.get = const_opt
+    if const_opt.is_some then
+        if symbol parser.store.constants.has then
+            location f"Imported symbol `{symbol}` conflicts with an existing constant" ErrorKind::DuplicateName raise_error
+        fi
+        symbol const_opt.unwrap parser.store.constants.set drop
+        return
+    fi
+
+    symbol import_parser.store.structs.get = struct_opt
+    if struct_opt.is_some then
+        if symbol parser.store.structs.has then
+            location f"Imported symbol `{symbol}` conflicts with an existing struct" ErrorKind::DuplicateName raise_error
+        fi
+        symbol struct_opt.unwrap parser.store.structs.set drop
+        imported location symbol import_parser parser selective_import_methods
+        return
+    fi
+
+    symbol import_parser.store.enums.get = enum_opt
+    if enum_opt.is_some then
+        if symbol parser.store.enums.has then
+            location f"Imported symbol `{symbol}` conflicts with an existing enum" ErrorKind::DuplicateName raise_error
+        fi
+        symbol enum_opt.unwrap parser.store.enums.set drop
+        imported location symbol import_parser parser selective_import_methods
+        return
+    fi
+
+    symbol import_parser.store.traits.get = trait_opt
+    if trait_opt.is_some then
+        if symbol parser.store.traits.has then
+            location f"Imported symbol `{symbol}` conflicts with an existing trait" ErrorKind::DuplicateName raise_error
+        fi
+        symbol trait_opt.unwrap parser.store.traits.set drop
+        return
+    fi
+
+    if symbol import_parser.store.variables.has then
+        location f"Selective import cannot import global variable `{symbol}`" ErrorKind::InvalidVariable raise_error
+    fi
+
+    location f"Symbol `{symbol}` not found in selective import" ErrorKind::UndefinedName raise_error
+}
+
+fn handle_selective_import parser:Parser selective:SelectiveImport location:Location {
+    selective SelectiveImport::path = import_path
+    if 0 import_path.length == then
+        return
+    fi
+
+    symbol_store_new make_parser = import_parser
+    parser.search_paths import_parser->search_paths
+    import_path import_parser.included_files.add drop
+    import_path lex_file = import_tokens
+    import_tokens import_parser parse_ops = import_ops
+    import_ops import_parser resolve_identifiers_global drop
+
+    Set::new(Set[str]) = imported
+    for symbol in selective SelectiveImport::symbols.iter do
+        imported location symbol import_parser parser selective_import_symbol
+    done
 }
 
 # ============================================================================
@@ -3089,6 +3329,12 @@ fn resolve_identifiers_fn parser:Parser ops:List[Op] function:Function -> List[O
         # IS_CHECK: resolve enum variant
         if current_op.value OpValue::IsCheck(is_enum_variant) is then
             resolve_errors function current_op is_enum_variant parser resolve_enum_variant
+            continue
+        fi
+
+        # IMPORT_FILE_SELECTIVE: register only requested declarations.
+        if current_op.value OpValue::ImportFileSelective(selective_import) is then
+            current_op Op::location selective_import parser handle_selective_import
             continue
         fi
 

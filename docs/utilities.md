@@ -418,6 +418,7 @@ Converts a `List[char]` to a `str`. Used internally by `StringBuilder::build`.
 
 ## See Also
 
-- [Standard Library](standard-library.md) -- arrays, Option, Result, and the `import` directive
+- [Standard Library](standard-library.md) -- arrays, Option, and Result
+- [Modules](modules.md) -- import directives and module resolution
 - [Collections](collections.md) -- List, Map, Set, and StringBuilder
 - [Strings and IO](strings-and-io.md) -- string methods and file I/O

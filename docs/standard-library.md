@@ -12,42 +12,7 @@ import "std"
 import "path/to/lib/std.casa"
 ```
 
-## `import` Directive
-
-`import` loads another Casa source file. Each file is imported at most once, regardless of how many times it appears, and the deduplication uses the canonicalized resolved path.
-
-There are two forms:
-
-### Path-style
-
-```casa
-import "relative/path/to/file.casa"
-import "/absolute/path/to/file.casa"
-```
-
-A specifier is treated as a path when it contains `/` or ends with `.casa`. Relative paths resolve from the directory of the importing file. Absolute paths are used as-is. No search is performed.
-
-### Module-style
-
-```casa
-import "std"
-```
-
-A specifier without `/` and without a `.casa` suffix is treated as a module name. The resolver looks for `<module>.casa` in:
-
-1. the directory of the importing file, then
-2. each directory passed via `-L` / `--library-path`, in CLI order.
-
-The first existing match wins. A same-directory candidate that resolves to the importing file itself is skipped, so an example file `examples/argparse.casa` can `import "argparse"` and reach the library copy via `-L`. If no candidate exists, the compiler reports an error listing every directory searched.
-
-### `-L` / `--library-path`
-
-Repeatable. Adds a directory to the module search path:
-
-```sh
-casac -L lib program.casa
-casac -L lib -L vendor program.casa
-```
+For full import resolution rules, selective imports, and `-L` search paths, see [Modules](modules.md).
 
 ## `memcpy`
 

@@ -88,7 +88,7 @@ source → lex → parse → resolve → type check → bytecode → emit asm �
 
 ## Documentation
 
-Start with the core language docs (1-8), then explore the library and tooling docs as needed.
+Start with the core language docs (1-9), then explore the library and tooling docs as needed.
 
 ### Core Language
 
@@ -96,18 +96,19 @@ Start with the core language docs (1-8), then explore the library and tooling do
 |---|----------|--------|
 | 1 | [Types and Literals](docs/types-and-literals.md) | Primitive types, composite types, literals, type casting, comments |
 | 2 | [Operators](docs/operators.md) | Stack-based evaluation, arithmetic, comparison, boolean, assignment |
-| 3 | [Functions and Lambdas](docs/functions-and-lambdas.md) | Functions, lambdas, closures, variables |
-| 4 | [Control Flow](docs/control-flow.md) | Conditionals, loops, `for` iterators, `match` pattern matching |
-| 5 | [Structs and Methods](docs/structs-and-methods.md) | Struct definition, accessors, `impl` blocks, dot/arrow syntax |
-| 6 | [Enums](docs/enums.md) | Enum types, variant constructors, `is` destructuring |
-| 7 | [Traits](docs/traits.md) | Trait definitions, structural satisfaction, trait bounds, `Hashable` |
-| 8 | [Built-in Intrinsics](docs/intrinsics.md) | Stack manipulation, IO, memory, and syscall intrinsics |
+| 3 | [Modules](docs/modules.md) | Import directives, module resolution, selective imports, library paths |
+| 4 | [Functions and Lambdas](docs/functions-and-lambdas.md) | Functions, lambdas, closures, variables |
+| 5 | [Control Flow](docs/control-flow.md) | Conditionals, loops, `for` iterators, `match` pattern matching |
+| 6 | [Structs and Methods](docs/structs-and-methods.md) | Struct definition, accessors, `impl` blocks, dot/arrow syntax |
+| 7 | [Enums](docs/enums.md) | Enum types, variant constructors, `is` destructuring |
+| 8 | [Traits](docs/traits.md) | Trait definitions, structural satisfaction, trait bounds, `Hashable` |
+| 9 | [Built-in Intrinsics](docs/intrinsics.md) | Stack manipulation, IO, memory, and syscall intrinsics |
 
 ### Library
 
 | Document | Topics |
 |----------|--------|
-| [Standard Library](docs/standard-library.md) | `import`, `memcpy`, arrays (`map`, `filter`, `reduce`), `Option[T]`, `Result[T E]` |
+| [Standard Library](docs/standard-library.md) | `memcpy`, arrays (`map`, `filter`, `reduce`), `Option[T]`, `Result[T E]` |
 | [Collections](docs/collections.md) | `List[T]`, `Map[K V]`, `Set[K]`, `StringBuilder` |
 | [Strings and IO](docs/strings-and-io.md) | String methods, file I/O, character classification, type conversions |
 | [Utilities](docs/utilities.md) | Logging, timer, argument parsing, process execution |
