@@ -34,7 +34,8 @@ for f in "$TESTS_DIR"/test_*.casa; do
         continue
     fi
 
-    output=$("$binary" 2>&1) || {
+    # Keep tests headless even when a compiled test reads stdin.
+    output=$("$binary" 2>&1 < /dev/null) || {
         printf "${RED}RUNTIME FAIL${RESET}\n"
         echo "$output"
         fail=$((fail+1))
