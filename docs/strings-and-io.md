@@ -556,7 +556,8 @@ Returns the absolute value of an integer, for use as a hash.
 
 ## See Also
 
-- [Standard Library](standard-library.md) -- arrays, Option, Result, and the `import` directive
+- [Standard Library](standard-library.md) -- arrays, Option, and Result
+- [Modules](modules.md) -- import directives and module resolution
 - [Collections](collections.md) -- List, Map, Set, and StringBuilder
 - [Traits](traits.md) -- the `Display` trait used by type conversions
 - [Types and Literals](types-and-literals.md) -- primitive type definitions

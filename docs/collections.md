@@ -500,6 +500,7 @@ Returns the number of characters in the builder.
 
 ## See Also
 
-- [Standard Library](standard-library.md) -- arrays, Option, Result, and the `import` directive
+- [Standard Library](standard-library.md) -- arrays, Option, and Result
+- [Modules](modules.md) -- import directives and module resolution
 - [Strings and IO](strings-and-io.md) -- string methods, file I/O, and type conversions
 - [Traits](traits.md) -- the `Hashable` trait required by Map and Set keys
