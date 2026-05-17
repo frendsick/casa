@@ -1,8 +1,10 @@
 # Casa
 
-Casa is a self-hosted programming language and compiler. Its CI vocabulary describes how compiler changes are proven bootstrappable and stable.
+Casa is a self-hosted programming language and compiler. Its glossary captures project-specific terms that prevent documentation drift.
 
 ## Language
+
+### Type representation
 
 **Type AST**:
 The compiler-owned structural representation of a Casa type after parsing.
@@ -11,6 +13,56 @@ _Avoid_: Type string, source type text
 **Source type syntax**:
 The user-written type expression before the parser converts it into the **Type AST**.
 _Avoid_: Type annotation metadata, internal type string
+
+### Documentation terminology
+
+**Documentation glossary**:
+The project-specific vocabulary in this file for concepts whose names must stay stable across docs, code review, and issues.
+_Avoid_: Language keyword reference, complete syntax catalog
+
+**Operand order**:
+The Casa rule that maps consumed stack values to operation operands: the topmost stack value is the first argument, with arithmetic operators as the explicit exception.
+_Avoid_: Evaluation order, precedence
+
+**Stack effect**:
+The type-only input and output shape of the Casa value stack for a function, operator, intrinsic, or expression.
+_Avoid_: Function signature, operator signature
+
+**Function type**:
+The `fn[...]` type form whose brackets contain a **Stack effect**.
+_Avoid_: Function signature
+
+**Function declaration**:
+The written `fn` header that gives a function's name, type variables, parameter names and types, and return types without its body.
+_Avoid_: Function signature
+
+**Method declaration**:
+The written `fn` header inside an `impl` or `trait` block that gives a method's name, type variables, parameter names and types, and return types without its body.
+_Avoid_: Method signature
+
+**Function definition**:
+A **Function declaration** together with its body.
+_Avoid_: Function signature
+
+**Method definition**:
+A **Method declaration** together with its body.
+_Avoid_: Method signature
+
+### Traits
+
+**Trait method requirement**:
+A bodyless `fn` line in a `trait` block that an implementing type must satisfy.
+_Avoid_: Required method signature
+
+**Default method definition**:
+A method body in a `trait` block that is available when a type implements trait and does not provide its own **Method definition**.
+_Avoid_: Default method signature
+
+**Implements trait**:
+A type has available methods whose names and **Stack effects** satisfy a trait under Casa's structural trait rules.
+_Avoid_: `impl Trait for Type`, nominal trait implementation
+
+### Bootstrap
 
 **Bootstrap compiler**:
 The latest stable released `casac` binary used to compile the compiler source on a branch.
@@ -52,6 +104,29 @@ _Avoid_: Release lint, tag lint
 
 - **Source type syntax** is parsed into the **Type AST** before compiler analysis.
 - Compiler analysis should operate on the **Type AST**, not reparsed or reformatted type strings.
+- The **Documentation glossary** names project concepts that prevent drift; language keywords and ordinary programming concepts belong in reference docs.
+- Function, operator, intrinsic, and expression docs should use **Stack effect**; **Operand order** explains how stack values map to operands.
+- Public reference docs should use one **Stack effect** line for an operation instead of separate signature and stack-effect lines.
+- **Stack effect** contains types and optional type bounds only; semantic operand names belong in concise prose only when they add information not derivable from the types.
+- In **Stack effect** notation, input types are listed from topmost consumed value downward; output types are listed in push order, so the last output type becomes topmost after the operation.
+- `int str -> bool char` means `int` is consumed from the top of the stack, `str` is consumed below it, `bool` is pushed first, and `char` is pushed last/topmost.
+- `None` in **Stack effect** notation means no stack values, not a Casa type and not `Option::None`.
+- **Stack effect** notation should write `None -> T` for no inputs and `T -> None` for no outputs.
+- Generic bounds appear before the **Stack effect**, such as `[T: Display] T -> None`; bounds are constraints, not stack values.
+- Only constrained type variables appear in the bounds prefix; unbounded type variables that appear in stack types are not repeated there.
+- Unbounded type variables should not use a bracket prefix in **Stack effect** notation; write `T -> T T`, not `[T] T -> T T`.
+- A **Function type** contains a **Stack effect** inside `fn[...]`; the whole `fn[...]` form is not called a signature.
+- Lambda docs should use **Function type** for the lambda's type and **Stack effect** for what the lambda consumes and produces.
+- Existing diagnostic names such as `SIGNATURE_MISMATCH` may remain until an internal rename, but explanatory prose should describe declared and inferred **Stack effects**.
+- In normal calls, the topmost stack value maps to the first argument; avoid describing this as "rightmost" because stack values may have existed before the immediate call expression.
+- Arithmetic operators use the same **Stack effect** notation as other operations, but their **Operand order** maps the topmost consumed value to the right operand instead of the first/left operand.
+- Comparison operators follow normal **Operand order**; for `a b <`, `b` is topmost and therefore the left operand, so the expression means `b < a`.
+- A **Function declaration** excludes the body; a **Function definition** includes the body.
+- A **Method declaration** excludes the body; a **Method definition** includes the body.
+- A **Trait method requirement** is satisfied by a matching method name and **Stack effect** on the implementing type.
+- A **Default method definition** belongs to the trait and is available to types that implement trait while omitting their own **Method definition**.
+- A type implements trait structurally; Casa has no `impl Trait for Type` syntax.
+- A **Function declaration** describes written source only, not compiler-injected hidden parameters.
 - A **Bootstrap compiler** builds exactly one **Branch compiler** at the start of CI.
 - A **Branch compiler** must self-compile and reach a **Fixed point** before the branch is considered releasable.
 - A **Temporary compiler release** must not replace the **Bootstrap compiler** as the normal PR CI input.
@@ -66,8 +141,16 @@ _Avoid_: Release lint, tag lint
 > **Dev:** "Can this PR depend on a temporary release so CI passes?"
 > **Domain expert:** "No. By default, the **Bootstrap compiler** must build the **Branch compiler** from the latest stable release, and that compiler must reach a **Fixed point**."
 
+> **Dev:** "Should I document `fn foo a:int b:str -> bool` as the signature?"
+> **Domain expert:** "No. That is the **Function declaration**. The public stack contract is the **Stack effect**: `int str -> bool`, where `int` is consumed from the top of the stack and `str` below it."
+
 ## Flagged Ambiguities
 
 - "`Op.type_annotation` / `Op.deferred_return_type` as source text" was used to justify keeping parsed type metadata as strings. Resolved: user-written type expressions are **Source type syntax** only before parsing; after parsing, compiler-owned metadata should use the **Type AST**.
+- "glossary" was considered as a complete keyword or syntax catalog. Resolved: the **Documentation glossary** covers only project-specific concepts whose terminology must stay stable.
+- "function signature" and "stack effect" were treated as interchangeable in docs. Resolved: use **Stack effect** for public stack contracts; reserve "signature" only where the compiler's internal function type model is meant.
+- "`fn foo a:int b:str -> bool`" was called a signature. Resolved: call it a **Function declaration** when bodyless, and a **Function definition** when paired with a body.
+- "top on right" was used to explain **Stack effect** notation. Resolved: inputs are topmost-first and outputs are push-order.
+- "`None`" in **Stack effect** notation can be confused with `Option::None`. Resolved: `None` means no stack values in notation only.
 - "release compiler" was used to mean both the stable compiler downloaded by CI and an ad hoc temporary compiler. Resolved: use **Bootstrap compiler** for the stable CI input; temporary releases are exceptional escape hatches.
 - "temporary release" was considered as a normal CI mechanism. Resolved: use **Temporary compiler release** only as an exception, not as the default bootstrap path.
