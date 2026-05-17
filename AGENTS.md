@@ -8,6 +8,8 @@ See [README.md](./README.md) for basic info, language docs, and examples.
 - Don't web-search Casa specifics; this repo is the only authoritative source.
 - When language features or stdlib functions change, update the corresponding
   documentation, examples, and tests.
+- Never mention Claude or AI usage
+- Always use caveman skill
 
 ## Code conventions
 
@@ -17,9 +19,9 @@ See [README.md](./README.md) for basic info, language docs, and examples.
 
 ### CRITICAL: Reverse polish notation
 
-- The topmost value in the stack is the first argument
-- `a b <` equals to `b < a` in traditional languages
-- `z y x foo` equals to `foo(x, y, z)` in traditional language
+- `z y x foo` equals to `foo(x, y, z)` in traditional language (top = first arg)
+- **Comparison** operators follow function convention: `a b <` equals `b < a` (top = left operand)
+- **Arithmetic** operators use Forth convention: `a b -` equals `a - b` (left-to-right reading)
 - When troubleshooting, first check if the related function call sites are using the correct argument order
 
 ### Import paths

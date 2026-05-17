@@ -19,7 +19,17 @@ Step       Operation    Stack (top on right)
 
 The stack replaces parentheses and precedence rules. Values are consumed left to right, and every operator immediately uses the top values on the stack.
 
-For binary operators, the **top of the stack is the first argument**. This means `1 0 >` asks "is `0` greater than `1`?", not "is `1` greater than `0`?". To check if 1 > 0, write `0 1 >`.
+### Operand order
+
+Arithmetic and comparison operators use different stack conventions:
+
+- **Arithmetic** (`+ - * / % << >> & | ^`): `a b op` = `a op b`. The value pushed first is the left operand. This means `10 3 -` is `10 - 3 = 7` — natural left-to-right reading.
+- **Comparison** (`== != < <= > >=`): `a b op` = `b op a`. The top of the stack is the left operand, matching function call convention. This means `0 1 >` is `1 > 0 = true`.
+
+```
+10 3 -     # 10 - 3 = 7   (arithmetic: left-to-right)
+10 3 >     # 3 > 10 = false (comparison: top is left operand)
+```
 
 ## Arithmetic
 
@@ -97,12 +107,13 @@ All comparison operators consume two values of the same type and push a `bool`. 
 Built-in primitives (`int`, `bool`, `char`, `cstr`, `ptr`) and enums get direct bytecode comparison. User-defined types must provide `impl T { fn eq ... }` (and `fn lt ...` for ordering); the operator then lowers to the corresponding trait method call. See [traits.md](traits.md) for `Eq` and `Ord`.
 
 ```casa
-1 1 == print    # 1 (true)
-1 0 != print    # 1 (true)
-1 0 > print     # 0 (false: top=0 is not greater than second=1)
+1 1 == print    # true
+1 0 != print    # true
+0 1 > print     # true (1 > 0, top is left operand)
+1 0 > print     # false (0 > 1)
 ```
 
-> **Note on stack order:** In `1 0 >`, the value `0` is on top of the stack and `1` is below. The comparison checks whether the top (`0`) is greater than the second (`1`), which is false. To check if 1 > 0, write `0 1 >` or equivalently `1 0 <`.
+Comparison operators use the top of the stack as the left operand (`a b op` = `b op a`). See [Operand order](#operand-order) above.
 
 ### String comparison
 
@@ -122,9 +133,9 @@ String `==` and `!=` compare by content (byte-by-byte), not by pointer identity.
 | `!`  | `bool -> bool` | Logical NOT |
 
 ```casa
-true true && print    # 1
-true false || print   # 1
-true ! print          # 0
+true true && print    # true
+true false || print   # true
+true ! print          # false
 ```
 
 ## Assignment
