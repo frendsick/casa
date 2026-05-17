@@ -216,7 +216,7 @@ impl Person {
 
 ### `impl` with Type Parameters
 
-`impl` blocks can declare type parameters with trait bounds. These are inherited by all methods in the block, so individual methods do not need to redeclare them.
+`impl` blocks can declare type parameters with trait bounds. These are available to all methods in the block, so individual methods do not need to redeclare them.
 
 ```casa
 struct Set[K] {
@@ -230,7 +230,7 @@ impl[K: Hashable] Set[K] {
 }
 ```
 
-All methods in this block inherit the `K: Hashable` bound. Methods can still declare additional type parameters of their own:
+All methods in this block get the `K: Hashable` bound. Methods can still declare additional type parameters of their own:
 
 ```casa
 impl[K: Hashable] Set[K] {

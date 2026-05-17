@@ -4,7 +4,7 @@ Traits define a set of required methods that a type must implement. They enable 
 
 ## Defining a Trait
 
-Use the `trait` keyword to declare a trait with one or more method signatures. Required methods have no body; default methods optionally include a body (see [Default Methods](#default-methods)). Use `self` as a placeholder for the implementing type.
+Use the `trait` keyword to declare a trait with one or more method declarations. Required methods have no body; default methods optionally include a body (see [Default Methods](#default-methods)). Use `self` as a placeholder for the implementing type.
 
 ```casa
 trait Hashable {
@@ -17,7 +17,7 @@ This declares that any type satisfying `Hashable` must have a `hash` method (tak
 
 ## Implementing a Trait
 
-Traits use structural satisfaction. A type satisfies a trait when its `impl` block contains all required methods with matching signatures. There is no `impl Trait for Type` syntax.
+Traits use structural satisfaction. A type satisfies a trait when its `impl` block contains all required methods with matching stack effects. There is no `impl Trait for Type` syntax.
 
 ```casa
 impl str {
@@ -31,7 +31,7 @@ impl int {
 }
 ```
 
-The compiler checks that `str::hash` and `str::eq` exist with signatures matching what `Hashable` requires (with `self` replaced by `str`). If any method is missing or has a wrong signature, a compile-time error is reported.
+The compiler checks that `str::hash` and `str::eq` exist with stack effects matching what `Hashable` requires (with `self` replaced by the implementing type). If any method is missing or has a wrong stack effect, a compile-time error is reported.
 
 ## Custom Types
 
@@ -64,7 +64,7 @@ enum Color { Red Green Blue }
 
 # Works without writing impl Color { fn hash ... fn eq ... }
 Map::new(Map[Color int]) = scores
-Color::Red 10 scores.set = scores
+10 Color::Red scores.set = scores
 ```
 
 Enums with payload-bearing variants (`Some(T)`, `Circle(int)`, etc.) are not auto-derived; for those, write an explicit `impl` if needed.
@@ -93,7 +93,7 @@ fn identity[T] x:T -> T { x }
 
 ### On `impl` Blocks
 
-`impl` blocks can declare trait bounds that are inherited by all methods. This avoids repeating the same bounds on every method. See [Structs and Methods](structs-and-methods.md) for details.
+`impl` blocks can declare trait bounds that are available to all methods. This avoids repeating the same bounds on every method. See [Structs and Methods](structs-and-methods.md) for details.
 
 ```casa
 impl[K: Hashable, V] Map[K V] {
@@ -304,22 +304,22 @@ The standard library defines the `Iterable[T]` trait for iteration. Any type wit
 
 **Required method:**
 
-| Method | Signature | Description |
-|--------|-----------|-------------|
-| `next` | `self:self -> Option[T]` | Return the next element, or `Option::None` when exhausted |
+| Method | Stack effect | Description |
+|--------|-------------|-------------|
+| `next` | `self -> Option[T]` | Return the next element, or `Option::None` when exhausted |
 
 **Default methods:**
 
-| Method | Signature | Description |
-|--------|-----------|-------------|
-| `collect` | `self:self -> List[T]` | Collect all elements into a `List[T]` |
-| `map` | `self:self f:fn[T -> U] -> List[U]` | Apply a function to each element, returning a new list |
-| `filter` | `self:self f:fn[T -> bool] -> List[T]` | Return a list of elements for which the function returns `true` |
-| `fold` | `self:self acc:U f:fn[U T -> U] -> U` | Reduce to a single value using an accumulator |
-| `count` | `self:self -> int` | Count the number of elements |
-| `any` | `self:self f:fn[T -> bool] -> bool` | Return `true` if any element satisfies the predicate |
-| `all` | `self:self f:fn[T -> bool] -> bool` | Return `true` if all elements satisfy the predicate |
-| `find` | `self:self f:fn[T -> bool] -> Option[T]` | Return the first element satisfying the predicate |
+| Method | Stack effect | Description |
+|--------|-------------|-------------|
+| `collect` | `self -> List[T]` | Collect all elements into a `List[T]` |
+| `map` | `self fn[T -> U] -> List[U]` | Apply a function to each element, returning a new list |
+| `filter` | `self fn[T -> bool] -> List[T]` | Return a list of elements for which the function returns `true` |
+| `fold` | `self U fn[U T -> U] -> U` | Reduce to a single value using an accumulator |
+| `count` | `self -> int` | Count the number of elements |
+| `any` | `self fn[T -> bool] -> bool` | Return `true` if any element satisfies the predicate |
+| `all` | `self fn[T -> bool] -> bool` | Return `true` if all elements satisfy the predicate |
+| `find` | `self fn[T -> bool] -> Option[T]` | Return the first element satisfying the predicate |
 
 The standard library `Iter[T]` struct (returned by `.iter` on `array[T]`, `List[T]`, and `str`) satisfies `Iterable[T]`. See [Standard Library](standard-library.md) for details on `Iter` and the default methods.
 
@@ -335,7 +335,7 @@ error[MISSING_TRAIT_METHOD]: Type `Foo` does not satisfy trait `Hashable`
 
 ### `TRAIT_SIGNATURE_MISMATCH`
 
-Reported when a type has a method with the right name but the wrong signature.
+Reported when a type has a method with the right name but the wrong stack effect.
 
 ```
 error[TRAIT_SIGNATURE_MISMATCH]: Method signature does not match trait requirement

@@ -6,13 +6,13 @@ Intrinsics are operations built into the compiler. They are available in every C
 
 Operations for manipulating the stack directly.
 
-| Intrinsic | Generic signature | Description |
-|-----------|-------------------|-------------|
-| `drop` | `[T] T -> None` | Discard top of stack |
-| `dup` | `[T] T -> T T` | Duplicate top of stack |
-| `swap` | `[T1 T2] T1 T2 -> T2 T1` | Swap top two values |
-| `over` | `[T1 T2] T1 T2 -> T2 T1 T2` | Copy second value to top |
-| `rot` | `[T1 T2 T3] T1 T2 T3 -> T3 T1 T2` | Rotate top three values |
+| Intrinsic | Stack effect | Description |
+|-----------|-------------|-------------|
+| `drop` | `T -> None` | Discard top of stack |
+| `dup` | `T -> T T` | Duplicate top of stack |
+| `swap` | `T1 T2 -> T2 T1` | Swap top two values |
+| `over` | `T1 T2 -> T2 T1 T2` | Copy second value to top |
+| `rot` | `T1 T2 T3 -> T3 T1 T2` | Rotate top three values |
 
 Type variables resolve at the call site, so the same intrinsic works on any value type:
 `42 dup` produces two `int`s on the stack, `"hi" dup` produces two `str`s.
@@ -42,9 +42,7 @@ See [`examples/stack_operations.casa`](../examples/stack_operations.casa).
 
 Prints the top of the stack to stdout. Requires the value's type to implement the `Display` trait.
 
-**Signature:** `print[T: Display] a:T`
-
-**Stack effect:** `a -> None`
+**Stack effect:** `[T: Display] T -> None`
 
 The primitives `int`, `bool`, `char`, `str`, and `cstr` already implement `Display` and are emitted through specialized output instructions. Other types must implement `Display` (a `to_str self -> str` method); the compiler lowers `value print` to `value to_str` followed by a string print.
 
@@ -60,8 +58,6 @@ true print                  # true
 ### `typeof`
 
 Consumes the top of the stack and prints its type name to stdout.
-
-**Signature:** `[T] T -> str`
 
 **Stack effect:** `a -> None`
 
@@ -89,7 +85,7 @@ Low-level byte-addressed memory access for building data structures. All load/st
 | `store32` | `[T: Word] T ptr -> None` | Store 32-bit value to address |
 | `store64` | `[T: Word] T ptr -> None` | Store 64-bit value to address |
 
-The value type must satisfy the [`Word`](traits.md#word) marker trait, which constrains it to a single-slot value. Every primitive, enum variant, struct reference, and array reference satisfies `Word` automatically.
+The value type must satisfy the [`Word`](traits.md#built-in-trait-word) marker trait, which constrains it to a single-slot value. Every primitive, enum variant, struct reference, and array reference satisfies `Word` automatically.
 
 ### Examples
 
@@ -109,7 +105,7 @@ Values are addressed by byte offset. Use pointer arithmetic (`+`) to access diff
 
 ## Syscall Intrinsics
 
-Direct Linux system call access. Each intrinsic pops N+1 values from the stack (the syscall number on top, then arguments in order) and pushes the kernel return value as `int`. The syscall number must be `int`. Each argument must satisfy the [`Word`](traits.md#word) marker trait so that exactly one register-sized value lands in the corresponding syscall register.
+Direct Linux system call access. Each intrinsic pops N+1 values from the stack (the syscall number on top, then arguments in order) and pushes the kernel return value as `int`. The syscall number must be `int`. Each argument must satisfy the [`Word`](traits.md#built-in-trait-word) marker trait so that exactly one register-sized value lands in the corresponding syscall register.
 
 | Intrinsic | Stack Effect | Description |
 |-----------|-------------|-------------|

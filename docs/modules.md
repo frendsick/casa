@@ -42,7 +42,7 @@ import "std" {
 
 Selective imports use the same path-style and module-style resolution rules as bare imports, then extract only the named declarations and the transitive dependencies needed by those declarations.
 
-- Function imports include referenced functions, constants, structs, enums, traits, and methods needed by the imported function body and signature.
+- Function imports include referenced functions, constants, structs, enums, traits, and methods needed by the imported function body and function declaration.
 - Struct and enum imports include generated accessors plus functions in their `impl` blocks.
 - Constants can be imported directly.
 - Top-level expressions and bare calls in the imported file are skipped.

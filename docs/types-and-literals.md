@@ -1,6 +1,6 @@
 # Types and Literals
 
-Casa is a statically typed language. Types are checked at compile time and most can be inferred automatically — you rarely need to write type annotations outside of function signatures.
+Casa is a statically typed language. Types are checked at compile time and most can be inferred automatically — you rarely need to write type annotations outside of function declarations.
 
 ## Primitive Types
 
@@ -20,11 +20,9 @@ Convert to string with `.to_str` (see [Strings and IO](strings-and-io.md#type-co
 Boolean type with two values: `true` and `false`.
 
 ```casa
-true print     # 1
-false print    # 0
+true print     # true
+false print    # false
 ```
-
-Booleans are printed as integers (`1` for true, `0` for false). Convert to `"true"` or `"false"` with `.to_str` (see [Strings and IO](strings-and-io.md#type-conversions)).
 
 ### `char`
 
@@ -71,7 +69,7 @@ String type. String literals are enclosed in double quotes. Internally, strings 
 "Hello world!" print
 ```
 
-Convert to string with `.to_str` (identity, see [Standard Library](standard-library.md#type-conversions)).
+Convert to string with `.to_str` (identity, see [Strings and IO](strings-and-io.md#type-conversions)).
 
 Strings support the following escape sequences:
 
@@ -220,15 +218,15 @@ Arrays can be nested. The element type is inferred recursively:
 [[1, 2], [3, 4]]   # type: array[array[int]]
 ```
 
-The bare type name `array` matches any `array[T]` for backward compatibility (e.g. in function signatures).
+The bare type name `array` matches any `array[T]` for backward compatibility (e.g. in function declarations).
 
-The array's length is stored in the first 8 bytes (64-bit value). Elements are stored starting at byte offset 8, each taking 8 bytes.
+Each array has a 16-byte header: the data pointer at offset 0 and the length at offset 8. Elements are stored contiguously in the data area, each taking 8 bytes.
 
 See [Standard Library — Arrays](standard-library.md#arrays) for `array::length` and `array::nth`.
 
 ### `fn[sig]`
 
-Function type representing a lambda or function reference. The signature inside the brackets describes the parameter and return types.
+Function type representing a lambda or function reference. The brackets contain a stack effect that describes the consumed and produced types.
 
 ```casa
 { 2 * }           # type: fn[int -> int]
@@ -286,7 +284,7 @@ Options stored in variables retain their type:
 Option::None = y         # y has type Option (bare)
 ```
 
-A bare `Option` type matches any `Option[T]` in function signatures, similar to how bare `array` matches any `array[T]`:
+A bare `Option` type matches any `Option[T]` in function declarations, similar to how bare `array` matches any `array[T]`:
 
 ```casa
 fn check opt:Option -> bool { true }
@@ -343,7 +341,7 @@ Type annotations can narrow the type to specify both type parameters:
 42 Result::Ok = x:Result[int str]    # x has type Result[int str]
 ```
 
-A bare `Result` type matches any `Result[T E]` in function signatures, similar to how bare `Option` matches any `Option[T]`:
+A bare `Result` type matches any `Result[T E]` in function declarations, similar to how bare `Option` matches any `Option[T]`:
 
 ```casa
 fn check res:Result -> bool { true }
@@ -412,6 +410,76 @@ fn hash_key[K: Hashable] key:K -> int {
 ```
 
 Type variables are purely compile-time, including trait bounds. See [Functions and Lambdas — Generic Functions](functions-and-lambdas.md#generic-functions) and [Traits](traits.md) for details.
+
+## Constants
+
+Constants are compile-time values declared with `const`. They are inlined as literal values at every usage site.
+
+### Syntax
+
+```
+const NAME value
+```
+
+The value can be a literal (`int`, `str`, `bool`, `char`), a reference to another constant, or a block expression.
+
+```casa
+const MAX_SIZE 100
+const GREETING "hello"
+const DEBUG false
+const NEWLINE '\n'
+```
+
+Constants must be declared at global scope. The name must be unique — it cannot conflict with existing functions, variables, structs, or enums. By convention, constants use `SCREAMING_SNAKE_CASE` (see [STYLE.md](STYLE.md)).
+
+### Referencing Other Constants
+
+A constant can reference a previously declared constant by name:
+
+```casa
+const WORD_SIZE 8
+const DOUBLE_WORD WORD_SIZE
+```
+
+The referenced constant must be declared before the referencing constant.
+
+### Block Expressions
+
+Use `const NAME { expr }` to evaluate an arithmetic or logical expression at compile time:
+
+```casa
+const fn double x:int -> int { x 2 * }
+const DOUBLED { MAX_SIZE double }
+const SUM { 3 4 + }
+```
+
+Block expressions support arithmetic (`+`, `-`, `*`, `/`, `%`), bitwise (`&`, `|`, `^`, `~`, `<<`, `>>`), comparison (`==`, `!=`, `<`, `>`, `<=`, `>=`), boolean (`&&`, `||`, `!`), and calls to `const fn` functions.
+
+### `const fn`
+
+A `const fn` is a function that can be evaluated at compile time inside `const { ... }` block expressions. It can also be called at runtime like a regular function.
+
+```casa
+const fn add a:int b:int -> int { a b + }
+
+const SEVEN { 3 4 add }    # evaluated at compile time
+3 4 add print               # called at runtime
+```
+
+`const fn` bodies have restrictions:
+- No control flow (`if`, `while`)
+- No global variable access
+- Can reference constants and call other `const fn` functions
+
+### Importing Constants
+
+Constants can be imported with selective imports:
+
+```casa
+import "std" { O_RDONLY O_WRONLY }
+```
+
+See [Modules — Selective imports](modules.md#selective-imports) for details.
 
 ## Type Casting
 

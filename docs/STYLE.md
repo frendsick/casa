@@ -82,11 +82,11 @@ see [FORMAT.md](./FORMAT.md).
 ### Structs, enums, and enum variants
 
 - **MUST** use `PascalCase` for struct names, enum names, and enum variant names.
-- **MUST** use `SCREAMING_SNAKE_CASE` for global constants:
+- **MUST** use `SCREAMING_SNAKE_CASE` for constants:
 
   ```casa
-  64 = ALIVE_THRESHOLD
-  200 = FRAME_DELAY_MS
+  const ALIVE_THRESHOLD 64
+  const FRAME_DELAY_MS 200
   ```
 
 - **MUST** name the `self` parameter `self` in all impl methods.
@@ -147,7 +147,7 @@ without a type-name prefix is acceptable.
 - Use the explicit form (`person Person::age`) only when passing an accessor as a
   function reference (`&Person::age`) or when the shorthand creates an ambiguous
   RPN expression.
-- For method pipeline formatting see [FORMAT.md — Accessor chaining and method pipelines](./FORMAT.md#accessor-chaining-and-method-pipelines).
+- For method pipeline formatting see [FORMAT.md — Getter chaining and method pipelines](./FORMAT.md#getter-chaining-and-method-pipelines).
 
 ---
 
@@ -269,7 +269,7 @@ without a type-name prefix is acceptable.
 
   ```casa
   # MUST
-  64 = ALIVE_THRESHOLD
+  const ALIVE_THRESHOLD 64
   if ALIVE_THRESHOLD cell load8 < then ...
 
   # MUST NOT

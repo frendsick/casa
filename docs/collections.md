@@ -20,8 +20,6 @@ struct List {
 
 Creates an empty `List` with an initial capacity of 8.
 
-**Signature:** `List::new -> List`
-
 **Stack effect:** `-> List`
 
 ```casa
@@ -31,8 +29,6 @@ List::new = v
 ### `List::from_array`
 
 Creates a `List[T]` from a fixed-size array. The list's size and capacity are both set to the array's length. The data pointer points directly into the array's data.
-
-**Signature:** `List::from_array[T] arr:array[T] -> List[T]`
 
 **Stack effect:** `array[T] -> List[T]`
 
@@ -44,8 +40,6 @@ Creates a `List[T]` from a fixed-size array. The list's size and capacity are bo
 
 Returns the number of elements in the list.
 
-**Signature:** `List::length self:List -> int`
-
 **Stack effect:** `List -> int`
 
 ```casa
@@ -55,8 +49,6 @@ list.length print    # 3
 ### `List::get`
 
 Returns the element at index `n` (zero-indexed). Prints an error and exits if the index is out of bounds.
-
-**Signature:** `List::get[T] self:List[T] n:int -> T`
 
 **Stack effect:** `List[T] int -> T`
 
@@ -71,8 +63,6 @@ The return type matches the list's element type. For example, calling `get` on a
 
 Sets the element at index `n`. Prints an error and exits if the index is out of bounds.
 
-**Signature:** `List::set[T] self:List[T] n:int item:T`
-
 **Stack effect:** `List[T] int T -> None`
 
 ```casa
@@ -83,8 +73,6 @@ Sets the element at index `n`. Prints an error and exits if the index is out of 
 ### `List::push`
 
 Appends an item to the list. If the list is at capacity, it allocates a new buffer with double the capacity and copies the existing elements.
-
-**Signature:** `List::push[T] self:List[T] item:T`
 
 **Stack effect:** `List[T] T -> None`
 
@@ -98,8 +86,6 @@ list.length print    # 4
 
 Removes and returns the last element. Prints an error and exits if the list is empty.
 
-**Signature:** `List::pop[T] self:List[T] -> T`
-
 **Stack effect:** `List[T] -> T`
 
 ```casa
@@ -107,11 +93,20 @@ list.pop print          # 4
 list.length print       # 3
 ```
 
+### `List::insert`
+
+Inserts an item at the given index, shifting subsequent elements right. Prints an error and exits if the index is out of bounds.
+
+**Stack effect:** `List[T] T int -> None`
+
+```casa
+99 1 list.insert
+1 list.get print    # 99
+```
+
 ### `List::slice`
 
 Returns an `array[T]` view into the list's data from index `start` (inclusive) to `stop` (exclusive). This is a zero-copy operation. Prints an error and exits if the range is out of bounds.
-
-**Signature:** `List::slice[T] self:List[T] start:int stop:int -> array[T]`
 
 **Stack effect:** `List[T] int int -> array[T]`
 
@@ -124,8 +119,6 @@ sliced.length print          # 2
 ### `List::to_array`
 
 Returns an `array[T]` view of the entire list. This is a zero-copy operation equivalent to `0 self.size self.slice`.
-
-**Signature:** `List::to_array[T] self:List[T] -> array[T]`
 
 **Stack effect:** `List[T] -> array[T]`
 
@@ -182,8 +175,6 @@ All Map methods are defined in an `impl` block with `K: Hashable` and `V` type p
 
 Creates an empty map with an initial capacity of 16.
 
-**Signature:** `Map::new -> Map[K V]`
-
 **Stack effect:** `-> Map[K V]`
 
 ```casa
@@ -196,8 +187,6 @@ The type cast `(Map[str int])` tells the compiler the concrete types for `K` and
 
 Returns the number of key-value pairs in the map.
 
-**Signature:** `Map::length self:Map[K V] -> int`
-
 **Stack effect:** `Map[K V] -> int`
 
 ```casa
@@ -208,20 +197,16 @@ m.length print    # 0
 
 Looks up a key and returns `Option[V]`. Returns `Option::Some` with the value if found, `Option::None` otherwise.
 
-**Signature:** `Map::get self:Map[K V] key:K -> Option[V]`
-
 **Stack effect:** `Map[K V] K -> Option[V]`
 
 ```casa
 "hello" m.get .unwrap print    # prints the value for "hello"
-"missing" m.get .is_none print # 1
+"missing" m.get .is_none print # true
 ```
 
 ### `Map::has`
 
 Returns `true` if the key exists in the map.
-
-**Signature:** `Map::has self:Map[K V] key:K -> bool`
 
 **Stack effect:** `Map[K V] K -> bool`
 
@@ -233,21 +218,15 @@ Returns `true` if the key exists in the map.
 
 Inserts or updates a key-value pair. Returns the updated map. Automatically resizes at 75% load factor.
 
-**Signature:** `Map::set self:Map[K V] value:V key:K -> Map[K V]`
-
 **Stack effect:** `Map[K V] V K -> Map[K V]`
 
 ```casa
-"one" 1 m.set = m
+1 "one" m.set = m
 ```
-
-Note: the key is on top of the stack, the value is below it, and the map is below the value.
 
 ### `Map::delete`
 
 Removes a key from the map. Returns the updated map. If the key does not exist, the map is returned unchanged.
-
-**Signature:** `Map::delete self:Map[K V] key:K -> Map[K V]`
 
 **Stack effect:** `Map[K V] K -> Map[K V]`
 
@@ -259,8 +238,6 @@ Removes a key from the map. Returns the updated map. If the key does not exist, 
 
 Returns a `List[K]` of all keys in the map.
 
-**Signature:** `Map::keys self:Map[K V] -> List[K]`
-
 **Stack effect:** `Map[K V] -> List[K]`
 
 ```casa
@@ -270,8 +247,6 @@ m.keys = key_list
 ### `Map::values`
 
 Returns a `List[V]` of all values in the map.
-
-**Signature:** `Map::values self:Map[K V] -> List[V]`
 
 **Stack effect:** `Map[K V] -> List[V]`
 
@@ -288,9 +263,9 @@ import "path/to/lib/std.casa"
 Map::new (Map[str int]) = m
 
 # Insert key-value pairs
-"one" 1 m.set = m
-"two" 2 m.set = m
-"three" 3 m.set = m
+1 "one" m.set = m
+2 "two" m.set = m
+3 "three" m.set = m
 
 # Look up values
 "one" m.get .unwrap print      # 1
@@ -301,7 +276,7 @@ Map::new (Map[str int]) = m
 "four" m.has print             # false
 
 # Update a value
-"one" 42 m.set = m
+42 "one" m.set = m
 "one" m.get .unwrap print      # 42
 
 # Delete a key
@@ -310,7 +285,7 @@ m.length print                 # 2
 
 # Integer keys work too
 Map::new (Map[int str]) = m2
-1 "hello" m2.set = m2
+"hello" 1 m2.set = m2
 1 m2.get .unwrap print         # hello
 ```
 
@@ -336,8 +311,6 @@ Set uses a struct-level type parameter `K` with a typed `Map[K int]` field. All 
 
 Creates an empty set.
 
-**Signature:** `Set::new -> Set[K]`
-
 **Stack effect:** `-> Set[K]`
 
 ```casa
@@ -347,8 +320,6 @@ Set::new (Set[str]) = s
 ### `Set::length`
 
 Returns the number of elements in the set.
-
-**Signature:** `Set::length self:Set[K] -> int`
 
 **Stack effect:** `Set[K] -> int`
 
@@ -360,8 +331,6 @@ s.length print    # 0
 
 Returns `true` if the element is in the set.
 
-**Signature:** `Set::has self:Set[K] key:K -> bool`
-
 **Stack effect:** `Set[K] K -> bool`
 
 ```casa
@@ -371,8 +340,6 @@ Returns `true` if the element is in the set.
 ### `Set::add`
 
 Adds an element to the set. Returns the updated set. Adding a duplicate has no effect.
-
-**Signature:** `Set::add self:Set[K] key:K -> Set[K]`
 
 **Stack effect:** `Set[K] K -> Set[K]`
 
@@ -384,8 +351,6 @@ Adds an element to the set. Returns the updated set. Adding a duplicate has no e
 
 Removes an element from the set. Returns the updated set. If the element does not exist, the set is returned unchanged.
 
-**Signature:** `Set::remove self:Set[K] key:K -> Set[K]`
-
 **Stack effect:** `Set[K] K -> Set[K]`
 
 ```casa
@@ -395,8 +360,6 @@ Removes an element from the set. Returns the updated set. If the element does no
 ### `Set::to_list`
 
 Returns a `List[K]` of all elements in the set.
-
-**Signature:** `Set::to_list self:Set[K] -> List[K]`
 
 **Stack effect:** `Set[K] -> List[K]`
 
@@ -445,8 +408,6 @@ struct StringBuilder {
 
 Creates an empty `StringBuilder`.
 
-**Signature:** `StringBuilder::new -> StringBuilder`
-
 **Stack effect:** `-> StringBuilder`
 
 ```casa
@@ -456,8 +417,6 @@ StringBuilder::new = sb
 ### `StringBuilder::append`
 
 Appends a string to the builder.
-
-**Signature:** `StringBuilder::append self:StringBuilder s:str`
 
 **Stack effect:** `StringBuilder str -> None`
 
@@ -470,8 +429,6 @@ Appends a string to the builder.
 
 Appends a single character to the builder.
 
-**Signature:** `StringBuilder::append_char self:StringBuilder c:char`
-
 **Stack effect:** `StringBuilder char -> None`
 
 ```casa
@@ -482,8 +439,6 @@ Appends a single character to the builder.
 
 Converts the builder's contents into a string.
 
-**Signature:** `StringBuilder::build self:StringBuilder -> str`
-
 **Stack effect:** `StringBuilder -> str`
 
 ```casa
@@ -493,8 +448,6 @@ sb.build print    # hello world!
 ### `StringBuilder::length`
 
 Returns the number of characters in the builder.
-
-**Signature:** `StringBuilder::length self:StringBuilder -> int`
 
 **Stack effect:** `StringBuilder -> int`
 

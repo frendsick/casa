@@ -27,7 +27,7 @@ fn fizzbuzz number:int {
 
 - Lines SHOULD NOT exceed **100 characters**.
 - String literals in examples and expected-output lines are exempt.
-- When a function signature exceeds 100 characters, use the wrapping form (see below).
+- When a function declaration exceeds 100 characters, use the wrapping form (see below).
 
 ---
 
@@ -59,8 +59,8 @@ impl Foo {
 }
 
 Map::new(Map[str int]) = MY_MAP
-"a" 1 MY_MAP.set = MY_MAP
-"b" 2 MY_MAP.set = MY_MAP
+1 "a" MY_MAP.set = MY_MAP
+2 "b" MY_MAP.set = MY_MAP
 
 fn bar {
     # first group
@@ -119,11 +119,11 @@ struct Token {
 
 ---
 
-## Function signatures
+## Function declarations
 
 ### Single-line form
 
-When the signature fits within the line-length limit, write everything on one line.
+When the function declaration fits within the line-length limit, write everything on one line.
 Parameters use `name:type` (no space after colon):
 
 ```casa
@@ -138,7 +138,7 @@ fn add a:int b:int -> int {
 
 ### Wrapped form
 
-When the signature would exceed 100 characters, wrap as follows:
+When the function declaration would exceed 100 characters, wrap as follows:
 
 - `fn name` alone on the first line
 - Each parameter on its own line, indented 4 spaces, `name:type` compact
