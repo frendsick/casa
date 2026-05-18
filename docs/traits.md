@@ -313,8 +313,8 @@ The standard library defines the `Iterable[T]` trait for iteration. Any type wit
 | Method | Stack effect | Description |
 |--------|-------------|-------------|
 | `collect` | `self -> List[T]` | Collect all elements into a `List[T]` |
-| `map` | `self fn[T -> U] -> List[U]` | Apply a function to each element, returning a new list |
-| `filter` | `self fn[T -> bool] -> List[T]` | Return a list of elements for which the function returns `true` |
+| `map` | `self fn[T -> U] -> Iter[U]` | Lazily apply a function to each element |
+| `filter` | `self fn[T -> bool] -> Iter[T]` | Lazily keep elements for which the function returns `true` |
 | `fold` | `self U fn[U T -> U] -> U` | Reduce to a single value using an accumulator |
 | `count` | `self -> int` | Count the number of elements |
 | `any` | `self fn[T -> bool] -> bool` | Return `true` if any element satisfies the predicate |
