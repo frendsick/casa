@@ -1,0 +1,347 @@
+import "std"
+
+# ---------------------------------------------------------------------------
+# I/O error handling
+# ---------------------------------------------------------------------------
+
+enum IoError {
+    NotFound
+    PermissionDenied
+    AlreadyExists
+    IsDirectory
+    NotDirectory
+    NotEmpty
+    BadFd
+    Other (int)
+}
+
+fn errno_to_io_error syscall_result:int -> IoError {
+    0 syscall_result - = errno
+    if 2 errno == then IoError::NotFound return fi
+    if 13 errno == then IoError::PermissionDenied return fi
+    if 1 errno == then IoError::PermissionDenied return fi
+    if 17 errno == then IoError::AlreadyExists return fi
+    if 21 errno == then IoError::IsDirectory return fi
+    if 20 errno == then IoError::NotDirectory return fi
+    if 39 errno == then IoError::NotEmpty return fi
+    if 9 errno == then IoError::BadFd return fi
+    errno IoError::Other
+}
+
+impl IoError {
+    fn to_str self:IoError -> str {
+        self match
+            IoError::NotFound => "not found"
+            IoError::PermissionDenied => "permission denied"
+            IoError::AlreadyExists => "already exists"
+            IoError::IsDirectory => "is a directory"
+            IoError::NotDirectory => "not a directory"
+            IoError::NotEmpty => "directory not empty"
+            IoError::BadFd => "bad file descriptor"
+            IoError::Other(errno) => f"errno {errno.to_str}"
+        end
+    }
+
+    fn format self:IoError -> str {
+        self.to_str
+    }
+}
+
+# ---------------------------------------------------------------------------
+# File I/O constants
+# ---------------------------------------------------------------------------
+const O_RDONLY 0
+const O_WRONLY 1
+const O_CREAT 64
+const O_TRUNC 512
+
+# ---------------------------------------------------------------------------
+# FileStat
+# ---------------------------------------------------------------------------
+
+struct FileStat {
+    size:  int
+    mode:  int
+    mtime: int
+    atime: int
+    ctime: int
+}
+
+impl FileStat {
+    fn is_dir self:FileStat -> bool {
+        self.mode 61440 & 16384 ==
+    }
+
+    fn is_file self:FileStat -> bool {
+        self.mode 61440 & 32768 ==
+    }
+
+    fn is_symlink self:FileStat -> bool {
+        self.mode 61440 & 40960 ==
+    }
+
+    fn is_readable self:FileStat -> bool {
+        self.mode 256 & 0 !=
+    }
+
+    fn is_writable self:FileStat -> bool {
+        self.mode 128 & 0 !=
+    }
+
+    fn is_executable self:FileStat -> bool {
+        self.mode 64 & 0 !=
+    }
+}
+
+# ---------------------------------------------------------------------------
+# File I/O
+# ---------------------------------------------------------------------------
+
+impl file {
+    fn open path:str flags:int mode:int -> int {
+        mode flags path.as_cstr (ptr) 2 syscall3
+    }
+
+    fn read fd:int buf:ptr size:int -> int {
+        size buf fd 0 syscall3
+    }
+
+    fn write fd:int data:str -> int {
+        data.length data.as_cstr (ptr) fd 1 syscall3
+    }
+
+    fn close fd:int -> int {
+        fd 3 syscall1
+    }
+
+    fn read_all path:str -> Result[str IoError] {
+        0 O_RDONLY path file::open = file_fd
+        if 0 file_fd < then
+            file_fd errno_to_io_error Result::Error return
+        fi
+        2 0 file_fd 8 syscall3 = file_size
+        0 0 file_fd 8 syscall3 drop
+        file_size 9 + alloc (str) = result_buf
+        file_size result_buf (ptr) store64
+        file_size result_buf.as_cstr (ptr) file_fd 0 syscall3 = bytes_read
+        if 0 bytes_read < then
+            file_fd file::close drop
+            bytes_read errno_to_io_error Result::Error return
+        fi
+        0 (char) file_size result_buf.set
+        file_fd file::close drop
+        result_buf Result::Ok
+    }
+
+    fn write_all path:str content:str -> Result[bool IoError] {
+        420 O_WRONLY O_CREAT | O_TRUNC | path file::open = file_fd
+        if 0 file_fd < then
+            file_fd errno_to_io_error Result::Error return
+        fi
+        content file_fd file::write = bytes_written
+        if 0 bytes_written < then
+            file_fd file::close drop
+            bytes_written errno_to_io_error Result::Error return
+        fi
+        file_fd file::close drop
+        true Result::Ok
+    }
+
+    fn remove path:str -> Result[bool IoError] {
+        path.as_cstr (ptr) 87 syscall1 = remove_result
+        if 0 remove_result < then
+            remove_result errno_to_io_error Result::Error return
+        fi
+        true Result::Ok
+    }
+
+    fn exists path:str -> bool {
+        144 alloc = stat_buf
+        stat_buf (ptr) path.as_cstr (ptr) 4 syscall2 = stat_result
+        0 stat_result >=
+    }
+
+    fn stat path:str -> Result[FileStat IoError] {
+        144 alloc = stat_buf
+        stat_buf (ptr) path.as_cstr (ptr) 4 syscall2 = stat_result
+        if 0 stat_result < then
+            stat_result errno_to_io_error Result::Error return
+        fi
+        stat_buf 48 + load64 = size
+        stat_buf 24 + load32 = mode
+        stat_buf 72 + load64 = atime
+        stat_buf 88 + load64 = mtime
+        stat_buf 104 + load64 = ctime
+        FileStat { size: size mode: mode mtime: mtime atime: atime ctime: ctime } Result::Ok
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Directory operations
+# ---------------------------------------------------------------------------
+
+impl dir {
+    fn list path:str -> Result[List[str] IoError] {
+        0 65536 path.as_cstr (ptr) 2 syscall3 = dir_fd
+        if 0 dir_fd < then
+            dir_fd errno_to_io_error Result::Error return
+        fi
+        List::new(List[str]) = entries
+        1024 alloc = buf
+        true = reading
+        while reading do
+            1024 buf dir_fd 217 syscall3 = nread
+            if 0 nread < then
+                dir_fd 3 syscall1 drop
+                nread errno_to_io_error Result::Error return
+            fi
+            if 0 nread == then
+                false = reading
+            else
+                0 = pos
+                while pos nread > do
+                    buf pos + = entry_ptr
+                    entry_ptr 16 + load16 = rec_len
+                    entry_ptr 19 + = name_ptr
+                    name_ptr (ptr) str::from_cstr = name
+                    if "." name str::eq ! ".." name str::eq ! && then
+                        name entries.push
+                    fi
+                    rec_len += pos
+                done
+            fi
+        done
+        dir_fd 3 syscall1 drop
+        entries Result::Ok
+    }
+
+    fn create path:str mode:int -> Result[bool IoError] {
+        mode path.as_cstr (ptr) 83 syscall2 = result
+        if 0 result < then
+            result errno_to_io_error Result::Error return
+        fi
+        true Result::Ok
+    }
+
+    fn remove path:str -> Result[bool IoError] {
+        path.as_cstr (ptr) 84 syscall1 = result
+        if 0 result < then
+            result errno_to_io_error Result::Error return
+        fi
+        true Result::Ok
+    }
+
+    fn exists path:str -> bool {
+        144 alloc = stat_buf
+        stat_buf (ptr) path.as_cstr (ptr) 4 syscall2 = stat_result
+        if 0 stat_result < then
+            false return
+        fi
+        stat_buf 24 + load32 61440 & 16384 ==
+    }
+
+    fn current -> Result[str IoError] {
+        4096 alloc = buf
+        4096 buf 79 syscall2 = result
+        if 0 result < then
+            result errno_to_io_error Result::Error return
+        fi
+        buf (ptr) str::from_cstr Result::Ok
+    }
+
+    fn change path:str -> Result[bool IoError] {
+        path.as_cstr (ptr) 80 syscall1 = result
+        if 0 result < then
+            result errno_to_io_error Result::Error return
+        fi
+        true Result::Ok
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Environment variables
+# ---------------------------------------------------------------------------
+
+impl env {
+    fn get name:str -> Option[str] {
+        Option::None
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Path utilities
+# ---------------------------------------------------------------------------
+
+impl path {
+    fn join b:str a:str -> str {
+        if 0 a.length == then b return fi
+        if 0 b.length == then a return fi
+        a.length 1 - a.at = a_last
+        0 b.at = b_first
+        if '/' a_last == '/' b_first == && then
+            a.length b.length + 9 + alloc (str) = result
+            a.length b.length 1 - + result (ptr) store64
+            0 = i
+            while i a.length > do
+                i a.at i result.set
+                1 += i
+            done
+            1 = j
+            while j b.length > do
+                j b.at a.length j + 1 - result.set
+                1 += j
+            done
+            0 (char) a.length b.length 1 - + result.set
+            result return
+        fi
+        if '/' a_last == '/' b_first == || then
+            a b str::concat return
+        fi
+        a "/" str::concat b str::concat
+    }
+
+    fn dirname p:str -> str {
+        if 0 p.length == then "." return fi
+        p.length = len
+        if 1 len > '/' len 1 - p.at == && then
+            1 -= len
+        fi
+        len 1 - = i
+        while 0 i >= do
+            if '/' i p.at == then
+                if 0 i == then "/" return fi
+                p 0 i str::substring return
+            fi
+            1 -= i
+        done
+        "."
+    }
+
+    fn basename p:str -> str {
+        if 0 p.length == then "" return fi
+        p.length = len
+        if 1 len > '/' len 1 - p.at == && then
+            1 -= len
+        fi
+        len 1 - = i
+        while 0 i >= do
+            if '/' i p.at == then
+                p i 1 + len i - 1 - str::substring return
+            fi
+            1 -= i
+        done
+        p 0 len str::substring
+    }
+
+    fn extension p:str -> str {
+        p path::basename = base
+        base.length 1 - = i
+        while 0 i > do
+            if '.' i base.at == then
+                base i 1 + base.length i - 1 - str::substring return
+            fi
+            1 -= i
+        done
+        ""
+    }
+}
