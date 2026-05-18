@@ -2,6 +2,20 @@
 
 Casa is a self-hosted programming language and compiler. Its glossary captures project-specific terms that prevent documentation drift.
 
+## Standard library
+
+**IoError**:
+The single error enum for all fallible OS syscall operations (file, directory, environment). Wraps errno values into named variants (`NotFound`, `PermissionDenied`, `AlreadyExists`, `IsDirectory`, `NotDirectory`, `BadFd`, `NotEmpty`, `Other(int)`).
+_Avoid_: FileError, DirError, OsError
+
+**os module**:
+The stdlib module (`lib/os.casa`) that consolidates all OS syscall wrappers: file I/O (`impl file`), directory operations (`impl dir`), environment variable access (`impl env`), path manipulation (`impl path`), and file metadata (`FileStat`).
+_Avoid_: putting OS operations in std.casa
+
+**FileStat**:
+A struct returned by `file::stat` containing file metadata fields (`size`, `mode`, `mtime`, `atime`, `ctime` as raw integers) with helper methods for type checks (`is_dir`, `is_file`, `is_symlink`) and permission checks (`is_readable`, `is_writable`, `is_executable`).
+_Avoid_: stat buffer, metadata tuple
+
 ## Language
 
 ### Type representation
@@ -135,6 +149,10 @@ _Avoid_: Release lint, tag lint
 - A **bootstrap-override label** is the only normal way to enable a **Bootstrap override** on a pull request.
 - **casa-release.env** is the single tracked source for the **Bootstrap compiler** release tag used by CI.
 - The **Bootstrap policy check** validates both the **casa-release.env** tag name and GitHub release metadata.
+- All OS syscall wrappers live in the **os module**, not in `std.casa`.
+- All fallible OS operations return `Result[T IoError]`; **IoError** is the single error type for file, directory, and environment failures.
+- **FileStat** is returned by `file::stat` and provides both raw metadata fields and convenience query methods.
+- `env::get` returns `Option[str]`, not `Result` — a missing environment variable is absence, not an error.
 
 ## Example Dialogue
 
