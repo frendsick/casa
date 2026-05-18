@@ -112,22 +112,22 @@ Collects all elements into a `List[T]`.
 
 #### `map`
 
-Applies a function to each element, returning a `List[U]`.
+Applies a function to each element, returning a lazy `Iter[U]`. Use `.collect` to materialize a `List[U]`.
 
-**Stack effect:** `Iter[T] fn[T -> U] -> List[U]`
+**Stack effect:** `Iter[T] fn[T -> U] -> Iter[U]`
 
 ```casa
-{ 2 * } [1 2 3].iter.map    # List[int] with elements 2, 4, 6
+{ 2 * } [1 2 3].iter.map.collect    # List[int] with elements 2, 4, 6
 ```
 
 #### `filter`
 
-Returns a `List[T]` of elements for which the function returns `true`.
+Returns a lazy `Iter[T]` of elements for which the function returns `true`. Use `.collect` to materialize a `List[T]`.
 
-**Stack effect:** `Iter[T] fn[T -> bool] -> List[T]`
+**Stack effect:** `Iter[T] fn[T -> bool] -> Iter[T]`
 
 ```casa
-{ 2 % 0 == } [1 2 3 4].iter.filter    # List[int] with elements 2, 4
+{ 2 % 0 == } [1 2 3 4].iter.filter.collect    # List[int] with elements 2, 4
 ```
 
 #### `fold`
