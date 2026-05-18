@@ -97,6 +97,44 @@ Trailing spaces or tabs at the end of a line are forbidden.
 
 ---
 
+## Array and list literals
+
+- Items are comma-separated with a space after each comma.
+- One space before the opening `[` when it follows another token:
+
+```casa
+# Correct
+["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
+[1, 2, 3] List::from_array = nums
+"hello" [0, 5] str::slice
+
+# Wrong
+["0","1","2"]
+[1,2,3]List::from_array = nums
+```
+
+---
+
+## Enum variant data parentheses
+
+No space between an enum variant name and its data parentheses:
+
+```casa
+# Correct
+OpValue::FnCall(value)
+Option::Some(x)
+Type::Generic(generic)
+
+# Wrong
+OpValue::FnCall (value)
+Option::Some (x)
+Type::Generic (generic)
+```
+
+This applies to pattern matching (`is` checks), constructors, and `match` arms.
+
+---
+
 ## Struct and enum field layout
 
 - Struct and enum fields use `name: Type` (space after colon).
