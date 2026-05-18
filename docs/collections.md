@@ -127,6 +127,18 @@ list.to_array = arr
 arr.length print    # 3
 ```
 
+### `List[str]::join`
+
+Joins a list of strings with a separator, returning a single string.
+
+**Stack effect:** `List[str] str -> str`
+
+```casa
+["a", "b", "c"] List::from_array = parts
+", " parts.join print    # a, b, c
+"" parts.join print      # abc
+```
+
 ### Complete Example
 
 ```casa

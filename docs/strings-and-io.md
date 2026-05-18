@@ -160,6 +160,70 @@ Replaces all occurrences of `old` with `new_str`, returning a new string.
 "world" "there" "hello there".replace print    # hello world
 ```
 
+### `str::to_upper`
+
+Returns a new string with all ASCII lowercase letters converted to uppercase. Non-alpha characters are unchanged.
+
+**Stack effect:** `str -> str`
+
+```casa
+"hello".to_upper print    # HELLO
+```
+
+### `str::to_lower`
+
+Returns a new string with all ASCII uppercase letters converted to lowercase. Non-alpha characters are unchanged.
+
+**Stack effect:** `str -> str`
+
+```casa
+"HELLO".to_lower print    # hello
+```
+
+### `str::repeat`
+
+Returns a new string that repeats the original `n` times. Returns an empty string when `n` is 0.
+
+**Stack effect:** `str int -> str`
+
+```casa
+3 "ha".repeat print    # hahaha
+0 "x".repeat print     # (empty)
+```
+
+### `str::reverse`
+
+Returns a new string with the characters in reverse order.
+
+**Stack effect:** `str -> str`
+
+```casa
+"hello".reverse print    # olleh
+```
+
+### `str::to_int`
+
+Parses a string as an integer, returning `Option[int]`. Handles negative numbers (leading `-`). Returns `None` for empty strings, non-digit characters, or a bare `-`. Does not tolerate leading or trailing whitespace — use `str::trim` first if needed.
+
+**Stack effect:** `str -> Option[int]`
+
+```casa
+"42".to_int.unwrap print          # 42
+"-7".to_int.unwrap print          # -7
+"abc".to_int.is_none print        # true
+```
+
+### `List[str]::join`
+
+Joins a list of strings with a separator, returning a single string.
+
+**Stack effect:** `List[str] str -> str`
+
+```casa
+["a", "b", "c"] List::from_array = parts
+", " parts.join print    # a, b, c
+```
+
 ## C String Methods
 
 Methods for working with `cstr` values. Method calls on any `cstr` receiver are resolved to `cstr::method`.
