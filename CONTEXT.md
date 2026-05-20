@@ -18,6 +18,36 @@ _Avoid_: stat buffer, metadata tuple
 
 ## Language
 
+### Compiler architecture
+
+**Functional compiler pass**:
+A compiler phase that takes its context as explicit input and returns its output, diagnostics, and updated context explicitly while keeping mutation local to phase-internal builders.
+_Avoid_: Pure compiler rewrite, immutable compiler
+
+**Typecheck result**:
+The explicit output of typechecking: updated symbols, checked global stack effect, and any resolved operation changes produced during typechecking.
+_Avoid_: Hidden typechecker side effects, global typechecker state
+
+**Pass result**:
+An explicit compiler phase output struct used only when a phase has multiple meaningful outputs.
+_Avoid_: Wrapper struct, single-field result
+
+**Compiler dependency**:
+An explicit state value returned from a compiler pass when later passes need that state, instead of passing a phase-owned object across boundaries.
+_Avoid_: Leaking parser object, omnibus context
+
+**Parse-and-resolve boundary**:
+The first explicit compiler boundary that keeps parser internals private while returning resolved operations and symbols needed by later phases.
+_Avoid_: Parser result, resolver-owned parser
+
+**Default parser**:
+The current process-global parser instance used as implicit compiler state before explicit pass boundaries replace it.
+_Avoid_: Shared compiler context, hidden parser dependency
+
+**Compiler diagnostics schema**:
+The shared representation and flow for compiler diagnostics across lexer, parser, typechecker, and later phases.
+_Avoid_: Typechecker-only diagnostics refactor, phase-local error schema
+
 ### Type representation
 
 **Type AST**:
@@ -118,6 +148,13 @@ _Avoid_: Release lint, tag lint
 
 - **Source type syntax** is parsed into the **Type AST** before compiler analysis.
 - Compiler analysis should operate on the **Type AST**, not reparsed or reformatted type strings.
+- A **Functional compiler pass** may use local mutation internally, but pass boundaries should make compiler context and diagnostics explicit.
+- A **Pass result** should be introduced only when the compiler phase returns more than one meaningful output; single-output phases should return the value directly.
+- A **Compiler dependency** should be returned as its own value only when a later boundary uses it now; unused phase-private state should stay private until needed.
+- The **Parse-and-resolve boundary** should hide `Parser` and return only resolved operations plus symbols until parsing and identifier resolution can be split cleanly.
+- The **Default parser** should trend toward zero use as explicit pass boundaries mature; if a slice can remove it fully, it should.
+- A **Typecheck result** may return the same **SymbolStore** reference it received, as long as mutations are represented at the pass boundary.
+- The **Compiler diagnostics schema** should be refactored once across the compiler, not as part of the first **Typecheck result** boundary.
 - The **Documentation glossary** names project concepts that prevent drift; language keywords and ordinary programming concepts belong in reference docs.
 - Function, operator, intrinsic, and expression docs should use **Stack effect**; **Operand order** explains how stack values map to operands.
 - Public reference docs should use one **Stack effect** line for an operation instead of separate signature and stack-effect lines.
@@ -165,6 +202,13 @@ _Avoid_: Release lint, tag lint
 ## Flagged Ambiguities
 
 - "`Op.type_annotation` / `Op.deferred_return_type` as source text" was used to justify keeping parsed type metadata as strings. Resolved: user-written type expressions are **Source type syntax** only before parsing; after parsing, compiler-owned metadata should use the **Type AST**.
+- "functional programming concepts" was broad enough to imply a full immutable rewrite. Resolved: the target is **Functional compiler pass** boundaries, with local mutation still allowed inside phases.
+- "`LexResult`" was proposed as a first slice even though it would only wrap `List[Token]`. Resolved: avoid single-field **Pass result** structs; `lex_file` should keep returning tokens until lexing has multiple explicit outputs.
+- "`ParseResult` returning `Parser`" leaked a parser-owned object past parsing, while returning every parser field exposed unused state. Resolved: return only the **Compiler dependencies** later boundaries use now, and migrate call sites instead of keeping the old API.
+- Parse and identifier resolution both need import state today, so a standalone parse result is premature. Resolved: start with a **Parse-and-resolve boundary** that keeps import state private.
+- "`DEFAULT_PARSER`" was treated as convenient shared context. Resolved: call it the **Default parser** and remove uses as explicit pass boundaries replace hidden compiler state.
+- "return updated SymbolStore" could imply deep-copying the symbol table. Resolved: **Typecheck result** may return the same reference after mutation; explicit pass output is the important boundary.
+- "typechecker diagnostics" was treated as a typechecker-specific refactor. Resolved: diagnostics belong to a compiler-wide **Compiler diagnostics schema** refactor, tracked in issue #219.
 - "glossary" was considered as a complete keyword or syntax catalog. Resolved: the **Documentation glossary** covers only project-specific concepts whose terminology must stay stable.
 - "function signature" and "stack effect" were treated as interchangeable in docs. Resolved: use **Stack effect** for public stack contracts; reserve "signature" only where the compiler's internal function type model is meant.
 - "`fn foo a:int b:str -> bool`" was called a signature. Resolved: call it a **Function declaration** when bodyless, and a **Function definition** when paired with a body.
