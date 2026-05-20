@@ -246,9 +246,36 @@ Removes a key from the map. Returns the updated map. If the key does not exist, 
 "one" m.delete = m
 ```
 
+### `Map::iter`
+
+Returns a lazy `Iter[Pair[K V]]` that yields key-value pairs on demand. Each pair's `.first` field is the key (`K`) and `.second` field is the value (`V`). The iterator walks hash buckets using closure state, so no intermediate list is allocated.
+
+**Stack effect:** `Map[K V] -> Iter[Pair[K V]]`
+
+```casa
+for pair in m.iter do
+    pair.first (str) = key
+    pair.second (int) = val
+    f"{key}: {val}\n" print
+done
+```
+
+Because `Iter` implements the `Iterable` trait, all iterator combinators (`map`, `filter`, `take`, `count`, `collect`, etc.) work on the result:
+
+```casa
+# Count entries
+m.iter.count print
+
+# Collect into a list of pairs
+m.iter.collect = pairs
+
+# Take first 5 entries
+5 m.iter.take.collect = first_five
+```
+
 ### `Map::keys`
 
-Returns a `List[K]` of all keys in the map.
+Returns a `List[K]` of all keys in the map. Implemented in terms of `Map::iter`.
 
 **Stack effect:** `Map[K V] -> List[K]`
 
@@ -258,7 +285,7 @@ m.keys = key_list
 
 ### `Map::values`
 
-Returns a `List[V]` of all values in the map.
+Returns a `List[V]` of all values in the map. Implemented in terms of `Map::iter`.
 
 **Stack effect:** `Map[K V] -> List[V]`
 
