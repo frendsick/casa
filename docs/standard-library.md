@@ -234,6 +234,51 @@ Returns the contained value, or a default if the option is empty.
 0 Option::None .unwrap_or print      # 0
 ```
 
+### `Option::map`
+
+Transforms the contained value with `f` if Some, otherwise returns None.
+
+**Stack effect:** `fn[T -> U] Option[T] -> Option[U]`
+
+```casa
+{ 2 * } 5 Option::Some .map       # Option::Some(10)
+{ 2 * } Option::None .map         # Option::None
+```
+
+### `Option::and_then`
+
+Returns None if the option is empty, otherwise calls `f` with the contained value and returns the result.
+
+**Stack effect:** `fn[T -> Option[U]] Option[T] -> Option[U]`
+
+```casa
+{ 1 + Option::Some } 5 Option::Some .and_then   # Option::Some(6)
+{ 1 + Option::Some } Option::None .and_then     # Option::None
+```
+
+### `Option::or_else`
+
+Returns the option if it contains a value, otherwise calls `f` and returns its result.
+
+**Stack effect:** `fn[-> Option[T]] Option[T] -> Option[T]`
+
+```casa
+{ 0 Option::Some } Option::None .or_else        # Option::Some(0)
+{ 0 Option::Some } 5 Option::Some .or_else      # Option::Some(5)
+```
+
+### `Option::filter`
+
+Returns the option if it contains a value and the predicate returns true, otherwise returns None.
+
+**Stack effect:** `fn[T -> bool] Option[T] -> Option[T]`
+
+```casa
+{ 3 > } 5 Option::Some .filter    # Option::Some(5)
+{ 3 > } 2 Option::Some .filter    # Option::None
+{ 3 > } Option::None .filter      # Option::None
+```
+
 ### Match on Option
 
 Use `match` with destructuring to handle Option values:
@@ -308,6 +353,50 @@ Returns the success value, or a default if the result is an error.
 ```casa
 0 42 Result::Ok .unwrap_or print            # 42
 0 "error" Result::Error .unwrap_or print    # 0
+```
+
+### `Result::map`
+
+Transforms the Ok value with `f`, leaving Error unchanged.
+
+**Stack effect:** `fn[T -> U] Result[T E] -> Result[U E]`
+
+```casa
+{ 2 * } 5 Result::Ok .map                 # Result::Ok(10)
+{ 2 * } "err" Result::Error .map          # Result::Error("err")
+```
+
+### `Result::map_error`
+
+Transforms the Error value with `f`, leaving Ok unchanged.
+
+**Stack effect:** `fn[E -> F] Result[T E] -> Result[T F]`
+
+```casa
+{ "wrapped: " swap str::concat } "err" Result::Error .map_error   # Result::Error("wrapped: err")
+{ "wrapped: " swap str::concat } 5 Result::Ok .map_error          # Result::Ok(5)
+```
+
+### `Result::and_then`
+
+Returns the error if the result is Error, otherwise calls `f` with the Ok value and returns the result.
+
+**Stack effect:** `fn[T -> Result[U E]] Result[T E] -> Result[U E]`
+
+```casa
+{ 1 + Result::Ok } 5 Result::Ok .and_then         # Result::Ok(6)
+{ 1 + Result::Ok } "err" Result::Error .and_then   # Result::Error("err")
+```
+
+### `Result::or_else`
+
+Returns the Ok value if present, otherwise calls `f` with the Error value for recovery.
+
+**Stack effect:** `fn[E -> Result[T F]] Result[T E] -> Result[T F]`
+
+```casa
+{ drop 0 Result::Ok } "err" Result::Error .or_else   # Result::Ok(0)
+{ drop 0 Result::Ok } 5 Result::Ok .or_else          # Result::Ok(5)
 ```
 
 ### Match on Result
