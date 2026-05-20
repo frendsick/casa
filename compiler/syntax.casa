@@ -976,8 +976,14 @@ fn parse_literal_to_constant_value raw:str -> ConstantValue {
 # try_fold_const_fn_call - constant-fold a const fn call with all-literal args
 # ============================================================================
 
-fn try_fold_const_fn_call parser:Parser ops:List[Op] op_index:int fn_name:str current_op:Op -> int {
-    fn_name parser.store.functions.get = fold_fn_opt
+fn try_fold_const_fn_call
+    store:SymbolStore
+    ops:List[Op]
+    op_index:int
+    fn_name:str
+    current_op:Op
+-> int {
+    fn_name store.functions.get = fold_fn_opt
     if fold_fn_opt.is_none then op_index return fi
     if fold_fn_opt.unwrap Function::is_const_fn ! then op_index return fi
     fold_fn_opt.unwrap Function::stack_effect StackEffect::parameters.length = fold_param_count
@@ -1008,7 +1014,7 @@ fn try_fold_const_fn_call parser:Parser ops:List[Op] op_index:int fn_name:str cu
         fi
         1 += load_idx
     done
-    fold_eval_stack current_op Op::location fold_stack fn_name parser eval_const_fn
+    fold_eval_stack current_op Op::location fold_stack fn_name store eval_const_fn
     fold_stack.pop = fold_result
     fold_result match
         ConstantValue::Int(ri) => { ri OpValue::PushInt first_arg_idx ops.get Op::set_value }
@@ -1164,7 +1170,7 @@ fn const_eval_apply_operator
 }
 
 fn eval_const_fn
-    parser:Parser
+    store:SymbolStore
     fn_name:str
     stack:List[ConstantValue]
     location:Location
@@ -1173,7 +1179,7 @@ fn eval_const_fn
     if fn_name eval_stack string_list_contains then
         location f"Cycle detected in const evaluation: `{fn_name}`" ErrorKind::Syntax raise_error
     fi
-    fn_name parser.store.functions.get = fn_opt
+    fn_name store.functions.get = fn_opt
     if fn_opt.is_none then
         location f"`{fn_name}` is not a const fn" ErrorKind::Syntax raise_error
     fi
@@ -1224,7 +1230,7 @@ fn eval_const_fn
             break
         fi
         if op_value OpValue::FnCall(call_name) is then
-            eval_stack fn_op Op::location fn_stack call_name parser eval_const_fn
+            eval_stack fn_op Op::location fn_stack call_name store eval_const_fn
             continue
         fi
         if op_value OpValue::AssignVar(assign_name) is then
@@ -1239,7 +1245,7 @@ fn eval_const_fn
                 local_opt.unwrap fn_stack.push
                 continue
             fi
-            var_name parser.store.constants.get = inner_const_opt
+            var_name store.constants.get = inner_const_opt
             if inner_const_opt.is_some then
                 inner_const_opt.unwrap Constant::value fn_stack.push
                 continue
@@ -1252,15 +1258,15 @@ fn eval_const_fn
                 local_opt.unwrap fn_stack.push
                 continue
             fi
-            ident_name parser.store.constants.get = inner_const_opt
+            ident_name store.constants.get = inner_const_opt
             if inner_const_opt.is_some then
                 inner_const_opt.unwrap Constant::value fn_stack.push
                 continue
             fi
-            ident_name parser.store.functions.get = inner_fn_opt
+            ident_name store.functions.get = inner_fn_opt
             if inner_fn_opt.is_some then
                 if inner_fn_opt.unwrap Function::is_const_fn then
-                    eval_stack fn_op Op::location fn_stack ident_name parser eval_const_fn
+                    eval_stack fn_op Op::location fn_stack ident_name store eval_const_fn
                     continue
                 fi
             fi
@@ -1309,7 +1315,7 @@ fn eval_const_block parser:Parser cursor:TokenCursor location:Location -> Consta
             ident parser.store.functions.get = f_opt
             if f_opt.is_some then
                 if f_opt.unwrap Function::is_const_fn then
-                    eval_stack tok Token::location stack ident parser eval_const_fn
+                    eval_stack tok Token::location stack ident parser.store eval_const_fn
                     continue
                 fi
             fi
@@ -2403,7 +2409,7 @@ fn selective_import_symbol
         if symbol parser.store.functions.has then
             location f"Imported symbol `{symbol}` conflicts with an existing function" ErrorKind::DuplicateName raise_error
         fi
-        imported_fn imported_fn Function::ops import_parser resolve_identifiers_fn = resolved_ops
+        imported_fn imported_fn Function::ops import_parser.store resolve_identifiers = resolved_ops
         resolved_ops imported_fn Function::set_ops
         imported location imported_fn import_parser parser selective_import_stack_effect_dependencies
         for resolved_op in resolved_ops.iter do
@@ -2691,6 +2697,7 @@ fn get_op_keyword parser:Parser token:Token cursor:TokenCursor function_name:str
 
     # import
     if KeywordKind::Import keyword == then
+        token Token::location "Import statements" function_name require_global_scope
         cursor parser handle_keyword_import ops.push
         return
     fi
@@ -3038,7 +3045,7 @@ fn parse_and_resolve tokens:List[Token] search_paths:List[str] -> ParseResolveRe
 # resolve_identifiers - post-parse pass
 # ============================================================================
 
-fn gather_captures parser:Parser lambda_function:Function function:Function {
+fn gather_captures store:SymbolStore lambda_function:Function function:Function {
     for op in lambda_function Function::ops.iter do
         if op.value OpValue::Identifier(name) is ! then continue fi
         false = captured
@@ -3054,7 +3061,7 @@ fn gather_captures parser:Parser lambda_function:Function function:Function {
 
         if captured ! then
             # Check global variables
-            name parser.store.variables.get = global_var_opt
+            name store.variables.get = global_var_opt
             if global_var_opt.is_some then
                 global_var_opt.unwrap lambda_function Function::captures.push
             fi
@@ -3062,16 +3069,21 @@ fn gather_captures parser:Parser lambda_function:Function function:Function {
     done
 }
 
-fn resolve_array_identifiers parser:Parser items:List[Op] function:Function errors:List[CasaError] {
+fn resolve_array_identifiers
+    store:SymbolStore
+    items:List[Op]
+    function:Function
+    errors:List[CasaError]
+{
     for rai_item in items.iter do
         if rai_item.value OpValue::PushArray(inner_items) is then
-            errors function inner_items parser resolve_array_identifiers
+            errors function inner_items store resolve_array_identifiers
         elif rai_item.value OpValue::Identifier(rai_name) is then
             if rai_name function Function::variables variable_list_contains then
                 rai_name OpValue::PushVar rai_item Op::set_value
             elif rai_name function Function::captures variable_list_contains then
                 rai_name OpValue::PushCapture rai_item Op::set_value
-            elif rai_name parser.store.variables.get.is_some then
+            elif rai_name store.variables.get.is_some then
                 rai_name OpValue::PushVar rai_item Op::set_value
             else
                 rai_item Op::location f"Identifier `{rai_name}` is not defined" ErrorKind::UndefinedName make_error errors.push
@@ -3081,7 +3093,7 @@ fn resolve_array_identifiers parser:Parser items:List[Op] function:Function erro
 }
 
 fn resolve_enum_variant
-    parser:Parser
+    store:SymbolStore
     variant:EnumVariant
     op:Op
     function:Function
@@ -3089,7 +3101,7 @@ fn resolve_enum_variant
 {
     # Resolve enum variant ordinal if still unresolved
     if variant EnumVariant::enum_name.length 0 != variant EnumVariant::ordinal.is_none && then
-        variant EnumVariant::enum_name parser.store.enums.get = rev_enum_opt
+        variant EnumVariant::enum_name store.enums.get = rev_enum_opt
         if rev_enum_opt.is_none then
             op Op::location f"Enum `{variant EnumVariant::enum_name}` is not defined" ErrorKind::UndefinedName make_error errors.push
         else
@@ -3107,7 +3119,7 @@ fn resolve_enum_variant
         for rev_var_name in variant EnumVariant::bindings.iter do
             rev_var_name make_variable = rev_var
             if GLOBAL_SCOPE_LABEL function Function::name == then
-                rev_var rev_var_name parser.store.variables.set drop
+                rev_var rev_var_name store.variables.set drop
             else
                 if rev_var_name function Function::variables variable_list_contains ! then
                     rev_var function Function::variables.push
@@ -3117,25 +3129,161 @@ fn resolve_enum_variant
     fi
 }
 
+fn expand_imports parser:Parser ops:List[Op] -> List[Op] {
+    0 = op_index
+    while op_index ops.length > do
+        op_index ops.get = current_op
+        1 += op_index
+
+        if current_op.value OpValue::ImportFileSelective(selective_import) is then
+            current_op Op::location selective_import parser handle_selective_import
+            continue
+        fi
+
+        if current_op.value OpValue::ImportFile(import_path) is then
+            if 0 import_path.length == then
+                continue
+            fi
+            if import_path parser.included_files.has ! then
+                import_path parser.included_files.add drop
+                import_path lex_file = import_tokens
+                import_tokens parser parse_ops = import_ops
+                List::new(List[Op]) = new_ops
+                0 = name_index
+                while name_index op_index > do
+                    name_index ops.get new_ops.push
+                    1 += name_index
+                done
+                for inner_op in import_ops.iter do
+                    inner_op new_ops.push
+                done
+                op_index = name_index
+                while name_index ops.length > do
+                    name_index ops.get new_ops.push
+                    1 += name_index
+                done
+                new_ops = ops
+            fi
+            continue
+        fi
+    done
+    ops
+}
+
 fn resolve_identifiers_global parser:Parser ops:List[Op] -> List[Op] {
-    # Create a dummy function for global scope resolution
+    ops parser expand_imports = expanded_ops
     empty_location List::new(List[Op]) GLOBAL_SCOPE_LABEL make_function = dummy
-    dummy ops parser resolve_identifiers_fn
+    dummy expanded_ops parser.store resolve_identifiers
 }
 
 fn resolve_identifiers store:SymbolStore ops:List[Op] function:Function -> List[Op] {
-    store make_parser = resolver
-    function ops resolver resolve_identifiers_fn
+    0 = op_index
+    List::new(List[CasaError]) = resolve_errors
+    Set::new(Set[str]) = declared_globals
+    while op_index ops.length > do
+        op_index ops.get = current_op
+        1 += op_index
+
+        if current_op.value OpValue::DeclareGlobal(global_name) is then
+            if global_name store.variables.get.is_none then
+                current_op Op::location f"`{global_name}` is not a global variable" ErrorKind::UndefinedGlobal make_error resolve_errors.push
+            fi
+            global_name declared_globals.add = declared_globals
+            continue
+        fi
+
+        if current_op.value OpValue::AssignInc(inc_name) is then
+            if inc_name store.constants.get.is_some then
+                current_op Op::location f"Cannot assign to constant `{inc_name}`" ErrorKind::Syntax make_error resolve_errors.push
+                continue
+            fi
+        fi
+
+        if current_op.value OpValue::AssignDec(dec_name) is then
+            if dec_name store.constants.get.is_some then
+                current_op Op::location f"Cannot assign to constant `{dec_name}`" ErrorKind::Syntax make_error resolve_errors.push
+                continue
+            fi
+        fi
+
+        if current_op.value OpValue::AssignVar(var_name) is then
+            if var_name store.constants.get.is_some then
+                current_op Op::location f"Cannot assign to constant `{var_name}`" ErrorKind::Syntax make_error resolve_errors.push
+                continue
+            fi
+            var_name make_variable = variable
+            if GLOBAL_SCOPE_LABEL function Function::name == then
+                variable var_name store.variables.set drop
+                continue
+            fi
+            if var_name function Function::variables variable_list_contains ! then
+                if var_name declared_globals.has ! then
+                    variable function Function::variables.push
+                fi
+            fi
+            continue
+        fi
+
+        if current_op.value OpValue::FnPush(fn_name) is then
+            fn_name store.functions.get = lambda_opt
+            if lambda_opt.is_some then
+                lambda_opt.unwrap = lambda
+                true lambda Function::set_is_used
+                function lambda store gather_captures
+                lambda lambda Function::ops store resolve_identifiers = lambda_resolved
+                lambda_resolved lambda Function::set_ops
+            fi
+            continue
+        fi
+
+        if current_op.value OpValue::PushArray(items_inner) is then
+            resolve_errors function items_inner store resolve_array_identifiers
+            continue
+        fi
+
+        if current_op.value OpValue::Identifier(ident) is then
+            if resolve_errors ident current_op function store try_resolve_fn_ref then continue fi
+            if resolve_errors ident current_op store try_resolve_enum_variant_ident then continue fi
+            if ident current_op function try_resolve_trait_method_call then continue fi
+            resolve_errors ident current_op function store resolve_plain_identifier
+            if current_op.value OpValue::FnCall(resolved_fn_name) is then
+                current_op resolved_fn_name op_index ops store try_fold_const_fn_call = op_index
+            fi
+            continue
+        fi
+
+        if current_op.value OpValue::MatchArm is then
+            resolve_errors current_op function store resolve_match_op
+            continue
+        fi
+
+        if current_op.value OpValue::IsCheck(is_enum_variant) is then
+            resolve_errors function current_op is_enum_variant store resolve_enum_variant
+            continue
+        fi
+    done
+
+    if 0 resolve_errors.length != then
+        if TEST_MODE ! RESILIENT_MODE ! && then
+            resolve_errors report_errors
+            1 exit
+        else
+            for resolve_error in resolve_errors.iter do
+                resolve_error ERRORS.push
+            done
+        fi
+    fi
+    ops
 }
 # resolve_match_op — per-arm identifier resolution entry point.
 # Registers struct-pattern field bindings as locals/globals and resolves
 # enum-variant ordinals (delegating to resolve_enum_variant). Literal and
 # wildcard arms need no resolution.
 
-fn register_struct_pattern_binding parser:Parser function:Function binding_name:str {
+fn register_struct_pattern_binding store:SymbolStore function:Function binding_name:str {
     binding_name make_variable = match_struct_variant
     if GLOBAL_SCOPE_LABEL function Function::name == then
-        match_struct_variant binding_name parser.store.variables.set drop
+        match_struct_variant binding_name store.variables.set drop
     else
         if binding_name function Function::variables variable_list_contains ! then
             match_struct_variant function Function::variables.push
@@ -3143,26 +3291,24 @@ fn register_struct_pattern_binding parser:Parser function:Function binding_name:
     fi
 }
 
-fn resolve_match_op parser:Parser function:Function op:Op errors:List[CasaError] {
+fn resolve_match_op store:SymbolStore function:Function op:Op errors:List[CasaError] {
     if op.value OpValue::MatchArm(arm) is ! then return fi
     arm.pattern_value match
         PatternValue::Struct(struct_pattern) => {
             struct_pattern.bindings.keys = pattern_keys
             for pattern_key in pattern_keys.iter do
                 pattern_key struct_pattern.bindings.get.unwrap = binding_name
-                binding_name function parser register_struct_pattern_binding
+                binding_name function store register_struct_pattern_binding
             done
         }
         PatternValue::EnumVariant(variant) => {
-            errors function op variant parser resolve_enum_variant
+            errors function op variant store resolve_enum_variant
         }
         PatternValue::Literal => { }
     end
-    # Resolve identifiers inside the guard expression (bindings registered
-    # by the pattern above are now in scope).
     arm.guard_ops = guard_ops
     if guard_ops.length 0 != then
-        function guard_ops parser resolve_identifiers_fn = resolved_guard
+        function guard_ops store resolve_identifiers = resolved_guard
         resolved_guard arm MatchArm::set_guard_ops
     fi
 }
@@ -3171,7 +3317,7 @@ fn resolve_match_op parser:Parser function:Function op:Op errors:List[CasaError]
 # (or an error pushed) and the caller should skip further resolution.
 
 fn try_resolve_fn_ref
-    parser:Parser
+    store:SymbolStore
     function:Function
     op:Op
     ident:str
@@ -3193,7 +3339,7 @@ fn try_resolve_fn_ref
             true return
         fi
     fi
-    ref_name parser.store.functions.get = ref_fn_opt
+    ref_name store.functions.get = ref_fn_opt
     if ref_fn_opt.is_some then
         ref_name OpValue::FnPush op Op::set_value
         true ref_fn_opt.unwrap Function::set_is_used
@@ -3206,7 +3352,7 @@ fn try_resolve_fn_ref
 # known (op rewritten, or undefined-variant error pushed).
 
 fn try_resolve_enum_variant_ident
-    parser:Parser
+    store:SymbolStore
     op:Op
     ident:str
     resolve_errors:List[CasaError]
@@ -3214,7 +3360,7 @@ fn try_resolve_enum_variant_ident
     if ident "::" str::find 0 <= ! then false return fi
     ident "::" str::find = separator
     ident 0 separator str::substring = enum_name
-    enum_name parser.store.enums.get = enum_opt
+    enum_name store.enums.get = enum_opt
     if enum_opt.is_none then false return fi
     ident separator 2 + ident.length separator - 2 - str::substring = binding_name
     binding_name enum_opt.unwrap CasaEnum::variants string_list_index = ordinal
@@ -3229,7 +3375,7 @@ fn try_resolve_enum_variant_ident
 # Try resolving `K::method` trait-bound method calls. Returns true if K is
 # a trait-bound type variable on the enclosing function's stack effect.
 
-fn try_resolve_trait_method_call parser:Parser function:Function op:Op ident:str -> bool {
+fn try_resolve_trait_method_call function:Function op:Op ident:str -> bool {
     if ident "::" str::find 0 <= ! then false return fi
     ident 0 ident "::" str::find str::substring = type_var
     if type_var function Function::stack_effect StackEffect::trait_bounds.get.is_some ! then false return fi
@@ -3246,7 +3392,7 @@ fn try_resolve_trait_method_call parser:Parser function:Function op:Op ident:str
 # kind or pushes an `UndefinedName` error.
 
 fn resolve_plain_identifier
-    parser:Parser
+    store:SymbolStore
     function:Function
     op:Op
     ident:str
@@ -3257,7 +3403,7 @@ fn resolve_plain_identifier
         return
     fi
 
-    ident parser.store.functions.get = generic_fn_opt
+    ident store.functions.get = generic_fn_opt
     if generic_fn_opt.is_some then
         ident OpValue::FnCall op Op::set_value
         true generic_fn_opt.unwrap Function::set_is_used
@@ -3269,12 +3415,12 @@ fn resolve_plain_identifier
         return
     fi
 
-    if ident parser.store.variables.get.is_some then
+    if ident store.variables.get.is_some then
         ident OpValue::PushVar op Op::set_value
         return
     fi
 
-    ident parser.store.constants.get = const_opt
+    ident store.constants.get = const_opt
     if const_opt.is_some then
         const_opt.unwrap Constant::value = const_value
         const_value match
@@ -3294,166 +3440,17 @@ fn resolve_plain_identifier
         return
     fi
 
-    ident parser.store.structs.get = struct_opt
+    ident store.structs.get = struct_opt
     if struct_opt.is_some then
         struct_opt.unwrap OpValue::StructNew op Op::set_value
         return
     fi
 
-    ident parser.store.enums.get = resolved_enum_opt
+    ident store.enums.get = resolved_enum_opt
     if resolved_enum_opt.is_some then
         resolved_enum_opt.unwrap CasaEnum::variants.length OpValue::PushInt op Op::set_value
         return
     fi
 
     op Op::location f"Identifier `{ident}` is not defined" ErrorKind::UndefinedName make_error resolve_errors.push
-}
-
-fn resolve_identifiers_fn parser:Parser ops:List[Op] function:Function -> List[Op] {
-    0 = op_index
-    List::new(List[CasaError]) = resolve_errors
-    Set::new(Set[str]) = declared_globals
-    while op_index ops.length > do
-        op_index ops.get = current_op
-        1 += op_index
-
-        if current_op.value OpValue::DeclareGlobal(global_name) is then
-            if global_name parser.store.variables.get.is_none then
-                current_op Op::location f"`{global_name}` is not a global variable" ErrorKind::UndefinedGlobal make_error resolve_errors.push
-            fi
-            global_name declared_globals.add = declared_globals
-            continue
-        fi
-
-        if current_op.value OpValue::AssignInc(inc_name) is then
-            if inc_name parser.store.constants.get.is_some then
-                current_op Op::location f"Cannot assign to constant `{inc_name}`" ErrorKind::Syntax make_error resolve_errors.push
-                continue
-            fi
-        fi
-
-        if current_op.value OpValue::AssignDec(dec_name) is then
-            if dec_name parser.store.constants.get.is_some then
-                current_op Op::location f"Cannot assign to constant `{dec_name}`" ErrorKind::Syntax make_error resolve_errors.push
-                continue
-            fi
-        fi
-
-        if current_op.value OpValue::AssignVar(var_name) is then
-            if var_name parser.store.constants.get.is_some then
-                current_op Op::location f"Cannot assign to constant `{var_name}`" ErrorKind::Syntax make_error resolve_errors.push
-                continue
-            fi
-            var_name make_variable = variable
-            # Global scope: store in parser.store.variables
-            if GLOBAL_SCOPE_LABEL function Function::name == then
-                variable var_name parser.store.variables.set drop
-                continue
-            fi
-            # Always register as local UNLESS explicitly declared global.
-            if var_name function Function::variables variable_list_contains ! then
-                if var_name declared_globals.has ! then
-                    variable function Function::variables.push
-                fi
-            fi
-            continue
-        fi
-
-        # FN_PUSH: resolve lambda captures and identifiers
-        if current_op.value OpValue::FnPush(fn_name) is then
-            fn_name parser.store.functions.get = lambda_opt
-            if lambda_opt.is_some then
-                lambda_opt.unwrap = lambda
-                true lambda Function::set_is_used
-                function lambda parser gather_captures
-                lambda lambda Function::ops parser.store resolve_identifiers = lambda_resolved
-                lambda_resolved lambda Function::set_ops
-            fi
-            continue
-        fi
-
-        # PUSH_ARRAY: resolve identifiers inside array literals
-        if current_op.value OpValue::PushArray(items_inner) is then
-            resolve_errors function items_inner parser resolve_array_identifiers
-            continue
-        fi
-
-        # IDENTIFIER: resolve to specific op kinds
-        if current_op.value OpValue::Identifier(ident) is then
-            if resolve_errors ident current_op function parser try_resolve_fn_ref then continue fi
-            if resolve_errors ident current_op parser try_resolve_enum_variant_ident then continue fi
-            if ident current_op function parser try_resolve_trait_method_call then continue fi
-            resolve_errors ident current_op function parser resolve_plain_identifier
-            if current_op.value OpValue::FnCall(resolved_fn_name) is then
-                current_op resolved_fn_name op_index ops parser try_fold_const_fn_call = op_index
-            fi
-            continue
-        fi
-
-        # MATCH_ARM: delegate to the pattern module.
-        if current_op.value OpValue::MatchArm is then
-            resolve_errors current_op function parser resolve_match_op
-            continue
-        fi
-
-        # IS_CHECK: resolve enum variant
-        if current_op.value OpValue::IsCheck(is_enum_variant) is then
-            resolve_errors function current_op is_enum_variant parser resolve_enum_variant
-            continue
-        fi
-
-        # IMPORT_FILE_SELECTIVE: register only requested declarations.
-        if current_op.value OpValue::ImportFileSelective(selective_import) is then
-            current_op Op::location selective_import parser handle_selective_import
-            continue
-        fi
-
-        # IMPORT_FILE: process imported file
-        if current_op.value OpValue::ImportFile(import_path) is then
-            # Resilient mode may produce an empty path when resolve_import
-            # already reported a "module not found" error; skip the read.
-            if 0 import_path.length == then
-                continue
-            fi
-            if import_path parser.included_files.has ! then
-                import_path parser.included_files.add drop
-                import_path lex_file = import_tokens
-                import_tokens parser parse_ops = import_ops
-                # Splice imported ops at current position (before remaining ops)
-                # Build: ops[:op_index] + imp_ops + ops[op_index:]
-                List::new(List[Op]) = new_ops
-                # Copy ops before current position (already processed)
-                0 = name_index
-                while name_index op_index > do
-                    name_index ops.get new_ops.push
-                    1 += name_index
-                done
-                # Insert imported ops
-                for inner_op in import_ops.iter do
-                    inner_op new_ops.push
-                done
-                # Copy remaining ops
-                op_index = name_index
-                while name_index ops.length > do
-                    name_index ops.get new_ops.push
-                    1 += name_index
-                done
-                new_ops = ops
-                # op_index now points past the imported ops (don't re-process the import)
-            fi
-            continue
-        fi
-    done
-
-    if 0 resolve_errors.length != then
-        if TEST_MODE ! RESILIENT_MODE ! && then
-            resolve_errors report_errors
-            1 exit
-        else
-            for resolve_error in resolve_errors.iter do
-                resolve_error ERRORS.push
-            done
-        fi
-    fi
-    ops
 }
