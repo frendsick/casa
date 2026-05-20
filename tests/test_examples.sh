@@ -1,11 +1,14 @@
 #!/usr/bin/env sh
 set -eu
 
-ROOT_DIR=$(git rev-parse --show-toplevel)
+ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd)
 
-# Accept optional compiler path as first argument
-if [ $# -ge 1 ]; then
+# Compiler: env var > positional path (backward compat) > default
+if [ -n "${CASA_COMPILER:-}" ]; then
+    COMPILER="$CASA_COMPILER"
+elif [ $# -ge 1 ] && echo "$1" | grep -q '/'; then
     COMPILER="$1"
+    shift
 else
     COMPILER="$ROOT_DIR/casac"
 fi
@@ -23,8 +26,27 @@ RESET='\033[0m'
 pass=0
 fail=0
 
+matches_filter() {
+    name="$1"
+    shift
+    if [ $# -eq 0 ]; then
+        return 0
+    fi
+    for pattern in "$@"; do
+        case "$name" in
+            *"$pattern"*) return 0 ;;
+        esac
+    done
+    return 1
+}
+
 for f in "$EXAMPLES_DIR"/*.casa; do
     base=$(basename "$f" .casa)
+
+    if ! matches_filter "$base" "$@"; then
+        continue
+    fi
+
     out_file="$EXAMPLES_DIR/outputs/$base.out"
     err_file="$EXAMPLES_DIR/outputs/$base.err"
     binary="/tmp/casa_test_$base"
