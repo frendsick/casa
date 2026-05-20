@@ -58,6 +58,14 @@ _Avoid_: Type string, source type text
 The user-written type expression before the parser converts it into the **Type AST**.
 _Avoid_: Type annotation metadata, internal type string
 
+**Fully parameterized type**:
+A generic type where all type parameters are specified, either as concrete types or as declared type variables. `Option[int]` and `Option[T]` (where `T` is declared) are fully parameterized; bare `Option` is not.
+_Avoid_: Raw type, unparameterized generic
+
+**Unresolved type variable**:
+A `Type::TypeVar` node in the **Type AST** that has not yet been bound to a concrete type during type inference. The type unifier treats types containing unresolved type variables as flexible; fully resolved types must match structurally.
+_Avoid_: Unknown type, type placeholder (which means `TYPE_UNKNOWN_T`)
+
 ### Documentation terminology
 
 **Documentation glossary**:
@@ -148,6 +156,9 @@ _Avoid_: Release lint, tag lint
 
 - **Source type syntax** is parsed into the **Type AST** before compiler analysis.
 - Compiler analysis should operate on the **Type AST**, not reparsed or reformatted type strings.
+- Generic types must be **Fully parameterized types** at all compiler boundaries; bare generic names are not valid type expressions.
+- The type unifier treats types containing **Unresolved type variables** as flexible; fully resolved types must match structurally.
+- Whether a type is "still flexible" is determined by the presence of `Type::TypeVar` nodes, not by checking whether the base name is a known enum or struct.
 - A **Functional compiler pass** may use local mutation internally, but pass boundaries should make compiler context and diagnostics explicit.
 - A **Pass result** should be introduced only when the compiler phase returns more than one meaningful output; single-output phases should return the value directly.
 - A **Compiler dependency** should be returned as its own value only when a later boundary uses it now; unused phase-private state should stay private until needed.
