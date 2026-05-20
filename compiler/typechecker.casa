@@ -57,8 +57,8 @@ impl TypedStack {
     }
 
     # Produce the unified types list between two TypedStacks, or empty on incompatibility.
-    fn unify_types self:TypedStack candidate:TypedStack -> List[Type] {
-        self TypedStack::types candidate TypedStack::types stacks_compatible
+    fn unify_types self:TypedStack candidate:TypedStack store:SymbolStore -> List[Type] {
+        store self TypedStack::types candidate TypedStack::types stacks_compatible
     }
 }
 
@@ -285,16 +285,16 @@ fn expect_type_t tc:TypeChecker expected:Type {
 # Type compatibility
 # ============================================================================
 
-fn is_enum_type_var_t typ:Type -> bool {
+fn is_enum_type_var_t typ:Type store:SymbolStore -> bool {
     typ.base = base_opt
     if base_opt.is_some then
-        base_opt.unwrap DEFAULT_PARSER.store.enums.get.is_some
+        base_opt.unwrap store.enums.get.is_some
     else
         false
     fi
 }
 
-fn is_type_variable_t typ:Type -> bool {
+fn is_type_variable_t typ:Type store:SymbolStore -> bool {
     typ match
         Type::TypeVar(_) => { true }
         Type::Generic(generic) => {
@@ -305,7 +305,7 @@ fn is_type_variable_t typ:Type -> bool {
                     false
                 fi
             else
-                generic.base DEFAULT_PARSER.store.enums.get.is_some
+                generic.base store.enums.get.is_some
             fi
         }
         _ => { false }
@@ -350,8 +350,8 @@ fn type_exists_recursive_t typ:Type function_opt:Option[Function] store:SymbolSt
     end
 }
 
-fn validate_type_exists typ:Type function_opt:Option[Function] location:Location {
-    if DEFAULT_PARSER.store function_opt typ type_exists_recursive_t then return fi
+fn validate_type_exists typ:Type function_opt:Option[Function] location:Location store:SymbolStore {
+    if store function_opt typ type_exists_recursive_t then return fi
     location f"type `{typ.format}` does not exist" ErrorKind::Syntax raise_error
 }
 
@@ -359,7 +359,7 @@ fn validate_type_exists typ:Type function_opt:Option[Function] location:Location
 # Unify types — returns the more specific type, or "" on incompatibility
 # ============================================================================
 
-fn unify_generic_params_t type_a:Type type_b:Type -> Option[Type] {
+fn unify_generic_params_t type_a:Type type_b:Type store:SymbolStore -> Option[Type] {
     type_a.type_params = params_a_opt
     type_b.type_params = params_b_opt
     if params_a_opt.is_none then type_b Option::Some return fi
@@ -370,26 +370,26 @@ fn unify_generic_params_t type_a:Type type_b:Type -> Option[Type] {
     List::new(List[Type]) = unified
     0 = index
     while index params_a.length > do
-        index params_b.get index params_a.get unify_type_t ? unified.push
+        store index params_b.get index params_a.get unify_type_t ? unified.push
         1 += index
     done
     type_a.base.unwrap = base
     unified base GenericType Type::Generic Option::Some
 }
 
-fn unify_type_t type_a:Type type_b:Type -> Option[Type] {
+fn unify_type_t type_a:Type type_b:Type store:SymbolStore -> Option[Type] {
     if type_a type_b.eq then type_a Option::Some return fi
     if type_a.is_unknown_placeholder then type_b Option::Some return fi
     if type_b.is_unknown_placeholder then type_a Option::Some return fi
     # Enum type variables unify with concrete types.
-    if type_a is_enum_type_var_t then type_b Option::Some return fi
-    if type_b is_enum_type_var_t then type_a Option::Some return fi
+    if store type_a is_enum_type_var_t then type_b Option::Some return fi
+    if store type_b is_enum_type_var_t then type_a Option::Some return fi
     type_a.base = base_a
     type_b.base = base_b
     if base_a.is_some then
         if base_b.is_some then
             if base_a.unwrap base_b.unwrap == then
-                type_b type_a unify_generic_params_t = generic_result
+                store type_b type_a unify_generic_params_t = generic_result
                 if generic_result.is_some then generic_result return fi
             fi
         fi
@@ -407,7 +407,7 @@ fn unify_type_t type_a:Type type_b:Type -> Option[Type] {
 # Stack compatibility — unify element-wise, returns empty list on mismatch
 # ============================================================================
 
-fn stacks_compatible stack_a:List[Type] stack_b:List[Type] -> List[Type] {
+fn stacks_compatible stack_a:List[Type] stack_b:List[Type] store:SymbolStore -> List[Type] {
     if stack_a.length stack_b.length != then
         List::new(List[Type]) return
     fi
@@ -417,7 +417,7 @@ fn stacks_compatible stack_a:List[Type] stack_b:List[Type] -> List[Type] {
         if index stack_b.get index stack_a.get.eq then
             index stack_a.get result.push
         else
-            index stack_b.get index stack_a.get unify_type_t = unified
+            store index stack_b.get index stack_a.get unify_type_t = unified
             if unified.is_none then
                 List::new(List[Type]) return
             fi
@@ -488,7 +488,7 @@ fn bind_type_var tc:TypeChecker bindings:Map[str Type] type_var:str actual:Type 
     existing.unwrap = bound
     actual.is_unknown_placeholder = actual_unknown
     bound.is_unknown_placeholder = bound_unknown
-    bound is_type_variable_t = bound_is_var
+    tc.store bound is_type_variable_t = bound_is_var
     if
     bound_unknown
     bound_is_var ||
@@ -500,7 +500,7 @@ fn bind_type_var tc:TypeChecker bindings:Map[str Type] type_var:str actual:Type 
     bound actual.eq !
     actual_unknown ! &&
     bound_unknown ! &&
-    actual is_enum_type_var_t ! &&
+    tc.store actual is_enum_type_var_t ! &&
     then
         f"Type variable `{type_var}` bound to `{bound.format}` but got `{actual.format}`" tc raise_type_mismatch
     fi
@@ -820,7 +820,7 @@ fn check_comparison
         op_index return
     fi
     # User-defined types must satisfy Eq (or Ord) explicitly.
-    if function_opt trait_name type1_t type_satisfies_trait ! then
+    if tc.store function_opt trait_name type1_t type_satisfies_trait ! then
         cmp_value comparison_op_str = cmp_str
         op Op::location f"Type `{type1}` cannot be compared with `{cmp_str}`: does not satisfy trait `{trait_name}`" ErrorKind::MissingTraitMethod add_error
         TYPE_BOOL_T tc stack_push_type
@@ -917,13 +917,13 @@ fn check_stack_ops tc:TypeChecker op:Op {
 # ============================================================================
 # Returns true if `bound` names `Word` directly or transitively via supertraits.
 
-fn bound_implies_word bound:TraitBound -> bool {
+fn bound_implies_word bound:TraitBound store:SymbolStore -> bool {
     bound TraitBound::name = bound_name
     if "Word" bound_name == then true return fi
-    bound_name DEFAULT_PARSER.store.traits.get = bound_trait_opt
+    bound_name store.traits.get = bound_trait_opt
     if bound_trait_opt.is_none then false return fi
     for super_bound in bound_trait_opt.unwrap CasaTrait::supertraits.iter do
-        if super_bound bound_implies_word then true return fi
+        if store super_bound bound_implies_word then true return fi
     done
     false
 }
@@ -941,7 +941,7 @@ fn assert_word_bound tc:TypeChecker op:Op type_name:str function_opt:Option[Func
     if type_name word_stack_effect StackEffect::type_vars.has ! then return fi
     type_name word_stack_effect StackEffect::trait_bounds.get = word_bound_opt
     if word_bound_opt.is_none then return fi
-    if word_bound_opt.unwrap bound_implies_word then return fi
+    if tc.store word_bound_opt.unwrap bound_implies_word then return fi
     op Op::location f"Type variable `{type_name}` does not satisfy `Word` bound; add `[{type_name}: Word]` (or a trait that extends `Word`) to the function's type parameters" ErrorKind::TypeMismatch raise_error
 }
 
@@ -976,14 +976,20 @@ fn check_memory tc:TypeChecker op:Op function_opt:Option[Function] {
 # Unify the stored type of `variable` with the type being assigned to it.
 # `scope` ("local" / "global") is only used in the error message.
 
-fn unify_variable_assignment op:Op variable:Variable effective_type:Type scope:str {
+fn unify_variable_assignment
+    op:Op
+    variable:Variable
+    effective_type:Type
+    scope:str
+    store:SymbolStore
+{
     variable Variable::name = var_name
     variable Variable::typ = pre_type
     pre_type.is_unknown pre_type.is_unknown_placeholder || = pre_unknown
     if pre_unknown effective_type.is_unknown_placeholder ! && then
         effective_type variable Variable::set_typ
     fi
-    effective_type variable Variable::typ unify_type_t = unified
+    store effective_type variable Variable::typ unify_type_t = unified
     if unified.is_none then
         op Op::location f"Cannot override {scope} variable `{var_name}` of type `{variable Variable::typ.format}` with other type `{effective_type.format}`" ErrorKind::InvalidVariable add_error
     else
@@ -1016,7 +1022,7 @@ fn check_assignment tc:TypeChecker op:Op function_opt:Option[Function] {
         var_name function Function::variables variable_list_index = local_index
         if 0 local_index >= then
             local_index function Function::variables.get = local_var
-            "local" effective_type_t local_var op unify_variable_assignment
+            tc.store "local" effective_type_t local_var op unify_variable_assignment
             effective_type_t tc expect_type_t
             return
         fi
@@ -1026,7 +1032,7 @@ fn check_assignment tc:TypeChecker op:Op function_opt:Option[Function] {
     var_name tc.store.variables.get = global_opt
     if global_opt.is_some then
         global_opt.unwrap = global_var
-        "global" effective_type_t global_var op unify_variable_assignment
+        tc.store "global" effective_type_t global_var op unify_variable_assignment
         effective_type_t tc expect_type_t
         return
     fi
@@ -1053,7 +1059,7 @@ fn simulate_trait_method_call tc:TypeChecker function:Function var_name:str {
     trait_bound_opt.unwrap TraitBound::name tc.store.traits.get = trait_def_opt
     if trait_def_opt.is_none then return fi
     trait_def_opt.unwrap = trait_def
-    for trait_method_entry in trait_def DEFAULT_PARSER collect_trait_methods.iter do
+    for trait_method_entry in trait_def tc.store collect_trait_methods.iter do
         if trait_method_name trait_method_entry TraitMethod::name == then
             tc stack_pop_drop
             trait_type_var trait_method_entry TraitMethod::stack_effect resolve_trait_stack_effect = resolved_exec_effect
@@ -1171,7 +1177,7 @@ fn check_if_block tc:TypeChecker op:Op {
                 op Op::location if_ctx IfContext::set_current_branch_location
                 return
             fi
-            if_after tc TypeChecker::live.unify_types = unified
+            tc.store if_after tc TypeChecker::live.unify_types = unified
             if 0 unified.length != if_after if_before.equals ! && then
                 unified if_after TypedStack::set_types
                 if_before tc TypeChecker::live.restore
@@ -1194,13 +1200,13 @@ fn check_if_block tc:TypeChecker op:Op {
             if if_before tc TypeChecker::live.equals if_after if_before.equals && then
                 return
             fi
-            if_after tc TypeChecker::live.unify_types = unified
+            tc.store if_after tc TypeChecker::live.unify_types = unified
             if 0 unified.length != if_ctx IfContext::default_present && then
                 if_after tc TypeChecker::live.restore
                 unified tc TypeChecker::live TypedStack::set_types
                 return
             fi
-            if_before tc TypeChecker::live.unify_types = unified_before
+            tc.store if_before tc TypeChecker::live.unify_types = unified_before
             if 0 unified_before.length != if_ctx IfContext::default_present ! && then
                 if_before tc TypeChecker::live.restore
                 unified_before tc TypeChecker::live TypedStack::set_types
@@ -1271,13 +1277,18 @@ fn bind_generic_params_standalone
     bindings
 }
 
-fn type_satisfies_trait type_name:Type trait_name:str function_opt:Option[Function] -> bool {
+fn type_satisfies_trait
+    type_name:Type
+    trait_name:str
+    function_opt:Option[Function]
+    store:SymbolStore
+-> bool {
     type_name.format = type_name_str
     # Accept both bare ("Iterable") and concrete generic ("Iterable[int]") trait names.
     trait_name parse_type_str = trait_type
     trait_type.base = trait_base_opt
     trait_name trait_base_opt.unwrap_or = trait_lookup_name
-    trait_lookup_name DEFAULT_PARSER.store.traits.get = trait_opt
+    trait_lookup_name store.traits.get = trait_opt
     if trait_opt.is_none then false return fi
     trait_opt.unwrap = trait_def
     # Build substitution map from trait's type_params to concrete args from trait_name.
@@ -1304,16 +1315,16 @@ fn type_satisfies_trait type_name:Type trait_name:str function_opt:Option[Functi
             if trait_name bound_opt.unwrap trait_bound_to_str == then true return fi
         fi
     fi
-    for method in trait_def DEFAULT_PARSER collect_trait_methods.iter do
+    for method in trait_def store collect_trait_methods.iter do
         f"{type_name_str}::{method TraitMethod::name}" = fn_name
-        fn_name DEFAULT_PARSER.store.functions.get = fn_opt
+        fn_name store.functions.get = fn_opt
         false = via_generic_base
         # Fall back to the generic base type (e.g. `Option::to_str` for `Option[int]`)
         if fn_opt.is_none then
             type_name.base = base_opt
             if base_opt.is_some then
                 f"{base_opt.unwrap}::{method TraitMethod::name}" = fn_name
-                fn_name DEFAULT_PARSER.store.functions.get = fn_opt
+                fn_name store.functions.get = fn_opt
                 true = via_generic_base
             fi
         fi
@@ -1325,7 +1336,7 @@ fn type_satisfies_trait type_name:Type trait_name:str function_opt:Option[Functi
             false return
         fi
         fn_opt.unwrap = function
-        function ensure_typechecked
+        store function ensure_typechecked
         if "None -> None" function Function::stack_effect stack_effect_to_str == then false return fi
         # When satisfying via the generic base, skip strict stack-effect comparison:
         # the concrete trait bounds are verified at the actual call site.
@@ -1461,15 +1472,16 @@ fn method_diff_bind_for_bound
     effect:StackEffect
     bound:TraitBound
     concrete:str
+    store:SymbolStore
 -> Map[str Type] {
-    bound TraitBound::name DEFAULT_PARSER.store.traits.get = trait_opt
+    bound TraitBound::name store.traits.get = trait_opt
     if trait_opt.is_none then bindings return fi
     trait_opt.unwrap = trait_def
     trait_def CasaTrait::type_params = trait_params
     bound TraitBound::type_args = bound_args
     if bound_args.length trait_params.length != then bindings return fi
     for trait_method in trait_def CasaTrait::methods.iter do
-        f"{concrete}::{trait_method TraitMethod::name}" DEFAULT_PARSER.store.functions.get = concrete_fn_opt
+        f"{concrete}::{trait_method TraitMethod::name}" store.functions.get = concrete_fn_opt
         if concrete_fn_opt.is_some then
             concrete trait_method TraitMethod::stack_effect resolve_trait_stack_effect = trait_resolved
             concrete_fn_opt.unwrap Function::stack_effect trait_resolved bound_args trait_params effect bindings diff_method_stack_effect = bindings
@@ -1482,13 +1494,14 @@ fn method_diff_bind_all
     effect:StackEffect
     function_opt:Option[Function]
     bindings:Map[str Type]
+    store:SymbolStore
 -> Map[str Type] {
     effect StackEffect::trait_bounds.keys = bound_keys
     for bound_type_var in bound_keys.iter do
         bound_type_var effect StackEffect::trait_bounds.get.unwrap = bound_constraint
         bound_type_var bindings.get = concrete_opt
         if concrete_opt.is_some then
-            concrete_opt.unwrap.format bound_constraint effect bindings method_diff_bind_for_bound = bindings
+            store concrete_opt.unwrap.format bound_constraint effect bindings method_diff_bind_for_bound = bindings
         fi
     done
     bindings
@@ -1547,7 +1560,7 @@ fn inject_trait_fn_ptrs
     # bound from the stack, inspect the concrete type's implementation of
     # each trait method and diff its stack effect against the trait's declared
     # stack effect to bind T. Single pass in declaration order.
-    bindings function_opt effect method_diff_bind_all = bindings
+    tc.store bindings function_opt effect method_diff_bind_all = bindings
 
     # Check TYPE_CAST lookahead for return type binding
     if op_index ops.length > then
@@ -1596,7 +1609,7 @@ fn inject_trait_fn_ptrs
             fi
         fi
 
-        trait_def DEFAULT_PARSER collect_trait_methods = expanded_methods
+        trait_def tc.store collect_trait_methods = expanded_methods
         if is_forwarding then
             # Forward hidden fn ptrs from calling function (abstract methods only)
             expanded_methods.length 1 - = method_index
@@ -1615,7 +1628,7 @@ fn inject_trait_fn_ptrs
             done
         else
             # Verify structural satisfaction
-            if function_opt trait_name concrete_t type_satisfies_trait ! then
+            if tc.store function_opt trait_name concrete_t type_satisfies_trait ! then
                 location f"Type `{concrete}` does not satisfy trait `{trait_name}`" ErrorKind::TypeMismatch raise_error
             fi
             # Inject FN_PUSH for each abstract method (reversed)
@@ -1630,9 +1643,9 @@ fn inject_trait_fn_ptrs
                         global_fn_opt.unwrap = global_fn
                         if global_fn Function::is_used ! then
                             true global_fn Function::set_is_used
-                            global_fn global_fn Function::ops resolve_identifiers global_fn Function::set_ops
+                            global_fn global_fn Function::ops tc.store resolve_identifiers global_fn Function::set_ops
                         fi
-                        global_fn ensure_typechecked
+                        tc.store global_fn ensure_typechecked
                         location fn_name OpValue::FnPush make_op = push_op
                         insert_pos push_op ops.insert
                         1 += insert_pos
@@ -1666,7 +1679,7 @@ fn check_function_ops
         fn_name tc.store.functions.get = fn_opt
         if fn_opt.is_some then
             fn_opt.unwrap = function
-            function ensure_typechecked
+            tc.store function ensure_typechecked
             function Function::stack_effect = effect
             if 0 effect StackEffect::trait_bounds.keys.length != then
                 function_opt op Op::location op_index ops effect tc inject_trait_fn_ptrs = injected
@@ -1690,7 +1703,7 @@ fn check_function_ops
         push_name tc.store.functions.get = push_fn_opt
         if push_fn_opt.is_some then
             push_fn_opt.unwrap = push_fn
-            push_fn ensure_typechecked
+            tc.store push_fn ensure_typechecked
             push_fn Function::stack_effect stack_effect_to_function_type tc stack_push_type
         else
             "fn" tc stack_push
@@ -1739,7 +1752,7 @@ fn check_literals tc:TypeChecker op:Op function_opt:Option[Function] {
             0 = items_idx
             while items_idx items.length > do
                 tc stack_pop_type = item_type_t
-                item_type_t elem_type_t unify_type_t = unified_opt
+                tc.store item_type_t elem_type_t unify_type_t = unified_opt
                 if unified_opt.is_none then
                     op Op::location f"Heterogeneous array literal: cannot unify `{elem_type_t.format}` and `{item_type_t.format}`" ErrorKind::TypeMismatch raise_error
                 else
@@ -1798,7 +1811,7 @@ fn check_io tc:TypeChecker op:Op ops:List[Op] op_index:int function_opt:Option[F
         tc stack_pop_drop
         op_index return
     fi
-    if function_opt "Display" peek_t type_satisfies_trait ! then
+    if tc.store function_opt "Display" peek_t type_satisfies_trait ! then
         op Op::location f"Type `{typ}` cannot be printed: does not satisfy trait `Display`" ErrorKind::MissingTraitMethod add_error
         tc stack_pop_drop
         op_index return
@@ -1947,7 +1960,7 @@ fn check_is tc:TypeChecker op:Op function_opt:Option[Function] {
 # Check match blocks
 # ============================================================================
 
-fn set_binding_type var_name:str field_type:Type function_opt:Option[Function] {
+fn set_binding_type var_name:str field_type:Type function_opt:Option[Function] store:SymbolStore {
     if function_opt.is_some then
         function_opt.unwrap = function
         for variable in function Function::variables.iter do
@@ -1957,7 +1970,7 @@ fn set_binding_type var_name:str field_type:Type function_opt:Option[Function] {
             fi
         done
     fi
-    var_name DEFAULT_PARSER.store.variables.get = global_opt
+    var_name store.variables.get = global_opt
     if global_opt.is_some then
         field_type global_opt.unwrap Variable::set_typ
     fi
@@ -2007,7 +2020,7 @@ fn check_match tc:TypeChecker op:Op function_opt:Option[Function] {
                 match_before tc TypeChecker::live.equals
                 match_after match_before.equals && !
                 then
-                    match_after tc TypeChecker::live.unify_types = last_unified
+                    tc.store match_after tc TypeChecker::live.unify_types = last_unified
                     if 0 last_unified.length != match_after match_before.equals ! && then
                         last_unified match_after TypedStack::set_types
                     elif match_after match_before.equals then
@@ -2090,7 +2103,7 @@ fn check_match tc:TypeChecker op:Op function_opt:Option[Function] {
                 final_after tc TypeChecker::live.restore
                 return
             fi
-            final_after tc TypeChecker::live.unify_types = unified
+            tc.store final_after tc TypeChecker::live.unify_types = unified
             if 0 unified.length != then
                 final_after tc TypeChecker::live.restore
                 unified tc TypeChecker::live TypedStack::set_types
@@ -2161,10 +2174,10 @@ fn check_struct_literal tc:TypeChecker op:Op {
 # Instantiate default trait method for a concrete type
 # ============================================================================
 
-fn find_default_trait_method method_name:str -> Option[TraitMethod] {
-    DEFAULT_PARSER.store.traits.keys = find_trait_keys
+fn find_default_trait_method method_name:str store:SymbolStore -> Option[TraitMethod] {
+    store.traits.keys = find_trait_keys
     for find_trait_key in find_trait_keys.iter do
-        find_trait_key DEFAULT_PARSER.store.traits.get.unwrap = find_trait_def
+        find_trait_key store.traits.get.unwrap = find_trait_def
         for find_method in find_trait_def CasaTrait::methods.iter do
             if method_name find_method TraitMethod::name == 0 find_method TraitMethod::default_ops.length != && then
                 find_method Option::Some return
@@ -2174,10 +2187,10 @@ fn find_default_trait_method method_name:str -> Option[TraitMethod] {
     Option::None(Option[TraitMethod])
 }
 
-fn find_trait_for_method method_name:str -> Option[CasaTrait] {
-    DEFAULT_PARSER.store.traits.keys = ftm_trait_keys
+fn find_trait_for_method method_name:str store:SymbolStore -> Option[CasaTrait] {
+    store.traits.keys = ftm_trait_keys
     for ftm_trait_key in ftm_trait_keys.iter do
-        ftm_trait_key DEFAULT_PARSER.store.traits.get.unwrap = ftm_trait_def
+        ftm_trait_key store.traits.get.unwrap = ftm_trait_def
         for ftm_method in ftm_trait_def CasaTrait::methods.iter do
             if method_name ftm_method TraitMethod::name == 0 ftm_method TraitMethod::default_ops.length != && then
                 ftm_trait_def Option::Some return
@@ -2187,14 +2200,14 @@ fn find_trait_for_method method_name:str -> Option[CasaTrait] {
     Option::None(Option[CasaTrait])
 }
 
-fn check_abstract_methods_present receiver:str trait_def:CasaTrait -> bool {
-    for cam_method in trait_def DEFAULT_PARSER collect_trait_methods.iter do
+fn check_abstract_methods_present receiver:str trait_def:CasaTrait store:SymbolStore -> bool {
+    for cam_method in trait_def store collect_trait_methods.iter do
         if 0 cam_method TraitMethod::default_ops.length == then
-            f"{receiver}::{cam_method TraitMethod::name}" DEFAULT_PARSER.store.functions.get = cam_fn_opt
+            f"{receiver}::{cam_method TraitMethod::name}" store.functions.get = cam_fn_opt
             if cam_fn_opt.is_none then
                 receiver parse_type_str.base = cam_base_opt
                 if cam_base_opt.is_some then
-                    f"{cam_base_opt.unwrap}::{cam_method TraitMethod::name}" DEFAULT_PARSER.store.functions.get = cam_fn_opt
+                    f"{cam_base_opt.unwrap}::{cam_method TraitMethod::name}" store.functions.get = cam_fn_opt
                 fi
             fi
             if cam_fn_opt.is_none then
@@ -2210,16 +2223,17 @@ fn instantiate_default_trait_method
     function_opt:Option[Function]
     method_name:str
     receiver:str
+    store:SymbolStore
 -> Option[str] {
     global DEFAULT_METHOD_INSTANTIATING
-    f"{receiver}::{method_name}" DEFAULT_PARSER.store.functions.get = already_opt
+    f"{receiver}::{method_name}" store.functions.get = already_opt
     if already_opt.is_some then
         f"{receiver}::{method_name}" Option::Some return
     fi
     # Also check generic base
     receiver parse_type_str.base = already_base_opt
     if already_base_opt.is_some then
-        f"{already_base_opt.unwrap}::{method_name}" DEFAULT_PARSER.store.functions.get = already_base_fn_opt
+        f"{already_base_opt.unwrap}::{method_name}" store.functions.get = already_base_fn_opt
         if already_base_fn_opt.is_some then
             f"{already_base_opt.unwrap}::{method_name}" Option::Some return
         fi
@@ -2228,14 +2242,14 @@ fn instantiate_default_trait_method
     true = DEFAULT_METHOD_INSTANTIATING
 
     # Find a trait with a matching default method
-    method_name find_default_trait_method = default_method_opt
+    store method_name find_default_trait_method = default_method_opt
     if default_method_opt.is_none then
         false = DEFAULT_METHOD_INSTANTIATING
         Option::None(Option[str]) return
     fi
     default_method_opt.unwrap = default_method
 
-    method_name find_trait_for_method = trait_opt
+    store method_name find_trait_for_method = trait_opt
     if trait_opt.is_none then
         false = DEFAULT_METHOD_INSTANTIATING
         Option::None(Option[str]) return
@@ -2243,7 +2257,7 @@ fn instantiate_default_trait_method
     trait_opt.unwrap = trait_def
 
     # Check that receiver implements all abstract methods
-    if trait_def receiver check_abstract_methods_present ! then
+    if store trait_def receiver check_abstract_methods_present ! then
         false = DEFAULT_METHOD_INSTANTIATING
         Option::None(Option[str]) return
     fi
@@ -2285,10 +2299,10 @@ fn instantiate_default_trait_method
         done
         for infer_method in trait_def CasaTrait::methods.iter do
             if 0 infer_method TraitMethod::default_ops.length == then
-                f"{receiver}::{infer_method TraitMethod::name}" DEFAULT_PARSER.store.functions.get = infer_fn_opt
+                f"{receiver}::{infer_method TraitMethod::name}" store.functions.get = infer_fn_opt
                 if infer_fn_opt.is_some then
                     infer_fn_opt.unwrap = infer_fn
-                    infer_fn ensure_typechecked
+                    store infer_fn ensure_typechecked
                     receiver infer_method TraitMethod::stack_effect resolve_trait_stack_effect = infer_trait_resolved
                     0 = ret_index
                     while ret_index infer_trait_resolved StackEffect::return_types.length > ret_index infer_fn Function::stack_effect StackEffect::return_types.length > && do
@@ -2335,7 +2349,7 @@ fn instantiate_default_trait_method
     for body_op in cloned_body.iter do
         if body_op.value OpValue::FnPush(lambda_name) is ! then continue fi
         if lambda_name "lambda__" str::starts_with ! then continue fi
-        lambda_name DEFAULT_PARSER.store.functions.get = lambda_opt
+        lambda_name store.functions.get = lambda_opt
         if lambda_opt.is_none then continue fi
 
         f"{lambda_name}__{synth_fn_name}_{cloned_lambda_index}" = cloned_lambda_name
@@ -2351,7 +2365,7 @@ fn instantiate_default_trait_method
             lambda_tvs lambda_effect StackEffect::set_type_vars
         done
         lambda_effect lambda_opt.unwrap Function::location lambda_ops cloned_lambda_name make_function_with_stack_effect = cloned_lambda
-        cloned_lambda cloned_lambda_name DEFAULT_PARSER.store.functions.set drop
+        cloned_lambda cloned_lambda_name store.functions.set drop
         cloned_lambda_name OpValue::FnPush body_op Op::set_value
         1 += cloned_lambda_index
     done
@@ -2363,8 +2377,8 @@ fn instantiate_default_trait_method
     resolved_stack_effect empty_location synth_ops synth_fn_name make_function_with_stack_effect = synth_fn
     synth_vars synth_fn Function::set_variables
     true synth_fn Function::set_is_used
-    synth_fn synth_fn_name DEFAULT_PARSER.store.functions.set drop
-    synth_fn ensure_typechecked
+    synth_fn synth_fn_name store.functions.set drop
+    store synth_fn ensure_typechecked
 
     false = DEFAULT_METHOD_INSTANTIATING
     synth_fn_name Option::Some
@@ -2408,7 +2422,7 @@ fn check_method_call
                         1 += constraint_index
                     done
                 fi
-                for trait_method in trait_def DEFAULT_PARSER collect_trait_methods.iter do
+                for trait_method in trait_def tc.store collect_trait_methods.iter do
                     if method_name trait_method TraitMethod::name == then
                         f"__trait_{receiver}_{method_name}" = hidden_var
                         tc stack_pop_drop
@@ -2441,7 +2455,7 @@ fn check_method_call
 
     # Try instantiating a default trait method
     if fn_opt.is_none then
-        receiver method_name function_opt instantiate_default_trait_method = default_inst_opt
+        tc.store receiver method_name function_opt instantiate_default_trait_method = default_inst_opt
         if default_inst_opt.is_some then
             default_inst_opt.unwrap = fn_name
             fn_name tc.store.functions.get = fn_opt
@@ -2451,10 +2465,10 @@ fn check_method_call
     if fn_opt.is_some then
         fn_opt.unwrap = function
         if function Function::is_typechecked ! then
-            function function Function::ops resolve_identifiers function Function::set_ops
+            function function Function::ops tc.store resolve_identifiers function Function::set_ops
             true function Function::set_is_used
         fi
-        function ensure_typechecked
+        tc.store function ensure_typechecked
         function Function::stack_effect = effect
         if 0 effect StackEffect::trait_bounds.keys.length != then
             function_opt op Op::location op_index ops effect tc inject_trait_fn_ptrs += op_index
@@ -2489,7 +2503,7 @@ fn check_fstring_to_str
         TYPE_STR_T tc stack_push_type
         op_index return
     fi
-    if function_opt "Display" fstring_type_t type_satisfies_trait ! then
+    if tc.store function_opt "Display" fstring_type_t type_satisfies_trait ! then
         op Op::location f"Type `{fstring_type}` cannot be used in f-string: does not satisfy trait `Display`" ErrorKind::MissingTraitMethod add_error
         tc stack_pop_drop
         TYPE_STR_T tc stack_push_type
@@ -2503,12 +2517,12 @@ fn check_fstring_to_str
 # Ensure a function is typechecked
 # ============================================================================
 
-fn ensure_typechecked function:Function {
+fn ensure_typechecked function:Function store:SymbolStore {
     if function Function::is_typechecked then return fi
     true function Function::set_is_typechecked
-    function function Function::ops resolve_identifiers = resolved_ops
+    function function Function::ops store resolve_identifiers = resolved_ops
     resolved_ops function Function::set_ops
-    function Option::Some resolved_ops type_check_ops = inferred_stack_effect
+    store function Option::Some resolved_ops type_check_ops = inferred_stack_effect
     if function Function::stack_effect stack_effect_to_str "None -> None" == then
         inferred_stack_effect function Function::set_stack_effect
     fi
@@ -2764,7 +2778,7 @@ fn run_type_check_ops checker:TypeChecker ops:List[Op] function_opt:Option[Funct
 
         # Type cast
         if op_value OpValue::TypeCast(cast_type) is then
-            current_op Op::location function_opt cast_type validate_type_exists
+            checker.store current_op Op::location function_opt cast_type validate_type_exists
             checker stack_pop drop
             cast_type checker stack_push_type
             continue
@@ -2797,8 +2811,8 @@ fn run_type_check_ops checker:TypeChecker ops:List[Op] function_opt:Option[Funct
     done
 }
 
-fn type_check_ops ops:List[Op] function_opt:Option[Function] -> StackEffect {
-    DEFAULT_PARSER.store make_typechecker = checker
+fn type_check_ops ops:List[Op] function_opt:Option[Function] store:SymbolStore -> StackEffect {
+    store make_typechecker = checker
     -1 = budget
     if function_opt.is_some then
         function_opt.unwrap = the_function
@@ -2843,10 +2857,10 @@ fn type_check_ops ops:List[Op] function_opt:Option[Function] -> StackEffect {
 # Type check all functions
 # ============================================================================
 
-fn type_check_functions {
-    DEFAULT_PARSER.store.functions.keys = function_keys
+fn type_check_functions store:SymbolStore {
+    store.functions.keys = function_keys
     for func_name in function_keys.iter do
-        func_name DEFAULT_PARSER.store.functions.get.unwrap = current_fn
+        func_name store.functions.get.unwrap = current_fn
         if current_fn Function::is_typechecked then
             continue
         fi
@@ -2854,14 +2868,14 @@ fn type_check_functions {
             continue
         fi
         true current_fn Function::set_is_typechecked
-        current_fn current_fn Function::ops resolve_identifiers = resolved_ops
+        current_fn current_fn Function::ops store resolve_identifiers = resolved_ops
         resolved_ops current_fn Function::set_ops
         # Skip type checking for functions with trait bounds (checked on demand)
         if 0 current_fn Function::stack_effect StackEffect::trait_bounds.keys.length != then
             continue
         fi
         ERRORS.length = errors_before
-        current_fn Option::Some current_fn Function::ops type_check_ops = inferred_stack_effect
+        store current_fn Option::Some current_fn Function::ops type_check_ops = inferred_stack_effect
         ERRORS.length errors_before < = had_errors
         if had_errors then
             continue
