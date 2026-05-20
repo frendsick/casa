@@ -3,9 +3,12 @@ set -eu
 
 ROOT_DIR=$(git rev-parse --show-toplevel)
 
-# Accept optional formatter path as first argument
-if [ $# -ge 1 ]; then
+# Formatter: env var > positional path (backward compat) > default
+if [ -n "${CASA_FORMATTER:-}" ]; then
+    FORMATTER="$CASA_FORMATTER"
+elif [ $# -ge 1 ] && echo "$1" | grep -q '/'; then
     FORMATTER="$1"
+    shift
 else
     FORMATTER="$ROOT_DIR/casafmt"
 fi
@@ -19,6 +22,24 @@ RESET='\033[0m'
 
 pass=0
 fail=0
+has_filter=false
+if [ $# -gt 0 ]; then
+    has_filter=true
+fi
+
+matches_filter() {
+    name="$1"
+    shift
+    if [ $# -eq 0 ]; then
+        return 0
+    fi
+    for pattern in "$@"; do
+        case "$name" in
+            *"$pattern"*) return 0 ;;
+        esac
+    done
+    return 1
+}
 
 # ============================================================================
 # Golden file tests
@@ -27,6 +48,11 @@ fail=0
 for input_file in "$TESTS_DIR"/*.input.casa; do
     [ -f "$input_file" ] || continue
     base=$(basename "$input_file" .input.casa)
+
+    if ! matches_filter "$base" "$@"; then
+        continue
+    fi
+
     expected_file="$TESTS_DIR/$base.expected.casa"
 
     if [ ! -f "$expected_file" ]; then
@@ -47,8 +73,10 @@ for input_file in "$TESTS_DIR"/*.input.casa; do
     fi
 done
 
+if [ "$has_filter" = false ]; then
+
 # ============================================================================
-# Idempotency tests
+# Idempotency tests (full suite only)
 # ============================================================================
 
 printf "\nRunning idempotency tests...\n"
@@ -73,7 +101,7 @@ pass=$((pass + idem_pass))
 fail=$((fail + idem_fail))
 
 # ============================================================================
-# Error handling test
+# Error handling test (full suite only)
 # ============================================================================
 
 printf "\nRunning error handling test...\n"
@@ -86,6 +114,8 @@ else
     printf "${RED}[FAIL]${RESET} Failed: error_passthrough\n"
     fail=$((fail + 1))
 fi
+
+fi # has_filter
 
 # ============================================================================
 # Summary
