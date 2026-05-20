@@ -9,11 +9,10 @@ import "error"
 import "lexer"
 
 # ============================================================================
-# Parser struct and shared state
+# Parser struct and parse/resolve result
 #
-# `Parser` owns the `SymbolStore` plus parser-private `included_files`. A
-# single default parser is constructed at module load; the compiler entry
-# point and tests reuse it via `DEFAULT_PARSER`.
+# `Parser` owns parse-private state. Later compiler phases receive only the
+# dependencies they use, not the parser object itself.
 # ============================================================================
 
 struct Parser {
@@ -22,14 +21,17 @@ struct Parser {
     search_paths:   List[str]
 }
 
+struct ParseResolveResult {
+    ops:   List[Op]
+    store: SymbolStore
+}
+
 fn make_parser store:SymbolStore -> Parser {
     List::new(List[str])
     Set::new(Set[str])
     store
     Parser
 }
-symbol_store_new = DEFAULT_STORE
-DEFAULT_STORE make_parser = DEFAULT_PARSER
 
 # ============================================================================
 # Simple keyword -> OpValue lookup (no-payload variants only)
@@ -885,7 +887,7 @@ fn parse_stack_effect cursor:TokenCursor -> StackEffect {
 fn collect_trait_methods_into
     seen:Set[str]
     result:List[TraitMethod]
-    parser:Parser
+    store:SymbolStore
     trait_def:CasaTrait
 -> Set[str] {
     for ctm_method in trait_def CasaTrait::methods.iter do
@@ -895,9 +897,9 @@ fn collect_trait_methods_into
         fi
     done
     for ctm_super in trait_def CasaTrait::supertraits.iter do
-        ctm_super TraitBound::name parser.store.traits.get = ctm_super_opt
+        ctm_super TraitBound::name store.traits.get = ctm_super_opt
         if ctm_super_opt.is_some then
-            ctm_super_opt.unwrap parser result seen collect_trait_methods_into = seen
+            ctm_super_opt.unwrap store result seen collect_trait_methods_into = seen
         fi
     done
     seen
@@ -906,10 +908,10 @@ fn collect_trait_methods_into
 # transitive supertraits, deduplicated by name. The trait's own methods
 # come first; supertrait methods follow in declaration order.
 
-fn collect_trait_methods parser:Parser trait_def:CasaTrait -> List[TraitMethod] {
+fn collect_trait_methods store:SymbolStore trait_def:CasaTrait -> List[TraitMethod] {
     List::new(List[TraitMethod]) = result
     Set::new(Set[str]) = seen
-    trait_def parser result seen collect_trait_methods_into drop
+    trait_def store result seen collect_trait_methods_into drop
     result
 }
 
@@ -936,7 +938,7 @@ fn build_hidden_trait_methods
                     1 += bhtm_sub_index
                 done
             fi
-            for bound_method in bound_trait parser collect_trait_methods.iter do
+            for bound_method in bound_trait parser.store collect_trait_methods.iter do
                 # Skip default methods — only abstract methods need hidden fn ptrs
                 if 0 bound_method TraitMethod::default_ops.length == then
                     f"__trait_{bound_type_var}_{bound_method TraitMethod::name}" = hidden_name
@@ -3023,6 +3025,15 @@ fn parse_ops parser:Parser tokens:List[Token] -> List[Op] {
     ops
 }
 
+fn parse_and_resolve tokens:List[Token] search_paths:List[str] -> ParseResolveResult {
+    symbol_store_new make_parser = parser
+    search_paths parser Parser::set_search_paths
+    tokens parser parse_ops = ops
+    ops parser resolve_identifiers_global = resolved_ops
+    parser derive_hashable_for_enums
+    parser.store resolved_ops ParseResolveResult
+}
+
 # ============================================================================
 # resolve_identifiers - post-parse pass
 # ============================================================================
@@ -3112,8 +3123,9 @@ fn resolve_identifiers_global parser:Parser ops:List[Op] -> List[Op] {
     dummy ops parser resolve_identifiers_fn
 }
 
-fn resolve_identifiers ops:List[Op] function:Function -> List[Op] {
-    function ops DEFAULT_PARSER resolve_identifiers_fn
+fn resolve_identifiers store:SymbolStore ops:List[Op] function:Function -> List[Op] {
+    store make_parser = resolver
+    function ops resolver resolve_identifiers_fn
 }
 # resolve_match_op — per-arm identifier resolution entry point.
 # Registers struct-pattern field bindings as locals/globals and resolves
@@ -3354,7 +3366,7 @@ fn resolve_identifiers_fn parser:Parser ops:List[Op] function:Function -> List[O
                 lambda_opt.unwrap = lambda
                 true lambda Function::set_is_used
                 function lambda parser gather_captures
-                lambda lambda Function::ops resolve_identifiers = lambda_resolved
+                lambda lambda Function::ops parser.store resolve_identifiers = lambda_resolved
                 lambda_resolved lambda Function::set_ops
             fi
             continue
