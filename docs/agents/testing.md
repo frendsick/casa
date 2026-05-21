@@ -2,7 +2,25 @@
 
 Rules for running and updating tests.
 
-## Before running tests or opening a PR
+## During development
+
+Use selective filters to run only relevant tests while iterating:
+
+```
+tests/test_compiler.sh array_methods       # just the test you're working on
+tests/test_examples.sh game_of_life        # just the example you changed
+```
+
+Rebuild the compiler before testing if compiler sources changed:
+
+```
+./casac -L lib casa.casa -o casac_new
+CASA_COMPILER=./casac_new tests/test_compiler.sh array_methods
+```
+
+## Before opening a PR
+
+Run the full suite — no filters:
 
 - **MUST** autoformat every changed `.casa` file with `./casafmt`:
 
@@ -10,7 +28,7 @@ Rules for running and updating tests.
   ./casafmt < file.casa > tmp && mv tmp file.casa
   ```
 
-- **MUST** run test scripts:
+- **MUST** run all test scripts:
 
   ```
   tests/test_compiler.sh

@@ -48,6 +48,10 @@ _Avoid_: Shared compiler context, hidden parser dependency
 The shared representation and flow for compiler diagnostics across lexer, parser, typechecker, and later phases.
 _Avoid_: Typechecker-only diagnostics refactor, phase-local error schema
 
+**Array literal**:
+A bracket-delimited list of values (`[1, 2, 3]`, `["a", "b"]`) that produces a fixed-size `array[T]`. When all elements are compile-time constants, the compiler emits the data into `.data` as a static struct; otherwise the array is heap-allocated at runtime.
+_Avoid_: Static array, const array, inline array
+
 ### Type representation
 
 **Type AST**:
@@ -166,6 +170,9 @@ _Avoid_: Release lint, tag lint
 - The **Default parser** should trend toward zero use as explicit pass boundaries mature; if a slice can remove it fully, it should.
 - A **Typecheck result** may return the same **SymbolStore** reference it received, as long as mutations are represented at the pass boundary.
 - The **Compiler diagnostics schema** should be refactored once across the compiler, not as part of the first **Typecheck result** boundary.
+- An **Array literal** is determined at bytecode compilation time: if all element ops are literal push values, the array qualifies. `const` values and `const fn` calls are already folded to literals during parsing, so they qualify automatically.
+- Multiple uses of the same **Array literal** contents produce separate `static_array_N` labels; no deduplication is performed.
+- An **Array literal** lives in `.data` (writable), not `.rodata`. Multiple references to the same literal share the same pointer; mutation through one reference is visible to others — consistent with how string literals behave.
 - The **Documentation glossary** names project concepts that prevent drift; language keywords and ordinary programming concepts belong in reference docs.
 - Function, operator, intrinsic, and expression docs should use **Stack effect**; **Operand order** explains how stack values map to operands.
 - Public reference docs should use one **Stack effect** line for an operation instead of separate signature and stack-effect lines.
