@@ -733,21 +733,58 @@ fn compile_struct_literal compiler:BytecodeCompiler op:Op bytecode:List[InstValu
 # Compile push array
 # ============================================================================
 
-fn is_all_literal_array items:List[Op] -> bool {
-    for item in items.iter do
-        if item op_is_literal ! then false return fi
+fn sanitize_fn_name name:str -> str {
+    StringBuilder::new = sb
+    0 = si
+    while si name.length > do
+        si name.at = ch
+        if ':' ch == then
+            if name.length si 1 + < then
+                if ':' si 1 + name.at == then
+                    '_' sb.append_char
+                    '_' sb.append_char
+                    2 += si
+                    continue
+                fi
+            fi
+        fi
+        ch sb.append_char
+        1 += si
     done
-    true
+    sb.build
+}
+
+fn compile_static_array_fns compiler:BytecodeCompiler items:List[Op] {
+    for item in items.iter do
+        if item Op::value OpValue::FnPush(fn_name) is then
+            fn_name compiler.store.functions.get = csa_fn_opt
+            if csa_fn_opt.is_some then
+                item csa_fn_opt.unwrap compiler compile_function
+            fi
+        fi
+    done
 }
 
 fn compile_static_array compiler:BytecodeCompiler items:List[Op] bytecode:List[InstValue] {
+    items compiler compile_static_array_fns
     List::new(List[StaticArrayElement]) = elements
     for item in items.iter do
         item Op::value match
-            OpValue::PushInt(val) => { val StaticArrayElement::Int elements.push }
-            OpValue::PushStr(val) => { val compiler intern_string StaticArrayElement::Str elements.push }
-            OpValue::PushBool(val) => { val StaticArrayElement::Bool elements.push }
-            OpValue::PushChar(val) => { val StaticArrayElement::Char elements.push }
+            OpValue::PushInt(val) => { val StaticArrayElement::Imm elements.push }
+            OpValue::PushStr(val) => { val compiler intern_string = str_idx f"str_{str_idx}" StaticArrayElement::Label elements.push }
+            OpValue::PushBool(val) => { val StaticArrayElement::Imm elements.push }
+            OpValue::PushChar(val) => { val StaticArrayElement::Imm elements.push }
+            OpValue::PushEnumVariant(ev) => { ev EnumVariant::ordinal.unwrap StaticArrayElement::Imm elements.push }
+            OpValue::FnPush(fn_name) => {
+                fn_name sanitize_fn_name = sanitized_fn
+                f"closure_{sanitized_fn}" StaticArrayElement::Label elements.push
+            }
+            OpValue::PushArray(inner_items) => {
+                List::new(List[InstValue]) = discard_bytecode
+                discard_bytecode inner_items compiler compile_static_array
+                compiler.static_arrays.length 1 - = inner_idx
+                f"static_array_{inner_idx}" StaticArrayElement::Label elements.push
+            }
             _ => { }
         end
     done
@@ -760,7 +797,7 @@ fn compile_push_array compiler:BytecodeCompiler op:Op bytecode:List[InstValue] {
     if op.value OpValue::PushArray(items) is ! then return fi
     items.length = length
 
-    if items is_all_literal_array then
+    if compiler.store items op_is_static_array_with_store then
         bytecode items compiler compile_static_array
         return
     fi
@@ -1055,6 +1092,12 @@ fn compile_op compiler:BytecodeCompiler op:Op op_index:int bytecode:List[InstVal
         InstValue::PrintStr bytecode.push
     elif op_value OpValue::PushArray is then
         bytecode op compiler compile_push_array
+    elif op_value OpValue::ExprGroup(group_ops) is then
+        0 = grp_idx
+        while grp_idx group_ops.length > do
+            bytecode grp_idx grp_idx group_ops.get compiler compile_op
+            1 += grp_idx
+        done
     elif op_value OpValue::PushBool(bool_value) is then
         bool_value InstValue::Push bytecode.push
     elif op_value OpValue::PushChar(char_value) is then

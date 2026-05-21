@@ -421,15 +421,41 @@ fn get_op_operator token:Token cursor:TokenCursor function_name:str -> Op {
 # get_op_array - parse [item1, item2] array literal
 # ============================================================================
 
-fn get_op_array cursor:TokenCursor -> Op {
+fn parse_array_struct_literal
+    parser:Parser
+    function_name:str
+    cursor:TokenCursor
+    name_token:Token
+    items:List[Op]
+{
+    function_name cursor name_token parser parse_struct_literal = struct_ops
+    name_token Token::location struct_ops OpValue::ExprGroup make_op items.push
+}
+
+fn parse_array_lambda
+    parser:Parser
+    function_name:str
+    cursor:TokenCursor
+    brace_token:Token
+    items:List[Op]
+{
+    cursor.retreat
+    f"lambda__{function_name}_o{brace_token Token::location Location::span Span::offset}" = arr_lam_name
+    arr_lam_name cursor parser parse_block_ops = arr_lam_ops
+    brace_token Token::location arr_lam_ops arr_lam_name make_function = arr_lam_fn
+    arr_lam_fn arr_lam_name parser.store.functions.set drop
+    brace_token Token::location arr_lam_name OpValue::FnPush make_op items.push
+}
+
+fn get_op_array parser:Parser function_name:str cursor:TokenCursor -> Op {
     "[" cursor expect_token_value = open_token
     List::new(List[Op]) = items
     while "]" cursor expect_delimiter ! do
         cursor.peek = next_opt
         if next_opt.is_some then
             if "[" next_opt.unwrap Token::value == then
-                cursor get_op_array items.push
-                "]" cursor expect_delimiter drop
+                cursor function_name parser get_op_array items.push
+                "," cursor expect_delimiter drop
                 continue
             fi
         fi
@@ -438,10 +464,21 @@ fn get_op_array cursor:TokenCursor -> Op {
             open_token Token::location "Unexpected end of input in array literal" ErrorKind::UnexpectedToken raise_error
         fi
         value_opt.unwrap = value_token
-        if TokenKind::Literal value_token Token::kind == then
+        if "{" value_token Token::value == then
+            items value_token cursor function_name parser parse_array_lambda
+        elif TokenKind::Literal value_token Token::kind == then
             value_token get_op_literal items.push
         elif TokenKind::Identifier value_token Token::kind == then
-            value_token Token::location value_token Token::value OpValue::Identifier make_op items.push
+            cursor.peek = struct_peek_opt
+            if struct_peek_opt.is_some then
+                if "{" struct_peek_opt.unwrap Token::value == then
+                    items value_token cursor function_name parser parse_array_struct_literal
+                else
+                    value_token Token::location value_token Token::value OpValue::Identifier make_op items.push
+                fi
+            else
+                value_token Token::location value_token Token::value OpValue::Identifier make_op items.push
+            fi
         else
             value_token Token::location "Unexpected token in array literal" ErrorKind::UnexpectedToken raise_error
         fi
@@ -572,7 +609,7 @@ fn get_op_delimiter parser:Parser token:Token cursor:TokenCursor function_name:s
     # Open bracket [ -> array literal
     if "[" value == then
         cursor.retreat
-        cursor get_op_array ops.push
+        cursor function_name parser get_op_array ops.push
         return
     fi
 
@@ -3098,6 +3135,8 @@ fn resolve_array_identifiers
     for rai_item in items.iter do
         if rai_item.value OpValue::PushArray(inner_items) is then
             errors function inner_items store resolve_array_identifiers
+        elif rai_item.value OpValue::ExprGroup(group_inner) is then
+            function group_inner store resolve_identifiers drop
         elif rai_item.value OpValue::Identifier(rai_name) is then
             if rai_name function Function::variables variable_list_contains then
                 rai_name OpValue::PushVar rai_item Op::set_value
@@ -3114,6 +3153,9 @@ fn resolve_array_identifiers
                     ConstantValue::Char(rai_const_char) => { rai_const_char OpValue::PushChar rai_item Op::set_value }
                 end
             elif errors rai_name rai_item store try_resolve_enum_variant_ident then
+            elif rai_name store.functions.get.is_some then
+                rai_name OpValue::FnPush rai_item Op::set_value
+                true rai_name store.functions.get.unwrap Function::set_is_used
             else
                 rai_item Op::location f"Identifier `{rai_name}` is not defined" ErrorKind::UndefinedName make_error errors.push
             fi
@@ -3265,6 +3307,11 @@ fn resolve_identifiers store:SymbolStore ops:List[Op] function:Function -> List[
 
         if current_op.value OpValue::PushArray(items_inner) is then
             resolve_errors function items_inner store resolve_array_identifiers
+            continue
+        fi
+
+        if current_op.value OpValue::ExprGroup(group_inner) is then
+            function group_inner store resolve_identifiers drop
             continue
         fi
 
