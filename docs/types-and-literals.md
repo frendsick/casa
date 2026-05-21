@@ -186,11 +186,15 @@ Fixed-size, statically typed array literal. The element type `T` is inferred fro
 [true, false]       # type: array[bool]
 ```
 
-Array items can be literals or variables:
+Array items can be literals, variables, enum variants, function references, lambdas, or struct literals:
 
 ```casa
 42 = x
-[x, 2, 3]          # type: array[int]
+[x, 2, 3]                            # type: array[int]
+[Color::Red, Color::Blue]            # type: array[Color]
+[double, triple]                      # type: array[fn[int -> int]]
+[{ 1 + }]                            # type: array[fn[int -> int]]
+[Point { x: 1, y: 2 }]              # type: array[Point]
 ```
 
 All items must have the same type. Heterogeneous arrays are compile-time errors:
