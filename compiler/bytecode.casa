@@ -52,11 +52,13 @@ struct BytecodeCompiler {
     string_table:    List[str]
     constants_table: List[str]
     static_arrays:   List[StaticArray]
+    static_structs:  List[StaticStruct]
     store:           SymbolStore
 }
 
 fn make_compiler store:SymbolStore ops:List[Op] -> BytecodeCompiler {
     store
+    List::new(List[StaticStruct])
     List::new(List[StaticArray])
     List::new(List[str])
     List::new(List[str])
@@ -73,8 +75,10 @@ fn make_compiler_with_tables
     string_table:List[str]
     constants_table:List[str]
     static_arrays:List[StaticArray]
+    static_structs:List[StaticStruct]
 -> BytecodeCompiler {
     store
+    static_structs
     static_arrays
     constants_table
     string_table
@@ -765,27 +769,75 @@ fn compile_static_array_fns compiler:BytecodeCompiler items:List[Op] {
     done
 }
 
+fn compile_static_element compiler:BytecodeCompiler op:Op -> StaticArrayElement {
+    op Op::value match
+        OpValue::PushInt(val) => { val StaticArrayElement::Imm return }
+        OpValue::PushStr(val) => { val compiler intern_string = str_idx f"str_{str_idx}" StaticArrayElement::Label return }
+        OpValue::PushBool(val) => { val StaticArrayElement::Imm return }
+        OpValue::PushChar(val) => { val StaticArrayElement::Imm return }
+        OpValue::PushEnumVariant(ev) => { ev EnumVariant::ordinal.unwrap StaticArrayElement::Imm return }
+        OpValue::FnPush(fn_name) => {
+            fn_name sanitize_fn_name = sanitized_fn
+            f"closure_{sanitized_fn}" StaticArrayElement::Label return
+        }
+        _ => {
+            "Internal error: compile_static_element called on non-static op\n" eprint
+            1 exit
+            0 StaticArrayElement::Imm return
+        }
+    end
+    0 StaticArrayElement::Imm
+}
+
+fn compile_static_struct compiler:BytecodeCompiler group_ops:List[Op] -> str {
+    group_ops.length 1 - group_ops.get Op::value = last_val
+    if last_val OpValue::StructLiteral(literal) is ! then
+        "Internal error: compile_static_struct called on non-struct ExprGroup\n" eprint
+        1 exit
+        "" return
+    fi
+    literal StructLiteral::struct_name = struct_name
+    literal StructLiteral::field_order = field_order
+    struct_name compiler.store.structs.get.unwrap = casa_struct
+
+    List::new(List[StaticArrayElement]) = ordered_elems
+    0 = i
+    while i field_order.length > do
+        i group_ops.get compiler compile_static_element ordered_elems.push
+        1 += i
+    done
+
+    # Reorder to match struct member definition order
+    List::new(List[StaticArrayElement]) = fields
+    0 = mi
+    while mi casa_struct CasaStruct::members.length > do
+        mi casa_struct CasaStruct::members.get Member::name = member_name
+        member_name field_order string_list_index = fo_idx
+        fo_idx ordered_elems.get fields.push
+        1 += mi
+    done
+
+    compiler.static_structs.length = struct_index
+    fields StaticStruct compiler.static_structs.push
+    f"static_struct_{struct_index}"
+}
+
 fn compile_static_array compiler:BytecodeCompiler items:List[Op] bytecode:List[InstValue] {
     items compiler compile_static_array_fns
     List::new(List[StaticArrayElement]) = elements
     for item in items.iter do
         item Op::value match
-            OpValue::PushInt(val) => { val StaticArrayElement::Imm elements.push }
-            OpValue::PushStr(val) => { val compiler intern_string = str_idx f"str_{str_idx}" StaticArrayElement::Label elements.push }
-            OpValue::PushBool(val) => { val StaticArrayElement::Imm elements.push }
-            OpValue::PushChar(val) => { val StaticArrayElement::Imm elements.push }
-            OpValue::PushEnumVariant(ev) => { ev EnumVariant::ordinal.unwrap StaticArrayElement::Imm elements.push }
-            OpValue::FnPush(fn_name) => {
-                fn_name sanitize_fn_name = sanitized_fn
-                f"closure_{sanitized_fn}" StaticArrayElement::Label elements.push
-            }
             OpValue::PushArray(inner_items) => {
                 List::new(List[InstValue]) = discard_bytecode
                 discard_bytecode inner_items compiler compile_static_array
                 compiler.static_arrays.length 1 - = inner_idx
                 f"static_array_{inner_idx}" StaticArrayElement::Label elements.push
             }
-            _ => { }
+            OpValue::ExprGroup(group_ops) => {
+                group_ops compiler compile_static_struct = struct_label
+                struct_label StaticArrayElement::Label elements.push
+            }
+            _ => { item compiler compile_static_element elements.push }
         end
     done
     compiler.static_arrays.length = array_index
@@ -883,7 +935,7 @@ fn compile_function compiler:BytecodeCompiler function:Function op:Op {
     function Function::name COMPILED_FUNCTIONS.add = COMPILED_FUNCTIONS
 
     List::new(List[InstValue]) = function_bytecode
-    compiler.static_arrays compiler.constants_table compiler.string_table function Option::Some ops compiler.store make_compiler_with_tables = function_compiler
+    compiler.static_structs compiler.static_arrays compiler.constants_table compiler.string_table function Option::Some ops compiler.store make_compiler_with_tables = function_compiler
     function_bytecode function_compiler compile_ops
 
     # Handle locals
@@ -1194,6 +1246,7 @@ fn compile_bytecode store:SymbolStore ops:List[Op] -> Program {
 
     compiler.constants_table.length
     compiler.store.variables.length
+    compiler.static_structs
     compiler.static_arrays
     compiler.string_table
     functions
