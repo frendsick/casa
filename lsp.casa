@@ -119,7 +119,6 @@ const COLLECTOR_ENUM 3
 const QPART_TYPE 0
 const QPART_SEPARATOR 1
 const QPART_MEMBER 2
-const QPART_NONE -1
 List::new(List[str]) = LSP_LIBRARY_PATHS
 
 # ============================================================================
@@ -251,7 +250,7 @@ fn lsp_log message:str {
 }
 
 fn read_message reader:StdinReader -> Option[JsonValue] {
-    0 1 - = content_length
+    Option::None(Option[int]) = content_length
     # Read headers until empty line
     while true do
         reader stdin_read_line = header_line
@@ -259,14 +258,14 @@ fn read_message reader:StdinReader -> Option[JsonValue] {
             break
         fi
         if header_line "Content-Length: " str::starts_with then
-            header_line 16 header_line.length 16 - str::substring str_to_int = content_length
+            header_line 16 header_line.length 16 - str::substring str_to_int Option::Some = content_length
         fi
     done
-    if content_length 0 >= then
+    if content_length.is_none then
         Option::None(Option[JsonValue])
         return
     fi
-    content_length reader stdin_read_exact = body
+    content_length.unwrap reader stdin_read_exact = body
     body Cursor::new = cursor
     cursor json_parse = parse_result
     if parse_result.is_error then
@@ -624,22 +623,22 @@ fn casa_location_to_lsp location:Location -> LspLocation {
 # Qualified name utilities
 # ============================================================================
 
-fn qualified_name_part source:str op:Op cursor_offset:int -> int {
+fn qualified_name_part source:str op:Op cursor_offset:int -> Option[int] {
     op Op::location Location::span Span::offset = start
     op Op::location Location::span Span::length = length
     source start length str::substring = text
     text "::" str::find = separator
     if 0 separator < then
-        QPART_NONE
+        Option::None(Option[int])
         return
     fi
     cursor_offset start - = relative_offset
     if relative_offset separator > then
-        QPART_TYPE
+        QPART_TYPE Option::Some
     elif relative_offset separator 2 + > then
-        QPART_SEPARATOR
+        QPART_SEPARATOR Option::Some
     else
-        QPART_MEMBER
+        QPART_MEMBER Option::Some
     fi
 }
 
@@ -768,17 +767,23 @@ fn compute_definition state:DocumentState line:int col:int -> Option[LspLocation
     col line state DocumentState::source position_to_offset = cursor_offset
 
     # Check qualified name
-    cursor_offset op state DocumentState::source qualified_name_part = qpart
-    if QPART_SEPARATOR qpart == then
-        Option::None(Option[LspLocation])
-        return
+    false = qpart_is_type
+    false = qpart_is_member
+    cursor_offset op state DocumentState::source qualified_name_part = qpart_opt
+    if qpart_opt Option::Some(qpart) is then
+        if QPART_SEPARATOR qpart == then
+            Option::None(Option[LspLocation])
+            return
+        fi
+        QPART_TYPE qpart == = qpart_is_type
+        QPART_MEMBER qpart == = qpart_is_member
     fi
 
     op.value = op_value
 
     # FN_CALL / FN_PUSH
     if op_value OpValue::FnCall is op_value OpValue::FnPush is || then
-        if QPART_TYPE qpart == then
+        if qpart_is_type then
             op op_str_value "::" str::split = parts
             0 parts.get = type_name
             if type_name state DocumentState::structs.has then
@@ -825,7 +830,7 @@ fn compute_definition state:DocumentState line:int col:int -> Option[LspLocation
         fi
         enum_name state DocumentState::enums.get.unwrap = casa_enum
         enum_variant EnumVariant::variant_name casa_enum CasaEnum::variant_locations.get = variant_loc_opt
-        if QPART_MEMBER qpart == variant_loc_opt.is_some && then
+        if qpart_is_member variant_loc_opt.is_some && then
             variant_loc_opt.unwrap casa_location_to_lsp Option::Some
             return
         fi
@@ -1097,66 +1102,64 @@ fn compute_hover state:DocumentState line:int col:int -> Option[HoverContent] {
     col line state DocumentState::source position_to_offset = cursor_offset
 
     # Dead zone for :: separator
-    cursor_offset op state DocumentState::source qualified_name_part = qpart
-    if QPART_SEPARATOR qpart == then
-        Option::None(Option[HoverContent])
-        return
-    fi
-
-    # Qualified function call
-    if
-    QPART_NONE qpart !=
-    op.value OpValue::FnCall is op.value OpValue::FnPush is || &&
-    then
-        op op_str_value "::" str::split = qualified_parts
-        0 qualified_parts.get = qualified_type_name
-        if QPART_TYPE qpart == then
-            op state DocumentState::source qualified_type_range = qualified_range
-            # Look up type
-            Option::None(Option[str]) = qualified_content
-            if qualified_type_name state DocumentState::structs.has then
-                qualified_type_name state DocumentState::structs.get.unwrap format_struct_hover Option::Some = qualified_content
-            elif qualified_type_name state DocumentState::enums.has then
-                qualified_type_name state DocumentState::enums.get.unwrap format_enum_hover Option::Some = qualified_content
-            fi
-            if qualified_content.is_some then
-                qualified_range f"```casa\n{qualified_content.unwrap}\n```" HoverContent Option::Some
-                return
-            fi
-        else
-            # Member part: show function stack effect
-            op state DocumentState::source qualified_member_range = member_range
-            member_range state func op format_qualified_member_hover = member_hover
-            if member_hover.is_some then
-                member_hover
-                return
-            fi
-        fi
-        Option::None(Option[HoverContent])
-        return
-    fi
-
-    # Qualified enum variant
-    if
-    QPART_NONE qpart !=
-    op.value OpValue::PushEnumVariant is &&
-    then
-        op enum_variant_of = enum_variant
-        if QPART_TYPE qpart == then
-            op state DocumentState::source qualified_type_range = enum_range
-            if enum_variant EnumVariant::enum_name state DocumentState::enums.has then
-                enum_variant EnumVariant::enum_name state DocumentState::enums.get.unwrap format_enum_hover = enum_text
-                enum_range f"```casa\n{enum_text}\n```" HoverContent Option::Some
-                return
-            fi
-        else
-            op state DocumentState::source qualified_member_range = variant_range
-            f"{enum_variant EnumVariant::enum_name}::{enum_variant EnumVariant::variant_name}" = variant_content
-            variant_range f"```casa\n{variant_content}\n```" HoverContent Option::Some
+    cursor_offset op state DocumentState::source qualified_name_part = qpart_opt
+    if qpart_opt Option::Some(qpart) is then
+        if QPART_SEPARATOR qpart == then
+            Option::None(Option[HoverContent])
             return
         fi
-        Option::None(Option[HoverContent])
-        return
+
+        # Qualified function call
+        if
+        op.value OpValue::FnCall is op.value OpValue::FnPush is ||
+        then
+            op op_str_value "::" str::split = qualified_parts
+            0 qualified_parts.get = qualified_type_name
+            if QPART_TYPE qpart == then
+                op state DocumentState::source qualified_type_range = qualified_range
+                # Look up type
+                Option::None(Option[str]) = qualified_content
+                if qualified_type_name state DocumentState::structs.has then
+                    qualified_type_name state DocumentState::structs.get.unwrap format_struct_hover Option::Some = qualified_content
+                elif qualified_type_name state DocumentState::enums.has then
+                    qualified_type_name state DocumentState::enums.get.unwrap format_enum_hover Option::Some = qualified_content
+                fi
+                if qualified_content.is_some then
+                    qualified_range f"```casa\n{qualified_content.unwrap}\n```" HoverContent Option::Some
+                    return
+                fi
+            else
+                # Member part: show function stack effect
+                op state DocumentState::source qualified_member_range = member_range
+                member_range state func op format_qualified_member_hover = member_hover
+                if member_hover.is_some then
+                    member_hover
+                    return
+                fi
+            fi
+            Option::None(Option[HoverContent])
+            return
+        fi
+
+        # Qualified enum variant
+        if op.value OpValue::PushEnumVariant is then
+            op enum_variant_of = enum_variant
+            if QPART_TYPE qpart == then
+                op state DocumentState::source qualified_type_range = enum_range
+                if enum_variant EnumVariant::enum_name state DocumentState::enums.has then
+                    enum_variant EnumVariant::enum_name state DocumentState::enums.get.unwrap format_enum_hover = enum_text
+                    enum_range f"```casa\n{enum_text}\n```" HoverContent Option::Some
+                    return
+                fi
+            else
+                op state DocumentState::source qualified_member_range = variant_range
+                f"{enum_variant EnumVariant::enum_name}::{enum_variant EnumVariant::variant_name}" = variant_content
+                variant_range f"```casa\n{variant_content}\n```" HoverContent Option::Some
+                return
+            fi
+            Option::None(Option[HoverContent])
+            return
+        fi
     fi
 
     # General hover
