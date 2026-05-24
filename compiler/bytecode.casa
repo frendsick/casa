@@ -8,55 +8,27 @@ import "error"
 import "pattern"
 
 # ============================================================================
-# Label management
-# ============================================================================
-0 = LABEL_COUNTER
-Map::new(Map[Op int]) = OP_LABEL_MAP
-Set::new(Set[str]) = COMPILED_FUNCTIONS
-
-fn new_label -> int {
-    global LABEL_COUNTER
-    LABEL_COUNTER = value
-    1 += LABEL_COUNTER
-    value
-}
-
-fn reset_labels {
-    global LABEL_COUNTER
-    global OP_LABEL_MAP
-    global COMPILED_FUNCTIONS
-    0 = LABEL_COUNTER
-    Map::new(Map[Op int]) = OP_LABEL_MAP
-    Set::new(Set[str]) = COMPILED_FUNCTIONS
-}
-
-fn op_to_label op:Op -> int {
-    global OP_LABEL_MAP
-    if op OP_LABEL_MAP.get Option::Some(existing) is then
-        existing
-    else
-        new_label = label
-        label op OP_LABEL_MAP.set = OP_LABEL_MAP
-        label
-    fi
-}
-
-# ============================================================================
 # BytecodeCompiler struct
 # ============================================================================
 
 struct BytecodeCompiler {
-    ops:             List[Op]
-    function:        Option[Function]
-    locals_count:    int
-    string_table:    List[str]
-    constants_table: List[str]
-    static_arrays:   List[StaticArray]
-    static_structs:  List[StaticStruct]
-    store:           SymbolStore
+    ops:                List[Op]
+    function:           Option[Function]
+    locals_count:       int
+    string_table:       List[str]
+    constants_table:    List[str]
+    static_arrays:      List[StaticArray]
+    static_structs:     List[StaticStruct]
+    store:              SymbolStore
+    label_counter:      int
+    op_label_map:       Map[Op int]
+    compiled_functions: Set[str]
 }
 
 fn make_compiler store:SymbolStore ops:List[Op] -> BytecodeCompiler {
+    Set::new(Set[str])
+    Map::new(Map[Op int])
+    0
     store
     List::new(List[StaticStruct])
     List::new(List[StaticArray])
@@ -76,7 +48,13 @@ fn make_compiler_with_tables
     constants_table:List[str]
     static_arrays:List[StaticArray]
     static_structs:List[StaticStruct]
+    label_counter:int
+    op_label_map:Map[Op int]
+    compiled_functions:Set[str]
 -> BytecodeCompiler {
+    compiled_functions
+    op_label_map
+    label_counter
     store
     static_structs
     static_arrays
@@ -86,6 +64,26 @@ fn make_compiler_with_tables
     function
     ops
     BytecodeCompiler
+}
+
+# ============================================================================
+# Label management
+# ============================================================================
+
+fn new_label compiler:BytecodeCompiler -> int {
+    compiler.label_counter = value
+    compiler.label_counter 1 + compiler->label_counter
+    value
+}
+
+fn op_to_label compiler:BytecodeCompiler op:Op -> int {
+    if op compiler.op_label_map.get Option::Some(existing) is then
+        existing
+    else
+        compiler new_label = label
+        label op compiler.op_label_map.set drop
+        label
+    fi
 }
 
 # ============================================================================
@@ -154,6 +152,7 @@ fn is_block_end_value op_value:OpValue -> bool {
 # start variant going backward).
 
 fn find_matching_label
+    compiler:BytecodeCompiler
     ops:List[Op]
     op_index:int
     boundary_value:OpValue
@@ -171,7 +170,7 @@ fn find_matching_label
         other_op.value = other_value
         if 1 depth <= then
             if other_value target_values op_value_list_contains then
-                index ops.get op_to_label Option::Some return
+                index ops.get compiler op_to_label Option::Some return
             fi
         fi
         if other_value is_block_start_value then
@@ -202,7 +201,7 @@ fn op_value_list_contains items:List[OpValue] value:OpValue -> bool {
 # tag-only equality. This forward scan tracks depth and returns the label
 # of the next OpMatchArm or None on OpMatchEnd at depth 0.
 
-fn find_next_match_arm_or_end ops:List[Op] op_index:int -> Option[int] {
+fn find_next_match_arm_or_end compiler:BytecodeCompiler ops:List[Op] op_index:int -> Option[int] {
     1 = depth
     op_index 1 + = index
     while index ops.length > do
@@ -210,7 +209,7 @@ fn find_next_match_arm_or_end ops:List[Op] op_index:int -> Option[int] {
         other_op.value = other_value
         if 1 depth <= then
             if other_value OpValue::MatchArm is then
-                index ops.get op_to_label Option::Some return
+                index ops.get compiler op_to_label Option::Some return
             fi
         fi
         if other_value is_block_start_value then
@@ -229,6 +228,7 @@ fn find_next_match_arm_or_end ops:List[Op] op_index:int -> Option[int] {
 }
 
 fn require_matching
+    compiler:BytecodeCompiler
     ops:List[Op]
     op_index:int
     boundary_value:OpValue
@@ -237,7 +237,7 @@ fn require_matching
     message:str
     backward:bool
 -> int {
-    backward target_values boundary_value op_index ops find_matching_label = result
+    backward target_values boundary_value op_index ops compiler find_matching_label = result
     if result.is_none then
         location message ErrorKind::UnmatchedBlock make_error ERRORS.push
         0
@@ -298,30 +298,30 @@ fn compile_if_block compiler:BytecodeCompiler op:Op op_index:int bytecode:List[I
 
     op.value match
         OpValue::IfCondition => {
-            true "`then` without matching `if`" loc start_targets OpValue::IfStart op_index ops require_matching drop
-            false "`then` without matching `fi`" loc elif_else_end OpValue::IfEnd op_index ops require_matching = end_label
+            true "`then` without matching `if`" loc start_targets OpValue::IfStart op_index ops compiler require_matching drop
+            false "`then` without matching `fi`" loc elif_else_end OpValue::IfEnd op_index ops compiler require_matching = end_label
             end_label InstValue::JumpNe bytecode.push
         }
         OpValue::IfElif => {
-            true "`elif` without parent `if`" loc start_targets OpValue::IfStart op_index ops require_matching drop
-            op_index compiler.ops.get op_to_label = elif_label
-            false "`elif` without matching `fi`" loc end_targets OpValue::IfEnd op_index ops require_matching = end_label_2
+            true "`elif` without parent `if`" loc start_targets OpValue::IfStart op_index ops compiler require_matching drop
+            op_index compiler.ops.get compiler op_to_label = elif_label
+            false "`elif` without matching `fi`" loc end_targets OpValue::IfEnd op_index ops compiler require_matching = end_label_2
             end_label_2 InstValue::Jump bytecode.push
             elif_label InstValue::Label bytecode.push
         }
         OpValue::IfElse => {
-            true "`else` without parent `if`" loc start_targets OpValue::IfStart op_index ops require_matching drop
-            op_index compiler.ops.get op_to_label = else_label
-            false "`else` without matching `fi`" loc end_targets OpValue::IfEnd op_index ops require_matching = end_label_3
+            true "`else` without parent `if`" loc start_targets OpValue::IfStart op_index ops compiler require_matching drop
+            op_index compiler.ops.get compiler op_to_label = else_label
+            false "`else` without matching `fi`" loc end_targets OpValue::IfEnd op_index ops compiler require_matching = end_label_3
             end_label_3 InstValue::Jump bytecode.push
             else_label InstValue::Label bytecode.push
         }
         OpValue::IfEnd => {
-            true "`fi` without parent `if`" loc start_targets OpValue::IfStart op_index ops require_matching drop
-            op_index compiler.ops.get op_to_label = fi_label
+            true "`fi` without parent `if`" loc start_targets OpValue::IfStart op_index ops compiler require_matching drop
+            op_index compiler.ops.get compiler op_to_label = fi_label
             fi_label InstValue::Label bytecode.push
         }
-        OpValue::IfStart => false "`if` without matching `fi`" loc end_targets OpValue::IfEnd op_index ops require_matching drop
+        OpValue::IfStart => false "`if` without matching `fi`" loc end_targets OpValue::IfEnd op_index ops compiler require_matching drop
         _ => {
             "Internal error: compile_if_block called with non-if OpValue\n" eprint
             1 exit
@@ -345,27 +345,27 @@ fn compile_while_block compiler:BytecodeCompiler op:Op op_index:int bytecode:Lis
 
     op.value match
         OpValue::WhileBreak => {
-            true "`break` without parent `while`" loc start_targets OpValue::WhileStart op_index ops require_matching drop
-            false "`break` without matching `done`" loc end_targets OpValue::WhileEnd op_index ops require_matching = end_label
+            true "`break` without parent `while`" loc start_targets OpValue::WhileStart op_index ops compiler require_matching drop
+            false "`break` without matching `done`" loc end_targets OpValue::WhileEnd op_index ops compiler require_matching = end_label
             end_label InstValue::Jump bytecode.push
         }
         OpValue::WhileCondition => {
-            true "`do` without parent `while`" loc start_targets OpValue::WhileStart op_index ops require_matching drop
-            false "`do` without matching `done`" loc end_targets OpValue::WhileEnd op_index ops require_matching = end_label_2
+            true "`do` without parent `while`" loc start_targets OpValue::WhileStart op_index ops compiler require_matching drop
+            false "`do` without matching `done`" loc end_targets OpValue::WhileEnd op_index ops compiler require_matching = end_label_2
             end_label_2 InstValue::JumpNe bytecode.push
         }
         OpValue::WhileContinue => {
-            true "`continue` without parent `while`" loc start_targets OpValue::WhileStart op_index ops require_matching = continue_target
+            true "`continue` without parent `while`" loc start_targets OpValue::WhileStart op_index ops compiler require_matching = continue_target
             continue_target InstValue::Jump bytecode.push
         }
         OpValue::WhileEnd => {
-            op_index compiler.ops.get op_to_label = while_label
-            true "`done` without parent `while`" loc start_targets OpValue::WhileStart op_index ops require_matching = loop_start
+            op_index compiler.ops.get compiler op_to_label = while_label
+            true "`done` without parent `while`" loc start_targets OpValue::WhileStart op_index ops compiler require_matching = loop_start
             loop_start InstValue::Jump bytecode.push
             while_label InstValue::Label bytecode.push
         }
         OpValue::WhileStart => {
-            op_index compiler.ops.get op_to_label = start_label
+            op_index compiler.ops.get compiler op_to_label = start_label
             start_label InstValue::Label bytecode.push
         }
         _ => {
@@ -527,9 +527,9 @@ fn compile_match_block compiler:BytecodeCompiler op:Op op_index:int bytecode:Lis
         List::new(List[OpValue]) = end_targets
         OpValue::MatchEnd end_targets.push
 
-        false "`match` arm without matching `end`" loc end_targets OpValue::MatchEnd op_index ops require_matching = end_label
+        false "`match` arm without matching `end`" loc end_targets OpValue::MatchEnd op_index ops compiler require_matching = end_label
 
-        op_index ops.get OP_LABEL_MAP.get = existing
+        op_index ops.get compiler.op_label_map.get = existing
         existing.is_some ! = is_first
 
         if is_first ! then
@@ -537,12 +537,12 @@ fn compile_match_block compiler:BytecodeCompiler op:Op op_index:int bytecode:Lis
             existing.unwrap InstValue::Label bytecode.push
         fi
 
-        op_index ops find_next_match_arm_or_end = next_arm
+        op_index ops compiler find_next_match_arm_or_end = next_arm
         next_arm.is_none = is_last
 
         bytecode next_arm is_last op compiler compile_match_op
     elif match_value OpValue::MatchEnd is then
-        op_index compiler.ops.get op_to_label = end_match_label
+        op_index compiler.ops.get compiler op_to_label = end_match_label
         end_match_label InstValue::Label bytecode.push
     fi
 }
@@ -658,7 +658,7 @@ fn compile_is_check compiler:BytecodeCompiler op:Op bytecode:List[InstValue] {
     compiler.locals_count = temp_ptr
     compiler.locals_count 1 + compiler->locals_count
 
-    new_label = skip_bindings
+    compiler new_label = skip_bindings
 
     # Save enum pointer
     temp_ptr InstValue::LocalSet bytecode.push
@@ -889,8 +889,8 @@ fn compile_push_array compiler:BytecodeCompiler op:Op bytecode:List[InstValue] {
     16 InstValue::Push bytecode.push
     index_local InstValue::LocalSet bytecode.push
 
-    new_label = start_label
-    new_label = end_label
+    compiler new_label = start_label
+    compiler new_label = end_label
 
     # while index limit > do
     start_label InstValue::Label bytecode.push
@@ -924,19 +924,19 @@ fn compile_push_array compiler:BytecodeCompiler op:Op bytecode:List[InstValue] {
 # ============================================================================
 
 fn compile_function compiler:BytecodeCompiler function:Function op:Op {
-    global COMPILED_FUNCTIONS
     # Compile a function if not already compiled.
-    if function Function::name COMPILED_FUNCTIONS.has then
+    if function Function::name compiler.compiled_functions.has then
         return
     fi
     function Function::ops = ops
 
     # Mark as being compiled to prevent infinite recursion on recursive calls
-    function Function::name COMPILED_FUNCTIONS.add = COMPILED_FUNCTIONS
+    function Function::name compiler.compiled_functions.add drop
 
     List::new(List[InstValue]) = function_bytecode
-    compiler.static_structs compiler.static_arrays compiler.constants_table compiler.string_table function Option::Some ops compiler.store make_compiler_with_tables = function_compiler
+    compiler.compiled_functions compiler.op_label_map compiler.label_counter compiler.static_structs compiler.static_arrays compiler.constants_table compiler.string_table function Option::Some ops compiler.store make_compiler_with_tables = function_compiler
     function_bytecode function_compiler compile_ops
+    function_compiler.label_counter compiler->label_counter
 
     # Handle locals
     function_compiler.locals_count = locals_count
@@ -1194,7 +1194,7 @@ fn compile_ops compiler:BytecodeCompiler bytecode:List[InstValue] {
     fi
 
     # Function label
-    new_label = function_label
+    compiler new_label = function_label
     function_label InstValue::Label bytecode.push
 
     0 = index
@@ -1210,8 +1210,6 @@ fn compile_ops compiler:BytecodeCompiler bytecode:List[InstValue] {
 # ============================================================================
 
 fn compile_bytecode store:SymbolStore ops:List[Op] -> Program {
-    reset_labels
-
     List::new(List[InstValue]) = bytecode
     ops store make_compiler = compiler
 
