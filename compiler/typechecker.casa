@@ -958,11 +958,7 @@ impl TypeChecker {
     fn assert_word_bound tc:TypeChecker op:Op type_name:str function_opt:Option[Function] {
         if type_name TYPE_UNKNOWN == then return fi
         if function_opt.is_none then return fi
-        if function_opt Option::Some(function) is then
-            function Function::stack_effect = word_stack_effect
-        else
-            return
-        fi
+        function_opt.unwrap Function::stack_effect = word_stack_effect
         if type_name word_stack_effect StackEffect::type_vars.has ! then return fi
         type_name word_stack_effect StackEffect::trait_bounds.get = word_bound_opt
         if word_bound_opt.is_none then return fi
@@ -1028,19 +1024,53 @@ fn unify_variable_assignment
 }
 
 impl TypeChecker {
-    # Record a variable assignment relative to the active while-block scopes.
-    # Outside any while block the name is a pre-scope (function-level) variable,
-    # and any stale out-of-scope marking is cleared. Inside a while block, a name
-    # that is not already active, pre-scope, or global becomes local to the
+    # Push a fresh scope frame for a new block branch (while body, if/elif/else
+    # branch, or match arm). Names first assigned inside the branch land here.
+    fn push_block_scope tc:TypeChecker {
+        List::new(List[str]) tc.scope_stack.push
+    }
+
+    # Pop the innermost scope frame at a block boundary. Each name that is not
+    # still active in an enclosing frame moves to out_of_scope, so a later read
+    # is rejected as undefined. Shared by while, if/elif/else, and match.
+    fn pop_block_scope tc:TypeChecker {
+        if 0 tc.scope_stack.length == then return fi
+        tc.scope_stack.pop = popped_frame
+        for exiting_name in popped_frame.iter do
+            # Only move to out_of_scope if not still active in an outer frame
+            false = still_active
+            0 = outer_idx
+            while outer_idx tc.scope_stack.length > do
+                outer_idx tc.scope_stack.get = outer_frame
+                if exiting_name outer_frame string_list_contains then
+                    true = still_active
+                fi
+                1 += outer_idx
+            done
+            if still_active ! then
+                exiting_name tc.out_of_scope.add = new_oos
+                new_oos tc->out_of_scope
+            fi
+        done
+    }
+
+    # Record a variable assignment or pattern binding relative to the active
+    # block scopes. Outside any block the name is a pre-scope (function-level)
+    # variable, and any stale out-of-scope marking is cleared. Inside a block, a
+    # name that is not already active, pre-scope, or global becomes local to the
     # innermost frame (reactivating it if it was previously out of scope).
-    fn record_var_scope tc:TypeChecker var_name:str {
+    #
+    # `is_binding` marks implicit pattern/is-bindings: when such a name would
+    # otherwise resolve to an accessible outer variable it is a shadow error,
+    # whereas an explicit `= x` is allowed to mutate that outer variable.
+    fn record_var_scope tc:TypeChecker var_name:str op:Op is_binding:bool {
         if 0 tc.scope_stack.length == then
             if var_name tc.pre_scope_vars.has ! then
                 var_name tc.pre_scope_vars.add = updated_pre
                 updated_pre tc->pre_scope_vars
             fi
             # A fresh outer-scope assignment is always accessible — clear any
-            # stale out-of-scope marking left by an earlier while block.
+            # stale out-of-scope marking left by an earlier block.
             if var_name tc.out_of_scope.has then
                 var_name tc.out_of_scope.remove = cleared_pre
                 cleared_pre tc->out_of_scope
@@ -1077,6 +1107,12 @@ impl TypeChecker {
                 if var_name cur_frame string_list_contains ! then
                     var_name cur_frame.push
                 fi
+            elif is_binding is_pre_scope_global ! && then
+                # An implicit pattern/is binding would shadow an accessible
+                # block-local or function-level variable. Globals are a separate
+                # namespace (and are exempt from block scoping), so a binding that
+                # merely matches a global name is allowed, as before.
+                op Op::location f"Binding `{var_name}` shadows an existing variable in scope; choose a different name" ErrorKind::DuplicateName add_error
             fi
         fi
     }
@@ -1089,46 +1125,47 @@ impl TypeChecker {
             TYPE_INT_T tc.expect_type_t
             return
         fi
-        if op.value OpValue::AssignVar(var_name) is ! then return fi
-        tc.stack_peek_type = stack_type_t
-        op Op::type_hint.is_some = has_annotation
-        stack_type_t = effective_type_t
-        if has_annotation then
-            op Op::type_hint = hint_opt
-            if hint_opt.is_none then
-                empty_location "Expected option value while unwrapping op Op::type_hint" ErrorKind::Syntax raise_error
-                1 exit
+        if op.value OpValue::AssignVar(var_name) is then
+            tc.stack_peek_type = stack_type_t
+            op Op::type_hint.is_some = has_annotation
+            stack_type_t = effective_type_t
+            if has_annotation then
+                op Op::type_hint = hint_opt
+                if hint_opt.is_none then
+                    empty_location "Expected option value while unwrapping op Op::type_hint" ErrorKind::Syntax raise_error
+                    1 exit
+                fi
+                hint_opt.unwrap = effective_type_t
             fi
-            hint_opt.unwrap = effective_type_t
-        fi
-        if has_annotation ! stack_type_t.has_unresolved && then
-            op Op::location f"Cannot infer element type of empty array literal assigned to `{var_name}`; add a type annotation (e.g. `= {var_name}:array[int]`) or an explicit cast (e.g. `[] (array[int])`)." ErrorKind::TypeMismatch raise_error
-        fi
+            if has_annotation ! stack_type_t.has_unresolved && then
+                op Op::location f"Cannot infer element type of empty array literal assigned to `{var_name}`; add a type annotation (e.g. `= {var_name}:array[int]`) or an explicit cast (e.g. `[] (array[int])`)." ErrorKind::TypeMismatch raise_error
+            fi
 
-        # Scope tracking: record variable assignment relative to while blocks.
-        var_name tc.record_var_scope
+            # Scope tracking: record variable assignment relative to block scopes.
+            false op var_name tc.record_var_scope
 
-        # Try local variables first
-        if function_opt.is_some then
-            function_opt.unwrap = function
-            var_name function Function::variables variable_list_index = local_index
-            if 0 local_index >= then
-                local_index function Function::variables.get = local_var
-                tc.store "local" effective_type_t local_var op unify_variable_assignment
+            # Try local variables first
+            if function_opt.is_some then
+                function_opt.unwrap = function
+                var_name function Function::variables variable_list_index = local_index
+                if 0 local_index >= then
+                    local_index function Function::variables.get = local_var
+                    tc.store "local" effective_type_t local_var op unify_variable_assignment
+                    effective_type_t tc.expect_type_t
+                    return
+                fi
+            fi
+
+            # Try global variables
+            var_name tc.store.variables.get = global_opt
+            if global_opt.is_some then
+                global_opt.unwrap = global_var
+                tc.store "global" effective_type_t global_var op unify_variable_assignment
                 effective_type_t tc.expect_type_t
                 return
             fi
-        fi
-
-        # Try global variables
-        var_name tc.store.variables.get = global_opt
-        if global_opt.is_some then
-            global_opt.unwrap = global_var
-            tc.store "global" effective_type_t global_var op unify_variable_assignment
             effective_type_t tc.expect_type_t
-            return
         fi
-        effective_type_t tc.expect_type_t
     }
 }
 
@@ -1150,11 +1187,7 @@ impl TypeChecker {
         trait_suffix trait_sep 1 + trait_suffix.length trait_sep - 1 - str::substring = trait_method_name
         trait_type_var function Function::stack_effect StackEffect::trait_bounds.get = trait_bound_opt
         if trait_bound_opt.is_none then return fi
-        if trait_bound_opt Option::Some(trait_bound) is then
-            trait_bound TraitBound::name tc.store.traits.get = trait_def_opt
-        else
-            return
-        fi
+        trait_bound_opt.unwrap TraitBound::name tc.store.traits.get = trait_def_opt
         if trait_def_opt.is_none then return fi
         trait_def_opt.unwrap = trait_def
         for trait_method_entry in trait_def tc.store collect_trait_methods.iter do
@@ -1203,41 +1236,41 @@ impl TypeChecker {
         fi
 
         # PUSH_VARIABLE
-        if op.value OpValue::PushVar(var_name) is ! then return fi
+        if op.value OpValue::PushVar(var_name) is then
+            # Check if variable has gone out of scope (was only in a popped block scope)
+            if var_name tc.out_of_scope.has then
+                op Op::location f"Variable `{var_name}` is not accessible outside its block scope" ErrorKind::UndefinedName add_error
+                TYPE_UNKNOWN_T tc.stack_push_type
+                return
+            fi
 
-        # Check if variable has gone out of scope (was only in a popped while scope)
-        if var_name tc.out_of_scope.has then
-            op Op::location f"Variable `{var_name}` is not accessible outside its while block scope" ErrorKind::UndefinedName add_error
-            TYPE_UNKNOWN_T tc.stack_push_type
-            return
-        fi
+            # Check local variables first
+            if function_opt.is_some then
+                function_opt.unwrap = function
+                var_name function Function::variables variable_list_index = local_index
+                if 0 local_index >= then
+                    if local_index function Function::variables.get Variable::typ.is_unknown ! then
+                        local_index function Function::variables.get Variable::typ tc.stack_push_type
+                    else
+                        TYPE_UNKNOWN_T tc.stack_push_type
+                    fi
+                    return
+                fi
+            fi
 
-        # Check local variables first
-        if function_opt.is_some then
-            function_opt.unwrap = function
-            var_name function Function::variables variable_list_index = local_index
-            if 0 local_index >= then
-                if local_index function Function::variables.get Variable::typ.is_unknown ! then
-                    local_index function Function::variables.get Variable::typ tc.stack_push_type
+            # Check global variables
+            var_name tc.store.variables.get = global_opt
+            if global_opt Option::Some(global_var) is then
+                if global_var Variable::typ.is_unknown ! then
+                    global_var Variable::typ tc.stack_push_type
                 else
                     TYPE_UNKNOWN_T tc.stack_push_type
                 fi
                 return
             fi
-        fi
 
-        # Check global variables
-        var_name tc.store.variables.get = global_opt
-        if global_opt Option::Some(global_var) is then
-            if global_var Variable::typ.is_unknown ! then
-                global_var Variable::typ tc.stack_push_type
-            else
-                TYPE_UNKNOWN_T tc.stack_push_type
-            fi
-            return
+            op Op::location f"Variable `{var_name}` is not defined" ErrorKind::UndefinedName raise_error
         fi
-
-        op Op::location f"Variable `{var_name}` is not defined" ErrorKind::UndefinedName raise_error
     }
 }
 
@@ -1253,6 +1286,9 @@ impl TypeChecker {
             op Op::location if_ctx IfContext::set_current_branch_location
             if_ctx BranchFrame::BranchIf = if_frame
             if_frame tc.branched_stacks.push
+            # Scope the then-branch: is-bindings from the condition and any
+            # block-local assignments live here until the next branch or `fi`.
+            tc.push_block_scope
             true tc->in_branch_condition
         elif if_value OpValue::IfCondition is then
             false tc->in_branch_condition
@@ -1271,6 +1307,10 @@ impl TypeChecker {
         if_value OpValue::IfElif is
         if_value OpValue::IfElse is ||
         then
+            # Close the preceding branch scope and open a fresh one. Each
+            # branch gets independent is-bindings and block-local variables.
+            tc.pop_block_scope
+            tc.push_block_scope
             if 0 tc.branched_stacks.length == then return fi
             tc.branched_stacks.length 1 - tc.branched_stacks.get = top_frame
             if top_frame BranchFrame::BranchIf(if_ctx) is then
@@ -1302,6 +1342,8 @@ impl TypeChecker {
                 op Op::location "Branches have incompatible stack effects" ErrorKind::StackMismatch add_error
             fi
         elif if_value OpValue::IfEnd is then
+            # Close the final branch scope.
+            tc.pop_block_scope
             tc.branched_stacks.pop = top_frame
             if top_frame BranchFrame::BranchIf(if_ctx) is then
                 if_ctx IfContext::before = if_before
@@ -1340,7 +1382,7 @@ impl TypeChecker {
             op Op::location while_ctx WhileContext::set_current_branch_location
             while_ctx BranchFrame::BranchWhile = while_frame
             while_frame tc.branched_stacks.push
-            List::new(List[str]) tc.scope_stack.push
+            tc.push_block_scope
         elif while_value OpValue::WhileCondition is then
             TYPE_BOOL_T tc.expect_type_t
             if 0 tc.branched_stacks.length == then return fi
@@ -1355,25 +1397,7 @@ impl TypeChecker {
             if 0 tc.branched_stacks.length == then return fi
         elif while_value OpValue::WhileEnd is then
             tc.branched_stacks.pop drop
-            if 0 tc.scope_stack.length != then
-                tc.scope_stack.pop = popped_frame
-                for exiting_name in popped_frame.iter do
-                    # Only move to out_of_scope if not still active in an outer frame
-                    false = still_active
-                    0 = outer_idx
-                    while outer_idx tc.scope_stack.length > do
-                        outer_idx tc.scope_stack.get = outer_frame
-                        if exiting_name outer_frame string_list_contains then
-                            true = still_active
-                        fi
-                        1 += outer_idx
-                    done
-                    if still_active ! then
-                        exiting_name tc.out_of_scope.add = new_oos
-                        new_oos tc->out_of_scope
-                    fi
-                done
-            fi
+            tc.pop_block_scope
         fi
     }
 }
@@ -1388,8 +1412,10 @@ fn bind_generic_params_standalone
     actual_type:Type
     type_vars:Set[str]
 -> Map[str Type] {
-    if expected_type.as_generic Option::Some(expected_g) is ! then bindings return fi
-    if actual_type.as_generic Option::Some(actual_g) is ! then bindings return fi
+    if expected_type.as_generic.is_none then bindings return fi
+    expected_type.as_generic.unwrap = expected_g
+    if actual_type.as_generic.is_none then bindings return fi
+    actual_type.as_generic.unwrap = actual_g
     if expected_g.base actual_g.base != then bindings return fi
     0 = index
     while
@@ -1539,8 +1565,10 @@ fn bind_from_type_slot
         fi
         bindings return
     fi
-    if expected.as_generic Option::Some(expected_g) is ! then bindings return fi
-    if actual.as_generic Option::Some(actual_g) is ! then bindings return fi
+    if expected.as_generic.is_none then bindings return fi
+    expected.as_generic.unwrap = expected_g
+    if actual.as_generic.is_none then bindings return fi
+    actual.as_generic.unwrap = actual_g
     if expected_g.base actual_g.base != then bindings return fi
     0 = slot_index
     while
@@ -2023,59 +2051,60 @@ impl TypeChecker {
 
 impl TypeChecker {
     fn check_enum_variant tc:TypeChecker op:Op {
-        if op.value OpValue::PushEnumVariant(variant) is ! then return fi
-        variant EnumVariant::enum_name = enum_name
-        enum_name tc.store.enums.get = enum_opt
-        if enum_opt.is_none then
-            enum_name GenericType::new Type::Generic tc.stack_push_type
-            return
-        fi
-        enum_opt.unwrap = casa_enum
-        variant EnumVariant::variant_name casa_enum CasaEnum::variant_types.get = inner_opt
-        if inner_opt.is_none then
-            # No inner values - push the enum type
-            if 0 casa_enum CasaEnum::type_vars.length != then
-                casa_enum CasaEnum::type_vars enum_name build_parameterized_type tc.stack_push_type
-            else
+        if op.value OpValue::PushEnumVariant(variant) is then
+            variant EnumVariant::enum_name = enum_name
+            enum_name tc.store.enums.get = enum_opt
+            if enum_opt.is_none then
                 enum_name GenericType::new Type::Generic tc.stack_push_type
+                return
             fi
-            return
-        fi
-        inner_opt.unwrap = inner_types
-        if 0 inner_types.length == then
-            if 0 casa_enum CasaEnum::type_vars.length != then
-                casa_enum CasaEnum::type_vars enum_name build_parameterized_type tc.stack_push_type
-            else
-                enum_name GenericType::new Type::Generic tc.stack_push_type
-            fi
-            return
-        fi
-
-        # Data-carrying variant: pop inner values, resolve generics
-        if 0 casa_enum CasaEnum::type_vars.length != then
-            # Generic enum variant (e.g. Option::Some with T)
-            # Bind type vars from inner values
-            Map::new(Map[str Type]) = bindings
-            Set::new(Set[str]) = type_vars
-            for type_var in casa_enum CasaEnum::type_vars.iter do
-                type_var type_vars.add = type_vars
-            done
-            for expected in inner_types.iter do
-                if expected.type_var_name Option::Some(tv_name) is tv_name type_vars.has && then
-                    tc.stack_pop_type = actual_t
-                    actual_t tv_name bindings tc.bind_type_var = bindings
+            enum_opt.unwrap = casa_enum
+            variant EnumVariant::variant_name casa_enum CasaEnum::variant_types.get = inner_opt
+            if inner_opt.is_none then
+                # No inner values - push the enum type
+                if 0 casa_enum CasaEnum::type_vars.length != then
+                    casa_enum CasaEnum::type_vars enum_name build_parameterized_type tc.stack_push_type
                 else
-                    expected tc.expect_type_t
+                    enum_name GenericType::new Type::Generic tc.stack_push_type
                 fi
-            done
-            # Build resolved type name
-            bindings casa_enum CasaEnum::type_vars enum_name build_resolved_type tc.stack_push_type
-        else
-            # Non-generic variant: pop inner values directly
-            for inner_type in inner_types.iter do
-                inner_type tc.expect_type_t
-            done
-            enum_name GenericType::new Type::Generic tc.stack_push_type
+                return
+            fi
+            inner_opt.unwrap = inner_types
+            if 0 inner_types.length == then
+                if 0 casa_enum CasaEnum::type_vars.length != then
+                    casa_enum CasaEnum::type_vars enum_name build_parameterized_type tc.stack_push_type
+                else
+                    enum_name GenericType::new Type::Generic tc.stack_push_type
+                fi
+                return
+            fi
+
+            # Data-carrying variant: pop inner values, resolve generics
+            if 0 casa_enum CasaEnum::type_vars.length != then
+                # Generic enum variant (e.g. Option::Some with T)
+                # Bind type vars from inner values
+                Map::new(Map[str Type]) = bindings
+                Set::new(Set[str]) = type_vars
+                for type_var in casa_enum CasaEnum::type_vars.iter do
+                    type_var type_vars.add = type_vars
+                done
+                for expected in inner_types.iter do
+                    if expected.type_var_name Option::Some(tv_name) is tv_name type_vars.has && then
+                        tc.stack_pop_type = actual_t
+                        actual_t tv_name bindings tc.bind_type_var = bindings
+                    else
+                        expected tc.expect_type_t
+                    fi
+                done
+                # Build resolved type name
+                bindings casa_enum CasaEnum::type_vars enum_name build_resolved_type tc.stack_push_type
+            else
+                # Non-generic variant: pop inner values directly
+                for inner_type in inner_types.iter do
+                    inner_type tc.expect_type_t
+                done
+                enum_name GenericType::new Type::Generic tc.stack_push_type
+            fi
         fi
     }
 }
@@ -2094,31 +2123,29 @@ impl TypeChecker {
             return
         fi
         base tc.store.enums.get.unwrap = casa_enum
-        if op.value OpValue::IsCheck(variant) is ! then
-            TYPE_BOOL_T tc.stack_push_type
-            return
-        fi
-        # Validate the variant belongs to the correct enum
-        if "" variant EnumVariant::enum_name != then
-            if variant EnumVariant::enum_name casa_enum CasaEnum::name != then
-                f"Cannot check `{variant EnumVariant::enum_name}::{variant EnumVariant::variant_name}` on value of type `{typ.format}`" tc.raise_type_mismatch
-            fi
-        fi
-        # Validate binding count for data-carrying variants
-        if 0 variant EnumVariant::bindings.length != then
-            variant EnumVariant::variant_name casa_enum CasaEnum::variant_types.get = inner_opt
-            if inner_opt.is_some then
-                inner_opt.unwrap = inner_types
-                if variant EnumVariant::bindings.length inner_types.length != then
-                    f"Variant `{variant EnumVariant::enum_name}::{variant EnumVariant::variant_name}` has {inner_types.length} inner value(s), but {variant EnumVariant::bindings.length} binding(s) provided" tc.raise_type_mismatch
+        if op.value OpValue::IsCheck(variant) is then
+            # Validate the variant belongs to the correct enum
+            if "" variant EnumVariant::enum_name != then
+                if variant EnumVariant::enum_name casa_enum CasaEnum::name != then
+                    f"Cannot check `{variant EnumVariant::enum_name}::{variant EnumVariant::variant_name}` on value of type `{typ.format}`" tc.raise_type_mismatch
                 fi
             fi
+            # Validate binding count for data-carrying variants
+            if 0 variant EnumVariant::bindings.length != then
+                variant EnumVariant::variant_name casa_enum CasaEnum::variant_types.get = inner_opt
+                if inner_opt.is_some then
+                    inner_opt.unwrap = inner_types
+                    if variant EnumVariant::bindings.length inner_types.length != then
+                        f"Variant `{variant EnumVariant::enum_name}::{variant EnumVariant::variant_name}` has {inner_types.length} inner value(s), but {variant EnumVariant::bindings.length} binding(s) provided" tc.raise_type_mismatch
+                    fi
+                fi
+            fi
+            typ.format variant function_opt tc register_enum_pattern_bindings
+            # Track bindings in scope; implicit bindings cannot shadow outer vars.
+            for binding_var in variant EnumVariant::bindings.iter do
+                true op binding_var tc.record_var_scope
+            done
         fi
-        typ.format variant function_opt tc register_enum_pattern_bindings
-        # Track bindings in scope (same rules as AssignVar)
-        for binding_var in variant EnumVariant::bindings.iter do
-            binding_var tc.record_var_scope
-        done
         TYPE_BOOL_T tc.stack_push_type
     }
 }
@@ -2176,6 +2203,10 @@ impl TypeChecker {
         elif match_value OpValue::MatchEnd is then
             tc.branched_stacks.pop = top_frame
             if top_frame BranchFrame::BranchMatch(match_ctx) is then
+                # Close the final arm's scope frame (only opened if an arm ran).
+                if match_ctx MatchContext::condition_present then
+                    tc.pop_block_scope
+                fi
                 # Record last arm label
                 if "" match_ctx MatchContext::current_branch_label != then
                     match_ctx MatchContext::current_branch_label match_ctx MatchContext::branch_records.push
@@ -2287,30 +2318,31 @@ impl TypeChecker {
 
 impl TypeChecker {
     fn check_struct_new tc:TypeChecker op:Op {
-        if op.value OpValue::StructNew(casa_struct) is ! then return fi
-        casa_struct CasaStruct::name = name
-        # Build type variable bindings from actual stack values
-        Map::new(Map[str Type]) = bindings
-        for member in casa_struct CasaStruct::members.iter do
-            tc.stack_pop_type = actual
-            member Member::typ = expected
-            # If expected is a type variable, bind it to the actual type
-            expected match
-                Type::TypeVar(expected_var) => {
-                    for type_var in casa_struct CasaStruct::type_vars.iter do
-                        if expected_var type_var == then
-                            actual expected_var bindings.set = bindings
-                        fi
-                    done
-                }
-                _ => { }
-            end
-        done
-        # Construct the result type
-        if 0 casa_struct CasaStruct::type_vars.length == then
-            name GenericType::new Type::Generic tc.stack_push_type
-        else
-            bindings casa_struct CasaStruct::type_vars name build_resolved_type tc.stack_push_type
+        if op.value OpValue::StructNew(casa_struct) is then
+            casa_struct CasaStruct::name = name
+            # Build type variable bindings from actual stack values
+            Map::new(Map[str Type]) = bindings
+            for member in casa_struct CasaStruct::members.iter do
+                tc.stack_pop_type = actual
+                member Member::typ = expected
+                # If expected is a type variable, bind it to the actual type
+                expected match
+                    Type::TypeVar(expected_var) => {
+                        for type_var in casa_struct CasaStruct::type_vars.iter do
+                            if expected_var type_var == then
+                                actual expected_var bindings.set = bindings
+                            fi
+                        done
+                    }
+                    _ => { }
+                end
+            done
+            # Construct the result type
+            if 0 casa_struct CasaStruct::type_vars.length == then
+                name GenericType::new Type::Generic tc.stack_push_type
+            else
+                bindings casa_struct CasaStruct::type_vars name build_resolved_type tc.stack_push_type
+            fi
         fi
     }
 }
@@ -2321,28 +2353,29 @@ impl TypeChecker {
 
 impl TypeChecker {
     fn check_struct_literal tc:TypeChecker op:Op {
-        if op.value OpValue::StructLiteral(literal) is ! then return fi
-        literal StructLiteral::struct_name = name
-        name tc.store.structs.get = struct_opt
-        if struct_opt.is_none then
-            name GenericType::new Type::Generic tc.stack_push_type
-            return
-        fi
-        struct_opt.unwrap = casa_struct
-        # Pop field values in reverse order
-        literal StructLiteral::field_order.length 1 - = index
-        while 0 index >= do
-            index literal StructLiteral::field_order.get = field_name
-            # Find member type
-            for member in casa_struct CasaStruct::members.iter do
-                if field_name member Member::name == then
-                    member Member::typ tc.expect_type_t
-                    break
-                fi
+        if op.value OpValue::StructLiteral(literal) is then
+            literal StructLiteral::struct_name = name
+            name tc.store.structs.get = struct_opt
+            if struct_opt.is_none then
+                name GenericType::new Type::Generic tc.stack_push_type
+                return
+            fi
+            struct_opt.unwrap = casa_struct
+            # Pop field values in reverse order
+            literal StructLiteral::field_order.length 1 - = index
+            while 0 index >= do
+                index literal StructLiteral::field_order.get = field_name
+                # Find member type
+                for member in casa_struct CasaStruct::members.iter do
+                    if field_name member Member::name == then
+                        member Member::typ tc.expect_type_t
+                        break
+                    fi
+                done
+                index 1 - = index
             done
-            index 1 - = index
-        done
-        name GenericType::new Type::Generic tc.stack_push_type
+            name GenericType::new Type::Generic tc.stack_push_type
+        fi
     }
 }
 
@@ -2452,6 +2485,7 @@ fn instantiate_default_trait_method
     # For non-generic receivers, substitute trait type params with concrete types.
     Map::new(Map[str Type]) = trait_subs
     receiver = default_self_type
+    empty_stack_effect = resolved_stack_effect
     if fn_base_opt.is_some then
         fn_base_opt.unwrap = base_name
         if 0 type_params.length != then
@@ -2517,28 +2551,29 @@ fn instantiate_default_trait_method
     fi
     0 = cloned_lambda_index
     for body_op in cloned_body.iter do
-        if body_op.value OpValue::FnPush(lambda_name) is ! then continue fi
-        if lambda_name "lambda__" str::starts_with ! then continue fi
-        lambda_name store.functions.get = lambda_opt
-        if lambda_opt.is_none then continue fi
-        lambda_opt.unwrap = lambda
+        if body_op.value OpValue::FnPush(lambda_name) is then
+            if lambda_name "lambda__" str::starts_with ! then continue fi
+            lambda_name store.functions.get = lambda_opt
+            if lambda_opt.is_none then continue fi
+            lambda_opt.unwrap = lambda
 
-        f"{lambda_name}__{synth_fn_name}_{cloned_lambda_index}" = cloned_lambda_name
-        lambda Function::ops clone_ops = lambda_ops
-        if 0 trait_subs.length != then
-            trait_subs lambda_ops substitute_ops_types
+            f"{lambda_name}__{synth_fn_name}_{cloned_lambda_index}" = cloned_lambda_name
+            lambda Function::ops clone_ops = lambda_ops
+            if 0 trait_subs.length != then
+                trait_subs lambda_ops substitute_ops_types
+            fi
+            List::new(List[Parameter]) = lambda_params
+            List::new(List[Type]) = lambda_returns
+            lambda_returns lambda_params StackEffect::new = lambda_effect
+            for lambda_type_var in resolved_stack_effect StackEffect::type_vars.to_list.iter do
+                lambda_type_var lambda_effect StackEffect::type_vars.add = lambda_tvs
+                lambda_tvs lambda_effect StackEffect::set_type_vars
+            done
+            lambda_effect lambda Function::location lambda_ops cloned_lambda_name Function::with_stack_effect = cloned_lambda
+            cloned_lambda cloned_lambda_name store.functions.set drop
+            cloned_lambda_name OpValue::FnPush body_op Op::set_value
+            1 += cloned_lambda_index
         fi
-        List::new(List[Parameter]) = lambda_params
-        List::new(List[Type]) = lambda_returns
-        lambda_returns lambda_params StackEffect::new = lambda_effect
-        for lambda_type_var in resolved_stack_effect StackEffect::type_vars.to_list.iter do
-            lambda_type_var lambda_effect StackEffect::type_vars.add = lambda_tvs
-            lambda_tvs lambda_effect StackEffect::set_type_vars
-        done
-        lambda_effect lambda Function::location lambda_ops cloned_lambda_name Function::with_stack_effect = cloned_lambda
-        cloned_lambda cloned_lambda_name store.functions.set drop
-        cloned_lambda_name OpValue::FnPush body_op Op::set_value
-        1 += cloned_lambda_index
     done
     for body_op in cloned_body.iter do
         body_op synth_ops.push
@@ -2567,86 +2602,87 @@ impl TypeChecker {
         op_index:int
         function_opt:Option[Function]
     -> int {
-        if op.value OpValue::MethodCall(method_name) is ! then op_index return fi
-        tc.stack_peek = receiver
+        if op.value OpValue::MethodCall(method_name) is then
+            tc.stack_peek = receiver
 
-        # Check if receiver is a trait-bounded type variable
-        if function_opt Option::Some(function) is then
-            function Function::stack_effect StackEffect::trait_bounds = bounds
-            receiver bounds.get = trait_opt
-            if trait_opt.is_some then
-                trait_opt.unwrap = bound
-                bound TraitBound::name = trait_name
-                trait_name tc.store.traits.get = trait_def_opt
-                if trait_def_opt.is_some then
-                    trait_def_opt.unwrap = trait_def
-                    # Build substitution map from trait's type_params to the
-                    # bound's concrete type_args, so that a trait method like
-                    # `next self:self -> Option[T]` with bound `I: Iterable[int]`
-                    # resolves to `next self:I -> Option[int]` at the call site.
-                    Map::new(Map[str Type]) = constraint_subs
-                    trait_def CasaTrait::type_params = constraint_params
-                    bound TraitBound::type_args = constraint_args
-                    if constraint_params.length constraint_args.length == then
-                        for pair in constraint_args.iter constraint_params.iter.zip do
-                            pair.second parse_type_str pair.first constraint_subs.set = constraint_subs
+            # Check if receiver is a trait-bounded type variable
+            if function_opt Option::Some(function) is then
+                function Function::stack_effect StackEffect::trait_bounds = bounds
+                receiver bounds.get = trait_opt
+                if trait_opt.is_some then
+                    trait_opt.unwrap = bound
+                    bound TraitBound::name = trait_name
+                    trait_name tc.store.traits.get = trait_def_opt
+                    if trait_def_opt.is_some then
+                        trait_def_opt.unwrap = trait_def
+                        # Build substitution map from trait's type_params to the
+                        # bound's concrete type_args, so that a trait method like
+                        # `next self:self -> Option[T]` with bound `I: Iterable[int]`
+                        # resolves to `next self:I -> Option[int]` at the call site.
+                        Map::new(Map[str Type]) = constraint_subs
+                        trait_def CasaTrait::type_params = constraint_params
+                        bound TraitBound::type_args = constraint_args
+                        if constraint_params.length constraint_args.length == then
+                            for pair in constraint_args.iter constraint_params.iter.zip do
+                                pair.second parse_type_str pair.first constraint_subs.set = constraint_subs
+                            done
+                        fi
+                        for trait_method in trait_def tc.store collect_trait_methods.iter do
+                            if method_name trait_method TraitMethod::name == then
+                                f"__trait_{receiver}_{method_name}" = hidden_var
+                                tc.stack_pop_drop
+                                constraint_subs receiver trait_method TraitMethod::stack_effect resolve_trait_stack_effect apply_type_subs_to_stack_effect = resolved_stack_effect
+                                receiver tc.stack_push
+                                f"{receiver}::{method_name}" resolved_stack_effect tc.apply_stack_effect
+                                hidden_var OpValue::PushVar op Op::set_value
+                                # Insert FN_EXEC op after the PUSH_VARIABLE
+                                op Op::location OpValue::FnExec Op::new = exec_op
+                                op_index exec_op ops.insert
+                                op_index 1 + return
+                            fi
                         done
                     fi
-                    for trait_method in trait_def tc.store collect_trait_methods.iter do
-                        if method_name trait_method TraitMethod::name == then
-                            f"__trait_{receiver}_{method_name}" = hidden_var
-                            tc.stack_pop_drop
-                            constraint_subs receiver trait_method TraitMethod::stack_effect resolve_trait_stack_effect apply_type_subs_to_stack_effect = resolved_stack_effect
-                            receiver tc.stack_push
-                            f"{receiver}::{method_name}" resolved_stack_effect tc.apply_stack_effect
-                            hidden_var OpValue::PushVar op Op::set_value
-                            # Insert FN_EXEC op after the PUSH_VARIABLE
-                            op Op::location OpValue::FnExec Op::new = exec_op
-                            op_index exec_op ops.insert
-                            op_index 1 + return
-                        fi
-                    done
                 fi
             fi
-        fi
 
-        # Look up Type::method
-        f"{receiver}::{method_name}" = fn_name
-        fn_name tc.store.functions.get = fn_opt
+            # Look up Type::method
+            f"{receiver}::{method_name}" = fn_name
+            fn_name tc.store.functions.get = fn_opt
 
-        # Try generic base type
-        if fn_opt.is_none then
-            receiver parse_type_str.base = base_opt
-            if base_opt Option::Some(base) is then
-                f"{base}::{method_name}" = fn_name
-                fn_name tc.store.functions.get = fn_opt
+            # Try generic base type
+            if fn_opt.is_none then
+                receiver parse_type_str.base = base_opt
+                if base_opt Option::Some(base) is then
+                    f"{base}::{method_name}" = fn_name
+                    fn_name tc.store.functions.get = fn_opt
+                fi
             fi
-        fi
 
-        # Try instantiating a default trait method
-        if fn_opt.is_none then
-            tc.store receiver method_name function_opt instantiate_default_trait_method = default_inst_opt
-            if default_inst_opt.is_some then
-                default_inst_opt.unwrap = fn_name
-                fn_name tc.store.functions.get = fn_opt
+            # Try instantiating a default trait method
+            if fn_opt.is_none then
+                tc.store receiver method_name function_opt instantiate_default_trait_method = default_inst_opt
+                if default_inst_opt.is_some then
+                    default_inst_opt.unwrap = fn_name
+                    fn_name tc.store.functions.get = fn_opt
+                fi
             fi
-        fi
 
-        if fn_opt.is_some then
-            fn_opt.unwrap = function
-            if function Function::is_typechecked ! then
-                function function Function::ops tc.store resolve_identifiers function Function::set_ops
-                true function Function::set_is_used
+            if fn_opt.is_some then
+                fn_opt.unwrap = function
+                if function Function::is_typechecked ! then
+                    function function Function::ops tc.store resolve_identifiers function Function::set_ops
+                    true function Function::set_is_used
+                fi
+                tc.store function ensure_typechecked
+                function Function::stack_effect = effect
+                if 0 effect StackEffect::trait_bounds.keys.length != then
+                    function_opt op Op::location op_index ops effect tc.inject_trait_fn_ptrs += op_index
+                fi
+                fn_name effect tc.apply_stack_effect
+                fn_name OpValue::FnCall op Op::set_value
+            else
+                op Op::location f"Method `{fn_name}` does not exist" ErrorKind::UndefinedName raise_error
             fi
-            tc.store function ensure_typechecked
-            function Function::stack_effect = effect
-            if 0 effect StackEffect::trait_bounds.keys.length != then
-                function_opt op Op::location op_index ops effect tc.inject_trait_fn_ptrs += op_index
-            fi
-            fn_name effect tc.apply_stack_effect
-            fn_name OpValue::FnCall op Op::set_value
-        else
-            op Op::location f"Method `{fn_name}` does not exist" ErrorKind::UndefinedName raise_error
         fi
         op_index
     }
