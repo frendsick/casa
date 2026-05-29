@@ -4,12 +4,11 @@ See [README.md](./README.md) for basic info, language docs, and examples.
 
 ## General principles
 
-- The codebase is the source of truth — verify against current code before asserting.
+- The codebase is the source of truth. Verify against current code before asserting.
 - Don't web-search Casa specifics; this repo is the only authoritative source.
 - When language features or stdlib functions change, update the corresponding
   documentation, examples, and tests.
 - Never mention Claude or AI usage
-- Always use caveman skill
 
 ## Code conventions
 
@@ -32,6 +31,9 @@ See [README.md](./README.md) for basic info, language docs, and examples.
 - **Module-style** (`import "std"`): bare name. Resolved against the importing file's directory first, then each `-L`/`--library-path` directory in CLI order. First existing match wins.
 
 ## Agent skills
+
+- Always use `caveman` skill
+- Use `tdd` skill whenever making new features or functionality changes
 
 Always load the relevant doc when the matching workflow comes up:
 
