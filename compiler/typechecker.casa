@@ -130,10 +130,16 @@ struct TypeChecker {
     store:                      SymbolStore
     param_cap:                  Option[int]
     underflow_reported_this_op: bool
+    scope_stack:                List[List[str]]
+    out_of_scope:               Set[str]
+    pre_scope_vars:             Set[str]
 }
 
 impl TypeChecker {
     fn new store:SymbolStore -> TypeChecker {
+        Set::new(Set[str]) # pre_scope_vars
+        Set::new(Set[str]) # out_of_scope
+        List::new(List[List[str]]) # scope_stack
         false # underflow_reported_this_op
         Option::None(Option[int]) # param_cap
         store # store
@@ -1022,6 +1028,59 @@ fn unify_variable_assignment
 }
 
 impl TypeChecker {
+    # Record a variable assignment relative to the active while-block scopes.
+    # Outside any while block the name is a pre-scope (function-level) variable,
+    # and any stale out-of-scope marking is cleared. Inside a while block, a name
+    # that is not already active, pre-scope, or global becomes local to the
+    # innermost frame (reactivating it if it was previously out of scope).
+    fn record_var_scope tc:TypeChecker var_name:str {
+        if 0 tc.scope_stack.length == then
+            if var_name tc.pre_scope_vars.has ! then
+                var_name tc.pre_scope_vars.add = updated_pre
+                updated_pre tc->pre_scope_vars
+            fi
+            # A fresh outer-scope assignment is always accessible — clear any
+            # stale out-of-scope marking left by an earlier while block.
+            if var_name tc.out_of_scope.has then
+                var_name tc.out_of_scope.remove = cleared_pre
+                cleared_pre tc->out_of_scope
+            fi
+        else
+            false = in_active_scope
+            0 = scope_idx
+            while scope_idx tc.scope_stack.length > do
+                scope_idx tc.scope_stack.get = active_frame
+                if var_name active_frame string_list_contains then
+                    true = in_active_scope
+                fi
+                1 += scope_idx
+            done
+
+            false = is_pre_scope_global
+            if var_name tc.store.variables.has then
+                true = is_pre_scope_global
+            fi
+
+            var_name tc.pre_scope_vars.has = is_pre_scope_local
+
+            # If not active, not pre-scope, not global: it is block-local.
+            if
+            in_active_scope !
+            is_pre_scope_local ! &&
+            is_pre_scope_global ! &&
+            then
+                if var_name tc.out_of_scope.has then
+                    var_name tc.out_of_scope.remove = cleared_oos
+                    cleared_oos tc->out_of_scope
+                fi
+                tc.scope_stack.length 1 - tc.scope_stack.get = cur_frame
+                if var_name cur_frame string_list_contains ! then
+                    var_name cur_frame.push
+                fi
+            fi
+        fi
+    }
+
     fn check_assignment tc:TypeChecker op:Op function_opt:Option[Function] {
         if
         op.value OpValue::AssignDec is
@@ -1045,6 +1104,9 @@ impl TypeChecker {
         if has_annotation ! stack_type_t.has_unresolved && then
             op Op::location f"Cannot infer element type of empty array literal assigned to `{var_name}`; add a type annotation (e.g. `= {var_name}:array[int]`) or an explicit cast (e.g. `[] (array[int])`)." ErrorKind::TypeMismatch raise_error
         fi
+
+        # Scope tracking: record variable assignment relative to while blocks.
+        var_name tc.record_var_scope
 
         # Try local variables first
         if function_opt.is_some then
@@ -1142,6 +1204,13 @@ impl TypeChecker {
 
         # PUSH_VARIABLE
         if op.value OpValue::PushVar(var_name) is ! then return fi
+
+        # Check if variable has gone out of scope (was only in a popped while scope)
+        if var_name tc.out_of_scope.has then
+            op Op::location f"Variable `{var_name}` is not accessible outside its while block scope" ErrorKind::UndefinedName add_error
+            TYPE_UNKNOWN_T tc.stack_push_type
+            return
+        fi
 
         # Check local variables first
         if function_opt.is_some then
@@ -1271,6 +1340,7 @@ impl TypeChecker {
             op Op::location while_ctx WhileContext::set_current_branch_location
             while_ctx BranchFrame::BranchWhile = while_frame
             while_frame tc.branched_stacks.push
+            List::new(List[str]) tc.scope_stack.push
         elif while_value OpValue::WhileCondition is then
             TYPE_BOOL_T tc.expect_type_t
             if 0 tc.branched_stacks.length == then return fi
@@ -1285,6 +1355,25 @@ impl TypeChecker {
             if 0 tc.branched_stacks.length == then return fi
         elif while_value OpValue::WhileEnd is then
             tc.branched_stacks.pop drop
+            if 0 tc.scope_stack.length != then
+                tc.scope_stack.pop = popped_frame
+                for exiting_name in popped_frame.iter do
+                    # Only move to out_of_scope if not still active in an outer frame
+                    false = still_active
+                    0 = outer_idx
+                    while outer_idx tc.scope_stack.length > do
+                        outer_idx tc.scope_stack.get = outer_frame
+                        if exiting_name outer_frame string_list_contains then
+                            true = still_active
+                        fi
+                        1 += outer_idx
+                    done
+                    if still_active ! then
+                        exiting_name tc.out_of_scope.add = new_oos
+                        new_oos tc->out_of_scope
+                    fi
+                done
+            fi
         fi
     }
 }
@@ -2026,6 +2115,10 @@ impl TypeChecker {
             fi
         fi
         typ.format variant function_opt tc register_enum_pattern_bindings
+        # Track bindings in scope (same rules as AssignVar)
+        for binding_var in variant EnumVariant::bindings.iter do
+            binding_var tc.record_var_scope
+        done
         TYPE_BOOL_T tc.stack_push_type
     }
 }
