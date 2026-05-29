@@ -39,7 +39,6 @@ Always load the relevant doc when the matching workflow comes up:
 - **Testing** — `docs/agents/testing.md`
 - **Review** — `docs/agents/review.md`
 - **Examples** — `docs/agents/examples.md`
-- **Pitfalls** — `docs/agents/pitfalls.md` (known Casa gotchas with workarounds)
 - **Issue tracker** — `docs/agents/issue-tracker.md`
 - **Triage labels** — `docs/agents/triage-labels.md`
 - **Domain docs** — `docs/agents/domain.md`
