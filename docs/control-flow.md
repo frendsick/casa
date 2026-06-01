@@ -106,6 +106,13 @@ elif shape Shape::Rectangle(w h) is then
 fi
 ```
 
+Bindings introduced by `is` are scoped to the branch whose condition created
+them. They are not visible in sibling `elif`/`else` branches or after `fi`.
+Bindings may not shadow an accessible local variable; choose a different binding
+name when an outer local with the same name is already in scope. Assignments
+inside a branch mutate an outer variable when one exists, otherwise they create a
+branch-local variable.
+
 ## Loops
 
 Casa has `while`/`do`/`done` loops with `break` and `continue`.
@@ -267,6 +274,12 @@ end
 ```
 
 The `match` keyword pops a value from the stack. Each arm specifies a pattern followed by `=>` and a body. An optional `if <guard>` between the pattern and `=>` adds a boolean condition that must also hold. The block is closed with `end`.
+
+Pattern bindings are scoped to their own arm body. They are visible in that
+arm's guard and body only, not in sibling arms and not after `end`. A pattern
+binding may not shadow an accessible local variable. Assignments inside an arm
+mutate an outer variable when one exists, otherwise they create an arm-local
+variable.
 
 ### Block Arm Bodies
 

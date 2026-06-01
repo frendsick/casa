@@ -110,7 +110,7 @@ color Color::Blue is print    # false
 
 ### Destructuring with `is`
 
-Inside `if`/`elif` conditions, `is` can destructure inner values into bindings. The bindings are available in the corresponding `then`-block.
+Inside `if`/`elif` conditions, `is` can destructure inner values into bindings. The bindings are available in the corresponding `then`-block only.
 
 ```casa
 enum Shape {
@@ -144,6 +144,9 @@ if maybe Option::Some(value) is then
     value print    # value has type int
 fi
 ```
+
+The binding is not visible in sibling branches, in `else`, or after `fi`.
+Implicit `is` bindings may not shadow an accessible local variable.
 
 Using `is` with bindings outside of `if`/`elif` conditions is a compile-time error:
 
