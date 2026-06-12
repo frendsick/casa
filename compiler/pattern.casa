@@ -144,6 +144,7 @@ fn unify_arm_stacks tc:TypeChecker match_ctx:MatchContext op:Op {
 # by a struct destructure arm.
 
 fn assign_struct_binding_type
+    tc:TypeChecker
     matched_struct:CasaStruct
     field_name:str
     bound_var:str
@@ -152,7 +153,7 @@ fn assign_struct_binding_type
 {
     for member in matched_struct CasaStruct::members.iter do
         if field_name member Member::name == then
-            store function_opt member Member::typ bound_var set_binding_type
+            store function_opt member Member::typ bound_var tc set_binding_type
         fi
     done
 }
@@ -171,7 +172,7 @@ fn register_struct_pattern_bindings
     struct_pattern StructPattern::bindings.keys = binding_keys
     for field_name in binding_keys.iter do
         if field_name struct_pattern StructPattern::bindings.get Option::Some(bound_var) is then
-            tc.store function_opt bound_var field_name matched_struct assign_struct_binding_type
+            tc.store function_opt bound_var field_name matched_struct tc assign_struct_binding_type
         else
             empty_location "Expected option value while unwrapping field_name struct_pattern StructPattern::bindings.get" ErrorKind::Syntax raise_error
             1 exit
@@ -233,7 +234,7 @@ fn apply_enum_bindings
         if binding_type.format type_bindings.get Option::Some(resolved) is then
             resolved = binding_type
         fi
-        tc.store function_opt binding_type binding_var set_binding_type
+        tc.store function_opt binding_type binding_var tc set_binding_type
         1 += bind_index
     done
 }
@@ -275,6 +276,10 @@ fn typecheck_match_op tc:TypeChecker function_opt:Option[Function] op:Op {
         op pattern_covered_key = covered_key
         match_subject_type parse_type_str.match_base = arm_base
 
+        # A prior arm has already opened (and left open) its scope frame iff the
+        # match has seen a condition. Capture this before the block below sets it.
+        match_ctx MatchContext::condition_present = arm_has_predecessor
+
         if op pattern_value_of PatternValue::EnumVariant(variant) is then
             if op pattern_is_wildcard ! then
                 arm_base variant op tc diagnose_bare_enum_pattern
@@ -291,11 +296,24 @@ fn typecheck_match_op tc:TypeChecker function_opt:Option[Function] op:Op {
             tc.stack match_ctx MatchContext::after.restore
         fi
 
+        # Each arm body gets its own scope frame: pattern bindings and any
+        # block-local assignments live here, invisible to other arms and after
+        # `end`. Close the previous arm's frame before opening this one.
+        if arm_has_predecessor then tc.pop_block_scope fi
+        tc.push_block_scope
+
+        # Record pattern bindings in the arm scope; implicit bindings cannot
+        # shadow an accessible outer variable (same rule as is-bindings).
+        for binding_var in op pattern_bindings.iter do
+            true op binding_var tc.record_var_scope
+        done
+
         match_subject_type op function_opt tc register_pattern_bindings
 
         if op pattern_is_guarded then
             op pattern_guard_ops = guard_ops
             tc.store TypeChecker::new = guard_checker
+            guard_checker tc.copy_scope_state_to
             function_opt guard_ops guard_checker.run_type_check_ops
             guard_checker.stack.types = guard_stack
             false = guard_ok
