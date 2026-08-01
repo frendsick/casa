@@ -820,6 +820,190 @@ fn test_parse_result_discards_nested_store_mutation {
     "has clean function store" 0 result.store.functions.length assert_eq
 }
 
+fn test_full_import_merges_symbols_after_success {
+    "full_import_merges_symbols_after_success" test_start
+    SourceStore::new = sources
+    "65536 = IMPORTED_SIZE fn imported_value -> int { 42 }" "/tmp/casa_import_success_258.casa" sources.add
+    "root" "import \"/tmp/casa_import_success_258.casa\" imported_value" lex_source = lex_result
+    sources lex_result.diagnostics List::new(List[str]) lex_result.tokens parse_and_resolve = result
+    "no diagnostics" result.diagnostics.has_errors ! assert_true
+    "imported function committed" "imported_value" result.store.functions.has assert_true
+    false = has_imported_assignment
+    if result.ops Option::Some(imported_ops) is then
+        for op in imported_ops.iter do
+            if op.value OpValue::AssignVar(name) is then
+                if name "IMPORTED_SIZE" == then true = has_imported_assignment fi
+            fi
+        done
+    else
+        "has usable output" false assert_true
+    fi
+    "imported global op committed" has_imported_assignment assert_true
+}
+
+fn test_selective_import_commits_only_selected_symbols {
+    "selective_import_commits_only_selected_symbols" test_start
+    SourceStore::new = sources
+    "fn selected -> int { 1 } fn hidden -> int { 2 }" "/tmp/casa_selective_success_258.casa" sources.add
+    "root" "import \"/tmp/casa_selective_success_258.casa\" { selected } selected" lex_source = lex_result
+    sources lex_result.diagnostics List::new(List[str]) lex_result.tokens parse_and_resolve = result
+    "no diagnostics" result.diagnostics.has_errors ! assert_true
+    "selected function committed" "selected" result.store.functions.has assert_true
+    "unselected function omitted" "hidden" result.store.functions.has ! assert_true
+}
+
+fn test_failed_nested_import_discards_symbols_and_stops_resolution {
+    "failed_nested_import_discards_symbols_and_stops_resolution" test_start
+    SourceStore::new = sources
+    "missing_imported" "/tmp/casa_nested_failure_258.casa" sources.add
+    "fn leaked -> int { 1 } import \"/tmp/casa_nested_failure_258.casa\"" "/tmp/casa_parent_failure_258.casa" sources.add
+    "root" "fn root_symbol -> int { 2 } import \"/tmp/casa_parent_failure_258.casa\" missing_root" lex_source = lex_result
+    sources lex_result.diagnostics List::new(List[str]) lex_result.tokens parse_and_resolve = result
+    "failed import has no usable output" result.ops.is_none assert_true
+    "failed import leaves no symbols" 0 result.store.functions.length assert_eq
+    "only imported error emitted" 1 result.diagnostics.entries.length assert_eq
+    0 result.diagnostics.entries.get = diagnostic
+    if diagnostic Diagnostic::Error(error) is then
+        "imported error kept" "Identifier `missing_imported` is not defined" error.message assert_str_eq
+    else
+        "imported diagnostic is error" false assert_true
+    fi
+}
+
+fn test_selective_import_failure_is_transactional {
+    "selective_import_failure_is_transactional" test_start
+    SourceStore::new = sources
+    "fn selected -> int { 1 }" "/tmp/casa_selective_failure_258.casa" sources.add
+    "root" "import \"/tmp/casa_selective_failure_258.casa\" { selected missing }" lex_source = lex_result
+    sources lex_result.diagnostics List::new(List[str]) lex_result.tokens parse_and_resolve = result
+    "failed selective import has no usable output" result.ops.is_none assert_true
+    "selected symbol was not partially committed" 0 result.store.functions.length assert_eq
+}
+
+fn test_import_diagnostics_preserve_encounter_order {
+    "import_diagnostics_preserve_encounter_order" test_start
+    SourceStore::new = sources
+    "\"bad\\q\"" "/tmp/casa_import_order_258.casa" sources.add
+    "root" "import \"/tmp/casa_import_order_258.casa\"" lex_source = lex_result
+    empty_location "root first" ErrorKind::Syntax CasaError::new lex_result.diagnostics.push_error
+    sources lex_result.diagnostics List::new(List[str]) lex_result.tokens parse_and_resolve = result
+    "two diagnostics" 2 result.diagnostics.entries.length assert_eq
+    0 result.diagnostics.entries.get = first
+    1 result.diagnostics.entries.get = second
+    if first Diagnostic::Error(first_error) is then
+        "root diagnostic first" "root first" first_error.message assert_str_eq
+    else
+        "first diagnostic is error" false assert_true
+    fi
+    if second Diagnostic::Error(second_error) is then
+        "import diagnostic second" "Invalid escape sequence" second_error.message assert_str_eq
+    else
+        "second diagnostic is error" false assert_true
+    fi
+}
+
+fn assert_import_failure imported_source:str root_source:str path:str message:str {
+    SourceStore::new = sources
+    imported_source path sources.add
+    "root" root_source lex_source = lex_result
+    sources lex_result.diagnostics List::new(List[str]) lex_result.tokens parse_and_resolve = result
+    f"{message} has no output" result.ops.is_none assert_true
+    f"{message} has one diagnostic" 1 result.diagnostics.entries.length assert_eq
+}
+
+fn test_full_and_selective_import_failures_are_explicit {
+    "full_and_selective_import_failures_are_explicit" test_start
+    "full lexical failure"
+    "/tmp/casa_full_lexical_failure_258.casa"
+    "import \"/tmp/casa_full_lexical_failure_258.casa\""
+    "\"bad\\q\""
+    assert_import_failure
+    "full parser failure"
+    "/tmp/casa_full_parser_failure_258.casa"
+    "import \"/tmp/casa_full_parser_failure_258.casa\""
+    "end 42"
+    assert_import_failure
+    "full resolution failure"
+    "/tmp/casa_full_resolution_failure_258.casa"
+    "import \"/tmp/casa_full_resolution_failure_258.casa\""
+    "missing_imported"
+    assert_import_failure
+    "selective lexical failure"
+    "/tmp/casa_selective_lexical_failure_258.casa"
+    "import \"/tmp/casa_selective_lexical_failure_258.casa\" { exported }"
+    "\"bad\\q\""
+    assert_import_failure
+    "selective parser failure"
+    "/tmp/casa_selective_parser_failure_258.casa"
+    "import \"/tmp/casa_selective_parser_failure_258.casa\" { exported }"
+    "end 42"
+    assert_import_failure
+    "selective resolution failure"
+    "/tmp/casa_selective_resolution_failure_258.casa"
+    "import \"/tmp/casa_selective_resolution_failure_258.casa\" { exported }"
+    "fn exported { missing_imported }"
+    assert_import_failure
+}
+
+fn test_import_diagnostic_precedes_later_root_diagnostic {
+    "import_diagnostic_precedes_later_root_diagnostic" test_start
+    SourceStore::new = sources
+    "\"bad\\q\"" "/tmp/casa_import_encounter_order_258.casa" sources.add
+    "root" "end import \"/tmp/casa_import_encounter_order_258.casa\" \"root\\q\"" lex_source = lex_result
+    sources lex_result.diagnostics List::new(List[str]) lex_result.tokens parse_and_resolve = result
+    "three diagnostics" 3 result.diagnostics.entries.length assert_eq
+    1 result.diagnostics.entries.get = imported_diagnostic
+    if imported_diagnostic Diagnostic::Error(imported_error) is then
+        "import diagnostic stays at encounter" "/tmp/casa_import_encounter_order_258.casa" imported_error.location.file assert_str_eq
+    else
+        "import diagnostic is error" false assert_true
+    fi
+}
+
+fn test_failed_import_does_not_mutate_importer_symbols {
+    "failed_import_does_not_mutate_importer_symbols" test_start
+    SourceStore::new = sources
+    "base missing_imported" "/tmp/casa_import_isolation_258.casa" sources.add
+    "root" "fn base -> int { 1 } import \"/tmp/casa_import_isolation_258.casa\"" lex_source = lex_result
+    sources lex_result.diagnostics symbol_store_new Parser::new = parser
+    lex_result.tokens parser parse_ops = ops
+    ops parser resolve_identifiers_global drop
+    "import failed" parser.state.has_usable_output ! assert_true
+    "base" parser.store.functions.get = base_opt
+    if base_opt Option::Some(base_function) is then
+        "base function remains unused" base_function.is_used ! assert_true
+    else
+        "base function exists" false assert_true
+    fi
+    "failed import symbol omitted" "missing_imported" parser.store.functions.has ! assert_true
+}
+
+fn test_import_parser_failure_suppresses_nested_cascade {
+    "import_parser_failure_suppresses_nested_cascade" test_start
+    SourceStore::new = sources
+    "missing_nested" "/tmp/casa_import_parser_nested_258.casa" sources.add
+    "end import \"/tmp/casa_import_parser_nested_258.casa\""
+    "/tmp/casa_import_parser_parent_258.casa"
+    sources.add
+    "root" "import \"/tmp/casa_import_parser_parent_258.casa\"" lex_source = lex_result
+    sources lex_result.diagnostics List::new(List[str]) lex_result.tokens parse_and_resolve = result
+    "parser failure has no output" result.ops.is_none assert_true
+    "nested import was not expanded" 1 result.diagnostics.entries.length assert_eq
+}
+
+fn test_selective_import_failure_stops_later_expansion {
+    "selective_import_failure_stops_later_expansion" test_start
+    SourceStore::new = sources
+    "fn selected -> int { 1 }" "/tmp/casa_selective_stop_first_258.casa" sources.add
+    "missing_later" "/tmp/casa_selective_stop_later_258.casa" sources.add
+    "root"
+    "import \"/tmp/casa_selective_stop_first_258.casa\" { missing } import \"/tmp/casa_selective_stop_later_258.casa\""
+    lex_source = lex_result
+    sources lex_result.diagnostics List::new(List[str]) lex_result.tokens parse_and_resolve = result
+    "selective import failed" result.ops.is_none assert_true
+    "later import was not expanded" 1 result.diagnostics.entries.length assert_eq
+}
+
 # ============================================================================
 # Run all tests
 # ============================================================================
@@ -901,4 +1085,14 @@ test_parse_result_recovers_at_supported_delimiters
 test_parse_result_rejects_ambiguous_end_of_input
 test_parse_result_discards_failed_declaration_state
 test_parse_result_discards_nested_store_mutation
+test_full_import_merges_symbols_after_success
+test_selective_import_commits_only_selected_symbols
+test_failed_nested_import_discards_symbols_and_stops_resolution
+test_selective_import_failure_is_transactional
+test_import_diagnostics_preserve_encounter_order
+test_full_and_selective_import_failures_are_explicit
+test_import_diagnostic_precedes_later_root_diagnostic
+test_failed_import_does_not_mutate_importer_symbols
+test_import_parser_failure_suppresses_nested_cascade
+test_selective_import_failure_stops_later_expansion
 test_summary

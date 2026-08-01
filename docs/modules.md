@@ -50,6 +50,10 @@ Selective imports use the same path-style and module-style resolution rules as b
 - Importing a function that depends on a skipped global variable is a compile error.
 - Names referenced directly by the importing file must be listed explicitly.
 
+### Import failures
+
+An imported file must lex, parse, and resolve successfully before any of its declarations or top-level operations are added to the importing file. A failed full or selective import reports the imported file's diagnostics at the import's position and stops further import expansion and identifier resolution.
+
 ### `-L` / `--library-path`
 
 Repeatable. Adds a directory to the module search path:
