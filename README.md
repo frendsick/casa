@@ -215,6 +215,15 @@ require('conform').setup({
 
 See [FORMAT.md](docs/FORMAT.md) for the full list of formatting rules.
 
+## Line Counting
+
+Use the included language definition to count Casa code with
+[cloc](https://github.com/AlDanial/cloc):
+
+```sh
+cloc --read-lang-def=cloc-lang-def.txt .
+```
+
 ## Testing
 
 Run the example and compiler test suites from the root folder of the repository:
