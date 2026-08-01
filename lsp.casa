@@ -82,9 +82,8 @@ struct FindOpState {
 
 struct CompileResult {
     document_state: DocumentState
-    errors:         List[CasaError]
-    warnings:       List[CasaWarning]
-    source_cache:   Map[str str]
+    diagnostics:    Diagnostics
+    sources:        SourceStore
 }
 
 # ============================================================================
@@ -311,24 +310,24 @@ fn compile_document file_path:str source:str open_docs:Map[str DocumentState] ->
     true = RESILIENT_MODE
 
     # Reset compiler globals
-    Map::new(Map[str str]) = SOURCE_CACHE
     List::new(List[CasaError]) = ERRORS
     List::new(List[CasaWarning]) = WARNINGS
-    # Seed SOURCE_CACHE from peer open documents
+    SourceStore::new = sources
+    # Seed source overrides from peer open documents
     open_docs.keys = uris
     for uri in uris.iter do
         uri open_docs.get.unwrap = cached_state
         if cached_state DocumentState::file_path file_path != then
-            cached_state DocumentState::source cached_state DocumentState::file_path SOURCE_CACHE.set = SOURCE_CACHE
+            cached_state.source cached_state.file_path sources.add
         fi
     done
 
     # Lex
-    source file_path SOURCE_CACHE.set = SOURCE_CACHE
-    file_path source lex_source = tokens
+    source file_path sources.add
+    file_path source lex_source = lex_result
 
     # Parse
-    LSP_LIBRARY_PATHS tokens parse_and_resolve = parse_result
+    sources lex_result.diagnostics LSP_LIBRARY_PATHS lex_result.tokens parse_and_resolve = parse_result
     parse_result ParseResolveResult::ops = ops
     parse_result ParseResolveResult::store = store
 
@@ -339,7 +338,7 @@ fn compile_document file_path:str source:str open_docs:Map[str DocumentState] ->
     fi
 
     # Snapshot file source (post-include)
-    file_path SOURCE_CACHE.get = source_opt
+    file_path sources.sources.get = source_opt
     if source_opt Option::Some(snapshot_source) is then
         snapshot_source
     else
@@ -386,10 +385,11 @@ fn compile_document file_path:str source:str open_docs:Map[str DocumentState] ->
 
     DocumentState = state
 
-    # Drain compiler globals into the result so callers never read them
-    SOURCE_CACHE
-    WARNINGS
-    ERRORS
+    for error in ERRORS.iter do error lex_result.diagnostics.push_error done
+    for warning in WARNINGS.iter do warning lex_result.diagnostics.push_warning done
+    sources.sources = SOURCE_CACHE
+    sources
+    lex_result.diagnostics
     state
     CompileResult
 }
@@ -413,68 +413,65 @@ fn ingest_document uri:str source:str -> List[LspDiagnostic] {
 }
 
 fn diagnostics_from result:CompileResult path:str -> List[LspDiagnostic] {
-    result CompileResult::errors = errors
-    result CompileResult::warnings = warnings
-    result CompileResult::source_cache = source_cache
+    result.diagnostics = compiler_diagnostics
+    result.sources.sources = source_cache
     result CompileResult::document_state DocumentState::source = fallback_source
 
     List::new(List[LspDiagnostic]) = diagnostics
 
-    # Convert errors
-    for error in errors.iter do
-        if
-        "" error CasaError::location Location::file !=
-        error CasaError::location Location::file path != &&
-        then
-            continue
-        fi
-        fallback_source = error_source
-        error CasaError::location Location::file source_cache.get = source_opt
-        if source_opt.is_some then
-            source_opt.unwrap = error_source
-        fi
+    for diagnostic in compiler_diagnostics.entries.iter do
+        if diagnostic Diagnostic::Error(error) is then
+            if
+            "" error CasaError::location Location::file !=
+            error CasaError::location Location::file path != &&
+            then
+                continue
+            fi
+            fallback_source = error_source
+            error CasaError::location Location::file source_cache.get = source_opt
+            if source_opt.is_some then
+                source_opt.unwrap = error_source
+            fi
 
-        # Build message
-        StringBuilder::new = msg_builder
-        error CasaError::message msg_builder.append
-        if error.expected Option::Some(expected) is then
-            "\nExpected: " msg_builder.append
-            expected msg_builder.append
-        fi
-        if error CasaError::got Option::Some(got) is then
-            "\n" msg_builder.append
-            error CasaError::got_label msg_builder.append
-            ": " msg_builder.append
-            got msg_builder.append
-        fi
+            # Build message
+            StringBuilder::new = msg_builder
+            error CasaError::message msg_builder.append
+            if error.expected Option::Some(expected) is then
+                "\nExpected: " msg_builder.append
+                expected msg_builder.append
+            fi
+            if error CasaError::got Option::Some(got) is then
+                "\n" msg_builder.append
+                error CasaError::got_label msg_builder.append
+                ": " msg_builder.append
+                got msg_builder.append
+            fi
 
-        DIAGNOSTIC_ERROR
-        msg_builder.build
-        error CasaError::location Location::span Span::length
-        error CasaError::location Location::span Span::offset
-        error_source offset_to_lsp_range
-        LspDiagnostic diagnostics.push
-    done
-
-    # Convert warnings
-    for warning in warnings.iter do
-        if
-        "" warning CasaWarning::location Location::file !=
-        warning CasaWarning::location Location::file path != &&
-        then
-            continue
+            DIAGNOSTIC_ERROR
+            msg_builder.build
+            error CasaError::location Location::span Span::length
+            error CasaError::location Location::span Span::offset
+            error_source offset_to_lsp_range
+            LspDiagnostic diagnostics.push
+        elif diagnostic Diagnostic::Warning(warning) is then
+            if
+            "" warning CasaWarning::location Location::file !=
+            warning CasaWarning::location Location::file path != &&
+            then
+                continue
+            fi
+            fallback_source = warn_source
+            warning CasaWarning::location Location::file source_cache.get = warn_source_opt
+            if warn_source_opt.is_some then
+                warn_source_opt.unwrap = warn_source
+            fi
+            DIAGNOSTIC_WARNING
+            warning CasaWarning::message
+            warning CasaWarning::location Location::span Span::length
+            warning CasaWarning::location Location::span Span::offset
+            warn_source offset_to_lsp_range
+            LspDiagnostic diagnostics.push
         fi
-        fallback_source = warn_source
-        warning CasaWarning::location Location::file source_cache.get = warn_source_opt
-        if warn_source_opt.is_some then
-            warn_source_opt.unwrap = warn_source
-        fi
-        DIAGNOSTIC_WARNING
-        warning CasaWarning::message
-        warning CasaWarning::location Location::span Span::length
-        warning CasaWarning::location Location::span Span::offset
-        warn_source offset_to_lsp_range
-        LspDiagnostic diagnostics.push
     done
 
     diagnostics
