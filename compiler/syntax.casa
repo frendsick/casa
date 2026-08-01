@@ -896,10 +896,14 @@ fn require_global_scope function_name:str what:str location:Location parser:Pars
 }
 
 # ============================================================================
-# parse_type_vars - parse [T, K: Hashable] type variable lists
+# parse_type_variables - parse [T, K: Hashable] type variable lists
 # ============================================================================
-# Global to pass trait bounds from parse_type_vars (since we can't return tuples)
-Map::new(Map[str TraitBound]) = LAST_TRAIT_BOUNDS
+
+struct ParsedTypeVariables {
+    names:        List[str]
+    trait_bounds: Map[str TraitBound]
+}
+
 # Parse the `[arg1 arg2 ...]` type argument list that follows a generic trait
 # name in a trait bound (e.g. `I: Iterable[int]`). The caller has already
 # consumed the trait identifier. If the next token is not `[`, returns an
@@ -971,26 +975,25 @@ fn parse_bound_type_args cursor:TokenCursor trait_token:Token -> List[str] {
     bound_args
 }
 
-fn parse_type_vars parser:Parser cursor:TokenCursor -> List[str] {
-    global LAST_TRAIT_BOUNDS
+fn parse_type_variables parser:Parser cursor:TokenCursor -> ParsedTypeVariables {
     fallback_token "[" cursor expect_token_value.unwrap_or drop
     List::new(List[str]) = vars
     Set::new(Set[str]) = seen
-    Map::new(Map[str TraitBound]) = LAST_TRAIT_BOUNDS
+    Map::new(Map[str TraitBound]) = trait_bounds
 
     while true do
         cursor.pop = token_opt
         if token_opt.is_none then
             empty_location "Expected `]` to close type parameters" ErrorKind::Syntax parser.state.record_error
             parser.state.mark_output_unusable
-            vars return
+            trait_bounds vars ParsedTypeVariables return
         fi
         token_opt.unwrap = token
         if "]" token Token::value == then
             if 0 vars.length == then
                 token Token::location "Empty type parameter list `[]` is not allowed" ErrorKind::Syntax parser.state.record_error
             fi
-            vars return
+            trait_bounds vars ParsedTypeVariables return
         fi
         if "," token Token::value == then continue fi
         if TokenKind::Identifier token Token::kind == then
@@ -1021,7 +1024,7 @@ fn parse_type_vars parser:Parser cursor:TokenCursor -> List[str] {
                             trait_token Token::location f"Trait `{bound_trait_name}` expects {declared_params.length} type argument(s), got {bound_args.length}" ErrorKind::Syntax parser.state.record_error
                         fi
                         bound_args bound_trait_name TraitBound = ptv_bound
-                        ptv_bound token Token::value LAST_TRAIT_BOUNDS.set = LAST_TRAIT_BOUNDS
+                        ptv_bound token Token::value trait_bounds.set = trait_bounds
                     fi
                 fi
             fi
@@ -1029,7 +1032,7 @@ fn parse_type_vars parser:Parser cursor:TokenCursor -> List[str] {
             token Token::location "Unexpected token in type parameters" ErrorKind::UnexpectedToken parser.state.record_error
         fi
     done
-    vars
+    trait_bounds vars ParsedTypeVariables
 }
 
 # ============================================================================
@@ -1618,10 +1621,13 @@ fn parse_function parser:Parser cursor:TokenCursor -> Function {
 
     # Parse optional type parameters
     List::new(List[str]) = type_vars
+    Map::new(Map[str TraitBound]) = trait_bounds
     cursor.peek = tvars_opt
     if tvars_opt Option::Some(tvars) is then
         if "[" tvars Token::value == then
-            cursor parser parse_type_vars = type_vars
+            cursor parser parse_type_variables = parsed_type_variables
+            parsed_type_variables.names = type_vars
+            parsed_type_variables.trait_bounds = trait_bounds
         fi
     fi
 
@@ -1633,8 +1639,7 @@ fn parse_function parser:Parser cursor:TokenCursor -> Function {
             type_var effect StackEffect::type_vars.add = new_type_vars
             new_type_vars effect StackEffect::set_type_vars
         done
-        # Set trait bounds from LAST_TRAIT_BOUNDS (set by parse_type_vars)
-        LAST_TRAIT_BOUNDS effect StackEffect::set_trait_bounds
+        trait_bounds effect StackEffect::set_trait_bounds
         effect StackEffect::type_vars effect canonicalize_stack_effect_type_vars
     fi
     List::new(List[Op]) = ops
@@ -1693,7 +1698,7 @@ fn parse_enum parser:Parser cursor:TokenCursor -> CasaEnum {
     cursor.peek = tvars_opt
     if tvars_opt Option::Some(tvars) is then
         if "[" tvars Token::value == then
-            cursor parser parse_type_vars = type_vars
+            cursor parser parse_type_variables.names = type_vars
         fi
     fi
 
@@ -1890,9 +1895,10 @@ fn parse_struct parser:Parser cursor:TokenCursor -> CasaStruct {
     cursor.peek = tvars_opt
     if tvars_opt Option::Some(tvars) is then
         if "[" tvars Token::value == then
-            cursor parser parse_type_vars = type_vars
+            cursor parser parse_type_variables = parsed_type_variables
+            parsed_type_variables.names = type_vars
             # Trait bounds are not allowed on struct definitions
-            if 0 LAST_TRAIT_BOUNDS.keys.length != then
+            if 0 parsed_type_variables.trait_bounds.keys.length != then
                 name_token Token::location "Trait bounds are not allowed on struct definitions. Use `impl[K: Bound] StructName[K]` instead" ErrorKind::UnexpectedToken parser.state.record_error
             fi
         fi
@@ -1982,7 +1988,7 @@ fn parse_trait_method_stack_effect cursor:TokenCursor -> StackEffect {
 # Parse a bracket-delimited identifier-only type-parameter list:
 # `[T1 T2 ...]`. `context` (e.g. "trait", "trait method") is interpolated
 # into error messages. Does *not* accept trait bounds; for those use
-# `parse_type_vars`.
+# `parse_type_variables`.
 
 fn parse_simple_type_vars cursor:TokenCursor context:str -> List[str] {
     cursor.pop drop # consume [
@@ -2168,8 +2174,9 @@ fn parse_impl_block parser:Parser cursor:TokenCursor {
     cursor.peek = tvars_opt
     if tvars_opt Option::Some(tvars) is then
         if "[" tvars Token::value == then
-            cursor parser parse_type_vars = type_vars
-            LAST_TRAIT_BOUNDS = trait_bounds
+            cursor parser parse_type_variables = parsed_type_variables
+            parsed_type_variables.names = type_vars
+            parsed_type_variables.trait_bounds = trait_bounds
         fi
     fi
 
