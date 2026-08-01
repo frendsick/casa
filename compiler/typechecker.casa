@@ -6,6 +6,7 @@ import "std"
 import "common"
 import "error"
 import "syntax"
+import "block_scope"
 import "pattern"
 
 # ============================================================================
@@ -130,11 +131,7 @@ struct TypeChecker {
     store:                      SymbolStore
     param_cap:                  Option[int]
     underflow_reported_this_op: bool
-    scope_stack:                List[List[str]]
-    out_of_scope:               Set[str]
-    pre_scope_vars:             Set[str]
-    scope_type_stack:           List[Map[str Type]]
-    pre_scope_types:            Map[str Type]
+    scope:                      BlockScope
     diagnostics:                Diagnostics
 }
 
@@ -148,11 +145,7 @@ struct TypecheckResult {
 impl TypeChecker {
     fn new store:SymbolStore -> TypeChecker {
         Diagnostics::new # diagnostics
-        Map::new(Map[str Type]) # pre_scope_types
-        List::new(List[Map[str Type]]) # scope_type_stack
-        Set::new(Set[str]) # pre_scope_vars
-        Set::new(Set[str]) # out_of_scope
-        List::new(List[List[str]]) # scope_stack
+        BlockScope::new # scope
         false # underflow_reported_this_op
         Option::None(Option[int]) # param_cap
         store # store
@@ -1042,50 +1035,9 @@ impl TypeChecker {
 }
 
 impl TypeChecker {
-    fn active_scope_has_var tc:TypeChecker var_name:str -> bool {
-        0 = scope_idx
-        while scope_idx tc.scope_stack.length > do
-            scope_idx tc.scope_stack.get = active_frame
-            if var_name active_frame string_list_contains then
-                true return
-            fi
-            1 += scope_idx
-        done
-        false
-    }
-
-    fn active_scoped_var_type tc:TypeChecker var_name:str -> Option[Type] {
-        tc.scope_type_stack.length 1 - = scope_idx
-        while 0 scope_idx >= do
-            scope_idx tc.scope_type_stack.get = type_frame
-            if var_name type_frame.get Option::Some(var_type) is then
-                var_type Option::Some return
-            fi
-            scope_idx 1 - = scope_idx
-        done
-        Option::None(Option[Type])
-    }
-
-    fn set_active_scoped_var_type tc:TypeChecker var_name:str var_type:Type -> bool {
-        tc.scope_type_stack.length 1 - = scope_idx
-        while 0 scope_idx >= do
-            scope_idx tc.scope_type_stack.get = type_frame
-            if var_name type_frame.has then
-                var_type var_name type_frame.set = type_frame
-                type_frame scope_idx tc.scope_type_stack.set
-                true return
-            fi
-            scope_idx 1 - = scope_idx
-        done
-        false
-    }
-
     fn local_var_type tc:TypeChecker var_name:str function_opt:Option[Function] -> Option[Type] {
-        if var_name tc.active_scoped_var_type Option::Some(scoped_type) is then
-            scoped_type Option::Some return
-        fi
-        if var_name tc.pre_scope_types.get Option::Some(pre_type) is then
-            pre_type Option::Some return
+        if var_name tc.scope.lookup Option::Some(binding_type) is then
+            binding_type Option::Some return
         fi
         if function_opt Option::Some(function) is then
             var_name function Function::variables variable_list_index = local_index
@@ -1096,97 +1048,18 @@ impl TypeChecker {
         Option::None(Option[Type])
     }
 
-    # Push a fresh scope frame for a new block branch (while body, if/elif/else
-    # branch, or match arm). Names first assigned inside the branch land here.
-    fn push_block_scope tc:TypeChecker {
-        List::new(List[str]) tc.scope_stack.push
-        Map::new(Map[str Type]) tc.scope_type_stack.push
-    }
-
-    # Pop the innermost scope frame at a block boundary. Each name that is not
-    # still active in an enclosing frame moves to out_of_scope, so a later read
-    # is rejected as undefined. Shared by while, if/elif/else, and match.
-    fn pop_block_scope tc:TypeChecker {
-        if 0 tc.scope_stack.length == then return fi
-        tc.scope_stack.pop = popped_frame
-        if 0 tc.scope_type_stack.length != then
-            tc.scope_type_stack.pop drop
+    fn is_global_assignment self:TypeChecker var_name:str function_opt:Option[Function] -> bool {
+        if var_name self.store.variables.has ! then false return fi
+        if function_opt Option::Some(function) is then
+            var_name function Function::variables variable_list_contains ! return
         fi
-        for exiting_name in popped_frame.iter do
-            # Only move to out_of_scope if not still active in an outer frame
-            false = still_active
-            0 = outer_idx
-            while outer_idx tc.scope_stack.length > do
-                outer_idx tc.scope_stack.get = outer_frame
-                if exiting_name outer_frame string_list_contains then
-                    true = still_active
-                fi
-                1 += outer_idx
-            done
-            if still_active ! then
-                exiting_name tc.out_of_scope.add = new_oos
-                new_oos = tc.out_of_scope
-            fi
-        done
+        true
     }
 
-    # Record a variable assignment or pattern binding relative to the active
-    # block scopes. Outside any block the name is a pre-scope (function-level)
-    # variable, and any stale out-of-scope marking is cleared. Inside a block, a
-    # name that is not already active, pre-scope, or global becomes local to the
-    # innermost frame (reactivating it if it was previously out of scope).
-    #
-    # `is_binding` marks implicit pattern/is-bindings: when such a name would
-    # otherwise resolve to an accessible outer variable it is a shadow error,
-    # whereas an explicit `= x` is allowed to mutate that outer variable.
-    fn record_var_scope tc:TypeChecker var_name:str op:Op is_binding:bool {
-        if 0 tc.scope_stack.length == then
-            if var_name tc.pre_scope_vars.has ! then
-                var_name tc.pre_scope_vars.add = updated_pre
-                updated_pre = tc.pre_scope_vars
-            fi
-            # A fresh outer-scope assignment is always accessible — clear any
-            # stale out-of-scope marking left by an earlier block.
-            if var_name tc.out_of_scope.has then
-                var_name tc.out_of_scope.remove = cleared_pre
-                cleared_pre = tc.out_of_scope
-            fi
-        else
-            var_name tc.active_scope_has_var = in_active_scope
-
-            false = is_pre_scope_global
-            if var_name tc.store.variables.has then
-                true = is_pre_scope_global
-            fi
-
-            var_name tc.pre_scope_vars.has = is_pre_scope_local
-
-            # If not active, not pre-scope, not global: it is block-local.
-            if
-            in_active_scope !
-            is_pre_scope_local ! &&
-            is_pre_scope_global ! &&
-            then
-                if var_name tc.out_of_scope.has then
-                    var_name tc.out_of_scope.remove = cleared_oos
-                    cleared_oos = tc.out_of_scope
-                fi
-                tc.scope_stack.length 1 - = cur_scope_index
-                cur_scope_index tc.scope_stack.get = cur_frame
-                if var_name cur_frame string_list_contains ! then
-                    var_name cur_frame.push
-                    cur_frame cur_scope_index tc.scope_stack.set
-                    cur_scope_index tc.scope_type_stack.get = cur_type_frame
-                    Type::Unknown var_name cur_type_frame.set = cur_type_frame
-                    cur_type_frame cur_scope_index tc.scope_type_stack.set
-                fi
-            elif is_binding is_pre_scope_global ! && then
-                # An implicit pattern/is binding would shadow an accessible
-                # block-local or function-level variable. Globals are a separate
-                # namespace (and are exempt from block scoping), so a binding that
-                # merely matches a global name is allowed, as before.
-                op Op::location f"Binding `{var_name}` shadows an existing variable in scope; choose a different name" ErrorKind::DuplicateName tc.diagnostics.record_error
-            fi
+    fn record_implicit_binding self:TypeChecker var_name:str op:Op {
+        if var_name self.scope.bind ! then
+            f"Binding `{var_name}` shadows an existing variable; choose a different name" = message
+            op Op::location message ErrorKind::DuplicateName self.diagnostics.record_error
         fi
     }
 
@@ -1285,12 +1158,13 @@ impl TypeChecker {
                 op Op::location f"Cannot infer element type of empty array literal assigned to `{var_name}`; add a type annotation (e.g. `= {var_name}:array[int]`) or an explicit cast (e.g. `[] (array[int])`)." ErrorKind::TypeMismatch tc.diagnostics.record_error
             fi
 
-            # Scope tracking: record variable assignment relative to block scopes.
-            false op var_name tc.record_var_scope
+            function_opt var_name tc.is_global_assignment = is_global
+            is_global var_name tc.scope.assign
 
-            if var_name tc.active_scoped_var_type Option::Some(scoped_type) is then
+            if var_name tc.scope.is_block_binding then
+                var_name tc.scope.lookup.unwrap = scoped_type
                 "local" effective_type_t scoped_type var_name op tc.unify_assignment_type = unified_scoped
-                unified_scoped var_name tc.set_active_scoped_var_type drop
+                unified_scoped var_name tc.scope.set_type drop
                 effective_type_t tc.expect_type_t
                 return
             fi
@@ -1301,15 +1175,14 @@ impl TypeChecker {
                 var_name function Function::variables variable_list_index = local_index
                 if 0 local_index >= then
                     local_index function Function::variables.get = local_var
-                    Type::Unknown = current_local_type
-                    if var_name tc.pre_scope_types.get Option::Some(pre_type) is then
-                        pre_type = current_local_type
-                    else
-                        local_var Variable::typ = current_local_type
+                    local_var Variable::typ = current_local_type
+                    if var_name tc.scope.lookup Option::Some(binding_type) is then
+                        if binding_type.is_unknown ! binding_type.is_unknown_placeholder ! && then
+                            binding_type = current_local_type
+                        fi
                     fi
                     "local" effective_type_t current_local_type var_name op tc.unify_assignment_type = unified_local
-                    unified_local var_name tc.pre_scope_types.set = updated_pre_types
-                    updated_pre_types = tc.pre_scope_types
+                    unified_local var_name tc.scope.set_type drop
                     unified_local local_var Variable::set_typ
                     effective_type_t tc.expect_type_t
                     return
@@ -1396,10 +1269,7 @@ impl TypeChecker {
 
         # PUSH_VARIABLE
         if op.value OpValue::PushVar(var_name) is then
-            var_name tc.active_scoped_var_type = active_type_opt
-            var_name tc.pre_scope_types.get = pre_type_opt
-            # Check if variable has gone out of scope (was only in a popped block scope).
-            if var_name tc.out_of_scope.has active_type_opt.is_none && pre_type_opt.is_none && then
+            if var_name tc.scope.is_expired then
                 op Op::location f"Variable `{var_name}` is not accessible outside its block scope" ErrorKind::UndefinedName tc.diagnostics.record_error
                 TYPE_UNKNOWN_T tc.stack_push_type
                 return
@@ -1445,7 +1315,7 @@ impl TypeChecker {
             if_frame tc.branched_stacks.push
             # Scope the then-branch: is-bindings from the condition and any
             # block-local assignments live here until the next branch or `fi`.
-            tc.push_block_scope
+            tc.scope.enter
             true = tc.in_branch_condition
         elif if_value OpValue::IfCondition is then
             false = tc.in_branch_condition
@@ -1466,8 +1336,8 @@ impl TypeChecker {
         then
             # Close the preceding branch scope and open a fresh one. Each
             # branch gets independent is-bindings and block-local variables.
-            tc.pop_block_scope
-            tc.push_block_scope
+            tc.scope.exit
+            tc.scope.enter
             if 0 tc.branched_stacks.length == then return fi
             tc.branched_stacks.length 1 - tc.branched_stacks.get = top_frame
             if top_frame BranchFrame::BranchIf(if_ctx) is then
@@ -1500,7 +1370,7 @@ impl TypeChecker {
             fi
         elif if_value OpValue::IfEnd is then
             # Close the final branch scope.
-            tc.pop_block_scope
+            tc.scope.exit
             tc.branched_stacks.pop = top_frame
             if top_frame BranchFrame::BranchIf(if_ctx) is then
                 if_ctx IfContext::before = if_before
@@ -1539,7 +1409,7 @@ impl TypeChecker {
             op Op::location while_ctx WhileContext::set_current_branch_location
             while_ctx BranchFrame::BranchWhile = while_frame
             while_frame tc.branched_stacks.push
-            tc.push_block_scope
+            tc.scope.enter
         elif while_value OpValue::WhileCondition is then
             TYPE_BOOL_T tc.expect_type_t
             if 0 tc.branched_stacks.length == then return fi
@@ -1554,7 +1424,7 @@ impl TypeChecker {
             if 0 tc.branched_stacks.length == then return fi
         elif while_value OpValue::WhileEnd is then
             tc.branched_stacks.pop drop
-            tc.pop_block_scope
+            tc.scope.exit
         fi
     }
 }
@@ -2331,7 +2201,7 @@ impl TypeChecker {
             fi
             # Track bindings in scope; implicit bindings cannot shadow outer vars.
             for binding_var in variant EnumVariant::bindings.iter do
-                true op binding_var tc.record_var_scope
+                op binding_var tc.record_implicit_binding
             done
             typ variant function_opt tc register_enum_pattern_bindings
         fi
@@ -2343,48 +2213,6 @@ impl TypeChecker {
 # Check match blocks
 # ============================================================================
 
-fn clone_str_set source:Set[str] -> Set[str] {
-    Set::new(Set[str]) = cloned
-    for item in source.to_list.iter do
-        item cloned.add = cloned
-    done
-    cloned
-}
-
-fn clone_type_map source:Map[str Type] -> Map[str Type] {
-    Map::new(Map[str Type]) = cloned
-    for pair in source.iter do
-        pair.second pair.first cloned.set = cloned
-    done
-    cloned
-}
-
-fn clone_scope_stack source:List[List[str]] -> List[List[str]] {
-    List::new(List[List[str]]) = cloned
-    for scope_frame in source.iter do
-        scope_frame.clone cloned.push
-    done
-    cloned
-}
-
-fn clone_scope_type_stack source:List[Map[str Type]] -> List[Map[str Type]] {
-    List::new(List[Map[str Type]]) = cloned
-    for scope_frame in source.iter do
-        scope_frame clone_type_map cloned.push
-    done
-    cloned
-}
-
-impl TypeChecker {
-    fn copy_scope_state_to tc:TypeChecker target:TypeChecker {
-        tc.scope_stack clone_scope_stack = target.scope_stack
-        tc.out_of_scope clone_str_set = target.out_of_scope
-        tc.pre_scope_vars clone_str_set = target.pre_scope_vars
-        tc.scope_type_stack clone_scope_type_stack = target.scope_type_stack
-        tc.pre_scope_types clone_type_map = target.pre_scope_types
-    }
-}
-
 fn set_binding_type
     tc:TypeChecker
     var_name:str
@@ -2392,25 +2220,27 @@ fn set_binding_type
     function_opt:Option[Function]
     store:SymbolStore
 {
-    if field_type var_name tc.set_active_scoped_var_type then return fi
-    if var_name tc.pre_scope_types.has then
-        field_type var_name tc.pre_scope_types.set = updated_pre_types
-        updated_pre_types = tc.pre_scope_types
-        return
+    field_type var_name tc.scope.set_type = scope_updated
+    if function_opt.is_none then
+        if var_name store.variables.get Option::Some(global_var) is then
+            field_type global_var Variable::set_typ
+            return
+        fi
     fi
+    if scope_updated then return fi
     if function_opt.is_some then
         function_opt.unwrap = function
         for variable in function Function::variables.iter do
             if var_name variable Variable::name == then
-                field_type var_name tc.pre_scope_types.set = updated_pre_types_2
-                updated_pre_types_2 = tc.pre_scope_types
+                false var_name tc.scope.assign
+                field_type var_name tc.scope.set_type drop
                 return
             fi
         done
     fi
     var_name store.variables.get = global_opt
-    if global_opt Option::Some(global_var) is then
-        field_type global_var Variable::set_typ
+    if global_opt Option::Some(global_var_fallback) is then
+        field_type global_var_fallback Variable::set_typ
     fi
 }
 
@@ -2449,7 +2279,7 @@ impl TypeChecker {
             if top_frame BranchFrame::BranchMatch(match_ctx) is then
                 # Close the final arm's scope frame (only opened if an arm ran).
                 if match_ctx MatchContext::condition_present then
-                    tc.pop_block_scope
+                    tc.scope.exit
                 fi
                 # Record last arm label
                 if "" match_ctx MatchContext::current_branch_label != then
