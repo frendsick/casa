@@ -20,6 +20,10 @@ Rules for commits, branches, and pull requests in this repo.
 - MUST use conventional prefixes: `feat/`, `refactor/`, `fix/`, etc. This applies
   to worktree branches too — rename away from the `worktree-` default before pushing.
 
+## Issues
+
+- Always set `frendsick` as assignee when working on an issue that does not have an assignee
+
 ## Pull requests
 
 - Always set `frendsick` as assignee
