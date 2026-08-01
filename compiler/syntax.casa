@@ -19,6 +19,8 @@ struct Parser {
     store:          SymbolStore
     included_files: Set[str]
     search_paths:   List[str]
+    diagnostics:    Diagnostics
+    sources:        SourceStore
 }
 
 struct ParseResolveResult {
@@ -27,7 +29,9 @@ struct ParseResolveResult {
 }
 
 impl Parser {
-    fn new store:SymbolStore -> Parser {
+    fn new store:SymbolStore diagnostics:Diagnostics sources:SourceStore -> Parser {
+        sources
+        diagnostics
         List::new(List[str])
         Set::new(Set[str])
         store
@@ -2573,11 +2577,17 @@ fn handle_selective_import parser:Parser selective:SelectiveImport location:Loca
         return
     fi
 
-    symbol_store_new Parser::new = import_parser
+    parser.sources parser.diagnostics symbol_store_new Parser::new = import_parser
     parser.search_paths = import_parser.search_paths
     import_path import_parser.included_files.add drop
-    import_path lex_file = import_tokens
-    import_tokens import_parser parse_ops = import_ops
+    parser.sources import_path lex_file = import_result
+    if import_result Result::Error(read_error) is then
+        location f"Cannot read import `{import_path}`: {read_error.to_str}" ErrorKind::Syntax raise_error
+        return
+    fi
+    import_result.unwrap = lex_result
+    lex_result.diagnostics parser.diagnostics.merge
+    lex_result.tokens import_parser parse_ops = import_ops
     import_ops import_parser resolve_identifiers_global drop
 
     Set::new(Set[str]) = imported
@@ -3137,8 +3147,13 @@ fn parse_ops parser:Parser tokens:List[Token] -> List[Op] {
     ops
 }
 
-fn parse_and_resolve tokens:List[Token] search_paths:List[str] -> ParseResolveResult {
-    symbol_store_new Parser::new = parser
+fn parse_and_resolve
+    tokens:List[Token]
+    search_paths:List[str]
+    diagnostics:Diagnostics
+    sources:SourceStore
+-> ParseResolveResult {
+    sources diagnostics symbol_store_new Parser::new = parser
     search_paths parser Parser::set_search_paths
     tokens parser parse_ops = ops
     ops parser resolve_identifiers_global = resolved_ops
@@ -3279,8 +3294,14 @@ fn expand_imports parser:Parser ops:List[Op] -> List[Op] {
             fi
             if import_path parser.included_files.has ! then
                 import_path parser.included_files.add drop
-                import_path lex_file = import_tokens
-                import_tokens parser parse_ops = import_ops
+                parser.sources import_path lex_file = import_result
+                if import_result Result::Error(read_error) is then
+                    current_op.location f"Cannot read import `{import_path}`: {read_error.to_str}" ErrorKind::Syntax raise_error
+                    continue
+                fi
+                import_result.unwrap = lex_result
+                lex_result.diagnostics parser.diagnostics.merge
+                lex_result.tokens parser parse_ops = import_ops
                 List::new(List[Op]) = new_ops
                 0 = name_index
                 while name_index op_index > do
