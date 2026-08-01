@@ -8,6 +8,7 @@ import "compiler/error.casa"
 import "compiler/lexer.casa"
 import "compiler/syntax.casa"
 import "compiler/typechecker.casa"
+import "compiler/analysis.casa"
 import "compiler/bytecode.casa"
 import "compiler/emitter.casa"
 import "compiler/build.casa"
@@ -28,24 +29,32 @@ fn parse_cli_args -> ParsedArgs {
     parser.parse_args
 }
 
-fn exit_on_errors diagnostics:Diagnostics sources:SourceStore {
-    global SOURCE_CACHE
-    if diagnostics.has_errors ! then return fi
-    sources.sources = SOURCE_CACHE
+impl CasaWarning {
+    fn format self:CasaWarning -> str {
+        self.kind match
+            WarningKind::UnusedParameter => f"warning[UNUSED_PARAMETER]: {self.message}"
+            WarningKind::LossyTypeAnnotation => f"warning[LOSSY_TYPE_ANNOTATION]: {self.message}"
+        end
+    }
+}
+
+fn report_diagnostics diagnostics:Diagnostics sources:SourceStore {
     0 = error_count
     for diagnostic in diagnostics.entries.iter do
         if diagnostic Diagnostic::Error(error) is then
-            error format_error eprintln
+            sources.sources error format_error eprintln
             "" eprintln
             1 += error_count
+        elif diagnostic Diagnostic::Warning(warning) is then
+            warning.format eprintln
         fi
     done
+    if 0 error_count == then return fi
     f"Found {error_count} error(s)." eprintln
     1 exit
 }
 
 fn main {
-    global SOURCE_CACHE
     parse_cli_args = args
 
     "input" args.get.unwrap = CLI_INPUT
@@ -76,37 +85,18 @@ fn main {
 
     Timer::new = timer
 
-    SourceStore::new = sources
-
-    # Read and lex
-    f"{timer} Lexing {CLI_INPUT}" log_info
     CLI_INPUT file::read_all = read_result
     if read_result Result::Error(read_error) is then
         f"error: cannot read {CLI_INPUT}: {read_error.to_str}" eprintln
         1 exit
     fi
     read_result.unwrap = source
-    source CLI_INPUT sources.add
-    CLI_INPUT source lex_source = lex_result
-    sources lex_result.diagnostics exit_on_errors
-    lex_result.tokens = tokens
-
-    # Parse
-    f"{timer} Parsing ops" log_info
-    sources lex_result.diagnostics CLI_LIBRARY_PATHS tokens parse_and_resolve = parse_result
-    sources parse_result.diagnostics exit_on_errors
-    sources.sources = SOURCE_CACHE
-    parse_result ParseResolveResult::ops.unwrap = ops
-    parse_result ParseResolveResult::store = store
-
-    # Type check
-    f"{timer} Type checking ops" log_info
-    store ops type_check = typecheck_result
-
-    sources typecheck_result.diagnostics exit_on_errors
-
-    # Report warnings
-    typecheck_result.diagnostics report_warnings
+    f"{timer} Analyzing {CLI_INPUT}" log_info
+    source CLI_INPUT AnalysisInput::new = analysis_input
+    CLI_LIBRARY_PATHS = analysis_input.library_paths
+    analysis_input analyze = analysis
+    analysis.sources analysis.diagnostics report_diagnostics
+    analysis.typechecked.unwrap = typecheck_result
 
     f"{timer} Compiling bytecode" log_info
     typecheck_result compile_typechecked = program_result

@@ -42,7 +42,7 @@ _Avoid_: Leaking parser object, omnibus context
 
 **Compiler source store**:
 The compiler dependency mapping file paths to the exact source text used by a compilation, including imported files and in-memory document overrides.
-_Avoid_: SOURCE_CACHE, diagnostics cache
+_Avoid_: global source cache, diagnostics cache
 
 **Parse-and-resolve boundary**:
 The first explicit compiler boundary that keeps parser internals private while returning resolved operations and symbols needed by later phases.

@@ -13,6 +13,7 @@ import "compiler/error.casa"
 import "compiler/lexer.casa"
 import "compiler/syntax.casa"
 import "compiler/typechecker.casa"
+import "compiler/analysis.casa"
 
 # ============================================================================
 # LSP structs
@@ -24,6 +25,7 @@ struct DocumentState {
     structs:   Map[str CasaStruct]
     enums:     Map[str CasaEnum]
     variables: Map[str Variable]
+    sources:   SourceStore
     source:    str
     file_path: str
 }
@@ -82,8 +84,7 @@ struct FindOpState {
 
 struct CompileResult {
     document_state: DocumentState
-    diagnostics:    Diagnostics
-    sources:        SourceStore
+    analysis:       AnalysisResult
 }
 
 # ============================================================================
@@ -248,6 +249,11 @@ fn lsp_log message:str {
     f"[LSP] {message}\n" eprint
 }
 
+fn exit_with_lsp_error message:str {
+    message lsp_log
+    1 exit
+}
+
 fn read_message reader:StdinReader -> Option[JsonValue] {
     Option::None(Option[int]) = content_length
     # Read headers until empty line
@@ -303,90 +309,35 @@ fn send_notification method:str params:JsonValue {
 # ============================================================================
 
 fn compile_document file_path:str source:str open_docs:Map[str DocumentState] -> CompileResult {
-    global RESILIENT_MODE
-    global SOURCE_CACHE
-    true = RESILIENT_MODE
-
-    SourceStore::new = sources
-    # Seed source overrides from peer open documents
+    source file_path AnalysisInput::new = input
+    LSP_LIBRARY_PATHS = input.library_paths
     open_docs.keys = uris
     for uri in uris.iter do
         uri open_docs.get.unwrap = cached_state
         if cached_state DocumentState::file_path file_path != then
-            cached_state.source cached_state.file_path sources.add
+            cached_state.source cached_state.file_path input.source_overrides.set = input.source_overrides
         fi
     done
+    input analyze = analysis
 
-    # Lex
-    source file_path sources.add
-    file_path source lex_source = lex_result
-
-    # Parse
-    sources lex_result.diagnostics LSP_LIBRARY_PATHS lex_result.tokens parse_and_resolve = parse_result
-    parse_result ParseResolveResult::store = store
-    Diagnostics::new = typecheck_diagnostics
+    symbol_store_new = store
     List::new(List[Op]) = ops
-    if parse_result.ops Option::Some(parsed_ops) is then
-        store parsed_ops type_check = typecheck_result
+    if analysis.typechecked Option::Some(typecheck_result) is then
         typecheck_result.ops = ops
         typecheck_result.store = store
-        typecheck_result.diagnostics = typecheck_diagnostics
     fi
 
-    # Snapshot file source (post-include)
-    file_path sources.sources.get = source_opt
-    if source_opt Option::Some(snapshot_source) is then
-        snapshot_source
-    else
-        source
-    fi
-    = final_source
-
-    # Snapshot store maps into a DocumentState
     file_path
-    final_source
-    Map::new(Map[str Variable]) = vars_copy
-    store.variables.keys = var_keys
-    for var_name in var_keys.iter do
-        var_name store.variables.get.unwrap = var_value
-        var_value var_name vars_copy.set = vars_copy
-    done
-    vars_copy
-
-    Map::new(Map[str CasaEnum]) = enums_copy
-    store.enums.keys = enum_keys
-    for enum_name in enum_keys.iter do
-        enum_name store.enums.get.unwrap = enum_value
-        enum_value enum_name enums_copy.set = enums_copy
-    done
-    enums_copy
-
-    Map::new(Map[str CasaStruct]) = structs_copy
-    store.structs.keys = struct_keys
-    for struct_name in struct_keys.iter do
-        struct_name store.structs.get.unwrap = struct_value
-        struct_value struct_name structs_copy.set = structs_copy
-    done
-    structs_copy
-
-    Map::new(Map[str Function]) = fns_copy
-    store.functions.keys = fn_keys
-    for fn_name in fn_keys.iter do
-        fn_name store.functions.get.unwrap = fn_value
-        fn_value fn_name fns_copy.set = fns_copy
-    done
-    fns_copy
-
+    source
+    analysis.sources
+    store.variables
+    store.enums
+    store.structs
+    store.functions
     ops
-
     DocumentState = state
 
-    Diagnostics::new = compiler_diagnostics
-    parse_result.diagnostics compiler_diagnostics.merge
-    typecheck_diagnostics compiler_diagnostics.merge
-    sources.sources = SOURCE_CACHE
-    sources
-    compiler_diagnostics
+    analysis
     state
     CompileResult
 }
@@ -410,8 +361,8 @@ fn ingest_document uri:str source:str -> List[LspDiagnostic] {
 }
 
 fn diagnostics_from result:CompileResult path:str -> List[LspDiagnostic] {
-    result.diagnostics = compiler_diagnostics
-    result.sources.sources = source_cache
+    result.analysis.diagnostics = compiler_diagnostics
+    result.analysis.sources.sources = source_map
     result CompileResult::document_state DocumentState::source = fallback_source
 
     List::new(List[LspDiagnostic]) = diagnostics
@@ -425,7 +376,7 @@ fn diagnostics_from result:CompileResult path:str -> List[LspDiagnostic] {
                 continue
             fi
             fallback_source = error_source
-            error CasaError::location Location::file source_cache.get = source_opt
+            error CasaError::location Location::file source_map.get = source_opt
             if source_opt.is_some then
                 source_opt.unwrap = error_source
             fi
@@ -458,7 +409,7 @@ fn diagnostics_from result:CompileResult path:str -> List[LspDiagnostic] {
                 continue
             fi
             fallback_source = warn_source
-            warning CasaWarning::location Location::file source_cache.get = warn_source_opt
+            warning CasaWarning::location Location::file source_map.get = warn_source_opt
             if warn_source_opt.is_some then
                 warn_source_opt.unwrap = warn_source
             fi
@@ -600,9 +551,9 @@ fn find_containing_function state:DocumentState offset:int -> Option[Function] {
     Option::None(Option[Function])
 }
 
-fn casa_location_to_lsp location:Location -> LspLocation {
+fn casa_location_to_lsp location:Location sources:SourceStore -> LspLocation {
     "" = location_source
-    location Location::file SOURCE_CACHE.get = source_opt
+    location Location::file sources.sources.get = source_opt
     if source_opt.is_some then
         source_opt.unwrap = location_source
     fi
@@ -665,47 +616,40 @@ fn split_qualified name:str -> List[str] {
 fn extract_uri message:JsonValue -> str {
     "params" message json_get_object = params_opt
     if params_opt.is_none then
-        empty_location "Expected option value while unwrapping params message json_get_object" ErrorKind::Syntax raise_error
-        1 exit
+        "Expected option value while unwrapping params message json_get_object" exit_with_lsp_error
     fi
     params_opt.unwrap = params
     "textDocument" params json_get_object = text_document_opt
     if text_document_opt.is_none then
-        empty_location "Expected option value while unwrapping textDocument params json_get_object" ErrorKind::Syntax raise_error
-        1 exit
+        "Expected option value while unwrapping textDocument params json_get_object" exit_with_lsp_error
     fi
     text_document_opt.unwrap = text_document
     if "uri" text_document json_get_str Option::Some(uri) is then
         uri return
     fi
-    empty_location "Expected option value while unwrapping uri text_document json_get_str" ErrorKind::Syntax raise_error
-    1 exit
+    "Expected option value while unwrapping uri text_document json_get_str" exit_with_lsp_error
     ""
 }
 
 fn extract_position message:JsonValue -> LspRange {
     "params" message json_get_object = params_opt
     if params_opt.is_none then
-        empty_location "Expected option value while unwrapping params message json_get_object" ErrorKind::Syntax raise_error
-        1 exit
+        "Expected option value while unwrapping params message json_get_object" exit_with_lsp_error
     fi
     params_opt.unwrap = params
     "position" params json_get_object = position_opt
     if position_opt.is_none then
-        empty_location "Expected option value while unwrapping position params json_get_object" ErrorKind::Syntax raise_error
-        1 exit
+        "Expected option value while unwrapping position params json_get_object" exit_with_lsp_error
     fi
     position_opt.unwrap = position
     "line" position json_get_int = line_opt
     if line_opt.is_none then
-        empty_location "Expected option value while unwrapping line position json_get_int" ErrorKind::Syntax raise_error
-        1 exit
+        "Expected option value while unwrapping line position json_get_int" exit_with_lsp_error
     fi
     line_opt.unwrap = line
     "character" position json_get_int = character_opt
     if character_opt.is_none then
-        empty_location "Expected option value while unwrapping character position json_get_int" ErrorKind::Syntax raise_error
-        1 exit
+        "Expected option value while unwrapping character position json_get_int" exit_with_lsp_error
     fi
     character_opt.unwrap = character
     0 0 character line LspRange
@@ -714,26 +658,22 @@ fn extract_position message:JsonValue -> LspRange {
 fn handle_did_open message:JsonValue {
     "params" message json_get_object = params_opt
     if params_opt.is_none then
-        empty_location "Expected option value while unwrapping params message json_get_object" ErrorKind::Syntax raise_error
-        1 exit
+        "Expected option value while unwrapping params message json_get_object" exit_with_lsp_error
     fi
     params_opt.unwrap = params
     "textDocument" params json_get_object = text_document_opt
     if text_document_opt.is_none then
-        empty_location "Expected option value while unwrapping textDocument params json_get_object" ErrorKind::Syntax raise_error
-        1 exit
+        "Expected option value while unwrapping textDocument params json_get_object" exit_with_lsp_error
     fi
     text_document_opt.unwrap = text_document
     "uri" text_document json_get_str = uri_opt
     if uri_opt.is_none then
-        empty_location "Expected option value while unwrapping uri text_document json_get_str" ErrorKind::Syntax raise_error
-        1 exit
+        "Expected option value while unwrapping uri text_document json_get_str" exit_with_lsp_error
     fi
     uri_opt.unwrap = uri
     "text" text_document json_get_str = text_opt
     if text_opt.is_none then
-        empty_location "Expected option value while unwrapping text text_document json_get_str" ErrorKind::Syntax raise_error
-        1 exit
+        "Expected option value while unwrapping text text_document json_get_str" exit_with_lsp_error
     fi
     text_opt.unwrap = text
     text uri ingest_document = diagnostics
@@ -743,33 +683,28 @@ fn handle_did_open message:JsonValue {
 fn handle_did_change message:JsonValue {
     "params" message json_get_object = params_opt
     if params_opt.is_none then
-        empty_location "Expected option value while unwrapping params message json_get_object" ErrorKind::Syntax raise_error
-        1 exit
+        "Expected option value while unwrapping params message json_get_object" exit_with_lsp_error
     fi
     params_opt.unwrap = params
     "textDocument" params json_get_object = text_document_opt
     if text_document_opt.is_none then
-        empty_location "Expected option value while unwrapping textDocument params json_get_object" ErrorKind::Syntax raise_error
-        1 exit
+        "Expected option value while unwrapping textDocument params json_get_object" exit_with_lsp_error
     fi
     text_document_opt.unwrap = text_document
     "uri" text_document json_get_str = uri_opt
     if uri_opt.is_none then
-        empty_location "Expected option value while unwrapping uri text_document json_get_str" ErrorKind::Syntax raise_error
-        1 exit
+        "Expected option value while unwrapping uri text_document json_get_str" exit_with_lsp_error
     fi
     uri_opt.unwrap = uri
     "contentChanges" params json_get_array = changes_opt
     if changes_opt.is_none then
-        empty_location "Expected option value while unwrapping contentChanges params json_get_array" ErrorKind::Syntax raise_error
-        1 exit
+        "Expected option value while unwrapping contentChanges params json_get_array" exit_with_lsp_error
     fi
     changes_opt.unwrap = changes
     0 changes.get = change
     "text" change json_get_str = text_opt
     if text_opt.is_none then
-        empty_location "Expected option value while unwrapping text change json_get_str" ErrorKind::Syntax raise_error
-        1 exit
+        "Expected option value while unwrapping text change json_get_str" exit_with_lsp_error
     fi
     text_opt.unwrap = text
     text uri ingest_document = diagnostics
@@ -823,7 +758,7 @@ fn find_variable_definition
     fi
 
     if best_op Option::Some(best) is then
-        best Op::location casa_location_to_lsp Option::Some
+        state.sources best Op::location casa_location_to_lsp Option::Some
     else
         Option::None(Option[LspLocation])
     fi
@@ -861,11 +796,11 @@ fn compute_definition state:DocumentState line:int col:int -> Option[LspLocation
             op op_str_value "::" str::split = parts
             0 parts.get = type_name
             if type_name state DocumentState::structs.get Option::Some(casa_struct) is then
-                casa_struct CasaStruct::location casa_location_to_lsp Option::Some
+                state.sources casa_struct CasaStruct::location casa_location_to_lsp Option::Some
                 return
             fi
             if type_name state DocumentState::enums.get Option::Some(casa_enum) is then
-                casa_enum CasaEnum::location casa_location_to_lsp Option::Some
+                state.sources casa_enum CasaEnum::location casa_location_to_lsp Option::Some
                 return
             fi
             Option::None(Option[LspLocation])
@@ -875,7 +810,7 @@ fn compute_definition state:DocumentState line:int col:int -> Option[LspLocation
         if fn_opt.is_some then
             fn_opt.unwrap = fn_def
             if "" fn_def Function::location Location::file != then
-                fn_def Function::location casa_location_to_lsp Option::Some
+                state.sources fn_def Function::location casa_location_to_lsp Option::Some
                 return
             fi
         fi
@@ -891,7 +826,7 @@ fn compute_definition state:DocumentState line:int col:int -> Option[LspLocation
 
     # STRUCT_NEW
     if op_value OpValue::StructNew(casa_struct) is then
-        casa_struct CasaStruct::location casa_location_to_lsp Option::Some
+        state.sources casa_struct CasaStruct::location casa_location_to_lsp Option::Some
         return
     fi
 
@@ -906,11 +841,11 @@ fn compute_definition state:DocumentState line:int col:int -> Option[LspLocation
         enum_variant EnumVariant::variant_name casa_enum CasaEnum::variant_locations.get = variant_loc_opt
         if qpart_is_member then
             if variant_loc_opt Option::Some(variant_loc) is then
-                variant_loc casa_location_to_lsp Option::Some
+                state.sources variant_loc casa_location_to_lsp Option::Some
                 return
             fi
         fi
-        casa_enum CasaEnum::location casa_location_to_lsp Option::Some
+        state.sources casa_enum CasaEnum::location casa_location_to_lsp Option::Some
         return
     fi
 
@@ -918,11 +853,11 @@ fn compute_definition state:DocumentState line:int col:int -> Option[LspLocation
     if op_value OpValue::TypeCast(cast_type) is then
         cast_type.format = cast_name
         if cast_name state DocumentState::structs.get Option::Some(casa_struct) is then
-            casa_struct CasaStruct::location casa_location_to_lsp Option::Some
+            state.sources casa_struct CasaStruct::location casa_location_to_lsp Option::Some
             return
         fi
         if cast_name state DocumentState::enums.get Option::Some(casa_enum) is then
-            casa_enum CasaEnum::location casa_location_to_lsp Option::Some
+            state.sources casa_enum CasaEnum::location casa_location_to_lsp Option::Some
             return
         fi
     fi
@@ -934,8 +869,7 @@ fn handle_definition message:JsonValue {
     message extract_uri = uri
     "id" message json_get_value = request_id_opt
     if request_id_opt.is_none then
-        empty_location "Expected option value while unwrapping id message json_get_value" ErrorKind::Syntax raise_error
-        1 exit
+        "Expected option value while unwrapping id message json_get_value" exit_with_lsp_error
     fi
     request_id_opt.unwrap = request_id
 
@@ -1265,8 +1199,7 @@ fn handle_hover message:JsonValue {
     message extract_uri = uri
     "id" message json_get_value = request_id_opt
     if request_id_opt.is_none then
-        empty_location "Expected option value while unwrapping id message json_get_value" ErrorKind::Syntax raise_error
-        1 exit
+        "Expected option value while unwrapping id message json_get_value" exit_with_lsp_error
     fi
     request_id_opt.unwrap = request_id
 
@@ -1554,8 +1487,7 @@ fn handle_completion message:JsonValue {
     message extract_uri = uri
     "id" message json_get_value = request_id_opt
     if request_id_opt.is_none then
-        empty_location "Expected option value while unwrapping id message json_get_value" ErrorKind::Syntax raise_error
-        1 exit
+        "Expected option value while unwrapping id message json_get_value" exit_with_lsp_error
     fi
     request_id_opt.unwrap = request_id
 
@@ -1572,8 +1504,7 @@ fn handle_completion message:JsonValue {
     # Check trigger character
     "params" message json_get_object = params_opt
     if params_opt.is_none then
-        empty_location "Expected option value while unwrapping params message json_get_object" ErrorKind::Syntax raise_error
-        1 exit
+        "Expected option value while unwrapping params message json_get_object" exit_with_lsp_error
     fi
     params_opt.unwrap = params
     "context" params json_get_object = context_opt
@@ -1603,7 +1534,7 @@ fn handle_completion message:JsonValue {
 # Find references helpers
 # ============================================================================
 
-fn collect_fn_refs ops:List[Op] name:str results:List[LspLocation] {
+fn collect_function_references ops:List[Op] name:str results:List[LspLocation] sources:SourceStore {
     for op in ops.iter do
         if op.value OpValue::FnCall is ! op.value OpValue::FnPush is ! && then
             continue
@@ -1611,7 +1542,7 @@ fn collect_fn_refs ops:List[Op] name:str results:List[LspLocation] {
         if op op_str_value name != then
             continue
         fi
-        op Op::location casa_location_to_lsp results.push
+        sources op Op::location casa_location_to_lsp results.push
     done
 }
 
@@ -1624,7 +1555,7 @@ fn is_var_op op:Op -> bool {
     op_value OpValue::AssignDec is ||
 }
 
-fn collect_var_refs ops:List[Op] name:str results:List[LspLocation] {
+fn collect_variable_references ops:List[Op] name:str results:List[LspLocation] sources:SourceStore {
     for op in ops.iter do
         if op is_var_op ! then
             continue
@@ -1632,29 +1563,34 @@ fn collect_var_refs ops:List[Op] name:str results:List[LspLocation] {
         if op op_str_value name != then
             continue
         fi
-        op Op::location casa_location_to_lsp results.push
+        sources op Op::location casa_location_to_lsp results.push
     done
 }
 
-fn collect_struct_refs ops:List[Op] name:str results:List[LspLocation] {
+fn collect_struct_references ops:List[Op] name:str results:List[LspLocation] sources:SourceStore {
     for op in ops.iter do
         if op.value OpValue::StructNew(casa_struct) is then
             if casa_struct CasaStruct::name name == then
-                op Op::location casa_location_to_lsp results.push
+                sources op Op::location casa_location_to_lsp results.push
             fi
         elif op.value OpValue::TypeCast(cast_type) is then
             if cast_type.format name == then
-                op Op::location casa_location_to_lsp results.push
+                sources op Op::location casa_location_to_lsp results.push
             fi
         fi
     done
 }
 
-fn collect_enum_refs ops:List[Op] enum_name:str results:List[LspLocation] {
+fn collect_enum_references
+    ops:List[Op]
+    enum_name:str
+    results:List[LspLocation]
+    sources:SourceStore
+{
     for op in ops.iter do
         if op.value OpValue::PushEnumVariant(variant) is then
             if variant EnumVariant::enum_name enum_name == then
-                op Op::location casa_location_to_lsp results.push
+                sources op Op::location casa_location_to_lsp results.push
             fi
         fi
     done
@@ -1670,13 +1606,13 @@ fn collect_refs_in_all_functions
     for fn_name in fn_keys.iter do
         fn_name state DocumentState::functions.get.unwrap = func
         if COLLECTOR_FN collector_kind == then
-            results name func Function::ops collect_fn_refs
+            state.sources results name func Function::ops collect_function_references
         elif COLLECTOR_VAR collector_kind == then
-            results name func Function::ops collect_var_refs
+            state.sources results name func Function::ops collect_variable_references
         elif COLLECTOR_STRUCT collector_kind == then
-            results name func Function::ops collect_struct_refs
+            state.sources results name func Function::ops collect_struct_references
         elif COLLECTOR_ENUM collector_kind == then
-            results name func Function::ops collect_enum_refs
+            state.sources results name func Function::ops collect_enum_references
         fi
     done
 }
@@ -1712,11 +1648,11 @@ fn find_all_references
             fn_name state DocumentState::functions.get = fn_opt
             if fn_opt Option::Some(fn_def) is then
                 if "" fn_def Function::location Location::file != then
-                    fn_def Function::location casa_location_to_lsp results.push
+                    state.sources fn_def Function::location casa_location_to_lsp results.push
                 fi
             fi
         fi
-        results fn_name state DocumentState::ops collect_fn_refs
+        state.sources results fn_name state DocumentState::ops collect_function_references
         results fn_name COLLECTOR_FN state collect_refs_in_all_functions
         results
         return
@@ -1727,10 +1663,10 @@ fn find_all_references
         op op_str_value = var_name
         if func var_name is_local_variable then
             if func Option::Some(local_func) is then
-                results var_name local_func Function::ops collect_var_refs
+                state.sources results var_name local_func Function::ops collect_variable_references
             fi
         else
-            results var_name state DocumentState::ops collect_var_refs
+            state.sources results var_name state DocumentState::ops collect_variable_references
             results var_name COLLECTOR_VAR state collect_refs_in_all_functions
         fi
         results
@@ -1741,9 +1677,9 @@ fn find_all_references
     if op_value OpValue::StructNew(casa_struct) is then
         casa_struct CasaStruct::name = struct_name
         if include_declaration then
-            casa_struct CasaStruct::location casa_location_to_lsp results.push
+            state.sources casa_struct CasaStruct::location casa_location_to_lsp results.push
         fi
-        results struct_name state DocumentState::ops collect_struct_refs
+        state.sources results struct_name state DocumentState::ops collect_struct_references
         results struct_name COLLECTOR_STRUCT state collect_refs_in_all_functions
         results
         return
@@ -1754,10 +1690,10 @@ fn find_all_references
         variant EnumVariant::enum_name = enum_name
         if include_declaration then
             if enum_name state DocumentState::enums.get Option::Some(casa_enum) is then
-                casa_enum CasaEnum::location casa_location_to_lsp results.push
+                state.sources casa_enum CasaEnum::location casa_location_to_lsp results.push
             fi
         fi
-        results enum_name state DocumentState::ops collect_enum_refs
+        state.sources results enum_name state DocumentState::ops collect_enum_references
         results enum_name COLLECTOR_ENUM state collect_refs_in_all_functions
         results
         return
@@ -1801,8 +1737,7 @@ fn handle_references message:JsonValue {
     message extract_uri = uri
     "id" message json_get_value = request_id_opt
     if request_id_opt.is_none then
-        empty_location "Expected option value while unwrapping id message json_get_value" ErrorKind::Syntax raise_error
-        1 exit
+        "Expected option value while unwrapping id message json_get_value" exit_with_lsp_error
     fi
     request_id_opt.unwrap = request_id
 
@@ -1911,8 +1846,7 @@ fn handle_rename message:JsonValue {
     message extract_uri = uri
     "id" message json_get_value = request_id_opt
     if request_id_opt.is_none then
-        empty_location "Expected option value while unwrapping id message json_get_value" ErrorKind::Syntax raise_error
-        1 exit
+        "Expected option value while unwrapping id message json_get_value" exit_with_lsp_error
     fi
     request_id_opt.unwrap = request_id
 
@@ -1925,14 +1859,12 @@ fn handle_rename message:JsonValue {
 
     "params" message json_get_object = params_opt
     if params_opt.is_none then
-        empty_location "Expected option value while unwrapping params message json_get_object" ErrorKind::Syntax raise_error
-        1 exit
+        "Expected option value while unwrapping params message json_get_object" exit_with_lsp_error
     fi
     params_opt.unwrap = params
     "newName" params json_get_str = new_name_opt
     if new_name_opt.is_none then
-        empty_location "Expected option value while unwrapping newName params json_get_str" ErrorKind::Syntax raise_error
-        1 exit
+        "Expected option value while unwrapping newName params json_get_str" exit_with_lsp_error
     fi
     new_name_opt.unwrap = new_name
 
@@ -2224,8 +2156,7 @@ fn handle_semantic_tokens message:JsonValue {
     message extract_uri = uri
     "id" message json_get_value = request_id_opt
     if request_id_opt.is_none then
-        empty_location "Expected option value while unwrapping id message json_get_value" ErrorKind::Syntax raise_error
-        1 exit
+        "Expected option value while unwrapping id message json_get_value" exit_with_lsp_error
     fi
     request_id_opt.unwrap = request_id
 
@@ -2416,8 +2347,7 @@ fn handle_initialize message:JsonValue {
     global LSP_LIBRARY_PATHS
     "id" message json_get_value = request_id_opt
     if request_id_opt.is_none then
-        empty_location "Expected option value while unwrapping id message json_get_value" ErrorKind::Syntax raise_error
-        1 exit
+        "Expected option value while unwrapping id message json_get_value" exit_with_lsp_error
     fi
     request_id_opt.unwrap = request_id
 
@@ -2470,8 +2400,7 @@ fn handle_shutdown message:JsonValue {
     if "id" message json_get_value Option::Some(request_id) is then
         JsonValue::JsonNull request_id send_response
     else
-        empty_location "Expected option value while unwrapping id message json_get_value" ErrorKind::Syntax raise_error
-        1 exit
+        "Expected option value while unwrapping id message json_get_value" exit_with_lsp_error
     fi
 }
 
@@ -2512,9 +2441,6 @@ fn dispatch_message message:JsonValue {
 }
 
 fn main {
-    global RESILIENT_MODE
-    true = RESILIENT_MODE
-
     while true do
         STDIN_READER read_message = msg_opt
         if msg_opt.is_none then

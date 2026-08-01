@@ -346,18 +346,20 @@ without a type-name prefix is acceptable.
 
 ## Error handling
 
-- **MUST** use `raise_error` for unrecoverable errors in library and application code.
-- Error collection (appending to an error list for deferred reporting) is appropriate
-  only in compiler and tooling code that explicitly implements resilient/multi-error mode.
+- **MUST** return `Result` for meaningful failures and `Option` for absence.
+- Compiler phases **MUST** record recoverable diagnostics in their phase-owned
+  `Diagnostics`; callers decide whether to continue, report, or exit.
+- Application adapters may print an unrecoverable internal error and exit when their
+  public interface cannot represent failure.
 - **MUST** write error messages as plain string literals, not `StringBuilder`-constructed
   strings:
 
   ```casa
   # MUST
-  "Expected type name" ErrorKind::Syntax raise_error
+  location "Expected type name" ErrorKind::Syntax diagnostics.record_error
 
   # MUST NOT
   StringBuilder::new = msg
   "Expected " msg.append ...
-  msg.build raise_error
+  location msg.build ErrorKind::Syntax diagnostics.record_error
   ```
