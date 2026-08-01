@@ -32,8 +32,7 @@ See [README.md](./README.md) for basic info, language docs, and examples.
 
 ## Agent skills
 
-- Always use `caveman` skill
-- Use `tdd` skill whenever making new features or functionality changes
+- Always use `ponytail` skill
 
 Always load the relevant doc when the matching workflow comes up:
 
