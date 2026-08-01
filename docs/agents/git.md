@@ -20,6 +20,11 @@ Rules for commits, branches, and pull requests in this repo.
 - MUST use conventional prefixes: `feat/`, `refactor/`, `fix/`, etc. This applies
   to worktree branches too — rename away from the `worktree-` default before pushing.
 
+## Pull requests
+
+- Always set `frendsick` as assignee
+- Always set relevant labels for the PR
+
 ## Releases
 
 - The release asset **MUST** be named `casac` (no version suffix, no other name).
