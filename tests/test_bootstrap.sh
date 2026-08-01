@@ -1,18 +1,16 @@
 #!/usr/bin/env sh
 set -eu
 
+. "$(dirname "$0")/test-lib.sh"
+
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd)
 LIB_DIR="$ROOT_DIR/lib"
 cd "$ROOT_DIR"
 
-# Compiler: env var > positional path (backward compat) > default
-if [ -n "${CASA_COMPILER:-}" ]; then
-    COMPILER="$CASA_COMPILER"
-elif [ $# -ge 1 ] && echo "$1" | grep -q '/'; then
-    COMPILER="$1"
+select_tool "${CASA_COMPILER:-}" "$ROOT_DIR/casac" "${1:-}"
+COMPILER=$TEST_TOOL
+if [ "$TEST_TOOL_ARG" = true ]; then
     shift
-else
-    COMPILER="$ROOT_DIR/casac"
 fi
 
 RED='\033[0;31m'
