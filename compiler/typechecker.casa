@@ -135,10 +135,19 @@ struct TypeChecker {
     pre_scope_vars:             Set[str]
     scope_type_stack:           List[Map[str Type]]
     pre_scope_types:            Map[str Type]
+    diagnostics:                Diagnostics
+}
+
+struct TypecheckResult {
+    store:               SymbolStore
+    global_stack_effect: StackEffect
+    ops:                 List[Op]
+    diagnostics:         Diagnostics
 }
 
 impl TypeChecker {
     fn new store:SymbolStore -> TypeChecker {
+        Diagnostics::new # diagnostics
         Map::new(Map[str Type]) # pre_scope_types
         List::new(List[Map[str Type]]) # scope_type_stack
         Set::new(Set[str]) # pre_scope_vars
@@ -172,7 +181,7 @@ impl TypeChecker {
 
 impl TypeChecker {
     fn raise_type_mismatch tc:TypeChecker message:str {
-        tc.current_location message ErrorKind::TypeMismatch raise_error
+        tc.current_location message ErrorKind::TypeMismatch tc.diagnostics.record_error
     }
 }
 
@@ -196,7 +205,7 @@ impl TypeChecker {
 impl TypeChecker {
     fn report_stack_underflow tc:TypeChecker message:str {
         if tc.underflow_reported_this_op then return fi
-        tc.current_location message ErrorKind::StackUnderflow add_error
+        tc.current_location message ErrorKind::StackUnderflow tc.diagnostics.record_error
         true = tc.underflow_reported_this_op
     }
 }
@@ -301,7 +310,7 @@ impl TypeChecker {
         if "" tc.current_op_context != then
             f"Type mismatch in {tc.current_op_context}" = et_message
         fi
-        et_actual et_expected tc.current_location et_message ErrorKind::TypeMismatch add_error_expected
+        et_actual et_expected tc.current_location et_message ErrorKind::TypeMismatch tc.diagnostics.record_error_expected
     }
 }
 
@@ -343,9 +352,16 @@ fn type_exists_recursive_t typ:Type function_opt:Option[Function] store:SymbolSt
     end
 }
 
-fn validate_type_exists typ:Type function_opt:Option[Function] location:Location store:SymbolStore {
-    if store function_opt typ type_exists_recursive_t then return fi
-    location f"type `{typ.format}` does not exist" ErrorKind::Syntax raise_error
+impl TypeChecker {
+    fn validate_type_exists
+        self:TypeChecker
+        typ:Type
+        function_opt:Option[Function]
+        location:Location
+    {
+        if self.store function_opt typ type_exists_recursive_t then return fi
+        location f"type `{typ.format}` does not exist" ErrorKind::Syntax self.diagnostics.record_error
+    }
 }
 
 # ============================================================================
@@ -365,10 +381,7 @@ fn unify_generic_params_t type_a:Type type_b:Type store:SymbolStore -> Option[Ty
         store pair.second pair.first unify_type_t ? unified.push
     done
     type_a.base = base_opt
-    if base_opt.is_none then
-        empty_location "Expected option value while unwrapping type_a.base" ErrorKind::Syntax raise_error
-        1 exit
-    fi
+    if base_opt.is_none then Option::None(Option[Type]) return fi
     base_opt.unwrap = base
     unified base GenericType Type::Generic Option::Some
 }
@@ -419,8 +432,7 @@ fn stacks_compatible stack_a:List[Type] stack_b:List[Type] store:SymbolStore -> 
             if unified Option::Some(unified_type) is then
                 unified_type result.push
             else
-                empty_location "Expected unified stack type" ErrorKind::Syntax raise_error
-                1 exit
+                List::new(List[Type]) return
             fi
         fi
         1 += index
@@ -835,9 +847,9 @@ impl TypeChecker {
             op_index return
         fi
         # User-defined types must satisfy Eq (or Ord) explicitly.
-        if tc.store function_opt trait_name type1_t type_satisfies_trait ! then
+        if tc.diagnostics tc.store function_opt trait_name type1_t type_satisfies_trait ! then
             cmp_value comparison_op_str = cmp_str
-            op Op::location f"Type `{type1}` cannot be compared with `{cmp_str}`: does not satisfy trait `{trait_name}`" ErrorKind::MissingTraitMethod add_error
+            op Op::location f"Type `{type1}` cannot be compared with `{cmp_str}`: does not satisfy trait `{trait_name}`" ErrorKind::MissingTraitMethod tc.diagnostics.record_error
             TYPE_BOOL_T tc.stack_push_type
             op_index return
         fi
@@ -969,7 +981,7 @@ impl TypeChecker {
         if word_bound_opt Option::Some(word_bound) is then
             if tc.store word_bound bound_implies_word then return fi
         fi
-        op Op::location f"Type variable `{type_name}` does not satisfy `Word` bound; add `[{type_name}: Word]` (or a trait that extends `Word`) to the function's type parameters" ErrorKind::TypeMismatch raise_error
+        op Op::location f"Type variable `{type_name}` does not satisfy `Word` bound; add `[{type_name}: Word]` (or a trait that extends `Word`) to the function's type parameters" ErrorKind::TypeMismatch tc.diagnostics.record_error
     }
 }
 
@@ -1006,49 +1018,53 @@ impl TypeChecker {
 # Unify the stored type of `variable` with the type being assigned to it.
 # `scope` ("local" / "global") is only used in the error message.
 
-fn unify_variable_assignment
-    op:Op
-    variable:Variable
-    effective_type:Type
-    scope:str
-    store:SymbolStore
-{
-    variable Variable::name = var_name
-    variable Variable::typ = pre_type
-    pre_type.is_unknown pre_type.is_unknown_placeholder || = pre_unknown
-    if pre_unknown effective_type.is_unknown_placeholder ! && then
-        effective_type variable Variable::set_typ
-    fi
-    store effective_type variable Variable::typ unify_type_t = unified
-    if unified.is_none then
-        op Op::location f"Cannot override {scope} variable `{var_name}` of type `{variable Variable::typ.format}` with other type `{effective_type.format}`" ErrorKind::InvalidVariable add_error
-    elif unified Option::Some(unified_type) is then
-        unified_type variable Variable::set_typ
-    fi
+impl TypeChecker {
+    fn unify_variable_assignment
+        self:TypeChecker
+        op:Op
+        variable:Variable
+        effective_type:Type
+        scope:str
+    {
+        variable Variable::name = var_name
+        variable Variable::typ = pre_type
+        pre_type.is_unknown pre_type.is_unknown_placeholder || = pre_unknown
+        if pre_unknown effective_type.is_unknown_placeholder ! && then
+            effective_type variable Variable::set_typ
+        fi
+        self.store effective_type variable Variable::typ unify_type_t = unified
+        if unified.is_none then
+            op Op::location f"Cannot override {scope} variable `{var_name}` of type `{variable Variable::typ.format}` with other type `{effective_type.format}`" ErrorKind::InvalidVariable self.diagnostics.record_error
+        elif unified Option::Some(unified_type) is then
+            unified_type variable Variable::set_typ
+        fi
+    }
 }
 
-fn unify_assignment_type
-    op:Op
-    var_name:str
-    current_type:Type
-    effective_type:Type
-    scope:str
-    store:SymbolStore
--> Type {
-    current_type = stored_type
-    stored_type.is_unknown stored_type.is_unknown_placeholder || = pre_unknown
-    if pre_unknown effective_type.is_unknown_placeholder ! && then
-        effective_type = stored_type
-    fi
-    store effective_type stored_type unify_type_t = unified
-    if unified.is_none then
-        op Op::location f"Cannot override {scope} variable `{var_name}` of type `{stored_type.format}` with other type `{effective_type.format}`" ErrorKind::InvalidVariable add_error
-        stored_type
-    elif unified Option::Some(unified_type) is then
-        unified_type
-    else
-        stored_type
-    fi
+impl TypeChecker {
+    fn unify_assignment_type
+        self:TypeChecker
+        op:Op
+        var_name:str
+        current_type:Type
+        effective_type:Type
+        scope:str
+    -> Type {
+        current_type = stored_type
+        stored_type.is_unknown stored_type.is_unknown_placeholder || = pre_unknown
+        if pre_unknown effective_type.is_unknown_placeholder ! && then
+            effective_type = stored_type
+        fi
+        self.store effective_type stored_type unify_type_t = unified
+        if unified.is_none then
+            op Op::location f"Cannot override {scope} variable `{var_name}` of type `{stored_type.format}` with other type `{effective_type.format}`" ErrorKind::InvalidVariable self.diagnostics.record_error
+            stored_type
+        elif unified Option::Some(unified_type) is then
+            unified_type
+        else
+            stored_type
+        fi
+    }
 }
 
 impl TypeChecker {
@@ -1195,7 +1211,7 @@ impl TypeChecker {
                 # block-local or function-level variable. Globals are a separate
                 # namespace (and are exempt from block scoping), so a binding that
                 # merely matches a global name is allowed, as before.
-                op Op::location f"Binding `{var_name}` shadows an existing variable in scope; choose a different name" ErrorKind::DuplicateName add_error
+                op Op::location f"Binding `{var_name}` shadows an existing variable in scope; choose a different name" ErrorKind::DuplicateName tc.diagnostics.record_error
             fi
         fi
     }
@@ -1286,20 +1302,20 @@ impl TypeChecker {
             if has_annotation then
                 op Op::type_hint = hint_opt
                 if hint_opt.is_none then
-                    empty_location "Expected option value while unwrapping op Op::type_hint" ErrorKind::Syntax raise_error
-                    1 exit
+                    empty_location "Expected option value while unwrapping op Op::type_hint" ErrorKind::Syntax tc.diagnostics.record_error
+                    return
                 fi
                 hint_opt.unwrap = effective_type_t
             fi
             if has_annotation ! stack_type_t.has_unresolved && then
-                op Op::location f"Cannot infer element type of empty array literal assigned to `{var_name}`; add a type annotation (e.g. `= {var_name}:array[int]`) or an explicit cast (e.g. `[] (array[int])`)." ErrorKind::TypeMismatch raise_error
+                op Op::location f"Cannot infer element type of empty array literal assigned to `{var_name}`; add a type annotation (e.g. `= {var_name}:array[int]`) or an explicit cast (e.g. `[] (array[int])`)." ErrorKind::TypeMismatch tc.diagnostics.record_error
             fi
 
             # Scope tracking: record variable assignment relative to block scopes.
             false op var_name tc.record_var_scope
 
             if var_name tc.active_scoped_var_type Option::Some(scoped_type) is then
-                tc.store "local" effective_type_t scoped_type var_name op unify_assignment_type = unified_scoped
+                "local" effective_type_t scoped_type var_name op tc.unify_assignment_type = unified_scoped
                 unified_scoped var_name tc.set_active_scoped_var_type drop
                 effective_type_t tc.expect_type_t
                 return
@@ -1317,7 +1333,7 @@ impl TypeChecker {
                     else
                         local_var Variable::typ = current_local_type
                     fi
-                    tc.store "local" effective_type_t current_local_type var_name op unify_assignment_type = unified_local
+                    "local" effective_type_t current_local_type var_name op tc.unify_assignment_type = unified_local
                     unified_local var_name tc.pre_scope_types.set = updated_pre_types
                     updated_pre_types = tc.pre_scope_types
                     unified_local local_var Variable::set_typ
@@ -1330,7 +1346,7 @@ impl TypeChecker {
             var_name tc.store.variables.get = global_opt
             if global_opt.is_some then
                 global_opt.unwrap = global_var
-                tc.store "global" effective_type_t global_var op unify_variable_assignment
+                "global" effective_type_t global_var op tc.unify_variable_assignment
                 effective_type_t tc.expect_type_t
                 return
             fi
@@ -1410,7 +1426,7 @@ impl TypeChecker {
             var_name tc.pre_scope_types.get = pre_type_opt
             # Check if variable has gone out of scope (was only in a popped block scope).
             if var_name tc.out_of_scope.has active_type_opt.is_none && pre_type_opt.is_none && then
-                op Op::location f"Variable `{var_name}` is not accessible outside its block scope" ErrorKind::UndefinedName add_error
+                op Op::location f"Variable `{var_name}` is not accessible outside its block scope" ErrorKind::UndefinedName tc.diagnostics.record_error
                 TYPE_UNKNOWN_T tc.stack_push_type
                 return
             fi
@@ -1436,7 +1452,7 @@ impl TypeChecker {
                 return
             fi
 
-            op Op::location f"Variable `{var_name}` is not defined" ErrorKind::UndefinedName raise_error
+            op Op::location f"Variable `{var_name}` is not defined" ErrorKind::UndefinedName tc.diagnostics.record_error
         fi
     }
 }
@@ -1506,7 +1522,7 @@ impl TypeChecker {
                     op Op::location if_ctx IfContext::set_current_branch_location
                     return
                 fi
-                op Op::location "Branches have incompatible stack effects" ErrorKind::StackMismatch add_error
+                op Op::location "Branches have incompatible stack effects" ErrorKind::StackMismatch tc.diagnostics.record_error
             fi
         elif if_value OpValue::IfEnd is then
             # Close the final branch scope.
@@ -1530,7 +1546,7 @@ impl TypeChecker {
                     unified_before = tc.stack.types
                     return
                 fi
-                op Op::location "Branches have incompatible stack effects" ErrorKind::StackMismatch add_error
+                op Op::location "Branches have incompatible stack effects" ErrorKind::StackMismatch tc.diagnostics.record_error
             fi
         fi
     }
@@ -1607,6 +1623,7 @@ fn type_satisfies_trait
     trait_name:str
     function_opt:Option[Function]
     store:SymbolStore
+    diagnostics:Diagnostics
 -> bool {
     type_name.format = type_name_str
     # Accept both bare ("Iterable") and concrete generic ("Iterable[int]") trait names.
@@ -1662,7 +1679,7 @@ fn type_satisfies_trait
             false return
         fi
         fn_opt.unwrap = function
-        store function ensure_typechecked
+        diagnostics store function ensure_typechecked
         if "None -> None" function Function::stack_effect stack_effect_to_str == then false return fi
         # When satisfying via the generic base, skip strict stack-effect comparison:
         # the concrete trait bounds are verified at the actual call site.
@@ -1821,9 +1838,6 @@ fn method_diff_bind_all
             if concrete_opt Option::Some(concrete) is then
                 store concrete.format bound_constraint effect bindings method_diff_bind_for_bound = bindings
             fi
-        else
-            empty_location "Expected option value while unwrapping bound_type_var effect StackEffect::trait_bounds.get" ErrorKind::Syntax raise_error
-            1 exit
         fi
     done
     bindings
@@ -1865,7 +1879,7 @@ impl TypeChecker {
                         else
                             existing_binding_opt.unwrap = existing_binding
                             if existing_binding actual.eq ! then
-                                location f"Type variable `{binding_type_var}` bound to `{existing_binding.format}` but got `{actual.format}`" ErrorKind::TypeMismatch raise_error
+                                location f"Type variable `{binding_type_var}` bound to `{existing_binding.format}` but got `{actual.format}`" ErrorKind::TypeMismatch tc.diagnostics.record_error
                             fi
                         fi
                     else
@@ -1907,8 +1921,9 @@ impl TypeChecker {
             type_index type_var_keys.get = type_var
             type_var effect StackEffect::trait_bounds.get = trait_bound_opt
             if trait_bound_opt.is_none then
-                empty_location "Expected option value while unwrapping type_var effect StackEffect::trait_bounds.get" ErrorKind::Syntax raise_error
-                1 exit
+                empty_location "Expected option value while unwrapping type_var effect StackEffect::trait_bounds.get" ErrorKind::Syntax tc.diagnostics.record_error
+                type_index 1 - = type_index
+                continue
             fi
             trait_bound_opt.unwrap = trait_bound
             # Resolve trait type args against current bindings so that
@@ -1917,7 +1932,7 @@ impl TypeChecker {
             bindings trait_bound_type.substitute_t.format = trait_name
             type_var bindings.get = concrete_opt
             if concrete_opt.is_none then
-                location f"Cannot determine concrete type for type variable `{type_var}`" ErrorKind::TypeMismatch raise_error
+                location f"Cannot determine concrete type for type variable `{type_var}`" ErrorKind::TypeMismatch tc.diagnostics.record_error
                 type_index 1 - = type_index
                 continue
             fi
@@ -1925,8 +1940,9 @@ impl TypeChecker {
             concrete_t.format = concrete
             trait_bound TraitBound::name tc.store.traits.get = trait_def_opt
             if trait_def_opt.is_none then
-                empty_location "Expected option value while unwrapping trait_bound TraitBound::name tc.store.traits.get" ErrorKind::Syntax raise_error
-                1 exit
+                empty_location "Expected option value while unwrapping trait_bound TraitBound::name tc.store.traits.get" ErrorKind::Syntax tc.diagnostics.record_error
+                type_index 1 - = type_index
+                continue
             fi
             trait_def_opt.unwrap = trait_def
 
@@ -1961,8 +1977,8 @@ impl TypeChecker {
                 done
             else
                 # Verify structural satisfaction
-                if tc.store function_opt trait_name concrete_t type_satisfies_trait ! then
-                    location f"Type `{concrete}` does not satisfy trait `{trait_name}`" ErrorKind::TypeMismatch raise_error
+                if tc.diagnostics tc.store function_opt trait_name concrete_t type_satisfies_trait ! then
+                    location f"Type `{concrete}` does not satisfy trait `{trait_name}`" ErrorKind::TypeMismatch tc.diagnostics.record_error
                 fi
                 # Inject FN_PUSH for each abstract method (reversed)
                 # Skip default methods — they are instantiated on demand
@@ -1976,16 +1992,16 @@ impl TypeChecker {
                             global_fn_opt.unwrap = global_fn
                             if global_fn Function::is_used ! then
                                 true global_fn Function::set_is_used
-                                Diagnostics::new global_fn global_fn Function::ops tc.store resolve_identifiers global_fn Function::set_ops
+                                tc.diagnostics global_fn global_fn Function::ops tc.store resolve_identifiers global_fn Function::set_ops
                             fi
-                            tc.store global_fn ensure_typechecked
+                            tc.diagnostics tc.store global_fn ensure_typechecked
                             location fn_name OpValue::FnPush Op::new = push_op
                             insert_pos push_op ops.insert
                             1 += insert_pos
                             1 += inserted
                             global_fn Function::stack_effect stack_effect_to_function_type tc.stack_push_type
                         else
-                            location f"Function `{fn_name}` required by trait `{trait_name}` not found" ErrorKind::TypeMismatch raise_error
+                            location f"Function `{fn_name}` required by trait `{trait_name}` not found" ErrorKind::TypeMismatch tc.diagnostics.record_error
                         fi
                     fi
                     method_index 1 - = method_index
@@ -2026,7 +2042,7 @@ impl TypeChecker {
             fn_name tc.store.functions.get = fn_opt
             if fn_opt.is_some then
                 fn_opt.unwrap = function
-                tc.store function ensure_typechecked
+                tc.diagnostics tc.store function ensure_typechecked
                 function Function::stack_effect = effect
                 if 0 effect StackEffect::trait_bounds.keys.length != then
                     function_opt op Op::location op_index ops effect tc.inject_trait_fn_ptrs = injected
@@ -2051,7 +2067,7 @@ impl TypeChecker {
             if push_fn_opt.is_some then
                 push_fn_opt.unwrap = push_fn
                 function_opt push_fn tc.sync_capture_types
-                tc.store push_fn ensure_typechecked
+                tc.diagnostics tc.store push_fn ensure_typechecked
                 push_fn Function::stack_effect stack_effect_to_function_type tc.stack_push_type
             else
                 "fn" tc.stack_push
@@ -2104,7 +2120,7 @@ impl TypeChecker {
                     tc.stack_pop_type = item_type_t
                     tc.store item_type_t elem_type_t unify_type_t = unified_opt
                     if unified_opt.is_none then
-                        op Op::location f"Heterogeneous array literal: cannot unify `{elem_type_t.format}` and `{item_type_t.format}`" ErrorKind::TypeMismatch raise_error
+                        op Op::location f"Heterogeneous array literal: cannot unify `{elem_type_t.format}` and `{item_type_t.format}`" ErrorKind::TypeMismatch tc.diagnostics.record_error
                     else
                         unified_opt.unwrap = elem_type_t
                     fi
@@ -2167,12 +2183,12 @@ impl TypeChecker {
             OpValue::PrintInt op Op::set_value
             op_index return
         fi
-        if TYPE_MISSING typ == then
+        if TYPE_MISSING typ == TYPE_UNKNOWN typ == || then
             tc.stack_pop_drop
             op_index return
         fi
-        if tc.store function_opt "Display" peek_t type_satisfies_trait ! then
-            op Op::location f"Type `{typ}` cannot be printed: does not satisfy trait `Display`" ErrorKind::MissingTraitMethod add_error
+        if tc.diagnostics tc.store function_opt "Display" peek_t type_satisfies_trait ! then
+            op Op::location f"Type `{typ}` cannot be printed: does not satisfy trait `Display`" ErrorKind::MissingTraitMethod tc.diagnostics.record_error
             tc.stack_pop_drop
             op_index return
         fi
@@ -2320,7 +2336,7 @@ impl TypeChecker {
                     fi
                 fi
                 if tc.in_branch_condition ! then
-                    op Op::location "`is` with bindings is only allowed in if/elif conditions" ErrorKind::InvalidScope add_error
+                    op Op::location "`is` with bindings is only allowed in if/elif conditions" ErrorKind::InvalidScope tc.diagnostics.record_error
                     TYPE_BOOL_T tc.stack_push_type
                     return
                 fi
@@ -2424,7 +2440,7 @@ impl TypeChecker {
                     false = inferring_stack_effect
                 fi
                 if inferring_stack_effect ! then
-                    op Op::location "`match` requires a subject value on the stack" ErrorKind::StackUnderflow add_error
+                    op Op::location "`match` requires a subject value on the stack" ErrorKind::StackUnderflow tc.diagnostics.record_error
                     true = tc.underflow_reported_this_op
                 fi
             fi
@@ -2465,7 +2481,7 @@ impl TypeChecker {
                         elif match_after match_before.equals then
                             tc.stack match_after.restore
                         else
-                            op Op::location "Match arms have incompatible stack effects" ErrorKind::StackMismatch add_error
+                            op Op::location "Match arms have incompatible stack effects" ErrorKind::StackMismatch tc.diagnostics.record_error
                         fi
                     fi
                     match_before tc.stack.restore
@@ -2498,12 +2514,12 @@ impl TypeChecker {
                             f"`{end_base}::{variant_name}`" formatted_missing.push
                         done
                         ", " formatted_missing.join = missing_str
-                        op Op::location f"Non-exhaustive match, missing arms: {missing_str}" ErrorKind::TypeMismatch raise_error
+                        op Op::location f"Non-exhaustive match, missing arms: {missing_str}" ErrorKind::TypeMismatch tc.diagnostics.record_error
                     fi
                 fi
                 if end_base tc.store.structs.get.is_some has_wildcard ! && then
                     if end_base covered_set.has ! then
-                        op Op::location f"Non-exhaustive match on struct `{end_match_type}`" ErrorKind::TypeMismatch raise_error
+                        op Op::location f"Non-exhaustive match on struct `{end_match_type}`" ErrorKind::TypeMismatch tc.diagnostics.record_error
                     fi
                 fi
                 # Literal exhaustiveness
@@ -2519,10 +2535,10 @@ impl TypeChecker {
                             if "true" covered_set.has ! then "true" bool_missing.push fi
                             if "false" covered_set.has ! then "false" bool_missing.push fi
                             if 0 bool_missing.length != then
-                                op Op::location "Non-exhaustive match on `bool`" ErrorKind::TypeMismatch raise_error
+                                op Op::location "Non-exhaustive match on `bool`" ErrorKind::TypeMismatch tc.diagnostics.record_error
                             fi
                         else
-                            op Op::location f"Non-exhaustive match on type `{end_base}`. A wildcard `_` arm is required" ErrorKind::TypeMismatch raise_error
+                            op Op::location f"Non-exhaustive match on type `{end_base}`. A wildcard `_` arm is required" ErrorKind::TypeMismatch tc.diagnostics.record_error
                         fi
                     fi
                 fi
@@ -2546,7 +2562,7 @@ impl TypeChecker {
                     unified = tc.stack.types
                     return
                 fi
-                op Op::location "Match arms have incompatible stack effects" ErrorKind::StackMismatch add_error
+                op Op::location "Match arms have incompatible stack effects" ErrorKind::StackMismatch tc.diagnostics.record_error
             fi
         fi
     }
@@ -2673,6 +2689,7 @@ fn instantiate_default_trait_method
     method_name:str
     receiver:str
     store:SymbolStore
+    diagnostics:Diagnostics
 -> Option[str] {
     global DEFAULT_METHOD_INSTANTIATING
     f"{receiver}::{method_name}" store.functions.get = already_opt
@@ -2746,7 +2763,7 @@ fn instantiate_default_trait_method
                 f"{receiver}::{infer_method TraitMethod::name}" store.functions.get = infer_fn_opt
                 if infer_fn_opt.is_some then
                     infer_fn_opt.unwrap = infer_fn
-                    store infer_fn ensure_typechecked
+                    diagnostics store infer_fn ensure_typechecked
                     receiver infer_method TraitMethod::stack_effect resolve_trait_stack_effect = infer_trait_resolved
                     0 = ret_index
                     while ret_index infer_trait_resolved StackEffect::return_types.length > ret_index infer_fn Function::stack_effect StackEffect::return_types.length > && do
@@ -2824,7 +2841,7 @@ fn instantiate_default_trait_method
     synth_vars synth_fn Function::set_variables
     true synth_fn Function::set_is_used
     synth_fn synth_fn_name store.functions.set drop
-    store synth_fn ensure_typechecked
+    diagnostics store synth_fn ensure_typechecked
 
     false = DEFAULT_METHOD_INSTANTIATING
     synth_fn_name Option::Some
@@ -2900,7 +2917,7 @@ impl TypeChecker {
 
             # Try instantiating a default trait method
             if fn_opt.is_none then
-                tc.store receiver method_name function_opt instantiate_default_trait_method = default_inst_opt
+                tc.diagnostics tc.store receiver method_name function_opt instantiate_default_trait_method = default_inst_opt
                 if default_inst_opt.is_some then
                     default_inst_opt.unwrap = fn_name
                     fn_name tc.store.functions.get = fn_opt
@@ -2910,10 +2927,10 @@ impl TypeChecker {
             if fn_opt.is_some then
                 fn_opt.unwrap = function
                 if function Function::is_typechecked ! then
-                    Diagnostics::new function function Function::ops tc.store resolve_identifiers function Function::set_ops
+                    tc.diagnostics function function Function::ops tc.store resolve_identifiers function Function::set_ops
                     true function Function::set_is_used
                 fi
-                tc.store function ensure_typechecked
+                tc.diagnostics tc.store function ensure_typechecked
                 function Function::stack_effect = effect
                 if 0 effect StackEffect::trait_bounds.keys.length != then
                     function_opt op Op::location op_index ops effect tc.inject_trait_fn_ptrs += op_index
@@ -2921,7 +2938,7 @@ impl TypeChecker {
                 fn_name effect tc.apply_stack_effect
                 fn_name OpValue::FnCall op Op::set_value
             else
-                op Op::location f"Method `{fn_name}` does not exist" ErrorKind::UndefinedName raise_error
+                op Op::location f"Method `{fn_name}` does not exist" ErrorKind::UndefinedName tc.diagnostics.record_error
             fi
         fi
         op_index
@@ -2946,13 +2963,13 @@ impl TypeChecker {
         fi
         tc.stack_peek_type = fstring_type_t
         fstring_type_t.format = fstring_type
-        if TYPE_MISSING fstring_type == then
+        if TYPE_MISSING fstring_type == TYPE_UNKNOWN fstring_type == || then
             tc.stack_pop_drop
             TYPE_STR_T tc.stack_push_type
             op_index return
         fi
-        if tc.store function_opt "Display" fstring_type_t type_satisfies_trait ! then
-            op Op::location f"Type `{fstring_type}` cannot be used in f-string: does not satisfy trait `Display`" ErrorKind::MissingTraitMethod add_error
+        if tc.diagnostics tc.store function_opt "Display" fstring_type_t type_satisfies_trait ! then
+            op Op::location f"Type `{fstring_type}` cannot be used in f-string: does not satisfy trait `Display`" ErrorKind::MissingTraitMethod tc.diagnostics.record_error
             tc.stack_pop_drop
             TYPE_STR_T tc.stack_push_type
             op_index return
@@ -2966,12 +2983,12 @@ impl TypeChecker {
 # Ensure a function is typechecked
 # ============================================================================
 
-fn ensure_typechecked function:Function store:SymbolStore {
+fn ensure_typechecked function:Function store:SymbolStore diagnostics:Diagnostics {
     if function Function::is_typechecked then return fi
     true function Function::set_is_typechecked
-    Diagnostics::new function function Function::ops store resolve_identifiers = resolved_ops
+    diagnostics function function Function::ops store resolve_identifiers = resolved_ops
     resolved_ops function Function::set_ops
-    store function Option::Some resolved_ops type_check_ops = inferred_stack_effect
+    diagnostics store function Option::Some resolved_ops check_ops = inferred_stack_effect
     if function Function::stack_effect stack_effect_to_str "None -> None" == then
         inferred_stack_effect function Function::set_stack_effect
     fi
@@ -3229,7 +3246,7 @@ impl TypeChecker {
 
             # Type cast
             if op_value OpValue::TypeCast(cast_type) is then
-                checker.store current_op Op::location function_opt cast_type validate_type_exists
+                current_op Op::location function_opt cast_type checker.validate_type_exists
                 checker.stack_pop drop
                 cast_type checker.stack_push_type
                 continue
@@ -3263,8 +3280,14 @@ impl TypeChecker {
     }
 }
 
-fn type_check_ops ops:List[Op] function_opt:Option[Function] store:SymbolStore -> StackEffect {
+fn check_ops
+    ops:List[Op]
+    function_opt:Option[Function]
+    store:SymbolStore
+    diagnostics:Diagnostics
+-> StackEffect {
     store TypeChecker::new = checker
+    diagnostics = checker.diagnostics
     Option::None(Option[int]) = budget
     if function_opt.is_some then
         function_opt.unwrap = the_function
@@ -3273,7 +3296,7 @@ fn type_check_ops ops:List[Op] function_opt:Option[Function] store:SymbolStore -
         fi
     fi
     budget = checker.param_cap
-    ERRORS.length = errors_before_ops
+    diagnostics.error_count = errors_before_ops
     function_opt ops checker.run_type_check_ops
 
     # Build inferred stack effect
@@ -3284,7 +3307,7 @@ fn type_check_ops ops:List[Op] function_opt:Option[Function] store:SymbolStore -
     inferred_returns checker.parameters StackEffect::new = inferred
 
     # Verify against declared stack effect if function has one
-    ERRORS.length errors_before_ops < = had_type_errors
+    diagnostics.error_count errors_before_ops < = had_type_errors
     if function_opt.is_some had_type_errors ! && then
         function_opt.unwrap = declared_function
         declared_function Function::stack_effect = declared
@@ -3293,7 +3316,7 @@ fn type_check_ops ops:List[Op] function_opt:Option[Function] store:SymbolStore -
         0 declared StackEffect::type_vars.length == &&
         then
             if inferred declared stack_effect_matches ! then
-                declared_function Function::location f"Invalid stack effect for function `{declared_function Function::name}`" ErrorKind::SignatureMismatch add_error
+                declared_function Function::location f"Invalid stack effect for function `{declared_function Function::name}`" ErrorKind::SignatureMismatch diagnostics.record_error
             fi
         fi
         # Update inferred stack effect with declared return types for type-var functions
@@ -3309,7 +3332,7 @@ fn type_check_ops ops:List[Op] function_opt:Option[Function] store:SymbolStore -
 # Type check all functions
 # ============================================================================
 
-fn type_check_functions store:SymbolStore {
+fn check_functions store:SymbolStore diagnostics:Diagnostics {
     for pair in store.functions.iter do
         pair.first = func_name
         pair.second = current_fn
@@ -3320,15 +3343,15 @@ fn type_check_functions store:SymbolStore {
             continue
         fi
         true current_fn Function::set_is_typechecked
-        Diagnostics::new current_fn current_fn Function::ops store resolve_identifiers = resolved_ops
+        diagnostics current_fn current_fn Function::ops store resolve_identifiers = resolved_ops
         resolved_ops current_fn Function::set_ops
         # Skip type checking for functions with trait bounds (checked on demand)
         if 0 current_fn Function::stack_effect StackEffect::trait_bounds.keys.length != then
             continue
         fi
-        ERRORS.length = errors_before
-        store current_fn Option::Some current_fn Function::ops type_check_ops = inferred_stack_effect
-        ERRORS.length errors_before < = had_errors
+        diagnostics.error_count = errors_before
+        diagnostics store current_fn Option::Some current_fn Function::ops check_ops = inferred_stack_effect
+        diagnostics.error_count errors_before < = had_errors
         if had_errors then
             continue
         fi
@@ -3336,5 +3359,15 @@ fn type_check_functions store:SymbolStore {
             inferred_stack_effect current_fn Function::set_stack_effect
         fi
     done
-    flush_errors
+}
+
+fn type_check ops:List[Op] store:SymbolStore -> TypecheckResult {
+    Diagnostics::new = diagnostics
+    diagnostics store Option::None ops check_ops = global_stack_effect
+    diagnostics store check_functions
+    diagnostics
+    ops
+    global_stack_effect
+    store
+    TypecheckResult
 }
