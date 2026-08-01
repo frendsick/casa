@@ -140,20 +140,27 @@ true ! print          # false
 
 ## Assignment
 
-Assignment operators pop a value from the stack and store it in a named variable.
+Assignment operators pop a value from the stack and store it in a variable or a
+variable-rooted field path.
 
 | Operator | Stack Effect | Description |
 |----------|-------------|-------------|
-| `= name` | `T -> None` | Assign top of stack to variable `name` |
+| `= target` | `T -> None` | Assign top of stack to variable or field path `target` |
 | `= name:type` | `T -> None` | Assign with type annotation, verifies and narrows the type |
-| `+= name` | `int -> None` | Add top of stack to variable `name` |
-| `-= name` | `int -> None` | Subtract top of stack from variable `name` |
+| `+= target` | `int -> None` | Add top of stack to an `int` variable or field path |
+| `-= target` | `int -> None` | Subtract top of stack from an `int` variable or field path |
 
 ```casa
 42 = count        # count is now 42
 1 += count        # count is now 43
 10 -= count       # count is now 33
+"Jane" = person.name
+1 += person.age
+"Helsinki" = person.address.city
 ```
+
+A field-path target has the form `identifier(.field)*`. Its root must be a named
+variable; arbitrary expression receivers are not assignable.
 
 ### Type annotations
 
