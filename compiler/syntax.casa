@@ -129,6 +129,44 @@ impl Parser {
     }
 }
 
+impl[T] Map[str T] {
+    fn merge_missing self:Map[str T] source:Map[str T] {
+        for name in source.keys.iter do
+            if name self.has ! then
+                name source.get.unwrap name self.set drop
+            fi
+        done
+    }
+}
+
+impl SymbolStore {
+    fn merge_import self:SymbolStore imported:SymbolStore {
+        for name in imported.functions.keys.iter do
+            name imported.functions.get.unwrap = imported_function
+            if name self.functions.get Option::Some(existing_function) is then
+                if imported_function.is_used then true = existing_function.is_used fi
+            fi
+        done
+        imported.functions self.functions.merge_missing
+        imported.variables self.variables.merge_missing
+        imported.constants self.constants.merge_missing
+        imported.enums self.enums.merge_missing
+        imported.structs self.structs.merge_missing
+        imported.traits self.traits.merge_missing
+    }
+
+    fn clone self:SymbolStore -> SymbolStore {
+        symbol_store_new = cloned
+        self cloned.merge_import
+        for name in self.functions.keys.iter do
+            name self.functions.get.unwrap = function
+            function.clone_for_import = cloned_function
+            cloned_function name cloned.functions.set drop
+        done
+        cloned
+    }
+}
+
 # ============================================================================
 # Simple keyword -> OpValue lookup (no-payload variants only)
 # ============================================================================
@@ -2581,6 +2619,7 @@ fn handle_keyword_import parser:Parser cursor:TokenCursor -> Op {
 fn selective_import_type_dependencies
     parser:Parser
     import_parser:Parser
+    existing_store:SymbolStore
     typ:Type
     location:Location
     imported:Set[str]
@@ -2593,18 +2632,18 @@ fn selective_import_type_dependencies
             base_name import_parser.store.enums.has ||
             base_name import_parser.store.traits.has ||
             then
-                imported location base_name import_parser parser selective_import_symbol
+                imported location base_name existing_store import_parser parser selective_import_symbol
             fi
             for param_type in generic GenericType::params.iter do
-                imported location param_type import_parser parser selective_import_type_dependencies
+                imported location param_type existing_store import_parser parser selective_import_type_dependencies
             done
         }
         Type::Function(fn_type) => {
             for param_type in fn_type FunctionType::parameters.iter do
-                imported location param_type import_parser parser selective_import_type_dependencies
+                imported location param_type existing_store import_parser parser selective_import_type_dependencies
             done
             for return_type in fn_type FunctionType::return_types.iter do
-                imported location return_type import_parser parser selective_import_type_dependencies
+                imported location return_type existing_store import_parser parser selective_import_type_dependencies
             done
         }
         _ => { }
@@ -2614,58 +2653,61 @@ fn selective_import_type_dependencies
 fn selective_import_stack_effect_dependencies
     parser:Parser
     import_parser:Parser
+    existing_store:SymbolStore
     function:Function
     location:Location
     imported:Set[str]
 {
     function Function::stack_effect = effect
     for param in effect StackEffect::parameters.iter do
-        imported location param Parameter::typ import_parser parser selective_import_type_dependencies
+        imported location param Parameter::typ existing_store import_parser parser selective_import_type_dependencies
     done
     for return_type in effect StackEffect::return_types.iter do
-        imported location return_type import_parser parser selective_import_type_dependencies
+        imported location return_type existing_store import_parser parser selective_import_type_dependencies
     done
 }
 
 fn selective_import_op_dependencies
     parser:Parser
     import_parser:Parser
+    existing_store:SymbolStore
     op:Op
     location:Location
     imported:Set[str]
 {
     if op.value OpValue::FnCall(dep_name) is then
-        imported location dep_name import_parser parser selective_import_symbol
+        imported location dep_name existing_store import_parser parser selective_import_symbol
         return
     fi
     if op.value OpValue::FnPush(dep_push_name) is then
-        imported location dep_push_name import_parser parser selective_import_symbol
+        imported location dep_push_name existing_store import_parser parser selective_import_symbol
         return
     fi
     if op.value OpValue::StructNew(dep_struct) is then
-        imported location dep_struct CasaStruct::name import_parser parser selective_import_symbol
+        imported location dep_struct CasaStruct::name existing_store import_parser parser selective_import_symbol
         return
     fi
     if op.value OpValue::StructLiteral(dep_literal) is then
-        imported location dep_literal StructLiteral::struct_name import_parser parser selective_import_symbol
+        imported location dep_literal StructLiteral::struct_name existing_store import_parser parser selective_import_symbol
         return
     fi
     if op.value OpValue::PushEnumVariant(dep_variant) is then
-        imported location dep_variant EnumVariant::enum_name import_parser parser selective_import_symbol
+        imported location dep_variant EnumVariant::enum_name existing_store import_parser parser selective_import_symbol
         return
     fi
     if op.value OpValue::IsCheck(dep_is_variant) is then
-        imported location dep_is_variant EnumVariant::enum_name import_parser parser selective_import_symbol
+        imported location dep_is_variant EnumVariant::enum_name existing_store import_parser parser selective_import_symbol
         return
     fi
     if op.value OpValue::TypeCast(dep_type) is then
-        imported location dep_type import_parser parser selective_import_type_dependencies
+        imported location dep_type existing_store import_parser parser selective_import_type_dependencies
     fi
 }
 
 fn selective_import_methods
     parser:Parser
     import_parser:Parser
+    existing_store:SymbolStore
     symbol:str
     location:Location
     imported:Set[str]
@@ -2673,7 +2715,7 @@ fn selective_import_methods
     f"{symbol}::" = method_prefix
     for fn_name in import_parser.store.functions.keys.iter do
         if fn_name method_prefix str::starts_with then
-            imported location fn_name import_parser parser selective_import_symbol
+            imported location fn_name existing_store import_parser parser selective_import_symbol
         fi
     done
 }
@@ -2681,6 +2723,7 @@ fn selective_import_methods
 fn selective_import_symbol
     parser:Parser
     import_parser:Parser
+    existing_store:SymbolStore
     symbol:str
     location:Location
     imported:Set[str]
@@ -2693,29 +2736,28 @@ fn selective_import_symbol
     symbol import_parser.store.functions.get = fn_opt
     if fn_opt.is_some then
         fn_opt.unwrap = imported_fn
-        if symbol parser.store.functions.has then
+        if symbol existing_store.functions.has then
             location f"Imported symbol `{symbol}` conflicts with an existing function" ErrorKind::DuplicateName parser.state.record_error
         fi
-        import_parser.state.diagnostics imported_fn imported_fn Function::ops import_parser.store resolve_identifiers = resolved_ops
-        resolved_ops imported_fn Function::set_ops
-        imported location imported_fn import_parser parser selective_import_stack_effect_dependencies
+        imported_fn.ops = resolved_ops
+        imported location imported_fn existing_store import_parser parser selective_import_stack_effect_dependencies
         for resolved_op in resolved_ops.iter do
             if resolved_op.value OpValue::PushVar(var_name) is then
-                if var_name imported_fn Function::variables variable_list_contains ! var_name import_parser.store.variables.has && then
-                    resolved_op Op::location f"Selective import `{symbol}` depends on global variable `{var_name}`" ErrorKind::InvalidVariable parser.state.record_error
+                if var_name imported_fn.variables variable_list_contains ! var_name import_parser.store.variables.has && then
+                    resolved_op.location f"Selective import `{symbol}` depends on global variable `{var_name}`" ErrorKind::InvalidVariable parser.state.record_error
                 fi
             fi
         done
         imported_fn symbol parser.put_function
         for resolved_op in resolved_ops.iter do
-            imported location resolved_op import_parser parser selective_import_op_dependencies
+            imported location resolved_op existing_store import_parser parser selective_import_op_dependencies
         done
         return
     fi
 
     symbol import_parser.store.constants.get = const_opt
     if const_opt Option::Some(imported_const) is then
-        if symbol parser.store.constants.has then
+        if symbol existing_store.constants.has then
             location f"Imported symbol `{symbol}` conflicts with an existing constant" ErrorKind::DuplicateName parser.state.record_error
         fi
         imported_const symbol parser.put_constant
@@ -2724,27 +2766,27 @@ fn selective_import_symbol
 
     symbol import_parser.store.structs.get = struct_opt
     if struct_opt Option::Some(imported_struct) is then
-        if symbol parser.store.structs.has then
+        if symbol existing_store.structs.has then
             location f"Imported symbol `{symbol}` conflicts with an existing struct" ErrorKind::DuplicateName parser.state.record_error
         fi
         imported_struct symbol parser.put_struct
-        imported location symbol import_parser parser selective_import_methods
+        imported location symbol existing_store import_parser parser selective_import_methods
         return
     fi
 
     symbol import_parser.store.enums.get = enum_opt
     if enum_opt Option::Some(imported_enum) is then
-        if symbol parser.store.enums.has then
+        if symbol existing_store.enums.has then
             location f"Imported symbol `{symbol}` conflicts with an existing enum" ErrorKind::DuplicateName parser.state.record_error
         fi
         imported_enum symbol parser.put_enum
-        imported location symbol import_parser parser selective_import_methods
+        imported location symbol existing_store import_parser parser selective_import_methods
         return
     fi
 
     symbol import_parser.store.traits.get = trait_opt
     if trait_opt Option::Some(imported_trait) is then
-        if symbol parser.store.traits.has then
+        if symbol existing_store.traits.has then
             location f"Imported symbol `{symbol}` conflicts with an existing trait" ErrorKind::DuplicateName parser.state.record_error
         fi
         imported_trait symbol parser.put_trait
@@ -2759,37 +2801,37 @@ fn selective_import_symbol
 }
 
 fn handle_selective_import parser:Parser selective:SelectiveImport location:Location {
-    selective SelectiveImport::path = import_path
+    selective.path = import_path
     if 0 import_path.length == then
         return
     fi
 
-    parser.sources parser.state.diagnostics symbol_store_new Parser::new = import_parser
-    parser.search_paths = import_parser.search_paths
-    import_path import_parser.included_files.add drop
-    parser.sources import_path lex_file = import_result
+    Set::new(Set[str]) = included_files
+    import_path included_files.add drop
+    symbol_store_new included_files import_path parser.analyze_import = import_result
     if import_result Result::Error(read_error) is then
-        location f"Cannot read import `{import_path}`: {read_error.to_str}" ErrorKind::Syntax parser.state.record_error
+        location f"Cannot read import `{import_path}`: {read_error.to_str}" ErrorKind::Syntax parser.state.diagnostics.record_error_at_encounter
         parser.state.mark_output_unusable
         return
     fi
-    import_result.unwrap = lex_result
-    lex_result.diagnostics parser.state.diagnostics.merge
-    if lex_result.diagnostics.has_errors then
-        parser.state.mark_output_unusable
-        return
-    fi
-    lex_result.tokens import_parser parse_ops = import_ops
-    import_ops import_parser resolve_identifiers_global drop
-    if 0 import_parser.state.output_usable.get ! then
+    import_result.unwrap = imported_result
+    location imported_result.diagnostics parser.state.diagnostics.merge_at_encounter
+    if imported_result.ops Option::Some(_) is ! then
         parser.state.mark_output_unusable
         return
     fi
 
+    parser.sources Diagnostics::new imported_result.store Parser::new = import_parser
+    Diagnostics::new = selection_diagnostics
+    parser.sources selection_diagnostics symbol_store_new Parser::new = selected_parser
+
     Set::new(Set[str]) = imported
-    for symbol in selective SelectiveImport::symbols.iter do
-        imported location symbol import_parser parser selective_import_symbol
+    for symbol in selective.symbols.iter do
+        imported location symbol parser.store import_parser selected_parser selective_import_symbol
     done
+    location selection_diagnostics parser.state.diagnostics.merge_at_encounter
+    if selection_diagnostics.has_errors then parser.state.mark_output_unusable return fi
+    selected_parser.store parser.store.merge_import
 }
 
 # ============================================================================
@@ -3354,6 +3396,28 @@ fn parse_ops parser:Parser tokens:List[Token] -> List[Op] {
     ops
 }
 
+impl Parser {
+    fn finish_resolution self:Parser ops:List[Op] skip_functions:Set[str] -> ParseResolveResult {
+        if self.state.has_usable_output ! then
+            self.state.diagnostics symbol_store_new Option::None(Option[List[Op]]) ParseResolveResult return
+        fi
+        ops self resolve_identifiers_global = resolved_ops
+        if self.state.has_usable_output ! then
+            self.state.diagnostics symbol_store_new Option::None(Option[List[Op]]) ParseResolveResult return
+        fi
+        self.store.functions.keys = function_names
+        for function_name in function_names.iter do
+            if function_name skip_functions.has then continue fi
+            if function_name "lambda__" str::starts_with then continue fi
+            function_name self.store.functions.get.unwrap = function
+            self.state.diagnostics function function.ops self.store resolve_identifiers function.set_ops
+        done
+        self derive_hashable_for_enums
+        if self.state.has_usable_output then resolved_ops Option::Some else Option::None fi = result_ops
+        self.state.diagnostics self.store result_ops ParseResolveResult
+    }
+}
+
 fn parse_and_resolve
     tokens:List[Token]
     search_paths:List[str]
@@ -3363,22 +3427,7 @@ fn parse_and_resolve
     sources diagnostics symbol_store_new Parser::new = parser
     search_paths parser Parser::set_search_paths
     tokens parser parse_ops = ops
-    if parser.state.has_usable_output ! then
-        parser.state.diagnostics symbol_store_new Option::None(Option[List[Op]]) ParseResolveResult return
-    fi
-    ops parser resolve_identifiers_global = resolved_ops
-    if parser.state.has_usable_output ! then
-        parser.state.diagnostics symbol_store_new Option::None(Option[List[Op]]) ParseResolveResult return
-    fi
-    parser.store.functions.keys = function_names
-    for function_name in function_names.iter do
-        if function_name "lambda__" str::starts_with then continue fi
-        function_name parser.store.functions.get.unwrap = function
-        parser.state.diagnostics function function.ops parser.store resolve_identifiers function.set_ops
-    done
-    parser derive_hashable_for_enums
-    if parser.state.has_usable_output then resolved_ops Option::Some else Option::None fi = result_ops
-    parser.state.diagnostics parser.store result_ops ParseResolveResult
+    Set::new(Set[str]) ops parser.finish_resolution
 }
 
 # ============================================================================
@@ -3498,6 +3547,41 @@ fn resolve_enum_variant
     fi
 }
 
+impl Parser {
+    fn analyze_import
+        self:Parser
+        import_path:str
+        included_files:Set[str]
+        base_store:SymbolStore
+    -> Result[ParseResolveResult IoError] {
+        self.sources import_path lex_file = import_result
+        if import_result Result::Error(read_error) is then read_error Result::Error return fi
+        import_result.unwrap = lex_result
+        Diagnostics::new = diagnostics
+        lex_result.diagnostics diagnostics.merge
+        if diagnostics.has_errors then
+            diagnostics symbol_store_new Option::None(Option[List[Op]]) ParseResolveResult Result::Ok
+            return
+        fi
+        base_store.functions.keys string_list_to_set = existing_functions
+        base_store.clone = imported_store
+        self.sources diagnostics imported_store Parser::new = import_parser
+        self.search_paths = import_parser.search_paths
+        included_files = import_parser.included_files
+        lex_result.tokens import_parser parse_ops = imported_ops
+        if diagnostics.has_errors import_parser.state.has_usable_output ! || then
+            diagnostics symbol_store_new Option::None(Option[List[Op]]) ParseResolveResult Result::Ok
+            return
+        fi
+        existing_functions imported_ops import_parser.finish_resolution = result
+        if result.diagnostics.has_errors then
+            result.diagnostics symbol_store_new Option::None(Option[List[Op]]) ParseResolveResult Result::Ok
+            return
+        fi
+        result Result::Ok
+    }
+}
+
 fn expand_imports parser:Parser ops:List[Op] -> List[Op] {
     0 = op_index
     while op_index ops.length > do
@@ -3505,7 +3589,8 @@ fn expand_imports parser:Parser ops:List[Op] -> List[Op] {
         1 += op_index
 
         if current_op.value OpValue::ImportFileSelective(selective_import) is then
-            current_op Op::location selective_import parser handle_selective_import
+            current_op.location selective_import parser handle_selective_import
+            if parser.state.has_usable_output ! then ops return fi
             continue
         fi
 
@@ -3515,32 +3600,34 @@ fn expand_imports parser:Parser ops:List[Op] -> List[Op] {
             fi
             if import_path parser.included_files.has ! then
                 import_path parser.included_files.add drop
-                parser.sources import_path lex_file = import_result
+                parser.store parser.included_files import_path parser.analyze_import = import_result
                 if import_result Result::Error(read_error) is then
-                    current_op.location f"Cannot read import `{import_path}`: {read_error.to_str}" ErrorKind::Syntax parser.state.record_error
-                    parser.state.mark_output_unusable
-                    continue
-                fi
-                import_result.unwrap = lex_result
-                lex_result.diagnostics parser.state.diagnostics.merge
-                if lex_result.diagnostics.has_errors then
+                    current_op.location f"Cannot read import `{import_path}`: {read_error.to_str}" ErrorKind::Syntax parser.state.diagnostics.record_error_at_encounter
                     parser.state.mark_output_unusable
                     ops return
                 fi
-                lex_result.tokens parser parse_ops = import_ops
-                List::new(List[Op]) = new_ops
-                0 = name_index
-                while name_index op_index > do
-                    name_index ops.get new_ops.push
-                    1 += name_index
-                done
-                for inner_op in import_ops.iter do
-                    inner_op new_ops.push
-                done
-                for remaining_op in op_index ops.iter.skip do
-                    remaining_op new_ops.push
-                done
-                new_ops = ops
+                import_result.unwrap = imported_result
+                current_op.location imported_result.diagnostics parser.state.diagnostics.merge_at_encounter
+                if imported_result.ops Option::Some(import_ops) is then
+                    imported_result.store parser.store.merge_import
+                    List::new(List[Op]) = new_ops
+                    0 = name_index
+                    while name_index op_index > do
+                        name_index ops.get new_ops.push
+                        1 += name_index
+                    done
+                    for inner_op in import_ops.iter do
+                        inner_op new_ops.push
+                    done
+                    for remaining_op in op_index ops.iter.skip do
+                        remaining_op new_ops.push
+                    done
+                    import_ops.length += op_index
+                    new_ops = ops
+                else
+                    parser.state.mark_output_unusable
+                    ops return
+                fi
             fi
             continue
         fi
@@ -3550,6 +3637,7 @@ fn expand_imports parser:Parser ops:List[Op] -> List[Op] {
 
 fn resolve_identifiers_global parser:Parser ops:List[Op] -> List[Op] {
     ops parser expand_imports = expanded_ops
+    if parser.state.has_usable_output ! then List::new(List[Op]) return fi
     empty_location List::new(List[Op]) GLOBAL_SCOPE_LABEL Function::new = dummy
     parser.state.diagnostics dummy expanded_ops parser.store resolve_identifiers
 }
@@ -3603,7 +3691,7 @@ fn resolve_identifiers
             if var_parts.length 1 < then continue fi
             var_name Variable::new = variable
             if GLOBAL_SCOPE_LABEL function Function::name == then
-                variable var_name store.variables.set drop
+                if var_name store.variables.has ! then variable var_name store.variables.set drop fi
                 continue
             fi
             if var_name function Function::variables variable_list_contains ! then
