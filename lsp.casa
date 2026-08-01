@@ -14,21 +14,11 @@ import "compiler/lexer.casa"
 import "compiler/syntax.casa"
 import "compiler/typechecker.casa"
 import "compiler/analysis.casa"
+import "compiler/document_query.casa"
 
 # ============================================================================
 # LSP structs
 # ============================================================================
-
-struct DocumentState {
-    ops:       List[Op]
-    functions: Map[str Function]
-    structs:   Map[str CasaStruct]
-    enums:     Map[str CasaEnum]
-    variables: Map[str Variable]
-    sources:   SourceStore
-    source:    str
-    file_path: str
-}
 
 struct LspRange {
     start_line: int
@@ -67,24 +57,14 @@ struct TextEdit {
     new_text: str
 }
 
-struct FindResult {
-    op:       Op
-    function: Option[Function]
-}
-
 struct HoverContent {
     content: str
     range:   LspRange
 }
 
-struct FindOpState {
-    best:     Option[FindResult]
-    best_len: int
-}
-
 struct CompileResult {
-    document_state: DocumentState
-    analysis:       AnalysisResult
+    document: AnalyzedDocument
+    analysis: AnalysisResult
 }
 
 # ============================================================================
@@ -115,16 +95,12 @@ const COLLECTOR_FN 0
 const COLLECTOR_VAR 1
 const COLLECTOR_STRUCT 2
 const COLLECTOR_ENUM 3
-# Qualified name parts
-const QPART_TYPE 0
-const QPART_SEPARATOR 1
-const QPART_MEMBER 2
 List::new(List[str]) = LSP_LIBRARY_PATHS
 
 # ============================================================================
 # Global state
 # ============================================================================
-Map::new(Map[str DocumentState]) = DOCUMENT_STATES
+Map::new(Map[str AnalyzedDocument]) = OPEN_DOCUMENTS
 StdinReader::new = STDIN_READER
 # STACK_EFFECTS and TOKEN_TYPE_MAP collapsed into match-based fns
 # (see op_value_stack_effect / op_value_token_type below).
@@ -141,26 +117,6 @@ fn offset_to_lsp_range source:str offset:int length:int -> LspRange {
     end_offset source offset_to_line_col 1 - = end_line
     end_offset source offset_to_col 1 - = end_col
     end_col end_line start_col start_line LspRange
-}
-
-fn position_to_offset source:str line:int col:int -> int {
-    0 = current_offset
-    0 = current_line
-    while current_line line > do
-        current_offset = search_pos
-        while search_pos source.length > do
-            if '\n' search_pos source.at == then
-                search_pos 1 + = current_offset
-                break
-            fi
-            1 += search_pos
-        done
-        if search_pos source.length == then
-            break
-        fi
-        1 += current_line
-    done
-    current_offset col +
 }
 
 fn uri_to_path uri:str -> str {
@@ -308,34 +264,19 @@ fn send_notification method:str params:JsonValue {
 # Compilation pipeline
 # ============================================================================
 
-fn compile_document file_path:str source:str open_docs:Map[str DocumentState] -> CompileResult {
+fn compile_document file_path:str source:str open_docs:Map[str AnalyzedDocument] -> CompileResult {
     source file_path AnalysisInput::new = input
     LSP_LIBRARY_PATHS = input.library_paths
     open_docs.keys = uris
     for uri in uris.iter do
         uri open_docs.get.unwrap = cached_state
-        if cached_state DocumentState::file_path file_path != then
+        if cached_state.file_path file_path != then
             cached_state.source cached_state.file_path input.source_overrides.set = input.source_overrides
         fi
     done
     input analyze = analysis
 
-    symbol_store_new = store
-    List::new(List[Op]) = ops
-    if analysis.typechecked Option::Some(typecheck_result) is then
-        typecheck_result.ops = ops
-        typecheck_result.store = store
-    fi
-
-    file_path
-    source
-    analysis.sources
-    store.variables
-    store.enums
-    store.structs
-    store.functions
-    ops
-    DocumentState = state
+    file_path source analysis AnalyzedDocument::new = state
 
     analysis
     state
@@ -345,25 +286,25 @@ fn compile_document file_path:str source:str open_docs:Map[str DocumentState] ->
 fn ingest_document_into
     uri:str
     source:str
-    open_docs:Map[str DocumentState]
--> List[LspDiagnostic] Map[str DocumentState] {
+    open_docs:Map[str AnalyzedDocument]
+-> List[LspDiagnostic] Map[str AnalyzedDocument] {
     uri uri_to_path = path
     open_docs source path compile_document = result
-    result CompileResult::document_state uri open_docs.set = open_docs
+    result.document uri open_docs.set = open_docs
     path result diagnostics_from
     open_docs
 }
 
 fn ingest_document uri:str source:str -> List[LspDiagnostic] {
-    global DOCUMENT_STATES
-    DOCUMENT_STATES source uri ingest_document_into = DOCUMENT_STATES = diagnostics
+    global OPEN_DOCUMENTS
+    OPEN_DOCUMENTS source uri ingest_document_into = OPEN_DOCUMENTS = diagnostics
     diagnostics
 }
 
 fn diagnostics_from result:CompileResult path:str -> List[LspDiagnostic] {
     result.analysis.diagnostics = compiler_diagnostics
     result.analysis.sources.sources = source_map
-    result CompileResult::document_state DocumentState::source = fallback_source
+    result.document.source = fallback_source
 
     List::new(List[LspDiagnostic]) = diagnostics
 
@@ -441,83 +382,6 @@ fn publish_diagnostics uri:str diagnostics:List[LspDiagnostic] {
 # Position and op finding utilities
 # ============================================================================
 
-fn find_best_spanning_op
-    ops:List[Op]
-    file_path:str
-    offset:int
-    func:Option[Function]
-    find_state:FindOpState
--> FindOpState {
-    for op in ops.iter do
-        if op Op::location Location::file file_path != then
-            continue
-        fi
-        op Op::location Location::span Span::offset = span_offset
-        op Op::location Location::span Span::length = span_length
-        if 1 span_length < then 1 = span_length fi
-        if
-        span_offset offset >=
-        offset span_offset span_length + > &&
-        find_state FindOpState::best.is_none span_length find_state FindOpState::best_len > || &&
-        then
-            span_length func op FindResult Option::Some FindOpState = find_state
-        fi
-    done
-    find_state
-}
-
-fn find_op_at_position state:DocumentState line:int col:int -> Option[FindResult] {
-    col line state DocumentState::source position_to_offset = target_offset
-    0 Option::None(Option[FindResult]) FindOpState = find_state
-
-    # Search global ops
-    find_state Option::None(Option[Function]) target_offset state DocumentState::file_path state DocumentState::ops find_best_spanning_op = find_state
-
-    # Search function ops
-    state DocumentState::functions.keys = func_keys
-    for func_name in func_keys.iter do
-        func_name state DocumentState::functions.get.unwrap = func
-        if
-        "" func Function::location Location::file ==
-        func Function::location Location::file state DocumentState::file_path != ||
-        then
-            continue
-        fi
-        find_state func Option::Some target_offset state DocumentState::file_path func Function::ops find_best_spanning_op = find_state
-    done
-
-    find_state FindOpState::best
-}
-
-fn find_function_at_position state:DocumentState line:int col:int -> Option[Function] {
-    col line state DocumentState::source position_to_offset = target_offset
-    state DocumentState::functions.keys = func_keys
-    for func_name in func_keys.iter do
-        func_name state DocumentState::functions.get.unwrap = func
-        if
-        "" func Function::location Location::file ==
-        func Function::location Location::file state DocumentState::file_path != ||
-        then
-            continue
-        fi
-        if
-        func Function::name "lambda__" str::starts_with
-        func Function::name "__" str::starts_with ||
-        then
-            continue
-        fi
-        func Function::location Location::span Span::offset = fn_offset
-        func Function::location Location::span Span::length = fn_length
-        if
-        fn_offset target_offset >=
-        target_offset fn_offset fn_length + > &&
-        then
-            func Option::Some return
-        fi
-    done
-    Option::None(Option[Function])
-}
-
 fn function_short_name name:str -> str {
     name "::" str::find = separator
     if 0 separator < then
@@ -525,30 +389,6 @@ fn function_short_name name:str -> str {
     else
         name separator 2 + name.length separator - 2 - str::substring
     fi
-}
-
-fn find_containing_function state:DocumentState offset:int -> Option[Function] {
-    state DocumentState::functions.keys = func_keys
-    for func_name in func_keys.iter do
-        func_name state DocumentState::functions.get.unwrap = func
-        if "" func Function::location Location::file == then
-            continue
-        fi
-        if func Function::location Location::file state DocumentState::file_path != then
-            continue
-        fi
-        if 0 func Function::ops.length == then
-            continue
-        fi
-        0 func Function::ops.get Op::location Location::span Span::offset = start_offset
-        func Function::ops.length 1 - func Function::ops.get = last_op
-        last_op Op::location Location::span Span::offset last_op Op::location Location::span Span::length + = end_offset
-        if start_offset offset >= offset end_offset >= && then
-            func Option::Some
-            return
-        fi
-    done
-    Option::None(Option[Function])
 }
 
 fn casa_location_to_lsp location:Location sources:SourceStore -> LspLocation {
@@ -564,49 +404,10 @@ fn casa_location_to_lsp location:Location sources:SourceStore -> LspLocation {
     LspLocation
 }
 
-# ============================================================================
-# Qualified name utilities
-# ============================================================================
-
-fn qualified_name_part source:str op:Op cursor_offset:int -> Option[int] {
-    op Op::location Location::span Span::offset = start
-    op Op::location Location::span Span::length = length
-    source start length str::substring = text
-    text "::" str::find = separator
-    if 0 separator < then
-        Option::None(Option[int])
-        return
-    fi
-    cursor_offset start - = relative_offset
-    if relative_offset separator > then
-        QPART_TYPE Option::Some
-    elif relative_offset separator 2 + > then
-        QPART_SEPARATOR Option::Some
-    else
-        QPART_MEMBER Option::Some
-    fi
-}
-
-fn qualified_type_range source:str op:Op -> LspRange {
-    op Op::location Location::span Span::offset = start
-    op Op::location Location::span Span::length = length
-    source start length str::substring = text
-    text "::" str::find = separator
-    separator start source offset_to_lsp_range
-}
-
-fn qualified_member_range source:str op:Op -> LspRange {
-    op Op::location Location::span Span::offset = start
-    op Op::location Location::span Span::length = length
-    source start length str::substring = text
-    text "::" str::find = separator
-    start separator + 2 + = member_offset
-    length separator - 2 - = member_length
-    member_length member_offset source offset_to_lsp_range
-}
-
-fn split_qualified name:str -> List[str] {
-    name "::" str::split
+fn convert_document_location_to_lsp location:DocumentLocation -> LspLocation {
+    location.length location.offset location.source offset_to_lsp_range
+    location.file path_to_uri
+    LspLocation
 }
 
 # ============================================================================
@@ -727,142 +528,12 @@ fn handle_did_save message:JsonValue {
 # Go-to-definition handler
 # ============================================================================
 
-fn find_best_assignment name:str ops:List[Op] usage_offset:int best:Option[Op] -> Option[Op] {
-    for op in ops.iter do
-        if op.value OpValue::AssignVar(assign_name) is then
-            if assign_name name == then
-                if op Op::location Location::span Span::offset usage_offset > then
-                    op Option::Some = best
-                elif best.is_none then
-                    op Option::Some = best
-                fi
-            fi
-        fi
-    done
-    best
-}
-
-fn find_variable_definition
-    name:str
-    function:Option[Function]
-    state:DocumentState
-    usage_offset:int
--> Option[LspLocation] {
-    Option::None(Option[Op]) = best_op
-
-    if function Option::Some(fn_def) is then
-        best_op usage_offset fn_def Function::ops name find_best_assignment = best_op
-    fi
-    if best_op.is_none then
-        best_op usage_offset state DocumentState::ops name find_best_assignment = best_op
-    fi
-
-    if best_op Option::Some(best) is then
-        state.sources best Op::location casa_location_to_lsp Option::Some
+fn compute_definition state:AnalyzedDocument line:int column:int -> Option[LspLocation] {
+    if column line state.find_definition_at Option::Some(location) is then
+        location convert_document_location_to_lsp Option::Some
     else
         Option::None(Option[LspLocation])
     fi
-}
-
-fn compute_definition state:DocumentState line:int col:int -> Option[LspLocation] {
-    col line state find_op_at_position = result
-    if result.is_none then
-        Option::None(Option[LspLocation])
-        return
-    fi
-    result.unwrap = find
-    find FindResult::op = op
-    find FindResult::function = func
-    col line state DocumentState::source position_to_offset = cursor_offset
-
-    # Check qualified name
-    false = qpart_is_type
-    false = qpart_is_member
-    cursor_offset op state DocumentState::source qualified_name_part = qpart_opt
-    if qpart_opt Option::Some(qpart) is then
-        if QPART_SEPARATOR qpart == then
-            Option::None(Option[LspLocation])
-            return
-        fi
-        QPART_TYPE qpart == = qpart_is_type
-        QPART_MEMBER qpart == = qpart_is_member
-    fi
-
-    op.value = op_value
-
-    # FN_CALL / FN_PUSH
-    if op_value OpValue::FnCall is op_value OpValue::FnPush is || then
-        if qpart_is_type then
-            op op_str_value "::" str::split = parts
-            0 parts.get = type_name
-            if type_name state DocumentState::structs.get Option::Some(casa_struct) is then
-                state.sources casa_struct CasaStruct::location casa_location_to_lsp Option::Some
-                return
-            fi
-            if type_name state DocumentState::enums.get Option::Some(casa_enum) is then
-                state.sources casa_enum CasaEnum::location casa_location_to_lsp Option::Some
-                return
-            fi
-            Option::None(Option[LspLocation])
-            return
-        fi
-        op op_str_value state DocumentState::functions.get = fn_opt
-        if fn_opt.is_some then
-            fn_opt.unwrap = fn_def
-            if "" fn_def Function::location Location::file != then
-                state.sources fn_def Function::location casa_location_to_lsp Option::Some
-                return
-            fi
-        fi
-        Option::None(Option[LspLocation])
-        return
-    fi
-
-    # PUSH_VARIABLE / PUSH_CAPTURE
-    if op_value OpValue::PushVar is op_value OpValue::PushCapture is || then
-        op Op::location Location::span Span::offset state func op op_str_value find_variable_definition
-        return
-    fi
-
-    # STRUCT_NEW
-    if op_value OpValue::StructNew(casa_struct) is then
-        state.sources casa_struct CasaStruct::location casa_location_to_lsp Option::Some
-        return
-    fi
-
-    # PUSH_ENUM_VARIANT
-    if op_value OpValue::PushEnumVariant(enum_variant) is then
-        enum_variant EnumVariant::enum_name = enum_name
-        if enum_name state DocumentState::enums.has ! then
-            Option::None(Option[LspLocation])
-            return
-        fi
-        enum_name state DocumentState::enums.get.unwrap = casa_enum
-        enum_variant EnumVariant::variant_name casa_enum CasaEnum::variant_locations.get = variant_loc_opt
-        if qpart_is_member then
-            if variant_loc_opt Option::Some(variant_loc) is then
-                state.sources variant_loc casa_location_to_lsp Option::Some
-                return
-            fi
-        fi
-        state.sources casa_enum CasaEnum::location casa_location_to_lsp Option::Some
-        return
-    fi
-
-    # TYPE_CAST
-    if op_value OpValue::TypeCast(cast_type) is then
-        cast_type.format = cast_name
-        if cast_name state DocumentState::structs.get Option::Some(casa_struct) is then
-            state.sources casa_struct CasaStruct::location casa_location_to_lsp Option::Some
-            return
-        fi
-        if cast_name state DocumentState::enums.get Option::Some(casa_enum) is then
-            state.sources casa_enum CasaEnum::location casa_location_to_lsp Option::Some
-            return
-        fi
-    fi
-
-    Option::None(Option[LspLocation])
 }
 
 fn handle_definition message:JsonValue {
@@ -873,7 +544,7 @@ fn handle_definition message:JsonValue {
     fi
     request_id_opt.unwrap = request_id
 
-    uri DOCUMENT_STATES.get = state_opt
+    uri OPEN_DOCUMENTS.get = state_opt
     if state_opt.is_none then
         JsonValue::JsonNull request_id send_response
         return
@@ -893,43 +564,14 @@ fn handle_definition message:JsonValue {
 # Hover handler
 # ============================================================================
 
-fn resolve_variable_type name:str function:Option[Function] state:DocumentState -> Option[Type] {
-    if function Option::Some(resolved_function) is then
-        for variable in resolved_function.variables.iter do
-            if variable.name name == then
-                if variable.typ.is_unknown ! then
-                    variable.typ Option::Some
-                    return
-                fi
-            fi
-        done
-        for capture in resolved_function.captures.iter do
-            if capture.name name == then
-                if capture.typ.is_unknown ! then
-                    capture.typ Option::Some
-                    return
-                fi
-            fi
-        done
-    fi
-    name state DocumentState::variables.get = global_var_opt
-    if global_var_opt Option::Some(global_var) is then
-        if global_var.typ.is_unknown ! then
-            global_var.typ Option::Some
-            return
-        fi
-    fi
-    Option::None(Option[Type])
-}
-
-fn format_hover op:Op state:DocumentState func:Option[Function] -> Option[str] {
+fn format_hover symbol:DocumentElement state:AnalyzedDocument -> Option[str] {
+    symbol.op = op
     op.value = op_value
 
     # Function call/push
     if op_value OpValue::FnCall is op_value OpValue::FnPush is || then
-        op op_str_value state DocumentState::functions.get = fn_opt
-        if fn_opt.is_some then
-            fn_opt.unwrap = hover_func
+        op op_str_value state.lookup_function = fn_opt
+        if fn_opt Option::Some(hover_func) is then
             StringBuilder::new = builder
             "fn " builder.append
             hover_func Function::name builder.append
@@ -969,7 +611,7 @@ fn format_hover op:Op state:DocumentState func:Option[Function] -> Option[str] {
     # Variables
     if op_value OpValue::PushVar is op_value OpValue::PushCapture is || then
         op op_str_value = var_name
-        state func var_name resolve_variable_type = var_type
+        symbol state.find_symbol_type = var_type
         if var_type Option::Some(resolved_var_type) is then
             f"{var_name}: {resolved_var_type.format}" Option::Some
         else
@@ -980,22 +622,7 @@ fn format_hover op:Op state:DocumentState func:Option[Function] -> Option[str] {
 
     # Struct new
     if op_value OpValue::StructNew(struct_val) is then
-        StringBuilder::new = struct_builder
-        "struct " struct_builder.append
-        struct_val CasaStruct::name struct_builder.append
-        " { " struct_builder.append
-        0 = member_index
-        while member_index struct_val CasaStruct::members.length > do
-            if 0 member_index != then ", " struct_builder.append fi
-            member_index struct_val CasaStruct::members.get = member
-            member Member::name struct_builder.append
-            ": " struct_builder.append
-            member Member::typ.format struct_builder.append
-            1 += member_index
-        done
-        " }" struct_builder.append
-        struct_builder.build Option::Some
-        return
+        struct_val format_struct_hover Option::Some return
     fi
 
     # Enum variant
@@ -1033,7 +660,7 @@ fn format_hover op:Op state:DocumentState func:Option[Function] -> Option[str] {
 
     # Assignment
     if op_value OpValue::AssignVar(assign_name) is then
-        state func assign_name resolve_variable_type = assign_type
+        symbol state.find_symbol_type = assign_type
         if assign_type Option::Some(resolved_assign_type) is then
             f"= {assign_name}: {resolved_assign_type.format}" Option::Some
         else
@@ -1086,111 +713,114 @@ fn format_enum_hover hover_enum:CasaEnum -> str {
 }
 
 fn format_qualified_member_hover
-    op:Op
-    func:Option[Function]
-    state:DocumentState
+    symbol:DocumentElement
+    state:AnalyzedDocument
     range:LspRange
 -> Option[HoverContent] {
-    if op op_str_value state DocumentState::functions.has ! then
-        Option::None(Option[HoverContent])
-        return
-    fi
-    func state op format_hover = member_content
-    if member_content.is_none then
-        Option::None(Option[HoverContent])
-        return
-    fi
-    if member_content Option::Some(content) is then
+    if state symbol format_hover Option::Some(content) is then
         range f"```casa\n{content}\n```" HoverContent Option::Some
-        return
+    else
+        Option::None(Option[HoverContent])
     fi
-    Option::None(Option[HoverContent])
 }
 
-fn compute_hover state:DocumentState line:int col:int -> Option[HoverContent] {
-    col line state find_op_at_position = result
-    if result.is_none then
-        Option::None(Option[HoverContent])
-        return
+fn get_hover_range symbol:DocumentElement state:AnalyzedDocument -> LspRange {
+    symbol.location state.locate convert_document_location_to_lsp = location
+    location.range
+}
+
+fn format_type_hover name:str state:AnalyzedDocument -> Option[str] {
+    if name state.lookup_struct Option::Some(hover_struct) is then
+        hover_struct format_struct_hover Option::Some return
     fi
-    result.unwrap = find
-    find FindResult::op = op
-    find FindResult::function = func
-    col line state DocumentState::source position_to_offset = cursor_offset
-
-    # Dead zone for :: separator
-    cursor_offset op state DocumentState::source qualified_name_part = qpart_opt
-    if qpart_opt Option::Some(qpart) is then
-        if QPART_SEPARATOR qpart == then
-            Option::None(Option[HoverContent])
-            return
-        fi
-
-        # Qualified function call
-        if
-        op.value OpValue::FnCall is op.value OpValue::FnPush is ||
-        then
-            op op_str_value "::" str::split = qualified_parts
-            0 qualified_parts.get = qualified_type_name
-            if QPART_TYPE qpart == then
-                op state DocumentState::source qualified_type_range = qualified_range
-                # Look up type
-                Option::None(Option[str]) = qualified_content
-                if qualified_type_name state DocumentState::structs.get Option::Some(hover_struct) is then
-                    hover_struct format_struct_hover Option::Some = qualified_content
-                elif qualified_type_name state DocumentState::enums.get Option::Some(hover_enum) is then
-                    hover_enum format_enum_hover Option::Some = qualified_content
-                fi
-                if qualified_content Option::Some(content) is then
-                    qualified_range f"```casa\n{content}\n```" HoverContent Option::Some
-                    return
-                fi
-            else
-                # Member part: show function stack effect
-                op state DocumentState::source qualified_member_range = member_range
-                member_range state func op format_qualified_member_hover = member_hover
-                if member_hover.is_some then
-                    member_hover
-                    return
-                fi
-            fi
-            Option::None(Option[HoverContent])
-            return
-        fi
-
-        # Qualified enum variant
-        if op.value OpValue::PushEnumVariant is then
-            op enum_variant_of = enum_variant
-            if QPART_TYPE qpart == then
-                op state DocumentState::source qualified_type_range = enum_range
-                if enum_variant EnumVariant::enum_name state DocumentState::enums.get Option::Some(hover_enum) is then
-                    hover_enum format_enum_hover = enum_text
-                    enum_range f"```casa\n{enum_text}\n```" HoverContent Option::Some
-                    return
-                fi
-            else
-                op state DocumentState::source qualified_member_range = variant_range
-                f"{enum_variant EnumVariant::enum_name}::{enum_variant EnumVariant::variant_name}" = variant_content
-                variant_range f"```casa\n{variant_content}\n```" HoverContent Option::Some
-                return
-            fi
-            Option::None(Option[HoverContent])
-            return
-        fi
+    if name state.lookup_enum Option::Some(hover_enum) is then
+        hover_enum format_enum_hover Option::Some return
     fi
+    Option::None(Option[str])
+}
 
-    # General hover
-    func state op format_hover = hover_content
-    if hover_content.is_none then
-        Option::None(Option[HoverContent])
-        return
-    fi
-    op Op::location Location::span Span::length op Op::location Location::span Span::offset state DocumentState::source offset_to_lsp_range = hover_range
-    if hover_content Option::Some(content) is then
+fn format_general_symbol_hover
+    symbol:DocumentElement
+    state:AnalyzedDocument
+-> Option[HoverContent] {
+    if state symbol format_hover Option::Some(content) is then
+        state symbol get_hover_range = hover_range
         hover_range f"```casa\n{content}\n```" HoverContent Option::Some
-        return
+    else
+        Option::None(Option[HoverContent])
     fi
-    Option::None(Option[HoverContent])
+}
+
+fn format_qualified_callable_hover
+    symbol:DocumentElement
+    state:AnalyzedDocument
+-> Option[HoverContent] {
+    state symbol get_hover_range = range
+    symbol.part match
+        SymbolPart::TypeName => {
+            symbol.op op_str_value "::" str::split = parts
+            0 parts.get = type_name
+            if state type_name format_type_hover Option::Some(content) is then
+                range f"```casa\n{content}\n```" HoverContent Option::Some
+            else
+                Option::None(Option[HoverContent])
+            fi
+        }
+        SymbolPart::MemberName => range state symbol format_qualified_member_hover
+        _ => Option::None(Option[HoverContent])
+    end
+}
+
+fn format_qualified_enum_hover
+    symbol:DocumentElement
+    state:AnalyzedDocument
+    variant:EnumVariant
+-> Option[HoverContent] {
+    state symbol get_hover_range = range
+    symbol.part match
+        SymbolPart::TypeName => {
+            if variant.enum_name state.lookup_enum Option::Some(hover_enum) is then
+                hover_enum format_enum_hover = content
+                range f"```casa\n{content}\n```" HoverContent Option::Some
+            else
+                Option::None(Option[HoverContent])
+            fi
+        }
+        SymbolPart::MemberName => {
+            f"{variant.enum_name}::{variant.variant_name}" = content
+            range f"```casa\n{content}\n```" HoverContent Option::Some
+        }
+        _ => Option::None(Option[HoverContent])
+    end
+}
+
+fn format_qualified_symbol_hover
+    symbol:DocumentElement
+    state:AnalyzedDocument
+-> Option[HoverContent] {
+    symbol.op.value match
+        OpValue::FnCall(_) => state symbol format_qualified_callable_hover
+        OpValue::FnPush(_) => state symbol format_qualified_callable_hover
+        OpValue::PushEnumVariant(variant) => variant state symbol format_qualified_enum_hover
+        _ => Option::None(Option[HoverContent])
+    end
+}
+
+fn compute_symbol_hover symbol:DocumentElement state:AnalyzedDocument -> Option[HoverContent] {
+    symbol.part match
+        SymbolPart::Whole => state symbol format_general_symbol_hover
+        SymbolPart::TypeName => state symbol format_qualified_symbol_hover
+        SymbolPart::MemberName => state symbol format_qualified_symbol_hover
+        SymbolPart::Separator => Option::None(Option[HoverContent])
+    end
+}
+
+fn compute_hover state:AnalyzedDocument line:int column:int -> Option[HoverContent] {
+    if column line state.find_symbol_at Option::Some(symbol) is then
+        state symbol compute_symbol_hover
+    else
+        Option::None(Option[HoverContent])
+    fi
 }
 
 fn handle_hover message:JsonValue {
@@ -1201,7 +831,7 @@ fn handle_hover message:JsonValue {
     fi
     request_id_opt.unwrap = request_id
 
-    uri DOCUMENT_STATES.get = state_opt
+    uri OPEN_DOCUMENTS.get = state_opt
     if state_opt.is_none then
         JsonValue::JsonNull request_id send_response
         return
@@ -1228,7 +858,7 @@ fn handle_hover message:JsonValue {
 # Completion handler
 # ============================================================================
 
-fn methods_for_type receiver_type:Type state:DocumentState -> List[CompletionItem] {
+fn methods_for_type receiver_type:Type state:AnalyzedDocument -> List[CompletionItem] {
     receiver_type.base = base_opt
     if base_opt Option::Some(base) is then
         base
@@ -1238,7 +868,7 @@ fn methods_for_type receiver_type:Type state:DocumentState -> List[CompletionIte
     = base_type
     f"{base_type}::" = method_prefix
     List::new(List[CompletionItem]) = items
-    state DocumentState::functions.keys = fn_keys
+    state.functions.keys = fn_keys
     for fn_name in fn_keys.iter do
         if fn_name method_prefix str::starts_with then
             fn_name method_prefix.length fn_name.length method_prefix.length - str::substring = method_name
@@ -1248,10 +878,10 @@ fn methods_for_type receiver_type:Type state:DocumentState -> List[CompletionIte
     items
 }
 
-fn members_for_qualified type_name:str state:DocumentState -> List[CompletionItem] {
+fn members_for_qualified type_name:str state:AnalyzedDocument -> List[CompletionItem] {
     List::new(List[CompletionItem]) = items
     # Enum variants
-    type_name state DocumentState::enums.get = enum_opt
+    type_name state.enums.get = enum_opt
     if enum_opt.is_some then
         enum_opt.unwrap = casa_enum
         for variant_name in casa_enum CasaEnum::variants.iter do
@@ -1328,14 +958,14 @@ fn infer_literal_type text:str -> Option[Type] {
     Option::None(Option[Type])
 }
 
-fn resolve_chain_type parts:List[str] state:DocumentState offset:int -> Option[Type] {
+fn resolve_chain_type parts:List[str] state:AnalyzedDocument offset:int -> Option[Type] {
     if 0 parts.length == then
         Option::None(Option[Type])
         return
     fi
-    offset state find_containing_function = containing_func
+    offset state.find_containing_function = containing_func
     0 parts.get = first_part
-    state containing_func first_part resolve_variable_type = current_type
+    containing_func first_part state.find_variable_type = current_type
     if current_type.is_none then
         first_part infer_literal_type = current_type
     fi
@@ -1349,7 +979,7 @@ fn resolve_chain_type parts:List[str] state:DocumentState offset:int -> Option[T
         resolved_type.base = base_opt
         if base_opt Option::Some(base) is then base else resolved_type.format fi = base_type
         part_index parts.get = method_name
-        f"{base_type}::{method_name}" state DocumentState::functions.get = fn_opt
+        f"{base_type}::{method_name}" state.functions.get = fn_opt
         if fn_opt.is_none then
             Option::None(Option[Type])
             return
@@ -1365,8 +995,8 @@ fn resolve_chain_type parts:List[str] state:DocumentState offset:int -> Option[T
     resolved_type Option::Some
 }
 
-fn handle_triggered_completion state:DocumentState offset:int -> List[CompletionItem] {
-    state DocumentState::source = source
+fn handle_triggered_completion state:AnalyzedDocument offset:int -> List[CompletionItem] {
+    state.source = source
     offset 1 - = pos
     if 0 pos < then
         List::new(List[CompletionItem])
@@ -1397,8 +1027,13 @@ fn handle_triggered_completion state:DocumentState offset:int -> List[Completion
     List::new(List[CompletionItem])
 }
 
-fn compute_completion state:DocumentState line:int col:int trigger:str -> List[CompletionItem] {
-    col line state DocumentState::source position_to_offset = cursor_offset
+fn compute_completion
+    state:AnalyzedDocument
+    line:int
+    column:int
+    trigger:str
+-> List[CompletionItem] {
+    column line state.source position_to_offset = cursor_offset
 
     if "." trigger == ":" trigger == || then
         cursor_offset state handle_triggered_completion
@@ -1409,7 +1044,7 @@ fn compute_completion state:DocumentState line:int col:int trigger:str -> List[C
     List::new(List[CompletionItem]) = items
 
     # Functions (skip lambda, internal, qualified)
-    state DocumentState::functions.keys = fn_keys
+    state.functions.keys = fn_keys
     for fn_name in fn_keys.iter do
         if fn_name "lambda__" str::starts_with fn_name "__" str::starts_with || then
             continue
@@ -1421,9 +1056,9 @@ fn compute_completion state:DocumentState line:int col:int trigger:str -> List[C
     done
 
     # Structs
-    state DocumentState::structs.keys = struct_keys
+    state.structs.keys = struct_keys
     for struct_name in struct_keys.iter do
-        struct_name state DocumentState::structs.get.unwrap = struct_val
+        struct_name state.structs.get.unwrap = struct_val
         StringBuilder::new = member_builder
         0 = member_index
         while member_index struct_val CasaStruct::members.length > do
@@ -1438,13 +1073,13 @@ fn compute_completion state:DocumentState line:int col:int trigger:str -> List[C
     done
 
     # Enums
-    state DocumentState::enums.keys = enum_keys
+    state.enums.keys = enum_keys
     for enum_name_val in enum_keys.iter do
         "" COMPLETION_ENUM enum_name_val CompletionItem items.push
     done
 
     # Local variables
-    cursor_offset state find_containing_function = containing_func_opt
+    cursor_offset state.find_containing_function = containing_func_opt
     if containing_func_opt.is_some then
         containing_func_opt.unwrap = containing_func
         for local_var in containing_func Function::variables.iter do
@@ -1453,9 +1088,9 @@ fn compute_completion state:DocumentState line:int col:int trigger:str -> List[C
     fi
 
     # Global variables
-    state DocumentState::variables.keys = global_var_keys
+    state.variables.keys = global_var_keys
     for global_var_name in global_var_keys.iter do
-        if global_var_name state DocumentState::variables.get Option::Some(global_var) is then
+        if global_var_name state.variables.get Option::Some(global_var) is then
             global_var Variable::typ.format COMPLETION_VARIABLE global_var_name CompletionItem items.push
         fi
     done
@@ -1489,7 +1124,7 @@ fn handle_completion message:JsonValue {
     fi
     request_id_opt.unwrap = request_id
 
-    uri DOCUMENT_STATES.get = state_opt
+    uri OPEN_DOCUMENTS.get = state_opt
     if state_opt.is_none then
         json_object
         "isIncomplete" false JsonValue::JsonBool json_set
@@ -1595,14 +1230,14 @@ fn collect_enum_references
 }
 
 fn collect_refs_in_all_functions
-    state:DocumentState
+    state:AnalyzedDocument
     collector_kind:int
     name:str
     results:List[LspLocation]
 {
-    state DocumentState::functions.keys = fn_keys
+    state.functions.keys = fn_keys
     for fn_name in fn_keys.iter do
-        fn_name state DocumentState::functions.get.unwrap = func
+        fn_name state.functions.get.unwrap = func
         if COLLECTOR_FN collector_kind == then
             state.sources results name func Function::ops collect_function_references
         elif COLLECTOR_VAR collector_kind == then
@@ -1631,7 +1266,7 @@ fn is_local_variable name:str func:Option[Function] -> bool {
 # ============================================================================
 
 fn find_all_references
-    state:DocumentState
+    state:AnalyzedDocument
     op:Op
     func:Option[Function]
     include_declaration:bool
@@ -1643,14 +1278,14 @@ fn find_all_references
     if op_value OpValue::FnCall is op_value OpValue::FnPush is || then
         op op_str_value = fn_name
         if include_declaration then
-            fn_name state DocumentState::functions.get = fn_opt
+            fn_name state.functions.get = fn_opt
             if fn_opt Option::Some(fn_def) is then
                 if "" fn_def Function::location Location::file != then
                     state.sources fn_def Function::location casa_location_to_lsp results.push
                 fi
             fi
         fi
-        state.sources results fn_name state DocumentState::ops collect_function_references
+        state.sources results fn_name state.ops collect_function_references
         results fn_name COLLECTOR_FN state collect_refs_in_all_functions
         results
         return
@@ -1664,7 +1299,7 @@ fn find_all_references
                 state.sources results var_name local_func Function::ops collect_variable_references
             fi
         else
-            state.sources results var_name state DocumentState::ops collect_variable_references
+            state.sources results var_name state.ops collect_variable_references
             results var_name COLLECTOR_VAR state collect_refs_in_all_functions
         fi
         results
@@ -1677,7 +1312,7 @@ fn find_all_references
         if include_declaration then
             state.sources casa_struct CasaStruct::location casa_location_to_lsp results.push
         fi
-        state.sources results struct_name state DocumentState::ops collect_struct_references
+        state.sources results struct_name state.ops collect_struct_references
         results struct_name COLLECTOR_STRUCT state collect_refs_in_all_functions
         results
         return
@@ -1687,11 +1322,11 @@ fn find_all_references
     if op_value OpValue::PushEnumVariant(variant) is then
         variant EnumVariant::enum_name = enum_name
         if include_declaration then
-            if enum_name state DocumentState::enums.get Option::Some(casa_enum) is then
+            if enum_name state.enums.get Option::Some(casa_enum) is then
                 state.sources casa_enum CasaEnum::location casa_location_to_lsp results.push
             fi
         fi
-        state.sources results enum_name state DocumentState::ops collect_enum_references
+        state.sources results enum_name state.ops collect_enum_references
         results enum_name COLLECTOR_ENUM state collect_refs_in_all_functions
         results
         return
@@ -1701,26 +1336,25 @@ fn find_all_references
 }
 
 fn compute_references
-    state:DocumentState
+    state:AnalyzedDocument
     line:int
-    col:int
+    column:int
     include_declaration:bool
 -> Option[List[LspLocation]] {
     # Check function definition name first (parameter ops share the name token location)
-    col line state find_function_at_position = fn_at_pos
+    column line state.find_function_at = fn_at_pos
     Option::None(Option[Function]) = func
     empty_location OpValue::FnExec Op::new = op
     if fn_at_pos Option::Some(matched_function) is then
         matched_function Function::location matched_function Function::name OpValue::FnCall Op::new = op
     else
-        col line state find_op_at_position = result
-        if result.is_none then
+        if column line state.find_symbol_at Option::Some(found) is then
+            found.op = op
+            found.containing_function = func
+        else
             Option::None(Option[List[LspLocation]])
             return
         fi
-        result.unwrap = find
-        find FindResult::op = op
-        find FindResult::function = func
     fi
 
     include_declaration func op state find_all_references = refs
@@ -1739,7 +1373,7 @@ fn handle_references message:JsonValue {
     fi
     request_id_opt.unwrap = request_id
 
-    uri DOCUMENT_STATES.get = state_opt
+    uri OPEN_DOCUMENTS.get = state_opt
     if state_opt.is_none then
         JsonValue::JsonNull request_id send_response
         return
@@ -1778,13 +1412,13 @@ fn handle_references message:JsonValue {
 # ============================================================================
 
 fn compute_rename
-    state:DocumentState
+    state:AnalyzedDocument
     line:int
-    col:int
+    column:int
     new_name:str
 -> Option[Map[str List[TextEdit]]] {
     # Check function definition name first (parameter ops share the name token location)
-    col line state find_function_at_position = fn_at_pos
+    column line state.find_function_at = fn_at_pos
     Option::None(Option[Function]) = func
     empty_location OpValue::FnExec Op::new = op
     "" = old_name
@@ -1792,15 +1426,14 @@ fn compute_rename
         matched_function Function::location matched_function Function::name OpValue::FnCall Op::new = op
         matched_function Function::name function_short_name = old_name
     else
-        col line state find_op_at_position = result
-        if result.is_none then
+        if column line state.find_symbol_at Option::Some(found) is then
+            found.op = op
+            found.containing_function = func
+            op op_str_value = old_name
+        else
             Option::None(Option[Map[str List[TextEdit]]])
             return
         fi
-        result.unwrap = find
-        find FindResult::op = op
-        find FindResult::function = func
-        op op_str_value = old_name
     fi
 
     true func op state find_all_references = refs
@@ -1848,7 +1481,7 @@ fn handle_rename message:JsonValue {
     fi
     request_id_opt.unwrap = request_id
 
-    uri DOCUMENT_STATES.get = state_opt
+    uri OPEN_DOCUMENTS.get = state_opt
     if state_opt.is_none then
         JsonValue::JsonNull request_id send_response
         return
@@ -1986,10 +1619,10 @@ const QUALIFIED_TYPE_TOKEN { TOKEN_TYPE }
 const QUALIFIED_MEMBER_FN { TOKEN_FUNCTION }
 const QUALIFIED_MEMBER_ENUM_VARIANT { TOKEN_ENUM_MEMBER }
 
-fn collect_semantic_tokens ops:List[Op] state:DocumentState tokens:List[SemanticToken] {
-    state DocumentState::source = token_source
+fn collect_semantic_tokens ops:List[Op] state:AnalyzedDocument tokens:List[SemanticToken] {
+    state.source = token_source
     for op in ops.iter do
-        if op Op::location Location::file state DocumentState::file_path != then
+        if op Op::location Location::file state.file_path != then
             continue
         fi
         op Op::location Location::span Span::offset = start
@@ -2009,7 +1642,7 @@ fn collect_semantic_tokens ops:List[Op] state:DocumentState tokens:List[Semantic
         op.value OpValue::FnPush is ||
         op.value OpValue::PushEnumVariant is ||
         then
-            state DocumentState::source start length str::substring = text
+            state.source start length str::substring = text
             text "::" str::find = separator
             if 0 separator >= then
                 # Type part
@@ -2055,28 +1688,28 @@ fn scan_keyword_before source:str name_offset:int keyword:str tokens:List[Semant
     fi
 }
 
-fn compute_semantic_tokens state:DocumentState -> List[SemanticToken] {
-    state DocumentState::source = source
+fn compute_semantic_tokens state:AnalyzedDocument -> List[SemanticToken] {
+    state.source = source
 
     List::new(List[SemanticToken]) = tokens
 
     # Collect from global ops
-    tokens state state DocumentState::ops collect_semantic_tokens
+    tokens state state.ops collect_semantic_tokens
 
     # Collect from function ops
-    state DocumentState::functions.keys = fn_keys
+    state.functions.keys = fn_keys
     for fn_name in fn_keys.iter do
-        fn_name state DocumentState::functions.get.unwrap = func
+        fn_name state.functions.get.unwrap = func
         tokens state func Function::ops collect_semantic_tokens
     done
 
     # Add function definition names + fn keyword
     for fn_def_name in fn_keys.iter do
-        fn_def_name state DocumentState::functions.get.unwrap = fn_def
+        fn_def_name state.functions.get.unwrap = fn_def
         if "" fn_def Function::location Location::file == then
             continue
         fi
-        if fn_def Function::location Location::file state DocumentState::file_path != then
+        if fn_def Function::location Location::file state.file_path != then
             continue
         fi
         if fn_def Function::name "lambda__" str::starts_with fn_def Function::name "__" str::starts_with || then
@@ -2093,10 +1726,10 @@ fn compute_semantic_tokens state:DocumentState -> List[SemanticToken] {
     done
 
     # Add enum definition names + enum keyword
-    state DocumentState::enums.keys = enum_keys
+    state.enums.keys = enum_keys
     for enum_def_name in enum_keys.iter do
-        enum_def_name state DocumentState::enums.get.unwrap = enum_def
-        if enum_def CasaEnum::location Location::file state DocumentState::file_path != then
+        enum_def_name state.enums.get.unwrap = enum_def
+        if enum_def CasaEnum::location Location::file state.file_path != then
             continue
         fi
         enum_def CasaEnum::location Location::span Span::offset = enum_offset
@@ -2110,10 +1743,10 @@ fn compute_semantic_tokens state:DocumentState -> List[SemanticToken] {
     done
 
     # Add struct definition names + struct keyword
-    state DocumentState::structs.keys = struct_keys
+    state.structs.keys = struct_keys
     for struct_def_name in struct_keys.iter do
-        struct_def_name state DocumentState::structs.get.unwrap = struct_def
-        if struct_def CasaStruct::location Location::file state DocumentState::file_path != then
+        struct_def_name state.structs.get.unwrap = struct_def
+        if struct_def CasaStruct::location Location::file state.file_path != then
             continue
         fi
         struct_def CasaStruct::location Location::span Span::offset = struct_offset
@@ -2158,7 +1791,7 @@ fn handle_semantic_tokens message:JsonValue {
     fi
     request_id_opt.unwrap = request_id
 
-    uri DOCUMENT_STATES.get = state_opt
+    uri OPEN_DOCUMENTS.get = state_opt
     if state_opt.is_none then
         json_object
         "data" List::new(List[JsonValue]) JsonValue::JsonArray json_set
