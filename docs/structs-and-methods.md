@@ -69,7 +69,7 @@ person Person::age print     # 18
 person Person::name print    # Jane Doe
 ```
 
-## Dot and Arrow Syntax
+## Dot and Assignment Syntax
 
 Shorthand syntax makes struct access more readable.
 
@@ -89,12 +89,15 @@ The type checker resolves the receiver type automatically from whatever value is
 person.name print                  # John Doe (dot on variable)
 ```
 
-### Arrow Syntax (Setter)
+### Field Assignment
 
-`value instance->field` is equivalent to `value instance Type::set_field`.
+`value = instance.field` is equivalent to `value instance Type::set_field`.
+Assignment targets may be variable-rooted field chains of any depth.
 
 ```casa
-"Jane Doe" person->name    # same as: "Jane Doe" person Person::set_name
+"Jane Doe" = person.name              # same as: "Jane Doe" person Person::set_name
+"Helsinki" = person.address.city      # nested field assignment
+1 += person.age                       # compound field assignment
 ```
 
 ## Struct-Typed Fields
@@ -109,7 +112,7 @@ struct Node {
 
 0 (Node) 42 Node = first      # next=null, value=42
 0 (Node) 99 Node = second
-second first->next            # first.next now points at second
+second = first.next           # first.next now points at second
 ```
 
 Self-referential and mutually recursive struct types are supported. The null sentinel for "no value" is `0 (StructName)`. For optional references, prefer `Option[StructName]`, which makes absence explicit:
@@ -168,7 +171,7 @@ Add methods to a type with `impl`:
 ```casa
 impl Person {
     fn celebrate_birthday self:Person {
-        self.age 1 + self->age
+        1 += self.age
     }
 }
 ```
@@ -265,7 +268,7 @@ struct Person {
 
 impl Person {
     fn celebrate_birthday self:Person {
-        self.age 1 + self->age
+        1 += self.age
     }
 }
 
@@ -277,7 +280,7 @@ person.name print       # John Doe
 person.age print        # 18
 
 # Setters
-"Jane Doe" person->name
+"Jane Doe" = person.name
 person.name print       # Jane Doe
 
 # Methods

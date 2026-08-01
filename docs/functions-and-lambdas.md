@@ -254,10 +254,10 @@ fn fizzbuzz number:int {
 
 | Operator | Stack Effect | Description |
 |----------|-------------|-------------|
-| `= name` | `T -> None` | Assign top of stack to `name` |
+| `= target` | `T -> None` | Assign top of stack to a variable or variable-rooted field path |
 | `= name:type` | `T -> None` | Assign with type annotation |
-| `+= name` | `int -> None` | Add to `name` |
-| `-= name` | `int -> None` | Subtract from `name` |
+| `+= target` | `int -> None` | Add to an `int` variable or field path |
+| `-= target` | `int -> None` | Subtract from an `int` variable or field path |
 
 A variable's type is set on first assignment and cannot change:
 

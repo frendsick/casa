@@ -132,7 +132,7 @@ without a type-name prefix is acceptable.
 
 ## Accessor shorthand
 
-- **MUST** use `.field` (getter shorthand) and `->field` (setter shorthand) when
+- **MUST** use `.field` for getter shorthand and field assignment targets when
   available.
 - **MUST NOT** put a space between the receiver and the accessor: `person.age` not
   `person .age`.
@@ -141,7 +141,7 @@ without a type-name prefix is acceptable.
   ```casa
   person.age print                  # MUST: shorthand getter, no space
   error.location.span.length        # MUST: getter chain stays on one line
-  42 person->age                    # MUST: shorthand setter, no space
+  42 = person.age                   # MUST: field assignment, no space
   ```
 
 - Use the explicit form (`person Person::age`) only when passing an accessor as a
@@ -336,10 +336,10 @@ without a type-name prefix is acceptable.
   index 1 + = index  # MUST NOT for literal increment
   ```
 
-- Use the setter pattern (`value var->field`) for computed updates:
+- Use field assignment for computed updates that are not `+=` or `-=`:
 
   ```casa
-  self.size 1 + self->size   # computed: setter pattern
+  self.capacity 2 * = self.capacity
   ```
 
 ---
