@@ -1,6 +1,6 @@
 # Stack-based type inference and checking for the Casa compiler.
 #
-# Maintains a virtual stack of type strings and validates that operations
+# Maintains a virtual stack of types and validates that operations
 # are type-safe.
 import "std"
 import "common"
@@ -197,12 +197,6 @@ impl TypeChecker {
 }
 
 impl TypeChecker {
-    fn stack_push tc:TypeChecker typ:str {
-        typ parse_type_str tc.stack_push_type
-    }
-}
-
-impl TypeChecker {
     fn report_stack_underflow tc:TypeChecker message:str {
         if tc.underflow_reported_this_op then return fi
         tc.current_location message ErrorKind::StackUnderflow tc.diagnostics.record_error
@@ -217,34 +211,6 @@ impl TypeChecker {
             "Stack underflow: expected a value but stack is empty" return
         fi
         f"Stack underflow: expected {expect_what} but stack is empty"
-    }
-}
-
-impl TypeChecker {
-    fn stack_peek tc:TypeChecker -> str {
-        if 0 tc.stack.types.length == then
-            if tc.within_param_cap then
-                TYPE_UNKNOWN return
-            fi
-            tc.stack_underflow_message tc.report_stack_underflow
-            TYPE_MISSING return
-        fi
-        tc.stack.types.length 1 - tc.stack.types.get.format
-    }
-}
-
-impl TypeChecker {
-    fn stack_pop tc:TypeChecker -> str {
-        if 0 tc.stack.types.length == then
-            if tc.within_param_cap then
-                TYPE_UNKNOWN Parameter::new tc.parameters.push
-                TYPE_UNKNOWN return
-            fi
-            tc.stack_underflow_message tc.report_stack_underflow
-            TYPE_MISSING return
-        fi
-        tc.stack.origins.pop drop
-        tc.stack.types.pop.format
     }
 }
 
@@ -847,7 +813,8 @@ impl TypeChecker {
             op_index return
         fi
         # User-defined types must satisfy Eq (or Ord) explicitly.
-        if tc.diagnostics tc.store function_opt trait_name type1_t type_satisfies_trait ! then
+        trait_name GenericType::new Type::Generic = trait_type
+        if tc.diagnostics tc.store function_opt trait_type type1_t type_satisfies_trait ! then
             cmp_value comparison_op_str = cmp_str
             op Op::location f"Type `{type1}` cannot be compared with `{cmp_str}`: does not satisfy trait `{trait_name}`" ErrorKind::MissingTraitMethod tc.diagnostics.record_error
             TYPE_BOOL_T tc.stack_push_type
@@ -914,9 +881,9 @@ impl TypeChecker {
             tc.stack_pop_drop
         elif stack_value OpValue::Dup is then
             "value for `dup`" = tc.current_expect_ctx
-            tc.stack_pop = typ
-            typ tc.stack_push
-            typ tc.stack_push
+            tc.stack_pop_type = typ
+            typ tc.stack_push_type
+            typ tc.stack_push_type
         elif stack_value OpValue::Swap is then
             "argument 1 of `swap`" = tc.current_expect_ctx
             tc.stack_pop_type = type1_t
@@ -926,12 +893,12 @@ impl TypeChecker {
             type2_t tc.stack_push_type
         elif stack_value OpValue::Over is then
             "argument 1 of `over`" = tc.current_expect_ctx
-            tc.stack_pop = type1
+            tc.stack_pop_type = type1
             "argument 2 of `over`" = tc.current_expect_ctx
-            tc.stack_pop = type2
-            type2 tc.stack_push
-            type1 tc.stack_push
-            type2 tc.stack_push
+            tc.stack_pop_type = type2
+            type2 tc.stack_push_type
+            type1 tc.stack_push_type
+            type2 tc.stack_push_type
         elif stack_value OpValue::Rot is then
             "argument 1 of `rot`" = tc.current_expect_ctx
             tc.stack_pop_type = type1_t
@@ -971,17 +938,24 @@ fn bound_implies_word bound:TraitBound store:SymbolStore -> bool {
 # satisfy `Word` automatically.
 
 impl TypeChecker {
-    fn assert_word_bound tc:TypeChecker op:Op type_name:str function_opt:Option[Function] {
-        if type_name TYPE_UNKNOWN == then return fi
-        if function_opt.is_none then return fi
-        function_opt.unwrap Function::stack_effect = word_stack_effect
-        if type_name word_stack_effect StackEffect::type_vars.has ! then return fi
-        type_name word_stack_effect StackEffect::trait_bounds.get = word_bound_opt
-        if word_bound_opt.is_none then return fi
-        if word_bound_opt Option::Some(word_bound) is then
-            if tc.store word_bound bound_implies_word then return fi
+    fn check_word_bound tc:TypeChecker bound:TraitBound type_name:str op:Op {
+        if tc.store bound bound_implies_word ! then
+            op.location f"Type variable `{type_name}` does not satisfy `Word` bound; add `[{type_name}: Word]` (or a trait that extends `Word`) to the function's type parameters" ErrorKind::TypeMismatch tc.diagnostics.record_error
         fi
-        op Op::location f"Type variable `{type_name}` does not satisfy `Word` bound; add `[{type_name}: Word]` (or a trait that extends `Word`) to the function's type parameters" ErrorKind::TypeMismatch tc.diagnostics.record_error
+    }
+
+    fn assert_word_bound tc:TypeChecker op:Op typ:Type function_opt:Option[Function] {
+        if typ.is_unknown_placeholder then return fi
+        if function_opt Option::Some(function) is then
+            if typ Type::TypeVar(type_name) is then
+                function.stack_effect = word_stack_effect
+                if type_name word_stack_effect.type_vars.has ! then return fi
+                type_name word_stack_effect.trait_bounds.get = word_bound_opt
+                if word_bound_opt Option::Some(word_bound) is then
+                    op type_name word_bound tc.check_word_bound
+                fi
+            fi
+        fi
     }
 }
 
@@ -1003,7 +977,7 @@ impl TypeChecker {
         mem_value OpValue::Store64 is ||
         then
             TYPE_PTR_T tc.expect_type_t
-            tc.stack_pop = stored_type
+            tc.stack_pop_type = stored_type
             function_opt stored_type op tc.assert_word_bound
         elif mem_value OpValue::HeapAlloc is then
             TYPE_INT_T tc.expect_type_t
@@ -1379,8 +1353,8 @@ impl TypeChecker {
         for trait_method_entry in trait_def tc.store collect_trait_methods.iter do
             if trait_method_name trait_method_entry TraitMethod::name == then
                 tc.stack_pop_drop
-                trait_type_var trait_method_entry TraitMethod::stack_effect resolve_trait_stack_effect = resolved_exec_effect
-                f"{trait_type_var}::{trait_method_name}" resolved_exec_effect tc.apply_stack_effect
+                trait_type_var Type::TypeVar trait_method_entry TraitMethod::stack_effect resolve_trait_stack_effect = resolved_exec_effect
+                trait_method_name trait_type_var Type::TypeVar.make_method_key resolved_exec_effect tc.apply_stack_effect
                 return
             fi
         done
@@ -1618,55 +1592,65 @@ fn bind_generic_params_standalone
     bindings
 }
 
+impl Type {
+    fn make_method_key self:Type method_name:str -> str {
+        f"{self.format}::{method_name}"
+    }
+
+    fn make_base_method_key self:Type method_name:str -> Option[str] {
+        if self.base Option::Some(base) is then
+            f"{base}::{method_name}" Option::Some return
+        fi
+        Option::None
+    }
+}
+
+fn matches_trait_bound receiver:Type trait_type:Type function_opt:Option[Function] -> bool {
+    if function_opt Option::Some(function) is then
+        if receiver Type::TypeVar(type_var_name) is then
+            type_var_name function.stack_effect.trait_bounds.get = bound_opt
+            if bound_opt Option::Some(bound) is then
+                bound trait_bound_to_type trait_type.eq return
+            fi
+        fi
+    fi
+    false
+}
+
 fn type_satisfies_trait
-    type_name:Type
-    trait_name:str
+    receiver:Type
+    trait_type:Type
     function_opt:Option[Function]
     store:SymbolStore
     diagnostics:Diagnostics
 -> bool {
-    type_name.format = type_name_str
-    # Accept both bare ("Iterable") and concrete generic ("Iterable[int]") trait names.
-    trait_name parse_type_str = trait_type
-    trait_type.base = trait_base_opt
-    trait_name = trait_lookup_name
-    if trait_base_opt Option::Some(trait_base) is then
-        trait_base = trait_lookup_name
-    fi
+    trait_type.match_base = trait_lookup_name
     trait_lookup_name store.traits.get = trait_opt
     if trait_opt.is_none then false return fi
     trait_opt.unwrap = trait_def
-    # Build substitution map from trait's type_params to concrete args from trait_name.
+    # Build substitution map from the trait's structural type arguments.
     Map::new(Map[str Type]) = trait_subs
-    if trait_base_opt.is_some then
-        trait_type.type_params = trait_args_opt
-        if trait_args_opt.is_some then
-            trait_args_opt.unwrap = trait_args
-            trait_def CasaTrait::type_params = tparams
-            if trait_args.length tparams.length == then
-                for sub_pair in trait_args.iter tparams.iter.zip do
-                    sub_pair.second sub_pair.first trait_subs.set = trait_subs
-                done
-            fi
+    if trait_type.type_params Option::Some(trait_args) is then
+        trait_def CasaTrait::type_params = tparams
+        if trait_args.length tparams.length == then
+            for sub_pair in trait_args.iter tparams.iter.zip do
+                sub_pair.second sub_pair.first trait_subs.set = trait_subs
+            done
         fi
     fi
     # Type variable with matching bound satisfies the trait
-    if function_opt Option::Some(function) is then
-        function Function::stack_effect StackEffect::trait_bounds = bounds
-        type_name_str bounds.get = bound_opt
-        if bound_opt Option::Some(bound) is then
-            if trait_name bound trait_bound_to_str == then true return fi
-        fi
+    if function_opt trait_type receiver matches_trait_bound then
+        true return
     fi
     for method in trait_def store collect_trait_methods.iter do
-        f"{type_name_str}::{method TraitMethod::name}" = fn_name
+        method TraitMethod::name receiver.make_method_key = fn_name
         fn_name store.functions.get = fn_opt
         false = via_generic_base
         # Fall back to the generic base type (e.g. `Option::to_str` for `Option[int]`)
         if fn_opt.is_none then
-            type_name.base = base_opt
-            if base_opt Option::Some(base) is then
-                f"{base}::{method TraitMethod::name}" = fn_name
+            method TraitMethod::name receiver.make_base_method_key = base_key_opt
+            if base_key_opt Option::Some(base_key) is then
+                base_key = fn_name
                 fn_name store.functions.get = fn_opt
                 true = via_generic_base
             fi
@@ -1686,7 +1670,7 @@ fn type_satisfies_trait
         if via_generic_base then
             continue
         fi
-        trait_subs type_name_str method TraitMethod::stack_effect resolve_trait_stack_effect apply_type_subs_to_stack_effect = resolved
+        trait_subs receiver method TraitMethod::stack_effect resolve_trait_stack_effect apply_type_subs_to_stack_effect = resolved
         if function Function::stack_effect StackEffect::parameters.length resolved StackEffect::parameters.length != then
             false return
         fi
@@ -1808,7 +1792,7 @@ fn method_diff_bind_for_bound
     bindings:Map[str Type]
     effect:StackEffect
     bound:TraitBound
-    concrete:str
+    concrete:Type
     store:SymbolStore
 -> Map[str Type] {
     bound TraitBound::name store.traits.get = trait_opt
@@ -1818,7 +1802,7 @@ fn method_diff_bind_for_bound
     bound TraitBound::type_args = bound_args
     if bound_args.length trait_params.length != then bindings return fi
     for trait_method in trait_def CasaTrait::methods.iter do
-        f"{concrete}::{trait_method TraitMethod::name}" store.functions.get = concrete_fn_opt
+        trait_method TraitMethod::name concrete.make_method_key store.functions.get = concrete_fn_opt
         if concrete_fn_opt Option::Some(concrete_fn) is then
             concrete trait_method TraitMethod::stack_effect resolve_trait_stack_effect = trait_resolved
             concrete_fn Function::stack_effect trait_resolved bound_args trait_params effect bindings diff_method_stack_effect = bindings
@@ -1838,7 +1822,7 @@ fn method_diff_bind_all
         if bound_type_var effect StackEffect::trait_bounds.get Option::Some(bound_constraint) is then
             bound_type_var bindings.get = concrete_opt
             if concrete_opt Option::Some(concrete) is then
-                store concrete.format bound_constraint effect bindings method_diff_bind_for_bound = bindings
+                store concrete bound_constraint effect bindings method_diff_bind_for_bound = bindings
             fi
         fi
     done
@@ -1931,7 +1915,8 @@ impl TypeChecker {
             # Resolve trait type args against current bindings so that
             # `Carrier[T]` becomes `Carrier[int]` once T has been bound.
             trait_bound trait_bound_to_type = trait_bound_type
-            bindings trait_bound_type.substitute_t.format = trait_name
+            bindings trait_bound_type.substitute_t = resolved_trait_type
+            resolved_trait_type.format = trait_name
             type_var bindings.get = concrete_opt
             if concrete_opt.is_none then
                 location f"Cannot determine concrete type for type variable `{type_var}`" ErrorKind::TypeMismatch tc.diagnostics.record_error
@@ -1972,14 +1957,14 @@ impl TypeChecker {
                         insert_pos push_op ops.insert
                         1 += insert_pos
                         1 += inserted
-                        concrete method TraitMethod::stack_effect resolve_trait_stack_effect = forward_stack_effect
+                        concrete_t method TraitMethod::stack_effect resolve_trait_stack_effect = forward_stack_effect
                         forward_stack_effect stack_effect_to_function_type tc.stack_push_type
                     fi
                     method_index 1 - = method_index
                 done
             else
                 # Verify structural satisfaction
-                if tc.diagnostics tc.store function_opt trait_name concrete_t type_satisfies_trait ! then
+                if tc.diagnostics tc.store function_opt resolved_trait_type concrete_t type_satisfies_trait ! then
                     location f"Type `{concrete}` does not satisfy trait `{trait_name}`" ErrorKind::TypeMismatch tc.diagnostics.record_error
                 fi
                 # Inject FN_PUSH for each abstract method (reversed)
@@ -1988,7 +1973,7 @@ impl TypeChecker {
                 while 0 method_index >= do
                     method_index expanded_methods.get = method
                     if 0 method TraitMethod::default_ops.length == then
-                        f"{concrete}::{method TraitMethod::name}" = fn_name
+                        method TraitMethod::name concrete_t.make_method_key = fn_name
                         fn_name tc.store.functions.get = global_fn_opt
                         if global_fn_opt.is_some then
                             global_fn_opt.unwrap = global_fn
@@ -2072,7 +2057,7 @@ impl TypeChecker {
                 tc.diagnostics tc.store push_fn ensure_typechecked
                 push_fn Function::stack_effect stack_effect_to_function_type tc.stack_push_type
             else
-                "fn" tc.stack_push
+                List::new(List[Type]) List::new(List[Type]) FunctionType Type::Function tc.stack_push_type
             fi
         elif fn_value OpValue::FnReturn is then
             if tc.has_return_types ! then
@@ -2189,7 +2174,8 @@ impl TypeChecker {
             tc.stack_pop_drop
             op_index return
         fi
-        if tc.diagnostics tc.store function_opt "Display" peek_t type_satisfies_trait ! then
+        "Display" GenericType::new Type::Generic = display_type
+        if tc.diagnostics tc.store function_opt display_type peek_t type_satisfies_trait ! then
             op Op::location f"Type `{typ}` cannot be printed: does not satisfy trait `Display`" ErrorKind::MissingTraitMethod tc.diagnostics.record_error
             tc.stack_pop_drop
             op_index return
@@ -2208,8 +2194,8 @@ impl TypeChecker {
 
 impl TypeChecker {
     fn check_typeof tc:TypeChecker op:Op {
-        tc.stack_pop = typ
-        typ parse_type_str Option::Some op Op::set_type_hint
+        tc.stack_pop_type = typ
+        typ Option::Some op Op::set_type_hint
         TYPE_STR_T tc.stack_push_type
     }
 }
@@ -2235,7 +2221,7 @@ impl TypeChecker {
         TYPE_INT_T tc.expect_type_t
         0 = index
         while index arg_count > do
-            tc.stack_pop = arg_type
+            tc.stack_pop_type = arg_type
             function_opt arg_type op tc.assert_word_bound
             1 += index
         done
@@ -2667,14 +2653,14 @@ fn find_trait_for_method method_name:str store:SymbolStore -> Option[CasaTrait] 
     Option::None(Option[CasaTrait])
 }
 
-fn check_abstract_methods_present receiver:str trait_def:CasaTrait store:SymbolStore -> bool {
+fn check_abstract_methods_present receiver:Type trait_def:CasaTrait store:SymbolStore -> bool {
     for cam_method in trait_def store collect_trait_methods.iter do
         if 0 cam_method TraitMethod::default_ops.length == then
-            f"{receiver}::{cam_method TraitMethod::name}" store.functions.get = cam_fn_opt
+            cam_method TraitMethod::name receiver.make_method_key store.functions.get = cam_fn_opt
             if cam_fn_opt.is_none then
-                receiver parse_type_str.base = cam_base_opt
-                if cam_base_opt Option::Some(cam_base) is then
-                    f"{cam_base}::{cam_method TraitMethod::name}" store.functions.get = cam_fn_opt
+                cam_method TraitMethod::name receiver.make_base_method_key = cam_base_key_opt
+                if cam_base_key_opt Option::Some(cam_base_key) is then
+                    cam_base_key store.functions.get = cam_fn_opt
                 fi
             fi
             if cam_fn_opt.is_none then
@@ -2688,20 +2674,21 @@ fn check_abstract_methods_present receiver:str trait_def:CasaTrait store:SymbolS
 fn instantiate_default_trait_method
     function_opt:Option[Function]
     method_name:str
-    receiver:str
+    receiver:Type
     store:SymbolStore
     diagnostics:Diagnostics
 -> Option[str] {
-    f"{receiver}::{method_name}" store.functions.get = already_opt
+    method_name receiver.make_method_key = receiver_key
+    receiver_key store.functions.get = already_opt
     if already_opt.is_some then
-        f"{receiver}::{method_name}" Option::Some return
+        receiver_key Option::Some return
     fi
     # Also check generic base
-    receiver parse_type_str.base = already_base_opt
-    if already_base_opt Option::Some(already_base) is then
-        f"{already_base}::{method_name}" store.functions.get = already_base_fn_opt
+    method_name receiver.make_base_method_key = already_base_key_opt
+    if already_base_key_opt Option::Some(already_base_key) is then
+        already_base_key store.functions.get = already_base_fn_opt
         if already_base_fn_opt.is_some then
-            f"{already_base}::{method_name}" Option::Some return
+            already_base_key Option::Some return
         fi
     fi
     # Find a trait with a matching default method
@@ -2725,12 +2712,11 @@ fn instantiate_default_trait_method
     trait_def CasaTrait::type_params = type_params
 
     # Determine function name and whether to use generic or concrete form
-    receiver parse_type_str.base = fn_base_opt
-    receiver = fn_type_name
-    if fn_base_opt Option::Some(fn_base) is then
-        fn_base = fn_type_name
+    receiver.base = fn_base_opt
+    receiver_key = synth_fn_name
+    if method_name receiver.make_base_method_key Option::Some(base_key) is then
+        base_key = synth_fn_name
     fi
-    f"{fn_type_name}::{method_name}" = synth_fn_name
 
     # For generic receivers, keep trait type params as function type vars.
     # For non-generic receivers, substitute trait type params with concrete types.
@@ -2739,12 +2725,11 @@ fn instantiate_default_trait_method
     empty_stack_effect = resolved_stack_effect
     if fn_base_opt.is_some then
         fn_base_opt.unwrap = base_name
-        if 0 type_params.length != then
-            " " type_params.join = tparams_str
-            f"{base_name}[{tparams_str}]" = default_self_type
-        else
-            base_name = default_self_type
-        fi
+        List::new(List[Type]) = default_type_params
+        for type_param in type_params.iter do
+            type_param Type::TypeVar default_type_params.push
+        done
+        default_type_params base_name GenericType Type::Generic = default_self_type
         default_self_type default_method TraitMethod::stack_effect resolve_trait_stack_effect = resolved_stack_effect
     else
         # Infer trait type params from concrete method stack effects
@@ -2754,7 +2739,7 @@ fn instantiate_default_trait_method
         done
         for infer_method in trait_def CasaTrait::methods.iter do
             if 0 infer_method TraitMethod::default_ops.length == then
-                f"{receiver}::{infer_method TraitMethod::name}" store.functions.get = infer_fn_opt
+                infer_method TraitMethod::name receiver.make_method_key store.functions.get = infer_fn_opt
                 if infer_fn_opt.is_some then
                     infer_fn_opt.unwrap = infer_fn
                     diagnostics store infer_fn ensure_typechecked
@@ -2778,7 +2763,7 @@ fn instantiate_default_trait_method
         done
     fi
 
-    default_self_type parse_type_str TRAIT_SELF_TYPE trait_subs.set = trait_subs
+    default_self_type TRAIT_SELF_TYPE trait_subs.set = trait_subs
 
     # Add method-level type vars to stack effect
     for method_type_var in default_method TraitMethod::type_vars.iter do
@@ -2839,6 +2824,68 @@ fn instantiate_default_trait_method
 
     synth_fn_name Option::Some
 }
+# Resolve a method call on a trait-bounded type variable to its hidden function pointer.
+
+impl TypeChecker {
+    fn apply_trait_bounded_method_call
+        tc:TypeChecker
+        receiver:Type
+        receiver_type_var:str
+        bound:TraitBound
+        method_name:str
+        op:Op
+        ops:List[Op]
+        op_index:int
+    -> Option[int] {
+        if bound.name tc.store.traits.get Option::Some(trait_def) is then
+            Map::new(Map[str Type]) = constraint_subs
+            trait_def.type_params = constraint_params
+            bound.type_args = constraint_args
+            if constraint_params.length constraint_args.length == then
+                for pair in constraint_args.iter constraint_params.iter.zip do
+                    pair.second pair.first constraint_subs.set = constraint_subs
+                done
+            fi
+
+            for trait_method in trait_def tc.store collect_trait_methods.iter do
+                if method_name trait_method.name == then
+                    f"__trait_{receiver_type_var}_{method_name}" = hidden_var
+                    tc.stack_pop_drop
+                    constraint_subs receiver trait_method.stack_effect resolve_trait_stack_effect apply_type_subs_to_stack_effect = resolved_stack_effect
+                    receiver tc.stack_push_type
+                    method_name receiver.make_method_key resolved_stack_effect tc.apply_stack_effect
+                    hidden_var OpValue::PushVar op Op::set_value
+                    op.location OpValue::FnExec Op::new = exec_op
+                    op_index exec_op ops.insert
+                    op_index 1 + Option::Some return
+                fi
+            done
+        fi
+        Option::None
+    }
+}
+
+impl TypeChecker {
+    fn resolve_trait_bounded_method_call
+        tc:TypeChecker
+        receiver:Type
+        method_name:str
+        op:Op
+        ops:List[Op]
+        op_index:int
+        function_opt:Option[Function]
+    -> Option[int] {
+        if function_opt Option::Some(function) is then
+            if receiver Type::TypeVar(receiver_type_var) is then
+                receiver_type_var function.stack_effect.trait_bounds.get = bound_opt
+                if bound_opt Option::Some(bound) is then
+                    op_index ops op method_name bound receiver_type_var receiver tc.apply_trait_bounded_method_call return
+                fi
+            fi
+        fi
+        Option::None
+    }
+}
 
 # ============================================================================
 # Check method call
@@ -2853,57 +2900,23 @@ impl TypeChecker {
         function_opt:Option[Function]
     -> int {
         if op.value OpValue::MethodCall(method_name) is then
-            tc.stack_peek = receiver
+            tc.stack_peek_type = receiver
 
             # Check if receiver is a trait-bounded type variable
-            if function_opt Option::Some(function) is then
-                function Function::stack_effect StackEffect::trait_bounds = bounds
-                receiver bounds.get = trait_opt
-                if trait_opt.is_some then
-                    trait_opt.unwrap = bound
-                    bound TraitBound::name = trait_name
-                    trait_name tc.store.traits.get = trait_def_opt
-                    if trait_def_opt.is_some then
-                        trait_def_opt.unwrap = trait_def
-                        # Build substitution map from trait's type_params to the
-                        # bound's concrete type_args, so that a trait method like
-                        # `next self:self -> Option[T]` with bound `I: Iterable[int]`
-                        # resolves to `next self:I -> Option[int]` at the call site.
-                        Map::new(Map[str Type]) = constraint_subs
-                        trait_def CasaTrait::type_params = constraint_params
-                        bound TraitBound::type_args = constraint_args
-                        if constraint_params.length constraint_args.length == then
-                            for pair in constraint_args.iter constraint_params.iter.zip do
-                                pair.second pair.first constraint_subs.set = constraint_subs
-                            done
-                        fi
-                        for trait_method in trait_def tc.store collect_trait_methods.iter do
-                            if method_name trait_method TraitMethod::name == then
-                                f"__trait_{receiver}_{method_name}" = hidden_var
-                                tc.stack_pop_drop
-                                constraint_subs receiver trait_method TraitMethod::stack_effect resolve_trait_stack_effect apply_type_subs_to_stack_effect = resolved_stack_effect
-                                receiver tc.stack_push
-                                f"{receiver}::{method_name}" resolved_stack_effect tc.apply_stack_effect
-                                hidden_var OpValue::PushVar op Op::set_value
-                                # Insert FN_EXEC op after the PUSH_VARIABLE
-                                op Op::location OpValue::FnExec Op::new = exec_op
-                                op_index exec_op ops.insert
-                                op_index 1 + return
-                            fi
-                        done
-                    fi
-                fi
+            function_opt op_index ops op method_name receiver tc.resolve_trait_bounded_method_call = bounded_index_opt
+            if bounded_index_opt Option::Some(bounded_index) is then
+                bounded_index return
             fi
 
             # Look up Type::method
-            f"{receiver}::{method_name}" = fn_name
+            method_name receiver.make_method_key = fn_name
             fn_name tc.store.functions.get = fn_opt
 
             # Try generic base type
             if fn_opt.is_none then
-                receiver parse_type_str.base = base_opt
-                if base_opt Option::Some(base) is then
-                    f"{base}::{method_name}" = fn_name
+                method_name receiver.make_base_method_key = base_key_opt
+                if base_key_opt Option::Some(base_key) is then
+                    base_key = fn_name
                     fn_name tc.store.functions.get = fn_opt
                 fi
             fi
@@ -2961,7 +2974,8 @@ impl TypeChecker {
             TYPE_STR_T tc.stack_push_type
             op_index return
         fi
-        if tc.diagnostics tc.store function_opt "Display" fstring_type_t type_satisfies_trait ! then
+        "Display" GenericType::new Type::Generic = display_type
+        if tc.diagnostics tc.store function_opt display_type fstring_type_t type_satisfies_trait ! then
             op Op::location f"Type `{fstring_type}` cannot be used in f-string: does not satisfy trait `Display`" ErrorKind::MissingTraitMethod tc.diagnostics.record_error
             tc.stack_pop_drop
             TYPE_STR_T tc.stack_push_type
@@ -3240,7 +3254,7 @@ impl TypeChecker {
             # Type cast
             if op_value OpValue::TypeCast(cast_type) is then
                 current_op Op::location function_opt cast_type checker.validate_type_exists
-                checker.stack_pop drop
+                checker.stack_pop_type drop
                 cast_type checker.stack_push_type
                 continue
             fi
