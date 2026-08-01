@@ -28,13 +28,21 @@ _Avoid_: Pure compiler rewrite, immutable compiler
 The explicit output of typechecking: updated symbols, checked global stack effect, and any resolved operation changes produced during typechecking.
 _Avoid_: Hidden typechecker side effects, global typechecker state
 
+**Lex result**:
+The explicit output of lexing: a structurally usable token stream plus any recoverable lexical diagnostics.
+_Avoid_: File read result, generic token pass result
+
 **Pass result**:
-An explicit compiler phase output struct used only when a phase has multiple meaningful outputs.
-_Avoid_: Wrapper struct, single-field result
+A phase-specific compiler output struct used only when a phase has multiple meaningful outputs.
+_Avoid_: Generic pass wrapper, single-field result
 
 **Compiler dependency**:
 An explicit state value returned from a compiler pass when later passes need that state, instead of passing a phase-owned object across boundaries.
 _Avoid_: Leaking parser object, omnibus context
+
+**Compiler source store**:
+The compiler dependency mapping file paths to the exact source text used by a compilation, including imported files and in-memory document overrides.
+_Avoid_: SOURCE_CACHE, diagnostics cache
 
 **Parse-and-resolve boundary**:
 The first explicit compiler boundary that keeps parser internals private while returning resolved operations and symbols needed by later phases.
@@ -45,8 +53,12 @@ The current process-global parser instance used as implicit compiler state befor
 _Avoid_: Shared compiler context, hidden parser dependency
 
 **Compiler diagnostics schema**:
-The shared representation and flow for compiler diagnostics across lexer, parser, typechecker, and later phases.
+The data-only representation and flow for compiler diagnostics across lexer, parser, typechecker, and later phases. Each phase owns recovery; callers decide whether usable output permits the next phase.
 _Avoid_: Typechecker-only diagnostics refactor, phase-local error schema
+
+**Analysis result**:
+The shared front-end compiler output containing exact compiler sources, collected diagnostics, and optional typechecked output for CLI, LSP, and tests.
+_Avoid_: CLI compile result, LSP compiler snapshot, global compiler result
 
 **Array literal**:
 A bracket-delimited list of values (`[1, 2, 3]`, `["a", "b"]`, `[[1], [2]]`, `[my_fn]`) that produces a fixed-size `array[T]`. Elements may be primitive literals, enum variants, nested array literals, function references, lambda expressions, or struct literals. When all elements are statically emittable (compile-time constants, payload-free enum ordinals, zero-capture function pointers, or recursively static nested arrays), the compiler emits the data into `.data`; otherwise the array is heap-allocated at runtime.
@@ -164,12 +176,30 @@ _Avoid_: Release lint, tag lint
 - The type unifier treats types containing **Unresolved type variables** as flexible; fully resolved types must match structurally.
 - Whether a type is "still flexible" is determined by the presence of `Type::TypeVar` nodes, not by checking whether the base name is a known enum or struct.
 - A **Functional compiler pass** may use local mutation internally, but pass boundaries should make compiler context and diagnostics explicit.
+- Within a **Functional compiler pass**, diagnostics collection belongs to the phase-owned implementation; nested helpers report through that owner instead of compiler-global state.
 - A **Pass result** should be introduced only when the compiler phase returns more than one meaningful output; single-output phases should return the value directly.
+- A **Pass result** names its phase outputs directly; a generic result abstraction requires repeated identical pass semantics that reduce caller knowledge.
+- A **Lex result** always contains tokens; file loading remains a separate fallible OS operation returning **IoError**.
 - A **Compiler dependency** should be returned as its own value only when a later boundary uses it now; unused phase-private state should stay private until needed.
+- The **Compiler source store** is separate from the **Compiler diagnostics schema**; diagnostics carry locations, while reporting adapters use the store to resolve source text.
+- CLI, LSP, and tests share one compiler-analysis seam returning an **Analysis result**; root source is explicit input, while root file I/O remains owned by the caller.
 - The **Parse-and-resolve boundary** should hide `Parser` and return only resolved operations plus symbols until parsing and identifier resolution can be split cleanly.
+- The **Parse-and-resolve boundary** returns partial output only after recovery at a known structural delimiter; ambiguous parser state produces no usable output.
 - The **Default parser** should trend toward zero use as explicit pass boundaries mature; if a slice can remove it fully, it should.
 - A **Typecheck result** may return the same **SymbolStore** reference it received, as long as mutations are represented at the pass boundary.
+- A **Typecheck result** with diagnostics may remain usable by editor adapters, but any type error prevents bytecode compilation.
+- Bytecode compilation runs only after error-free typechecking and produces either a complete program or an internal compiler failure; user-facing validation belongs in earlier phases.
 - The **Compiler diagnostics schema** should be refactored once across the compiler, not as part of the first **Typecheck result** boundary.
+- A **Functional compiler pass** may return partial output after recoverable diagnostics only when that phase guarantees the output remains usable; unrecoverable diagnostics produce no usable output.
+- Unrecoverable phase state is represented by the **Pass result**, not by a separate diagnostic severity.
+- Diagnostics produced by completed or recoverable work remain visible regardless of severity; unusable output prevents later compiler phases and therefore their diagnostics.
+- Imported-file diagnostics join the same compilation diagnostic stream at the import encounter point, preserving emission order; core diagnostics are not sorted by file or severity.
+- A failed import ends the **Parse-and-resolve boundary** with no usable output after its diagnostics are merged; import expansion and identifier resolution do not continue with incomplete symbols.
+- Recording a diagnostic does not control compiler flow; fallible phase helpers represent missing or failed values explicitly with `Option` or `Result`.
+- Diagnostics collection does not decide whether to print, exit, or run another compiler phase.
+- The **Compiler diagnostics schema** preserves emission order in one diagnostic list; error and warning variants encode severity without a separate severity field while retaining their different payload shapes.
+- CLI reporting, LSP conversion, and test inspection are adapters outside the **Compiler diagnostics schema**.
+- Diagnostics migration is complete only when compiler-global diagnostics, source, and mode state is deleted and all adapters consume explicit results; snapshot or copy bridges do not satisfy the deletion test.
 - An **Array literal**'s emission path is determined at bytecode compilation time. An element qualifies as statically emittable if it is a primitive literal, a payload-free enum variant, a zero-capture function reference, or a nested **Array literal** whose own elements are all statically emittable. `const` values and `const fn` calls are already folded to literals during parsing, so they qualify automatically.
 - Multiple uses of the same **Array literal** contents produce separate `static_array_N` labels; no deduplication is performed.
 - An **Array literal** lives in `.data` (writable), not `.rodata`. Multiple references to the same literal share the same pointer; mutation through one reference is visible to others — consistent with how string literals behave.
@@ -221,7 +251,7 @@ _Avoid_: Release lint, tag lint
 
 - "`Op.type_annotation` / `Op.deferred_return_type` as source text" was used to justify keeping parsed type metadata as strings. Resolved: user-written type expressions are **Source type syntax** only before parsing; after parsing, compiler-owned metadata should use the **Type AST**.
 - "functional programming concepts" was broad enough to imply a full immutable rewrite. Resolved: the target is **Functional compiler pass** boundaries, with local mutation still allowed inside phases.
-- "`LexResult`" was proposed as a first slice even though it would only wrap `List[Token]`. Resolved: avoid single-field **Pass result** structs; `lex_file` should keep returning tokens until lexing has multiple explicit outputs.
+- "`LexResult`" was proposed while it would only wrap `List[Token]`. Resolved: **Lex result** became justified only once recoverable lexical diagnostics were made explicit alongside tokens; file loading remains separate.
 - "`ParseResult` returning `Parser`" leaked a parser-owned object past parsing, while returning every parser field exposed unused state. Resolved: return only the **Compiler dependencies** later boundaries use now, and migrate call sites instead of keeping the old API.
 - Parse and identifier resolution both need import state today, so a standalone parse result is premature. Resolved: start with a **Parse-and-resolve boundary** that keeps import state private.
 - "`DEFAULT_PARSER`" was treated as convenient shared context. Resolved: call it the **Default parser** and remove uses as explicit pass boundaries replace hidden compiler state.
