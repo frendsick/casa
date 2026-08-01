@@ -1,16 +1,14 @@
 #!/usr/bin/env bash
 set -eu
 
+. "$(dirname "$0")/test-lib.sh"
+
 ROOT_DIR=$(git rev-parse --show-toplevel)
 
-# Formatter: env var > positional path (backward compat) > default
-if [ -n "${CASA_FORMATTER:-}" ]; then
-    FORMATTER="$CASA_FORMATTER"
-elif [ $# -ge 1 ] && echo "$1" | grep -q '/'; then
-    FORMATTER="$1"
+select_tool "${CASA_FORMATTER:-}" "$ROOT_DIR/casafmt" "${1:-}"
+FORMATTER=$TEST_TOOL
+if [ "$TEST_TOOL_ARG" = true ]; then
     shift
-else
-    FORMATTER="$ROOT_DIR/casafmt"
 fi
 
 cd "$ROOT_DIR"
@@ -26,20 +24,6 @@ has_filter=false
 if [ $# -gt 0 ]; then
     has_filter=true
 fi
-
-matches_filter() {
-    name="$1"
-    shift
-    if [ $# -eq 0 ]; then
-        return 0
-    fi
-    for pattern in "$@"; do
-        case "$name" in
-            *"$pattern"*) return 0 ;;
-        esac
-    done
-    return 1
-}
 
 # ============================================================================
 # Golden file tests
