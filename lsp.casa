@@ -102,14 +102,25 @@ StdinReader::new = STDIN_READER
 # Coordinate conversion utilities
 # ============================================================================
 
-fn offset_to_lsp_range source:str offset:int length:int -> LspRange {
+fn convert_lsp_position line:int column:int -> SourcePosition {
+    column 1 + line 1 + SourcePosition::new
+}
+
+fn convert_location_to_lsp_range sources:SourceStore location:Location -> LspRange {
+    location.span.length = length
     if 1 length < then 1 = length fi
-    offset source offset_to_line_col 1 - = start_line
-    offset source offset_to_col 1 - = start_col
-    offset length + = end_offset
-    end_offset source offset_to_line_col 1 - = end_line
-    end_offset source offset_to_col 1 - = end_col
-    end_col end_line start_col start_line LspRange
+    location.span.offset location.file sources.convert_offset_to_position = start_result
+    location.span.offset length + location.file sources.convert_offset_to_position = end_result
+    if start_result Option::Some(start_position) is then
+        if end_result Option::Some(end_position) is then
+            end_position.column 1 -
+            end_position.line 1 -
+            start_position.column 1 -
+            start_position.line 1 -
+            LspRange return
+        fi
+    fi
+    0 0 0 0 LspRange
 }
 
 fn uri_to_path uri:str -> str {
@@ -293,7 +304,6 @@ fn ingest_document uri:str source:str -> List[LspDiagnostic] {
 fn diagnostics_from result:CompileResult path:str -> List[LspDiagnostic] {
     result.analysis.diagnostics = compiler_diagnostics
     result.analysis.sources = sources
-    result.document.source = fallback_source
 
     List::new(List[LspDiagnostic]) = diagnostics
 
@@ -305,11 +315,8 @@ fn diagnostics_from result:CompileResult path:str -> List[LspDiagnostic] {
             then
                 continue
             fi
-            fallback_source = error_source
-            error CasaError::location Location::file sources.get = source_opt
-            if source_opt.is_some then
-                source_opt.unwrap = error_source
-            fi
+            error.location = location
+            if location.file sources.get.is_none then path = location.file fi
 
             # Build message
             StringBuilder::new = msg_builder
@@ -327,9 +334,7 @@ fn diagnostics_from result:CompileResult path:str -> List[LspDiagnostic] {
 
             DIAGNOSTIC_ERROR
             msg_builder.build
-            error CasaError::location Location::span Span::length
-            error CasaError::location Location::span Span::offset
-            error_source offset_to_lsp_range
+            location sources convert_location_to_lsp_range
             LspDiagnostic diagnostics.push
         elif diagnostic Diagnostic::Warning(warning) is then
             if
@@ -338,16 +343,11 @@ fn diagnostics_from result:CompileResult path:str -> List[LspDiagnostic] {
             then
                 continue
             fi
-            fallback_source = warn_source
-            warning CasaWarning::location Location::file sources.get = warn_source_opt
-            if warn_source_opt.is_some then
-                warn_source_opt.unwrap = warn_source
-            fi
+            warning.location = location
+            if location.file sources.get.is_none then path = location.file fi
             DIAGNOSTIC_WARNING
             warning CasaWarning::message
-            warning CasaWarning::location Location::span Span::length
-            warning CasaWarning::location Location::span Span::offset
-            warn_source offset_to_lsp_range
+            location sources convert_location_to_lsp_range
             LspDiagnostic diagnostics.push
         fi
     done
@@ -367,8 +367,10 @@ fn publish_diagnostics uri:str diagnostics:List[LspDiagnostic] {
     params "textDocument/publishDiagnostics" send_notification
 }
 
-fn convert_document_location_to_lsp location:DocumentLocation -> LspLocation {
-    location.length location.offset location.source offset_to_lsp_range
+fn convert_document_location_to_lsp sources:SourceStore location:DocumentLocation -> LspLocation {
+    location.length location.offset location.file Location::new
+    sources
+    convert_location_to_lsp_range
     location.file path_to_uri
     LspLocation
 }
@@ -492,8 +494,9 @@ fn handle_did_save message:JsonValue {
 # ============================================================================
 
 fn compute_definition state:AnalyzedDocument line:int column:int -> Option[LspLocation] {
-    if column line state.find_definition_at Option::Some(location) is then
-        location convert_document_location_to_lsp Option::Some
+    column line convert_lsp_position = position
+    if position state.find_definition_at Option::Some(location) is then
+        location state.sources convert_document_location_to_lsp Option::Some
     else
         Option::None(Option[LspLocation])
     fi
@@ -527,14 +530,15 @@ fn handle_definition message:JsonValue {
 # Hover handler
 # ============================================================================
 
-fn convert_document_hover_to_lsp hover:DocumentHover -> HoverContent {
-    hover.location convert_document_location_to_lsp = location
+fn convert_document_hover_to_lsp sources:SourceStore hover:DocumentHover -> HoverContent {
+    hover.location sources convert_document_location_to_lsp = location
     location.range f"```casa\n{hover.content}\n```" HoverContent
 }
 
 fn compute_hover state:AnalyzedDocument line:int column:int -> Option[HoverContent] {
-    if column line state.find_hover_at Option::Some(hover) is then
-        hover convert_document_hover_to_lsp Option::Some
+    column line convert_lsp_position = position
+    if position state.find_hover_at Option::Some(hover) is then
+        hover state.sources convert_document_hover_to_lsp Option::Some
     else
         Option::None(Option[HoverContent])
     fi
@@ -621,7 +625,8 @@ fn compute_completion
     trigger:str
 -> List[CompletionItem] {
     List::new(List[CompletionItem]) = items
-    trigger column line state.find_completion_candidates = candidates
+    column line convert_lsp_position = position
+    trigger position state.find_completion_candidates = candidates
     for candidate in candidates.iter do
         candidate format_completion_candidate items.push
     done
@@ -685,10 +690,11 @@ fn compute_references
     column:int
     include_declaration:bool
 -> Option[List[LspLocation]] {
-    if include_declaration column line state.find_references_at Option::Some(document_references) is then
+    column line convert_lsp_position = position
+    if include_declaration position state.find_references_at Option::Some(document_references) is then
         List::new(List[LspLocation]) = references
         for document_reference in document_references.iter do
-            document_reference convert_document_location_to_lsp references.push
+            document_reference state.sources convert_document_location_to_lsp references.push
         done
         references Option::Some return
     fi
@@ -747,10 +753,11 @@ fn compute_rename
     column:int
     new_name:str
 -> Option[Map[str List[TextEdit]]] {
-    if true column line state.find_references_at Option::Some(document_references) is then
+    column line convert_lsp_position = position
+    if true position state.find_references_at Option::Some(document_references) is then
         Map::new(Map[str List[TextEdit]]) = edits_map
         for document_reference in document_references.iter do
-            document_reference convert_document_location_to_lsp = reference_location
+            document_reference state.sources convert_document_location_to_lsp = reference_location
             reference_location.uri = reference_uri
             reference_location.range = edit_range
 
@@ -843,13 +850,12 @@ fn compute_semantic_tokens state:AnalyzedDocument -> List[SemanticToken] {
     List::new(List[SemanticToken]) = tokens
     for document_token in state.find_semantic_tokens.iter do
         document_token.location = location
-        location.offset location.source offset_to_line_col 1 - = line
-        location.offset location.source offset_to_col 1 - = column
+        location state.sources convert_document_location_to_lsp.range = range
         0
         document_token.kind map_document_token_type
         location.length
-        column
-        line
+        range.start_col
+        range.start_line
         SemanticToken tokens.push
     done
     tokens
