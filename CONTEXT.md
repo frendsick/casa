@@ -28,6 +28,10 @@ _Avoid_: Pure compiler rewrite, immutable compiler
 The explicit output of typechecking: updated symbols, checked global stack effect, and any resolved operation changes produced during typechecking.
 _Avoid_: Hidden typechecker side effects, global typechecker state
 
+**Operation semantics**:
+The phase-independent meaning of a resolved operation: its typed-stack transition, canonical rewrite or dispatch target, and declaration, type, or trait dependencies.
+_Avoid_: Typechecker-only operation meaning, selective-import simulation
+
 **Lex result**:
 The explicit output of lexing: a structurally usable token stream plus any recoverable lexical diagnostics.
 _Avoid_: File read result, generic token pass result
@@ -187,6 +191,7 @@ _Avoid_: Release lint, tag lint
 - The **Parse-and-resolve boundary** returns partial output only after recovery at a known structural delimiter; ambiguous parser state produces no usable output.
 - The **Default parser** should trend toward zero use as explicit pass boundaries mature; if a slice can remove it fully, it should.
 - A **Typecheck result** may return the same **SymbolStore** reference it received, as long as mutations are represented at the pass boundary.
+- **Operation semantics** are computed once below the **Parse-and-resolve boundary** and typechecking; each phase consumes data-only facts while keeping its mutable state private.
 - A **Typecheck result** with diagnostics may remain usable by editor adapters, but any type error prevents bytecode compilation.
 - Bytecode compilation runs only after error-free typechecking and produces either a complete program or an internal compiler failure; user-facing validation belongs in earlier phases.
 - The **Compiler diagnostics schema** should be refactored once across the compiler, not as part of the first **Typecheck result** boundary.
