@@ -90,11 +90,6 @@ const TOKEN_TYPE 6
 const TOKEN_ENUM_MEMBER 7
 const TOKEN_STRUCT 8
 const TOKEN_MACRO 9
-# Reference collector types
-const COLLECTOR_FN 0
-const COLLECTOR_VAR 1
-const COLLECTOR_STRUCT 2
-const COLLECTOR_ENUM 3
 List::new(List[str]) = LSP_LIBRARY_PATHS
 
 # ============================================================================
@@ -389,19 +384,6 @@ fn function_short_name name:str -> str {
     else
         name separator 2 + name.length separator - 2 - str::substring
     fi
-}
-
-fn casa_location_to_lsp location:Location sources:SourceStore -> LspLocation {
-    "" = location_source
-    location Location::file sources.sources.get = source_opt
-    if source_opt.is_some then
-        source_opt.unwrap = location_source
-    fi
-    location Location::span Span::length
-    location Location::span Span::offset
-    location_source offset_to_lsp_range
-    location Location::file path_to_uri
-    LspLocation
 }
 
 fn convert_document_location_to_lsp location:DocumentLocation -> LspLocation {
@@ -959,176 +941,8 @@ fn handle_completion message:JsonValue {
 }
 
 # ============================================================================
-# Find references helpers
-# ============================================================================
-
-fn collect_function_references ops:List[Op] name:str results:List[LspLocation] sources:SourceStore {
-    for op in ops.iter do
-        if op.value OpValue::FnCall is ! op.value OpValue::FnPush is ! && then
-            continue
-        fi
-        if op op_str_value name != then
-            continue
-        fi
-        sources op Op::location casa_location_to_lsp results.push
-    done
-}
-
-fn is_var_op op:Op -> bool {
-    op.value = op_value
-    op_value OpValue::PushVar is
-    op_value OpValue::PushCapture is ||
-    op_value OpValue::AssignVar is ||
-    op_value OpValue::AssignInc is ||
-    op_value OpValue::AssignDec is ||
-}
-
-fn collect_variable_references ops:List[Op] name:str results:List[LspLocation] sources:SourceStore {
-    for op in ops.iter do
-        if op is_var_op ! then
-            continue
-        fi
-        if op op_str_value name != then
-            continue
-        fi
-        sources op Op::location casa_location_to_lsp results.push
-    done
-}
-
-fn collect_struct_references ops:List[Op] name:str results:List[LspLocation] sources:SourceStore {
-    for op in ops.iter do
-        if op.value OpValue::StructNew(casa_struct) is then
-            if casa_struct CasaStruct::name name == then
-                sources op Op::location casa_location_to_lsp results.push
-            fi
-        elif op.value OpValue::TypeCast(cast_type) is then
-            if cast_type.format name == then
-                sources op Op::location casa_location_to_lsp results.push
-            fi
-        fi
-    done
-}
-
-fn collect_enum_references
-    ops:List[Op]
-    enum_name:str
-    results:List[LspLocation]
-    sources:SourceStore
-{
-    for op in ops.iter do
-        if op.value OpValue::PushEnumVariant(variant) is then
-            if variant EnumVariant::enum_name enum_name == then
-                sources op Op::location casa_location_to_lsp results.push
-            fi
-        fi
-    done
-}
-
-fn collect_refs_in_all_functions
-    state:AnalyzedDocument
-    collector_kind:int
-    name:str
-    results:List[LspLocation]
-{
-    state.functions.keys = fn_keys
-    for fn_name in fn_keys.iter do
-        fn_name state.functions.get.unwrap = func
-        if COLLECTOR_FN collector_kind == then
-            state.sources results name func Function::ops collect_function_references
-        elif COLLECTOR_VAR collector_kind == then
-            state.sources results name func Function::ops collect_variable_references
-        elif COLLECTOR_STRUCT collector_kind == then
-            state.sources results name func Function::ops collect_struct_references
-        elif COLLECTOR_ENUM collector_kind == then
-            state.sources results name func Function::ops collect_enum_references
-        fi
-    done
-}
-
-fn is_local_variable name:str func:Option[Function] -> bool {
-    if func.is_none then false return fi
-    func.unwrap = resolved_func
-    for variable in resolved_func Function::variables.iter do
-        if variable Variable::name name == then
-            true return
-        fi
-    done
-    false
-}
-
-# ============================================================================
 # Find references handler
 # ============================================================================
-
-fn find_all_references
-    state:AnalyzedDocument
-    op:Op
-    func:Option[Function]
-    include_declaration:bool
--> List[LspLocation] {
-    List::new(List[LspLocation]) = results
-    op.value = op_value
-
-    # Function call/push
-    if op_value OpValue::FnCall is op_value OpValue::FnPush is || then
-        op op_str_value = fn_name
-        if include_declaration then
-            fn_name state.functions.get = fn_opt
-            if fn_opt Option::Some(fn_def) is then
-                if "" fn_def Function::location Location::file != then
-                    state.sources fn_def Function::location casa_location_to_lsp results.push
-                fi
-            fi
-        fi
-        state.sources results fn_name state.ops collect_function_references
-        results fn_name COLLECTOR_FN state collect_refs_in_all_functions
-        results
-        return
-    fi
-
-    # Variables
-    if op is_var_op then
-        op op_str_value = var_name
-        if func var_name is_local_variable then
-            if func Option::Some(local_func) is then
-                state.sources results var_name local_func Function::ops collect_variable_references
-            fi
-        else
-            state.sources results var_name state.ops collect_variable_references
-            results var_name COLLECTOR_VAR state collect_refs_in_all_functions
-        fi
-        results
-        return
-    fi
-
-    # Struct
-    if op_value OpValue::StructNew(casa_struct) is then
-        casa_struct CasaStruct::name = struct_name
-        if include_declaration then
-            state.sources casa_struct CasaStruct::location casa_location_to_lsp results.push
-        fi
-        state.sources results struct_name state.ops collect_struct_references
-        results struct_name COLLECTOR_STRUCT state collect_refs_in_all_functions
-        results
-        return
-    fi
-
-    # Enum variant
-    if op_value OpValue::PushEnumVariant(variant) is then
-        variant EnumVariant::enum_name = enum_name
-        if include_declaration then
-            if enum_name state.enums.get Option::Some(casa_enum) is then
-                state.sources casa_enum CasaEnum::location casa_location_to_lsp results.push
-            fi
-        fi
-        state.sources results enum_name state.ops collect_enum_references
-        results enum_name COLLECTOR_ENUM state collect_refs_in_all_functions
-        results
-        return
-    fi
-
-    results
-}
 
 fn compute_references
     state:AnalyzedDocument
@@ -1136,28 +950,14 @@ fn compute_references
     column:int
     include_declaration:bool
 -> Option[List[LspLocation]] {
-    # Check function definition name first (parameter ops share the name token location)
-    column line state.find_function_at = fn_at_pos
-    Option::None(Option[Function]) = func
-    empty_location OpValue::FnExec Op::new = op
-    if fn_at_pos Option::Some(matched_function) is then
-        matched_function Function::location matched_function Function::name OpValue::FnCall Op::new = op
-    else
-        if column line state.find_symbol_at Option::Some(found) is then
-            found.op = op
-            found.containing_function = func
-        else
-            Option::None(Option[List[LspLocation]])
-            return
-        fi
+    if include_declaration column line state.find_references_at Option::Some(document_references) is then
+        List::new(List[LspLocation]) = references
+        for document_reference in document_references.iter do
+            document_reference convert_document_location_to_lsp references.push
+        done
+        references Option::Some return
     fi
-
-    include_declaration func op state find_all_references = refs
-    if 0 refs.length == then
-        Option::None(Option[List[LspLocation]])
-        return
-    fi
-    refs Option::Some
+    Option::None(Option[List[LspLocation]])
 }
 
 fn handle_references message:JsonValue {
@@ -1212,60 +1012,26 @@ fn compute_rename
     column:int
     new_name:str
 -> Option[Map[str List[TextEdit]]] {
-    # Check function definition name first (parameter ops share the name token location)
-    column line state.find_function_at = fn_at_pos
-    Option::None(Option[Function]) = func
-    empty_location OpValue::FnExec Op::new = op
-    "" = old_name
-    if fn_at_pos Option::Some(matched_function) is then
-        matched_function Function::location matched_function Function::name OpValue::FnCall Op::new = op
-        matched_function Function::name function_short_name = old_name
-    else
-        if column line state.find_symbol_at Option::Some(found) is then
-            found.op = op
-            found.containing_function = func
-            op op_str_value = old_name
-        else
-            Option::None(Option[Map[str List[TextEdit]]])
-            return
-        fi
+    if true column line state.find_references_at Option::Some(document_references) is then
+        Map::new(Map[str List[TextEdit]]) = edits_map
+        for document_reference in document_references.iter do
+            document_reference convert_document_location_to_lsp = reference_location
+            reference_location.uri = reference_uri
+            reference_location.range = edit_range
+
+            new_name edit_range TextEdit = edit
+            reference_uri edits_map.get = existing_edits
+            if existing_edits Option::Some(edits) is then
+                edit edits.push
+            else
+                List::new(List[TextEdit]) = document_edits
+                edit document_edits.push
+                document_edits reference_uri edits_map.set = edits_map
+            fi
+        done
+        edits_map Option::Some return
     fi
-
-    true func op state find_all_references = refs
-    if 0 refs.length == then
-        Option::None(Option[Map[str List[TextEdit]]])
-        return
-    fi
-
-    # Build workspace edit: group edits by URI
-    Map::new(Map[str List[TextEdit]]) = edits_map
-    for ref_loc in refs.iter do
-        ref_loc LspLocation::uri = ref_uri
-        ref_loc LspLocation::range = edit_range
-
-        # Adjust range for assignment operators (= / += / -=)
-        old_name.length = name_length
-        edit_range LspRange::end_col edit_range LspRange::start_col - = span_length
-        if span_length name_length < then
-            edit_range LspRange::end_col
-            edit_range LspRange::end_line
-            edit_range LspRange::end_col name_length -
-            edit_range LspRange::end_line
-            LspRange = edit_range
-        fi
-
-        new_name edit_range TextEdit = edit_item
-        ref_uri edits_map.get = existing_opt
-        if existing_opt Option::Some(existing) is then
-            edit_item existing.push
-        else
-            List::new(List[TextEdit]) = new_list
-            edit_item new_list.push
-            new_list ref_uri edits_map.set = edits_map
-        fi
-    done
-
-    edits_map Option::Some
+    Option::None(Option[Map[str List[TextEdit]]])
 }
 
 fn handle_rename message:JsonValue {
