@@ -2,6 +2,7 @@
 import "std"
 import "common"
 import "error"
+import "operation_semantics"
 
 enum SelectiveImportDeclaration {
     Function (Function)
@@ -35,33 +36,6 @@ enum SelectiveImportBranchKind {
 impl StackEffect {
     fn needs_inference self:StackEffect -> bool {
         0 self.parameters.length == 0 self.return_types.length == &&
-    }
-}
-
-impl GenericType {
-    fn bind_arguments self:GenericType actual:Type bindings:Map[str Type] -> Map[str Type] {
-        if actual Type::Generic(actual_generic) is then
-            if self.base actual_generic.base == then
-                for pair in actual_generic.params.iter self.params.iter.zip do
-                    bindings pair.second pair.first bind_type_arguments = bindings
-                done
-            fi
-        fi
-        bindings
-    }
-}
-
-impl FunctionType {
-    fn bind_arguments self:FunctionType actual:Type bindings:Map[str Type] -> Map[str Type] {
-        if actual Type::Function(actual_function) is then
-            for pair in actual_function.parameters.iter self.parameters.iter.zip do
-                bindings pair.second pair.first bind_type_arguments = bindings
-            done
-            for pair in actual_function.return_types.iter self.return_types.iter.zip do
-                bindings pair.second pair.first bind_type_arguments = bindings
-            done
-        fi
-        bindings
     }
 }
 
@@ -132,24 +106,6 @@ impl SelectiveImportTypeStack {
     }
 }
 
-fn bind_type_arguments expected:Type actual:Type bindings:Map[str Type] -> Map[str Type] {
-    expected match
-        Type::TypeVar(type_variable) => {
-            if type_variable bindings.has ! then
-                actual type_variable bindings.set = bindings
-            fi
-            bindings
-        }
-        Type::Generic(expected_generic) => {
-            bindings actual expected_generic.bind_arguments
-        }
-        Type::Function(expected_function) => {
-            bindings actual expected_function.bind_arguments
-        }
-        _ => bindings
-    end
-}
-
 impl SelectiveImportTypeStack {
     fn apply_effect_with_bindings
         self:SelectiveImportTypeStack
@@ -161,7 +117,7 @@ impl SelectiveImportTypeStack {
                 continue
             fi
             if self.pop Option::Some(actual_type) is then
-                bindings actual_type parameter.typ bind_type_arguments = bindings
+                bindings actual_type parameter.typ bind_semantic_type_arguments = bindings
             fi
         done
         for return_type in effect.return_types.iter do
@@ -170,21 +126,9 @@ impl SelectiveImportTypeStack {
         bindings
     }
 
-    fn apply_effect self:SelectiveImportTypeStack effect:StackEffect {
-        effect self.apply_effect_with_bindings drop
-    }
-
     fn apply_result self:SelectiveImportTypeStack consumed:int result_type:Type {
         consumed self.drop_count
         result_type self.push
-    }
-
-    fn apply_function_pointer self:SelectiveImportTypeStack {
-        if self.pop Option::Some(function_pointer_type) is then
-            if function_pointer_type Type::Function(function_type) is then
-                function_type function_type_to_stack_effect self.apply_effect
-            fi
-        fi
     }
 
     fn clone_variables self:SelectiveImportTypeStack -> Map[str Type] {
@@ -527,226 +471,6 @@ impl SelectiveImportClosureBuilder {
         Option::None(Option[StackEffect])
     }
 
-    fn find_method_function_name
-        self:SelectiveImportClosureBuilder
-        receiver:Type
-        method_name:str
-    -> Option[str] {
-        f"{receiver.format}::{method_name}" = function_name
-        if function_name self.store.functions.has then
-            function_name Option::Some return
-        fi
-        if receiver.base Option::Some(base_name) is then
-            f"{base_name}::{method_name}" = function_name
-            if function_name self.store.functions.has then
-                function_name Option::Some return
-            fi
-        fi
-        Option::None(Option[str])
-    }
-
-    fn find_trait_method
-        self:SelectiveImportClosureBuilder
-        casa_trait:CasaTrait
-        method_name:str
-    -> Option[TraitMethod] {
-        for method in casa_trait.methods.iter do
-            if method.name method_name == then
-                method Option::Some return
-            fi
-        done
-        for supertrait in casa_trait.supertraits.iter do
-            if supertrait.name self.store.traits.get Option::Some(supertrait_def) is then
-                method_name supertrait_def self.find_trait_method = method_result
-                if method_result.is_some then
-                    method_result return
-                fi
-            fi
-        done
-        Option::None(Option[TraitMethod])
-    }
-
-    fn type_satisfies_trait
-        self:SelectiveImportClosureBuilder
-        receiver:Type
-        casa_trait:CasaTrait
-    -> bool {
-        for method in casa_trait.methods.iter do
-            if
-            0 method.default_ops.length ==
-            method.name receiver self.find_method_function_name.is_none &&
-            then
-                false return
-            fi
-        done
-        for supertrait in casa_trait.supertraits.iter do
-            if supertrait.name self.store.traits.get Option::Some(supertrait_def) is then
-                if supertrait_def receiver self.type_satisfies_trait ! then
-                    false return
-                fi
-            else
-                false return
-            fi
-        done
-        true
-    }
-
-    fn collect_trait_implementations
-        self:SelectiveImportClosureBuilder
-        receiver:Type
-        casa_trait:CasaTrait
-    {
-        for method in casa_trait.methods.iter do
-            if 0 method.default_ops.length == then
-                if
-                method.name receiver self.find_method_function_name
-                Option::Some(function_name)
-                is
-                then
-                    function_name self.collect_symbol
-                fi
-            fi
-        done
-        for supertrait in casa_trait.supertraits.iter do
-            if supertrait.name self.store.traits.get Option::Some(supertrait_def) is then
-                supertrait_def receiver self.collect_trait_implementations
-            fi
-        done
-    }
-
-    fn infer_trait_substitutions
-        self:SelectiveImportClosureBuilder
-        receiver:Type
-        casa_trait:CasaTrait
-    -> Map[str Type] {
-        Map::new(Map[str Type]) = substitutions
-        for trait_method in casa_trait.methods.iter do
-            if 0 trait_method.default_ops.length == then
-                substitutions trait_method receiver
-                self.infer_trait_method_substitutions = substitutions
-            fi
-        done
-        substitutions
-    }
-
-    fn infer_trait_method_substitutions
-        self:SelectiveImportClosureBuilder
-        receiver:Type
-        trait_method:TraitMethod
-        substitutions:Map[str Type]
-    -> Map[str Type] {
-        trait_method.name receiver self.find_method_function_name = function_name_result
-        if function_name_result Option::Some(function_name) is then
-            if function_name self.store.functions.get Option::Some(function) is then
-                receiver trait_method.stack_effect resolve_trait_stack_effect = expected_effect
-                for pair in
-                function.stack_effect.return_types.iter
-                expected_effect.return_types.iter.zip
-                do
-                    substitutions pair.second pair.first bind_type_arguments = substitutions
-                done
-            fi
-        fi
-        substitutions
-    }
-
-    fn make_trait_bound_substitutions
-        self:SelectiveImportClosureBuilder
-        bound:TraitBound
-        casa_trait:CasaTrait
-    -> Map[str Type] {
-        Map::new(Map[str Type]) = substitutions
-        if bound.type_args.length casa_trait.type_params.length == then
-            for pair in bound.type_args.iter casa_trait.type_params.iter.zip do
-                pair.second pair.first substitutions.set = substitutions
-            done
-        fi
-        substitutions
-    }
-
-    fn collect_default_method_dependency
-        self:SelectiveImportClosureBuilder
-        receiver:Type
-        method_name:str
-    -> Option[StackEffect] {
-        for trait_name in self.store.traits.keys.iter do
-            trait_name self.store.traits.get.unwrap = casa_trait
-            method_name casa_trait self.find_trait_method = method_result
-            if method_result Option::Some(method) is then
-                if
-                0 method.default_ops.length !=
-                casa_trait receiver self.type_satisfies_trait &&
-                then
-                    trait_name self.collect_symbol
-                    casa_trait receiver self.collect_trait_implementations
-                    casa_trait receiver self.infer_trait_substitutions = substitutions
-                    receiver method.stack_effect resolve_trait_stack_effect = resolved_effect
-                    substitutions resolved_effect apply_type_subs_to_stack_effect
-                    Option::Some return
-                fi
-            fi
-        done
-        Option::None(Option[StackEffect])
-    }
-
-    fn collect_bound_method_dependency
-        self:SelectiveImportClosureBuilder
-        bound:TraitBound
-        receiver:Type
-        method_name:str
-    -> Option[StackEffect] {
-        if bound.name self.store.traits.get Option::Some(casa_trait) is then
-            if method_name casa_trait self.find_trait_method Option::Some(method) is then
-                bound.name self.collect_symbol
-                casa_trait bound self.make_trait_bound_substitutions = substitutions
-                receiver method.stack_effect resolve_trait_stack_effect = resolved_effect
-                substitutions resolved_effect apply_type_subs_to_stack_effect Option::Some return
-            fi
-        fi
-        Option::None(Option[StackEffect])
-    }
-
-    fn collect_method_dependency
-        self:SelectiveImportClosureBuilder
-        function:Function
-        receiver_type:Option[Type]
-        method_name:str
-    -> Option[StackEffect] {
-        if receiver_type Option::Some(receiver) is then
-            if receiver Type::TypeVar(type_variable) is then
-                if type_variable function.stack_effect.trait_bounds.get Option::Some(bound) is then
-                    method_name receiver bound self.collect_bound_method_dependency return
-                fi
-                Option::None(Option[StackEffect]) return
-            fi
-            if
-            method_name receiver self.find_method_function_name
-            Option::Some(function_name)
-            is
-            then
-                function_name self.collect_symbol
-                function_name self.get_function_effect return
-            fi
-            method_name receiver self.collect_default_method_dependency return
-        fi
-
-        f"::{method_name}" = method_suffix
-        Option::None(Option[str]) = candidate
-        for function_name in self.store.functions.keys.iter do
-            if function_name method_suffix str::ends_with then
-                if candidate.is_some then
-                    Option::None(Option[StackEffect]) return
-                fi
-                function_name Option::Some = candidate
-            fi
-        done
-        if candidate Option::Some(function_name) is then
-            function_name self.collect_symbol
-            function_name self.get_function_effect return
-        fi
-        Option::None(Option[StackEffect])
-    }
-
     fn collect_operation_dependencies self:SelectiveImportClosureBuilder function:Function op:Op {
         if op.type_hint Option::Some(type_hint) is then
             type_hint self.collect_type
@@ -756,9 +480,6 @@ impl SelectiveImportClosureBuilder {
         fi
 
         op.value = operation
-        if operation OpValue::FnCall is operation OpValue::FnPush is || then
-            op op_str_value self.collect_symbol
-        fi
         if operation OpValue::DeclareGlobal(global_name) is then
             true op.location global_name function self.record_global_dependency
         elif
@@ -784,109 +505,6 @@ impl SelectiveImportClosureBuilder {
         end
     }
 
-    fn collect_print_dependency
-        self:SelectiveImportClosureBuilder
-        function:Function
-        receiver_type:Option[Type]
-    {
-        if receiver_type Option::Some(receiver) is then
-            receiver match
-                Type::Generic(_) => true
-                Type::TypeVar(_) => true
-                _ => false
-            end = needs_display_method
-            if needs_display_method then
-                if "Display" self.store.traits.has then
-                    "Display" self.collect_symbol
-                fi
-                "to_str" receiver_type function self.collect_method_dependency drop
-            fi
-        fi
-    }
-
-    fn collect_fstring_dependency
-        self:SelectiveImportClosureBuilder
-        function:Function
-        receiver_type:Option[Type]
-    {
-        if receiver_type Option::Some(receiver) is then
-            if TYPE_STR_T receiver.eq ! then
-                if "Display" self.store.traits.has then
-                    "Display" self.collect_symbol
-                fi
-                "to_str" receiver_type function self.collect_method_dependency drop
-            fi
-        fi
-    }
-
-    fn comparison_method_name self:SelectiveImportClosureBuilder operation:OpValue -> str {
-        operation match
-            OpValue::Eq => "eq"
-            OpValue::Ne => "ne"
-            OpValue::Lt => "lt"
-            OpValue::Le => "le"
-            OpValue::Gt => "gt"
-            _ => "ge"
-        end
-    }
-
-    fn comparison_trait_name self:SelectiveImportClosureBuilder operation:OpValue -> str {
-        operation match
-            OpValue::Eq => "Eq"
-            OpValue::Ne => "Eq"
-            _ => "Ord"
-        end
-    }
-
-    fn collect_comparison_method
-        self:SelectiveImportClosureBuilder
-        function:Function
-        receiver_type:Option[Type]
-        operation:OpValue
-    {
-        operation self.comparison_trait_name = trait_name
-        if trait_name self.store.traits.has then
-            trait_name self.collect_symbol
-        fi
-        operation self.comparison_method_name
-        receiver_type
-        function
-        self.collect_method_dependency
-        drop
-    }
-
-    fn collect_comparison_dependency
-        self:SelectiveImportClosureBuilder
-        function:Function
-        receiver_type:Option[Type]
-        operation:OpValue
-    {
-        if receiver_type Option::Some(receiver) is then
-            if receiver Type::TypeVar(_) is then
-                operation receiver_type function self.collect_comparison_method
-                return
-            fi
-            if receiver Type::Generic(generic) is then
-                if generic.base self.store.structs.has then
-                    operation receiver_type function self.collect_comparison_method
-                fi
-            fi
-        fi
-    }
-
-    fn syscall_argument_count self:SelectiveImportClosureBuilder operation:OpValue -> Option[int] {
-        operation match
-            OpValue::Syscall0 => 0 Option::Some
-            OpValue::Syscall1 => 1 Option::Some
-            OpValue::Syscall2 => 2 Option::Some
-            OpValue::Syscall3 => 3 Option::Some
-            OpValue::Syscall4 => 4 Option::Some
-            OpValue::Syscall5 => 5 Option::Some
-            OpValue::Syscall6 => 6 Option::Some
-            _ => Option::None(Option[int])
-        end
-    }
-
     fn construct_struct_type
         self:SelectiveImportClosureBuilder
         stack:SelectiveImportTypeStack
@@ -895,7 +513,7 @@ impl SelectiveImportClosureBuilder {
         Map::new(Map[str Type]) = bindings
         for member in casa_struct.members.iter do
             if stack.pop Option::Some(actual_type) is then
-                bindings actual_type member.typ bind_type_arguments = bindings
+                bindings actual_type member.typ bind_semantic_type_arguments = bindings
             fi
         done
         bindings casa_struct.type_vars casa_struct.name build_resolved_type
@@ -932,7 +550,7 @@ impl SelectiveImportClosureBuilder {
         for member in casa_struct.members.iter do
             if field_name member.name == then
                 if actual_type_result Option::Some(actual_type) is then
-                    bindings actual_type member.typ bind_type_arguments = bindings
+                    bindings actual_type member.typ bind_semantic_type_arguments = bindings
                 fi
                 break
             fi
@@ -948,7 +566,7 @@ impl SelectiveImportClosureBuilder {
         Map::new(Map[str Type]) = bindings
         for expected_type in expected_types.iter do
             if stack.pop Option::Some(actual_type) is then
-                bindings actual_type expected_type bind_type_arguments = bindings
+                bindings actual_type expected_type bind_semantic_type_arguments = bindings
             fi
         done
         bindings
@@ -1082,89 +700,61 @@ impl SelectiveImportClosureBuilder {
         end
     }
 
-    fn collect_function_bound_implementations
+    fn collect_semantic_dependencies
         self:SelectiveImportClosureBuilder
-        function:Function
-        bindings:Map[str Type]
+        semantics:OperationSemanticsResult
     {
-        for type_variable in function.stack_effect.trait_bounds.keys.iter do
-            if type_variable bindings.get Option::Some(receiver) is then
-                type_variable function.stack_effect.trait_bounds.get.unwrap = bound
-                if bound.name self.store.traits.get Option::Some(casa_trait) is then
-                    casa_trait receiver self.collect_trait_implementations
-                fi
-            fi
+        for dependency in semantics.dependencies.iter do
+            dependency self.collect_symbol
         done
     }
 
-    fn apply_function_call
+    fn collect_bound_semantics
         self:SelectiveImportClosureBuilder
-        stack:SelectiveImportTypeStack
-        function_name:str
-    {
-        if function_name self.get_function_effect Option::Some(effect) is then
-            effect stack.apply_effect_with_bindings = bindings
-            if function_name self.store.functions.get Option::Some(function) is then
-                bindings function self.collect_function_bound_implementations
-            fi
-        fi
-    }
-
-    fn apply_method_call
-        self:SelectiveImportClosureBuilder
-        stack:SelectiveImportTypeStack
-        function:Function
-        receiver_type:Option[Type]
-        method_name:str
-    {
-        method_name receiver_type function self.collect_method_dependency = effect_result
-        if effect_result Option::Some(effect) is then
-            effect stack.apply_effect_with_bindings = bindings
-            if receiver_type Option::Some(receiver) is then
-                bindings method_name receiver self.collect_method_bound_implementations
-            fi
-        fi
-    }
-
-    fn apply_trait_method_call
-        self:SelectiveImportClosureBuilder
-        stack:SelectiveImportTypeStack
-        function:Function
-        hidden_name:str
-    {
-        "__trait_" = hidden_prefix
-        hidden_name hidden_prefix.length hidden_name.length hidden_prefix.length - str::substring
-        = trait_suffix
-        trait_suffix "_" str::find = separator
-        if separator 0 >= then
-            return
-        fi
-        trait_suffix 0 separator str::substring = type_variable
-        trait_suffix separator 1 + trait_suffix.length separator - 1 - str::substring = method_name
-        if type_variable function.stack_effect.trait_bounds.get Option::Some(bound) is then
-            method_name type_variable Type::TypeVar bound
-            self.collect_bound_method_dependency = effect_result
-            if effect_result Option::Some(effect) is then
-                effect stack.apply_effect
-            fi
-        fi
-    }
-
-    fn collect_method_bound_implementations
-        self:SelectiveImportClosureBuilder
-        receiver:Type
-        method_name:str
+        effect:StackEffect
         bindings:Map[str Type]
     {
-        if
-        method_name receiver self.find_method_function_name
-        Option::Some(function_name)
-        is
-        then
-            if function_name self.store.functions.get Option::Some(method_function) is then
-                bindings method_function self.collect_function_bound_implementations
+        self.store bindings effect collect_bound_semantic_dependencies = dependencies
+        for dependency in dependencies.iter do
+            dependency self.collect_symbol
+        done
+    }
+
+    fn apply_shared_operation_semantics
+        self:SelectiveImportClosureBuilder
+        stack:SelectiveImportTypeStack
+        function:Function
+        operation:OpValue
+    -> bool {
+        stack.peek = receiver
+        self.store function Option::Some receiver operation analyze_operation_semantics = semantics
+        semantics self.collect_semantic_dependencies
+        if semantics.stack_effect Option::None is then false return fi
+        semantics.stack_effect.unwrap = effect
+
+        if operation OpValue::FnCall(function_name) is then
+            if function_name self.get_function_effect Option::Some(inferred_effect) is then
+                inferred_effect = effect
+            fi
+        elif operation OpValue::FnPush(function_name) is then
+            if function_name self.get_function_effect Option::Some(inferred_effect) is then
+                inferred_effect make_function_reference_stack_effect = effect
+            fi
+        elif semantics.method Option::Some(method) is then
+            if method.kind MethodSemanticsKind::Function is then
+                method.function_name self.get_function_effect = inferred_effect_opt
+                if inferred_effect_opt Option::Some(inferred_effect) is then
+                    inferred_effect = effect
+                fi
             fi
         fi
+
+        if operation OpValue::FnExec is then
+            stack.pop drop
+        fi
+        effect stack.apply_effect_with_bindings = bindings
+        bindings effect self.collect_bound_semantics
+        true
     }
 
     fn update_type_stack
@@ -1174,71 +764,11 @@ impl SelectiveImportClosureBuilder {
         stack:SelectiveImportTypeStack
     {
         op.value = operation
-        if
-        operation OpValue::Mul is
-        operation OpValue::Div is ||
-        operation OpValue::Mod is ||
-        operation OpValue::BitAnd is ||
-        operation OpValue::BitOr is ||
-        operation OpValue::BitXor is ||
-        then
-            TYPE_INT_T 2 stack.apply_result
-            return
-        fi
-        if
-        operation OpValue::Add is
-        operation OpValue::Sub is ||
-        operation OpValue::Shl is ||
-        operation OpValue::Shr is ||
-        then
-            stack.pop drop
-            if stack.pop Option::Some(left_type) is then
-                left_type stack.push
-            fi
-            return
-        fi
-        if
-        operation OpValue::And is
-        operation OpValue::Or is ||
-        then
-            TYPE_BOOL_T 2 stack.apply_result
-            return
-        fi
-        if
-        operation OpValue::Eq is
-        operation OpValue::Ge is ||
-        operation OpValue::Gt is ||
-        operation OpValue::Le is ||
-        operation OpValue::Lt is ||
-        operation OpValue::Ne is ||
-        then
-            operation stack.peek function self.collect_comparison_dependency
-            TYPE_BOOL_T 2 stack.apply_result
-            return
-        fi
-        operation self.syscall_argument_count = syscall_argument_count_result
-        if syscall_argument_count_result Option::Some(argument_count) is then
-            TYPE_INT_T argument_count 1 + stack.apply_result
-            return
-        fi
+        if operation function stack self.apply_shared_operation_semantics then return fi
 
         operation match
-            OpValue::PushInt(_) => { TYPE_INT_T stack.push }
-            OpValue::PushStr(_) => { TYPE_STR_T stack.push }
-            OpValue::PushBool(_) => { TYPE_BOOL_T stack.push }
-            OpValue::PushChar(_) => { TYPE_CHAR_T stack.push }
             OpValue::PushVar(name) => { name stack function self.push_variable_type }
             OpValue::PushCapture(name) => { name stack function self.push_variable_type }
-            OpValue::FnCall(name) => { name stack self.apply_function_call }
-            OpValue::FnPush(name) => {
-                if name self.get_function_effect Option::Some(effect) is then
-                    effect stack_effect_to_function_type stack.push
-                fi
-            }
-            OpValue::FnExec => { stack.apply_function_pointer }
-            OpValue::TraitMethodCall(hidden_name) => {
-                hidden_name function stack self.apply_trait_method_call
-            }
             OpValue::StructNew(casa_struct) => {
                 casa_struct stack self.construct_struct_type stack.push
             }
@@ -1252,44 +782,6 @@ impl SelectiveImportClosureBuilder {
                 stack.pop drop
                 cast_type stack.push
             }
-            OpValue::MethodCall(method_name) => {
-                method_name stack.peek function stack self.apply_method_call
-            }
-            OpValue::BitNot => { TYPE_INT_T 1 stack.apply_result }
-            OpValue::Not => { TYPE_BOOL_T 1 stack.apply_result }
-            OpValue::FstringConcat(count) => { TYPE_STR_T count stack.apply_result }
-            OpValue::FstringToStr => {
-                stack.peek = receiver_type
-                receiver_type function self.collect_fstring_dependency
-                if receiver_type Option::Some(receiver) is then
-                    if TYPE_STR_T receiver.eq ! then
-                        TYPE_STR_T 1 stack.apply_result
-                    fi
-                fi
-            }
-            OpValue::Print => {
-                stack.peek = receiver_type
-                receiver_type function self.collect_print_dependency
-                stack.pop drop
-            }
-            OpValue::PrintBool => { stack.pop drop }
-            OpValue::PrintChar => { stack.pop drop }
-            OpValue::PrintCstr => { stack.pop drop }
-            OpValue::PrintInt => { stack.pop drop }
-            OpValue::PrintStr => { stack.pop drop }
-            OpValue::Typeof => { TYPE_STR_T 1 stack.apply_result }
-            OpValue::Load8 => { TYPE_INT_T 1 stack.apply_result }
-            OpValue::Load16 => { TYPE_INT_T 1 stack.apply_result }
-            OpValue::Load32 => { TYPE_INT_T 1 stack.apply_result }
-            OpValue::Load64 => { TYPE_INT_T 1 stack.apply_result }
-            OpValue::Store8 => { 2 stack.drop_count }
-            OpValue::Store16 => { 2 stack.drop_count }
-            OpValue::Store32 => { 2 stack.drop_count }
-            OpValue::Store64 => { 2 stack.drop_count }
-            OpValue::HeapAlloc => { TYPE_PTR_T 1 stack.apply_result }
-            OpValue::Argc => { TYPE_INT_T stack.push }
-            OpValue::Argv => { TYPE_PTR_T stack.push }
-            OpValue::Envp => { TYPE_PTR_T stack.push }
             OpValue::IfStart => {
                 false
                 SelectiveImportBranchKind::If
@@ -1329,50 +821,6 @@ impl SelectiveImportClosureBuilder {
             OpValue::IsCheck(variant) => {
                 variant stack.peek stack self.assign_enum_pattern_bindings
                 TYPE_BOOL_T 1 stack.apply_result
-            }
-            OpValue::Drop => { stack.pop drop }
-            OpValue::Dup => {
-                if stack.pop Option::Some(type_value) is then
-                    type_value stack.push
-                    type_value stack.push
-                fi
-            }
-            OpValue::Swap => {
-                stack.pop = first
-                stack.pop = second
-                if first Option::Some(first_type) is then
-                    first_type stack.push
-                fi
-                if second Option::Some(second_type) is then
-                    second_type stack.push
-                fi
-            }
-            OpValue::Over => {
-                stack.pop = first
-                stack.pop = second
-                if second Option::Some(second_type) is then
-                    second_type stack.push
-                fi
-                if first Option::Some(first_type) is then
-                    first_type stack.push
-                fi
-                if second Option::Some(second_type) is then
-                    second_type stack.push
-                fi
-            }
-            OpValue::Rot => {
-                stack.pop = first
-                stack.pop = second
-                stack.pop = third
-                if second Option::Some(second_type) is then
-                    second_type stack.push
-                fi
-                if first Option::Some(first_type) is then
-                    first_type stack.push
-                fi
-                if third Option::Some(third_type) is then
-                    third_type stack.push
-                fi
             }
             OpValue::AssignVar(name) => { stack.pop name stack.assign_variable_type }
             OpValue::AssignInc(name) => {
