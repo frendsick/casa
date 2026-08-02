@@ -1,0 +1,93 @@
+import "../../compiler/operation_semantics.casa"
+import "helpers.casa"
+
+fn analyze_test_operation
+    store:SymbolStore
+    function_opt:Option[Function]
+    receiver:Option[Type]
+    operation:OpValue
+-> OperationSemanticsResult {
+    store function_opt receiver operation analyze_operation_semantics
+}
+
+fn test_fixed_stack_effects_are_canonical {
+    "fixed_stack_effects_are_canonical" test_start
+    symbol_store_new = store
+    Option::None(Option[Function]) = no_function
+    Option::None(Option[Type]) = no_receiver
+
+    OpValue::Dup no_receiver no_function store analyze_test_operation = duplicate
+    "dup has a fixed effect" duplicate.stack_effect.is_some assert_true
+    "dup effect" "T -> T T" duplicate.stack_effect.unwrap stack_effect_to_str assert_str_eq
+
+    OpValue::Store64 no_receiver no_function store analyze_test_operation = store_semantics
+    "store64 effect" "ptr T -> None" store_semantics.stack_effect.unwrap stack_effect_to_str assert_str_eq
+    "store64 Word values" 1 store_semantics.word_parameter_count assert_eq
+
+    OpValue::Syscall3 no_receiver no_function store analyze_test_operation = syscall_semantics
+    "syscall3 arity" 3 syscall_semantics.syscall_argument_count.unwrap assert_eq
+    "syscall3 effect" 4 syscall_semantics.stack_effect.unwrap.parameters.length assert_eq
+    "syscall3 result" "int" 0 syscall_semantics.stack_effect.unwrap.return_types.get.format assert_str_eq
+}
+
+fn test_dispatch_and_dependencies_are_canonical {
+    "dispatch_and_dependencies_are_canonical" test_start
+    Diagnostics::new = diagnostics
+    diagnostics
+    "trait Display { fn to_str self:self -> str } struct Box { value: int } impl Box { fn to_str self:Box -> str { self drop \"box\" } } fn callee -> Box { 1 Box } fn root -> str { callee print }"
+    parse_resolve_test_source = parsed
+    diagnostics "source parses" assert_no_errors
+    "root" parsed.store.functions.get.unwrap = root
+    "Box" parse_type_str Option::Some = box_receiver
+    root Option::Some = root_function
+
+    "callee" OpValue::FnCall Option::None(Option[Type]) root_function parsed.store
+    analyze_test_operation = call_semantics
+    "call dependency" "callee" call_semantics.dependencies string_list_contains assert_true
+
+    OpValue::Print box_receiver root_function parsed.store
+    analyze_test_operation = print_semantics
+    "print trait dependency" "Display" print_semantics.dependencies string_list_contains assert_true
+    "print method dependency" "Box::to_str" print_semantics.dependencies string_list_contains assert_true
+    "print resolves through method" print_semantics.method.is_some assert_true
+}
+
+fn test_method_kinds_share_targets_and_dependencies {
+    "method_kinds_share_targets_and_dependencies" test_start
+    Diagnostics::new = diagnostics
+    diagnostics
+    "trait Step { fn base self:self -> int fn bumped self:self -> int { self .base 1 + } } struct Box { value: int } impl Box { fn base self:Box -> int { self Box::value } } fn bounded[T: Step] value:T -> int { value .base } fn root -> int { 1 Box .bumped }"
+    parse_resolve_test_source = parsed
+    diagnostics "source parses" assert_no_errors
+    "root" parsed.store.functions.get.unwrap Option::Some = root
+    "bounded" parsed.store.functions.get.unwrap Option::Some = bounded
+
+    "base" OpValue::MethodCall "Box" parse_type_str Option::Some root parsed.store
+    analyze_test_operation = direct
+    "direct method fact" direct.method.is_some assert_true
+    "direct target" "Box::base" direct.method.unwrap.function_name assert_str_eq
+    "direct dependency" "Box::base" direct.dependencies string_list_contains assert_true
+
+    "bumped" OpValue::MethodCall "Box" parse_type_str Option::Some root parsed.store
+    analyze_test_operation = default_method
+    "default method fact" default_method.method.is_some assert_true
+    "default method kind"
+    default_method.method.unwrap.kind MethodSemanticsKind::DefaultMethod is
+    assert_true
+    "default trait dependency" "Step" default_method.dependencies string_list_contains assert_true
+    "default implementation dependency"
+    "Box::base" default_method.dependencies string_list_contains
+    assert_true
+
+    "base" OpValue::MethodCall "T" Type::TypeVar Option::Some bounded parsed.store
+    analyze_test_operation = bound_method
+    "bound method fact" bound_method.method.is_some assert_true
+    "bound method kind"
+    bound_method.method.unwrap.kind MethodSemanticsKind::TraitBound is
+    assert_true
+    "bound trait dependency" "Step" bound_method.dependencies string_list_contains assert_true
+}
+test_fixed_stack_effects_are_canonical
+test_dispatch_and_dependencies_are_canonical
+test_method_kinds_share_targets_and_dependencies
+test_summary
