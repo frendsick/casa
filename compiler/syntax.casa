@@ -7,6 +7,7 @@ import "parser"
 import "common"
 import "error"
 import "lexer"
+import "selective_import"
 
 # ============================================================================
 # Parser struct and parse/resolve result
@@ -2573,188 +2574,58 @@ fn handle_keyword_import parser:Parser cursor:TokenCursor -> Op {
     path_token Token::location "" OpValue::ImportFile Op::new
 }
 
-fn selective_import_type_dependencies
+impl Parser {
+    fn record_selective_import_conflict
+        self:Parser
+        name:str
+        declaration_kind:str
+        location:Location
+    {
+        f"Imported symbol `{name}` conflicts with an existing {declaration_kind}" = message
+        location message ErrorKind::DuplicateName self.state.record_error
+    }
+}
+
+fn add_selective_import_declaration
     parser:Parser
-    import_parser:Parser
+    selected_parser:Parser
     existing_store:SymbolStore
-    typ:Type
+    declaration:SelectiveImportDeclaration
     location:Location
-    imported:Set[str]
 {
-    typ match
-        Type::Generic(generic) => {
-            generic GenericType::base = base_name
-            if
-            base_name import_parser.store.structs.has
-            base_name import_parser.store.enums.has ||
-            base_name import_parser.store.traits.has ||
-            then
-                imported location base_name existing_store import_parser parser selective_import_symbol
+    declaration.get_name = name
+    declaration match
+        SelectiveImportDeclaration::Function(function) => {
+            if name existing_store.functions.has then
+                location "function" name parser.record_selective_import_conflict
             fi
-            for param_type in generic GenericType::params.iter do
-                imported location param_type existing_store import_parser parser selective_import_type_dependencies
-            done
+            function name selected_parser.put_function
         }
-        Type::Function(fn_type) => {
-            for param_type in fn_type FunctionType::parameters.iter do
-                imported location param_type existing_store import_parser parser selective_import_type_dependencies
-            done
-            for return_type in fn_type FunctionType::return_types.iter do
-                imported location return_type existing_store import_parser parser selective_import_type_dependencies
-            done
+        SelectiveImportDeclaration::Constant(constant) => {
+            if name existing_store.constants.has then
+                location "constant" name parser.record_selective_import_conflict
+            fi
+            constant name selected_parser.put_constant
         }
-        _ => { }
+        SelectiveImportDeclaration::Struct(casa_struct) => {
+            if name existing_store.structs.has then
+                location "struct" name parser.record_selective_import_conflict
+            fi
+            casa_struct name selected_parser.put_struct
+        }
+        SelectiveImportDeclaration::Enum(casa_enum) => {
+            if name existing_store.enums.has then
+                location "enum" name parser.record_selective_import_conflict
+            fi
+            casa_enum name selected_parser.put_enum
+        }
+        SelectiveImportDeclaration::Trait(casa_trait) => {
+            if name existing_store.traits.has then
+                location "trait" name parser.record_selective_import_conflict
+            fi
+            casa_trait name selected_parser.put_trait
+        }
     end
-}
-
-fn selective_import_stack_effect_dependencies
-    parser:Parser
-    import_parser:Parser
-    existing_store:SymbolStore
-    function:Function
-    location:Location
-    imported:Set[str]
-{
-    function Function::stack_effect = effect
-    for param in effect StackEffect::parameters.iter do
-        imported location param Parameter::typ existing_store import_parser parser selective_import_type_dependencies
-    done
-    for return_type in effect StackEffect::return_types.iter do
-        imported location return_type existing_store import_parser parser selective_import_type_dependencies
-    done
-}
-
-fn selective_import_op_dependencies
-    parser:Parser
-    import_parser:Parser
-    existing_store:SymbolStore
-    op:Op
-    location:Location
-    imported:Set[str]
-{
-    if op.value OpValue::FnCall(dep_name) is then
-        imported location dep_name existing_store import_parser parser selective_import_symbol
-        return
-    fi
-    if op.value OpValue::FnPush(dep_push_name) is then
-        imported location dep_push_name existing_store import_parser parser selective_import_symbol
-        return
-    fi
-    if op.value OpValue::StructNew(dep_struct) is then
-        imported location dep_struct CasaStruct::name existing_store import_parser parser selective_import_symbol
-        return
-    fi
-    if op.value OpValue::StructLiteral(dep_literal) is then
-        imported location dep_literal StructLiteral::struct_name existing_store import_parser parser selective_import_symbol
-        return
-    fi
-    if op.value OpValue::PushEnumVariant(dep_variant) is then
-        imported location dep_variant EnumVariant::enum_name existing_store import_parser parser selective_import_symbol
-        return
-    fi
-    if op.value OpValue::IsCheck(dep_is_variant) is then
-        imported location dep_is_variant EnumVariant::enum_name existing_store import_parser parser selective_import_symbol
-        return
-    fi
-    if op.value OpValue::TypeCast(dep_type) is then
-        imported location dep_type existing_store import_parser parser selective_import_type_dependencies
-    fi
-}
-
-fn selective_import_methods
-    parser:Parser
-    import_parser:Parser
-    existing_store:SymbolStore
-    symbol:str
-    location:Location
-    imported:Set[str]
-{
-    f"{symbol}::" = method_prefix
-    for fn_name in import_parser.store.functions.keys.iter do
-        if fn_name method_prefix str::starts_with then
-            imported location fn_name existing_store import_parser parser selective_import_symbol
-        fi
-    done
-}
-
-fn selective_import_symbol
-    parser:Parser
-    import_parser:Parser
-    existing_store:SymbolStore
-    symbol:str
-    location:Location
-    imported:Set[str]
-{
-    if symbol imported.has then
-        return
-    fi
-    symbol imported.add = imported
-
-    symbol import_parser.store.functions.get = fn_opt
-    if fn_opt.is_some then
-        fn_opt.unwrap = imported_fn
-        if symbol existing_store.functions.has then
-            location f"Imported symbol `{symbol}` conflicts with an existing function" ErrorKind::DuplicateName parser.state.record_error
-        fi
-        imported_fn.ops = resolved_ops
-        imported location imported_fn existing_store import_parser parser selective_import_stack_effect_dependencies
-        for resolved_op in resolved_ops.iter do
-            if resolved_op.value OpValue::PushVar(var_name) is then
-                if var_name imported_fn.variables variable_list_contains ! var_name import_parser.store.variables.has && then
-                    resolved_op.location f"Selective import `{symbol}` depends on global variable `{var_name}`" ErrorKind::InvalidVariable parser.state.record_error
-                fi
-            fi
-        done
-        imported_fn symbol parser.put_function
-        for resolved_op in resolved_ops.iter do
-            imported location resolved_op existing_store import_parser parser selective_import_op_dependencies
-        done
-        return
-    fi
-
-    symbol import_parser.store.constants.get = const_opt
-    if const_opt Option::Some(imported_const) is then
-        if symbol existing_store.constants.has then
-            location f"Imported symbol `{symbol}` conflicts with an existing constant" ErrorKind::DuplicateName parser.state.record_error
-        fi
-        imported_const symbol parser.put_constant
-        return
-    fi
-
-    symbol import_parser.store.structs.get = struct_opt
-    if struct_opt Option::Some(imported_struct) is then
-        if symbol existing_store.structs.has then
-            location f"Imported symbol `{symbol}` conflicts with an existing struct" ErrorKind::DuplicateName parser.state.record_error
-        fi
-        imported_struct symbol parser.put_struct
-        imported location symbol existing_store import_parser parser selective_import_methods
-        return
-    fi
-
-    symbol import_parser.store.enums.get = enum_opt
-    if enum_opt Option::Some(imported_enum) is then
-        if symbol existing_store.enums.has then
-            location f"Imported symbol `{symbol}` conflicts with an existing enum" ErrorKind::DuplicateName parser.state.record_error
-        fi
-        imported_enum symbol parser.put_enum
-        imported location symbol existing_store import_parser parser selective_import_methods
-        return
-    fi
-
-    symbol import_parser.store.traits.get = trait_opt
-    if trait_opt Option::Some(imported_trait) is then
-        if symbol existing_store.traits.has then
-            location f"Imported symbol `{symbol}` conflicts with an existing trait" ErrorKind::DuplicateName parser.state.record_error
-        fi
-        imported_trait symbol parser.put_trait
-        return
-    fi
-
-    if symbol import_parser.store.variables.has then
-        location f"Selective import cannot import global variable `{symbol}`" ErrorKind::InvalidVariable parser.state.record_error
-    fi
-
-    location f"Symbol `{symbol}` not found in selective import" ErrorKind::UndefinedName parser.state.record_error
 }
 
 fn handle_selective_import parser:Parser selective:SelectiveImport location:Location {
@@ -2778,14 +2649,27 @@ fn handle_selective_import parser:Parser selective:SelectiveImport location:Loca
         return
     fi
 
-    parser.sources Diagnostics::new imported_result.store Parser::new = import_parser
     Diagnostics::new = selection_diagnostics
     parser.sources selection_diagnostics symbol_store_new Parser::new = selected_parser
-
-    Set::new(Set[str]) = imported
-    for symbol in selective.symbols.iter do
-        imported location symbol parser.store import_parser selected_parser selective_import_symbol
-    done
+    location
+    selective.symbols
+    imported_result.store
+    compute_selective_import_closure = closure_result
+    if closure_result Result::Error(closure_diagnostics) is then
+        location closure_diagnostics parser.state.diagnostics.merge_at_encounter
+        parser.state.mark_output_unusable
+        return
+    fi
+    if closure_result Result::Ok(declarations) is then
+        for declaration in declarations.iter do
+            location
+            declaration
+            parser.store
+            selected_parser
+            parser
+            add_selective_import_declaration
+        done
+    fi
     location selection_diagnostics parser.state.diagnostics.merge_at_encounter
     if selection_diagnostics.has_errors then parser.state.mark_output_unusable return fi
     selected_parser.store parser.store.merge_import

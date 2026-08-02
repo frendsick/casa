@@ -1,0 +1,321 @@
+import "../../compiler/selective_import.casa"
+import "../../compiler/typechecker.casa"
+import "helpers.casa"
+
+fn compute_test_closure
+    source:str
+    requested:List[str]
+-> Result[List[SelectiveImportDeclaration] Diagnostics] {
+    Diagnostics::new = diagnostics
+    diagnostics source parse_resolve_test_source = result
+    diagnostics "source parses" assert_no_errors
+    empty_location requested result.store compute_selective_import_closure
+}
+
+fn get_closure_declarations
+    result:Result[List[SelectiveImportDeclaration] Diagnostics]
+-> List[SelectiveImportDeclaration] {
+    if result Result::Ok(declarations) is then
+        declarations return
+    fi
+    "closure succeeds" false assert_true
+    List::new(List[SelectiveImportDeclaration])
+}
+
+fn get_declaration_names declarations:List[SelectiveImportDeclaration] -> List[str] {
+    List::new(List[str]) = names
+    for declaration in declarations.iter do
+        declaration.get_name names.push
+    done
+    names
+}
+
+fn assert_closure_has names:List[str] name:str {
+    f"closure contains {name}" name names string_list_contains assert_true
+}
+
+fn test_collects_symbol_and_type_dependencies {
+    "collects_symbol_and_type_dependencies" test_start
+    "const EXPLICIT 9\ntrait Base { }\ntrait Carrier[T]: Base { fn carry self:self -> T }\nstruct Leaf { value: int }\nimpl Leaf { fn double self:Leaf -> int { self Leaf::value 2 * } }\nstruct Box[T] { value: T }\nenum Choice { Pick(Leaf) }\nimpl Choice { fn code self:Choice -> int { self drop 1 } }\nfn leaf -> Leaf { 1 Leaf }\nfn referenced -> fn[-> Leaf] { &leaf }\nfn root[I: Carrier[Box[Leaf]]] item:I { item drop referenced drop 1 Leaf Choice::Pick drop }" = source
+    List::new(List[str]) = requested
+    "root" requested.push
+    "EXPLICIT" requested.push
+    requested source compute_test_closure get_closure_declarations get_declaration_names = names
+
+    "root" names assert_closure_has
+    "referenced" names assert_closure_has
+    "leaf" names assert_closure_has
+    "EXPLICIT" names assert_closure_has
+    "Base" names assert_closure_has
+    "Carrier" names assert_closure_has
+    "Leaf" names assert_closure_has
+    "Leaf::double" names assert_closure_has
+    "Box" names assert_closure_has
+    "Choice" names assert_closure_has
+    "Choice::code" names assert_closure_has
+}
+
+fn test_cycles_are_unique_and_dependency_ordered {
+    "cycles_are_unique_and_dependency_ordered" test_start
+    List::new(List[str]) = requested
+    "left" requested.push
+    requested "fn left { right } fn right { left }" compute_test_closure
+    get_closure_declarations get_declaration_names = names
+    "unique declarations" 2 names.length assert_eq
+    "dependency first" "right" 0 names.get assert_str_eq
+    "requested root last" "left" 1 names.get assert_str_eq
+}
+
+fn test_failures_return_diagnostics_without_a_partial_closure {
+    "failures_return_diagnostics_without_a_partial_closure" test_start
+    List::new(List[str]) = requested
+    "read_state" requested.push
+    requested "1 = STATE fn read_state -> int { STATE }" compute_test_closure = global_result
+    if global_result Result::Error(diagnostics) is then
+        diagnostics "global diagnostic count" 1 assert_error_count
+        diagnostics "global dependency" "depends on global variable" assert_error_contains
+    else
+        "global dependency fails" false assert_true
+    fi
+
+    List::new(List[str]) = missing
+    "missing" missing.push
+    missing "fn present { }" compute_test_closure = missing_result
+    if missing_result Result::Error(diagnostics) is then
+        diagnostics "missing diagnostic count" 1 assert_error_count
+        diagnostics "missing symbol" "not found in selective import" assert_error_contains
+    else
+        "missing symbol fails" false assert_true
+    fi
+}
+
+fn test_collects_unqualified_method_dependencies {
+    "collects_unqualified_method_dependencies" test_start
+    List::new(List[str]) = requested
+    "root" requested.push
+    requested
+    "1 = STATE impl bool { fn bumped self:bool -> int { STATE } } impl int { fn bumped self:int -> int { self 1 + } } fn root -> int { 1 .bumped }"
+    compute_test_closure get_closure_declarations get_declaration_names = names
+    "int::bumped" names assert_closure_has
+    "unused same-named method omitted" "bool::bumped" names string_list_contains ! assert_true
+}
+
+fn test_tracks_receiver_types_through_stack_operations {
+    "tracks_receiver_types_through_stack_operations" test_start
+    "impl int { fn picked self:int -> int { self } } impl bool { fn picked self:bool -> int { self drop 1 } } fn root int -> int { .picked }"
+    = source
+    List::new(List[str]) = requested
+    "root" requested.push
+    requested source compute_test_closure get_closure_declarations get_declaration_names = names
+    "unnamed parameter receiver" "int::picked" names assert_closure_has
+    "other method omitted" "bool::picked" names string_list_contains ! assert_true
+
+    "impl int { fn picked self:int -> int { self } } impl bool { fn picked self:bool -> int { self drop 1 } } fn root -> int { 1 true swap .picked }"
+    = swap_source
+    requested swap_source compute_test_closure get_closure_declarations
+    get_declaration_names = swap_names
+    "swapped receiver" "int::picked" swap_names assert_closure_has
+    "pre-swap receiver omitted" "bool::picked" swap_names string_list_contains ! assert_true
+
+    "impl array { fn picked self:array[int] -> int { self drop 1 } } fn root -> int { [1 2] .picked }"
+    = array_source
+    requested array_source compute_test_closure get_closure_declarations
+    get_declaration_names = array_names
+    "array receiver" "array::picked" array_names assert_closure_has
+}
+
+fn test_collects_default_trait_method_dependencies {
+    "collects_default_trait_method_dependencies" test_start
+    "trait Step { fn base self:self -> int fn bumped self:self -> int { self .base 1 + } } struct Box { value: int } impl Box { fn base self:Box -> int { self Box::value } } fn root -> int { 1 Box .bumped }"
+    = source
+    List::new(List[str]) = requested
+    "root" requested.push
+    requested source compute_test_closure get_closure_declarations get_declaration_names = names
+    "default method trait" "Step" names assert_closure_has
+    "required implementation" "Box::base" names assert_closure_has
+}
+
+fn test_tracks_receiver_types_through_dependent_operations {
+    "tracks_receiver_types_through_dependent_operations" test_start
+    List::new(List[str]) = requested
+    "root" requested.push
+
+    "impl int { fn picked self:int -> int { self } } impl bool { fn picked self:bool -> int { self drop 1 } } fn consume int { drop } fn root -> int { true 1 &consume exec .picked }"
+    = execute_source
+    requested execute_source compute_test_closure get_closure_declarations
+    get_declaration_names = execute_names
+    "exec removes function pointer" "bool::picked" execute_names assert_closure_has
+    "consumed argument method omitted"
+    "int::picked" execute_names string_list_contains !
+    assert_true
+
+    "trait Carrier[T] { fn get self:self -> T } impl int { fn picked self:int -> int { self } } impl bool { fn picked self:bool -> int { self drop 1 } } fn root[I: Carrier[int]] item:I -> int { item .get .picked }"
+    = generic_trait_source
+    requested generic_trait_source compute_test_closure get_closure_declarations
+    get_declaration_names = generic_trait_names
+    "trait result substitution" "int::picked" generic_trait_names assert_closure_has
+    "unsubstituted method omitted"
+    "bool::picked" generic_trait_names string_list_contains !
+    assert_true
+
+    "impl int { fn picked self:int -> int { self } } impl bool { fn picked self:bool -> int { self drop 1 } } fn root -> int { 1 true print .picked }"
+    = print_source
+    requested print_source compute_test_closure get_closure_declarations
+    get_declaration_names = print_names
+    "print consumes receiver" "int::picked" print_names assert_closure_has
+    "printed receiver method omitted" "bool::picked" print_names string_list_contains ! assert_true
+
+    "trait Display { fn render self:self -> str fn to_str self:self -> str { self .render } } struct Box { value: int } impl Box { fn render self:Box -> str { self drop \"box\" } } fn root { 1 Box print }"
+    = display_source
+    requested display_source compute_test_closure get_closure_declarations
+    get_declaration_names = display_names
+    "print display trait" "Display" display_names assert_closure_has
+
+    "fn id[T] T -> T { } impl int { fn picked self:int -> int { self } } impl bool { fn picked self:bool -> int { self drop 1 } } fn root -> int { 1 id .picked }"
+    = generic_call_source
+    requested generic_call_source compute_test_closure get_closure_declarations
+    get_declaration_names = generic_call_names
+    "generic call result" "int::picked" generic_call_names assert_closure_has
+    "unbound generic method omitted"
+    "bool::picked" generic_call_names string_list_contains !
+    assert_true
+
+    "impl int { fn picked self:int -> int { self } } impl bool { fn picked self:bool -> int { self drop 1 } } fn root -> int { 1 = value value .picked }"
+    = assignment_source
+    requested assignment_source compute_test_closure get_closure_declarations
+    get_declaration_names = assignment_names
+    "inferred local receiver" "int::picked" assignment_names assert_closure_has
+    "uninferred local method omitted"
+    "bool::picked" assignment_names string_list_contains !
+    assert_true
+
+    "trait Eq { fn eq self:self other:self -> bool } struct Box { value: int } impl Box { fn eq self:Box other:Box -> bool { self drop other drop true } } fn root -> bool { 1 Box 2 Box == }"
+    = comparison_source
+    requested comparison_source compute_test_closure get_closure_declarations
+    get_declaration_names = comparison_names
+    "comparison trait" "Eq" comparison_names assert_closure_has
+
+    "fn make { 1 } impl int { fn picked self:int -> int { self } } impl bool { fn picked self:bool -> int { self drop 1 } } fn root -> int { make .picked }"
+    = inferred_call_source
+    requested inferred_call_source compute_test_closure get_closure_declarations
+    get_declaration_names = inferred_call_names
+    "inferred helper result" "int::picked" inferred_call_names assert_closure_has
+
+    "trait Carrier[T] { fn raw self:self -> T fn get self:self -> T { self .raw } } struct Box { value: int } impl Box { fn raw self:Box -> int { self Box::value } } impl int { fn picked self:int -> int { self } } impl bool { fn picked self:bool -> int { self drop 1 } } fn root -> int { 1 Box .get .picked }"
+    = default_generic_source
+    requested default_generic_source compute_test_closure get_closure_declarations
+    get_declaration_names = default_generic_names
+    "default generic result" "int::picked" default_generic_names assert_closure_has
+
+    "impl[T] array[T] { fn first self:array[T] -> T { 0 self.nth } } impl int { fn picked self:int -> int { self } } impl bool { fn picked self:bool -> int { self drop 1 } } fn root -> int { [1] .first .picked }"
+    = generic_array_source
+    requested generic_array_source compute_test_closure get_closure_declarations
+    get_declaration_names = generic_array_names
+    "generic array method result" "int::picked" generic_array_names assert_closure_has
+
+    "impl int { fn acceptable self:int -> bool { self drop true } } impl bool { fn acceptable self:bool -> bool { self } } fn root -> int { 1 = value true match _ if value .acceptable => 1 _ => 0 end }"
+    = guard_source
+    requested guard_source compute_test_closure get_closure_declarations
+    get_declaration_names = guard_names
+    "guard receiver" "int::acceptable" guard_names assert_closure_has
+    "wrong guard method omitted"
+    "bool::acceptable" guard_names string_list_contains !
+    assert_true
+
+    "fn consume { drop } impl int { fn picked self:int -> int { self } } impl bool { fn picked self:bool -> int { self drop 1 } } fn root -> int { true 1 consume .picked }"
+    = inferred_parameter_source
+    requested inferred_parameter_source compute_test_closure get_closure_declarations
+    get_declaration_names = inferred_parameter_names
+    "inferred consumed parameter" "bool::picked" inferred_parameter_names assert_closure_has
+    "consumed inferred argument omitted"
+    "int::picked" inferred_parameter_names string_list_contains !
+    assert_true
+
+    "trait Hashable { fn hash self:self -> int fn eq self:self other:self -> bool } impl int { fn hash self:int -> int { self } fn eq self:int other:int -> bool { self other == } } fn use_hash[K: Hashable] K -> int { .hash } fn root -> int { 1 use_hash }"
+    = dictionary_source
+    requested dictionary_source compute_test_closure get_closure_declarations
+    get_declaration_names = dictionary_names
+    "dictionary hash implementation" "int::hash" dictionary_names assert_closure_has
+    "dictionary equality implementation" "int::eq" dictionary_names assert_closure_has
+
+    "enum E { Some(int) None } impl int { fn picked self:int -> int { self } } impl bool { fn picked self:bool -> int { self drop 1 } } fn root -> int { 1 E::Some match E::Some(value) => { value .picked } E::None => 0 end }"
+    = match_binding_source
+    requested match_binding_source compute_test_closure get_closure_declarations
+    get_declaration_names = match_binding_names
+    "match payload receiver" "int::picked" match_binding_names assert_closure_has
+
+    "enum E { Some(int) None } impl int { fn picked self:int -> int { self } } impl bool { fn picked self:bool -> int { self drop 1 } } fn root value:E -> int { if value E::Some(inner) is then inner .picked else 0 fi }"
+    = is_binding_source
+    requested is_binding_source compute_test_closure get_closure_declarations
+    get_declaration_names = is_binding_names
+    "is payload receiver" "int::picked" is_binding_names assert_closure_has
+
+    "trait Carrier[T] { fn get self:self -> T } impl int { fn picked self:int -> int { self } } impl bool { fn picked self:bool -> int { self drop 1 } } fn root[K: Carrier[int]] item:K -> int { item K::get .picked }"
+    = qualified_bound_source
+    requested qualified_bound_source compute_test_closure get_closure_declarations
+    get_declaration_names = qualified_bound_names
+    "qualified bound result" "int::picked" qualified_bound_names assert_closure_has
+}
+
+fn test_distinguishes_local_and_global_captures {
+    "distinguishes_local_and_global_captures" test_start
+    List::new(List[str]) = requested
+    "outer" requested.push
+    requested
+    "1 = VALUE fn outer VALUE:int -> fn[-> int] { { VALUE } }"
+    compute_test_closure get_closure_declarations drop
+    requested
+    "struct Box { value: int } 1 Box = VALUE fn outer VALUE:Box -> fn[-> int] { { 2 = VALUE.value 0 } }"
+    compute_test_closure get_closure_declarations drop
+
+    requested
+    "1 = VALUE fn outer -> fn[-> int] { { VALUE } }"
+    compute_test_closure = global_capture_result
+    if global_capture_result Result::Error(diagnostics) is then
+        diagnostics "global capture diagnostic count" 1 assert_error_count
+        diagnostics "global capture" "depends on global variable" assert_error_contains
+    else
+        "global capture fails" false assert_true
+    fi
+
+    requested
+    "struct Box { value: int } 1 Box = VALUE fn outer -> fn[-> int] { { 2 = VALUE.value 0 } }"
+    compute_test_closure = global_capture_write_result
+    if global_capture_write_result Result::Error(diagnostics) is then
+        diagnostics "global capture write count" 1 assert_error_count
+        diagnostics "global capture write" "depends on global variable" assert_error_contains
+    else
+        "global capture write fails" false assert_true
+    fi
+}
+
+fn test_selective_method_import_works_end_to_end {
+    "selective_method_import_works_end_to_end" test_start
+    SourceStore::new = sources
+    "1 = STATE impl bool { fn bumped self:bool -> int { STATE } } impl int { fn bumped self:int -> int { self 1 + } } fn root -> int { 1 .bumped }"
+    "/tmp/casa_selective_method_closure_272.casa"
+    sources.add
+    "root"
+    "import \"/tmp/casa_selective_method_closure_272.casa\" { root } root drop"
+    lex_source = lex_result
+    sources
+    lex_result.diagnostics
+    List::new(List[str])
+    lex_result.tokens
+    parse_and_resolve = result
+    result.diagnostics "selective method import resolves" assert_no_errors
+    "selected method included" "int::bumped" result.store.functions.has assert_true
+    "unused method omitted" "bool::bumped" result.store.functions.has ! assert_true
+    result.store result.ops.unwrap type_check = typecheck_result
+    typecheck_result.diagnostics "selective method import typechecks" assert_no_errors
+}
+test_collects_symbol_and_type_dependencies
+test_cycles_are_unique_and_dependency_ordered
+test_failures_return_diagnostics_without_a_partial_closure
+test_collects_unqualified_method_dependencies
+test_tracks_receiver_types_through_stack_operations
+test_collects_default_trait_method_dependencies
+test_tracks_receiver_types_through_dependent_operations
+test_distinguishes_local_and_global_captures
+test_selective_method_import_works_end_to_end
+test_summary
