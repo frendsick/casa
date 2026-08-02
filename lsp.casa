@@ -97,8 +97,6 @@ List::new(List[str]) = LSP_LIBRARY_PATHS
 # ============================================================================
 Map::new(Map[str AnalyzedDocument]) = OPEN_DOCUMENTS
 StdinReader::new = STDIN_READER
-# STACK_EFFECTS and TOKEN_TYPE_MAP collapsed into match-based fns
-# (see op_value_stack_effect / op_value_token_type below).
 
 # ============================================================================
 # Coordinate conversion utilities
@@ -1089,258 +1087,34 @@ fn handle_rename message:JsonValue {
 # Semantic tokens handler
 # ============================================================================
 
-fn op_value_token_type op_value:OpValue -> Option[int] {
-    op_value match
-        OpValue::FnCall(_) => TOKEN_FUNCTION Option::Some
-        OpValue::FnPush(_) => TOKEN_FUNCTION Option::Some
-        OpValue::MethodCall(_) => TOKEN_FUNCTION Option::Some
-        OpValue::TraitMethodCall(_) => TOKEN_FUNCTION Option::Some
-        OpValue::PushVar(_) => TOKEN_VARIABLE Option::Some
-        OpValue::PushCapture(_) => TOKEN_VARIABLE Option::Some
-        OpValue::AssignVar(_) => TOKEN_VARIABLE Option::Some
-        OpValue::AssignInc(_) => TOKEN_VARIABLE Option::Some
-        OpValue::AssignDec(_) => TOKEN_VARIABLE Option::Some
-        OpValue::PushStr(_) => TOKEN_STRING Option::Some
-        OpValue::PushInt(_) => TOKEN_NUMBER Option::Some
-        OpValue::PushChar(_) => TOKEN_NUMBER Option::Some
-        OpValue::PushBool(_) => TOKEN_KEYWORD Option::Some
-        OpValue::FnExec => TOKEN_KEYWORD Option::Some
-        OpValue::IfStart => TOKEN_KEYWORD Option::Some
-        OpValue::IfCondition => TOKEN_KEYWORD Option::Some
-        OpValue::IfElif => TOKEN_KEYWORD Option::Some
-        OpValue::IfElse => TOKEN_KEYWORD Option::Some
-        OpValue::IfEnd => TOKEN_KEYWORD Option::Some
-        OpValue::WhileStart => TOKEN_KEYWORD Option::Some
-        OpValue::WhileCondition => TOKEN_KEYWORD Option::Some
-        OpValue::WhileEnd => TOKEN_KEYWORD Option::Some
-        OpValue::WhileBreak => TOKEN_KEYWORD Option::Some
-        OpValue::WhileContinue => TOKEN_KEYWORD Option::Some
-        OpValue::MatchStart => TOKEN_KEYWORD Option::Some
-        OpValue::MatchArm(_) => TOKEN_KEYWORD Option::Some
-        OpValue::MatchEnd => TOKEN_KEYWORD Option::Some
-        OpValue::FnReturn => TOKEN_KEYWORD Option::Some
-        OpValue::Add => TOKEN_OPERATOR Option::Some
-        OpValue::Sub => TOKEN_OPERATOR Option::Some
-        OpValue::Mul => TOKEN_OPERATOR Option::Some
-        OpValue::Div => TOKEN_OPERATOR Option::Some
-        OpValue::Mod => TOKEN_OPERATOR Option::Some
-        OpValue::Shl => TOKEN_OPERATOR Option::Some
-        OpValue::Shr => TOKEN_OPERATOR Option::Some
-        OpValue::BitAnd => TOKEN_OPERATOR Option::Some
-        OpValue::BitOr => TOKEN_OPERATOR Option::Some
-        OpValue::BitXor => TOKEN_OPERATOR Option::Some
-        OpValue::BitNot => TOKEN_OPERATOR Option::Some
-        OpValue::And => TOKEN_OPERATOR Option::Some
-        OpValue::Or => TOKEN_OPERATOR Option::Some
-        OpValue::Not => TOKEN_OPERATOR Option::Some
-        OpValue::Eq => TOKEN_OPERATOR Option::Some
-        OpValue::Ne => TOKEN_OPERATOR Option::Some
-        OpValue::Lt => TOKEN_OPERATOR Option::Some
-        OpValue::Le => TOKEN_OPERATOR Option::Some
-        OpValue::Gt => TOKEN_OPERATOR Option::Some
-        OpValue::Ge => TOKEN_OPERATOR Option::Some
-        OpValue::TypeCast(_) => TOKEN_TYPE Option::Some
-        OpValue::PushEnumVariant(_) => TOKEN_ENUM_MEMBER Option::Some
-        OpValue::StructNew(_) => TOKEN_STRUCT Option::Some
-        OpValue::Drop => TOKEN_MACRO Option::Some
-        OpValue::Dup => TOKEN_MACRO Option::Some
-        OpValue::Swap => TOKEN_MACRO Option::Some
-        OpValue::Over => TOKEN_MACRO Option::Some
-        OpValue::Rot => TOKEN_MACRO Option::Some
-        OpValue::Print => TOKEN_MACRO Option::Some
-        OpValue::PrintInt => TOKEN_MACRO Option::Some
-        OpValue::PrintStr => TOKEN_MACRO Option::Some
-        OpValue::PrintBool => TOKEN_MACRO Option::Some
-        OpValue::PrintChar => TOKEN_MACRO Option::Some
-        OpValue::PrintCstr => TOKEN_MACRO Option::Some
-        OpValue::HeapAlloc => TOKEN_MACRO Option::Some
-        OpValue::Load8 => TOKEN_MACRO Option::Some
-        OpValue::Load16 => TOKEN_MACRO Option::Some
-        OpValue::Load32 => TOKEN_MACRO Option::Some
-        OpValue::Load64 => TOKEN_MACRO Option::Some
-        OpValue::Store8 => TOKEN_MACRO Option::Some
-        OpValue::Store16 => TOKEN_MACRO Option::Some
-        OpValue::Store32 => TOKEN_MACRO Option::Some
-        OpValue::Store64 => TOKEN_MACRO Option::Some
-        OpValue::Syscall0 => TOKEN_MACRO Option::Some
-        OpValue::Syscall1 => TOKEN_MACRO Option::Some
-        OpValue::Syscall2 => TOKEN_MACRO Option::Some
-        OpValue::Syscall3 => TOKEN_MACRO Option::Some
-        OpValue::Syscall4 => TOKEN_MACRO Option::Some
-        OpValue::Syscall5 => TOKEN_MACRO Option::Some
-        OpValue::Syscall6 => TOKEN_MACRO Option::Some
-        OpValue::Typeof => TOKEN_MACRO Option::Some
-        _ => Option::None(Option[int])
+fn map_document_token_type kind:DocumentTokenKind -> int {
+    kind match
+        DocumentTokenKind::Function => TOKEN_FUNCTION
+        DocumentTokenKind::Variable => TOKEN_VARIABLE
+        DocumentTokenKind::String => TOKEN_STRING
+        DocumentTokenKind::Number => TOKEN_NUMBER
+        DocumentTokenKind::Keyword => TOKEN_KEYWORD
+        DocumentTokenKind::Operator => TOKEN_OPERATOR
+        DocumentTokenKind::Type => TOKEN_TYPE
+        DocumentTokenKind::EnumMember => TOKEN_ENUM_MEMBER
+        DocumentTokenKind::Struct => TOKEN_STRUCT
+        DocumentTokenKind::Macro => TOKEN_MACRO
     end
-}
-# Qualified name token type maps
-# Type part is always TOKEN_TYPE for all qualified names
-const QUALIFIED_TYPE_TOKEN { TOKEN_TYPE }
-# Member part tokens
-const QUALIFIED_MEMBER_FN { TOKEN_FUNCTION }
-const QUALIFIED_MEMBER_ENUM_VARIANT { TOKEN_ENUM_MEMBER }
-
-fn collect_semantic_tokens ops:List[Op] state:AnalyzedDocument tokens:List[SemanticToken] {
-    state.source = token_source
-    for op in ops.iter do
-        if op Op::location Location::file state.file_path != then
-            continue
-        fi
-        op Op::location Location::span Span::offset = start
-        op Op::location Location::span Span::length = length
-        if 0 length <= then
-            continue
-        fi
-        op.value op_value_token_type = token_type_opt
-        if token_type_opt.is_none then
-            continue
-        fi
-        token_type_opt.unwrap = token_type
-
-        # Check for qualified names
-        if
-        op.value OpValue::FnCall is
-        op.value OpValue::FnPush is ||
-        op.value OpValue::PushEnumVariant is ||
-        then
-            state.source start length str::substring = text
-            text "::" str::find = separator
-            if 0 separator >= then
-                # Type part
-                start token_source offset_to_line_col 1 - = type_line
-                start token_source offset_to_col 1 - = type_col
-                0 QUALIFIED_TYPE_TOKEN separator type_col type_line SemanticToken tokens.push
-                # Member part
-                start separator + 2 + = member_start
-                length separator - 2 - = member_length
-                if 0 member_length > then
-                    member_start token_source offset_to_line_col 1 - = member_line
-                    member_start token_source offset_to_col 1 - = member_col
-                    if op.value OpValue::PushEnumVariant is then QUALIFIED_MEMBER_ENUM_VARIANT else QUALIFIED_MEMBER_FN fi = member_token_type
-                    0 member_token_type member_length member_col member_line SemanticToken tokens.push
-                fi
-                continue
-            fi
-        fi
-
-        start token_source offset_to_line_col 1 - = token_line
-        start token_source offset_to_col 1 - = token_col
-        0 token_type length token_col token_line SemanticToken tokens.push
-    done
-}
-
-fn scan_keyword_before source:str name_offset:int keyword:str tokens:List[SemanticToken] {
-    name_offset 1 - = pos
-    while 0 pos >= do
-        pos source.at = ch
-        if ' ' ch != '\t' ch != && '\n' ch != && then
-            break
-        fi
-        1 -= pos
-    done
-    pos keyword.length - 1 + = keyword_start
-    if 0 keyword_start >= then
-        source keyword_start keyword.length str::substring = found_text
-        if found_text keyword == then
-            keyword_start source offset_to_line_col 1 - = keyword_line
-            keyword_start source offset_to_col 1 - = keyword_col
-            0 TOKEN_KEYWORD keyword.length keyword_col keyword_line SemanticToken tokens.push
-        fi
-    fi
 }
 
 fn compute_semantic_tokens state:AnalyzedDocument -> List[SemanticToken] {
-    state.source = source
-
     List::new(List[SemanticToken]) = tokens
-
-    # Collect from global ops
-    tokens state state.ops collect_semantic_tokens
-
-    # Collect from function ops
-    state.functions.keys = fn_keys
-    for fn_name in fn_keys.iter do
-        fn_name state.functions.get.unwrap = func
-        tokens state func Function::ops collect_semantic_tokens
+    for document_token in state.find_semantic_tokens.iter do
+        document_token.location = location
+        location.offset location.source offset_to_line_col 1 - = line
+        location.offset location.source offset_to_col 1 - = column
+        0
+        document_token.kind map_document_token_type
+        location.length
+        column
+        line
+        SemanticToken tokens.push
     done
-
-    # Add function definition names + fn keyword
-    for fn_def_name in fn_keys.iter do
-        fn_def_name state.functions.get.unwrap = fn_def
-        if "" fn_def Function::location Location::file == then
-            continue
-        fi
-        if fn_def Function::location Location::file state.file_path != then
-            continue
-        fi
-        if fn_def Function::name "lambda__" str::starts_with fn_def Function::name "__" str::starts_with || then
-            continue
-        fi
-        fn_def Function::location Location::span Span::offset = fn_offset
-        fn_def Function::location Location::span Span::length = fn_length
-        if 0 fn_length > then
-            fn_offset source offset_to_line_col 1 - = fn_line
-            fn_offset source offset_to_col 1 - = fn_col
-            0 TOKEN_FUNCTION fn_length fn_col fn_line SemanticToken tokens.push
-        fi
-        tokens "fn" fn_offset source scan_keyword_before
-    done
-
-    # Add enum definition names + enum keyword
-    state.enums.keys = enum_keys
-    for enum_def_name in enum_keys.iter do
-        enum_def_name state.enums.get.unwrap = enum_def
-        if enum_def CasaEnum::location Location::file state.file_path != then
-            continue
-        fi
-        enum_def CasaEnum::location Location::span Span::offset = enum_offset
-        enum_def CasaEnum::location Location::span Span::length = enum_length
-        if 0 enum_length > then
-            enum_offset source offset_to_line_col 1 - = enum_line
-            enum_offset source offset_to_col 1 - = enum_col
-            0 TOKEN_TYPE enum_length enum_col enum_line SemanticToken tokens.push
-        fi
-        tokens "enum" enum_offset source scan_keyword_before
-    done
-
-    # Add struct definition names + struct keyword
-    state.structs.keys = struct_keys
-    for struct_def_name in struct_keys.iter do
-        struct_def_name state.structs.get.unwrap = struct_def
-        if struct_def CasaStruct::location Location::file state.file_path != then
-            continue
-        fi
-        struct_def CasaStruct::location Location::span Span::offset = struct_offset
-        struct_def CasaStruct::location Location::span Span::length = struct_length
-        if 0 struct_length > then
-            struct_offset source offset_to_line_col 1 - = struct_line
-            struct_offset source offset_to_col 1 - = struct_col
-            0 TOKEN_STRUCT struct_length struct_col struct_line SemanticToken tokens.push
-        fi
-        tokens "struct" struct_offset source scan_keyword_before
-    done
-
-    # Sort tokens by (line, col)
-    # Simple insertion sort
-    1 = sort_index
-    while sort_index tokens.length > do
-        sort_index tokens.get = sort_key
-        sort_index 1 - = sort_j
-        while 0 sort_j >= do
-            sort_j tokens.get = sort_cmp
-            if
-            sort_key SemanticToken::line sort_cmp SemanticToken::line <
-            sort_key SemanticToken::line sort_cmp SemanticToken::line == sort_key SemanticToken::col sort_cmp SemanticToken::col <= && ||
-            then
-                break
-            fi
-            sort_cmp sort_j 1 + tokens.set
-            1 -= sort_j
-        done
-        sort_key sort_j 1 + tokens.set
-        1 += sort_index
-    done
-
     tokens
 }
 
