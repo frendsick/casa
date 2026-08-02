@@ -9,6 +9,14 @@ enum SymbolPart {
     MemberName
 }
 
+enum DocumentSymbolKind {
+    Function
+    Variable
+    Struct
+    Enum
+    EnumVariant
+}
+
 struct AnalyzedDocument {
     ops:       List[Op]
     functions: Map[str Function]
@@ -45,9 +53,63 @@ enum CompletionCandidate {
     Method (Function)
 }
 
+struct DocumentSymbol {
+    kind:        DocumentSymbolKind
+    name:        str
+    declaration: Location
+    owner:       Option[Function]
+}
+
 struct FindSymbolState {
     best:        Option[DocumentElement]
     best_length: int
+}
+
+impl Location {
+    fn matches self:Location other:Location -> bool {
+        self.file other.file ==
+        self.span.offset other.span.offset == &&
+        self.span.length other.span.length == &&
+    }
+
+    fn contains_offset self:Location file_path:str offset:int -> bool {
+        if self.file file_path != then false return fi
+        self.span.offset offset >=
+        offset self.span.offset self.span.length + > &&
+    }
+}
+
+impl DocumentSymbol {
+    fn new
+        kind:DocumentSymbolKind
+        name:str
+        declaration:Location
+        owner:Option[Function]
+    -> DocumentSymbol {
+        owner declaration name kind DocumentSymbol
+    }
+
+    fn matches_identity self:DocumentSymbol other:DocumentSymbol -> bool {
+        if self.kind other.kind != self.name other.name != || then false return fi
+        if other.declaration self.declaration.matches ! then false return fi
+        if self.owner Option::Some(self_owner) is then
+            if other.owner Option::Some(other_owner) is then
+                other_owner.location self_owner.location.matches return
+            fi
+            false return
+        fi
+        other.owner.is_none
+    }
+
+    fn has_declaration_reference self:DocumentSymbol -> bool {
+        self.kind match
+            DocumentSymbolKind::Function => true
+            DocumentSymbolKind::Variable => false
+            DocumentSymbolKind::Struct => true
+            DocumentSymbolKind::Enum => true
+            DocumentSymbolKind::EnumVariant => true
+        end
+    }
 }
 
 fn position_to_offset source:str line:int column:int -> int {
@@ -194,6 +256,20 @@ fn infer_literal_type text:str -> Option[Type] {
     if all_digits then TYPE_INT_T Option::Some return fi
     if text "true" == text "false" == || then TYPE_BOOL_T Option::Some return fi
     Option::None(Option[Type])
+}
+
+fn find_first_assignment name:str ops:List[Op] -> Option[Location] {
+    for op in ops.iter do
+        if op.value OpValue::AssignVar(assign_name) is then
+            if assign_name name == then op.location Option::Some return fi
+        fi
+    done
+    Option::None(Option[Location])
+}
+
+fn is_qualified_operation source:str op:Op -> bool {
+    if 0 op.location.span.length == then false return fi
+    source op.location.span.offset op.location.span.length str::substring "::" str::contains
 }
 
 impl AnalyzedDocument {
@@ -385,6 +461,261 @@ impl AnalyzedDocument {
         fi
 
         List::new(List[CompletionCandidate])
+    }
+
+    fn find_variable_owner
+        self:AnalyzedDocument
+        name:str
+        function:Option[Function]
+    -> Option[Function] {
+        if function Option::Some(containing_function) is then
+            if name containing_function.variables variable_list_contains then
+                containing_function Option::Some return
+            fi
+            if name containing_function.captures variable_list_contains then
+                if containing_function self.find_parent_function Option::Some(parent) is then
+                    parent Option::Some name self.find_variable_owner return
+                fi
+            fi
+        fi
+        Option::None(Option[Function])
+    }
+
+    fn find_parent_function
+        self:AnalyzedDocument
+        child:Function
+    -> Option[Function] {
+        for function_name in self.functions.keys.iter do
+            function_name self.functions.get.unwrap = function
+            for op in function.ops.iter do
+                if op.value OpValue::FnPush(pushed_name) is then
+                    if pushed_name child.name == then function Option::Some return fi
+                fi
+            done
+        done
+        Option::None(Option[Function])
+    }
+
+    fn find_callable_symbol
+        self:AnalyzedDocument
+        name:str
+        part:SymbolPart
+    -> Option[DocumentSymbol] {
+        if part SymbolPart::TypeName is then
+            name "::" str::split = parts
+            0 parts.get self.find_type_symbol return
+        fi
+        if part SymbolPart::Separator is then Option::None(Option[DocumentSymbol]) return fi
+        if name self.lookup_function Option::Some(function) is then
+            Option::None(Option[Function])
+            function.location
+            name
+            DocumentSymbolKind::Function
+            DocumentSymbol::new Option::Some return
+        fi
+        Option::None(Option[DocumentSymbol])
+    }
+
+    fn find_enum_variant_symbol
+        self:AnalyzedDocument
+        variant:EnumVariant
+        part:SymbolPart
+    -> Option[DocumentSymbol] {
+        if part SymbolPart::TypeName is then variant.enum_name self.find_type_symbol return fi
+        if part SymbolPart::Separator is then Option::None(Option[DocumentSymbol]) return fi
+        if variant.enum_name self.lookup_enum Option::Some(casa_enum) is then
+            if variant.variant_name casa_enum.variant_locations.get Option::Some(declaration) is then
+                Option::None(Option[Function])
+                declaration
+                variant.variant_name
+                DocumentSymbolKind::EnumVariant
+                DocumentSymbol::new Option::Some return
+            fi
+        fi
+        Option::None(Option[DocumentSymbol])
+    }
+
+    fn find_variable_symbol
+        self:AnalyzedDocument
+        name:str
+        function:Option[Function]
+    -> Option[DocumentSymbol] {
+        function name self.find_variable_owner = owner
+        if owner Option::Some(owner_function) is then owner_function.ops else self.ops fi = operations
+        if operations name find_first_assignment Option::Some(declaration) is then
+            owner declaration name DocumentSymbolKind::Variable DocumentSymbol::new Option::Some return
+        fi
+        Option::None(Option[DocumentSymbol])
+    }
+
+    fn find_symbol_identity
+        self:AnalyzedDocument
+        element:DocumentElement
+    -> Option[DocumentSymbol] {
+        element.op.value match
+            OpValue::FnCall(name) => element.part name self.find_callable_symbol
+            OpValue::FnPush(name) => element.part name self.find_callable_symbol
+            OpValue::PushEnumVariant(variant) => element.part variant self.find_enum_variant_symbol
+            OpValue::StructNew(casa_struct) => {
+                Option::None(Option[Function])
+                casa_struct.location
+                casa_struct.name
+                DocumentSymbolKind::Struct
+                DocumentSymbol::new Option::Some
+            }
+            OpValue::TypeCast(cast_type) => cast_type.match_base self.find_type_symbol
+            OpValue::PushVar(name) => element.containing_function name self.find_variable_symbol
+            OpValue::PushCapture(name) => element.containing_function name self.find_variable_symbol
+            OpValue::AssignVar(name) => element.containing_function name self.find_variable_symbol
+            OpValue::AssignInc(name) => element.containing_function name self.find_variable_symbol
+            OpValue::AssignDec(name) => element.containing_function name self.find_variable_symbol
+            _ => Option::None(Option[DocumentSymbol])
+        end
+    }
+
+    fn find_type_symbol self:AnalyzedDocument name:str -> Option[DocumentSymbol] {
+        if name self.lookup_struct Option::Some(casa_struct) is then
+            Option::None(Option[Function])
+            casa_struct.location
+            casa_struct.name
+            DocumentSymbolKind::Struct
+            DocumentSymbol::new Option::Some return
+        fi
+        if name self.lookup_enum Option::Some(casa_enum) is then
+            Option::None(Option[Function])
+            casa_enum.location
+            casa_enum.name
+            DocumentSymbolKind::Enum
+            DocumentSymbol::new Option::Some return
+        fi
+        Option::None(Option[DocumentSymbol])
+    }
+
+    fn find_symbol_identity_at
+        self:AnalyzedDocument
+        line:int
+        column:int
+    -> Option[DocumentSymbol] {
+        if column line self.find_function_at Option::Some(function) is then
+            Option::None(Option[Function])
+            function.location
+            function.name
+            DocumentSymbolKind::Function
+            DocumentSymbol::new Option::Some return
+        fi
+        if column line self.find_declared_symbol_at Option::Some(symbol) is then
+            symbol Option::Some return
+        fi
+        if column line self.find_symbol_at Option::Some(element) is then
+            element self.find_symbol_identity return
+        fi
+        Option::None(Option[DocumentSymbol])
+    }
+
+    fn find_declared_symbol_at
+        self:AnalyzedDocument
+        line:int
+        column:int
+    -> Option[DocumentSymbol] {
+        column line self.source position_to_offset = offset
+        for struct_name in self.structs.keys.iter do
+            struct_name self.structs.get.unwrap = casa_struct
+            if offset self.file_path casa_struct.location.contains_offset then
+                struct_name self.find_type_symbol return
+            fi
+        done
+        for enum_name in self.enums.keys.iter do
+            enum_name self.enums.get.unwrap = casa_enum
+            if offset casa_enum self.find_declared_enum_symbol_at Option::Some(symbol) is then
+                symbol Option::Some return
+            fi
+        done
+        Option::None(Option[DocumentSymbol])
+    }
+
+    fn find_declared_enum_symbol_at
+        self:AnalyzedDocument
+        casa_enum:CasaEnum
+        offset:int
+    -> Option[DocumentSymbol] {
+        if offset self.file_path casa_enum.location.contains_offset then
+            casa_enum.name self.find_type_symbol return
+        fi
+        for variant_name in casa_enum.variants.iter do
+            if variant_name casa_enum.variant_locations.get Option::Some(location) is then
+                if offset self.file_path location.contains_offset then
+                    Option::None(Option[Function])
+                    location
+                    variant_name
+                    DocumentSymbolKind::EnumVariant
+                    DocumentSymbol::new Option::Some return
+                fi
+            fi
+        done
+        Option::None(Option[DocumentSymbol])
+    }
+
+    fn collect_symbol_references
+        self:AnalyzedDocument
+        symbol:DocumentSymbol
+        ops:List[Op]
+        function:Option[Function]
+        references:List[DocumentLocation]
+    {
+        for op in ops.iter do
+            op.location self.locate.source = op_source
+            if op op_source is_qualified_operation then
+                references op_source SymbolPart::TypeName op function symbol self.collect_element_reference
+                references op_source SymbolPart::MemberName op function symbol self.collect_element_reference
+            else
+                references op_source SymbolPart::Whole op function symbol self.collect_element_reference
+            fi
+        done
+    }
+
+    fn collect_element_reference
+        self:AnalyzedDocument
+        symbol:DocumentSymbol
+        function:Option[Function]
+        op:Op
+        part:SymbolPart
+        source:str
+        references:List[DocumentLocation]
+    {
+        part op source get_symbol_location = location
+        location part function op DocumentElement = element
+        if element self.find_symbol_identity Option::Some(reference_symbol) is then
+            if reference_symbol symbol.matches_identity then
+                if symbol.name.length location.span.length < then
+                    symbol.name.length
+                    location.span.offset location.span.length + symbol.name.length -
+                    location.file
+                    Location::new = location
+                fi
+                location self.locate references.push
+            fi
+        fi
+    }
+
+    fn find_references_at
+        self:AnalyzedDocument
+        line:int
+        column:int
+        include_declaration:bool
+    -> Option[List[DocumentLocation]] {
+        if column line self.find_symbol_identity_at Option::Some(symbol) is then
+            List::new(List[DocumentLocation]) = references
+            if include_declaration symbol.has_declaration_reference && then
+                symbol.declaration self.locate references.push
+            fi
+            references Option::None(Option[Function]) self.ops symbol self.collect_symbol_references
+            for function_name in self.functions.keys.iter do
+                function_name self.functions.get.unwrap = function
+                references function Option::Some function.ops symbol self.collect_symbol_references
+            done
+            if 0 references.length != then references Option::Some return fi
+        fi
+        Option::None(Option[List[DocumentLocation]])
     }
 
     fn find_function_at self:AnalyzedDocument line:int column:int -> Option[Function] {
