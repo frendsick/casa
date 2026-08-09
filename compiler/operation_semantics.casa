@@ -43,6 +43,275 @@ struct MethodSemantics {
     stack_effect:  StackEffect
 }
 
+struct OperationSemanticsStack {
+    types:            List[Type]
+    parameters:       List[Parameter]
+    next_parameter:   int
+    branches:         List[OperationSemanticsBranch]
+    variables:        Map[str Type]
+    infer_parameters: bool
+}
+
+struct OperationSemanticsStackSnapshot {
+    types:          List[Type]
+    next_parameter: int
+    variables:      Map[str Type]
+}
+
+enum OperationSemanticsBranchKind {
+    If
+    While
+    Match
+}
+
+impl StackEffect {
+    fn needs_inference self:StackEffect -> bool {
+        0 self.parameters.length == 0 self.return_types.length == &&
+    }
+}
+
+struct OperationSemanticsBranch {
+    kind:         OperationSemanticsBranchKind
+    before:       Option[OperationSemanticsStackSnapshot]
+    after:        Option[OperationSemanticsStackSnapshot]
+    subject_type: Option[Type]
+    active:       bool
+    has_default:  bool
+}
+
+fn get_variable_root_name variable_name:str -> str {
+    variable_name "." str::split = name_parts
+    0 name_parts.get
+}
+
+fn unify_generic_type_parameters type_a:Type type_b:Type store:SymbolStore -> Option[Type] {
+    if type_a.base type_b.base != then Option::None(Option[Type]) return fi
+    type_a.type_params = parameters_a_result
+    type_b.type_params = parameters_b_result
+    if parameters_a_result.is_none then type_b Option::Some return fi
+    if parameters_b_result.is_none then type_a Option::Some return fi
+    parameters_a_result.unwrap = parameters_a
+    parameters_b_result.unwrap = parameters_b
+    if parameters_a.length parameters_b.length != then Option::None(Option[Type]) return fi
+    List::new(List[Type]) = unified
+    for pair in parameters_b.iter parameters_a.iter.zip do
+        store pair.second pair.first unify_type_t ? unified.push
+    done
+    type_a.base = base_result
+    if base_result.is_none then Option::None(Option[Type]) return fi
+    base_result.unwrap = base
+    unified base GenericType Type::Generic Option::Some
+}
+
+fn unify_type_t type_a:Type type_b:Type store:SymbolStore -> Option[Type] {
+    if type_a type_b.eq then type_a Option::Some return fi
+    if type_a.is_unknown_placeholder then type_b Option::Some return fi
+    if type_b.is_unknown_placeholder then type_a Option::Some return fi
+    if type_a.has_unresolved_type_var then type_b Option::Some return fi
+    if type_b.has_unresolved_type_var then type_a Option::Some return fi
+    type_a.base = base_a
+    type_b.base = base_b
+    if base_a.is_some base_b.is_some && then
+        store type_b type_a unify_generic_type_parameters = generic_result
+        if generic_result.is_some then generic_result return fi
+    fi
+    if base_a Option::Some(first_base_name) is then
+        if first_base_name type_b.format == then type_a Option::Some return fi
+    fi
+    if base_b Option::Some(second_base_name) is then
+        if second_base_name type_a.format == then type_b Option::Some return fi
+    fi
+    Option::None(Option[Type])
+}
+
+impl OperationSemanticsStack {
+    fn new function:Function -> OperationSemanticsStack {
+        Map::new(Map[str Type]) = variables
+        for variable in function.variables.iter do
+            variable.typ variable.name variables.set = variables
+        done
+        for capture in function.captures.iter do
+            capture.typ capture.name variables.set = variables
+        done
+        function.stack_effect.needs_inference
+        variables
+        List::new(List[OperationSemanticsBranch])
+        0
+        function.stack_effect.parameters
+        List::new(List[Type])
+        OperationSemanticsStack
+    }
+
+    fn push self:OperationSemanticsStack type_value:Type {
+        type_value self.types.push
+    }
+
+    fn peek self:OperationSemanticsStack -> Option[Type] {
+        if 0 self.types.length != then
+            self.types.length 1 - self.types.get Option::Some return
+        fi
+        if self.next_parameter self.parameters.length > then
+            self.next_parameter self.parameters.get.typ Option::Some return
+        fi
+        if self.infer_parameters then
+            TYPE_UNKNOWN_T Option::Some return
+        fi
+        Option::None(Option[Type])
+    }
+
+    fn pop self:OperationSemanticsStack -> Option[Type] {
+        if 0 self.types.length != then
+            self.types.pop Option::Some return
+        fi
+        if self.next_parameter self.parameters.length > then
+            self.next_parameter self.parameters.get.typ = parameter_type
+            1 += self.next_parameter
+            parameter_type Option::Some return
+        fi
+        if self.infer_parameters then
+            TYPE_UNKNOWN_T Parameter::new self.parameters.push
+            1 += self.next_parameter
+            TYPE_UNKNOWN_T Option::Some return
+        fi
+        Option::None(Option[Type])
+    }
+
+    fn drop_count self:OperationSemanticsStack count:int {
+        0 = index
+        while index count > do
+            self.pop drop
+            1 += index
+        done
+    }
+}
+
+impl OperationSemanticsStack {
+    fn apply_effect_with_bindings self:OperationSemanticsStack effect:StackEffect -> Map[str Type] {
+        Map::new(Map[str Type]) = bindings
+        for parameter in effect.parameters.iter do
+            if parameter.name "__trait_" str::starts_with then
+                continue
+            fi
+            if self.pop Option::Some(actual_type) is then
+                bindings actual_type parameter.typ bind_semantic_type_arguments = bindings
+            fi
+        done
+        for return_type in effect.return_types.iter do
+            bindings return_type.substitute_t self.push
+        done
+        bindings
+    }
+
+    fn apply_result self:OperationSemanticsStack consumed:int result_type:Type {
+        consumed self.drop_count
+        result_type self.push
+    }
+
+    fn clone_variables self:OperationSemanticsStack -> Map[str Type] {
+        Map::new(Map[str Type]) = cloned
+        for name in self.variables.keys.iter do
+            name self.variables.get.unwrap name cloned.set = cloned
+        done
+        cloned
+    }
+
+    fn snapshot self:OperationSemanticsStack -> OperationSemanticsStackSnapshot {
+        self.clone_variables self.next_parameter self.types.clone OperationSemanticsStackSnapshot
+    }
+
+    fn restore self:OperationSemanticsStack snapshot:OperationSemanticsStackSnapshot {
+        snapshot.types.clone = self.types
+        snapshot.next_parameter = self.next_parameter
+        Map::new(Map[str Type]) = self.variables
+        for name in snapshot.variables.keys.iter do
+            name snapshot.variables.get.unwrap name self.variables.set = self.variables
+        done
+    }
+
+    fn start_branch
+        self:OperationSemanticsStack
+        subject_type:Option[Type]
+        kind:OperationSemanticsBranchKind
+        capture_now:bool
+    {
+        Option::None(Option[OperationSemanticsStackSnapshot]) = before
+        if capture_now then
+            self.snapshot Option::Some = before
+        fi
+        false
+        false
+        subject_type
+        Option::None(Option[OperationSemanticsStackSnapshot])
+        before
+        kind
+        OperationSemanticsBranch = branch
+        branch self.branches.push
+    }
+
+    fn capture_branch_entry self:OperationSemanticsStack {
+        if 0 self.branches.length == then
+            return
+        fi
+        self.branches.length 1 - self.branches.get = branch
+        if branch.before Option::None is then
+            self.snapshot Option::Some = branch.before
+        fi
+    }
+
+    fn restore_branch_entry self:OperationSemanticsStack {
+        if 0 self.branches.length == then
+            return
+        fi
+        self.branches.length 1 - self.branches.get = branch
+        if branch.before Option::Some(before) is then
+            before self.restore
+        fi
+    }
+
+    fn end_loop self:OperationSemanticsStack {
+        if 0 self.branches.length == then
+            return
+        fi
+        self.branches.pop = branch
+        if branch.kind OperationSemanticsBranchKind::While is then
+            if branch.before Option::Some(before) is then
+                before self.restore
+            fi
+        fi
+    }
+
+    fn end_branch self:OperationSemanticsStack {
+        if 0 self.branches.length != then
+            self.branches.pop drop
+        fi
+    }
+
+    fn get_branch_subject self:OperationSemanticsStack -> Option[Type] {
+        if 0 self.branches.length != then
+            self.branches.length 1 - self.branches.get.subject_type return
+        fi
+        Option::None(Option[Type])
+    }
+
+    fn get_variable_type self:OperationSemanticsStack variable_name:str -> Option[Type] {
+        variable_name get_variable_root_name self.variables.get
+    }
+
+    fn assign_variable_type
+        self:OperationSemanticsStack
+        variable_name:str
+        type_result:Option[Type]
+    {
+        variable_name "." str::split = name_parts
+        if 1 name_parts.length != then
+            return
+        fi
+        if type_result Option::Some(type_value) is then
+            type_value variable_name self.variables.set = self.variables
+        fi
+    }
+}
+
 struct OperationSemanticsResult {
     stack_effect:           Option[StackEffect]
     resolved_operation:     Option[OpValue]
@@ -807,4 +1076,617 @@ fn analyze_operation_semantics
         fi
     fi
     result
+}
+
+struct FunctionOperationSemantics {
+    ordered_facts:   List[OperationDependencyFact]
+    inferred_effect: StackEffect
+}
+
+impl FunctionOperationSemantics {
+    fn has_symbol_dependency self:FunctionOperationSemantics dependency:str -> bool {
+        for fact in self.ordered_facts.iter do
+            if fact OperationDependencyFact::Symbol(symbol) is then
+                if symbol dependency == then true return fi
+            fi
+        done
+        false
+    }
+}
+
+enum OperationDependencyFact {
+    Symbol (str)
+    Type (Type)
+    Global (OperationGlobalReference)
+}
+
+struct OperationGlobalReference {
+    name:            str
+    location:        Location
+    declared_global: bool
+}
+
+struct OperationSemanticsAnalysis {
+    store:             SymbolStore
+    inferred_effects:  Map[str StackEffect]
+    seen_dependencies: Set[str]
+    ordered_facts:     List[OperationDependencyFact]
+}
+
+impl OperationSemanticsAnalysis {
+    fn merge_branch_variable
+        self:OperationSemanticsAnalysis
+        merged:OperationSemanticsStackSnapshot
+        current:OperationSemanticsStackSnapshot
+        variable_name:str
+    {
+        variable_name current.variables.get = current_result
+        variable_name merged.variables.get = merged_result
+        if current_result.is_none merged_result.is_none || then return fi
+        self.store current_result.unwrap merged_result.unwrap unify_type_t = unified
+        if unified Option::Some(type_value) is then
+            type_value variable_name merged.variables.set = merged.variables
+        fi
+    }
+
+    fn merge_branch_exit self:OperationSemanticsAnalysis stack:OperationSemanticsStack {
+        if 0 stack.branches.length == then return fi
+        stack.branches.length 1 - stack.branches.get = branch
+        if branch.active ! then return fi
+        stack.snapshot = current
+        if branch.after Option::None is then
+            current Option::Some = branch.after
+            return
+        fi
+        branch.after.unwrap = merged
+        if merged.types.length current.types.length != then return fi
+        0 = index
+        while index merged.types.length > do
+            self.store index current.types.get index merged.types.get unify_type_t
+            = unified
+            if unified Option::Some(type_value) is then
+                type_value index merged.types.set
+            fi
+            1 += index
+        done
+        for variable_name in merged.variables.keys.iter do
+            variable_name current merged self.merge_branch_variable
+        done
+    }
+
+    fn finish_branch
+        self:OperationSemanticsAnalysis
+        stack:OperationSemanticsStack
+        include_entry:bool
+    {
+        stack self.merge_branch_exit
+        if 0 stack.branches.length == then return fi
+        stack.branches.length 1 - stack.branches.get = branch
+        if include_entry branch.before Option::Some(entry) is && then
+            true = branch.active
+            entry stack.restore
+            stack self.merge_branch_exit
+        fi
+        if branch.after Option::Some(after) is then after stack.restore fi
+        stack.end_branch
+    }
+
+    fn new store:SymbolStore inferred_effects:Map[str StackEffect] -> OperationSemanticsAnalysis {
+        List::new(List[OperationDependencyFact])
+        Set::new(Set[str])
+        inferred_effects
+        store
+        OperationSemanticsAnalysis
+    }
+
+    fn add_dependency self:OperationSemanticsAnalysis dependency:str {
+        if dependency self.seen_dependencies.has ! then
+            dependency self.seen_dependencies.add = self.seen_dependencies
+            dependency OperationDependencyFact::Symbol self.ordered_facts.push
+        fi
+    }
+
+    fn add_type_dependency self:OperationSemanticsAnalysis type_value:Type {
+        type_value OperationDependencyFact::Type self.ordered_facts.push
+    }
+
+    fn add_global_reference
+        self:OperationSemanticsAnalysis
+        name:str
+        location:Location
+        declared_global:bool
+    {
+        declared_global location name OperationGlobalReference = reference
+        reference OperationDependencyFact::Global self.ordered_facts.push
+    }
+
+    fn get_variable_type
+        self:OperationSemanticsAnalysis
+        function:Function
+        variable_name:str
+    -> Option[Type] {
+        variable_name get_variable_root_name = root_name
+        for variable in function.variables.iter do
+            if variable.name root_name == then variable.typ Option::Some return fi
+        done
+        for capture in function.captures.iter do
+            if capture.name root_name == then capture.typ Option::Some return fi
+        done
+        if root_name self.store.variables.get Option::Some(variable) is then
+            variable.typ Option::Some return
+        fi
+        Option::None(Option[Type])
+    }
+
+    fn get_function_effect
+        self:OperationSemanticsAnalysis
+        function_name:str
+    -> Option[StackEffect] {
+        if function_name self.inferred_effects.get Option::Some(effect) is then
+            effect Option::Some return
+        fi
+        if function_name self.store.functions.get Option::Some(function) is then
+            if function.stack_effect.needs_inference then
+                function.stack_effect function_name self.inferred_effects.set = self.inferred_effects
+                self.store self.inferred_effects function
+                analyze_function_operation_semantics = semantics
+                semantics.inferred_effect function_name self.inferred_effects.set
+                = self.inferred_effects
+                semantics.inferred_effect Option::Some return
+            fi
+            function.stack_effect Option::Some return
+        fi
+        Option::None(Option[StackEffect])
+    }
+}
+
+impl OperationSemanticsAnalysis {
+    fn collect_pattern_dependencies self:OperationSemanticsAnalysis pattern:PatternValue {
+        pattern match
+            PatternValue::Struct(struct_pattern) => {
+                if "" struct_pattern.struct_name != then
+                    struct_pattern.struct_name self.add_dependency
+                fi
+            }
+            PatternValue::EnumVariant(variant) => {
+                if "" variant.enum_name != then
+                    variant.enum_name self.add_dependency
+                fi
+            }
+            PatternValue::Literal => { }
+        end
+    }
+
+    fn collect_operation_facts self:OperationSemanticsAnalysis function:Function operation_node:Op {
+        if operation_node.type_hint Option::Some(type_hint) is then
+            type_hint self.add_type_dependency
+        fi
+        if operation_node.deferred_return_hint Option::Some(return_hint) is then
+            return_hint self.add_type_dependency
+        fi
+
+        operation_node.value = operation_value
+        if operation_value OpValue::DeclareGlobal(global_name) is then
+            true operation_node.location global_name self.add_global_reference
+        elif
+        operation_value OpValue::PushVar is
+        operation_value OpValue::PushCapture is ||
+        operation_value OpValue::AssignVar is ||
+        operation_value OpValue::AssignInc is ||
+        operation_value OpValue::AssignDec is ||
+        then
+            false operation_node.location operation_node op_str_value
+            self.add_global_reference
+        fi
+
+        operation_value match
+            OpValue::StructNew(casa_struct) => { casa_struct.name self.add_dependency }
+            OpValue::StructLiteral(literal) => { literal.struct_name self.add_dependency }
+            OpValue::PushEnumVariant(variant) => { variant.enum_name self.add_dependency }
+            OpValue::IsCheck(variant) => { variant.enum_name self.add_dependency }
+            OpValue::TypeCast(cast_type) => { cast_type self.add_type_dependency }
+            OpValue::MatchArm(arm) => {
+                arm.pattern_value self.collect_pattern_dependencies
+            }
+            _ => { }
+        end
+    }
+
+    fn construct_struct_type
+        self:OperationSemanticsAnalysis
+        stack:OperationSemanticsStack
+        casa_struct:CasaStruct
+    -> Type {
+        Map::new(Map[str Type]) = bindings
+        for member in casa_struct.members.iter do
+            if stack.pop Option::Some(actual_type) is then
+                bindings actual_type member.typ bind_semantic_type_arguments = bindings
+            fi
+        done
+        bindings casa_struct.type_vars casa_struct.name build_resolved_type
+    }
+
+    fn construct_struct_literal_type
+        self:OperationSemanticsAnalysis
+        stack:OperationSemanticsStack
+        literal:StructLiteral
+    -> Type {
+        if literal.struct_name self.store.structs.get Option::Some(casa_struct) is then
+            Map::new(Map[str Type]) = bindings
+            literal.field_order.length 1 - = field_index
+            while 0 field_index >= do
+                field_index literal.field_order.get = field_name
+                stack.pop = actual_type_result
+                actual_type_result field_name casa_struct bindings
+                self.bind_struct_literal_field = bindings
+                1 -= field_index
+            done
+            bindings casa_struct.type_vars casa_struct.name build_resolved_type return
+        fi
+        literal.field_order.length stack.drop_count
+        literal.struct_name GenericType::new Type::Generic
+    }
+
+    fn bind_struct_literal_field
+        self:OperationSemanticsAnalysis
+        bindings:Map[str Type]
+        casa_struct:CasaStruct
+        field_name:str
+        actual_type_result:Option[Type]
+    -> Map[str Type] {
+        for member in casa_struct.members.iter do
+            if field_name member.name == then
+                if actual_type_result Option::Some(actual_type) is then
+                    bindings actual_type member.typ bind_semantic_type_arguments = bindings
+                fi
+                break
+            fi
+        done
+        bindings
+    }
+
+    fn bind_enum_payload
+        self:OperationSemanticsAnalysis
+        stack:OperationSemanticsStack
+        expected_types:List[Type]
+    -> Map[str Type] {
+        Map::new(Map[str Type]) = bindings
+        for expected_type in expected_types.iter do
+            if stack.pop Option::Some(actual_type) is then
+                bindings actual_type expected_type bind_semantic_type_arguments = bindings
+            fi
+        done
+        bindings
+    }
+
+    fn construct_enum_type
+        self:OperationSemanticsAnalysis
+        stack:OperationSemanticsStack
+        variant:EnumVariant
+    -> Type {
+        if variant.enum_name self.store.enums.get Option::Some(casa_enum) is then
+            List::new(List[Type]) = expected_types
+            if variant.variant_name casa_enum.variant_types.get Option::Some(variant_types) is then
+                variant_types = expected_types
+            fi
+            expected_types stack self.bind_enum_payload = bindings
+            bindings casa_enum.type_vars casa_enum.name build_resolved_type return
+        fi
+        variant.enum_name GenericType::new Type::Generic
+    }
+
+    fn push_variable_type
+        self:OperationSemanticsAnalysis
+        function:Function
+        stack:OperationSemanticsStack
+        name:str
+    {
+        if name stack.get_variable_type Option::Some(variable_type) is then
+            variable_type stack.push
+            return
+        fi
+        if name function self.get_variable_type Option::Some(variable_type) is then
+            variable_type stack.push
+        fi
+    }
+
+    fn make_pattern_substitutions
+        self:OperationSemanticsAnalysis
+        type_variables:List[str]
+        subject_type:Option[Type]
+    -> Map[str Type] {
+        Map::new(Map[str Type]) = substitutions
+        if subject_type Option::Some(subject) is then
+            if subject Type::Generic(subject_generic) is then
+                for pair in subject_generic.params.iter type_variables.iter.zip do
+                    pair.second pair.first substitutions.set = substitutions
+                done
+            fi
+        fi
+        substitutions
+    }
+
+    fn assign_struct_pattern_field
+        self:OperationSemanticsAnalysis
+        stack:OperationSemanticsStack
+        casa_struct:CasaStruct
+        substitutions:Map[str Type]
+        field_name:str
+        bound_name:str
+    {
+        for member in casa_struct.members.iter do
+            if field_name member.name == then
+                substitutions member.typ.substitute_t Option::Some
+                bound_name
+                stack.assign_variable_type
+                return
+            fi
+        done
+    }
+
+    fn assign_struct_pattern_bindings
+        self:OperationSemanticsAnalysis
+        stack:OperationSemanticsStack
+        subject_type:Option[Type]
+        pattern:StructPattern
+    {
+        if pattern.struct_name self.store.structs.get Option::Some(casa_struct) is then
+            subject_type casa_struct.type_vars self.make_pattern_substitutions = substitutions
+            for field_name in pattern.bindings.keys.iter do
+                if field_name pattern.bindings.get Option::Some(bound_name) is then
+                    bound_name field_name substitutions casa_struct stack
+                    self.assign_struct_pattern_field
+                fi
+            done
+        fi
+    }
+
+    fn assign_enum_pattern_payloads
+        self:OperationSemanticsAnalysis
+        stack:OperationSemanticsStack
+        substitutions:Map[str Type]
+        payload_types:List[Type]
+        binding_names:List[str]
+    {
+        for pair in binding_names.iter payload_types.iter.zip do
+            substitutions pair.first.substitute_t Option::Some
+            pair.second
+            stack.assign_variable_type
+        done
+    }
+
+    fn assign_enum_pattern_bindings
+        self:OperationSemanticsAnalysis
+        stack:OperationSemanticsStack
+        subject_type:Option[Type]
+        variant:EnumVariant
+    {
+        if variant.enum_name self.store.enums.get Option::Some(casa_enum) is then
+            subject_type casa_enum.type_vars self.make_pattern_substitutions = substitutions
+            if variant.variant_name casa_enum.variant_types.get Option::Some(payload_types) is then
+                variant.bindings payload_types substitutions stack
+                self.assign_enum_pattern_payloads
+            fi
+        fi
+    }
+
+    fn assign_pattern_bindings
+        self:OperationSemanticsAnalysis
+        stack:OperationSemanticsStack
+        subject_type:Option[Type]
+        pattern:PatternValue
+    {
+        pattern match
+            PatternValue::Struct(struct_pattern) => {
+                struct_pattern subject_type stack self.assign_struct_pattern_bindings
+            }
+            PatternValue::EnumVariant(variant) => {
+                variant subject_type stack self.assign_enum_pattern_bindings
+            }
+            PatternValue::Literal => { }
+        end
+    }
+
+    fn collect_semantic_dependencies
+        self:OperationSemanticsAnalysis
+        semantics:OperationSemanticsResult
+    {
+        for dependency in semantics.dependencies.iter do
+            dependency self.add_dependency
+        done
+    }
+
+    fn collect_bound_semantics
+        self:OperationSemanticsAnalysis
+        effect:StackEffect
+        bindings:Map[str Type]
+    {
+        self.store bindings effect collect_bound_semantic_dependencies = dependencies
+        for dependency in dependencies.iter do
+            dependency self.add_dependency
+        done
+    }
+
+    fn apply_shared_operation_semantics
+        self:OperationSemanticsAnalysis
+        stack:OperationSemanticsStack
+        function:Function
+        operation:OpValue
+    -> bool {
+        stack.peek = receiver
+        self.store function Option::Some receiver operation analyze_operation_semantics = semantics
+        semantics self.collect_semantic_dependencies
+        if semantics.stack_effect Option::None is then false return fi
+        semantics.stack_effect.unwrap = effect
+
+        if operation OpValue::FnCall(function_name) is then
+            if function_name self.get_function_effect Option::Some(inferred_effect) is then
+                inferred_effect = effect
+            fi
+        elif operation OpValue::FnPush(function_name) is then
+            if function_name self.get_function_effect Option::Some(inferred_effect) is then
+                inferred_effect make_function_reference_stack_effect = effect
+            fi
+        elif semantics.method Option::Some(method) is then
+            if method.kind MethodSemanticsKind::Function is then
+                method.function_name self.get_function_effect = inferred_effect_opt
+                if inferred_effect_opt Option::Some(inferred_effect) is then
+                    inferred_effect = effect
+                fi
+            fi
+        fi
+
+        if operation OpValue::FnExec is then
+            stack.pop drop
+        fi
+        effect stack.apply_effect_with_bindings = bindings
+        bindings effect self.collect_bound_semantics
+        true
+    }
+
+    fn update_type_stack
+        self:OperationSemanticsAnalysis
+        function:Function
+        operation_node:Op
+        stack:OperationSemanticsStack
+    {
+        operation_node.value = operation_value
+        if operation_value function stack self.apply_shared_operation_semantics then return fi
+
+        operation_value match
+            OpValue::PushVar(name) => { name stack function self.push_variable_type }
+            OpValue::PushCapture(name) => { name stack function self.push_variable_type }
+            OpValue::StructNew(casa_struct) => {
+                casa_struct stack self.construct_struct_type stack.push
+            }
+            OpValue::StructLiteral(literal) => {
+                literal stack self.construct_struct_literal_type stack.push
+            }
+            OpValue::PushEnumVariant(variant) => {
+                variant stack self.construct_enum_type stack.push
+            }
+            OpValue::TypeCast(cast_type) => {
+                stack.pop drop
+                cast_type stack.push
+            }
+            OpValue::IfStart => {
+                false
+                OperationSemanticsBranchKind::If
+                Option::None(Option[Type])
+                stack.start_branch
+            }
+            OpValue::IfCondition => {
+                stack.pop drop
+                stack.capture_branch_entry
+                if 0 stack.branches.length != then
+                    stack.branches.length 1 - stack.branches.get = branch
+                    true = branch.active
+                fi
+            }
+            OpValue::IfElif => {
+                stack self.merge_branch_exit
+                stack.restore_branch_entry
+            }
+            OpValue::IfElse => {
+                stack self.merge_branch_exit
+                stack.restore_branch_entry
+                if 0 stack.branches.length != then
+                    stack.branches.length 1 - stack.branches.get = branch
+                    true = branch.has_default
+                fi
+            }
+            OpValue::IfEnd => {
+                false = include_entry
+                if 0 stack.branches.length != then
+                    stack.branches.length 1 - stack.branches.get.has_default ! = include_entry
+                fi
+                include_entry stack self.finish_branch
+            }
+            OpValue::WhileStart => {
+                true
+                OperationSemanticsBranchKind::While
+                Option::None(Option[Type])
+                stack.start_branch
+            }
+            OpValue::WhileCondition => { stack.pop drop }
+            OpValue::WhileEnd => { stack.end_loop }
+            OpValue::MatchStart => {
+                true
+                OperationSemanticsBranchKind::Match
+                stack.pop
+                stack.start_branch
+            }
+            OpValue::MatchArm(arm) => {
+                stack self.merge_branch_exit
+                stack.restore_branch_entry
+                if 0 stack.branches.length != then
+                    stack.branches.length 1 - stack.branches.get = branch
+                    true = branch.active
+                fi
+                arm.pattern_value stack.get_branch_subject stack self.assign_pattern_bindings
+                arm.guard_ops function stack self.collect_operations_with_stack
+                if 0 arm.guard_ops.length != then
+                    stack.pop drop
+                fi
+            }
+            OpValue::MatchEnd => { false stack self.finish_branch }
+            OpValue::IsCheck(variant) => {
+                variant stack.peek stack self.assign_enum_pattern_bindings
+                TYPE_BOOL_T 1 stack.apply_result
+            }
+            OpValue::AssignVar(name) => { stack.pop name stack.assign_variable_type }
+            OpValue::AssignInc(name) => {
+                stack.pop drop
+                TYPE_INT_T Option::Some name stack.assign_variable_type
+            }
+            OpValue::AssignDec(name) => {
+                stack.pop drop
+                TYPE_INT_T Option::Some name stack.assign_variable_type
+            }
+            OpValue::PushArray(items) => {
+                items function stack self.collect_operations_with_stack
+                TYPE_UNKNOWN_T stack.peek.unwrap_or = element_type
+                items.length stack.drop_count
+                List::new(List[Type]) = array_parameters
+                element_type array_parameters.push
+                array_parameters "array" GenericType Type::Generic stack.push
+            }
+            OpValue::ExprGroup(items) => { items function stack self.collect_operations_with_stack }
+            _ => { }
+        end
+    }
+
+    fn collect_operations_with_stack
+        self:OperationSemanticsAnalysis
+        stack:OperationSemanticsStack
+        function:Function
+        operations:List[Op]
+    {
+        for operation_node in operations.iter do
+            operation_node function self.collect_operation_facts
+            stack operation_node function self.update_type_stack
+        done
+    }
+
+    fn collect_operations
+        self:OperationSemanticsAnalysis
+        function:Function
+        operations:List[Op]
+    -> StackEffect {
+        function OperationSemanticsStack::new = stack
+        operations function stack self.collect_operations_with_stack
+        stack.types.clone stack.parameters StackEffect::new
+    }
+}
+
+fn analyze_function_operation_semantics
+    function:Function
+    inferred_effects:Map[str StackEffect]
+    store:SymbolStore
+-> FunctionOperationSemantics {
+    inferred_effects store OperationSemanticsAnalysis::new = analysis
+    function.ops function analysis.collect_operations = inferred_effect
+    inferred_effect
+    analysis.ordered_facts
+    FunctionOperationSemantics
 }
