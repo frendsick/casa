@@ -1,6 +1,6 @@
-# Shared operation semantics below parsing and typechecking
+# Shared semantics below parsing and typechecking
 
-Selective-import dependency discovery and typechecking both need the typed meaning of resolved operations. We will place that meaning in a phase-independent `compiler/operation_semantics.casa` module below both callers, return data-only facts, and keep import closure policy and typechecking policy in their current phases.
+Selective-import dependency discovery and typechecking both need the typed meaning of resolved operations. We will place that meaning in a phase-independent `compiler/semantics.casa` module below both callers, return data-only facts, and keep import closure policy and typechecking policy in their current phases.
 
 ## Current boundaries and ordering
 
@@ -17,7 +17,7 @@ Selective imports must remain inside step 3: their declarations are needed to re
 
 ## Decision
 
-Add one deep operation-semantics module whose interface accepts resolved operations, optional function context, and a read-only `SymbolStore`. It returns an `OperationSemanticsResult` containing:
+Add one deep semantics module whose interface accepts resolved operations, optional function context, and a read-only `SymbolStore`. It returns semantic facts containing:
 
 - canonical resolved operations, including comparison, printing, f-string, method, and trait dispatch rewrites;
 - the inferred **Stack effect**;
@@ -30,7 +30,7 @@ Phase ownership remains explicit:
 
 - Parsing owns syntax, import loading, import encounter order, and identifier resolution.
 - Selective-import discovery owns requested roots, visited and cycle handling, closure order, forbidden-global diagnostics, declaration conflicts, and transactional merge.
-- Operation semantics owns typed stack transitions, inference, callable application, dispatch selection, resolved operation forms, and the semantic dependencies those decisions expose.
+- Semantics owns typed stack transitions, inference, callable application, dispatch selection, resolved operation forms, and the dependencies those decisions expose.
 - Typechecking owns function scheduling, committing resolved operations and inferred effects, publishing operation-validation diagnostics, and constructing the **Typecheck result**.
 
 Selective-import discovery consumes ordered dependency facts but does not publish typecheck-only diagnostics early. Typechecking consumes the same semantic result and preserves the current diagnostic and mutation order. Neither caller receives a `Parser`, `TypeChecker`, stack, branch frame, or mutable callback interface.
@@ -39,7 +39,7 @@ Selective-import discovery consumes ordered dependency facts but does not publis
 
 | Seam | Depth | Locality | Leverage | Test surface | Decision |
 |---|---|---|---|---|---|
-| Phase-independent operation semantics below both callers | One data interface hides stack, inference, control flow, and dispatch | Operation meaning changes in one module; phase policy stays with each caller | Both current callers reuse the same facts | One semantic interface plus boundary tests for typechecking and selective imports | Chosen |
+| Phase-independent semantics below both callers | One data interface hides stack, inference, control flow, and dispatch | Operation meaning changes in one module; phase policy stays with each caller | Both current callers reuse the same facts | One semantic interface plus boundary tests for typechecking and selective imports | Chosen |
 | TypeChecker as the selective-import query seam | Deep for typechecking, but its interface includes typecheck lifecycle and mutation rules that closure discovery does not need | Centralizes meaning, but couples import expansion to later-phase state | Reuses current handlers | Requires tests for a second TypeChecker mode and mutation/diagnostic suppression | Rejected: `syntax` already imports selective-import code while typechecking imports `syntax`, so this points the dependency upward or creates a cycle; it also risks changing phase ordering and store mutation |
 | Parser annotates operations with all semantic dependencies | Shallow because later inference and dispatch still need another interpreter | Spreads type knowledge into parsing and duplicates late semantic decisions | Parsing and closure reuse annotations, but typechecking cannot rely on incomplete early facts | Parser annotation tests plus the existing typechecker tests | Rejected: receiver types, inferred **Stack effects**, trait dispatch, branches, and patterns are not all known during parsing, and parser-owned mutable state would cross its boundary |
 
