@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0047
+---
+
 # Explicit `global` declarations for in-function global writes
 
 Variables assigned inside functions silently target an existing global of the same name instead of creating a local (#171). This happens because `resolve_identifiers_fn` skips local registration when `parser.store.variables` already contains the name — and since resolution is lazy (deferred to first call via `ensure_typechecked`), globals registered by *other files* suppress locals in library code parsed earlier.

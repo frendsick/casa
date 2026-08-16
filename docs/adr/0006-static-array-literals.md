@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0020
+---
+
 # Static emission for array literals
 
 Array literals whose elements are all compile-time constants (int, str, bool, char literals — including values folded from `const` declarations and `const fn` calls) are emitted as static data in the `.data` section rather than heap-allocated at runtime. The full array struct (header + elements) lives in `.data` with the linker resolving internal pointers. This makes patterns like `["a", "b", "c"].contains` zero-cost, unblocking #217.

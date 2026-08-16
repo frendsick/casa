@@ -5,7 +5,7 @@ Casa is a self-hosted programming language and compiler. Its glossary captures p
 ## Standard library
 
 **IoError**:
-The single error enum for all fallible OS syscall operations (file, directory, environment). Wraps errno values into named variants (`NotFound`, `PermissionDenied`, `AlreadyExists`, `IsDirectory`, `NotDirectory`, `BadFd`, `NotEmpty`, `Other(int)`).
+The single error enum for all fallible OS syscall operations (file, directory, environment). Wraps errno values into named variants (`NotFound`, `PermissionDenied`, `AlreadyExists`, `IsDirectory`, `NotDirectory`, `BadFd`, `NotEmpty`, `Other(i64)`).
 _Avoid_: FileError, DirError, OsError
 
 **os module**:
@@ -17,6 +17,12 @@ A struct returned by `file::stat` containing file metadata fields (`size`, `mode
 _Avoid_: stat buffer, metadata tuple
 
 ## Language
+
+### Design identity
+
+**Composition-first programming**:
+Casa programs are built primarily by composing small, statically typed functions through the value stack. New features should strengthen that style without sacrificing a minimal language or fast compilation.
+_Avoid_: General-purpose feature parity, syntax-first design
 
 ### Compiler architecture
 
@@ -65,7 +71,7 @@ The shared front-end compiler output containing exact compiler sources, collecte
 _Avoid_: CLI compile result, LSP compiler snapshot, global compiler result
 
 **Array literal**:
-A bracket-delimited list of values (`[1, 2, 3]`, `["a", "b"]`, `[[1], [2]]`, `[my_fn]`) that produces a fixed-size `array[T]`. Elements may be primitive literals, enum variants, nested array literals, function references, lambda expressions, or struct literals. When all elements are statically emittable (compile-time constants, payload-free enum ordinals, zero-capture function pointers, or recursively static nested arrays), the compiler emits the data into `.data`; otherwise the array is heap-allocated at runtime.
+A bracket-delimited list of values (`[1, 2, 3]`, `["a", "b"]`, `[[1], [2]]`, `[my_fn]`) that produces an independent owned, fixed-length `array[T]`. The runtime length is not part of the type. Elements may be primitive literals, enum variants, nested array literals, function references, lambda expressions, or struct literals; storage placement and unobservable sharing remain compiler decisions.
 _Avoid_: Static array, const array, inline array
 
 ### Type representation
@@ -79,7 +85,7 @@ The user-written type expression before the parser converts it into the **Type A
 _Avoid_: Type annotation metadata, internal type string
 
 **Fully parameterized type**:
-A generic type where all type parameters are specified, either as concrete types or as declared type variables. `Option[int]` and `Option[T]` (where `T` is declared) are fully parameterized; bare `Option` is not.
+A generic type where all type parameters are specified, either as concrete types or as declared type variables. `Option[i64]` and `Option[T]` (where `T` is declared) are fully parameterized; bare `Option` is not.
 _Avoid_: Raw type, unparameterized generic
 
 **Unresolved type variable**:
@@ -131,8 +137,8 @@ A method body in a `trait` block that is available when a type implements trait 
 _Avoid_: Default method signature
 
 **Implements trait**:
-A type has available methods whose names and **Stack effects** satisfy a trait under Casa's structural trait rules.
-_Avoid_: `impl Trait for Type`, nominal trait implementation
+A type explicitly declares conformance with `impl Type: Trait`, and its available methods satisfy every required **Stack effect**.
+_Avoid_: Accidental conformance from matching method names
 
 ### Bootstrap
 
@@ -205,18 +211,99 @@ _Avoid_: Release lint, tag lint
 - The **Compiler diagnostics schema** preserves emission order in one diagnostic list; error and warning variants encode severity without a separate severity field while retaining their different payload shapes.
 - CLI reporting, LSP conversion, and test inspection are adapters outside the **Compiler diagnostics schema**.
 - Diagnostics migration is complete only when compiler-global diagnostics, source, and mode state is deleted and all adapters consume explicit results; snapshot or copy bridges do not satisfy the deletion test.
-- An **Array literal**'s emission path is determined at bytecode compilation time. An element qualifies as statically emittable if it is a primitive literal, a payload-free enum variant, a zero-capture function reference, or a nested **Array literal** whose own elements are all statically emittable. `const` values and `const fn` calls are already folded to literals during parsing, so they qualify automatically.
-- Multiple uses of the same **Array literal** contents produce separate `static_array_N` labels; no deduplication is performed.
-- An **Array literal** lives in `.data` (writable), not `.rodata`. Multiple references to the same literal share the same pointer; mutation through one reference is visible to others — consistent with how string literals behave.
+- Each evaluation of an **Array literal** has independent owned-value semantics. The compiler may share or statically emit backing data only when doing so is unobservable to safe code.
 - The **Documentation glossary** names project concepts that prevent drift; language keywords and ordinary programming concepts belong in reference docs.
 - Function, operator, intrinsic, and expression docs should use **Stack effect**; **Operand order** explains how stack values map to operands.
 - Public reference docs should use one **Stack effect** line for an operation instead of separate signature and stack-effect lines.
 - **Stack effect** contains types and optional type bounds only; semantic operand names belong in concise prose only when they add information not derivable from the types.
 - In **Stack effect** notation, input types are listed from topmost consumed value downward; output types are listed in push order, so the last output type becomes topmost after the operation.
-- `int str -> bool char` means `int` is consumed from the top of the stack, `str` is consumed below it, `bool` is pushed first, and `char` is pushed last/topmost.
+- `i64 str -> bool char` means `i64` is consumed from the top of the stack, `str` is consumed below it, `bool` is pushed first, and `char` is pushed last/topmost.
 - `None` in **Stack effect** notation means no stack values, not a Casa type and not `Option::None`.
 - **Stack effect** notation should write `None -> T` for no inputs and `T -> None` for no outputs.
 - Generic bounds appear before the **Stack effect**, such as `[T: Display] T -> None`; bounds are constraints, not stack values.
+- Multiple bounds on one type variable use `+`, such as `[T: Copy + Display]`; every listed bound is required and their order has no semantic meaning.
+- An owned binding is definitely available at a control-flow join only when every continuing incoming path owns or reinitialized it; terminating paths do not participate.
+- `ptr` is a nullable, non-owning, `Copy` raw address. Existing load/store intrinsics and pointer arithmetic require `unsafe`; only explicit `ptr::as_ref[T]` and `ptr::as_mut[T]` form typed borrows.
+- An inherent method wins over defaults from explicitly implemented traits. Without one, more than one applicable default-method declaration is a compile-time ambiguity rather than a declaration-order choice.
+- Trait conformance may be declared only by the module defining the type or the trait; duplicate and overlapping conformances are rejected without specialization.
+- First-class function values are monomorphic. A generic named function reference supplies all type arguments explicitly, such as `&id[i64]`; direct generic calls still infer them.
+- Every closure is repeatable. Invoking it may consume explicit arguments but may not leave a captured non-`Copy` owner consumed; Casa has no single-use function type.
+- Standard `Copy` is a methodless marker extending Clone; it may be used implicitly and never allocates or calls user code. `derives Copy` and `impl Type: Copy { }` establish the same compiler-validated conformance and supply missing fieldwise Clone behavior. A freestanding Copy declaration may omit that supertrait and relationship.
+- A Copy type may provide a customized Clone implementation, which takes precedence over the fieldwise fallback. Generated aggregate Clone calls field Clone methods, while implicit Copy remains allocation-free; explicit Clone cost and semantics belong to the implementation author.
+- Reserved language-integrated traits use minimum compiler-validated hook contracts while allowing additional default methods and supertraits. Primitive operations remain available without importing those declarations.
+- `!=` lowers to the active equality trait's `ne` hook. The standard default negates `eq`; overrides must preserve that semantic inverse.
+- PartialEq owns the shared `eq` and `ne` hooks; Eq extends PartialEq as the explicit lawful-total marker. The compiler validates Eq's effective inherited shape, and `derives Eq` establishes both conformances.
+- PartialOrd owns `partial_cmp` and the `lt`, `le`, `gt`, and `ge` operator hooks; Ord extends PartialOrd and Eq, adds `cmp`, and provides the inherited `partial_cmp` default. The compiler validates the complete effective inherited shape.
+- `Clone` is an explicit, infallible trait operation that may allocate or run user code; allocation failure terminates. Stack operations and implicit reuse never invoke it.
+- `Clone` is declared in `std`, not injected by the compiler. The compiler recognizes its canonical identity only for explicit `derives Clone` generation.
+- `array[T]` owns fixed-length runtime-sized storage and is never `Copy`; it implements `Clone` when `T: Clone`. `List[T]` remains the growable sequence.
+- Standard value owners implement `Clone` when their owned contents do; identity-bearing resources and exclusive borrows do not receive automatic conformance.
+- Structs and enums may opt into generated explicit duplication with `derives Clone`; derivation is conditional on every owned field or payload implementing `Clone` and never implies `Copy`.
+- Derived trait methods are fallbacks: one handwritten customization block may override generated hooks and merge into the same conformance. Multiple handwritten conformances remain errors, and source order has no effect.
+- Custom `eq` requires explicit `hash` when Hashable is derived and explicit `cmp` when Ord is derived; compiler generation cannot infer those consistency laws.
+- Finite recursive owned types may derive Clone. Conformance checking resolves recursive obligations as one dependency cycle; runtime cloning traverses and may allocate for the complete structure.
+- Finite recursive owned types may also derive Eq, Ord, and Hashable through cycle-aware conformance checking. Generated operations recursively traverse finite payloads.
+- Recursive destruction initially uses call-stack recursion and preserves LIFO hook and reverse-field order. Deep-chain tests and benchmarks report the practical stack limit before iterative lowering is considered.
+- `Ordering` is the ordinary standard enum `Less`, `Equal`, `Greater`; it is compiler-validated only when generated Ord behavior needs it. Option remains ordinary library code.
+- Standard Ordering initially derives Eq and Copy, but not Ord or Hashable.
+- A subtrait may provide a matching default body for an inherited bodyless requirement; Ord uses this to adapt `cmp` into PartialOrd's `partial_cmp` without compiler knowledge of Option.
+- Trait inheritance must be acyclic. Direct and indirect cycles are rejected before inherited methods or conformance closure are computed.
+- Diamond inheritance deduplicates a shared ancestor's methods by declaration identity; only distinct competing defaults are ambiguous.
+- Conformance to a subtrait implies conformance to every transitive supertrait once inherited requirements are satisfied; an explicit supertrait conformance is reused rather than duplicated.
+- A trait declaration is rejected when distinct inherited methods share a name but have incompatible stack effects; Casa does not overload methods.
+- One inherited default method satisfies every compatible bodyless requirement; zero bodies require an implementation and multiple distinct bodies require an override.
+- A type may implement multiple distinct instantiations of one generic trait; conformance coherence is keyed by receiver type and fully instantiated trait.
+- Ambiguous conformance method calls use postfix trait qualification such as `token Convert[i64]::convert`; return types never drive overload resolution.
+- Ambiguous conformance method pointers fully qualify receiver and trait, such as `&Token::Convert[i64]::convert`; unambiguous pointers retain `&Token::method`.
+- Inside a trait default, an unqualified call to one of that trait's methods resolves within the same instantiated conformance; another trait requires explicit qualification.
+- Borrow checking distinguishes statically disjoint named struct fields, while dynamic indexes and other unproven projections conservatively overlap.
+- A `mut$self` receiver exclusively borrows the complete object according to its public stack effect; method bodies do not produce narrower inferred field effects.
+- A safe function may return multiple exclusive borrows when its body proves them disjoint; callers may rely on that non-aliasing contract.
+- Borrows returned through an opaque function keep each complete source input loaned until all derived outputs expire; body-derived field paths are not part of public function types.
+- An available `mut$T` implicitly reborrows as `$T` in any shared typed context, suspending exclusive use until the shared reborrow expires; the reverse conversion is forbidden.
+- A shared `$T` borrow permits no safe mutation of its reachable owned storage; Casa initially has no interior-mutability container or exception.
+- Unsafe raw access must preserve all live borrow invariants; violating lifetime, validity, or aliasing requirements is undefined behavior and receives no runtime check.
+- A typed borrow formed from `ptr` may escape only when tied conservatively to existing borrowed inputs; raw pointers never invent an originless returned lifetime.
+- An escaping `mut$T` formed from `ptr` requires an exclusive `mut$` input origin; unsafe code cannot upgrade a shared input into mutable access.
+- An owner cannot move, be replaced, or be destroyed while any derived borrow remains live; Casa does not automatically pin owners or transfer loans across moves.
+- Safe code cannot construct an owner containing a borrow into itself; use offsets or on-demand views instead of pinning and staged initialization.
+- `$T` and `mut$T` are always non-null live references; absence uses ordinary enums such as stdlib `Option`, without compiler special-casing.
+- Equality, ordering, hashing, and display on a borrow forward to the referent's traits rather than observing its address; raw `ptr` equality remains address equality.
+- Under standard `Copy: Clone`, cloning `$T` produces another shared `$T`; explicitly calling `T::clone` through the borrow produces a new owned referent.
+- Method availability follows receiver capability uniformly: `self` requires ownership, `$self` accepts owned/shared/exclusive access, and `mut$self` accepts owned/exclusive access.
+- `mut$T` is affine and not Copy; when `T: Clone`, `mut$T.clone` may call `T.clone` through a temporary shared reborrow and returns an owned `T`.
+- `ptr::from_ref` safely obtains `ptr` from `$T`; owned and exclusive values may reborrow, and no separate `from_mut` exists because raw pointers have no mutability.
+- Unsafe `ptr::read[T]` and `ptr::write[T]` move ownership out of and into initialized generic storage; their caller maintains validity and initialization state.
+- Unsafe raw storage uses `u64 alloc -> ptr` and `ptr free -> None`; `free` releases bytes only and never replaces typed destruction.
+- `0 alloc` returns `ptr::null`, `ptr::null free` is a no-op, and every positive allocation returns non-null or terminates.
+- Casa targets only x86-64 and has no `usize` or `isize`; in-memory sizes and indexes use `u64`, while signed offsets use `i64`.
+- `size_of[T] -> u64` is a safe compile-time query for padded inline storage size, enabling dense generic containers without compiler-known collection layouts.
+- Ordinary aggregate layout has no stable ABI or persistence contract; `size_of[T]` describes only the current compiler's x86-64 layout.
+- `size_of[T]` is the only initial layout query; Casa has no `align_of`, `offset_of`, packed-layout, or explicit-alignment surface without a concrete need.
+- Every inhabited concrete type has `size_of[T] >= 1`; empty structs occupy one byte so generic storage has no zero-sized-value exceptions.
+- Enum declarations require at least one variant; empty enums are rejected rather than acting as an implicit `Never` type.
+- Unsafe raw pointer `+` and `-` use `u64` byte offsets within one live allocation or its one-past address; Casa has no pointer-pointer subtraction.
+- Raw `load8` through `load64` and matching stores use their exact unsigned integer widths; other typed values use unsafe `ptr::read[T]` and `ptr::write[T]`.
+- Fixed-width raw integer loads and stores allow unaligned addresses on x86-64 but still require every accessed byte to be valid; typed raw operations retain natural alignment.
+- Multibyte raw integer loads and stores use explicit x86-64 little-endian byte order; other protocol orders require library conversion.
+- `memcpy` remains an ordinary unsafe stdlib function for non-overlapping initialized byte regions; typed ownership moves do not use raw byte copying.
+- The compiler intrinsic `copy` has `[T: Copy] $T -> T`, materializing an owned allocation-free copy of a borrowed referent without invoking Clone.
+- Aggregate padding is unspecified and may be uninitialized; safe operations use fields, and `size_of[T]` does not make padding readable byte data.
+- Unsafe `ptr::read[T]` requires an already valid initialized `T`; invalid booleans, Unicode scalars, enum tags, borrows, or owners cause undefined behavior rather than runtime validation.
+- Character conversion uses safe `character.codepoint` and stdlib `char::from_codepoint -> Option[char]`; only the validating wrapper knows `Option`, while the compiler supplies narrow lossless and unsafe unchecked code-point primitives.
+- Floating-point types use the canonical names `f32` and `f64`; `float` is removed without an alias, and both widths retain IEEE NaN, infinity, and partial-comparison semantics.
+- Floating-point literals are context-typed as `f32` or `f64`, default to `f64`, round directly to their target width, and have no suffix syntax initially.
+- `f32` and `f64` expose safe, allocation-free `from_bits` and `to_bits` primitives using width-matched unsigned integers; these preserve representation and are not numeric casts.
+- Numeric conversion names expose their loss contract: `from` is universally exact, `try_from` succeeds only for an exactly representable value, `round_from` permits IEEE floating-point rounding, and integer-only `wrapping_from` keeps low bits.
+- Float `+`, `-`, `*`, and `/` require equal widths and retain that width; division follows IEEE behavior, mixed widths are rejected, and `%` remains integer-only.
+- Floating-point execution fixes rounding to nearest with ties-to-even, preserves subnormals and signed zero, and initially forbids reassociation, silent fused operations, ambient rounding modes, and fast-math assumptions.
+- Floating-point literals use decimal-point or exponent notation, require digits on both sides of a decimal point, and add no hexadecimal, suffix, NaN, or infinity syntax.
+- Safe `Target::trunc_from` converts floats to integers by truncating toward zero and terminates on invalid or out-of-range inputs; stdlib validation builds exact `try_from -> Option[Target]` without compiler knowledge of Option.
+- Initial stdlib floats expose special values, classification, absolute value, and basic rounding only; transcendental math, `total_cmp`, and a comprehensive math module remain deferred.
+- Float parsing is locale-independent and returns ordinary Option; formatting emits shortest same-width round-trippable decimal text, preserves negative zero, and canonicalizes special-value spellings without preserving NaN payloads.
+- Custom destruction is the reserved inherent `drop` method, not trait conformance. It is compiler-invoked, cannot be called directly, and makes the type non-`Copy`.
+- Borrow types use prefix sigils: `T` is owned, `$T` is shared, and `mut$T` is exclusive. Receivers use `self`, `$self`, and `mut$self` respectively.
+- A returned borrow is conservatively tied to every compatible borrowed input; Casa exposes no named lifetime syntax initially.
 - Only constrained type variables appear in the bounds prefix; unbounded type variables that appear in stack types are not repeated there.
 - Unbounded type variables should not use a bracket prefix in **Stack effect** notation; write `T -> T T`, not `[T] T -> T T`.
 - A **Function type** contains a **Stack effect** inside `fn[...]`; the whole `fn[...]` form is not called a signature.
@@ -227,9 +314,9 @@ _Avoid_: Release lint, tag lint
 - Comparison operators follow normal **Operand order**; for `a b <`, `b` is topmost and therefore the left operand, so the expression means `b < a`.
 - A **Function declaration** excludes the body; a **Function definition** includes the body.
 - A **Method declaration** excludes the body; a **Method definition** includes the body.
-- A **Trait method requirement** is satisfied by a matching method name and **Stack effect** on the implementing type.
+- A **Trait method requirement** is satisfied by a matching method name and **Stack effect** on a type that explicitly declares conformance.
 - A **Default method definition** belongs to the trait and is available to types that implement trait while omitting their own **Method definition**.
-- A type implements trait structurally; Casa has no `impl Trait for Type` syntax.
+- A type implements a user-defined trait only through `impl Type: Trait`; matching methods alone do not declare conformance.
 - A **Function declaration** describes written source only, not compiler-injected hidden parameters.
 - A **Bootstrap compiler** builds exactly one **Branch compiler** at the start of CI.
 - A **Branch compiler** must self-compile and reach a **Fixed point** before the branch is considered releasable.
@@ -242,15 +329,15 @@ _Avoid_: Release lint, tag lint
 - All OS syscall wrappers live in the **os module**, not in `std.casa`.
 - All fallible OS operations return `Result[T IoError]`; **IoError** is the single error type for file, directory, and environment failures.
 - **FileStat** is returned by `file::stat` and provides both raw metadata fields and convenience query methods.
-- `env::get` returns `Option[str]`, not `Result` — a missing environment variable is absence, not an error.
+- `env::get` returns `Option[Bytes]`, not `Result` — a missing environment variable is absence, not an error, and a present Linux value is not guaranteed to be UTF-8.
 
 ## Example Dialogue
 
 > **Dev:** "Can this PR depend on a temporary release so CI passes?"
 > **Domain expert:** "No. By default, the **Bootstrap compiler** must build the **Branch compiler** from the latest stable release, and that compiler must reach a **Fixed point**."
 
-> **Dev:** "Should I document `fn foo a:int b:str -> bool` as the signature?"
-> **Domain expert:** "No. That is the **Function declaration**. The public stack contract is the **Stack effect**: `int str -> bool`, where `int` is consumed from the top of the stack and `str` below it."
+> **Dev:** "Should I document `fn foo a:i64 b:str -> bool` as the signature?"
+> **Domain expert:** "No. That is the **Function declaration**. The public stack contract is the **Stack effect**: `i64 str -> bool`, where `i64` is consumed from the top of the stack and `str` below it."
 
 ## Flagged Ambiguities
 
@@ -264,7 +351,7 @@ _Avoid_: Release lint, tag lint
 - "typechecker diagnostics" was treated as a typechecker-specific refactor. Resolved: diagnostics belong to a compiler-wide **Compiler diagnostics schema** refactor, tracked in issue #219.
 - "glossary" was considered as a complete keyword or syntax catalog. Resolved: the **Documentation glossary** covers only project-specific concepts whose terminology must stay stable.
 - "function signature" and "stack effect" were treated as interchangeable in docs. Resolved: use **Stack effect** for public stack contracts; reserve "signature" only where the compiler's internal function type model is meant.
-- "`fn foo a:int b:str -> bool`" was called a signature. Resolved: call it a **Function declaration** when bodyless, and a **Function definition** when paired with a body.
+- "`fn foo a:i64 b:str -> bool`" was called a signature. Resolved: call it a **Function declaration** when bodyless, and a **Function definition** when paired with a body.
 - "top on right" was used to explain **Stack effect** notation. Resolved: inputs are topmost-first and outputs are push-order.
 - "`None`" in **Stack effect** notation can be confused with `Option::None`. Resolved: `None` means no stack values in notation only.
 - "release compiler" was used to mean both the stable compiler downloaded by CI and an ad hoc temporary compiler. Resolved: use **Bootstrap compiler** for the stable CI input; temporary releases are exceptional escape hatches.
