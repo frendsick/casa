@@ -34,6 +34,12 @@ See [README.md](./README.md) for basic info, language docs, and examples.
 
 - Always use `ponytail` skill
 
+## Bootstrap releases
+
+- When a ready PR cannot compile with the newest stable compiler release, create
+  the next stable release from that PR and update `casa-release.env` to use it.
+- Create a prerelease compiler only when the user explicitly requests one.
+
 Always load the relevant doc when the matching workflow comes up:
 
 - **Git** — `docs/agents/git.md`
