@@ -36,7 +36,7 @@ see [FORMAT.md](./FORMAT.md).
   - live outside any impl block because they're too complex to be methods
 
   ```casa
-  fn make_location file:str offset:int length:int -> Location {
+  fn make_location file:str offset:u64 length:u64 -> Location {
       length offset file Location
   }
   ```
@@ -166,10 +166,10 @@ without a type-name prefix is acceptable.
 
   ```casa
   # Required: bare Option needs narrowing
-  Option::None = empty:Option[int]
+  Option::None = empty:Option[i64]
 
   # MUST NOT: inference works fine, annotation is noise
-  42 = x:int
+  42 = x:i64
   ```
 
 ---
@@ -188,25 +188,25 @@ without a type-name prefix is acceptable.
   # MUST — primary data first, flag last
   fn find_matching_label
       ops:List[Op]
-      op_index:int
-      boundary:int
+      op_index:u64
+      boundary:i64
       target:OpKind
       backward:bool
-  -> int { ... }
+  -> i64 { ... }
 
   # MUST NOT — flag in first position
   fn find_matching_label
       backward:bool
       ops:List[Op]
       ...
-  -> int { ... }
+  -> i64 { ... }
   ```
 
 ### Flag types match the value range
 
 - **MUST** pick the parameter type matching the actual value set. Two states = `bool`.
-  Arbitrary integer = `int`. Don't use `int` as a stand-in for "one of two values".
-- `int` tells the reader "any integer" and invites misuse. If only `1` and `-1` are
+  Arbitrary integer = `i64`. Don't use `i64` as a stand-in for "one of two values".
+- `i64` tells the reader "any integer" and invites misuse. If only `1` and `-1` are
   ever valid, the type lies about the domain. Use `bool` and derive the integer
   internally (`if backward then -1 else 1 fi = step`).
 
@@ -319,7 +319,7 @@ without a type-name prefix is acceptable.
 
   ```casa
   # MUST NOT — inference resolves this
-  42 (int) = x
+  42 (i64) = x
 
   # Required — crossing a type boundary
   buf (ptr) store64

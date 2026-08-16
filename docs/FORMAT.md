@@ -13,7 +13,7 @@ See [STYLE.md](./STYLE.md) for naming conventions and idiomatic patterns.
 - Never use tabs.
 
 ```casa
-fn fizzbuzz number:int {
+fn fizzbuzz number:i64 {
     number 3 % 0 == = fizz
     if fizz then
         "Fizz\n" print
@@ -48,8 +48,8 @@ import "path/to/lib/io.casa"
 16 = BUFFER_SIZE
 
 struct Foo {
-    x: int
-    y: int
+    x: i64
+    y: i64
 }
 
 impl Foo {
@@ -58,7 +58,7 @@ impl Foo {
     }
 }
 
-Map::new(Map[str int]) = MY_MAP
+Map::new(Map[str i64]) = MY_MAP
 1 "a" MY_MAP.set = MY_MAP
 2 "b" MY_MAP.set = MY_MAP
 
@@ -165,11 +165,11 @@ When the function declaration fits within the line-length limit, write everythin
 Parameters use `name:type` (no space after colon):
 
 ```casa
-fn fizzbuzz number:int {
+fn fizzbuzz number:i64 {
     ...
 }
 
-fn add a:int b:int -> int {
+fn add a:i64 b:i64 -> i64 {
     a b +
 }
 ```
@@ -313,7 +313,7 @@ Prefer f-strings whenever embedding one or more values into a string literal:
 f"Hello, {name}!" print
 
 # Avoid: str::concat for 3+ strings
-name " is " str::concat age int::to_str str::concat print
+name " is " str::concat age i64::to_str str::concat print
 ```
 
 Use `StringBuilder` for incremental or loop-based string construction:

@@ -16,7 +16,7 @@ const HEAP_SIZE 1073741824
 
 struct Emitter {
     asm:           StringBuilder
-    label_counter: int
+    label_counter: u64
     program:       Program
 }
 
@@ -28,7 +28,7 @@ impl Emitter {
         Emitter
     }
 
-    fn emit_uid self:Emitter -> int {
+    fn emit_uid self:Emitter -> u64 {
         1 += self.label_counter
         self.label_counter
     }
@@ -58,11 +58,11 @@ fn sanitize_name name:str -> str {
 # escape_string: escape special chars for assembly string literals
 # ============================================================================
 
-fn nibble_to_hex value:int -> char {
+fn nibble_to_hex value:i64 -> char {
     if 10 value >= then
-        value 10 - 'a' (int) + (char)
+        value 10 - 'a' (i64) + (char)
     else
-        value '0' (int) + (char)
+        value '0' (i64) + (char)
     fi
 }
 
@@ -82,12 +82,12 @@ fn escape_string s:str -> str {
         elif '\r' ch == then
             "\\r" builder.append
         elif
-        32 ch (int) <
-        127 ch (int) >= ||
+        32 ch (i64) <
+        127 ch (i64) >= ||
         then
             "\\x" builder.append
-            ch (int) 16 / nibble_to_hex builder.append_char
-            ch (int) 16 % nibble_to_hex builder.append_char
+            ch (i64) 16 / nibble_to_hex builder.append_char
+            ch (i64) 16 % nibble_to_hex builder.append_char
         else
             ch builder.append_char
         fi
@@ -127,7 +127,7 @@ impl Emitter {
 
     fn emit_data self:Emitter {
         ".section .data" self.line
-        0 = index
+        0 (u64) = index
         while index self.program.strings.length > do
             index self.program.strings.get = value
             value escape_string = escaped
@@ -149,7 +149,7 @@ impl Emitter {
         done
 
         # Static array literals
-        0 = sa_index
+        0 (u64) = sa_index
         while sa_index self.program.static_arrays.length > do
             sa_index self.program.static_arrays.get = sa
             sa StaticArray::elements = elems
@@ -167,7 +167,7 @@ impl Emitter {
         done
 
         # Static struct literals
-        0 = ss_index
+        0 (u64) = ss_index
         while ss_index self.program.static_structs.length > do
             ss_index self.program.static_structs.get = ss
             ss StaticStruct::fields = fields
@@ -229,6 +229,34 @@ impl Emitter {
         "decq %rsi" self.indent
         "movb $45, (%rsi)" self.indent
         ".Lpi_write:" self.line
+        "leaq print_buf+32(%rip), %rdx" self.indent
+        "subq %rsi, %rdx" self.indent
+        "movq $1, %rax" self.indent
+        "movq $1, %rdi" self.indent
+        "syscall" self.indent
+        "subq $8, %r14" self.indent
+        "jmpq *(%r14)" self.indent
+        "" self.line
+
+        # print_uint: value in %rdi, returns via r14
+        "print_uint:" self.line
+        "movq %rdi, %rax" self.indent
+        "leaq print_buf+32(%rip), %rsi" self.indent
+        "testq %rax, %rax" self.indent
+        "jnz .Lpui_digit_loop" self.indent
+        "decq %rsi" self.indent
+        "movb $48, (%rsi)" self.indent
+        "jmp .Lpui_write" self.indent
+        ".Lpui_digit_loop:" self.line
+        "decq %rsi" self.indent
+        "xorq %rdx, %rdx" self.indent
+        "movq $10, %rcx" self.indent
+        "divq %rcx" self.indent
+        "addb $48, %dl" self.indent
+        "movb %dl, (%rsi)" self.indent
+        "testq %rax, %rax" self.indent
+        "jnz .Lpui_digit_loop" self.indent
+        ".Lpui_write:" self.line
         "leaq print_buf+32(%rip), %rdx" self.indent
         "subq %rsi, %rdx" self.indent
         "movq $1, %rax" self.indent
@@ -369,10 +397,10 @@ impl Emitter {
     # Emit syscall helper
     # ============================================================================
 
-    fn emit_syscall self:Emitter arg_count:int {
+    fn emit_syscall self:Emitter arg_count:u64 {
         "popq %rax" self.indent
         ["%rdi", "%rsi", "%rdx", "%r10", "%r8", "%r9"] = syscall_regs
-        0 = index
+        0 (u64) = index
         while index arg_count > do
             f"popq {index syscall_regs array::nth(str)}" self.indent
             1 += index
@@ -428,6 +456,23 @@ impl Emitter {
                     f"movabsq ${value}, %rax" self.indent
                     "pushq %rax" self.indent
                 fi
+            }
+            InstValue::PushFloat32(value) => {
+                "jmp 1f" self.indent
+                ".align 4" self.line
+                "0:" self.line
+                f".float {value}" self.line
+                "1:" self.line
+                "movl 0b(%rip), %eax" self.indent
+                "pushq %rax" self.indent
+            }
+            InstValue::PushFloat64(value) => {
+                "jmp 1f" self.indent
+                ".align 8" self.line
+                "0:" self.line
+                f".double {value}" self.line
+                "1:" self.line
+                "pushq 0b(%rip)" self.indent
             }
             InstValue::PushStr(str_index) => {
                 f"leaq str_{str_index}(%rip), %rax" self.indent
@@ -495,6 +540,20 @@ impl Emitter {
                 "idivq %rbx" self.indent
                 "pushq %rdx" self.indent
             }
+            InstValue::UDiv => {
+                "popq %rbx" self.indent
+                "popq %rax" self.indent
+                "xorq %rdx, %rdx" self.indent
+                "divq %rbx" self.indent
+                "pushq %rax" self.indent
+            }
+            InstValue::UMod => {
+                "popq %rbx" self.indent
+                "popq %rax" self.indent
+                "xorq %rdx, %rdx" self.indent
+                "divq %rbx" self.indent
+                "pushq %rdx" self.indent
+            }
             InstValue::Shl => {
                 "popq %rcx" self.indent
                 "shlq %cl, (%rsp)" self.indent
@@ -502,6 +561,10 @@ impl Emitter {
             InstValue::Shr => {
                 "popq %rcx" self.indent
                 "sarq %cl, (%rsp)" self.indent
+            }
+            InstValue::UShr => {
+                "popq %rcx" self.indent
+                "shrq %cl, (%rsp)" self.indent
             }
             InstValue::BitAnd => {
                 "popq %rax" self.indent
@@ -545,6 +608,22 @@ impl Emitter {
             InstValue::Le => "setle" self.emit_comparison
             InstValue::Gt => "setg" self.emit_comparison
             InstValue::Ge => "setge" self.emit_comparison
+            InstValue::Ult => "setb" self.emit_comparison
+            InstValue::Ule => "setbe" self.emit_comparison
+            InstValue::Ugt => "seta" self.emit_comparison
+            InstValue::Uge => "setae" self.emit_comparison
+            InstValue::NormalizeInt(builtin) => {
+                builtin match
+                    BuiltinType::I8 => "movsbq (%rsp), %rax" self.indent
+                    BuiltinType::I16 => "movswq (%rsp), %rax" self.indent
+                    BuiltinType::I32 => "movslq (%rsp), %rax" self.indent
+                    BuiltinType::U8 => "movzbq (%rsp), %rax" self.indent
+                    BuiltinType::U16 => "movzwq (%rsp), %rax" self.indent
+                    BuiltinType::U32 => "movl (%rsp), %eax" self.indent
+                    _ => return
+                end
+                "movq %rax, (%rsp)" self.indent
+            }
             _ => {
                 "Internal error: emit_arithmetic called with non-arithmetic InstValue\n" eprint
                 1 exit
@@ -739,6 +818,10 @@ impl Emitter {
                 "popq %rdi" self.indent
                 "print_done" "print_int" self.emit_call_via_return_stack
             }
+            InstValue::PrintUint => {
+                "popq %rdi" self.indent
+                "print_uint_done" "print_uint" self.emit_call_via_return_stack
+            }
             InstValue::PrintBool => {
                 self.emit_uid = uid
                 "popq %rax" self.indent
@@ -829,6 +912,8 @@ impl Emitter {
             InstValue::Dup => inst self.emit_stack_ops
             InstValue::Over => inst self.emit_stack_ops
             InstValue::Push => inst self.emit_stack_ops
+            InstValue::PushFloat32 => inst self.emit_stack_ops
+            InstValue::PushFloat64 => inst self.emit_stack_ops
             InstValue::PushChar => inst self.emit_stack_ops
             InstValue::PushStr => inst self.emit_stack_ops
             InstValue::PushStaticArray => inst self.emit_stack_ops
@@ -856,6 +941,14 @@ impl Emitter {
             InstValue::Le => inst self.emit_arithmetic
             InstValue::Gt => inst self.emit_arithmetic
             InstValue::Ge => inst self.emit_arithmetic
+            InstValue::Ult => inst self.emit_arithmetic
+            InstValue::Ule => inst self.emit_arithmetic
+            InstValue::Ugt => inst self.emit_arithmetic
+            InstValue::Uge => inst self.emit_arithmetic
+            InstValue::UDiv => inst self.emit_arithmetic
+            InstValue::UMod => inst self.emit_arithmetic
+            InstValue::UShr => inst self.emit_arithmetic
+            InstValue::NormalizeInt => inst self.emit_arithmetic
 
             # Control flow / variables / functions
             InstValue::Label => is_global inst self.emit_control_flow
@@ -891,6 +984,7 @@ impl Emitter {
 
             # IO operations
             InstValue::PrintInt => inst self.emit_io_ops
+            InstValue::PrintUint => inst self.emit_io_ops
             InstValue::PrintBool => inst self.emit_io_ops
             InstValue::PrintStr => inst self.emit_io_ops
             InstValue::PrintChar => inst self.emit_io_ops

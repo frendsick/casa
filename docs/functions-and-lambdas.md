@@ -21,7 +21,7 @@ Parameters are consumed from the top of the stack in declaration order: the firs
 ### Basic Example
 
 ```casa
-fn local_add a:int b:int -> int {
+fn local_add a:i64 b:i64 -> i64 {
     a b +
 }
 
@@ -35,7 +35,7 @@ When `34 35 local_add` is called, `35` is assigned to `a` (first param, popped f
 Functions can have no explicit parameters. They can still consume values from the stack if the body does so, and the type checker will infer the stack effect.
 
 ```casa
-fn global_add -> int {
+fn global_add -> i64 {
     global_a global_b +
 }
 ```
@@ -58,7 +58,7 @@ Type annotations are optional. The type checker can infer the full stack effect 
 fn double {
     2 *
 }
-# Inferred stack effect: int -> int
+# Inferred stack effect: i64 -> i64
 ```
 
 When both an explicit stack effect and an inferred one are available, the type checker verifies that they match.
@@ -78,9 +78,9 @@ The `&name` syntax pushes a named function onto the stack as a value instead of 
 **Stack effect:** `-> fn[sig]`
 
 ```casa
-fn add a:int b:int -> int { a b + }
+fn add a:i64 b:i64 -> i64 { a b + }
 
-&add                # pushes fn[int int -> int]
+&add                # pushes fn[i64 i64 -> i64]
 3 5 &add exec       # calls add, result: 8
 &add = my_fn        # store in variable
 3 5 my_fn exec      # call via variable, result: 8
@@ -89,15 +89,15 @@ fn add a:int b:int -> int { a b + }
 This works for struct accessors and methods too:
 
 ```casa
-struct Point { x: int y: int }
+struct Point { x: i64 y: i64 }
 
-&Point::x           # pushes fn[Point -> int]
+&Point::x           # pushes fn[Point -> i64]
 
 impl Point {
-    fn sum self:Point -> int { self.x self.y + }
+    fn sum self:Point -> i64 { self.x self.y + }
 }
 
-&Point::sum          # pushes fn[Point -> int]
+&Point::sum          # pushes fn[Point -> i64]
 ```
 
 Use `exec` to call the function reference, just like with lambdas. See [`exec`](#exec) for details.
@@ -107,7 +107,7 @@ Use `exec` to call the function reference, just like with lambdas. See [`exec`](
 Use `return` to exit a function early. The stack at the `return` point must match the function's return type.
 
 ```casa
-fn fib number:int -> int {
+fn fib number:i64 -> i64 {
     if number 1 >= then
         number return
     elif number 0 == then
@@ -129,7 +129,7 @@ Functions can declare type variables in square brackets after the name. Type var
 
 ```casa
 fn id[T] T -> T { }       # T -> T
-42 id print                # int -> int, prints 42
+42 id print                # i64 -> i64, prints 42
 "hello" id print           # str -> str, prints hello
 ```
 
@@ -137,14 +137,14 @@ Multiple type variables:
 
 ```casa
 fn swap_t[T1 T2] T1 T2 -> T1 T2 { swap }   # T1 T2 -> T1 T2
-5 "hi" swap_t              # int str -> str int
+5 "hi" swap_t              # i64 str -> str i64
 ```
 
 Generic functions can mix type variables with concrete types and named parameters:
 
 ```casa
 fn first[T1 T2] a:T1 b:T2 -> T1 { a }
-fn wrap[T] T -> T int { 42 }
+fn wrap[T] T -> T i64 { 42 }
 ```
 
 The built-in stack intrinsics use the same generic surface syntax:
@@ -156,15 +156,15 @@ The built-in stack intrinsics use the same generic surface syntax:
 # over[T1 T2]     T1 T2 -> T2 T1 T2
 # rot[T1 T2 T3]   T1 T2 T3 -> T3 T1 T2
 fn keep_top[T1 T2] T1 T2 -> T1 { swap drop }
-42 "kept" keep_top         # "kept" (deeper int dropped, top str kept)
+42 "kept" keep_top         # "kept" (deeper i64 dropped, top str kept)
 ```
 
 The type checker enforces consistency — if the same type variable appears multiple times in the parameters, all occurrences must bind to the same type:
 
 ```casa
 fn pair[T] T T -> T T { }
-42 42 pair        # OK: both T=int
-42 "hi" pair      # ERROR: T bound to int and str
+42 42 pair        # OK: both T=i64
+42 "hi" pair      # ERROR: T bound to i64 and str
 ```
 
 Generic type parameters also work in `impl` block methods:
@@ -190,10 +190,10 @@ Multiple type variables are separated by commas. Variables without a `:` have no
 
 Every type variable must appear in at least one parameter (return-only type variables are not allowed).
 
-Type variable names must not collide with built-in types (`int`, `bool`, `char`, `cstr`, `str`, `ptr`, `array`) or user-defined struct names:
+Type variable names must not collide with built-in types (`i64`, `bool`, `char`, `cstr`, `str`, `ptr`, `array`) or user-defined struct names:
 
 ```casa
-fn bad[int] int -> int { }     # ERROR: shadows built-in type
+fn bad[i64] i64 -> i64 { }     # ERROR: shadows built-in type
 fn bad[MyStruct] MyStruct -> MyStruct { }   # ERROR: shadows struct type
 fn good[T] T -> T { }         # OK
 ```
@@ -213,7 +213,7 @@ Declared at the top level, visible everywhere (including inside functions):
 1 = global_a
 2 = global_b
 
-fn global_add -> int {
+fn global_add -> i64 {
     global_a global_b +
 }
 ```
@@ -243,7 +243,7 @@ fn increment {
 Declared inside a function, scoped to that function:
 
 ```casa
-fn fizzbuzz number:int {
+fn fizzbuzz number:i64 {
     number 3 % 0 == = fizz    # fizz is local
     number 5 % 0 == = buzz    # buzz is local
     # ...
@@ -256,20 +256,20 @@ fn fizzbuzz number:int {
 |----------|-------------|-------------|
 | `= target` | `T -> None` | Assign top of stack to a variable or variable-rooted field path |
 | `= name:type` | `T -> None` | Assign with type annotation |
-| `+= target` | `int -> None` | Add to an `int` variable or field path |
-| `-= target` | `int -> None` | Subtract from an `int` variable or field path |
+| `+= target` | `i64 -> None` | Add to an `i64` variable or field path |
+| `-= target` | `i64 -> None` | Subtract from an `i64` variable or field path |
 
 A variable's type is set on first assignment and cannot change:
 
 ```casa
-42 = x       # x is int
-"hi" = x     # ERROR: cannot assign str to int variable
+42 = x       # x is i64
+"hi" = x     # ERROR: cannot assign str to i64 variable
 ```
 
 The `= name:type` form annotates the variable type explicitly. The type checker verifies the stack value is compatible and uses the annotated type for the variable. This is useful for narrowing a bare `Option` (or other unresolved generic) to a concrete type:
 
 ```casa
-Option::None = empty:Option[int]    # narrow bare Option to Option[int]
+Option::None = empty:Option[i64]    # narrow bare Option to Option[i64]
 ```
 
 ## Lambdas
@@ -281,7 +281,7 @@ Lambdas are anonymous functions created with braces `{ body }`. They push a func
 ### Basic Example
 
 ```casa
-{ 2 * }              # type: fn[int -> int]
+{ 2 * }              # type: fn[i64 -> i64]
 21 swap exec print   # 42
 ```
 
@@ -309,7 +309,7 @@ Captured variables are copied at the time the lambda is created.
 Lambdas are first-class values and can be passed to functions:
 
 ```casa
-fn apply_twice f:fn[int -> int] x:int -> int {
+fn apply_twice f:fn[i64 -> i64] x:i64 -> i64 {
     x f exec f exec
 }
 
@@ -322,7 +322,7 @@ Calls the function value on top of the stack.
 
 **Stack effect:** `args... fn[sig] -> results...`
 
-The function value must be on top of the stack, with its arguments below. For `fn[int -> int]`, exec pops the function and one `int`, then pushes one `int`.
+The function value must be on top of the stack, with its arguments below. For `fn[i64 -> i64]`, exec pops the function and one `i64`, then pushes one `i64`.
 
 ## See Also
 

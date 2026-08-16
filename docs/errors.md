@@ -59,13 +59,13 @@ error[SYNTAX]: Invalid escape sequence `\q`
 The parser expected one token but found another.
 
 ```casa
-struct Foo { x int }
+struct Foo { x i64 }
 ```
 
 ```
 error[UNEXPECTED_TOKEN]: Unexpected token
   Expected: `:`
-  Got: `int`
+  Got: `i64`
 ```
 
 ### `UNDEFINED_NAME`
@@ -157,7 +157,7 @@ fn bad[T] T T -> T T { }
 ```
 
 ```
-error[TYPE_MISMATCH]: Type variable `T` bound to `str` but got `int`
+error[TYPE_MISMATCH]: Type variable `T` bound to `str` but got `i64`
 ```
 
 If `got` shows `<missing>`, an earlier error left the slot without a real type — fix the earlier error first. See [Cascade Errors](#cascade-errors).
@@ -167,7 +167,7 @@ If `got` shows `<missing>`, an earlier error left the slot without a real type �
 Branches of a conditional or loop leave the stack in inconsistent states. The error shows each branch's stack effect so you can see which branch diverges.
 
 ```casa
-fn branchy bool -> int {
+fn branchy bool -> i64 {
     if dup then
         1 2
     else
@@ -182,12 +182,12 @@ error[STACK_MISMATCH]: Branches have incompatible stack effects
    |
 27 |     fi
    |     ^^
-  Note: `if` branch has signature `? -> ? int int`
+  Note: `if` branch has signature `? -> ? i64 i64`
   --> examples/multi_error.casa:23:5
    |
 23 |     if dup then
    |     ^^
-  Note: `else` branch has signature `? -> ? int`
+  Note: `else` branch has signature `? -> ? i64`
   --> examples/multi_error.casa:25:5
    |
 25 |     else
@@ -199,14 +199,14 @@ error[STACK_MISMATCH]: Branches have incompatible stack effects
 A function's declared stack effect does not match the inferred stack effect from its body.
 
 ```casa
-fn bad a:int -> str { a 1 + }
+fn bad a:i64 -> str { a 1 + }
 bad
 ```
 
 ```
 error[SIGNATURE_MISMATCH]: Invalid signature for function `bad`
-  Expected: int -> str
-  Inferred: ? -> int
+  Expected: i64 -> str
+  Inferred: ? -> i64
 ```
 
 ### `INVALID_VARIABLE`
@@ -219,7 +219,7 @@ Attempting to assign a value of a different type to an existing variable.
 ```
 
 ```
-error[INVALID_VARIABLE]: Cannot override global variable `x` of type `int` with other type `str`
+error[INVALID_VARIABLE]: Cannot override global variable `x` of type `i64` with other type `str`
 ```
 
 ### `UNMATCHED_BLOCK`
@@ -249,7 +249,7 @@ fn foo {
 
 ```
 error[STACK_UNDERFLOW]: Stack underflow: expected value with trait `Display` but stack is empty
-error[TYPE_MISMATCH]: Type variable `T` bound to `int` but got `<missing>`
+error[TYPE_MISMATCH]: Type variable `T` bound to `i64` but got `<missing>`
 ```
 
 The second error is a *cascade* — its real cause is the underflow above. Fix the upstream error first; the cascade error usually disappears on its own. `<missing>` is distinct from `?` (an unconstrained type that the compiler is still inferring).
@@ -265,8 +265,8 @@ Within a single function, type checking stops at the first error because the sta
 A type is used where a trait bound is required, but it does not implement all required methods.
 
 ```casa
-struct Foo { x: int }
-Map::new (Map[Foo int]) = m    # Foo has no hash or eq methods
+struct Foo { x: i64 }
+Map::new (Map[Foo i64]) = m    # Foo has no hash or eq methods
 ```
 
 ```
@@ -290,7 +290,7 @@ The compiler also reports non-fatal warnings. Currently the only warning kind is
 A function parameter is declared but not used in the function body and is instead passed through the stack untouched.
 
 ```
-warning[UNUSED_PARAMETER]: Unused parameter `int` in function `add`
+warning[UNUSED_PARAMETER]: Unused parameter `i64` in function `add`
 ```
 
 ## See Also

@@ -19,8 +19,8 @@ Variants can carry inner values by specifying types in parentheses.
 
 ```casa
 enum Shape {
-    Circle(int)
-    Rectangle(int int)
+    Circle(i64)
+    Rectangle(i64 i64)
     Point
 }
 ```
@@ -62,7 +62,7 @@ Shape::Point               # pushes Shape with no inner values
 For generic enums, the type parameters are inferred from the inner values.
 
 ```casa
-42 Option::Some            # pushes Option[int]
+42 Option::Some            # pushes Option[i64]
 Option::None               # pushes Option[T] (generic)
 "hello" Option::Some       # pushes Option[str]
 ```
@@ -94,7 +94,7 @@ Comparing values of different enum types is a compile-time error:
 Color::Red Direction::North ==
 ```
 
-Comparing an enum value with a non-enum type (e.g. `int`) is also a compile-time error.
+Comparing an enum value with a non-enum type (e.g. `i64`) is also a compile-time error.
 
 ## Variant Checking with `is`
 
@@ -114,8 +114,8 @@ Inside `if`/`elif` conditions, `is` can destructure inner values into bindings. 
 
 ```casa
 enum Shape {
-    Circle(int)
-    Rectangle(int int)
+    Circle(i64)
+    Rectangle(i64 i64)
     Point
 }
 
@@ -141,7 +141,7 @@ For generic enums, binding types are inferred from the concrete enum type:
 ```casa
 42 Option::Some = maybe
 if maybe Option::Some(value) is then
-    value print    # value has type int
+    value print    # value has type i64
 fi
 ```
 
@@ -237,9 +237,9 @@ Color::Blue print    # 2
 
 ## Variant Count
 
-Using the enum name as a value pushes the number of variants as an `int`.
+Using the enum name as a value pushes the number of variants as an `i64`.
 
-**Stack effect:** `-> int`
+**Stack effect:** `-> i64`
 
 ```casa
 enum Color { Red Green Blue }

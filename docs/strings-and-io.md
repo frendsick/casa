@@ -10,7 +10,7 @@ Methods for working with `str` values. Method calls on any `str` receiver are re
 
 Returns the length of a string in bytes.
 
-**Stack effect:** `str -> int`
+**Stack effect:** `str -> i64`
 
 ```casa
 "hello".length print    # 5
@@ -21,7 +21,7 @@ Returns the length of a string in bytes.
 
 Returns the character at the given index.
 
-**Stack effect:** `str int -> char`
+**Stack effect:** `str i64 -> char`
 
 ```casa
 0 "hello".at print      # h
@@ -32,7 +32,7 @@ Returns the character at the given index.
 
 Writes a character at the given index in a string (mutates in place).
 
-**Stack effect:** `str int char -> None`
+**Stack effect:** `str i64 char -> None`
 
 ```casa
 14 alloc (str) = buf
@@ -68,7 +68,7 @@ Compares two strings by content. Returns `true` if they have the same length and
 
 Extracts a substring starting at `start` with the given `len`.
 
-**Stack effect:** `int int str -> str`
+**Stack effect:** `i64 i64 str -> str`
 
 ```casa
 3 1 "hello".substring print    # ell
@@ -78,7 +78,7 @@ Extracts a substring starting at `start` with the given `len`.
 
 Finds the first occurrence of `needle` in the string. Returns the index, or -1 if not found.
 
-**Stack effect:** `str str -> int`
+**Stack effect:** `str str -> i64`
 
 ```casa
 "lo" "hello".find print     # 3
@@ -184,7 +184,7 @@ Returns a new string with all ASCII uppercase letters converted to lowercase. No
 
 Returns a new string that repeats the original `n` times. Returns an empty string when `n` is 0.
 
-**Stack effect:** `str int -> str`
+**Stack effect:** `str i64 -> str`
 
 ```casa
 3 "ha".repeat print    # hahaha
@@ -203,9 +203,9 @@ Returns a new string with the characters in reverse order.
 
 ### `str::to_int`
 
-Parses a string as an integer, returning `Option[int]`. Handles negative numbers (leading `-`). Returns `None` for empty strings, non-digit characters, or a bare `-`. Does not tolerate leading or trailing whitespace — use `str::trim` first if needed.
+Parses a string as an integer, returning `Option[i64]`. Handles negative numbers (leading `-`). Returns `None` for empty strings, non-digit characters, or a bare `-`. Does not tolerate leading or trailing whitespace — use `str::trim` first if needed.
 
-**Stack effect:** `str -> Option[int]`
+**Stack effect:** `str -> Option[i64]`
 
 ```casa
 "42".to_int.unwrap print          # 42
@@ -263,7 +263,7 @@ O_WRONLY O_CREAT | O_TRUNC |    # open for writing, create if needed, truncate
 
 Opens a file and returns a file descriptor. Returns a negative value on error.
 
-**Stack effect:** `str int int -> int`
+**Stack effect:** `str i64 i64 -> i64`
 
 ```casa
 0 O_RDONLY "input.txt" file::open = fd
@@ -275,7 +275,7 @@ The `mode` parameter sets file permissions when creating a new file (e.g., 420 f
 
 Reads up to `size` bytes from a file descriptor into a buffer. Returns the number of bytes read, or a negative value on error.
 
-**Stack effect:** `int ptr int -> int`
+**Stack effect:** `i64 ptr i64 -> i64`
 
 ```casa
 1024 alloc = buf
@@ -286,7 +286,7 @@ Reads up to `size` bytes from a file descriptor into a buffer. Returns the numbe
 
 Writes a string to a file descriptor. Returns the number of bytes written, or a negative value on error.
 
-**Stack effect:** `int str -> int`
+**Stack effect:** `i64 str -> i64`
 
 ```casa
 "Hello, file!\n" fd file::write drop
@@ -296,7 +296,7 @@ Writes a string to a file descriptor. Returns the number of bytes written, or a 
 
 Closes a file descriptor. Returns 0 on success, or a negative value on error.
 
-**Stack effect:** `int -> int`
+**Stack effect:** `i64 -> i64`
 
 ```casa
 fd file::close drop
@@ -314,7 +314,7 @@ enum FileError {
     IsDirectory
     NotDirectory
     BadFd
-    Other (int)    # raw errno for cases not covered above
+    Other (i64)    # raw errno for cases not covered above
 }
 ```
 
@@ -466,19 +466,19 @@ Convert values to their string representation. All `to_str` methods can be calle
 
 ### `digit_to_str`
 
-Converts a single digit (0-9) to its string representation. This is a helper used internally by `int::to_str`.
+Converts a single digit (0-9) to its string representation. This is a helper used internally by `i64::to_str`.
 
-**Stack effect:** `int -> str`
+**Stack effect:** `i64 -> str`
 
 ```casa
 5 digit_to_str print    # 5
 ```
 
-### `int::to_str`
+### `i64::to_str`
 
 Converts an integer to its string representation. Handles negative numbers and zero.
 
-**Stack effect:** `int -> str`
+**Stack effect:** `i64 -> str`
 
 ```casa
 42.to_str print         # 42
@@ -535,7 +535,7 @@ Formats an array as `[elem1, elem2, ...]`. Requires `T` to satisfy the `Display`
 **Stack effect:** `[T: Display] array[T] -> str`
 
 ```casa
-[1, 2, 3] (array[int]) .to_str print    # [1, 2, 3]
+[1, 2, 3] (array[i64]) .to_str print    # [1, 2, 3]
 ```
 
 ### `List[T]::to_str`
@@ -552,7 +552,7 @@ Formats an `Option` as `Some(value)` or `None`. Requires `T` to satisfy the `Dis
 
 ```casa
 5 Option::Some .to_str print                # Some(5)
-Option::None (Option[int]) .to_str print    # None
+Option::None (Option[i64]) .to_str print    # None
 ```
 
 ### `Result[T E]::to_str`
@@ -562,8 +562,8 @@ Formats a `Result` as `Ok(value)` or `Error(err)`. Requires both `T` and `E` to 
 **Stack effect:** `[T: Display, E: Display] Result[T E] -> str`
 
 ```casa
-99 Result::Ok (Result[int str]) .to_str print       # Ok(99)
-"oops" Result::Error (Result[int str]) .to_str print # Error(oops)
+99 Result::Ok (Result[i64 str]) .to_str print       # Ok(99)
+"oops" Result::Error (Result[i64 str]) .to_str print # Error(oops)
 ```
 
 ## Hash Helpers
@@ -574,7 +574,7 @@ Standalone hash functions used by the built-in `Hashable` trait implementations.
 
 Computes a hash for a string using the djb2 algorithm. Returns a non-negative integer.
 
-**Stack effect:** `str -> int`
+**Stack effect:** `str -> i64`
 
 ```casa
 "hello" str_hash print    # prints hash value
@@ -584,7 +584,7 @@ Computes a hash for a string using the djb2 algorithm. Returns a non-negative in
 
 Returns the absolute value of an integer, for use as a hash.
 
-**Stack effect:** `int -> int`
+**Stack effect:** `i64 -> i64`
 
 ```casa
 -42 int_hash print    # 42

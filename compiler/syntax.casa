@@ -252,7 +252,7 @@ fn op_value_to_operator_kind op_value:OpValue -> Option[OperatorKind] {
 
 struct TokenCursor {
     tokens: List[Token]
-    pos:    int
+    pos:    u64
     state:  ParseState
 }
 
@@ -289,11 +289,11 @@ impl TokenCursor {
         self TokenCursor::pos 1 - self TokenCursor::set_pos
     }
 
-    fn save self:TokenCursor -> int {
+    fn save self:TokenCursor -> u64 {
         self TokenCursor::pos
     }
 
-    fn restore self:TokenCursor saved:int {
+    fn restore self:TokenCursor saved:u64 {
         saved self TokenCursor::set_pos
     }
 
@@ -505,10 +505,13 @@ fn get_op_literal token:Token cursor:TokenCursor -> Op {
     if "false" value == then
         token Token::location 0 OpValue::PushBool Op::new return
     fi
-    # Integer literal (positive or negative)
+    # Numeric literal (positive or negative)
+    if value is_float_literal then
+        token Token::location value OpValue::PushFloat Op::new return
+    fi
     if 0 value.at.is_digit value is_negative_integer_literal || then
         value str_to_int = int_value
-        token Token::location int_value OpValue::PushInt Op::new return
+        token Token::location int_value value IntegerLiteral::new OpValue::PushInt Op::new return
     fi
     # Char literal: 'X'
     if
@@ -516,7 +519,7 @@ fn get_op_literal token:Token cursor:TokenCursor -> Op {
     '\'' value.length 1 - value.at == &&
     3 value.length == &&
     then
-        1 value.at (int) = char_value
+        1 value.at (i64) = char_value
         token Token::location char_value OpValue::PushChar Op::new return
     fi
     # String literal: "..."
@@ -525,7 +528,7 @@ fn get_op_literal token:Token cursor:TokenCursor -> Op {
         token Token::location str_value OpValue::PushStr Op::new return
     fi
     token Token::location f"Token `{value}` is not a literal" ErrorKind::Syntax cursor.state.record_error
-    token Token::location 0 OpValue::PushInt Op::new
+    token Token::location 0 make_integer_op_value Op::new
 }
 
 # ============================================================================
@@ -545,7 +548,7 @@ fn get_op_intrinsic token:Token cursor:TokenCursor -> Op {
     if op_value_opt Option::Some(op_value) is then
         token Token::location op_value Op::new return
     fi
-    token Token::location 0 OpValue::PushInt Op::new
+    token Token::location 0 make_integer_op_value Op::new
 }
 
 # ============================================================================
@@ -611,7 +614,7 @@ fn get_op_operator token:Token cursor:TokenCursor function_name:str -> Op {
     if op_value_opt Option::Some(op_value) is then
         token Token::location op_value Op::new return
     fi
-    token Token::location 0 OpValue::PushInt Op::new
+    token Token::location 0 make_integer_op_value Op::new
 }
 
 # ============================================================================
@@ -749,7 +752,7 @@ fn handle_fstring
     function_name:str
     ops:List[Op]
 {
-    0 = part_count
+    0 (u64) = part_count
     while true do
         cursor.pop = token_opt
         if token_opt.is_none then break fi
@@ -772,7 +775,7 @@ fn handle_fstring
     done
     if 0 part_count == then
         start_token Token::location "" OpValue::PushStr Op::new ops.push
-        1 = part_count
+        1 (u64) = part_count
     fi
     if 1 part_count > then
         start_token Token::location part_count OpValue::FstringConcat Op::new ops.push
@@ -875,8 +878,8 @@ fn try_parse_is_check token:Token cursor:TokenCursor -> Option[Op] {
 
     # Split token value on ::
     token Token::value "::" str::find = separator
-    token Token::value 0 separator str::substring = enum_name
-    token Token::value separator 2 + token Token::value.length separator - 2 - str::substring = variant_name
+    token Token::value 0 separator (u64) str::substring = enum_name
+    token Token::value separator 2 + (u64) token Token::value.length separator (u64) - 2 - str::substring = variant_name
 
     Option::None variant_name enum_name EnumVariant::new = variant
     bindings variant EnumVariant::set_bindings
@@ -903,7 +906,7 @@ struct ParsedTypeVariables {
 }
 
 # Parse the `[arg1 arg2 ...]` type argument list that follows a generic trait
-# name in a trait bound (e.g. `I: Iterable[int]`). The caller has already
+# name in a trait bound (e.g. `I: Iterable[i64]`). The caller has already
 # consumed the trait identifier. If the next token is not `[`, returns an
 # empty list. Otherwise parses each argument as a Type AST value.
 
@@ -966,7 +969,7 @@ fn parse_type_variables parser:Parser cursor:TokenCursor -> ParsedTypeVariables 
             fi
             token Token::value vars.push
             token Token::value seen.add = seen
-            # Check for trait bound: K: Hashable  or  K: Iterable[int]
+            # Check for trait bound: K: Hashable  or  K: Iterable[i64]
             cursor.peek = colon_opt
             if colon_opt Option::Some(colon) is then
                 if ":" colon Token::value == then
@@ -1153,27 +1156,44 @@ fn parse_literal_to_constant_value raw:str -> ConstantValue {
         raw 1 raw.length 2 - str::substring ConstantValue::Str return
     fi
     if '\'' 0 raw.at == then
-        1 raw.at (int) ConstantValue::Char return
+        1 raw.at (i64) ConstantValue::Char return
     fi
-    raw str_to_int ConstantValue::Int
+    if raw is_float_literal then raw ConstantValue::Float return fi
+    raw str_to_int raw IntegerLiteral::new ConstantValue::Int
 }
 
 # ============================================================================
 # try_fold_const_fn_call - constant-fold a const fn call with all-literal args
 # ============================================================================
 
+fn is_const_fold_literal value:OpValue -> bool {
+    value OpValue::PushInt is
+    value OpValue::PushFloat is ||
+    value OpValue::PushStr is ||
+    value OpValue::PushBool is ||
+    value OpValue::PushChar is ||
+}
+
 fn try_fold_const_fn_call
     store:SymbolStore
     ops:List[Op]
-    op_index:int
+    op_index:u64
     fn_name:str
     current_op:Op
     diagnostics:Diagnostics
--> int {
+-> u64 {
     fn_name store.functions.get = fold_fn_opt
     if fold_fn_opt.is_none then op_index return fi
     fold_fn_opt.unwrap = fold_fn
     if fold_fn Function::is_const_fn ! then op_index return fi
+    for parameter in fold_fn.stack_effect.parameters.iter do
+        if parameter.typ.has_unresolved_type_var parameter.typ.has_unresolved || then
+            op_index return
+        fi
+    done
+    for return_type in fold_fn.stack_effect.return_types.iter do
+        if return_type.has_unresolved_type_var return_type.has_unresolved || then op_index return fi
+    done
     fold_fn Function::stack_effect StackEffect::parameters.length = fold_param_count
     op_index 1 - = call_idx
     call_idx fold_param_count - = first_arg_idx
@@ -1181,9 +1201,7 @@ fn try_fold_const_fn_call
     first_arg_idx = check_idx
     while check_idx call_idx > do
         check_idx ops.get Op::value = check_val
-        if check_val OpValue::PushInt is ! check_val OpValue::PushStr is ! && check_val OpValue::PushBool is ! && check_val OpValue::PushChar is ! && then
-            op_index return
-        fi
+        if check_val is_const_fold_literal ! then op_index return fi
         1 += check_idx
     done
     List::new(List[ConstantValue]) = fold_stack
@@ -1193,6 +1211,8 @@ fn try_fold_const_fn_call
         load_idx ops.get Op::value = load_val
         if load_val OpValue::PushInt(li) is then
             li ConstantValue::Int fold_stack.push
+        elif load_val OpValue::PushFloat(float_literal) is then
+            float_literal ConstantValue::Float fold_stack.push
         elif load_val OpValue::PushStr(ls) is then
             ls ConstantValue::Str fold_stack.push
         elif load_val OpValue::PushBool(lb) is then
@@ -1208,10 +1228,15 @@ fn try_fold_const_fn_call
     fold_stack.pop = fold_result
     fold_result match
         ConstantValue::Int(ri) => { ri OpValue::PushInt first_arg_idx ops.get Op::set_value }
+        ConstantValue::Float(float_result) => { float_result OpValue::PushFloat first_arg_idx ops.get Op::set_value }
         ConstantValue::Str(rs) => { rs OpValue::PushStr first_arg_idx ops.get Op::set_value }
         ConstantValue::Bool(rb) => { rb OpValue::PushBool first_arg_idx ops.get Op::set_value }
         ConstantValue::Char(rc) => { rc OpValue::PushChar first_arg_idx ops.get Op::set_value }
     end
+    if 1 fold_fn.stack_effect.return_types.length == then
+        0 fold_fn.stack_effect.return_types.get Option::Some
+        first_arg_idx ops.get Op::set_type_hint
+    fi
     first_arg_idx 1 + = shift_dst
     call_idx 1 + = shift_src
     while shift_src ops.length > do
@@ -1219,7 +1244,7 @@ fn try_fold_const_fn_call
         1 += shift_src
         1 += shift_dst
     done
-    0 = pop_count
+    0 (u64) = pop_count
     while pop_count fold_param_count > do
         ops.pop drop
         1 += pop_count
@@ -1250,6 +1275,36 @@ fn validate_const_fn_body function:Function diagnostics:Diagnostics {
 # eval_const_block - compile-time evaluation of const { ... } expressions
 # ============================================================================
 
+fn validate_constant_numeric
+    value:ConstantValue
+    target:Type
+    location:Location
+    diagnostics:Diagnostics
+-> bool {
+    value match
+        ConstantValue::Int(literal) => {
+            if target.is_integer_type_t ! then
+                location f"Integer literal `{literal.raw}` requires an integer context, got `{target.format}`" ErrorKind::TypeMismatch diagnostics.record_error
+                false return
+            fi
+            if target literal.fits ! then
+                target.get_integer_min = minimum
+                target.get_integer_max = maximum
+                location f"Integer literal `{literal.raw}` is outside `{target.format}` range {minimum}..{maximum}" ErrorKind::TypeMismatch diagnostics.record_error
+                false return
+            fi
+        }
+        ConstantValue::Float(literal) => {
+            if target.is_float_type_t ! then
+                location f"Floating-point literal `{literal}` requires `f32` or `f64` context, got `{target.format}`" ErrorKind::TypeMismatch diagnostics.record_error
+                false return
+            fi
+        }
+        _ => { }
+    end
+    true
+}
+
 fn const_eval_apply_operator
     stack:List[ConstantValue]
     operator_kind:OperatorKind
@@ -1264,9 +1319,13 @@ fn const_eval_apply_operator
         if a_val ConstantValue::Bool(a_bool) is then
             if 0 a_bool != then 0 else 1 fi ConstantValue::Bool stack.push
         elif a_val ConstantValue::Int(a_int) is then
-            if 0 a_int != then 0 else 1 fi ConstantValue::Bool stack.push
+            if diagnostics location TYPE_I64_T a_val validate_constant_numeric ! then
+                0 IntegerLiteral::from_int ConstantValue::Int stack.push
+                return
+            fi
+            if 0 a_int.value != then 0 else 1 fi ConstantValue::Bool stack.push
         else
-            location "Operator `!` requires bool or int operand" ErrorKind::Syntax diagnostics.record_error
+            location "Operator `!` requires bool or i64 operand" ErrorKind::Syntax diagnostics.record_error
         fi
         return
     fi
@@ -1276,9 +1335,13 @@ fn const_eval_apply_operator
         fi
         stack.pop = bitnot_val
         if bitnot_val ConstantValue::Int(bitnot_int) is then
-            bitnot_int ~ ConstantValue::Int stack.push
+            if diagnostics location TYPE_I64_T bitnot_val validate_constant_numeric ! then
+                0 IntegerLiteral::from_int ConstantValue::Int stack.push
+                return
+            fi
+            bitnot_int.value ~ IntegerLiteral::from_int ConstantValue::Int stack.push
         else
-            location "Operator `~` requires int operand" ErrorKind::Syntax diagnostics.record_error
+            location "Operator `~` requires i64 operand" ErrorKind::Syntax diagnostics.record_error
         fi
         return
     fi
@@ -1289,55 +1352,62 @@ fn const_eval_apply_operator
     stack.pop = a_val
     if a_val ConstantValue::Int(a_int) is then
         if b_val ConstantValue::Int(b_int) is then
+            if
+            diagnostics location TYPE_I64_T a_val validate_constant_numeric !
+            diagnostics location TYPE_I64_T b_val validate_constant_numeric ! ||
+            then
+                0 IntegerLiteral::from_int ConstantValue::Int stack.push
+                return
+            fi
             if operator_kind OperatorKind::Plus == then
-                a_int b_int + ConstantValue::Int stack.push return
+                a_int.value b_int.value + IntegerLiteral::from_int ConstantValue::Int stack.push return
             fi
             if operator_kind OperatorKind::Minus == then
-                a_int b_int - ConstantValue::Int stack.push return
+                a_int.value b_int.value - IntegerLiteral::from_int ConstantValue::Int stack.push return
             fi
             if operator_kind OperatorKind::Mul == then
-                a_int b_int * ConstantValue::Int stack.push return
+                a_int.value b_int.value * IntegerLiteral::from_int ConstantValue::Int stack.push return
             fi
             if operator_kind OperatorKind::Div == then
-                a_int b_int / ConstantValue::Int stack.push return
+                a_int.value b_int.value / IntegerLiteral::from_int ConstantValue::Int stack.push return
             fi
             if operator_kind OperatorKind::Mod == then
-                a_int b_int % ConstantValue::Int stack.push return
+                a_int.value b_int.value % IntegerLiteral::from_int ConstantValue::Int stack.push return
             fi
             if operator_kind OperatorKind::Shl == then
-                a_int b_int << ConstantValue::Int stack.push return
+                a_int.value b_int.value (u64) << IntegerLiteral::from_int ConstantValue::Int stack.push return
             fi
             if operator_kind OperatorKind::Shr == then
-                a_int b_int >> ConstantValue::Int stack.push return
+                a_int.value b_int.value (u64) >> IntegerLiteral::from_int ConstantValue::Int stack.push return
             fi
             if operator_kind OperatorKind::BitAnd == then
-                a_int b_int & ConstantValue::Int stack.push return
+                a_int.value b_int.value & IntegerLiteral::from_int ConstantValue::Int stack.push return
             fi
             if operator_kind OperatorKind::BitOr == then
-                a_int b_int | ConstantValue::Int stack.push return
+                a_int.value b_int.value | IntegerLiteral::from_int ConstantValue::Int stack.push return
             fi
             if operator_kind OperatorKind::BitXor == then
-                a_int b_int ^ ConstantValue::Int stack.push return
+                a_int.value b_int.value ^ IntegerLiteral::from_int ConstantValue::Int stack.push return
             fi
             if operator_kind OperatorKind::Eq == then
-                if a_int b_int == then 1 else 0 fi ConstantValue::Bool stack.push return
+                if a_int.value b_int.value == then 1 else 0 fi ConstantValue::Bool stack.push return
             fi
             if operator_kind OperatorKind::Ne == then
-                if a_int b_int != then 1 else 0 fi ConstantValue::Bool stack.push return
+                if a_int.value b_int.value != then 1 else 0 fi ConstantValue::Bool stack.push return
             fi
             if operator_kind OperatorKind::Lt == then
-                if a_int b_int < then 1 else 0 fi ConstantValue::Bool stack.push return
+                if a_int.value b_int.value < then 1 else 0 fi ConstantValue::Bool stack.push return
             fi
             if operator_kind OperatorKind::Le == then
-                if a_int b_int <= then 1 else 0 fi ConstantValue::Bool stack.push return
+                if a_int.value b_int.value <= then 1 else 0 fi ConstantValue::Bool stack.push return
             fi
             if operator_kind OperatorKind::Gt == then
-                if a_int b_int > then 1 else 0 fi ConstantValue::Bool stack.push return
+                if a_int.value b_int.value > then 1 else 0 fi ConstantValue::Bool stack.push return
             fi
             if operator_kind OperatorKind::Ge == then
-                if a_int b_int >= then 1 else 0 fi ConstantValue::Bool stack.push return
+                if a_int.value b_int.value >= then 1 else 0 fi ConstantValue::Bool stack.push return
             fi
-            location "Unsupported operator for int operands in const expression" ErrorKind::Syntax diagnostics.record_error
+            location "Unsupported operator for i64 operands in const expression" ErrorKind::Syntax diagnostics.record_error
         fi
     fi
     if a_val ConstantValue::Bool(a_bool) is then
@@ -1390,19 +1460,28 @@ fn eval_const_fn
         location f"Not enough arguments for const fn `{fn_name}`" ErrorKind::Syntax diagnostics.record_error
         false return
     fi
-    0 = pi
+    0 (u64) = pi
     while pi param_count > do
-        stack.pop fn_stack.push
+        stack.pop = argument
+        pi function.stack_effect.parameters.get.typ = parameter_type
+        if diagnostics location parameter_type argument validate_constant_numeric ! then
+            false return
+        fi
+        argument fn_stack.push
         1 += pi
     done
     function Function::ops = fn_ops
-    0 = oi
+    0 (u64) = oi
     while oi fn_ops.length > do
         oi fn_ops.get = fn_op
         1 += oi
         fn_op Op::value = op_value
         if op_value OpValue::PushInt(push_int) is then
             push_int ConstantValue::Int fn_stack.push
+            continue
+        fi
+        if op_value OpValue::PushFloat(push_float) is then
+            push_float ConstantValue::Float fn_stack.push
             continue
         fi
         if op_value OpValue::PushStr(push_str) is then
@@ -1495,7 +1574,7 @@ fn eval_const_block parser:Parser cursor:TokenCursor location:Location -> Consta
         if tok_opt.is_none then
             location "Unclosed const block expression" ErrorKind::Syntax parser.state.record_error
             parser.state.mark_output_unusable
-            0 ConstantValue::Int return
+            0 IntegerLiteral::from_int ConstantValue::Int return
         fi
         tok_opt.unwrap = tok
         if "}" tok Token::value == then break fi
@@ -1523,7 +1602,7 @@ fn eval_const_block parser:Parser cursor:TokenCursor location:Location -> Consta
             if f_opt Option::Some(function) is then
                 if function Function::is_const_fn then
                     if parser.state.diagnostics eval_stack tok Token::location stack ident parser.store eval_const_fn ! then
-                        0 ConstantValue::Int return
+                        0 IntegerLiteral::from_int ConstantValue::Int return
                     fi
                     continue
                 fi
@@ -1537,6 +1616,7 @@ fn eval_const_block parser:Parser cursor:TokenCursor location:Location -> Consta
     done
     if 0 stack.length == then
         location "Const block expression produced no value" ErrorKind::Syntax parser.state.record_error
+        0 IntegerLiteral::from_int ConstantValue::Int return
     fi
     stack.pop
 }
@@ -1688,7 +1768,7 @@ fn parse_enum parser:Parser cursor:TokenCursor -> CasaEnum {
             variant_name variant_types.get = vt_opt
             if vt_opt.is_some then
                 vt_opt.unwrap = vt_inner
-                0 = vt_index
+                0 (u64) = vt_index
                 while vt_index vt_inner.length > do
                     tv_set vt_index vt_inner.get canonicalize_type_var vt_index vt_inner.set
                     1 += vt_index
@@ -1713,11 +1793,11 @@ fn synthesize_hashable_for_enum parser:Parser casa_enum:CasaEnum {
     f"{enum_name}::hash" = hash_name
     if hash_name parser.store.functions.get.is_none then
         List::new(List[Op]) = hash_ops
-        location TYPE_INT_T OpValue::TypeCast Op::new hash_ops.push
+        location TYPE_I64_T OpValue::TypeCast Op::new hash_ops.push
         List::new(List[Parameter]) = hash_params
         enum_name GenericType::new Type::Generic Parameter::new hash_params.push
         List::new(List[Type]) = hash_returns
-        TYPE_INT_T hash_returns.push
+        TYPE_I64_T hash_returns.push
         hash_returns hash_params StackEffect::new = hash_stack_effect
         hash_stack_effect location hash_ops hash_name Function::with_stack_effect = hash_fn
         hash_fn hash_name parser.put_function
@@ -1753,7 +1833,7 @@ fn create_member_accessor
     struct_name:str
     member_name:str
     member_type:Type
-    member_index:int
+    member_index:u64
     location:Location
     type_vars:List[str]
 {
@@ -1770,7 +1850,7 @@ fn create_member_accessor
     f"{struct_name}::{member_name}" = getter_name
     List::new(List[Op]) = getter_ops
     location TYPE_PTR_T OpValue::TypeCast Op::new getter_ops.push
-    location offset OpValue::PushInt Op::new getter_ops.push
+    location offset (i64) make_integer_op_value Op::new getter_ops.push
     location OpValue::Add Op::new getter_ops.push
     location OpValue::Load64 Op::new getter_ops.push
     location member_type OpValue::TypeCast Op::new getter_ops.push
@@ -1793,8 +1873,11 @@ fn create_member_accessor
     f"{struct_name}::set_{member_name}" = setter_name
     List::new(List[Op]) = setter_ops
     location TYPE_PTR_T OpValue::TypeCast Op::new setter_ops.push
-    location offset OpValue::PushInt Op::new setter_ops.push
+    location offset (i64) make_integer_op_value Op::new setter_ops.push
     location OpValue::Add Op::new setter_ops.push
+    location OpValue::Swap Op::new setter_ops.push
+    location TYPE_U64_T OpValue::TypeCast Op::new setter_ops.push
+    location OpValue::Swap Op::new setter_ops.push
     location OpValue::Store64 Op::new setter_ops.push
 
     List::new(List[Parameter]) = setter_params
@@ -2070,7 +2153,7 @@ fn inject_impl_trait_params
 
     # Inject hidden __trait_* parameters
     List::new(List[Parameter]) = hidden_params
-    0 = insert_pos
+    0 (u64) = insert_pos
     effect StackEffect::trait_bounds parser build_hidden_trait_methods = hidden_methods
     for hidden in hidden_methods.iter do
         hidden HiddenTraitMethod::var_name = hidden_name
@@ -2261,20 +2344,20 @@ fn parse_literal_match_pattern token:Token parser:Parser -> LiteralPattern {
         "false" false LiteralValue::Bool LiteralPattern return
     fi
     if 0 value.at.is_digit value is_negative_integer_literal || then
-        value value str_to_int LiteralValue::Int LiteralPattern return
+        value value str_to_int value IntegerLiteral::new LiteralValue::Int LiteralPattern return
     fi
     if
     '\'' 0 value.at ==
     3 value.length == &&
     then
-        value 1 value.at (int) LiteralValue::Char LiteralPattern return
+        value 1 value.at (i64) LiteralValue::Char LiteralPattern return
     fi
     if '"' 0 value.at == '"' value.length 1 - value.at == && then
         value value 1 value.length 2 - str::substring LiteralValue::Str LiteralPattern return
     fi
     token Token::location f"Unsupported literal in match arm: `{value}`" ErrorKind::UnexpectedToken parser.state.record_error
     # Unreachable
-    "" 0 LiteralValue::Int LiteralPattern
+    "" 0 IntegerLiteral::from_int LiteralValue::Int LiteralPattern
 }
 # Parse one match-arm pattern (wildcard, literal, struct, bare ident, or
 # Enum::Variant) plus its optional guard, append the OpMatchArm to `ops`.
@@ -2310,8 +2393,8 @@ fn parse_match_arm_pattern
         arm_token Token::location bare_arm OpValue::MatchArm Op::new ops.push
     else
         arm_token Token::value "::" str::find = separator
-        arm_token Token::value 0 separator str::substring = enum_name
-        arm_token Token::value separator 2 + arm_token Token::value.length separator - 2 - str::substring = variant_name
+        arm_token Token::value 0 separator (u64) str::substring = enum_name
+        arm_token Token::value separator 2 + (u64) arm_token Token::value.length separator (u64) - 2 - str::substring = variant_name
 
         List::new(List[str]) = bindings
         cursor.peek = paren_opt
@@ -2397,8 +2480,8 @@ fn is_path_specifier spec:str -> bool {
 }
 
 fn dir_of_path path:str -> str {
-    Option::None(Option[int]) = last_slash
-    0 = scan
+    Option::None(Option[u64]) = last_slash
+    0 (u64) = scan
     while scan path.length > do
         if '/' scan path.at == then
             scan Option::Some = last_slash
@@ -3196,6 +3279,7 @@ fn resolve_array_identifiers
                 rai_const Constant::value = rai_const_value
                 rai_const_value match
                     ConstantValue::Int(rai_const_int) => { rai_const_int OpValue::PushInt rai_item Op::set_value }
+                    ConstantValue::Float(rai_const_float) => { rai_const_float OpValue::PushFloat rai_item Op::set_value }
                     ConstantValue::Str(rai_const_str) => { rai_const_str OpValue::PushStr rai_item Op::set_value }
                     ConstantValue::Bool(rai_const_bool) => { rai_const_bool OpValue::PushBool rai_item Op::set_value }
                     ConstantValue::Char(rai_const_char) => { rai_const_char OpValue::PushChar rai_item Op::set_value }
@@ -3284,7 +3368,7 @@ impl Parser {
 }
 
 fn expand_imports parser:Parser ops:List[Op] -> List[Op] {
-    0 = op_index
+    0 (u64) = op_index
     while op_index ops.length > do
         op_index ops.get = current_op
         1 += op_index
@@ -3312,7 +3396,7 @@ fn expand_imports parser:Parser ops:List[Op] -> List[Op] {
                 if imported_result.ops Option::Some(import_ops) is then
                     imported_result.store parser.store.merge_import
                     List::new(List[Op]) = new_ops
-                    0 = name_index
+                    0 (u64) = name_index
                     while name_index op_index > do
                         name_index ops.get new_ops.push
                         1 += name_index
@@ -3349,7 +3433,7 @@ fn resolve_identifiers
     function:Function
     diagnostics:Diagnostics
 -> List[Op] {
-    0 = op_index
+    0 (u64) = op_index
     List::new(List[CasaError]) = resolve_errors
     Set::new(Set[str]) = declared_globals
     while op_index ops.length > do
@@ -3514,10 +3598,10 @@ fn try_resolve_fn_ref
         true return
     fi
     if ref_name "::" str::find 0 <= then
-        ref_name 0 ref_name "::" str::find str::substring = ref_type_var
+        ref_name 0 ref_name "::" str::find(u64) str::substring = ref_type_var
         ref_type_var function Function::stack_effect StackEffect::trait_bounds.get = ref_bound_opt
         if ref_bound_opt.is_some then
-            ref_name ref_name "::" str::find 2 + ref_name.length ref_name "::" str::find - 2 - str::substring = ref_trait_method
+            ref_name ref_name "::" str::find 2 + (u64) ref_name.length ref_name "::" str::find(u64) - 2 - str::substring = ref_trait_method
             f"__trait_{ref_type_var}_{ref_trait_method}" = ref_hidden
             ref_hidden OpValue::PushVar op Op::set_value
             true return
@@ -3543,10 +3627,10 @@ fn try_resolve_enum_variant_ident
 -> bool {
     if ident "::" str::find 0 <= ! then false return fi
     ident "::" str::find = separator
-    ident 0 separator str::substring = enum_name
+    ident 0 separator (u64) str::substring = enum_name
     enum_name store.enums.get = enum_opt
     if enum_opt.is_none then false return fi
-    ident separator 2 + ident.length separator - 2 - str::substring = binding_name
+    ident separator 2 + (u64) ident.length separator (u64) - 2 - str::substring = binding_name
     enum_opt.unwrap = casa_enum
     binding_name casa_enum CasaEnum::variants string_list_index = ordinal
     if 0 ordinal < then
@@ -3562,9 +3646,9 @@ fn try_resolve_enum_variant_ident
 
 fn try_resolve_trait_method_call function:Function op:Op ident:str -> bool {
     if ident "::" str::find 0 <= ! then false return fi
-    ident 0 ident "::" str::find str::substring = type_var
+    ident 0 ident "::" str::find(u64) str::substring = type_var
     if type_var function Function::stack_effect StackEffect::trait_bounds.get.is_some ! then false return fi
-    ident ident "::" str::find 2 + ident.length ident "::" str::find - 2 - str::substring = trait_method
+    ident ident "::" str::find 2 + (u64) ident.length ident "::" str::find(u64) - 2 - str::substring = trait_method
     f"__trait_{type_var}_{trait_method}" = hidden_var
     if hidden_var function Function::variables variable_list_contains ! then
         hidden_var Variable::new function Function::variables.push
@@ -3612,6 +3696,9 @@ fn resolve_plain_identifier
             ConstantValue::Int(const_int) => {
                 const_int OpValue::PushInt op Op::set_value
             }
+            ConstantValue::Float(const_float) => {
+                const_float OpValue::PushFloat op Op::set_value
+            }
             ConstantValue::Str(const_str) => {
                 const_str OpValue::PushStr op Op::set_value
             }
@@ -3633,7 +3720,7 @@ fn resolve_plain_identifier
 
     ident store.enums.get = resolved_enum_opt
     if resolved_enum_opt Option::Some(resolved_enum) is then
-        resolved_enum CasaEnum::variants.length OpValue::PushInt op Op::set_value
+        resolved_enum CasaEnum::variants.length (i64) make_integer_op_value op Op::set_value
         return
     fi
 

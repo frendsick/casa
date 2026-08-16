@@ -11,8 +11,8 @@ A generic dynamic list that grows automatically when items are pushed. The type 
 ```casa
 struct List {
     data:     ptr
-    size:     int
-    capacity: int
+    size:     u64
+    capacity: u64
 }
 ```
 
@@ -40,7 +40,7 @@ Creates a `List[T]` from a fixed-size array. The list's size and capacity are bo
 
 Returns the number of elements in the list.
 
-**Stack effect:** `List -> int`
+**Stack effect:** `List -> i64`
 
 ```casa
 list.length print    # 3
@@ -50,20 +50,20 @@ list.length print    # 3
 
 Returns the element at index `n` (zero-indexed). Prints an error and exits if the index is out of bounds.
 
-**Stack effect:** `List[T] int -> T`
+**Stack effect:** `List[T] i64 -> T`
 
 ```casa
 0 list.get print    # 1
 2 list.get print    # 3
 ```
 
-The return type matches the list's element type. For example, calling `get` on a `List[int]` returns `int`.
+The return type matches the list's element type. For example, calling `get` on a `List[i64]` returns `i64`.
 
 ### `List::set`
 
 Sets the element at index `n`. Prints an error and exits if the index is out of bounds.
 
-**Stack effect:** `List[T] int T -> None`
+**Stack effect:** `List[T] i64 T -> None`
 
 ```casa
 99 1 list.set
@@ -97,7 +97,7 @@ list.length print       # 3
 
 Inserts an item at the given index, shifting subsequent elements right. Prints an error and exits if the index is out of bounds.
 
-**Stack effect:** `List[T] T int -> None`
+**Stack effect:** `List[T] T i64 -> None`
 
 ```casa
 99 1 list.insert
@@ -108,7 +108,7 @@ Inserts an item at the given index, shifting subsequent elements right. Prints a
 
 Returns an `array[T]` view into the list's data from index `start` (inclusive) to `stop` (exclusive). This is a zero-copy operation. Prints an error and exits if the range is out of bounds.
 
-**Stack effect:** `List[T] int int -> array[T]`
+**Stack effect:** `List[T] i64 i64 -> array[T]`
 
 ```casa
 3 1 list.slice = sliced
@@ -174,8 +174,8 @@ A generic hash map using separate chaining. Keys must satisfy the `Hashable` tra
 ```casa
 struct Map {
     buckets:  ptr
-    size:     int
-    capacity: int
+    size:     u64
+    capacity: u64
 }
 
 impl[K: Hashable, V] Map[K V] { ... }
@@ -190,16 +190,16 @@ Creates an empty map with an initial capacity of 16.
 **Stack effect:** `-> Map[K V]`
 
 ```casa
-Map::new (Map[str int]) = m
+Map::new (Map[str i64]) = m
 ```
 
-The type cast `(Map[str int])` tells the compiler the concrete types for `K` and `V`. The compiler verifies that `str` satisfies `Hashable`.
+The type cast `(Map[str i64])` tells the compiler the concrete types for `K` and `V`. The compiler verifies that `str` satisfies `Hashable`.
 
 ### `Map::length`
 
 Returns the number of key-value pairs in the map.
 
-**Stack effect:** `Map[K V] -> int`
+**Stack effect:** `Map[K V] -> i64`
 
 ```casa
 m.length print    # 0
@@ -255,7 +255,7 @@ Returns a lazy `Iter[Pair[K V]]` that yields key-value pairs on demand. Each pai
 ```casa
 for pair in m.iter do
     pair.first (str) = key
-    pair.second (int) = val
+    pair.second (i64) = val
     f"{key}: {val}\n" print
 done
 ```
@@ -299,7 +299,7 @@ m.values = val_list
 import "path/to/lib/std.casa"
 
 # Create a map from strings to ints
-Map::new (Map[str int]) = m
+Map::new (Map[str i64]) = m
 
 # Insert key-value pairs
 1 "one" m.set = m
@@ -323,7 +323,7 @@ Map::new (Map[str int]) = m
 m.length print                 # 2
 
 # Integer keys work too
-Map::new (Map[int str]) = m2
+Map::new (Map[i64 str]) = m2
 "hello" 1 m2.set = m2
 1 m2.get .unwrap print         # hello
 ```
@@ -332,19 +332,19 @@ See [`examples/hash_map.casa`](../examples/hash_map.casa) for a full program.
 
 ## `Set[K]`
 
-A generic hash set backed by a `Map[K int]`. Keys must satisfy the `Hashable` trait (see [Traits](traits.md)). The type parameter `K` tracks the element type at compile time.
+A generic hash set backed by a `Map[K i64]`. Keys must satisfy the `Hashable` trait (see [Traits](traits.md)). The type parameter `K` tracks the element type at compile time.
 
 ### Definition
 
 ```casa
 struct Set[K] {
-    map: Map[K int]
+    map: Map[K i64]
 }
 
 impl[K: Hashable] Set[K] { ... }
 ```
 
-Set uses a struct-level type parameter `K` with a typed `Map[K int]` field. All methods are in an `impl` block with the `K: Hashable` bound.
+Set uses a struct-level type parameter `K` with a typed `Map[K i64]` field. All methods are in an `impl` block with the `K: Hashable` bound.
 
 ### `Set::new`
 
@@ -360,7 +360,7 @@ Set::new (Set[str]) = s
 
 Returns the number of elements in the set.
 
-**Stack effect:** `Set[K] -> int`
+**Stack effect:** `Set[K] -> i64`
 
 ```casa
 s.length print    # 0
@@ -488,7 +488,7 @@ sb.build print    # hello world!
 
 Returns the number of characters in the builder.
 
-**Stack effect:** `StringBuilder -> int`
+**Stack effect:** `StringBuilder -> i64`
 
 ## See Also
 

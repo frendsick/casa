@@ -37,11 +37,11 @@ All arithmetic operators consume two values and produce one.
 
 | Operator | Stack Effect | Description |
 |----------|-------------|-------------|
-| `+` | `a int -> a` | Addition. The second operand must be `int`; result type matches the first operand. Works on `ptr` for pointer arithmetic. |
-| `-` | `a int -> a` | Subtraction. Same typing rules as `+`. |
-| `*` | `int int -> int` | Multiplication |
-| `/` | `int int -> int` | Integer division (truncates toward zero) |
-| `%` | `int int -> int` | Modulo (remainder) |
+| `+` | `T T -> T` | Same-width integer addition; also `ptr i64 -> ptr` |
+| `-` | `T T -> T` | Same-width integer subtraction; also `ptr i64 -> ptr` |
+| `*` | `T T -> T` | Same-width integer multiplication |
+| `/` | `T T -> T` | Same-width integer division (truncates toward zero) |
+| `%` | `T T -> T` | Same-width integer remainder |
 
 ```casa
 34 35 + print    # 69
@@ -65,8 +65,8 @@ buf (ptr) 8 + load64 print  # 42
 
 | Operator | Stack Effect | Description |
 |----------|-------------|-------------|
-| `<<` | `a int -> a` | Left shift. Result type matches the first operand. |
-| `>>` | `a int -> a` | Right shift. Result type matches the first operand. |
+| `<<` | `T u64 -> T` | Integer left shift; result keeps the operand width |
+| `>>` | `T u64 -> T` | Integer right shift; signed types preserve the sign |
 
 ```casa
 1 4 << print    # 16
@@ -77,10 +77,10 @@ buf (ptr) 8 + load64 print  # 42
 
 | Operator | Stack Effect | Description |
 |----------|-------------|-------------|
-| `&` | `int int -> int` | Bitwise AND |
-| `\|` | `int int -> int` | Bitwise OR |
-| `^` | `int int -> int` | Bitwise XOR |
-| `~` | `int -> int` | Bitwise NOT (one's complement) |
+| `&` | `T T -> T` | Same-width integer bitwise AND |
+| `\|` | `T T -> T` | Same-width integer bitwise OR |
+| `^` | `T T -> T` | Same-width integer bitwise XOR |
+| `~` | `T -> T` | Integer bitwise NOT (one's complement) |
 
 ```casa
 12 10 & print   # 8 (1100 AND 1010 = 1000)
@@ -104,7 +104,11 @@ All comparison operators consume two values of the same type and push a `bool`. 
 | `>`  | `[T: Ord] T T -> bool` | Greater than |
 | `>=` | `[T: Ord] T T -> bool` | Greater than or equal |
 
-Built-in primitives (`int`, `bool`, `char`, `cstr`, `ptr`) and enums get direct bytecode comparison. User-defined types must provide `impl T { fn eq ... }` (and `fn lt ...` for ordering); the operator then lowers to the corresponding trait method call. See [traits.md](traits.md) for `Eq` and `Ord`.
+Built-in integer types, `bool`, `char`, `cstr`, `ptr`, and enums get direct
+bytecode comparison. Integer operands must have the same width. User-defined
+types must provide `impl T { fn eq ... }` (and `fn lt ...` for ordering); the
+operator then lowers to the corresponding trait method call. See
+[traits.md](traits.md) for `Eq` and `Ord`.
 
 ```casa
 1 1 == print    # true
@@ -147,8 +151,8 @@ variable-rooted field path.
 |----------|-------------|-------------|
 | `= target` | `T -> None` | Assign top of stack to variable or field path `target` |
 | `= name:type` | `T -> None` | Assign with type annotation, verifies and narrows the type |
-| `+= target` | `int -> None` | Add top of stack to an `int` variable or field path |
-| `-= target` | `int -> None` | Subtract top of stack from an `int` variable or field path |
+| `+= target` | `T -> None` | Add to a same-width integer variable or field path |
+| `-= target` | `T -> None` | Subtract from a same-width integer variable or field path |
 
 ```casa
 42 = count        # count is now 42
@@ -167,8 +171,8 @@ variable; arbitrary expression receivers are not assignable.
 The `= name:type` form lets you annotate the type of a variable at assignment time. The type checker verifies the stack value is compatible and uses the annotated type for the variable.
 
 ```casa
-42 = x:int                  # explicit int annotation
-Option::None = empty:Option[int]    # narrow bare Option to Option[int]
+42 = x:i64                  # explicit i64 annotation
+Option::None = empty:Option[i64]    # narrow bare Option to Option[i64]
 ```
 
 Variables are created on first assignment. See [Functions and Lambdas -- Variables](functions-and-lambdas.md#variables) for scoping rules.

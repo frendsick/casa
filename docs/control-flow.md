@@ -67,7 +67,7 @@ else
 fi
 ```
 
-The first branch pushes an `int`, the second pushes a `str` — the type checker rejects this.
+The first branch pushes an `i64`, the second pushes a `str` — the type checker rejects this.
 
 Compatible types are allowed across branches. For example, `Option::None` (bare `Option`) and `Option::Some` (`Option[T]`) can appear in different branches. The type checker unifies them to the more specific type:
 
@@ -75,9 +75,9 @@ Compatible types are allowed across branches. For example, `Option::None` (bare 
 if condition then
     Option::None           # Option
 else
-    42 Option::Some        # Option[int]
+    42 Option::Some        # Option[i64]
 fi
-# result type: Option[int]
+# result type: Option[i64]
 ```
 
 The same applies to bare `array` and `array[T]`.
@@ -90,8 +90,8 @@ The `is` keyword can be used in `if`/`elif` conditions to check and destructure 
 
 ```casa
 enum Shape {
-    Circle(int)
-    Rectangle(int int)
+    Circle(i64)
+    Rectangle(i64 i64)
     Point
 }
 
@@ -236,12 +236,12 @@ A `Counter` that yields integers from `0` up to (but not including) a
 limit:
 
 ```casa
-struct Counter { value:int limit:int }
+struct Counter { value:i64 limit:i64 }
 
 impl Counter {
-    fn next self:Counter -> Option[int] {
+    fn next self:Counter -> Option[i64] {
         if self Counter::limit self Counter::value >= then
-            Option::None (Option[int]) return
+            Option::None (Option[i64]) return
         fi
         self Counter::value = current
         1 += self.value
@@ -261,7 +261,7 @@ want to restart it.
 
 ## Match
 
-Casa has exhaustive pattern matching using `match`/`end`. Match works with enum types, struct types, and literal types (`bool`, `int`, `char`, `str`).
+Casa has exhaustive pattern matching using `match`/`end`. Match works with enum types, struct types, and literal types (`bool`, `i64`, `char`, `str`).
 
 ### Syntax
 
@@ -316,10 +316,10 @@ end
 
 ### Literal Matching
 
-Match on `bool`, `int`, `char`, and `str` values using literal patterns:
+Match on `bool`, `i64`, `char`, and `str` values using literal patterns:
 
 ```casa
-fn describe n:int {
+fn describe n:i64 {
     n match
         0 => "zero" print
         1 => "one" print
@@ -367,7 +367,7 @@ end
 An arm may carry an `if <cond>` guard between the pattern and `=>`. The arm fires only when the pattern matches AND the guard returns `true`. The guard expression is a regular Casa expression that must leave a single `bool` on the stack; pattern bindings are in scope inside the guard.
 
 ```casa
-fn classify n:int -> str {
+fn classify n:i64 -> str {
     n match
         _ if 0 n > => "positive"
         _ if 0 n == => "zero"

@@ -116,7 +116,7 @@ Timer::new = timer
 
 Returns elapsed nanoseconds since the Timer was created.
 
-**Stack effect:** `Timer -> int`
+**Stack effect:** `Timer -> i64`
 
 ```casa
 timer .elapsed_ns print   # e.g. 42000000
@@ -126,7 +126,7 @@ timer .elapsed_ns print   # e.g. 42000000
 
 Returns elapsed milliseconds since the Timer was created.
 
-**Stack effect:** `Timer -> int`
+**Stack effect:** `Timer -> i64`
 
 ```casa
 timer .elapsed_ms print   # e.g. 42
@@ -156,13 +156,13 @@ Starts the global timer.
 
 Returns elapsed milliseconds from the global timer. Exits with an error if `timer_start` has not been called.
 
-**Stack effect:** `-> int`
+**Stack effect:** `-> i64`
 
 #### `timer_elapsed_ns`
 
 Returns elapsed nanoseconds from the global timer. Exits with an error if `timer_start` has not been called.
 
-**Stack effect:** `-> int`
+**Stack effect:** `-> i64`
 
 ### Complete Example
 
@@ -187,7 +187,7 @@ f"Elapsed ms: {timer .elapsed_ms}\n" print
 
 Pushes the number of command-line arguments onto the stack.
 
-**Stack effect:** `-> int`
+**Stack effect:** `-> i64`
 
 ```casa
 argc print    # prints the argument count
@@ -203,7 +203,7 @@ Pushes a pointer to the argument array onto the stack.
 
 Returns the nth command-line argument as a string (zero-indexed). Prints an error to stderr and exits if the index is out of bounds.
 
-**Stack effect:** `int -> str`
+**Stack effect:** `i64 -> str`
 
 ```casa
 0 get_arg print    # prints the program name
@@ -347,7 +347,7 @@ options:
 
 Executes an external command using fork/execve/wait4. Takes a `List[str]` where the first element is the executable path and the remaining elements are arguments. Returns the child process exit code.
 
-**Stack effect:** `List[str] -> int`
+**Stack effect:** `List[str] -> i64`
 
 ```casa
 List::new (List[str]) = args

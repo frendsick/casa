@@ -25,14 +25,14 @@ impl BytecodeFailure {
 struct BytecodeCompiler {
     ops:               List[Op]
     function:          Option[Function]
-    locals_count:      int
+    locals_count:      u64
     string_table:      List[str]
     constants_table:   List[str]
     static_arrays:     List[StaticArray]
     static_structs:    List[StaticStruct]
     store:             SymbolStore
-    label_counter:     int
-    op_label_map:      Map[Op int]
+    label_counter:     u64
+    op_label_map:      Map[Op u64]
     function_bytecode: Map[str List[InstValue]]
     failure:           Option[BytecodeFailure]
 }
@@ -41,7 +41,7 @@ impl BytecodeCompiler {
     fn new store:SymbolStore ops:List[Op] -> BytecodeCompiler {
         Option::None(Option[BytecodeFailure])
         Map::new(Map[str List[InstValue]])
-        Map::new(Map[Op int])
+        Map::new(Map[Op u64])
         0
         store
         List::new(List[StaticStruct])
@@ -86,7 +86,7 @@ impl BytecodeCompiler {
 # ============================================================================
 
 impl BytecodeCompiler {
-    fn new_label compiler:BytecodeCompiler -> int {
+    fn new_label compiler:BytecodeCompiler -> u64 {
         compiler.label_counter = value
         1 += compiler.label_counter
         value
@@ -94,7 +94,7 @@ impl BytecodeCompiler {
 }
 
 impl BytecodeCompiler {
-    fn op_to_label compiler:BytecodeCompiler op:Op -> int {
+    fn op_to_label compiler:BytecodeCompiler op:Op -> u64 {
         if op compiler.op_label_map.get Option::Some(existing) is then
             existing
         else
@@ -109,10 +109,10 @@ impl BytecodeCompiler {
 # String/constant interning
 # ============================================================================
 
-fn intern_table table:List[str] value:str -> int {
+fn intern_table table:List[str] value:str -> u64 {
     # Add value to table if not present, return its index.
     if value table string_list_contains then
-        value table string_list_index
+        value table string_list_index (u64)
     else
         table.length = table_index
         value table.push
@@ -121,7 +121,7 @@ fn intern_table table:List[str] value:str -> int {
 }
 
 impl BytecodeCompiler {
-    fn intern_string compiler:BytecodeCompiler value:str -> int {
+    fn intern_string compiler:BytecodeCompiler value:str -> u64 {
         value compiler.string_table intern_table
     }
 }
@@ -136,13 +136,13 @@ impl BytecodeCompiler {
             variable_name function Function::variables variable_list_contains = is_local
             if is_local then
                 variable_name function Function::variables variable_list_index = local_index
-                local_index ResolvedVariable::Local return
+                local_index (u64) ResolvedVariable::Local return
             fi
         fi
         variable_name compiler.store.variables.has = is_global
         if is_global then
             variable_name compiler.store.variables.keys string_list_index = global_index
-            global_index ResolvedVariable::Global return
+            global_index (u64) ResolvedVariable::Global return
         fi
         f"Variable `{variable_name}` is missing during bytecode compilation" compiler.record_failure
         0 ResolvedVariable::Local
@@ -173,23 +173,23 @@ impl BytecodeCompiler {
     fn find_matching_label
         compiler:BytecodeCompiler
         ops:List[Op]
-        op_index:int
+        op_index:u64
         boundary_value:OpValue
         target_values:List[OpValue]
         backward:bool
-    -> Option[int] {
+    -> Option[u64] {
         if backward then -1 else 1 fi = step
         0 step - = neg_step
         1 = depth
-        op_index step + = index
+        op_index (i64) step + = index
         while
-        if backward then 0 index >= else index ops.length > fi
+        if backward then 0 index >= else index ops.length (i64) > fi
         do
-            index ops.get = other_op
+            index (u64) ops.get = other_op
             other_op.value = other_value
             if 1 depth <= then
                 if other_value target_values op_value_list_contains then
-                    index ops.get compiler.op_to_label Option::Some return
+                    index (u64) ops.get compiler.op_to_label Option::Some return
                 fi
             fi
             if other_value is_block_start_value then
@@ -225,8 +225,8 @@ impl BytecodeCompiler {
     fn find_next_match_arm_or_end
         compiler:BytecodeCompiler
         ops:List[Op]
-        op_index:int
-    -> Option[int] {
+        op_index:u64
+    -> Option[u64] {
         1 = depth
         op_index 1 + = index
         while index ops.length > do
@@ -257,12 +257,12 @@ impl BytecodeCompiler {
     fn require_matching
         compiler:BytecodeCompiler
         ops:List[Op]
-        op_index:int
+        op_index:u64
         boundary_value:OpValue
         target_values:List[OpValue]
         message:str
         backward:bool
-    -> int {
+    -> u64 {
         backward target_values boundary_value op_index ops compiler.find_matching_label = result
         if result Option::Some(label) is then label return fi
         message compiler.record_failure
@@ -274,7 +274,52 @@ impl BytecodeCompiler {
 # Compile assignment
 # ============================================================================
 
+impl OpValue {
+    fn produces_integer_result self:OpValue -> bool {
+        self match
+            OpValue::Add => true
+            OpValue::Sub => true
+            OpValue::Mul => true
+            OpValue::Div => true
+            OpValue::Mod => true
+            OpValue::Shl => true
+            OpValue::Shr => true
+            OpValue::BitAnd => true
+            OpValue::BitOr => true
+            OpValue::BitXor => true
+            OpValue::BitNot => true
+            OpValue::AssignInc => true
+            OpValue::AssignDec => true
+            _ => false
+        end
+    }
+
+    fn select_integer_instruction self:OpValue direct:InstValue builtin:BuiltinType -> InstValue {
+        if builtin.is_unsigned ! then direct return fi
+        self match
+            OpValue::Div => InstValue::UDiv
+            OpValue::Mod => InstValue::UMod
+            OpValue::Shr => InstValue::UShr
+            OpValue::Lt => InstValue::Ult
+            OpValue::Le => InstValue::Ule
+            OpValue::Gt => InstValue::Ugt
+            OpValue::Ge => InstValue::Uge
+            OpValue::PrintInt => InstValue::PrintUint
+            _ => direct
+        end
+    }
+}
+
 impl BytecodeCompiler {
+    fn emit_integer_normalization compiler:BytecodeCompiler op:Op bytecode:List[InstValue] {
+        if op.value.produces_integer_result ! then return fi
+        if op.type_hint Option::Some(type_hint) is then
+            if type_hint Type::Builtin(builtin) is then
+                builtin InstValue::NormalizeInt bytecode.push
+            fi
+        fi
+    }
+
     fn compile_assignment compiler:BytecodeCompiler op:Op bytecode:List[InstValue] {
         op op_str_value = name
         name compiler.resolve_variable = resolved
@@ -284,11 +329,13 @@ impl BytecodeCompiler {
                 bytecode resolved.emit_get
                 InstValue::Swap bytecode.push
                 InstValue::Sub bytecode.push
+                bytecode op compiler.emit_integer_normalization
                 bytecode resolved.emit_set
             }
             OpValue::AssignInc => {
                 bytecode resolved.emit_get
                 InstValue::Add bytecode.push
+                bytecode op compiler.emit_integer_normalization
                 bytecode resolved.emit_set
             }
             OpValue::AssignVar => bytecode resolved.emit_set
@@ -304,7 +351,7 @@ impl BytecodeCompiler {
 # ============================================================================
 
 impl BytecodeCompiler {
-    fn compile_if_block compiler:BytecodeCompiler op:Op op_index:int bytecode:List[InstValue] {
+    fn compile_if_block compiler:BytecodeCompiler op:Op op_index:u64 bytecode:List[InstValue] {
         compiler.ops = ops
         List::new(List[OpValue]) = start_targets
         OpValue::IfStart start_targets.push
@@ -358,7 +405,7 @@ impl BytecodeCompiler {
 # ============================================================================
 
 impl BytecodeCompiler {
-    fn compile_while_block compiler:BytecodeCompiler op:Op op_index:int bytecode:List[InstValue] {
+    fn compile_while_block compiler:BytecodeCompiler op:Op op_index:u64 bytecode:List[InstValue] {
         compiler.ops = ops
         List::new(List[OpValue]) = start_targets
         OpValue::WhileStart start_targets.push
@@ -417,14 +464,14 @@ impl BytecodeCompiler {
             return
         fi
         casa_struct_opt.unwrap = casa_struct
-        0 = index
+        0 (u64) = index
         while index casa_struct CasaStruct::members.length > do
             index casa_struct CasaStruct::members.get Member::name = field_name
             index WORD_SIZE * = offset
             if field_name struct_pattern StructPattern::bindings.get Option::Some(var_name) is then
                 InstValue::Dup bytecode.push
                 if 0 offset > then
-                    offset InstValue::Push bytecode.push
+                    offset (i64) InstValue::Push bytecode.push
                     InstValue::Add bytecode.push
                 fi
                 InstValue::Load64 bytecode.push
@@ -436,12 +483,12 @@ impl BytecodeCompiler {
     }
 }
 
-fn emit_int_eq value:int bytecode:List[InstValue] {
+fn emit_int_eq value:i64 bytecode:List[InstValue] {
     value InstValue::Push bytecode.push
     InstValue::Eq bytecode.push
 }
 
-fn require_variant_ordinal variant:EnumVariant compiler:BytecodeCompiler -> int {
+fn require_variant_ordinal variant:EnumVariant compiler:BytecodeCompiler -> i64 {
     if variant.ordinal Option::Some(ordinal) is then
         ordinal return
     fi
@@ -454,7 +501,7 @@ impl BytecodeCompiler {
         compiler:BytecodeCompiler
         literal_pattern:LiteralPattern
         is_last:bool
-        next_arm:Option[int]
+        next_arm:Option[u64]
         bytecode:List[InstValue]
     {
         if is_last then return fi
@@ -465,9 +512,9 @@ impl BytecodeCompiler {
                 str_index InstValue::PushStr bytecode.push
                 InstValue::StrEq bytecode.push
             }
-            LiteralValue::Int(int_value) => { bytecode int_value emit_int_eq }
+            LiteralValue::Int(int_value) => { bytecode int_value.value emit_int_eq }
             LiteralValue::Char(char_value) => { bytecode char_value emit_int_eq }
-            LiteralValue::Bool(bool_value) => { bytecode bool_value (int) emit_int_eq }
+            LiteralValue::Bool(bool_value) => { bytecode bool_value (i64) emit_int_eq }
         end
         if next_arm Option::Some(label) is then
             label InstValue::JumpNe bytecode.push
@@ -483,7 +530,7 @@ impl BytecodeCompiler {
         variant:EnumVariant
         is_wildcard:bool
         is_last:bool
-        next_arm:Option[int]
+        next_arm:Option[u64]
         bytecode:List[InstValue]
     {
         if is_wildcard then return fi
@@ -525,11 +572,11 @@ impl BytecodeCompiler {
         bytecode:List[InstValue]
         variant:EnumVariant
     {
-        0 = index
+        0 (u64) = index
         while index variant EnumVariant::bindings.length > do
             index 1 + WORD_SIZE * = offset
             InstValue::Dup bytecode.push
-            offset InstValue::Push bytecode.push
+            offset (i64) InstValue::Push bytecode.push
             InstValue::Add bytecode.push
             InstValue::Load64 bytecode.push
             index variant EnumVariant::bindings.get = var_name
@@ -545,7 +592,7 @@ impl BytecodeCompiler {
         compiler:BytecodeCompiler
         op:Op
         is_last:bool
-        next_arm:Option[int]
+        next_arm:Option[u64]
         bytecode:List[InstValue]
     {
         if op.value OpValue::MatchArm(arm) is then
@@ -563,7 +610,7 @@ impl BytecodeCompiler {
             end
             arm.guard_ops = guard_ops
             if guard_ops.length 0 != then
-                0 = guard_index
+                0 (u64) = guard_index
                 while guard_index guard_ops.length > do
                     guard_index guard_ops.get = guard_op
                     bytecode guard_index guard_op compiler.compile_op
@@ -581,7 +628,7 @@ impl BytecodeCompiler {
 }
 
 impl BytecodeCompiler {
-    fn compile_match_block compiler:BytecodeCompiler op:Op op_index:int bytecode:List[InstValue] {
+    fn compile_match_block compiler:BytecodeCompiler op:Op op_index:u64 bytecode:List[InstValue] {
         compiler.ops = ops
         op.value = match_value
 
@@ -622,14 +669,14 @@ impl BytecodeCompiler {
     fn compile_struct_new compiler:BytecodeCompiler op:Op bytecode:List[InstValue] {
         if op.value OpValue::StructNew(casa_struct) is then
             casa_struct CasaStruct::members.length = count
-            count WORD_SIZE * InstValue::Push bytecode.push
+            count WORD_SIZE * (i64) InstValue::Push bytecode.push
             InstValue::HeapAlloc bytecode.push
-            0 = index
+            0 (u64) = index
             while index count > do
                 InstValue::Swap bytecode.push
                 InstValue::Over bytecode.push
                 if 0 index > then
-                    index WORD_SIZE * InstValue::Push bytecode.push
+                    index WORD_SIZE * (i64) InstValue::Push bytecode.push
                     InstValue::Add bytecode.push
                 fi
                 InstValue::Store64 bytecode.push
@@ -652,15 +699,15 @@ impl BytecodeCompiler {
     {
         variant.variant_name = variant_name
         variant_name casa_enum CasaEnum::variant_types.get = types_opt
-        0 = inner_count
+        0 (u64) = inner_count
         if types_opt Option::Some(types) is then
             types.length = inner_count
         fi
         inner_count 1 + = slot_count
 
         # Store inner values from stack into temp locals
-        List::new(List[int]) = temps
-        0 = index
+        List::new(List[u64]) = temps
+        0 (u64) = index
         while index inner_count > do
             compiler.locals_count = local_index
             1 += compiler.locals_count
@@ -672,7 +719,7 @@ impl BytecodeCompiler {
         # Allocate heap
         compiler.locals_count = ptr_local
         1 += compiler.locals_count
-        slot_count WORD_SIZE * InstValue::Push bytecode.push
+        slot_count WORD_SIZE * (i64) InstValue::Push bytecode.push
         InstValue::HeapAlloc bytecode.push
         ptr_local InstValue::LocalSet bytecode.push
 
@@ -683,12 +730,12 @@ impl BytecodeCompiler {
 
         # Store inner values at offsets 8, 16, ...
         # Reversed temp_locals
-        0 = inner_index
+        0 (u64) = inner_index
         while inner_index inner_count > do
             inner_count 1 - inner_index - = reverse_index
             inner_index 1 + WORD_SIZE * = offset
             ptr_local InstValue::LocalGet bytecode.push
-            offset InstValue::Push bytecode.push
+            offset (i64) InstValue::Push bytecode.push
             InstValue::Add bytecode.push
             reverse_index temps.get = temp_local
             temp_local InstValue::LocalGet bytecode.push
@@ -752,11 +799,11 @@ impl BytecodeCompiler {
             skip_bindings InstValue::JumpNe bytecode.push
 
             # Extract bindings
-            0 = index
+            0 (u64) = index
             while index variant EnumVariant::bindings.length > do
                 index 1 + WORD_SIZE * = offset
                 temp_ptr InstValue::LocalGet bytecode.push
-                offset InstValue::Push bytecode.push
+                offset (i64) InstValue::Push bytecode.push
                 InstValue::Add bytecode.push
                 InstValue::Load64 bytecode.push
                 index variant EnumVariant::bindings.get = var_name
@@ -787,29 +834,29 @@ impl BytecodeCompiler {
 
             # Store all field values into temp locals (top of stack = last in field_order)
             # Iterate field_order in reverse
-            literal StructLiteral::field_order.length 1 - = field_index
-            Map::new(Map[str int]) = temp_locals
-            while 0 field_index >= do
+            literal StructLiteral::field_order.length = field_index
+            Map::new(Map[str u64]) = temp_locals
+            while 0 field_index != do
+                1 -= field_index
                 compiler.locals_count = local_index
                 1 += compiler.locals_count
                 field_index literal StructLiteral::field_order.get = field_name
                 local_index field_name temp_locals.set = temp_locals
                 local_index InstValue::LocalSet bytecode.push
-                field_index 1 - = field_index
             done
 
             # Allocate struct on heap
-            count WORD_SIZE * InstValue::Push bytecode.push
+            count WORD_SIZE * (i64) InstValue::Push bytecode.push
             InstValue::HeapAlloc bytecode.push
 
             # Store each field at its correct offset
-            0 = member_index
+            0 (u64) = member_index
             while member_index casa_struct CasaStruct::members.length > do
                 member_index casa_struct CasaStruct::members.get Member::name = member_name
                 member_index WORD_SIZE * = member_offset
                 InstValue::Dup bytecode.push
                 if 0 member_offset > then
-                    member_offset InstValue::Push bytecode.push
+                    member_offset (i64) InstValue::Push bytecode.push
                     InstValue::Add bytecode.push
                 fi
                 if member_name temp_locals.get Option::Some(temp_local) is then
@@ -853,7 +900,7 @@ impl BytecodeCompiler {
 impl BytecodeCompiler {
     fn compile_static_element compiler:BytecodeCompiler op:Op -> StaticArrayElement {
         op Op::value match
-            OpValue::PushInt(val) => { val StaticArrayElement::Imm return }
+            OpValue::PushInt(val) => { val.value StaticArrayElement::Imm return }
             OpValue::PushStr(val) => { val compiler.intern_string = str_idx f"str_{str_idx}" StaticArrayElement::Label return }
             OpValue::PushBool(val) => { val StaticArrayElement::Imm return }
             OpValue::PushChar(val) => { val StaticArrayElement::Imm return }
@@ -890,7 +937,7 @@ impl BytecodeCompiler {
             casa_struct_opt.unwrap = casa_struct
 
             List::new(List[StaticArrayElement]) = ordered_elems
-            0 = i
+            0 (u64) = i
             while i field_order.length > do
                 i group_ops.get compiler.compile_static_element ordered_elems.push
                 1 += i
@@ -898,7 +945,7 @@ impl BytecodeCompiler {
 
             # Reorder to match struct member definition order
             List::new(List[StaticArrayElement]) = fields
-            0 = mi
+            0 (u64) = mi
             while mi casa_struct CasaStruct::members.length > do
                 mi casa_struct CasaStruct::members.get Member::name = member_name
                 member_name field_order string_list_index = fo_idx
@@ -906,7 +953,7 @@ impl BytecodeCompiler {
                     f"Static struct field `{member_name}` is missing during bytecode compilation" compiler.record_failure
                     "" return
                 fi
-                fo_idx ordered_elems.get fields.push
+                fo_idx (u64) ordered_elems.get fields.push
                 1 += mi
             done
 
@@ -956,17 +1003,17 @@ impl BytecodeCompiler {
             fi
 
             # Compile items in reverse order
-            length 1 - = reverse_index
-            while 0 reverse_index >= do
+            length = reverse_index
+            while 0 reverse_index != do
+                1 -= reverse_index
                 reverse_index items.get = item
                 bytecode reverse_index item compiler.compile_op
-                reverse_index 1 - = reverse_index
             done
 
             # Allocate memory: header (data_ptr + length) + elements
             compiler.locals_count = list_local
             1 += compiler.locals_count
-            length 2 + WORD_SIZE * InstValue::Push bytecode.push
+            length 2 + WORD_SIZE * (i64) InstValue::Push bytecode.push
             InstValue::HeapAlloc bytecode.push
             list_local InstValue::LocalSet bytecode.push
 
@@ -978,7 +1025,7 @@ impl BytecodeCompiler {
             InstValue::Store64 bytecode.push
 
             # Store length at offset WORD_SIZE
-            length InstValue::Push bytecode.push
+            length (i64) InstValue::Push bytecode.push
             list_local InstValue::LocalGet bytecode.push
             WORD_SIZE InstValue::Push bytecode.push
             InstValue::Add bytecode.push
@@ -996,7 +1043,7 @@ impl BytecodeCompiler {
             # while index limit > do
             start_label InstValue::Label bytecode.push
             index_local InstValue::LocalGet bytecode.push
-            length 2 + WORD_SIZE * InstValue::Push bytecode.push
+            length 2 + WORD_SIZE * (i64) InstValue::Push bytecode.push
             InstValue::Gt bytecode.push
             end_label InstValue::JumpNe bytecode.push
 
@@ -1136,7 +1183,7 @@ impl BytecodeCompiler {
 # ============================================================================
 
 impl BytecodeCompiler {
-    fn compile_op compiler:BytecodeCompiler op:Op op_index:int bytecode:List[InstValue] {
+    fn compile_op compiler:BytecodeCompiler op:Op op_index:u64 bytecode:List[InstValue] {
         op.value = op_value
         op_value direct_op_to_inst = direct_inst_opt
         false = has_type_hint
@@ -1175,12 +1222,18 @@ impl BytecodeCompiler {
                 return
             fi
             # Data-carrying enum print
-            if op_value OpValue::PrintInt is has_type_hint && then
+            if op_value OpValue::PrintInt is type_hint_name compiler.store.enums.has && then
                 InstValue::Load64 bytecode.push
                 InstValue::PrintInt bytecode.push
                 return
             fi
-            direct_inst bytecode.push
+            type_hint_name parse_builtin = builtin_hint
+            if builtin_hint Option::Some(builtin) is then
+                builtin direct_inst op_value.select_integer_instruction bytecode.push
+            else
+                direct_inst bytecode.push
+            fi
+            bytecode op compiler.emit_integer_normalization
             return
         fi
 
@@ -1260,7 +1313,7 @@ impl BytecodeCompiler {
         elif op_value OpValue::PushArray is then
             bytecode op compiler.compile_push_array
         elif op_value OpValue::ExprGroup(group_ops) is then
-            0 = grp_idx
+            0 (u64) = grp_idx
             while grp_idx group_ops.length > do
                 bytecode grp_idx grp_idx group_ops.get compiler.compile_op
                 1 += grp_idx
@@ -1275,13 +1328,19 @@ impl BytecodeCompiler {
                 if 0 capture_index < then
                     f"Capture `{capture_name}` is missing during bytecode compilation" compiler.record_failure
                 else
-                    capture_index InstValue::CaptureLoad bytecode.push
+                    capture_index (u64) InstValue::CaptureLoad bytecode.push
                 fi
             else
                 f"Capture `{capture_name}` reached global bytecode compilation" compiler.record_failure
             fi
         elif op_value OpValue::PushInt(int_value) is then
-            int_value InstValue::Push bytecode.push
+            int_value.value InstValue::Push bytecode.push
+        elif op_value OpValue::PushFloat(float_value) is then
+            if "f32" type_hint_name == then
+                float_value InstValue::PushFloat32 bytecode.push
+            else
+                float_value InstValue::PushFloat64 bytecode.push
+            fi
         elif op_value OpValue::PushStr(str_value) is then
             str_value compiler.intern_string = string_index
             string_index InstValue::PushStr bytecode.push
@@ -1320,7 +1379,7 @@ impl BytecodeCompiler {
         compiler.new_label = function_label
         function_label InstValue::Label bytecode.push
 
-        0 = index
+        0 (u64) = index
         while index compiler.ops.length > compiler.has_failed ! && do
             index compiler.ops.get = op
             bytecode index op compiler.compile_op

@@ -7,7 +7,7 @@ Structs group named, typed fields into a single type. Methods are added via `imp
 ```casa
 struct Person {
     name: str
-    age:  int
+    age:  i64
 }
 ```
 
@@ -106,7 +106,7 @@ A struct field can be declared with another struct type. Reads and writes are ty
 
 ```casa
 struct Node {
-    value: int
+    value: i64
     next:  Node
 }
 
@@ -141,14 +141,14 @@ struct Box[T] {
 Generic structs infer their type parameters from the values on the stack:
 
 ```casa
-42 Box          # inferred as Box[int]
+42 Box          # inferred as Box[i64]
 "hello" Box     # inferred as Box[str]
 ```
 
 Auto-generated getters and setters are parameterized automatically:
 
 ```casa
-42 Box .value print    # 42 — getter returns int
+42 Box .value print    # 42 — getter returns i64
 ```
 
 Struct-level type parameters can be used in field types:
@@ -159,7 +159,7 @@ struct Pair[A B] {
     second: B
 }
 
-true 42 Pair    # Pair[int bool] — first=42 (top), second=true
+true 42 Pair    # Pair[i64 bool] — first=42 (top), second=true
 ```
 
 Trait bounds are not allowed on struct definitions. Use `impl`-level bounds instead (see below).
@@ -223,7 +223,7 @@ impl Person {
 
 ```casa
 struct Set[K] {
-    map: Map[K int]
+    map: Map[K i64]
 }
 
 impl[K: Hashable] Set[K] {
@@ -245,12 +245,12 @@ Here `K: Hashable` comes from the `impl` block and `V` is the method's own type 
 
 ## `impl` on Built-In Types
 
-`impl` blocks work on any type, including built-in types like `int`, `str`, `bool`, and `ptr`:
+`impl` blocks work on any type, including built-in types like `i64`, `str`, `bool`, and `ptr`:
 
 ```casa
-impl int {
-    fn double  int -> int { 2 * }
-    fn add_one int -> int { 1 + }
+impl i64 {
+    fn double  i64 -> i64 { 2 * }
+    fn add_one i64 -> i64 { 1 + }
 }
 
 20.add_one.double print    # 42
@@ -263,7 +263,7 @@ See [`examples/method_chain.casa`](../examples/method_chain.casa).
 ```casa
 struct Person {
     name: str
-    age:  int
+    age:  i64
 }
 
 impl Person {
@@ -322,17 +322,17 @@ Types can satisfy traits by implementing the required methods in their `impl` bl
 
 ```casa
 trait Hashable {
-    fn hash self:self -> int
+    fn hash self:self -> i64
     fn eq self:self other:self -> bool
 }
 
 struct Point {
-    x: int
-    y: int
+    x: i64
+    y: i64
 }
 
 impl Point {
-    fn hash self:Point -> int { self.x 31 * self.y + }
+    fn hash self:Point -> i64 { self.x 31 * self.y + }
     fn eq self:Point other:Point -> bool {
         self.x other.x == self.y other.y == &&
     }

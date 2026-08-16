@@ -15,7 +15,7 @@ Operations for manipulating the stack directly.
 | `rot` | `T1 T2 T3 -> T3 T1 T2` | Rotate top three values |
 
 Type variables resolve at the call site, so the same intrinsic works on any value type:
-`42 dup` produces two `int`s on the stack, `"hi" dup` produces two `str`s.
+`42 dup` produces two `i64`s on the stack, `"hi" dup` produces two `str`s.
 
 ### Examples
 
@@ -44,7 +44,9 @@ Prints the top of the stack to stdout. Requires the value's type to implement th
 
 **Stack effect:** `[T: Display] T -> None`
 
-The primitives `int`, `bool`, `char`, `str`, and `cstr` already implement `Display` and are emitted through specialized output instructions. Other types must implement `Display` (a `to_str self -> str` method); the compiler lowers `value print` to `value to_str` followed by a string print.
+All integer widths, plus `bool`, `char`, `str`, and `cstr`, can be printed
+directly. Other types must implement `Display` (a `to_str self -> str` method);
+the compiler lowers `value print` to `value to_str` followed by a string print.
 
 ```casa
 42 print                    # 42
@@ -61,10 +63,10 @@ Consumes the top of the stack and prints its type name to stdout.
 
 **Stack effect:** `a -> None`
 
-Works with all types: `int`, `bool`, `str`, `char`, `ptr`, `array`, `fn`, structs, and enums.
+Works with all types: `i64`, `bool`, `str`, `char`, `ptr`, `array`, `fn`, structs, and enums.
 
 ```casa
-42 typeof                   # int
+42 typeof                   # i64
 true typeof                 # bool
 "hello" typeof              # str
 ```
@@ -75,17 +77,19 @@ Low-level byte-addressed memory access for building data structures. All load/st
 
 | Intrinsic | Stack Effect | Description |
 |-----------|-------------|-------------|
-| `alloc` | `int -> ptr` | Allocate N bytes of heap memory, return pointer |
-| `load8` | `ptr -> int` | Load 8-bit value from address (zero-extended) |
-| `load16` | `ptr -> int` | Load 16-bit value from address (zero-extended) |
-| `load32` | `ptr -> int` | Load 32-bit value from address (zero-extended) |
-| `load64` | `ptr -> int` | Load 64-bit value from address |
+| `alloc` | `u64 -> ptr` | Allocate N bytes of heap memory, return pointer |
+| `load8` | `ptr -> i64` | Load 8-bit value from address (zero-extended) |
+| `load16` | `ptr -> i64` | Load 16-bit value from address (zero-extended) |
+| `load32` | `ptr -> i64` | Load 32-bit value from address (zero-extended) |
+| `load64` | `ptr -> i64` | Load 64-bit value from address |
 | `store8` | `[T: Word] T ptr -> None` | Store 8-bit value to address |
 | `store16` | `[T: Word] T ptr -> None` | Store 16-bit value to address |
 | `store32` | `[T: Word] T ptr -> None` | Store 32-bit value to address |
 | `store64` | `[T: Word] T ptr -> None` | Store 64-bit value to address |
 
-The value type must satisfy the [`Word`](traits.md#built-in-trait-word) marker trait, which constrains it to a single-slot value. Every primitive, enum variant, struct reference, and array reference satisfies `Word` automatically.
+The value type must satisfy the [`Word`](traits.md#built-in-trait-word) marker
+trait, which constrains it to a single-slot value. Every primitive, enum
+variant, struct reference, and array reference satisfies `Word` automatically.
 
 ### Examples
 
@@ -105,17 +109,17 @@ Values are addressed by byte offset. Use pointer arithmetic (`+`) to access diff
 
 ## Syscall Intrinsics
 
-Direct Linux system call access. Each intrinsic pops N+1 values from the stack (the syscall number on top, then arguments in order) and pushes the kernel return value as `int`. The syscall number must be `int`. Each argument must satisfy the [`Word`](traits.md#built-in-trait-word) marker trait so that exactly one register-sized value lands in the corresponding syscall register.
+Direct Linux system call access. Each intrinsic pops N+1 values from the stack (the syscall number on top, then arguments in order) and pushes the kernel return value as `i64`. The syscall number must be `i64`. Each argument must satisfy the [`Word`](traits.md#built-in-trait-word) marker trait so that exactly one register-sized value lands in the corresponding syscall register.
 
 | Intrinsic | Stack Effect | Description |
 |-----------|-------------|-------------|
-| `syscall0` | `nr -> int` | Syscall with 0 args |
-| `syscall1` | `[A1: Word] A1 nr -> int` | Syscall with 1 arg |
-| `syscall2` | `[A1: Word A2: Word] A2 A1 nr -> int` | Syscall with 2 args |
-| `syscall3` | `[A1: Word A2: Word A3: Word] A3 A2 A1 nr -> int` | Syscall with 3 args |
-| `syscall4` | `[A1: Word ... A4: Word] A4 A3 A2 A1 nr -> int` | Syscall with 4 args |
-| `syscall5` | `[A1: Word ... A5: Word] A5 A4 A3 A2 A1 nr -> int` | Syscall with 5 args |
-| `syscall6` | `[A1: Word ... A6: Word] A6 A5 A4 A3 A2 A1 nr -> int` | Syscall with 6 args |
+| `syscall0` | `nr -> i64` | Syscall with 0 args |
+| `syscall1` | `[A1: Word] A1 nr -> i64` | Syscall with 1 arg |
+| `syscall2` | `[A1: Word A2: Word] A2 A1 nr -> i64` | Syscall with 2 args |
+| `syscall3` | `[A1: Word A2: Word A3: Word] A3 A2 A1 nr -> i64` | Syscall with 3 args |
+| `syscall4` | `[A1: Word ... A4: Word] A4 A3 A2 A1 nr -> i64` | Syscall with 4 args |
+| `syscall5` | `[A1: Word ... A5: Word] A5 A4 A3 A2 A1 nr -> i64` | Syscall with 5 args |
+| `syscall6` | `[A1: Word ... A6: Word] A6 A5 A4 A3 A2 A1 nr -> i64` | Syscall with 6 args |
 
 ### Register Mapping
 
