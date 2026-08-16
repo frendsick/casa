@@ -36,7 +36,7 @@ See [README.md](./README.md) for basic info, language docs, and examples.
   the next stable release from that PR and update `casa-release.env` to use it.
 - Create a prerelease compiler only when the user explicitly requests one.
 
-## Agent instructions
+## Agent documentation
 
 Always load the relevant doc when the matching workflow comes up:
 
