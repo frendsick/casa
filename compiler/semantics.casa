@@ -752,6 +752,126 @@ fn make_bound_substitutions bound:TraitBound casa_trait:CasaTrait -> Map[str Typ
     substitutions
 }
 
+fn bind_conformance_type pattern:Type actual:Type bindings:Map[str Type] -> bool {
+    if pattern Type::TypeVar(type_variable) is then
+        if type_variable bindings.get Option::Some(bound_type) is then
+            actual bound_type.eq return
+        fi
+        actual type_variable bindings.set drop
+        true return
+    fi
+    if pattern Type::Generic(pattern_generic) is then
+        if actual Type::Generic(actual_generic) is then
+            if pattern_generic.base actual_generic.base != then false return fi
+            if pattern_generic.params.length actual_generic.params.length != then false return fi
+            for pair in actual_generic.params.iter pattern_generic.params.iter.zip do
+                if bindings pair.second pair.first bind_conformance_type ! then false return fi
+            done
+            true return
+        fi
+        false return
+    fi
+    if pattern Type::Function(pattern_function) is then
+        if actual Type::Function(actual_function) is then
+            if pattern_function.parameters.length actual_function.parameters.length != then false return fi
+            if pattern_function.return_types.length actual_function.return_types.length != then false return fi
+            for pair in actual_function.parameters.iter pattern_function.parameters.iter.zip do
+                if bindings pair.second pair.first bind_conformance_type ! then false return fi
+            done
+            for pair in actual_function.return_types.iter pattern_function.return_types.iter.zip do
+                if bindings pair.second pair.first bind_conformance_type ! then false return fi
+            done
+            true return
+        fi
+        false return
+    fi
+    pattern actual.eq
+}
+
+fn resolve_conformance_bound bound:TraitBound bindings:Map[str Type] -> Type {
+    bindings bound trait_bound_to_type.substitute_t
+}
+
+fn trait_type_implies direct:Type target:Type store:SymbolStore -> bool {
+    if direct target.eq then true return fi
+    direct.match_base store.traits.get = direct_trait_opt
+    if direct_trait_opt.is_none then false return fi
+    direct_trait_opt.unwrap = direct_trait
+    Map[str Type]::new = substitutions
+    if direct.type_params Option::Some(direct_arguments) is then
+        for pair in direct_arguments.iter direct_trait.type_params.iter.zip do
+            pair.second pair.first substitutions.set drop
+        done
+    fi
+    for supertrait in direct_trait.supertraits.iter do
+        substitutions supertrait trait_bound_to_type.substitute_t = resolved_supertrait
+        if store target resolved_supertrait trait_type_implies then true return fi
+    done
+    false
+}
+
+fn conformance_constraints_hold
+    conformance:TraitConformance
+    bindings:Map[str Type]
+    store:SymbolStore
+-> bool {
+    for type_variable in conformance.trait_bounds.keys.iter do
+        if type_variable bindings.get Option::Some(concrete) is then
+            for bound in type_variable conformance.trait_bounds.get.unwrap.iter do
+                bindings bound resolve_conformance_bound = resolved_bound
+                if store resolved_bound concrete type_declares_trait ! then false return fi
+            done
+        else
+            false return
+        fi
+    done
+    true
+}
+
+fn type_declares_trait receiver:Type trait_type:Type store:SymbolStore -> bool {
+    for conformance in store.conformances.values.iter do
+        Map[str Type]::new = bindings
+        if bindings receiver conformance.receiver bind_conformance_type ! then continue fi
+        bindings conformance.trait_bound resolve_conformance_bound = declared_trait
+        if store trait_type declared_trait trait_type_implies ! then continue fi
+        if store bindings conformance conformance_constraints_hold then true return fi
+    done
+    false
+}
+
+fn find_implied_trait_type direct:Type trait_name:str store:SymbolStore -> Option[Type] {
+    if direct.match_base trait_name == then direct Option::Some return fi
+    direct.match_base store.traits.get = direct_trait_opt
+    if direct_trait_opt.is_none then Option[Type]::None return fi
+    direct_trait_opt.unwrap = direct_trait
+    Map[str Type]::new = substitutions
+    if direct.type_params Option::Some(direct_arguments) is then
+        for pair in direct_arguments.iter direct_trait.type_params.iter.zip do
+            pair.second pair.first substitutions.set drop
+        done
+    fi
+    for supertrait in direct_trait.supertraits.iter do
+        substitutions supertrait trait_bound_to_type.substitute_t = resolved_supertrait
+        if store trait_name resolved_supertrait find_implied_trait_type Option::Some(found) is then
+            found Option::Some return
+        fi
+    done
+    Option[Type]::None
+}
+
+fn find_declared_trait_type receiver:Type trait_name:str store:SymbolStore -> Option[Type] {
+    for conformance in store.conformances.values.iter do
+        Map[str Type]::new = bindings
+        if bindings receiver conformance.receiver bind_conformance_type ! then continue fi
+        if store bindings conformance conformance_constraints_hold ! then continue fi
+        bindings conformance.trait_bound resolve_conformance_bound = declared_trait
+        if store trait_name declared_trait find_implied_trait_type Option::Some(found) is then
+            found Option::Some return
+        fi
+    done
+    Option[Type]::None
+}
+
 fn infer_default_method_substitutions
     receiver:Type
     casa_trait:CasaTrait
@@ -800,15 +920,16 @@ fn collect_bound_semantic_dependencies
     List[str]::new = dependencies
     for type_variable in effect.trait_bounds.keys.iter do
         if type_variable bindings.get Option::Some(receiver) is then
-            type_variable effect.trait_bounds.get.unwrap = bound
-            if bound.name store.traits.get Option::Some(casa_trait) is then
-                bound.name dependencies.push
-                store casa_trait receiver collect_trait_implementation_dependencies
-                = implementations
-                for implementation in implementations.iter do
-                    implementation dependencies.push
-                done
-            fi
+            for bound in type_variable effect.trait_bounds.get.unwrap.iter do
+                if bound.name store.traits.get Option::Some(casa_trait) is then
+                    bound.name dependencies.push
+                    store casa_trait receiver collect_trait_implementation_dependencies
+                    = implementations
+                    for implementation in implementations.iter do
+                        implementation dependencies.push
+                    done
+                fi
+            done
         fi
     done
     dependencies
@@ -831,19 +952,21 @@ fn resolve_bound_method_semantics
     store:SymbolStore
 -> Option[MethodSemantics] {
     if receiver Type::TypeVar(type_variable) is then
-        if type_variable function.stack_effect.trait_bounds.get Option::Some(bound) is then
-            if bound.name store.traits.get Option::Some(casa_trait) is then
-                store casa_trait method_name find_semantic_trait_method = trait_method_opt
-                if trait_method_opt Option::Some(method) is then
-                    casa_trait bound make_bound_substitutions = substitutions
-                    receiver method.stack_effect resolve_trait_stack_effect = resolved_effect
-                    substitutions resolved_effect apply_type_subs_to_stack_effect = resolved_effect
-                    f"__trait_{type_variable}_{method_name}" = hidden_name
-                    resolved_effect method_name bound.name hidden_name
-                    MethodSemanticsKind::TraitBound
-                    make_method_semantics Option::Some return
+        if type_variable function.stack_effect.trait_bounds.get Option::Some(bounds) is then
+            for bound in bounds.iter do
+                if bound.name store.traits.get Option::Some(casa_trait) is then
+                    store casa_trait method_name find_semantic_trait_method = trait_method_opt
+                    if trait_method_opt Option::Some(method) is then
+                        casa_trait bound make_bound_substitutions = substitutions
+                        receiver method.stack_effect resolve_trait_stack_effect = resolved_effect
+                        substitutions resolved_effect apply_type_subs_to_stack_effect = resolved_effect
+                        f"__trait_{type_variable}_{method_name}" = hidden_name
+                        resolved_effect method_name bound.name hidden_name
+                        MethodSemanticsKind::TraitBound
+                        make_method_semantics Option::Some return
+                    fi
                 fi
-            fi
+            done
         fi
     fi
     Option[MethodSemantics]::None
@@ -858,9 +981,14 @@ fn resolve_default_method_semantics
         trait_name store.traits.get.unwrap = casa_trait
         store casa_trait method_name find_semantic_trait_method = trait_method_opt
         if trait_method_opt Option::Some(method) is then
-            store casa_trait receiver type_has_semantic_trait_shape = has_trait_shape
-            if 0 method.default_ops.length != has_trait_shape && then
-                store casa_trait receiver infer_default_method_substitutions = substitutions
+            store trait_name receiver find_declared_trait_type = declared_trait_opt
+            if 0 method.default_ops.length != declared_trait_opt.is_some && then
+                Map[str Type]::new = substitutions
+                if declared_trait_opt.unwrap.type_params Option::Some(arguments) is then
+                    for pair in arguments.iter casa_trait.type_params.iter.zip do
+                        pair.second pair.first substitutions.set drop
+                    done
+                fi
                 receiver method.stack_effect resolve_trait_stack_effect = resolved_effect
                 substitutions resolved_effect apply_type_subs_to_stack_effect = resolved_effect
                 method_name receiver.make_method_key = function_name

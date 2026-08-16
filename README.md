@@ -15,7 +15,7 @@ Casa compiles to x86-64 Linux executables via GNU assembly. It features static t
 - **String interpolation** — f-strings with embedded expressions (`f"hello {name}"`)
 - **Compiles to native code** — generates x86-64 assembly with `ld` and `as`
 - **Enums and match** — enum types with exhaustive pattern matching
-- **Traits** — structural trait system with bounded polymorphism (`trait`, `Hashable`, `Display`)
+- **Traits** - explicit conformance with bounded polymorphism (`trait`, `Hashable`, `Display`)
 - **Standard library** — generic `List[T]`, `Map[K V]`, `Set[K]`, arrays with `map`/`filter`/`reduce`, type conversions, and memory utilities
 
 ## Requirements
@@ -101,7 +101,7 @@ Start with the core language docs (1-9), then explore the library and tooling do
 | 5 | [Control Flow](docs/control-flow.md) | Conditionals, loops, `for` iterators, `match` pattern matching |
 | 6 | [Structs and Methods](docs/structs-and-methods.md) | Struct definition, accessors, `impl` blocks, dot/arrow syntax |
 | 7 | [Enums](docs/enums.md) | Enum types, variant constructors, `is` destructuring |
-| 8 | [Traits](docs/traits.md) | Trait definitions, structural satisfaction, trait bounds, `Hashable` |
+| 8 | [Traits](docs/traits.md) | Trait definitions, explicit conformance, trait bounds, `Hashable` |
 | 9 | [Built-in Intrinsics](docs/intrinsics.md) | Stack manipulation, IO, memory, and syscall intrinsics |
 
 ### Library

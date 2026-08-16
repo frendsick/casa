@@ -444,6 +444,8 @@ fn hash_key[K: Hashable] key:K -> i64 {
 }
 ```
 
+Use `+` to require multiple traits, for example `[T: Copy + Display]`.
+
 Type variables are purely compile-time, including trait bounds. See [Functions and Lambdas — Generic Functions](functions-and-lambdas.md#generic-functions) and [Traits](traits.md) for details.
 
 ## Constants
@@ -558,7 +560,7 @@ buffer (ptr) load64 (i64)    # cast i64 -> i64 (no-op here, but useful for gener
 
 ## Printing Values
 
-`print` requires the value's type to implement the [`Display` trait](traits.md). The primitives `i64`, `bool`, `char`, `str`, and `cstr` are dispatched directly to specialized output instructions; user types must provide a `to_str self -> str` method, which the compiler invokes before printing the resulting string.
+`print` requires the value's type to implement the [`Display` trait](traits.md). The primitives `i64`, `bool`, `char`, `str`, and `cstr` are dispatched directly to specialized output instructions. User types must declare `Display` conformance and provide a `to_str self -> str` method, which the compiler invokes before printing the resulting string.
 
 ```casa
 struct Point { x: i64 y: i64 }

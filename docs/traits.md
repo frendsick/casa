@@ -13,29 +13,41 @@ trait Hashable {
 }
 ```
 
-This declares that any type satisfying `Hashable` must have a `hash` method (taking self, returning `i64`) and an `eq` method (taking self and another value of the same type, returning `bool`).
+This declares that any type conforming to `Hashable` must have a `hash` method (taking self, returning `i64`) and an `eq` method (taking self and another value of the same type, returning `bool`).
 
 ## Implementing a Trait
 
-Traits use structural satisfaction. A type satisfies a trait when its `impl` block contains all required methods with matching stack effects. There is no `impl Trait for Type` syntax.
+Declare conformance after the receiver type with `impl Type: Trait`. The compiler checks that the block provides all required methods with matching stack effects.
 
 ```casa
-impl str {
+impl str: Hashable {
     fn hash self:str -> i64 { self str_hash }
     # str::eq is already defined in the standard library
 }
 
-impl i64 {
+impl i64: Hashable {
     fn hash self:i64 -> i64 { self int_hash }
     fn eq self:i64 other:i64 -> bool { self other == }
 }
 ```
 
-The compiler checks that `str::hash` and `str::eq` exist with stack effects matching what `Hashable` requires (with `self` replaced by the implementing type). If any method is missing or has a wrong stack effect, a compile-time error is reported.
+The compiler checks that `str::hash` and `str::eq` have the stack effects that `Hashable` requires, with `self` replaced by the implementing type. If a method is missing or has the wrong stack effect, the declaration is rejected. An ordinary `impl str { ... }` block defines inherent methods but does not declare conformance.
+
+A block can declare multiple conformances with `+`:
+
+```casa
+impl Item: Eq + Display { ... }
+```
+
+Methodless marker traits and traits with only default methods still require an explicit declaration. Use an empty block when no method body is required:
+
+```casa
+impl Item: Marker { }
+```
 
 ## Custom Types
 
-User-defined structs can satisfy traits by implementing the required methods:
+User-defined structs can conform to traits by declaring the trait and implementing its required methods:
 
 ```casa
 struct Point {
@@ -43,7 +55,7 @@ struct Point {
     y: i64
 }
 
-impl Point {
+impl Point: Hashable {
     fn hash self:Point -> i64 {
         self.x 31 * self.y +
     }
@@ -62,7 +74,7 @@ Enums whose variants carry no inner values automatically satisfy `Hashable` — 
 ```casa
 enum Color { Red Green Blue }
 
-# Works without writing impl Color { fn hash ... fn eq ... }
+# Works without writing impl Color: Hashable { fn hash ... fn eq ... }
 Map[Color i64]::new = scores
 10 Color::Red scores.set = scores
 ```
@@ -73,7 +85,7 @@ A user-written `impl` always wins. If you define `Color::hash` or `Color::eq` ma
 
 ## Trait Bounds
 
-Functions and `impl` blocks declare trait bounds on type variables using the `K: TraitName` syntax inside square brackets. Multiple type variables are separated by commas.
+Functions and `impl` blocks declare trait bounds on type variables using the `K: TraitName` syntax inside square brackets. Separate multiple bounds on one type variable with `+`. Separate type variables with commas.
 
 ### On Functions
 
@@ -82,6 +94,16 @@ fn example[K: Hashable] key:K -> i64 {
     key K::hash
 }
 ```
+
+Every bound must be satisfied:
+
+```casa
+fn show_twice[T: Copy + Display] value:T {
+    value dup print print
+}
+```
+
+Equivalent duplicate bounds are normalized. If two bounds declare the same method with incompatible stack effects, the generic declaration is rejected.
 
 Here `K` must satisfy `Hashable`. The compiler verifies this at every call site by checking that the concrete type bound to `K` has the required methods.
 
@@ -111,6 +133,12 @@ struct Set[K] { map: Map[K i64] }       # correct
 # struct Set[K: Hashable] { ... }       # error
 impl[K: Hashable] Set[K] { ... }        # bounds go here
 ```
+
+## Coherence
+
+A conformance must be in the module that defines either the receiver type or the trait. A third module cannot declare a conformance between an imported type and an imported trait.
+
+Each receiver and fully instantiated trait pair can have only one conformance. Distinct instantiations such as `Marker[i64]` and `Marker[str]` can coexist. Overlapping generic conformances and unrestricted `impl[T] T: Trait` blanket conformances are rejected.
 
 ## Calling Trait Methods
 
@@ -173,11 +201,11 @@ trait Eq {
 }
 ```
 
-Built-in implementations: `i64`, `bool`, `char`, `str`, `cstr`, `ptr`.
+Built-in implementations: `i64`, `u64`, `bool`, `char`, `str`, `cstr`, `ptr`.
 
-A type satisfies `Eq` by providing `Type::eq self:Type other:Type -> bool`. The `ne` default is auto-instantiated for any satisfying type, so `x.ne y` works without writing it.
+A type satisfies `Eq` by declaring `impl Type: Eq` and providing `Type::eq self:Type other:Type -> bool`. The `ne` default is available for any conforming type, so `x.ne y` works without writing it.
 
-The `==` and `!=` operators are bounded by `Eq`. Built-in primitives and enums get direct bytecode comparison, but a user-defined struct used with `==` must provide `impl T { fn eq ... }`; the operator then lowers to `T::eq`. Comparing values whose type does not satisfy `Eq` is a compile-time error.
+The `==` and `!=` operators are bounded by `Eq`. Built-in primitives and enums get direct bytecode comparison, but a user-defined struct used with `==` must declare `impl T: Eq { fn eq ... }`. The operator then lowers to `T::eq`. Comparing values whose type does not satisfy `Eq` is a compile-time error.
 
 ## Built-in Trait: `Ord`
 
@@ -194,7 +222,7 @@ trait Ord {
 
 Built-in implementations: `i64`, `char`. Lexicographic ordering for `str` is intentionally out of scope.
 
-The `<`, `<=`, `>`, and `>=` operators are bounded by `Ord`. Built-in primitives (excluding `str`) and enums use direct bytecode ordering; user-defined types must provide `impl T { fn lt ... }` and the operator lowers to the corresponding trait method (`lt`, `le`, `gt`, `ge`). A type with `impl Eq` but no `impl Ord` is rejected at compile time when used with an ordering operator.
+The `<`, `<=`, `>`, and `>=` operators are bounded by `Ord`. Built-in primitives (excluding `str`) and enums use direct bytecode ordering. User-defined types must declare `impl T: Ord { fn lt ... }`, and the operator lowers to the corresponding trait method (`lt`, `le`, `gt`, `ge`). A type with `Eq` but no `Ord` conformance is rejected at compile time when used with an ordering operator.
 
 ## Built-in Trait: `Word`
 
@@ -204,9 +232,7 @@ Marker trait for register-sized values that fit in one stack slot. It declares n
 trait Word { }
 ```
 
-It is used as a bound on builtins that require single-slot operands (for
-example, syscall and `store*` arguments). Primitive types, enums, struct refs,
-and array refs satisfy `Word`; multi-slot value types do not.
+It is used as a bound on builtins that require single-slot operands, such as syscall and `store*` arguments. Standard single-slot types declare `Word` conformance. User-defined types must also declare it when needed. Multi-slot value types cannot validly conform.
 
 `Hashable` and `Display` both extend `Word` as supertraits, so any type that satisfies one of them automatically satisfies `Word`.
 
@@ -235,14 +261,14 @@ trait Display: Word {
 }
 ```
 
-Any type with a `to_str self:T -> str` method structurally satisfies `Display`. The standard library provides implementations for `i64`, `bool`, `str`, `char`, `cstr`, `ptr`, and generic containers `array[T]`, `List[T]`, `Option[T]`, and `Result[T E]` (the parameter types must themselves satisfy `Display`).
+Any type that declares `Display` conformance must provide a `to_str self:T -> str` method. The standard library provides implementations for `i64`, `u64`, `f32`, `f64`, `bool`, `str`, `char`, `cstr`, `ptr`, and generic containers `array[T]`, `List[T]`, `Option[T]`, and `Result[T E]`. The parameter types must themselves satisfy `Display`.
 
-When an expression appears inside an f-string (`f"value: {x}"`), the compiler verifies that its type satisfies `Display` and automatically calls the corresponding `to_str` method. Custom structs and enums become interpolatable simply by providing a `to_str` method:
+When an expression appears inside an f-string (`f"value: {x}"`), the compiler verifies that its type satisfies `Display` and automatically calls the corresponding `to_str` method. Custom structs and enums become interpolatable by declaring conformance and providing `to_str`:
 
 ```casa
 struct Point { x: i64 y: i64 }
 
-impl Point {
+impl Point: Display {
     fn to_str self:Point -> str {
         f"Point({self.x}, {self.y})"
     }
@@ -268,7 +294,7 @@ trait Hashable: Eq + Word {
 }
 ```
 
-Multiple supertraits are listed with `+`. A type satisfies `Hashable` only if it satisfies every supertrait (here `Eq` and `Word`) in addition to providing `Hashable`'s own required methods. Concretely, the type's `impl` block must contain `eq` (from `Eq`) and `hash` (from `Hashable`); `Word` is a marker with no required methods, so its satisfaction is automatic.
+Multiple supertraits are listed with `+`. Declaring `Hashable` conformance also declares its implied `Eq` and `Word` conformances. The type must provide `eq` from `Eq` and `hash` from `Hashable`. `Word` is a marker with no method requirement.
 
 Trait-bounded code may call methods declared by any supertrait directly. For example, inside a function bounded by `K: Hashable`, both `K::hash` and `K::eq` resolve correctly.
 
@@ -276,7 +302,7 @@ Supertraits are checked at the trait's declaration site: each supertrait must al
 
 ## Default Methods
 
-Traits can provide default method implementations. A default method has a body in the trait definition and is automatically available to any type that satisfies the trait (i.e. implements the required methods). Default methods can call the required methods using `self`.
+Traits can provide default method implementations. A default method has a body in the trait definition and is available to any type that declares the conformance and implements the required methods. Default methods can call the required methods using `self`.
 
 ```casa
 trait Iterable[T] {
@@ -304,7 +330,7 @@ Here `next` is the only required method. `collect` and `count` are default metho
 
 ### Built-in Trait: `Iterable[T]`
 
-The standard library defines the `Iterable[T]` trait for iteration. Any type with a `next self:self -> Option[T]` method structurally satisfies `Iterable[T]` and gains all default methods.
+The standard library defines the `Iterable[T]` trait for iteration. A type that declares `Iterable[T]` conformance and provides `next self:self -> Option[T]` gains all default methods.
 
 **Required method:**
 
@@ -331,7 +357,7 @@ The standard library `Iter[T]` struct (returned by `.iter` on `array[T]`, `List[
 
 ### `MISSING_TRAIT_METHOD`
 
-Reported when a type is used with a trait bound but does not implement all required methods.
+Reported when a trait-dependent operation is used on a type that does not declare the required conformance.
 
 ```
 error[MISSING_TRAIT_METHOD]: Type `Foo` does not satisfy trait `Hashable`
@@ -347,7 +373,7 @@ error[TRAIT_SIGNATURE_MISMATCH]: Method signature does not match trait requireme
 
 ## See Also
 
-- [Structs and Methods](structs-and-methods.md) -- `impl` blocks where trait methods are defined
-- [Functions and Lambdas](functions-and-lambdas.md) -- generic functions and trait bounds
-- [Collections](collections.md) -- Map and Set require the `Hashable` trait
-- [Strings and IO](strings-and-io.md) -- type conversions using the `Display` trait
+- [Structs and Methods](structs-and-methods.md) - `impl` blocks where trait methods are defined
+- [Functions and Lambdas](functions-and-lambdas.md) - generic functions and trait bounds
+- [Collections](collections.md) - Map and Set require the `Hashable` trait
+- [Strings and IO](strings-and-io.md) - type conversions using the `Display` trait

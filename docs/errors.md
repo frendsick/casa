@@ -262,11 +262,11 @@ Within a single function, type checking stops at the first error because the sta
 
 ### `MISSING_TRAIT_METHOD`
 
-A type is used where a trait bound is required, but it does not implement all required methods.
+A trait-dependent operation is used on a type that does not declare the required conformance.
 
 ```casa
 struct Foo { x: i64 }
-Map[Foo i64]::new = m    # Foo has no hash or eq methods
+Map[Foo i64]::new = m    # Foo does not declare Hashable conformance
 ```
 
 ```
@@ -275,7 +275,7 @@ error[MISSING_TRAIT_METHOD]: Type `Foo` does not satisfy trait `Hashable`
 
 ### `TRAIT_SIGNATURE_MISMATCH`
 
-A type has a method with the right name for a trait, but its stack effect does not match the trait's requirement.
+An explicit conformance has a missing method or a method whose stack effect does not match the trait requirement. Incompatible same-name requirements from multiple bounds also use this error.
 
 ```
 error[TRAIT_SIGNATURE_MISMATCH]: Method signature does not match trait requirement
