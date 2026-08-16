@@ -112,7 +112,7 @@ Start with the core language docs (1-9), then explore the library and tooling do
 | [Collections](docs/collections.md) | `List[T]`, `Map[K V]`, `Set[K]`, `StringBuilder` |
 | [Strings and IO](docs/strings-and-io.md) | String methods, file I/O, character classification, type conversions |
 | [Utilities](docs/utilities.md) | Logging, timer, argument parsing, process execution |
-| [Parser Library](docs/parser.md) | `Cursor`, `ParseError`, scanning methods, string/int/identifier parsers |
+| [Parser Library](docs/parser.md) | `Cursor`, `ParseError`, scanning methods, string/i64/identifier parsers |
 
 ### Tooling
 

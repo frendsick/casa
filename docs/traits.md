@@ -8,12 +8,12 @@ Use the `trait` keyword to declare a trait with one or more method declarations.
 
 ```casa
 trait Hashable {
-    fn hash self:self -> int
+    fn hash self:self -> i64
     fn eq self:self other:self -> bool
 }
 ```
 
-This declares that any type satisfying `Hashable` must have a `hash` method (taking self, returning `int`) and an `eq` method (taking self and another value of the same type, returning `bool`).
+This declares that any type satisfying `Hashable` must have a `hash` method (taking self, returning `i64`) and an `eq` method (taking self and another value of the same type, returning `bool`).
 
 ## Implementing a Trait
 
@@ -21,13 +21,13 @@ Traits use structural satisfaction. A type satisfies a trait when its `impl` blo
 
 ```casa
 impl str {
-    fn hash self:str -> int { self str_hash }
+    fn hash self:str -> i64 { self str_hash }
     # str::eq is already defined in the standard library
 }
 
-impl int {
-    fn hash self:int -> int { self int_hash }
-    fn eq self:int other:int -> bool { self other == }
+impl i64 {
+    fn hash self:i64 -> i64 { self int_hash }
+    fn eq self:i64 other:i64 -> bool { self other == }
 }
 ```
 
@@ -39,12 +39,12 @@ User-defined structs can satisfy traits by implementing the required methods:
 
 ```casa
 struct Point {
-    x: int
-    y: int
+    x: i64
+    y: i64
 }
 
 impl Point {
-    fn hash self:Point -> int {
+    fn hash self:Point -> i64 {
         self.x 31 * self.y +
     }
     fn eq self:Point other:Point -> bool {
@@ -63,11 +63,11 @@ Enums whose variants carry no inner values automatically satisfy `Hashable` — 
 enum Color { Red Green Blue }
 
 # Works without writing impl Color { fn hash ... fn eq ... }
-Map::new(Map[Color int]) = scores
+Map::new(Map[Color i64]) = scores
 10 Color::Red scores.set = scores
 ```
 
-Enums with payload-bearing variants (`Some(T)`, `Circle(int)`, etc.) are not auto-derived; for those, write an explicit `impl` if needed.
+Enums with payload-bearing variants (`Some(T)`, `Circle(i64)`, etc.) are not auto-derived; for those, write an explicit `impl` if needed.
 
 A user-written `impl` always wins. If you define `Color::hash` or `Color::eq` manually, the synthesized version is suppressed and your implementation is used.
 
@@ -78,7 +78,7 @@ Functions and `impl` blocks declare trait bounds on type variables using the `K:
 ### On Functions
 
 ```casa
-fn example[K: Hashable] key:K -> int {
+fn example[K: Hashable] key:K -> i64 {
     key K::hash
 }
 ```
@@ -107,7 +107,7 @@ impl[K: Hashable, V] Map[K V] {
 Trait bounds belong on `impl` blocks, not on struct definitions. Structs only declare bare type parameters:
 
 ```casa
-struct Set[K] { map: Map[K int] }       # correct
+struct Set[K] { map: Map[K i64] }       # correct
 # struct Set[K: Hashable] { ... }       # error
 impl[K: Hashable] Set[K] { ... }        # bounds go here
 ```
@@ -121,7 +121,7 @@ Inside a trait-bounded function, there are two ways to call a trait method.
 Use `K::method` to call a trait method on a value:
 
 ```casa
-fn example[K: Hashable] key:K -> int {
+fn example[K: Hashable] key:K -> i64 {
     key K::hash
 }
 ```
@@ -131,7 +131,7 @@ fn example[K: Hashable] key:K -> int {
 Dot syntax also works when the receiver is a trait-bounded type variable:
 
 ```casa
-fn example[K: Hashable] key:K -> int {
+fn example[K: Hashable] key:K -> i64 {
     key.hash
 }
 ```
@@ -143,7 +143,7 @@ Both forms are equivalent. The compiler resolves them to the correct method for 
 Use `&K::method` to push a trait method as a function pointer without calling it:
 
 ```casa
-fn get_hasher[K: Hashable] -> fn[K -> int] {
+fn get_hasher[K: Hashable] -> fn[K -> i64] {
     &K::hash
 }
 ```
@@ -155,10 +155,10 @@ This pushes the function pointer for the concrete type's method.
 When calling a function with trait bounds, the compiler automatically injects the correct function pointers. You do not need to pass them manually.
 
 ```casa
-Map::new (Map[str int]) = m
+Map::new (Map[str i64]) = m
 ```
 
-The compiler sees that `Map::new` requires `[K: Hashable, V]`, determines `K=str` from the type cast `(Map[str int])`, verifies that `str` satisfies `Hashable`, and injects `&str::hash` and `&str::eq` behind the scenes.
+The compiler sees that `Map::new` requires `[K: Hashable, V]`, determines `K=str` from the type cast `(Map[str i64])`, verifies that `str` satisfies `Hashable`, and injects `&str::hash` and `&str::eq` behind the scenes.
 
 ## Built-in Trait: `Eq`
 
@@ -171,7 +171,7 @@ trait Eq {
 }
 ```
 
-Built-in implementations: `int`, `bool`, `char`, `str`, `cstr`, `ptr`.
+Built-in implementations: `i64`, `bool`, `char`, `str`, `cstr`, `ptr`.
 
 A type satisfies `Eq` by providing `Type::eq self:Type other:Type -> bool`. The `ne` default is auto-instantiated for any satisfying type, so `x.ne y` works without writing it.
 
@@ -190,7 +190,7 @@ trait Ord {
 }
 ```
 
-Built-in implementations: `int`, `char`. Lexicographic ordering for `str` is intentionally out of scope.
+Built-in implementations: `i64`, `char`. Lexicographic ordering for `str` is intentionally out of scope.
 
 The `<`, `<=`, `>`, and `>=` operators are bounded by `Ord`. Built-in primitives (excluding `str`) and enums use direct bytecode ordering; user-defined types must provide `impl T { fn lt ... }` and the operator lowers to the corresponding trait method (`lt`, `le`, `gt`, `ge`). A type with `impl Eq` but no `impl Ord` is rejected at compile time when used with an ordering operator.
 
@@ -202,7 +202,9 @@ Marker trait for register-sized values that fit in one stack slot. It declares n
 trait Word { }
 ```
 
-It is used as a bound on builtins that require single-slot operands (for example, syscall and `store*` arguments). Primitive types, enums, struct refs, and array refs satisfy `Word`; multi-slot value types do not.
+It is used as a bound on builtins that require single-slot operands (for
+example, syscall and `store*` arguments). Primitive types, enums, struct refs,
+and array refs satisfy `Word`; multi-slot value types do not.
 
 `Hashable` and `Display` both extend `Word` as supertraits, so any type that satisfies one of them automatically satisfies `Word`.
 
@@ -212,14 +214,14 @@ The standard library defines the `Hashable` trait as an extension of `Eq` and `W
 
 ```casa
 trait Hashable: Eq + Word {
-    fn hash self:self -> int
+    fn hash self:self -> i64
 }
 ```
 
 Built-in implementations:
 - `str::hash` uses the djb2 hash algorithm (via `str_hash`)
-- `int::hash` returns the absolute value (via `int_hash`)
-- `Eq::eq` for `str` and `int` is provided by their respective `impl` blocks
+- `i64::hash` returns the absolute value (via `int_hash`)
+- `Eq::eq` for `str` and `i64` is provided by their respective `impl` blocks
 
 ## Built-in Trait: `Display`
 
@@ -231,12 +233,12 @@ trait Display: Word {
 }
 ```
 
-Any type with a `to_str self:T -> str` method structurally satisfies `Display`. The standard library provides implementations for `int`, `bool`, `str`, `char`, `cstr`, `ptr`, and generic containers `array[T]`, `List[T]`, `Option[T]`, and `Result[T E]` (the parameter types must themselves satisfy `Display`).
+Any type with a `to_str self:T -> str` method structurally satisfies `Display`. The standard library provides implementations for `i64`, `bool`, `str`, `char`, `cstr`, `ptr`, and generic containers `array[T]`, `List[T]`, `Option[T]`, and `Result[T E]` (the parameter types must themselves satisfy `Display`).
 
 When an expression appears inside an f-string (`f"value: {x}"`), the compiler verifies that its type satisfies `Display` and automatically calls the corresponding `to_str` method. Custom structs and enums become interpolatable simply by providing a `to_str` method:
 
 ```casa
-struct Point { x: int y: int }
+struct Point { x: i64 y: i64 }
 
 impl Point {
     fn to_str self:Point -> str {
@@ -260,7 +262,7 @@ trait Eq {
 trait Word { }
 
 trait Hashable: Eq + Word {
-    fn hash self:self -> int
+    fn hash self:self -> i64
 }
 ```
 
@@ -286,7 +288,7 @@ trait Iterable[T] {
         iter_result
     }
 
-    fn count self:self -> int {
+    fn count self:self -> u64 {
         0 = iter_count
         for iter_elem in self do
             1 += iter_count
@@ -316,7 +318,7 @@ The standard library defines the `Iterable[T]` trait for iteration. Any type wit
 | `map` | `self fn[T -> U] -> Iter[U]` | Lazily apply a function to each element |
 | `filter` | `self fn[T -> bool] -> Iter[T]` | Lazily keep elements for which the function returns `true` |
 | `fold` | `self U fn[U T -> U] -> U` | Reduce to a single value using an accumulator |
-| `count` | `self -> int` | Count the number of elements |
+| `count` | `self -> u64` | Count the number of elements |
 | `any` | `self fn[T -> bool] -> bool` | Return `true` if any element satisfies the predicate |
 | `all` | `self fn[T -> bool] -> bool` | Return `true` if all elements satisfy the predicate |
 | `find` | `self fn[T -> bool] -> Option[T]` | Return the first element satisfying the predicate |

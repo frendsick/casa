@@ -17,7 +17,7 @@ A cursor tracks a position within a source string. All scanning methods operate 
 ```casa
 struct Cursor {
     source: str
-    pos:    int
+    pos:    i64
 }
 ```
 
@@ -28,7 +28,7 @@ Returned by parsers when input does not match the expected pattern. Contains a h
 ```casa
 struct ParseError {
     message: str
-    pos:     int
+    pos:     i64
 }
 ```
 
@@ -68,7 +68,7 @@ Returns the current character without advancing the cursor. Returns `Option::Non
 
 Returns the character at `pos + offset` without advancing the cursor. Returns `Option::None` if out of bounds.
 
-**Stack effect:** `Cursor int -> Option[char]`
+**Stack effect:** `Cursor i64 -> Option[char]`
 
 ```casa
 2 "hello" Cursor::new .peek_at .unwrap print    # l
@@ -113,7 +113,7 @@ Consumes the next character if it matches `expected`. Returns `Result::Ok` with 
 
 Advances the cursor position by `n` characters without returning them.
 
-**Stack effect:** `Cursor int -> None`
+**Stack effect:** `Cursor i64 -> None`
 
 ```casa
 "hello" Cursor::new = cursor
@@ -160,13 +160,13 @@ Collects characters while the predicate returns `true`, returning them as a subs
 
 Returns the current cursor position for later backtracking.
 
-**Stack effect:** `Cursor -> int`
+**Stack effect:** `Cursor -> i64`
 
 ### `Cursor::restore`
 
 Sets the cursor position back to a previously saved value.
 
-**Stack effect:** `Cursor int -> None`
+**Stack effect:** `Cursor i64 -> None`
 
 ```casa
 "test" Cursor::new = cursor
@@ -189,7 +189,7 @@ Converts a `List[char]` to a `str`. Allocates a new string with the correct leng
 
 Converts a digit string to an integer. Handles optional leading `-` for negative numbers.
 
-**Stack effect:** `str -> int`
+**Stack effect:** `str -> i64`
 
 ```casa
 "42" str_to_int print      # 42
@@ -226,7 +226,7 @@ cursor.pos print    # 3
 
 Parses an integer with optional leading `-`. Returns `Result::Error` if no digits are found. Restores cursor position on failure.
 
-**Stack effect:** `Cursor -> Result[int ParseError]`
+**Stack effect:** `Cursor -> Result[i64 ParseError]`
 
 ```casa
 "42" Cursor::new parse_int .unwrap print      # 42

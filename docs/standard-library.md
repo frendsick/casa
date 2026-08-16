@@ -42,7 +42,7 @@ Arrays are fixed-size heap-allocated sequences created with bracket syntax. Each
 
 Returns the length of an array.
 
-**Stack effect:** `array -> int`
+**Stack effect:** `array -> i64`
 
 ```casa
 [1, 2, 3] = arr
@@ -62,7 +62,7 @@ Returns the nth element of an array (zero-indexed). This is a generic function t
 1 arr.nth print           # 20
 ```
 
-The return type matches the array's element type. For example, calling `nth` on an `array[int]` returns `int`, not `any`.
+The return type matches the array's element type. For example, calling `nth` on an `array[i64]` returns `i64`, not `any`.
 
 ## Iteration
 
@@ -77,8 +77,8 @@ A generic iterator wrapper returned by `.iter` on `array[T]`, `List[T]`, and `st
 ```casa
 struct Iter {
     get:    ptr
-    length: int
-    index:  int
+    length: u64
+    index:  u64
 }
 ```
 
@@ -91,7 +91,7 @@ struct Iter {
 | `str` | `str::iter` | `Iter[char]` |
 
 ```casa
-[1 2 3].iter           # Iter[int]
+[1 2 3].iter           # Iter[i64]
 my_list.iter           # Iter[T]
 "hello".iter           # Iter[char]
 ```
@@ -107,7 +107,7 @@ Collects all elements into a `List[T]`.
 **Stack effect:** `Iter[T] -> List[T]`
 
 ```casa
-[1 2 3].iter.collect    # List[int] with elements 1, 2, 3
+[1 2 3].iter.collect    # List[i64] with elements 1, 2, 3
 ```
 
 #### `map`
@@ -117,7 +117,7 @@ Applies a function to each element, returning a lazy `Iter[U]`. Use `.collect` t
 **Stack effect:** `Iter[T] fn[T -> U] -> Iter[U]`
 
 ```casa
-{ 2 * } [1 2 3].iter.map.collect    # List[int] with elements 2, 4, 6
+{ 2 * } [1 2 3].iter.map.collect    # List[i64] with elements 2, 4, 6
 ```
 
 #### `filter`
@@ -127,7 +127,7 @@ Returns a lazy `Iter[T]` of elements for which the function returns `true`. Use 
 **Stack effect:** `Iter[T] fn[T -> bool] -> Iter[T]`
 
 ```casa
-{ 2 % 0 == } [1 2 3 4].iter.filter.collect    # List[int] with elements 2, 4
+{ 2 % 0 == } [1 2 3 4].iter.filter.collect    # List[i64] with elements 2, 4
 ```
 
 #### `fold`
@@ -144,7 +144,7 @@ Reduces to a single value using an accumulator and a function.
 
 Returns the number of elements.
 
-**Stack effect:** `Iter[T] -> int`
+**Stack effect:** `Iter[T] -> i64`
 
 ```casa
 [1 2 3].iter.count print    # 3
@@ -416,11 +416,11 @@ The standard library declares traits with primitive implementations. See [Traits
 
 | Trait | Required | Defaults | Built-in impls |
 |-------|----------|----------|----------------|
-| `Eq` | `eq self other -> bool` | `ne` | `int`, `bool`, `char`, `str`, `cstr`, `ptr` |
-| `Ord` | `lt self other -> bool` | `le`, `gt`, `ge` | `int`, `char` |
-| `Display: Word` | `to_str self -> str` (extends `Word`) | -- | `int`, `bool`, `char`, `str`, `cstr`, `ptr`, `array[T]`, `List[T]`, `Option[T]`, `Result[T E]` |
+| `Eq` | `eq self other -> bool` | `ne` | `i64`, `bool`, `char`, `str`, `cstr`, `ptr` |
+| `Ord` | `lt self other -> bool` | `le`, `gt`, `ge` | `i64`, `char` |
+| `Display: Word` | `to_str self -> str` (extends `Word`) | -- | `i64`, `bool`, `char`, `str`, `cstr`, `ptr`, `array[T]`, `List[T]`, `Option[T]`, `Result[T E]` |
 | `Word` | (marker) | -- | every single-slot type |
-| `Hashable: Eq + Word` | `hash self -> int` (extends `Eq`, `Word`) | -- | `int`, `str`, payload-free enums (auto-derived) |
+| `Hashable: Eq + Word` | `hash self -> i64` (extends `Eq`, `Word`) | -- | `i64`, `str`, payload-free enums (auto-derived) |
 | `Iterable[T]` | `next self -> Option[T]` | `collect`, `map`, `filter`, `fold`, `count`, `any`, `all`, `find` | `Iter[T]` |
 
 ## See Also

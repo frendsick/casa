@@ -40,7 +40,7 @@ Diagnostics carry the error message from the compiler. When the compiler provide
 
 ```
 type mismatch
-Expected: int
+Expected: i64
 Got: str
 ```
 
@@ -75,9 +75,9 @@ Hover over a symbol to see type and stack effect information in a code block.
 | Variable | `name: type` |
 | Struct constructor | `struct Name { field: type, ... }` |
 | Enum variant | `EnumName::VariantName` |
-| Integer, string, bool, or char literal | Type and value (e.g. `(int) 42`) |
+| Integer, string, bool, or char literal | Type and value (e.g. `(i64) 42`) |
 | Assignment | `= name: type` (with inferred type) |
-| Operator | Name and stack effect (e.g. `+: int int -> int`) |
+| Operator | Name and stack effect (e.g. `+: T T -> T (same-width integers)`) |
 | Intrinsic | Name and stack effect (e.g. `drop: T -> None`) |
 
 All operators and intrinsics show their stack effects on hover, including arithmetic, comparison, boolean, bitwise, stack manipulation, memory, syscall, and IO operations.
@@ -102,7 +102,7 @@ Typing `.` after a variable triggers method completion. The server looks up the 
 
 For example, after `p.` where `p` is a `Point`, the server offers `get_x`, `set_x`, etc. from the `Point` impl block. Method completions use the short name (e.g. `get_x` not `Point::get_x`) and appear with `Method` kind.
 
-This works for generic types too. If `items` is a `List[int]`, typing `items.` shows methods from `List::*`.
+This works for generic types too. If `items` is a `List[i64]`, typing `items.` shows methods from `List::*`.
 
 Method chaining is supported. For example, `test.hash.` resolves `test` to its type, looks up the return type of `hash`, and offers methods for that return type.
 

@@ -37,8 +37,8 @@ struct DocumentElement {
 
 struct DocumentLocation {
     file:   str
-    offset: int
-    length: int
+    offset: u64
+    length: u64
 }
 
 struct DocumentHover {
@@ -90,7 +90,7 @@ struct DocumentSymbol {
 
 struct FindSymbolState {
     best:        Option[DocumentElement]
-    best_length: int
+    best_length: u64
 }
 
 impl Location {
@@ -100,7 +100,7 @@ impl Location {
         self.span.length other.span.length == &&
     }
 
-    fn contains_offset self:Location file_path:str offset:int -> bool {
+    fn contains_offset self:Location file_path:str offset:u64 -> bool {
         if self.file file_path != then false return fi
         self.span.offset offset >=
         offset self.span.offset self.span.length + > &&
@@ -140,15 +140,16 @@ impl DocumentSymbol {
     }
 }
 
-fn find_qualified_part source:str op:Op cursor_offset:int -> SymbolPart {
+fn find_qualified_part source:str op:Op cursor_offset:u64 -> SymbolPart {
     op.location.span.offset = start
     op.location.span.length = length
     source start length str::substring "::" str::find = separator
     if 0 separator < then SymbolPart::Whole return fi
+    separator (u64) = separator_index
     cursor_offset start - = relative_offset
-    if relative_offset separator > then
+    if relative_offset separator_index > then
         SymbolPart::TypeName
-    elif relative_offset separator 2 + > then
+    elif relative_offset separator_index 2 + > then
         SymbolPart::Separator
     else
         SymbolPart::MemberName
@@ -159,12 +160,13 @@ fn get_symbol_location source:str op:Op part:SymbolPart -> Location {
     op.location.span.offset = start
     op.location.span.length = length
     source start length str::substring "::" str::find = separator
+    separator (u64) = separator_index
     part match
-        SymbolPart::TypeName => separator start op.location.file Location::new
-        SymbolPart::Separator => 2 start separator + op.location.file Location::new
+        SymbolPart::TypeName => separator_index start op.location.file Location::new
+        SymbolPart::Separator => 2 start separator_index + op.location.file Location::new
         SymbolPart::MemberName => {
-            length separator - 2 -
-            start separator + 2 +
+            length separator_index - 2 -
+            start separator_index + 2 +
             op.location.file
             Location::new
         }
@@ -176,7 +178,7 @@ fn find_best_spanning_symbol
     ops:List[Op]
     file_path:str
     source:str
-    offset:int
+    offset:u64
     function:Option[Function]
     find_state:FindSymbolState
 -> FindSymbolState {
@@ -184,7 +186,7 @@ fn find_best_spanning_symbol
         if op.location.file file_path != then continue fi
         op.location.span.offset = span_offset
         op.location.span.length = span_length
-        if 1 span_length < then 1 = span_length fi
+        if 1 span_length < then 1 (u64) = span_length fi
         if
         span_offset offset >=
         offset span_offset span_length + > &&
@@ -203,7 +205,7 @@ fn find_best_spanning_symbol
     find_state
 }
 
-fn find_best_assignment name:str ops:List[Op] usage_offset:int best:Option[Op] -> Option[Op] {
+fn find_best_assignment name:str ops:List[Op] usage_offset:u64 best:Option[Op] -> Option[Op] {
     for op in ops.iter do
         if op.value OpValue::AssignVar(assign_name) is then
             if assign_name name != then continue fi
@@ -217,18 +219,21 @@ fn find_best_assignment name:str ops:List[Op] usage_offset:int best:Option[Op] -
     best
 }
 
-fn extract_word_before source:str offset:int -> str {
+fn extract_word_before source:str offset:u64 -> str {
     offset = end_pos
-    end_pos 1 - = start_pos
-    while 0 start_pos >= do
-        start_pos source.at = character
-        if character.is_alpha ! character.is_digit ! && character '_' != && then break fi
+    end_pos = start_pos
+    while 0 start_pos != do
         1 -= start_pos
+        start_pos source.at = character
+        if character.is_alpha ! character.is_digit ! && character '_' != && then
+            1 += start_pos
+            break
+        fi
     done
-    source start_pos 1 + end_pos start_pos - 1 - str::substring
+    source start_pos end_pos start_pos - str::substring
 }
 
-fn extract_chain_before source:str offset:int -> List[str] {
+fn extract_chain_before source:str offset:u64 -> List[str] {
     List::new(List[str]) = reversed_parts
     offset = position
     while 0 position > do
@@ -246,10 +251,10 @@ fn extract_chain_before source:str offset:int -> List[str] {
     done
 
     List::new(List[str]) = parts
-    reversed_parts.length 1 - = reverse_index
-    while 0 reverse_index >= do
-        reverse_index reversed_parts.get parts.push
+    reversed_parts.length = reverse_index
+    while 0 reverse_index != do
         1 -= reverse_index
+        reverse_index reversed_parts.get parts.push
     done
     parts
 }
@@ -263,7 +268,8 @@ fn infer_literal_type text:str -> Option[Type] {
             break
         fi
     done
-    if all_digits then TYPE_INT_T Option::Some return fi
+    if all_digits then TYPE_I64_T Option::Some return fi
+    if text is_float_literal then TYPE_F64_T Option::Some return fi
     if text "true" == text "false" == || then TYPE_BOOL_T Option::Some return fi
     Option::None(Option[Type])
 }
@@ -295,6 +301,7 @@ fn find_document_token_kind op_value:OpValue -> Option[DocumentTokenKind] {
         OpValue::AssignDec(_) => DocumentTokenKind::Variable Option::Some
         OpValue::PushStr(_) => DocumentTokenKind::String Option::Some
         OpValue::PushInt(_) => DocumentTokenKind::Number Option::Some
+        OpValue::PushFloat(_) => DocumentTokenKind::Number Option::Some
         OpValue::PushChar(_) => DocumentTokenKind::Number Option::Some
         OpValue::PushBool(_) => DocumentTokenKind::Keyword Option::Some
         OpValue::FnExec => DocumentTokenKind::Keyword Option::Some
@@ -375,15 +382,15 @@ fn classify_qualified_member op_value:OpValue -> DocumentTokenKind {
     fi
 }
 
-fn find_keyword_before source:str file_path:str name_offset:int keyword:str -> Option[Location] {
-    name_offset 1 - = position
-    while 0 position >= do
+fn find_keyword_before source:str file_path:str name_offset:u64 keyword:str -> Option[Location] {
+    name_offset = position
+    while 0 position != do
+        1 -= position
         position source.at = character
         if ' ' character != '\t' character != && '\n' character != && then break fi
-        1 -= position
     done
-    position keyword.length - 1 + = keyword_start
-    if 0 keyword_start >= then
+    if keyword.length position 1 + >= then
+        position 1 + keyword.length - = keyword_start
         if source keyword_start keyword.length str::substring keyword == then
             keyword.length keyword_start file_path Location::new Option::Some return
         fi
@@ -454,17 +461,17 @@ impl CasaEnum {
 impl OpValue {
     fn format_hover self:OpValue -> Option[str] {
         self match
-            OpValue::Add => "+: int int -> int" Option::Some
-            OpValue::Sub => "-: int int -> int" Option::Some
-            OpValue::Mul => "*: int int -> int" Option::Some
-            OpValue::Div => "/: int int -> int" Option::Some
-            OpValue::Mod => "%: int int -> int" Option::Some
-            OpValue::Shl => "<<: int int -> int" Option::Some
-            OpValue::Shr => ">>: int int -> int" Option::Some
-            OpValue::BitAnd => "&: int int -> int" Option::Some
-            OpValue::BitOr => "|: int int -> int" Option::Some
-            OpValue::BitXor => "^: int int -> int" Option::Some
-            OpValue::BitNot => "~: int -> int" Option::Some
+            OpValue::Add => "+: T T -> T (same-width integers)" Option::Some
+            OpValue::Sub => "-: T T -> T (same-width integers)" Option::Some
+            OpValue::Mul => "*: T T -> T (same-width integers)" Option::Some
+            OpValue::Div => "/: T T -> T (same-width integers)" Option::Some
+            OpValue::Mod => "%: T T -> T (same-width integers)" Option::Some
+            OpValue::Shl => "<<: T u64 -> T (integer T)" Option::Some
+            OpValue::Shr => ">>: T u64 -> T (integer T)" Option::Some
+            OpValue::BitAnd => "&: T T -> T (same-width integers)" Option::Some
+            OpValue::BitOr => "|: T T -> T (same-width integers)" Option::Some
+            OpValue::BitXor => "^: T T -> T (same-width integers)" Option::Some
+            OpValue::BitNot => "~: T -> T (integer T)" Option::Some
             OpValue::Not => "!: bool -> bool" Option::Some
             OpValue::Eq => "==: [T: Eq] T T -> bool" Option::Some
             OpValue::Ne => "!=: [T: Eq] T T -> bool" Option::Some
@@ -487,25 +494,25 @@ impl OpValue {
             OpValue::PrintCstr => "print: [T: Display] T -> None" Option::Some
             OpValue::FnExec => "exec: fn[...] -> ..." Option::Some
             OpValue::Typeof => "typeof: T -> str" Option::Some
-            OpValue::AssignDec(_) => "-=: int -> None" Option::Some
-            OpValue::AssignInc(_) => "+=: int -> None" Option::Some
-            OpValue::HeapAlloc => "alloc: int -> ptr" Option::Some
-            OpValue::Load8 => "load8: ptr -> int" Option::Some
-            OpValue::Load16 => "load16: ptr -> int" Option::Some
-            OpValue::Load32 => "load32: ptr -> int" Option::Some
-            OpValue::Load64 => "load64: ptr -> int" Option::Some
-            OpValue::Store8 => "store8[T: Word]: T ptr -> None" Option::Some
-            OpValue::Store16 => "store16[T: Word]: T ptr -> None" Option::Some
-            OpValue::Store32 => "store32[T: Word]: T ptr -> None" Option::Some
-            OpValue::Store64 => "store64[T: Word]: T ptr -> None" Option::Some
-            OpValue::Syscall0 => "syscall0: int -> int" Option::Some
-            OpValue::Syscall1 => "syscall1[A1: Word]: A1 int -> int" Option::Some
-            OpValue::Syscall2 => "syscall2[A1: Word A2: Word]: A1 A2 int -> int" Option::Some
-            OpValue::Syscall3 => "syscall3[A1: Word A2: Word A3: Word]: A1 A2 A3 int -> int" Option::Some
-            OpValue::Syscall4 => "syscall4[A1: Word A2: Word A3: Word A4: Word]: A1 A2 A3 A4 int -> int" Option::Some
-            OpValue::Syscall5 => "syscall5[A1: Word A2: Word A3: Word A4: Word A5: Word]: A1 A2 A3 A4 A5 int -> int" Option::Some
-            OpValue::Syscall6 => "syscall6[A1: Word A2: Word A3: Word A4: Word A5: Word A6: Word]: A1 A2 A3 A4 A5 A6 int -> int" Option::Some
-            OpValue::Argc => "argc: None -> int" Option::Some
+            OpValue::AssignDec(_) => "-=: T -> None (integer T)" Option::Some
+            OpValue::AssignInc(_) => "+=: T -> None (integer T)" Option::Some
+            OpValue::HeapAlloc => "alloc: u64 -> ptr" Option::Some
+            OpValue::Load8 => "load8: ptr -> u8" Option::Some
+            OpValue::Load16 => "load16: ptr -> u16" Option::Some
+            OpValue::Load32 => "load32: ptr -> u32" Option::Some
+            OpValue::Load64 => "load64: ptr -> u64" Option::Some
+            OpValue::Store8 => "store8: u8 ptr -> None" Option::Some
+            OpValue::Store16 => "store16: u16 ptr -> None" Option::Some
+            OpValue::Store32 => "store32: u32 ptr -> None" Option::Some
+            OpValue::Store64 => "store64: u64 ptr -> None" Option::Some
+            OpValue::Syscall0 => "syscall0: i64 -> i64" Option::Some
+            OpValue::Syscall1 => "syscall1[A1: Word]: A1 i64 -> i64" Option::Some
+            OpValue::Syscall2 => "syscall2[A1: Word A2: Word]: A1 A2 i64 -> i64" Option::Some
+            OpValue::Syscall3 => "syscall3[A1: Word A2: Word A3: Word]: A1 A2 A3 i64 -> i64" Option::Some
+            OpValue::Syscall4 => "syscall4[A1: Word A2: Word A3: Word A4: Word]: A1 A2 A3 A4 i64 -> i64" Option::Some
+            OpValue::Syscall5 => "syscall5[A1: Word A2: Word A3: Word A4: Word A5: Word]: A1 A2 A3 A4 A5 i64 -> i64" Option::Some
+            OpValue::Syscall6 => "syscall6[A1: Word A2: Word A3: Word A4: Word A5: Word A6: Word]: A1 A2 A3 A4 A5 A6 i64 -> i64" Option::Some
+            OpValue::Argc => "argc: None -> i64" Option::Some
             OpValue::Argv => "argv: None -> ptr" Option::Some
             _ => Option::None(Option[str])
         end
@@ -665,15 +672,15 @@ impl AnalyzedDocument {
             fi
         done
 
-        KeywordKind = keyword_count
-        0 = keyword_index
+        KeywordKind (u64) = keyword_count
+        0 (u64) = keyword_index
         while keyword_index keyword_count > do
             keyword_index (KeywordKind) CompletionCandidate::Keyword candidates.push
             1 += keyword_index
         done
 
-        IntrinsicKind = intrinsic_count
-        0 = intrinsic_index
+        IntrinsicKind (u64) = intrinsic_count
+        0 (u64) = intrinsic_index
         while intrinsic_index intrinsic_count > do
             intrinsic_index (IntrinsicKind) CompletionCandidate::Intrinsic candidates.push
             1 += intrinsic_index
@@ -712,7 +719,7 @@ impl AnalyzedDocument {
     fn resolve_completion_chain_type
         self:AnalyzedDocument
         parts:List[str]
-        offset:int
+        offset:u64
     -> Option[Type] {
         if 0 parts.length == then Option::None(Option[Type]) return fi
         offset self.find_containing_function = containing_function
@@ -722,7 +729,7 @@ impl AnalyzedDocument {
         if current_type.is_none then Option::None(Option[Type]) return fi
 
         current_type.unwrap = resolved_type
-        1 = part_index
+        1 (u64) = part_index
         while part_index parts.length > do
             part_index parts.get = method_name
             f"{resolved_type.match_base}::{method_name}" self.lookup_function = function
@@ -738,10 +745,10 @@ impl AnalyzedDocument {
 
     fn find_triggered_completion_candidates
         self:AnalyzedDocument
-        offset:int
+        offset:u64
     -> List[CompletionCandidate] {
+        if 0 offset == then List::new(List[CompletionCandidate]) return fi
         offset 1 - = position
-        if 0 position < then List::new(List[CompletionCandidate]) return fi
 
         if 1 position >= then
             if self.source position 1 - 2 str::substring "::" == then
@@ -930,7 +937,7 @@ impl AnalyzedDocument {
     fn find_declared_enum_symbol_at
         self:AnalyzedDocument
         casa_enum:CasaEnum
-        offset:int
+        offset:u64
     -> Option[DocumentSymbol] {
         if offset self.file_path casa_enum.location.contains_offset then
             casa_enum.name self.find_type_symbol return
@@ -1031,7 +1038,7 @@ impl AnalyzedDocument {
         Option::None(Option[Function])
     }
 
-    fn find_containing_function self:AnalyzedDocument offset:int -> Option[Function] {
+    fn find_containing_function self:AnalyzedDocument offset:u64 -> Option[Function] {
         for function in self.collect_document_functions.iter do
             if 0 function.ops.length == then continue fi
             0 function.ops.get.location.span.offset = start_offset
@@ -1078,7 +1085,20 @@ impl AnalyzedDocument {
             OpValue::PushVar(name) => symbol.containing_function name self.find_variable_type
             OpValue::PushCapture(name) => symbol.containing_function name self.find_variable_type
             OpValue::AssignVar(name) => symbol.containing_function name self.find_variable_type
-            OpValue::PushInt(_) => TYPE_INT_T Option::Some
+            OpValue::PushInt(_) => {
+                if symbol.op.type_hint Option::Some(literal_type) is then
+                    literal_type Option::Some
+                else
+                    TYPE_I64_T Option::Some
+                fi
+            }
+            OpValue::PushFloat(_) => {
+                if symbol.op.type_hint Option::Some(literal_type) is then
+                    literal_type Option::Some
+                else
+                    TYPE_F64_T Option::Some
+                fi
+            }
             OpValue::PushStr(_) => TYPE_STR_T Option::Some
             OpValue::PushBool(_) => TYPE_BOOL_T Option::Some
             OpValue::PushChar(_) => TYPE_CHAR_T Option::Some
@@ -1144,7 +1164,20 @@ impl AnalyzedDocument {
             OpValue::PushEnumVariant(variant) => {
                 f"{variant.enum_name}::{variant.variant_name}" Option::Some
             }
-            OpValue::PushInt(value) => f"(int) {value}" Option::Some
+            OpValue::PushInt(value) => {
+                if symbol.op.type_hint Option::Some(literal_type) is then
+                    f"({literal_type.format}) {value.raw}" Option::Some
+                else
+                    f"(i64) {value.raw}" Option::Some
+                fi
+            }
+            OpValue::PushFloat(value) => {
+                if symbol.op.type_hint Option::Some(literal_type) is then
+                    f"({literal_type.format}) {value}" Option::Some
+                else
+                    f"(f64) {value}" Option::Some
+                fi
+            }
             OpValue::PushStr(value) => f"(str) \"{value}\"" Option::Some
             OpValue::PushBool(value) => {
                 if value 0 != then "(bool) true" else "(bool) false" fi Option::Some
@@ -1236,7 +1269,7 @@ impl AnalyzedDocument {
         self:AnalyzedDocument
         name:str
         function:Option[Function]
-        usage_offset:int
+        usage_offset:u64
     -> Option[Location] {
         Option::None(Option[Op]) = best
         if function Option::Some(containing_function) is then

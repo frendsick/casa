@@ -4,16 +4,41 @@ Casa is a statically typed language. Types are checked at compile time and most 
 
 ## Primitive Types
 
-### `int`
+### Integers
 
-Integer type. All integers are 64-bit signed values.
+Casa provides signed `i8`, `i16`, `i32`, and `i64` integers, plus unsigned
+`u8`, `u16`, `u32`, and `u64` integers. Integer operations require matching
+widths; stored values are never implicitly promoted or converted.
 
 ```casa
-42 print       # 42
--42 print      # -42
+127 = signed_byte:i8
+255 = unsigned_byte:u8
+42 print                       # unconstrained literal defaults to i64
+18446744073709551615 = max:u64
 ```
 
-Convert to string with `.to_str` (see [Strings and IO](strings-and-io.md#type-conversions)).
+An integer literal adopts an immediate integer context, including an annotated
+binding, function parameter, collection element, or same-width operation. The
+compiler rejects values outside that type's range. A literal with no integer
+context defaults to `i64`.
+
+The old `int` and `byte` type names are not aliases and are rejected.
+
+### Floating point
+
+Casa provides `f32` and `f64`. A floating-point literal adopts an immediate
+`f32` or `f64` context and otherwise defaults to `f64`.
+
+```casa
+1.5 = single:f32
+1.5 = double:f64
+1.5 typeof             # f64
+```
+
+Decimal and exponent forms are accepted (`1.5`, `2e3`, `2.5e-2`). The old
+`float` spelling is rejected. Floating-point arithmetic and display are added
+separately; this initial surface provides the explicit types and contextual
+literals.
 
 ### `bool`
 
@@ -55,10 +80,10 @@ Characters support the following escape sequences:
 
 Invalid escape sequences (e.g. `\q`) produce a compile-time `SYNTAX` error. Empty char literals (`''`) are also errors.
 
-Characters can be cast to `int` to get their ASCII code:
+Characters can currently be cast to `i64` to get their code value:
 
 ```casa
-'A' (int) print    # 65
+'A' (i64) print    # 65
 ```
 
 ### `str`
@@ -181,7 +206,7 @@ See [Built-in Intrinsics -- Memory Intrinsics](intrinsics.md#memory-intrinsics) 
 Fixed-size, statically typed array literal. The element type `T` is inferred from the items in the array.
 
 ```casa
-[1, 2, 3]          # type: array[int]
+[1, 2, 3]          # type: array[i64]
 ["a", "b", "c"]    # type: array[str]
 [true, false]       # type: array[bool]
 ```
@@ -190,10 +215,10 @@ Array items can be literals, variables, enum variants, function references, lamb
 
 ```casa
 42 = x
-[x, 2, 3]                            # type: array[int]
+[x, 2, 3]                            # type: array[i64]
 [Color::Red, Color::Blue]            # type: array[Color]
-[double, triple]                      # type: array[fn[int -> int]]
-[{ 1 + }]                            # type: array[fn[int -> int]]
+[double, triple]                      # type: array[fn[i64 -> i64]]
+[{ 1 + }]                            # type: array[fn[i64 -> i64]]
 [Point { x: 1, y: 2 }]              # type: array[Point]
 ```
 
@@ -206,7 +231,7 @@ All items must have the same type. Heterogeneous arrays are compile-time errors:
 An empty array literal has an unresolved element type. The compiler infers it from the first constraining use — an explicit cast or a typed binding:
 
 ```casa
-[] (array[int])               # explicit cast resolves element type
+[] (array[i64])               # explicit cast resolves element type
 [] = xs:array[str]            # type annotation on the binding resolves it
 ```
 
@@ -219,7 +244,7 @@ If the inference frame closes without resolution, the compiler emits a `TYPE_MIS
 Arrays can be nested. The element type is inferred recursively:
 
 ```casa
-[[1, 2], [3, 4]]   # type: array[array[int]]
+[[1, 2], [3, 4]]   # type: array[array[i64]]
 ```
 
 The bare type name `array` matches any `array[T]` for backward compatibility (e.g. in function declarations).
@@ -233,8 +258,8 @@ See [Standard Library — Arrays](standard-library.md#arrays) for `array::length
 Function type representing a lambda or function reference. The brackets contain a stack effect that describes the consumed and produced types.
 
 ```casa
-{ 2 * }           # type: fn[int -> int]
-{ 1 + }           # type: fn[int -> int]
+{ 2 * }           # type: fn[i64 -> i64]
+{ 1 + }           # type: fn[i64 -> i64]
 { drop "hi" }     # type: fn[T -> str]
 ```
 
@@ -248,7 +273,7 @@ Call a function value with `exec`:
 `fn[sig]` can be used as a parameter type in function declarations, allowing functions to accept callbacks:
 
 ```casa
-fn apply f:fn[int -> int] x:int -> int {
+fn apply f:fn[i64 -> i64] x:i64 -> i64 {
     x f exec
 }
 
@@ -274,7 +299,7 @@ enum Option[T] { None Some(T) }
 **Stack effect:** `T -> Option[T]`
 
 ```casa
-42 Option::Some          # type: Option[int]
+42 Option::Some          # type: Option[i64]
 "hello" Option::Some     # type: Option[str]
 Option::None             # type: Option (compatible with any Option[T])
 ```
@@ -284,7 +309,7 @@ At runtime, an option is heap-allocated as 16 bytes: `[tag, value]` where each f
 Options stored in variables retain their type:
 
 ```casa
-42 Option::Some = x      # x has type Option[int]
+42 Option::Some = x      # x has type Option[i64]
 Option::None = y         # y has type Option (bare)
 ```
 
@@ -292,13 +317,13 @@ A bare `Option` type matches any `Option[T]` in function declarations, similar t
 
 ```casa
 fn check opt:Option -> bool { true }
-42 Option::Some check    # works: Option[int] matches bare Option
+42 Option::Some check    # works: Option[i64] matches bare Option
 ```
 
 `Option::None` and `Option::Some` can appear in different branches of a conditional. The type checker unifies them to the more specific `Option[T]`:
 
 ```casa
-fn safe_head arr:array[int] -> Option[int] {
+fn safe_head arr:array[i64] -> Option[i64] {
     if 0 arr .length > then
         0 arr array::nth Option::Some
     else
@@ -326,7 +351,7 @@ enum Result[T E] { Error(E) Ok(T) }
 **Stack effect:** `E -> Result[T E]`
 
 ```casa
-42 Result::Ok            # type: Result[int E]
+42 Result::Ok            # type: Result[i64 E]
 "not found" Result::Error # type: Result[T str]
 ```
 
@@ -335,27 +360,27 @@ At runtime, a result is heap-allocated as 16 bytes: `[tag, value]` where each fi
 Results stored in variables retain their type:
 
 ```casa
-42 Result::Ok = x                    # x has type Result[int E]
+42 Result::Ok = x                    # x has type Result[i64 E]
 "not found" Result::Error = y        # y has type Result[T str]
 ```
 
 Type annotations can narrow the type to specify both type parameters:
 
 ```casa
-42 Result::Ok = x:Result[int str]    # x has type Result[int str]
+42 Result::Ok = x:Result[i64 str]    # x has type Result[i64 str]
 ```
 
 A bare `Result` type matches any `Result[T E]` in function declarations, similar to how bare `Option` matches any `Option[T]`:
 
 ```casa
 fn check res:Result -> bool { true }
-42 Result::Ok check    # works: Result[int E] matches bare Result
+42 Result::Ok check    # works: Result[i64 E] matches bare Result
 ```
 
 `Result::Ok` and `Result::Error` can appear in different branches of a conditional. The type checker unifies them to the more specific `Result[T E]`:
 
 ```casa
-fn divide dividend:int divisor:int -> Result[int str] {
+fn divide dividend:i64 divisor:i64 -> Result[i64 str] {
     if 0 divisor == then
         "division by zero" Result::Error
     else
@@ -372,8 +397,8 @@ Struct names are types. After defining a struct, its name can be used as a type.
 
 ```casa
 struct Point {
-    x: int
-    y: int
+    x: i64
+    y: i64
 }
 
 10 20 Point = p    # p has type Point
@@ -401,14 +426,14 @@ Type variables let functions declare type relationships between inputs and outpu
 
 ```casa
 fn id[T] T -> T { }
-42 id        # T=int, returns int
+42 id        # T=i64, returns i64
 "hi" id      # T=str, returns str
 ```
 
 Type variables can have trait bounds to constrain which types are accepted:
 
 ```casa
-fn hash_key[K: Hashable] key:K -> int {
+fn hash_key[K: Hashable] key:K -> i64 {
     key K::hash
 }
 ```
@@ -425,7 +450,9 @@ Constants are compile-time values declared with `const`. They are inlined as lit
 const NAME value
 ```
 
-The value can be a literal (`int`, `str`, `bool`, `char`), a reference to another constant, or a block expression.
+The value can be a contextual numeric literal, a `str`, `bool`, or `char`
+literal, a reference to another constant, or a block expression. Numeric
+constants retain their literal spelling and are typed at each use site.
 
 ```casa
 const MAX_SIZE 100
@@ -452,7 +479,7 @@ The referenced constant must be declared before the referencing constant.
 Use `const NAME { expr }` to evaluate an arithmetic or logical expression at compile time:
 
 ```casa
-const fn double x:int -> int { x 2 * }
+const fn double x:i64 -> i64 { x 2 * }
 const DOUBLED { MAX_SIZE double }
 const SUM { 3 4 + }
 ```
@@ -464,7 +491,7 @@ Block expressions support arithmetic (`+`, `-`, `*`, `/`, `%`), bitwise (`&`, `|
 A `const fn` is a function that can be evaluated at compile time inside `const { ... }` block expressions. It can also be called at runtime like a regular function.
 
 ```casa
-const fn add a:int b:int -> int { a b + }
+const fn add a:i64 b:i64 -> i64 { a b + }
 
 const SEVEN { 3 4 add }    # evaluated at compile time
 3 4 add print               # called at runtime
@@ -492,15 +519,15 @@ The `(TypeName)` syntax casts the top of the stack to the given type. This is a 
 **Stack effect:** `a -> TypeName`
 
 ```casa
-buffer (ptr) load64 (int)    # cast int -> int (no-op here, but useful for generic data)
+buffer (ptr) load64 (i64)    # cast i64 -> i64 (no-op here, but useful for generic data)
 ```
 
 ## Printing Values
 
-`print` requires the value's type to implement the [`Display` trait](traits.md). The primitives `int`, `bool`, `char`, `str`, and `cstr` are dispatched directly to specialized output instructions; user types must provide a `to_str self -> str` method, which the compiler invokes before printing the resulting string.
+`print` requires the value's type to implement the [`Display` trait](traits.md). The primitives `i64`, `bool`, `char`, `str`, and `cstr` are dispatched directly to specialized output instructions; user types must provide a `to_str self -> str` method, which the compiler invokes before printing the resulting string.
 
 ```casa
-struct Point { x: int y: int }
+struct Point { x: i64 y: i64 }
 impl Point {
     fn to_str self:Point -> str { f"({self.x}, {self.y})" }
 }

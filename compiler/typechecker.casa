@@ -11,38 +11,90 @@ import "semantics"
 import "pattern"
 
 # ============================================================================
-# TypedStack — pair of (types, origins) lists tracked by the type checker
+# TypedStack — typed values with source and unresolved-literal origins.
 # ============================================================================
 
 struct TypedStack {
-    types:   List[Type]
-    origins: List[Location]
+    values: List[TypedValue]
+}
+
+struct TypedValue {
+    type_value: Type
+    origin:     Location
+    literals:   List[Op]
+}
+
+fn contains_op ops:List[Op] candidate:Op -> bool {
+    for op in ops.iter do
+        if candidate op.eq then true return fi
+    done
+    false
+}
+
+impl TypedValue {
+    fn resolve_literals self:TypedValue target:Type diagnostics:Diagnostics -> bool {
+        true = valid
+        for literal in self.literals.iter do
+            if diagnostics target literal.resolve_literal ! then false = valid fi
+        done
+        valid
+    }
 }
 
 impl TypedStack {
     fn new -> TypedStack {
-        List::new(List[Location])
-        List::new(List[Type])
-        TypedStack
+        List::new(List[TypedValue]) TypedStack
     }
 
     fn snapshot self:TypedStack -> TypedStack {
-        self.origins.clone self.types.clone TypedStack
+        self.values.clone TypedStack
     }
 
     fn restore self:TypedStack source:TypedStack {
-        source.types.clone = self.types
-        source.origins.clone = self.origins
+        source.values.clone = self.values
+    }
+
+    fn get_types self:TypedStack -> List[Type] {
+        List::new(List[Type]) = types
+        for value in self.values.iter do
+            value.type_value types.push
+        done
+        types
+    }
+
+    fn set_types self:TypedStack types:List[Type] {
+        0 (u64) = index
+        while index self.values.length > do
+            index self.values.get = value
+            value.literals value.origin index types.get TypedValue index self.values.set
+            1 += index
+        done
     }
 
     # Pure stack comparison on the types slice (origins are not compared).
     fn equals self:TypedStack other:TypedStack -> bool {
-        self.types other.types stacks_equal
+        self.get_types other.get_types stacks_equal
     }
 
-    # Produce the unified types list between two TypedStacks, or empty on incompatibility.
+    fn merge_literals self:TypedStack candidate:TypedStack {
+        0 (u64) = index
+        while index self.values.length > do
+            index self.values.get = value
+            index candidate.values.get = candidate_value
+            for candidate_literal in candidate_value.literals.iter do
+                if candidate_literal value.literals contains_op ! then
+                    candidate_literal value.literals.push
+                fi
+            done
+            1 += index
+        done
+    }
+
+    # Produce unified types and retain literal origins from both stacks.
     fn unify_types self:TypedStack candidate:TypedStack store:SymbolStore -> List[Type] {
-        store self.types candidate.types stacks_compatible
+        store self.get_types candidate.get_types stacks_compatible = unified
+        if unified.length self.values.length == then candidate self.merge_literals fi
+        unified
     }
 }
 
@@ -130,7 +182,7 @@ struct TypeChecker {
     current_expect_ctx:         str
     in_branch_condition:        bool
     store:                      SymbolStore
-    param_cap:                  Option[int]
+    param_cap:                  Option[u64]
     underflow_reported_this_op: bool
     scope:                      BlockScope
     diagnostics:                Diagnostics
@@ -148,7 +200,7 @@ impl TypeChecker {
         Diagnostics::new # diagnostics
         BlockScope::new # scope
         false # underflow_reported_this_op
-        Option::None(Option[int]) # param_cap
+        Option::None(Option[u64]) # param_cap
         store # store
         false # in_branch_condition
         "" # current_expect_ctx
@@ -161,6 +213,118 @@ impl TypeChecker {
         TypedStack::new # stack
         TypeChecker
     }
+}
+
+fn resolve_numeric_literal_default type_value:Type -> Type {
+    if type_value.is_integer_literal_t then TYPE_I64_T return fi
+    if type_value.is_float_literal_t then TYPE_F64_T return fi
+    type_value match
+        Type::Generic(generic) => {
+            List::new(List[Type]) = parameters
+            for parameter in generic.params.iter do
+                parameter resolve_numeric_literal_default parameters.push
+            done
+            parameters generic.base GenericType Type::Generic
+        }
+        Type::Function(function_type) => {
+            List::new(List[Type]) = parameters
+            for parameter in function_type.parameters.iter do
+                parameter resolve_numeric_literal_default parameters.push
+            done
+            List::new(List[Type]) = return_types
+            for return_type in function_type.return_types.iter do
+                return_type resolve_numeric_literal_default return_types.push
+            done
+            return_types parameters FunctionType Type::Function
+        }
+        _ => type_value
+    end
+}
+
+impl Op {
+    fn has_numeric_literal self:Op -> bool {
+        self.value match
+            OpValue::PushInt(_) => true
+            OpValue::PushFloat(_) => true
+            OpValue::PushArray(items) => {
+                for item in items.iter do
+                    if item.has_numeric_literal then true return fi
+                done
+                false
+            }
+            OpValue::ExprGroup(items) => {
+                for item in items.iter do
+                    if item.has_numeric_literal then true return fi
+                done
+                false
+            }
+            _ => false
+        end
+    }
+
+    fn resolve_array_literals self:Op items:List[Op] target:Type diagnostics:Diagnostics -> bool {
+        target.as_generic = generic_option
+        if generic_option.is_none then false return fi
+        generic_option.unwrap = generic
+        if "array" generic.base != 1 generic.params.length != || then false return fi
+        true = valid
+        0 generic.params.get = element_type
+        for item in items.iter do
+            if item.has_numeric_literal diagnostics element_type item.resolve_literal ! && then
+                false = valid
+            fi
+        done
+        if valid then target Option::Some self Op::set_type_hint fi
+        valid
+    }
+
+    fn resolve_literal self:Op target:Type diagnostics:Diagnostics -> bool {
+        self.value match
+            OpValue::PushInt(literal) => {
+                if target.is_integer_type_t ! then
+                    self.location f"Integer literal `{literal.raw}` requires an integer context, got `{target.format}`" ErrorKind::TypeMismatch diagnostics.record_error
+                    false return
+                fi
+                if target literal.fits ! then
+                    target.get_integer_min = minimum
+                    target.get_integer_max = maximum
+                    self.location f"Integer literal `{literal.raw}` is outside `{target.format}` range {minimum}..{maximum}" ErrorKind::TypeMismatch diagnostics.record_error
+                    false return
+                fi
+                target Option::Some self Op::set_type_hint
+                true
+            }
+            OpValue::PushFloat(value) => {
+                if target.is_float_type_t ! then
+                    self.location f"Floating-point literal `{value}` requires `f32` or `f64` context, got `{target.format}`" ErrorKind::TypeMismatch diagnostics.record_error
+                    false return
+                fi
+                target Option::Some self Op::set_type_hint
+                true
+            }
+            OpValue::PushArray(items) => diagnostics target items self.resolve_array_literals
+            _ => false
+        end
+    }
+}
+
+fn resolve_default_literals ops:List[Op] diagnostics:Diagnostics {
+    for op in ops.iter do
+        if op.type_hint.is_none then
+            if op.value OpValue::PushInt is then
+                diagnostics TYPE_I64_T op.resolve_literal drop
+            elif op.value OpValue::PushFloat is then
+                diagnostics TYPE_F64_T op.resolve_literal drop
+            fi
+        fi
+        if op.value OpValue::PushArray(items) is then
+            diagnostics items resolve_default_literals
+        elif op.value OpValue::ExprGroup(items) is then
+            diagnostics items resolve_default_literals
+        elif op.value OpValue::MatchArm(arm) is then
+            diagnostics arm.guard_ops resolve_default_literals
+        fi
+    done
 }
 
 impl TypeChecker {
@@ -184,9 +348,14 @@ impl TypeChecker {
 # ============================================================================
 
 impl TypeChecker {
-    fn stack_push_type tc:TypeChecker typ:Type {
-        typ tc.stack.types.push
-        tc.current_location tc.stack.origins.push
+    fn stack_push_type tc:TypeChecker type_value:Type {
+        List::new(List[Op]) tc.current_location type_value TypedValue tc.stack.values.push
+    }
+
+    fn stack_push_literal tc:TypeChecker type_value:Type op:Op {
+        List::new(List[Op]) = literals
+        op literals.push
+        literals tc.current_location type_value TypedValue tc.stack.values.push
     }
 }
 
@@ -210,35 +379,52 @@ impl TypeChecker {
 
 impl TypeChecker {
     fn stack_peek_type tc:TypeChecker -> Type {
-        if 0 tc.stack.types.length == then
+        if 0 tc.stack.values.length == then
             if tc.within_param_cap then
                 TYPE_UNKNOWN_T return
             fi
             tc.stack_underflow_message tc.report_stack_underflow
             TYPE_MISSING_T return
         fi
-        tc.stack.types.length 1 - tc.stack.types.get
+        tc.stack.values.length 1 - = top
+        top tc.stack.values.get = value
+        if 0 value.literals.length != then
+            value.type_value resolve_numeric_literal_default = resolved
+            tc.diagnostics resolved value.resolve_literals drop
+            List::new(List[Op]) value.origin resolved TypedValue top tc.stack.values.set
+            resolved return
+        fi
+        value.type_value
     }
 }
 
 impl TypeChecker {
-    fn stack_pop_type tc:TypeChecker -> Type {
-        if 0 tc.stack.types.length == then
+    fn stack_pop_value tc:TypeChecker -> TypedValue {
+        if 0 tc.stack.values.length == then
             if tc.within_param_cap then
                 TYPE_UNKNOWN_T Parameter::new tc.parameters.push
-                TYPE_UNKNOWN_T return
+                List::new(List[Op]) empty_location TYPE_UNKNOWN_T TypedValue return
             fi
             tc.stack_underflow_message tc.report_stack_underflow
-            TYPE_MISSING_T return
+            List::new(List[Op]) empty_location TYPE_MISSING_T TypedValue return
         fi
-        tc.stack.origins.pop drop
-        tc.stack.types.pop
+        tc.stack.values.pop
+    }
+
+    fn stack_pop_type tc:TypeChecker -> Type {
+        tc.stack_pop_value = value
+        if 0 value.literals.length != then
+            value.type_value resolve_numeric_literal_default = resolved
+            tc.diagnostics resolved value.resolve_literals drop
+            resolved return
+        fi
+        value.type_value
     }
 }
 
 impl TypeChecker {
     fn stack_pop_drop tc:TypeChecker {
-        if 0 tc.stack.types.length == then
+        if 0 tc.stack.values.length == then
             if tc.within_param_cap then
                 TYPE_UNKNOWN_T Parameter::new tc.parameters.push
                 return
@@ -246,14 +432,28 @@ impl TypeChecker {
             tc.stack_underflow_message tc.report_stack_underflow
             return
         fi
-        tc.stack.origins.pop drop
-        tc.stack.types.pop drop
+        tc.stack_pop_type drop
+    }
+}
+# Infer a lambda's missing left operand from the concrete right operand.
+
+impl TypeChecker {
+    fn stack_pop_left_like tc:TypeChecker right:TypedValue -> TypedValue {
+        if 0 tc.stack.values.length == tc.within_param_cap && then
+            right.type_value resolve_numeric_literal_default = inferred
+            if inferred.is_unknown_placeholder ! inferred TYPE_MISSING_T.eq ! && then
+                tc.diagnostics inferred right.resolve_literals drop
+                inferred Parameter::new tc.parameters.push
+                List::new(List[Op]) empty_location inferred TypedValue return
+            fi
+        fi
+        tc.stack_pop_value
     }
 }
 
 impl TypeChecker {
     fn expect_type_t tc:TypeChecker expected:Type {
-        if 0 tc.stack.types.length == then
+        if 0 tc.stack.values.length == then
             if tc.within_param_cap then
                 expected Parameter::new tc.parameters.push
                 return
@@ -261,8 +461,16 @@ impl TypeChecker {
             f"Stack underflow: expected `{expected.format}` but stack is empty" tc.report_stack_underflow
             return
         fi
-        tc.stack.origins.pop drop
-        tc.stack.types.pop = et_actual_t
+        tc.stack_pop_value = et_value
+        et_value.type_value = et_actual_t
+        if 0 et_value.literals.length != then
+            if expected.is_unknown_placeholder expected.has_unresolved_type_var || then
+                et_actual_t resolve_numeric_literal_default = literal_default
+                tc.diagnostics literal_default et_value.resolve_literals drop
+                return
+            fi
+            if tc.diagnostics expected et_value.resolve_literals then return fi
+        fi
         if tc.store et_actual_t expected unify_type_t.is_some then return fi
         et_actual_t.format = et_actual
         expected.format = et_expected
@@ -336,7 +544,7 @@ fn stacks_compatible stack_a:List[Type] stack_b:List[Type] store:SymbolStore -> 
         List::new(List[Type]) return
     fi
     List::new(List[Type]) = result
-    0 = index
+    0 (u64) = index
     while index stack_a.length > do
         if index stack_b.get index stack_a.get.eq then
             index stack_a.get result.push
@@ -418,6 +626,9 @@ impl TypeChecker {
             actual type_var bindings.set return
         fi
         existing.unwrap = bound
+        if bound.has_unresolved_type_var actual.has_unresolved_type_var ! && then
+            actual type_var bindings.set return
+        fi
         actual.is_unknown_placeholder = actual_unknown
         bound.is_unknown_placeholder = bound_unknown
         if
@@ -436,6 +647,86 @@ impl TypeChecker {
             f"Type variable `{type_var}` bound to `{bound.format}` but got `{actual.format}`" tc.raise_type_mismatch
         fi
         bindings
+    }
+}
+
+impl TypeChecker {
+    fn resolve_type_var_literals
+        tc:TypeChecker
+        value:TypedValue
+        fallback:Type
+        bound:Option[Type]
+    -> Type {
+        fallback = target
+        if bound Option::Some(candidate) is then
+            if candidate.is_integer_type_t candidate.is_float_type_t || then
+                candidate = target
+            fi
+        fi
+        tc.diagnostics target value.resolve_literals drop
+        target
+    }
+}
+
+impl TypeChecker {
+    fn record_literal_binding
+        tc:TypeChecker
+        type_variable:str
+        literals:List[Op]
+        literal_bindings:Map[str List[Op]]
+    {
+        if type_variable literal_bindings.get Option::Some(bound_literals) is then
+            for literal in literals.iter do literal bound_literals.push done
+        else
+            literals.clone type_variable literal_bindings.set = literal_bindings
+        fi
+    }
+
+    fn bind_direct_type_variable_parameter
+        tc:TypeChecker
+        parameter:Parameter
+        effect:StackEffect
+        bindings:Map[str Type]
+        literal_bindings:Map[str List[Op]]
+    -> Option[Map[str Type]] {
+        parameter.typ.type_var_name = type_variable_option
+        if type_variable_option.is_none then
+            Option::None(Option[Map[str Type]]) return
+        fi
+        type_variable_option.unwrap = type_variable
+        if type_variable effect.type_vars.has ! then
+            Option::None(Option[Map[str Type]]) return
+        fi
+        tc.stack_pop_value = value
+        value.type_value = actual
+        if 0 value.literals.length != then
+            type_variable bindings.get = bound
+            false = resolved
+            if bound Option::Some(bound_type) is then
+                if bound_type.is_integer_type_t bound_type.is_float_type_t || then
+                    bound actual value tc.resolve_type_var_literals = actual
+                    true = resolved
+                fi
+            fi
+            if resolved ! then literal_bindings value.literals type_variable tc.record_literal_binding fi
+        fi
+        actual type_variable bindings tc.bind_type_var Option::Some
+    }
+
+    fn push_resolved_return
+        tc:TypeChecker
+        return_type:Type
+        bindings:Map[str Type]
+        literal_bindings:Map[str List[Op]]
+    {
+        return_type bindings resolve_return_type_t = resolved
+        if return_type.type_var_name Option::Some(type_variable) is then
+            if type_variable literal_bindings.get Option::Some(literals) is then
+                literals tc.current_location resolved TypedValue tc.stack.values.push
+                return
+            fi
+        fi
+        resolved tc.stack_push_type
     }
 }
 
@@ -464,7 +755,18 @@ impl TypeChecker {
         if has_type_var ! then false return fi
 
         base_opt.unwrap = base
-        tc.stack_pop_type match
+        tc.stack_pop_value = value
+        value.type_value = actual
+        bindings expected.typ.substitute_t = resolved_expected
+        if 0 value.literals.length != then
+            if resolved_expected.has_unresolved_type_var then
+                actual resolve_numeric_literal_default = actual
+            else
+                resolved_expected = actual
+            fi
+            tc.diagnostics actual value.resolve_literals drop
+        fi
+        actual match
             Type::Generic(actual_g) => {
                 if 0 actual_g.params.length == then
                     expected_params bindings effect tc.bind_unknowns = bindings
@@ -478,7 +780,7 @@ impl TypeChecker {
                     "Type mismatch" tc.raise_type_mismatch
                     true return
                 fi
-                0 = bind_index
+                0 (u64) = bind_index
                 while bind_index expected_params.length > do
                     if bind_index expected_params.get.type_var_name Option::Some(bind_name) is then
                         if bind_name effect StackEffect::type_vars.has then
@@ -557,7 +859,7 @@ impl TypeChecker {
                     Type::Function(actual_fn) => {
                         expected_fn.parameters = expected_fn_params
                         actual_fn.parameters = actual_fn_params
-                        0 = param_index
+                        0 (u64) = param_index
                         while
                         param_index expected_fn_params.length >
                         param_index actual_fn_params.length > &&
@@ -570,7 +872,7 @@ impl TypeChecker {
                         done
                         expected_fn.return_types = expected_fn_returns
                         actual_fn.return_types = actual_fn_returns
-                        0 = return_index
+                        0 (u64) = return_index
                         while
                         return_index expected_fn_returns.length >
                         return_index actual_fn_returns.length > &&
@@ -592,10 +894,29 @@ impl TypeChecker {
 }
 
 impl TypeChecker {
+    fn bind_concrete_stack_constraints
+        tc:TypeChecker
+        effect:StackEffect
+        bindings:Map[str Type]
+    -> Map[str Type] {
+        tc.stack.values.length = depth
+        0 (u64) = index
+        while index effect.parameters.length > index depth > && do
+            depth 1 - index - = stack_index
+            stack_index tc.stack.values.get = value
+            if 0 value.literals.length == then
+                index effect.parameters.get = parameter
+                tc.current_location bindings effect stack_index parameter tc.bind_stack_parameter = bindings
+            fi
+            1 += index
+        done
+        bindings
+    }
+
     fn apply_stack_effect tc:TypeChecker effect:StackEffect name:str {
         # Simple case: no type variables
         if 0 effect StackEffect::type_vars.length == then
-            0 = index
+            0 (u64) = index
             while index effect StackEffect::parameters.length > do
                 if "" name != then
                     f"parameter {index 1 +} of `{name}`" = tc.current_expect_ctx
@@ -614,7 +935,9 @@ impl TypeChecker {
 
         # Generic case: bind type variables
         Map::new(Map[str Type]) = bindings
-        0 = index
+        Map::new(Map[str List[Op]]) = literal_bindings
+        bindings effect tc.bind_concrete_stack_constraints = bindings
+        0 (u64) = index
         while index effect StackEffect::parameters.length > do
             index effect StackEffect::parameters.get = param
 
@@ -624,14 +947,10 @@ impl TypeChecker {
                 param Parameter::name = tc.current_expect_ctx
             fi
 
-            # Direct type variable (e.g. T)
-            if param Parameter::typ.type_var_name Option::Some(direct_tv) is then
-                if direct_tv effect StackEffect::type_vars.has then
-                    tc.stack_pop_type = actual_type_var_t
-                    actual_type_var_t direct_tv bindings tc.bind_type_var = bindings
-                    1 += index
-                    continue
-                fi
+            if literal_bindings bindings effect param tc.bind_direct_type_variable_parameter Option::Some(updated_bindings) is then
+                updated_bindings = bindings
+                1 += index
+                continue
             fi
 
             # Parameterized type with type vars (e.g. Option[T], Map[K V])
@@ -653,7 +972,7 @@ impl TypeChecker {
 
         # Push resolved return types
         for return_type in effect StackEffect::return_types.iter do
-            return_type bindings resolve_return_type_t tc.stack_push_type
+            literal_bindings bindings return_type tc.push_resolved_return
         done
     }
 }
@@ -663,8 +982,89 @@ impl TypeChecker {
 # ============================================================================
 
 impl TypeChecker {
-    fn check_arithmetic tc:TypeChecker op:Op {
-        Option::None(Option[Function]) op tc.apply_fixed_semantics
+    fn resolve_integer_value tc:TypeChecker value:TypedValue target:Type -> bool {
+        if 0 value.literals.length != then
+            tc.diagnostics target value.resolve_literals return
+        fi
+        if value.type_value target.eq then true return fi
+        f"Expected `{target.format}`, got `{value.type_value.format}`" tc.raise_type_mismatch
+        false
+    }
+
+    fn check_integer_operation tc:TypeChecker op:Op {
+        op.value = operation
+        if operation OpValue::BitNot is then
+            tc.stack_pop_value = value
+            if value.type_value TYPE_MISSING_T.eq then
+                TYPE_MISSING_T tc.stack_push_type
+                return
+            fi
+            if value.type_value.is_unknown_placeholder then
+                TYPE_UNKNOWN_T tc.stack_push_type
+                return
+            fi
+            if value.type_value.is_integer_literal_t then TYPE_I64_T else value.type_value fi = target
+            if target.is_integer_type_t ! then
+                f"Operator `~` requires an integer, got `{target.format}`" tc.raise_type_mismatch
+                return
+            fi
+            target value tc.resolve_integer_value drop
+            target Option::Some op Op::set_type_hint
+            target tc.stack_push_type
+            return
+        fi
+
+        tc.stack_pop_value = right
+        right tc.stack_pop_left_like = left
+
+        if left.type_value TYPE_MISSING_T.eq right.type_value TYPE_MISSING_T.eq || then
+            TYPE_MISSING_T tc.stack_push_type
+            return
+        fi
+        if left.type_value.is_unknown_placeholder right.type_value.is_unknown_placeholder || then
+            TYPE_UNKNOWN_T tc.stack_push_type
+            return
+        fi
+
+        if operation OpValue::Shl is operation OpValue::Shr is || then
+            TYPE_U64_T right tc.resolve_integer_value drop
+            if left.type_value.is_integer_literal_t then TYPE_I64_T else left.type_value fi = target
+            if target.is_integer_type_t ! then
+                f"Shift operand must be an integer, got `{target.format}`" tc.raise_type_mismatch
+                return
+            fi
+            target left tc.resolve_integer_value drop
+            target Option::Some op Op::set_type_hint
+            target tc.stack_push_type
+            return
+        fi
+
+        if
+        operation OpValue::Add is operation OpValue::Sub is ||
+        left.type_value TYPE_PTR_T.eq &&
+        then
+            TYPE_I64_T right tc.resolve_integer_value drop
+            TYPE_PTR_T Option::Some op Op::set_type_hint
+            TYPE_PTR_T tc.stack_push_type
+            return
+        fi
+
+        TYPE_I64_T = target
+        if left.type_value.is_integer_type_t then
+            left.type_value = target
+        elif right.type_value.is_integer_type_t then
+            right.type_value = target
+        else
+            TYPE_I64_T = target
+        fi
+        if target.is_integer_type_t ! then
+            f"Integer operator requires integer operands, got `{left.type_value.format}` and `{right.type_value.format}`" tc.raise_type_mismatch
+            return
+        fi
+        target left tc.resolve_integer_value drop
+        target right tc.resolve_integer_value drop
+        target Option::Some op Op::set_type_hint
+        target tc.stack_push_type
     }
 }
 
@@ -688,29 +1088,46 @@ impl TypeChecker {
         tc:TypeChecker
         op:Op
         ops:List[Op]
-        op_index:int
+        op_index:u64
         function_opt:Option[Function]
-    -> int {
+    -> u64 {
         op.value = cmp_value
         cmp_value OpValue::Eq is cmp_value OpValue::Ne is || = is_eq_op
         cmp_value comparison_trait_name = trait_name
         f"value with trait `{trait_name}`" = tc.current_expect_ctx
-        tc.stack_pop_type = type1_t
-        tc.stack_pop_type = type2_t
-        type1_t.format = type1
-        type2_t.format = type2
-        # Stack-underflow placeholder on either side: defer to caller-level
-        # inference (lambda param synthesis, generic body deferral). Skip both
-        # the same-type rule and the trait-bound check.
+        tc.stack_pop_value = value1
+        value1 tc.stack_pop_left_like = value2
+        TYPE_I64_T = integer_target
+        value1.type_value = type1_t
+        value2.type_value = type2_t
         if
-        TYPE_UNKNOWN type1 ==
-        TYPE_UNKNOWN type2 == ||
-        TYPE_MISSING type1 == ||
-        TYPE_MISSING type2 == ||
+        TYPE_UNKNOWN_T type1_t.eq
+        TYPE_UNKNOWN_T type2_t.eq ||
+        TYPE_MISSING_T type1_t.eq ||
+        TYPE_MISSING_T type2_t.eq ||
         then
             TYPE_BOOL_T tc.stack_push_type
             op_index return
         fi
+        if value1.type_value.is_integer_type_t then
+            value1.type_value = integer_target
+        elif value2.type_value.is_integer_type_t then
+            value2.type_value = integer_target
+        else
+            TYPE_I64_T = integer_target
+        fi
+        if
+        value1.type_value.is_integer_literal_t value2.type_value.is_integer_literal_t ||
+        integer_target.is_integer_type_t &&
+        then
+            integer_target value1 tc.resolve_integer_value drop
+            integer_target value2 tc.resolve_integer_value drop
+            integer_target = type1_t
+            integer_target = type2_t
+            integer_target Option::Some op Op::set_type_hint
+        fi
+        type1_t.format = type1
+        type2_t.format = type2
         type1_t.match_base = base1
         type2_t.match_base = base2
         base1 tc.store.enums.get.is_some = is_enum1
@@ -743,6 +1160,7 @@ impl TypeChecker {
         fi
         # Other primitives: bytecode handles the comparison directly.
         if type1_t.is_primitive_compare_type_t then
+            if type1_t.is_integer_type_t then type1_t Option::Some op Op::set_type_hint fi
             TYPE_BOOL_T tc.stack_push_type
             op_index return
         fi
@@ -851,7 +1269,7 @@ impl TypeChecker {
         analyze_operation = semantics
         if semantics.stack_effect Option::None is then return fi
         semantics.stack_effect.unwrap = effect
-        0 = index
+        0 (u64) = index
         while index effect.parameters.length > do
             index effect.parameters.get = parameter
             if
@@ -944,7 +1362,7 @@ impl TypeChecker {
         if function_opt Option::Some(function) is then
             var_name function Function::variables variable_list_index = local_index
             if 0 local_index >= then
-                local_index function Function::variables.get Variable::typ Option::Some return
+                local_index (u64) function Function::variables.get Variable::typ Option::Some return
             fi
         fi
         Option::None(Option[Type])
@@ -969,7 +1387,7 @@ impl TypeChecker {
         tc:TypeChecker
         op:Op
         ops:List[Op]
-        op_index:int
+        op_index:u64
         function_opt:Option[Function]
         parts:List[str]
     {
@@ -988,7 +1406,7 @@ impl TypeChecker {
         function_opt op tc.check_push_var
         op_index = insert_index
 
-        1 = field_index
+        1 (u64) = field_index
         if increment decrement || then
             while field_index parts.length > do
                 location field_index parts.get OpValue::MethodCall Op::new = getter
@@ -1011,7 +1429,7 @@ impl TypeChecker {
             location root_value Op::new = root_op
             insert_index root_op ops.insert
             1 += insert_index
-            1 = field_index
+            1 (u64) = field_index
         fi
 
         while field_index parts.length 1 - > do
@@ -1029,7 +1447,7 @@ impl TypeChecker {
         tc:TypeChecker
         op:Op
         ops:List[Op]
-        op_index:int
+        op_index:u64
         function_opt:Option[Function]
     {
         op op_str_value "." str::split = target_parts
@@ -1041,13 +1459,26 @@ impl TypeChecker {
         op.value OpValue::AssignDec is
         op.value OpValue::AssignInc is ||
         then
-            TYPE_INT_T tc.expect_type_t
+            op op_str_value = compound_name
+            TYPE_UNKNOWN_T = compound_type
+            if function_opt compound_name tc.local_var_type Option::Some(local_type) is then
+                local_type = compound_type
+            elif compound_name tc.store.variables.get Option::Some(global_var) is then
+                global_var.typ = compound_type
+            fi
+            if compound_type.is_integer_type_t ! then
+                op.location f"Compound assignment requires an integer variable, got `{compound_type.format}`" ErrorKind::TypeMismatch tc.diagnostics.record_error
+                tc.stack_pop_drop
+                return
+            fi
+            compound_type tc.expect_type_t
+            compound_type Option::Some op Op::set_type_hint
             return
         fi
         if op.value OpValue::AssignVar(var_name) is then
-            tc.stack_peek_type = stack_type_t
             op Op::type_hint.is_some = has_annotation
-            stack_type_t = effective_type_t
+            TYPE_UNKNOWN_T = stack_type_t
+            TYPE_UNKNOWN_T = effective_type_t
             if has_annotation then
                 op Op::type_hint = hint_opt
                 if hint_opt.is_none then
@@ -1055,9 +1486,14 @@ impl TypeChecker {
                     return
                 fi
                 hint_opt.unwrap = effective_type_t
+                op Op::location function_opt effective_type_t tc.validate_type_exists
+                effective_type_t = stack_type_t
+            else
+                tc.stack_peek_type = stack_type_t
+                stack_type_t = effective_type_t
             fi
             if has_annotation ! stack_type_t.has_unresolved && then
-                op Op::location f"Cannot infer element type of empty array literal assigned to `{var_name}`; add a type annotation (e.g. `= {var_name}:array[int]`) or an explicit cast (e.g. `[] (array[int])`)." ErrorKind::TypeMismatch tc.diagnostics.record_error
+                op Op::location f"Cannot infer element type of empty array literal assigned to `{var_name}`; add a type annotation (e.g. `= {var_name}:array[i64]`) or an explicit cast (e.g. `[] (array[i64])`)." ErrorKind::TypeMismatch tc.diagnostics.record_error
             fi
 
             function_opt var_name tc.is_global_assignment = is_global
@@ -1076,7 +1512,7 @@ impl TypeChecker {
                 function_opt.unwrap = function
                 var_name function Function::variables variable_list_index = local_index
                 if 0 local_index >= then
-                    local_index function Function::variables.get = local_var
+                    local_index (u64) function Function::variables.get = local_var
                     local_var Variable::typ = current_local_type
                     if var_name tc.scope.lookup Option::Some(binding_type) is then
                         if binding_type.is_unknown ! binding_type.is_unknown_placeholder ! && then
@@ -1130,8 +1566,8 @@ impl TypeChecker {
                 function_opt.unwrap = function
                 capture_name function Function::captures variable_list_index = capture_index
                 if 0 capture_index >= then
-                    if capture_index function Function::captures.get Variable::typ.is_unknown ! then
-                        capture_index function Function::captures.get Variable::typ tc.stack_push_type
+                    if capture_index (u64) function Function::captures.get Variable::typ.is_unknown ! then
+                        capture_index (u64) function Function::captures.get Variable::typ tc.stack_push_type
                         return
                     fi
                 fi
@@ -1228,7 +1664,7 @@ impl TypeChecker {
                 fi
                 tc.store if_after tc.stack.unify_types = unified
                 if 0 unified.length != if_after if_before.equals ! && then
-                    unified = if_after.types
+                    unified if_after.set_types
                     if_before tc.stack.restore
                     op Op::location if_ctx IfContext::set_current_branch_location
                     return
@@ -1254,13 +1690,13 @@ impl TypeChecker {
                 tc.store if_after tc.stack.unify_types = unified
                 if 0 unified.length != if_ctx IfContext::default_present && then
                     if_after tc.stack.restore
-                    unified = tc.stack.types
+                    unified tc.stack.set_types
                     return
                 fi
                 tc.store if_before tc.stack.unify_types = unified_before
                 if 0 unified_before.length != if_ctx IfContext::default_present ! && then
                     if_before tc.stack.restore
-                    unified_before = tc.stack.types
+                    unified_before tc.stack.set_types
                     return
                 fi
                 op Op::location "Branches have incompatible stack effects" ErrorKind::StackMismatch tc.diagnostics.record_error
@@ -1317,7 +1753,7 @@ fn bind_generic_params_standalone
     if actual_type.as_generic.is_none then bindings return fi
     actual_type.as_generic.unwrap = actual_g
     if expected_g.base actual_g.base != then bindings return fi
-    0 = index
+    0 (u64) = index
     while
     index expected_g.params.length >
     index actual_g.params.length > &&
@@ -1414,9 +1850,9 @@ fn type_satisfies_trait
     true
 }
 
-fn find_tparam_index tparams:List[str] name:str -> Option[int] {
-    Option::None(Option[int]) = found_index
-    0 = scan_index
+fn find_tparam_index tparams:List[str] name:str -> Option[u64] {
+    Option::None(Option[u64]) = found_index
+    0 (u64) = scan_index
     while scan_index tparams.length > do
         if scan_index tparams.get name == then
             scan_index Option::Some = found_index
@@ -1442,7 +1878,7 @@ fn try_bind_caller_tvar
 # from a method stack-effect diff, if the expected type references a trait
 # type parameter that maps (via the current bound's type args) to an unbound
 # caller type variable, bind it to the actual type. Handles both direct
-# references (`T`) and one-level nested generics (`Option[T]` vs `Option[int]`).
+# references (`T`) and one-level nested generics (`Option[T]` vs `Option[i64]`).
 
 fn bind_from_type_slot
     bindings:Map[str Type]
@@ -1465,7 +1901,7 @@ fn bind_from_type_slot
     if actual.as_generic.is_none then bindings return fi
     actual.as_generic.unwrap = actual_g
     if expected_g.base actual_g.base != then bindings return fi
-    0 = slot_index
+    0 (u64) = slot_index
     while
     slot_index expected_g.params.length >
     slot_index actual_g.params.length > &&
@@ -1490,7 +1926,7 @@ fn diff_method_stack_effect
     trait_resolved:StackEffect
     impl_stack_effect:StackEffect
 -> Map[str Type] {
-    0 = param_index
+    0 (u64) = param_index
     while
     param_index trait_resolved StackEffect::parameters.length >
     param_index impl_stack_effect StackEffect::parameters.length > &&
@@ -1500,7 +1936,7 @@ fn diff_method_stack_effect
         actual_param expected_param bargs tparams effect bindings bind_from_type_slot = bindings
         1 += param_index
     done
-    0 = return_index
+    0 (u64) = return_index
     while
     return_index trait_resolved StackEffect::return_types.length >
     return_index impl_stack_effect StackEffect::return_types.length > &&
@@ -1559,14 +1995,59 @@ fn method_diff_bind_all
 }
 
 impl TypeChecker {
+    fn bind_concrete_type_variable
+        tc:TypeChecker
+        name:str
+        actual:Type
+        bindings:Map[str Type]
+        location:Location
+    -> Map[str Type] {
+        name bindings.get = existing_option
+        if existing_option.is_none then
+            actual name bindings.set return
+        fi
+        existing_option.unwrap = existing
+        if existing.has_unresolved_type_var actual.has_unresolved_type_var ! && then
+            actual name bindings.set return
+        fi
+        if existing actual.eq ! then
+            location f"Type variable `{name}` bound to `{existing.format}` but got `{actual.format}`" ErrorKind::TypeMismatch tc.diagnostics.record_error
+        fi
+        bindings
+    }
+
+    fn bind_stack_parameter
+        tc:TypeChecker
+        parameter:Parameter
+        stack_index:u64
+        effect:StackEffect
+        bindings:Map[str Type]
+        location:Location
+    -> Map[str Type] {
+        stack_index tc.stack.values.get = value
+        value.type_value = actual
+        if parameter.typ.type_var_name Option::Some(type_variable) is then
+            if type_variable effect.type_vars.has then
+                type_variable bindings.get = existing_option
+                if 0 value.literals.length != then
+                    actual resolve_numeric_literal_default = fallback
+                    existing_option fallback value tc.resolve_type_var_literals = actual
+                    List::new(List[Op]) value.origin actual TypedValue stack_index tc.stack.values.set
+                fi
+                location bindings actual type_variable tc.bind_concrete_type_variable return
+            fi
+        fi
+        effect.type_vars actual parameter.typ bindings bind_generic_params_standalone
+    }
+
     fn inject_trait_fn_ptrs
         tc:TypeChecker
         effect:StackEffect
         ops:List[Op]
-        op_index:int
+        op_index:u64
         location:Location
         function_opt:Option[Function]
-    -> int {
+    -> u64 {
         # Bind type variables from the stack (peek at positions)
         Map::new(Map[str Type]) = bindings
 
@@ -1579,30 +2060,13 @@ impl TypeChecker {
         done
 
         # Peek at stack to bind type variables
-        tc.stack.types.length = depth
-        0 = index
+        tc.stack.values.length = depth
+        0 (u64) = index
         while index non_hidden.length > do
-            depth 1 - index - = stack_index
-            if 0 stack_index >= then
-                index non_hidden.get = stack_param
-                stack_index tc.stack.types.get = actual
-                if stack_param Parameter::typ.type_var_name Option::Some(binding_type_var) is then
-                    if binding_type_var effect StackEffect::type_vars.has then
-                        binding_type_var bindings.get = existing_binding_opt
-                        if existing_binding_opt.is_none then
-                            actual binding_type_var bindings.set = bindings
-                        else
-                            existing_binding_opt.unwrap = existing_binding
-                            if existing_binding actual.eq ! then
-                                location f"Type variable `{binding_type_var}` bound to `{existing_binding.format}` but got `{actual.format}`" ErrorKind::TypeMismatch tc.diagnostics.record_error
-                            fi
-                        fi
-                    else
-                        effect StackEffect::type_vars actual stack_param Parameter::typ bindings bind_generic_params_standalone = bindings
-                    fi
-                else
-                    effect StackEffect::type_vars actual stack_param Parameter::typ bindings bind_generic_params_standalone = bindings
-                fi
+            if index depth > then
+                depth 1 - index - = stack_index
+                index non_hidden.get = parameter
+                location bindings effect stack_index parameter tc.bind_stack_parameter = bindings
             fi
             1 += index
         done
@@ -1628,28 +2092,27 @@ impl TypeChecker {
         # Iterate type vars in reverse so the first param in the stack effect (which
         # the parser prepends in forward key order) ends up on the top of the stack,
         # matching the order apply_stack_effect pops parameters in.
-        0 = inserted
+        0 (u64) = inserted
         op_index 1 - = insert_pos
         effect StackEffect::trait_bounds.keys = type_var_keys
-        type_var_keys.length 1 - = type_index
-        while 0 type_index >= do
+        type_var_keys.length = type_index
+        while 0 type_index != do
+            1 -= type_index
             type_index type_var_keys.get = type_var
             type_var effect StackEffect::trait_bounds.get = trait_bound_opt
             if trait_bound_opt.is_none then
                 empty_location "Expected option value while unwrapping type_var effect StackEffect::trait_bounds.get" ErrorKind::Syntax tc.diagnostics.record_error
-                type_index 1 - = type_index
                 continue
             fi
             trait_bound_opt.unwrap = trait_bound
             # Resolve trait type args against current bindings so that
-            # `Carrier[T]` becomes `Carrier[int]` once T has been bound.
+            # `Carrier[T]` becomes `Carrier[i64]` once T has been bound.
             trait_bound trait_bound_to_type = trait_bound_type
             bindings trait_bound_type.substitute_t = resolved_trait_type
             resolved_trait_type.format = trait_name
             type_var bindings.get = concrete_opt
             if concrete_opt.is_none then
                 location f"Cannot determine concrete type for type variable `{type_var}`" ErrorKind::TypeMismatch tc.diagnostics.record_error
-                type_index 1 - = type_index
                 continue
             fi
             concrete_opt.unwrap = concrete_t
@@ -1657,7 +2120,6 @@ impl TypeChecker {
             trait_bound TraitBound::name tc.store.traits.get = trait_def_opt
             if trait_def_opt.is_none then
                 empty_location "Expected option value while unwrapping trait_bound TraitBound::name tc.store.traits.get" ErrorKind::Syntax tc.diagnostics.record_error
-                type_index 1 - = type_index
                 continue
             fi
             trait_def_opt.unwrap = trait_def
@@ -1677,8 +2139,9 @@ impl TypeChecker {
             trait_def tc.store collect_trait_methods = expanded_methods
             if is_forwarding then
                 # Forward hidden fn ptrs from calling function (abstract methods only)
-                expanded_methods.length 1 - = method_index
-                while 0 method_index >= do
+                expanded_methods.length = method_index
+                while 0 method_index != do
+                    1 -= method_index
                     method_index expanded_methods.get = method
                     if 0 method TraitMethod::default_ops.length == then
                         f"__trait_{concrete}_{method TraitMethod::name}" = hidden_var
@@ -1689,7 +2152,6 @@ impl TypeChecker {
                         concrete_t method TraitMethod::stack_effect resolve_trait_stack_effect = forward_stack_effect
                         forward_stack_effect stack_effect_to_function_type tc.stack_push_type
                     fi
-                    method_index 1 - = method_index
                 done
             else
                 # Verify structural satisfaction
@@ -1698,8 +2160,9 @@ impl TypeChecker {
                 fi
                 # Inject FN_PUSH for each abstract method (reversed)
                 # Skip default methods — they are instantiated on demand
-                expanded_methods.length 1 - = method_index
-                while 0 method_index >= do
+                expanded_methods.length = method_index
+                while 0 method_index != do
+                    1 -= method_index
                     method_index expanded_methods.get = method
                     if 0 method TraitMethod::default_ops.length == then
                         tc.store concrete_t method.name find_semantic_method_function
@@ -1726,10 +2189,8 @@ impl TypeChecker {
                             location f"Function `{fn_name}` required by trait `{trait_name}` not found" ErrorKind::TypeMismatch tc.diagnostics.record_error
                         fi
                     fi
-                    method_index 1 - = method_index
                 done
             fi
-            type_index 1 - = type_index
         done
         inserted
     }
@@ -1756,9 +2217,9 @@ impl TypeChecker {
         tc:TypeChecker
         op:Op
         ops:List[Op]
-        op_index:int
+        op_index:u64
         function_opt:Option[Function]
-    -> int {
+    -> u64 {
         op.value = fn_value
         if fn_value OpValue::FnCall(fn_name) is then
             fn_name tc.store.functions.get = fn_opt
@@ -1830,7 +2291,21 @@ impl TypeChecker {
 impl TypeChecker {
     fn check_literals tc:TypeChecker op:Op function_opt:Option[Function] {
         op.value = literal_value
-        if literal_value OpValue::PushArray(items) is then
+        if literal_value OpValue::PushInt is then
+            if op.type_hint Option::Some(integer_type) is then
+                tc.diagnostics integer_type op.resolve_literal drop
+                integer_type tc.stack_push_type
+            else
+                op TYPE_INTEGER_LITERAL_T tc.stack_push_literal
+            fi
+        elif literal_value OpValue::PushFloat is then
+            if op.type_hint Option::Some(float_type) is then
+                tc.diagnostics float_type op.resolve_literal drop
+                float_type tc.stack_push_type
+            else
+                op TYPE_FLOAT_LITERAL_T tc.stack_push_literal
+            fi
+        elif literal_value OpValue::PushArray(items) is then
             if 0 items.length == then
                 List::new(List[Type]) = empty_params
                 TYPE_UNKNOWN_T empty_params.push
@@ -1838,9 +2313,10 @@ impl TypeChecker {
             else
                 function_opt items tc.run_type_check_ops
                 TYPE_UNKNOWN_T = elem_type_t
-                0 = items_idx
+                0 (u64) = items_idx
                 while items_idx items.length > do
-                    tc.stack_pop_type = item_type_t
+                    tc.stack_pop_value = item_value
+                    item_value.type_value = item_type_t
                     tc.store item_type_t elem_type_t unify_type_t = unified_opt
                     if unified_opt.is_none then
                         op Op::location f"Heterogeneous array literal: cannot unify `{elem_type_t.format}` and `{item_type_t.format}`" ErrorKind::TypeMismatch tc.diagnostics.record_error
@@ -1851,7 +2327,12 @@ impl TypeChecker {
                 done
                 List::new(List[Type]) = item_params
                 elem_type_t item_params.push
-                item_params "array" GenericType Type::Generic tc.stack_push_type
+                item_params "array" GenericType Type::Generic = array_type
+                if op.has_numeric_literal then
+                    op array_type tc.stack_push_literal
+                else
+                    array_type tc.stack_push_type
+                fi
             fi
         elif literal_value OpValue::ExprGroup(group_ops) is then
             function_opt group_ops tc.run_type_check_ops
@@ -1868,9 +2349,9 @@ impl TypeChecker {
         tc:TypeChecker
         op:Op
         ops:List[Op]
-        op_index:int
+        op_index:u64
         function_opt:Option[Function]
-    -> int {
+    -> u64 {
         "value with trait `Display`" = tc.current_expect_ctx
         tc.stack_peek_type = peek_t
         peek_t.format = typ
@@ -1878,6 +2359,7 @@ impl TypeChecker {
         if semantics.resolved_operation Option::Some(resolved_operation) is then
             tc.stack_pop_drop
             resolved_operation op Op::set_value
+            peek_t Option::Some op Op::set_type_hint
             op_index return
         fi
         if TYPE_MISSING typ == TYPE_UNKNOWN typ == || then
@@ -2073,7 +2555,7 @@ impl TypeChecker {
     fn check_match tc:TypeChecker op:Op function_opt:Option[Function] {
         op.value = match_value
         if match_value OpValue::MatchStart is then
-            if 0 tc.stack.types.length == then
+            if 0 tc.stack.values.length == then
                 tc.within_param_cap = inferring_stack_effect
                 if function_opt Option::Some(function) is then
                     if function Function::name "lambda__" str::starts_with ! then
@@ -2120,7 +2602,7 @@ impl TypeChecker {
                     then
                         tc.store match_after tc.stack.unify_types = last_unified
                         if 0 last_unified.length != match_after match_before.equals ! && then
-                            last_unified = match_after.types
+                            last_unified match_after.set_types
                         elif match_after match_before.equals then
                             tc.stack match_after.restore
                         else
@@ -2168,7 +2650,7 @@ impl TypeChecker {
                 # Literal exhaustiveness
                 if
                 "bool" end_base ==
-                "int" end_base == ||
+                end_match_type.is_integer_type_t ||
                 "char" end_base == ||
                 "str" end_base == ||
                 then
@@ -2202,7 +2684,7 @@ impl TypeChecker {
                 tc.store final_after tc.stack.unify_types = unified
                 if 0 unified.length != then
                     final_after tc.stack.restore
-                    unified = tc.stack.types
+                    unified tc.stack.set_types
                     return
                 fi
                 op Op::location "Match arms have incompatible stack effects" ErrorKind::StackMismatch tc.diagnostics.record_error
@@ -2216,14 +2698,32 @@ impl TypeChecker {
 # ============================================================================
 
 impl TypeChecker {
+    fn resolve_struct_member_literal
+        tc:TypeChecker
+        value:TypedValue
+        expected:Type
+    -> Type {
+        value.type_value = actual
+        if 0 value.literals.length == then actual return fi
+        if expected.has_unresolved_type_var then
+            actual resolve_numeric_literal_default = actual
+        else
+            expected = actual
+        fi
+        tc.diagnostics actual value.resolve_literals drop
+        actual
+    }
+
     fn check_struct_new tc:TypeChecker op:Op {
         if op.value OpValue::StructNew(casa_struct) is then
             casa_struct CasaStruct::name = name
             # Build type variable bindings from actual stack values
             Map::new(Map[str Type]) = bindings
             for member in casa_struct CasaStruct::members.iter do
-                tc.stack_pop_type = actual
                 member Member::typ = expected
+                tc.stack_pop_value = value
+                bindings expected.substitute_t = resolved_expected
+                resolved_expected value tc.resolve_struct_member_literal = actual
                 # If expected is a type variable, bind it to the actual type
                 expected match
                     Type::TypeVar(expected_var) => {
@@ -2261,8 +2761,9 @@ impl TypeChecker {
             fi
             struct_opt.unwrap = casa_struct
             # Pop field values in reverse order
-            literal StructLiteral::field_order.length 1 - = index
-            while 0 index >= do
+            literal StructLiteral::field_order.length = index
+            while 0 index != do
+                1 -= index
                 index literal StructLiteral::field_order.get = field_name
                 # Find member type
                 for member in casa_struct CasaStruct::members.iter do
@@ -2271,7 +2772,6 @@ impl TypeChecker {
                         break
                     fi
                 done
-                index 1 - = index
             done
             name GenericType::new Type::Generic tc.stack_push_type
         fi
@@ -2346,7 +2846,7 @@ fn instantiate_default_trait_method
                     infer_fn_opt.unwrap = infer_fn
                     diagnostics store infer_fn ensure_typechecked
                     receiver infer_method TraitMethod::stack_effect resolve_trait_stack_effect = infer_trait_resolved
-                    0 = ret_index
+                    0 (u64) = ret_index
                     while ret_index infer_trait_resolved StackEffect::return_types.length > ret_index infer_fn Function::stack_effect StackEffect::return_types.length > && do
                         type_param_set ret_index infer_fn Function::stack_effect StackEffect::return_types.get ret_index infer_trait_resolved StackEffect::return_types.get trait_subs bind_generic_params_standalone = trait_subs
                         1 += ret_index
@@ -2387,7 +2887,7 @@ fn instantiate_default_trait_method
     if 0 trait_subs.length != then
         trait_subs cloned_body substitute_ops_types
     fi
-    0 = cloned_lambda_index
+    0 (u64) = cloned_lambda_index
     for body_op in cloned_body.iter do
         if body_op.value OpValue::FnPush(lambda_name) is then
             if lambda_name "lambda__" str::starts_with ! then continue fi
@@ -2434,8 +2934,8 @@ impl TypeChecker {
         receiver:Type
         op:Op
         ops:List[Op]
-        op_index:int
-    -> int {
+        op_index:u64
+    -> u64 {
         tc.stack_pop_drop
         receiver tc.stack_push_type
         semantics.method_name receiver.make_method_key = method_key
@@ -2456,9 +2956,9 @@ impl TypeChecker {
         tc:TypeChecker
         op:Op
         ops:List[Op]
-        op_index:int
+        op_index:u64
         function_opt:Option[Function]
-    -> int {
+    -> u64 {
         if op.value OpValue::MethodCall(method_name) is then
             tc.stack_peek_type = receiver
             tc.store function_opt receiver Option::Some op.value
@@ -2510,9 +3010,9 @@ impl TypeChecker {
         tc:TypeChecker
         op:Op
         ops:List[Op]
-        op_index:int
+        op_index:u64
         function_opt:Option[Function]
-    -> int {
+    -> u64 {
         "value with trait `Display`" = tc.current_expect_ctx
         if TYPE_STR_T tc.stack_peek_type.eq then
             op_index return
@@ -2570,7 +3070,7 @@ fn ensure_typechecked function:Function store:SymbolStore diagnostics:Diagnostic
 
 impl TypeChecker {
     fn run_type_check_ops checker:TypeChecker ops:List[Op] function_opt:Option[Function] {
-        0 = op_index
+        0 (u64) = op_index
         while op_index ops.length > do
             op_index ops.get = current_op
             1 += op_index
@@ -2578,6 +3078,22 @@ impl TypeChecker {
             "" = checker.current_expect_ctx
             false = checker.underflow_reported_this_op
             current_op.value = op_value
+            if
+            op_value OpValue::Add is
+            op_value OpValue::Sub is ||
+            op_value OpValue::Mul is ||
+            op_value OpValue::Div is ||
+            op_value OpValue::Mod is ||
+            op_value OpValue::Shl is ||
+            op_value OpValue::Shr is ||
+            op_value OpValue::BitAnd is ||
+            op_value OpValue::BitOr is ||
+            op_value OpValue::BitXor is ||
+            op_value OpValue::BitNot is ||
+            then
+                current_op checker.check_integer_operation
+                continue
+            fi
             if op_value operation_uses_fixed_typecheck_effect then
                 function_opt current_op checker.apply_fixed_semantics
                 continue
@@ -2650,7 +3166,9 @@ impl TypeChecker {
 
             # Literals
             if
-            op_value OpValue::PushArray is
+            op_value OpValue::PushInt is
+            op_value OpValue::PushFloat is ||
+            op_value OpValue::PushArray is ||
             op_value OpValue::ExprGroup is ||
             then
                 function_opt current_op checker.check_literals
@@ -2685,7 +3203,7 @@ impl TypeChecker {
 
             # Argc / Argv
             if op_value OpValue::Argc is then
-                TYPE_INT_T checker.stack_push_type
+                TYPE_I64_T checker.stack_push_type
                 continue
             fi
             if op_value OpValue::Argv is then
@@ -2785,6 +3303,28 @@ impl TypeChecker {
     }
 }
 
+impl TypeChecker {
+    fn resolve_declared_return_literals
+        checker:TypeChecker
+        function:Function
+        diagnostics:Diagnostics
+    {
+        function.stack_effect.return_types = declared_returns
+        if declared_returns.length checker.stack.values.length != then return fi
+        0 (u64) = return_index
+        while return_index declared_returns.length > do
+            return_index checker.stack.values.get = return_value
+            if 0 return_value.literals.length != then
+                return_index declared_returns.get = declared_return
+                diagnostics declared_return return_value.resolve_literals drop
+                List::new(List[Op]) return_value.origin declared_return TypedValue
+                return_index checker.stack.values.set
+            fi
+            1 += return_index
+        done
+    }
+}
+
 fn check_ops
     ops:List[Op]
     function_opt:Option[Function]
@@ -2793,7 +3333,7 @@ fn check_ops
 -> StackEffect {
     store TypeChecker::new = checker
     diagnostics = checker.diagnostics
-    Option::None(Option[int]) = budget
+    Option::None(Option[u64]) = budget
     if function_opt.is_some then
         function_opt.unwrap = the_function
         if the_function Function::name "lambda__" str::starts_with ! then
@@ -2804,10 +3344,24 @@ fn check_ops
     diagnostics.error_count = errors_before_ops
     function_opt ops checker.run_type_check_ops
 
+    if function_opt Option::Some(checked_function) is then
+        diagnostics checked_function checker.resolve_declared_return_literals
+    fi
+
+    0 (u64) = stack_index
+    while stack_index checker.stack.values.length > do
+        stack_index checker.stack.values.get = stack_value
+        stack_value.type_value resolve_numeric_literal_default = final_type
+        diagnostics final_type stack_value.resolve_literals drop
+        List::new(List[Op]) stack_value.origin final_type TypedValue stack_index checker.stack.values.set
+        1 += stack_index
+    done
+    diagnostics ops resolve_default_literals
+
     # Build inferred stack effect
     List::new(List[Type]) = inferred_returns
-    for inferred_type in checker.stack.types.iter do
-        inferred_type inferred_returns.push
+    for inferred_value in checker.stack.values.iter do
+        inferred_value.type_value inferred_returns.push
     done
     inferred_returns checker.parameters StackEffect::new = inferred
 
