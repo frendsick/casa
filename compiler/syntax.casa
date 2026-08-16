@@ -129,6 +129,11 @@ impl Parser {
         self.state.mark_store_mutated
         casa_trait name self.store.traits.set drop
     }
+
+    fn put_conformance self:Parser name:str conformance:TraitConformance {
+        self.state.mark_store_mutated
+        conformance name self.store.conformances.set drop
+    }
 }
 
 impl[T] Map[str T] {
@@ -155,6 +160,7 @@ impl SymbolStore {
         imported.enums self.enums.merge_missing
         imported.structs self.structs.merge_missing
         imported.traits self.traits.merge_missing
+        imported.conformances self.conformances.merge_missing
     }
 
     fn clone self:SymbolStore -> SymbolStore {
@@ -902,7 +908,7 @@ fn require_global_scope function_name:str what:str location:Location parser:Pars
 
 struct ParsedTypeVariables {
     names:        List[str]
-    trait_bounds: Map[str TraitBound]
+    trait_bounds: Map[str List[TraitBound]]
 }
 
 # Parse the `[arg1 arg2 ...]` type argument list that follows a generic trait
@@ -939,11 +945,67 @@ fn parse_bound_type_args cursor:TokenCursor trait_token:Token -> List[Type] {
     bound_args
 }
 
+fn trait_bound_method_effect
+    type_variable:str
+    method:TraitMethod
+    bound:TraitBound
+    casa_trait:CasaTrait
+-> StackEffect {
+    casa_trait bound make_bound_substitutions = substitutions
+    0 (u64) = method_type_index
+    for method_type_variable in method.type_vars.iter do
+        f"__method_type_{method_type_index}" Type::TypeVar
+        method_type_variable substitutions.set = substitutions
+        1 += method_type_index
+    done
+    type_variable Type::TypeVar method.stack_effect resolve_trait_stack_effect = effect
+    substitutions effect apply_type_subs_to_stack_effect
+}
+
+fn stack_effect_shapes_equal first:StackEffect second:StackEffect -> bool {
+    if first.parameters.length second.parameters.length != then false return fi
+    if first.return_types.length second.return_types.length != then false return fi
+    for pair in second.parameters.iter first.parameters.iter.zip do
+        if pair.second.typ pair.first.typ.eq ! then false return fi
+    done
+    for pair in second.return_types.iter first.return_types.iter.zip do
+        if pair.second pair.first.eq ! then false return fi
+    done
+    true
+}
+
+fn bound_is_compatible
+    parser:Parser
+    type_variable:str
+    existing_bounds:List[TraitBound]
+    candidate:TraitBound
+-> bool {
+    candidate.name parser.store.traits.get = candidate_trait_opt
+    if candidate_trait_opt.is_none then false return fi
+    candidate_trait_opt.unwrap = candidate_trait
+    for candidate_method in candidate_trait parser.store collect_trait_methods.iter do
+        candidate_trait candidate candidate_method type_variable trait_bound_method_effect
+        = candidate_effect
+        for existing_bound in existing_bounds.iter do
+            existing_bound.name parser.store.traits.get = existing_trait_opt
+            if existing_trait_opt.is_none then continue fi
+            existing_trait_opt.unwrap = existing_trait
+            for existing_method in existing_trait parser.store collect_trait_methods.iter do
+                if existing_method.name candidate_method.name != then continue fi
+                existing_trait existing_bound existing_method type_variable trait_bound_method_effect
+                = existing_effect
+                if candidate_effect existing_effect stack_effect_shapes_equal ! then false return fi
+            done
+        done
+    done
+    true
+}
+
 fn parse_type_variables parser:Parser cursor:TokenCursor -> ParsedTypeVariables {
     fallback_token "[" cursor expect_token_value.unwrap_or drop
     List[str]::new = vars
     Set[str]::new = seen
-    Map[str TraitBound]::new = trait_bounds
+    Map[str List[TraitBound]]::new = trait_bounds
 
     while true do
         cursor.pop = token_opt
@@ -969,27 +1031,46 @@ fn parse_type_variables parser:Parser cursor:TokenCursor -> ParsedTypeVariables 
             fi
             token Token::value vars.push
             token Token::value seen.add = seen
-            # Check for trait bound: K: Hashable  or  K: Iterable[i64]
+            # Check for trait bounds: K: Hashable + Display
             cursor.peek = colon_opt
             if colon_opt Option::Some(colon) is then
                 if ":" colon Token::value == then
                     cursor.pop drop # consume :
-                    fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = trait_token
-                    trait_token Token::value = bound_trait_name
-                    bound_trait_name parser.store.traits.get = bound_trait_def_opt
-                    if bound_trait_def_opt.is_none then
-                        trait_token Token::location f"Trait `{bound_trait_name}` is not defined" ErrorKind::UndefinedName parser.state.record_error
-                    fi
-                    trait_token cursor parse_bound_type_args = bound_args
-                    if bound_trait_def_opt Option::Some(bound_trait_def) is then
-                        # Arity check against trait's declared type_params
-                        bound_trait_def CasaTrait::type_params = declared_params
-                        if bound_args.length declared_params.length != then
-                            trait_token Token::location f"Trait `{bound_trait_name}` expects {declared_params.length} type argument(s), got {bound_args.length}" ErrorKind::Syntax parser.state.record_error
+                    List[TraitBound]::new = bounds
+                    true = parse_bounds
+                    while parse_bounds do
+                        fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = trait_token
+                        trait_token Token::value = bound_trait_name
+                        bound_trait_name parser.store.traits.get = bound_trait_def_opt
+                        if bound_trait_def_opt.is_none then
+                            trait_token Token::location f"Trait `{bound_trait_name}` is not defined" ErrorKind::UndefinedName parser.state.record_error
                         fi
-                        bound_args bound_trait_name TraitBound = ptv_bound
-                        ptv_bound token Token::value trait_bounds.set = trait_bounds
-                    fi
+                        trait_token cursor parse_bound_type_args = bound_args
+                        if bound_trait_def_opt Option::Some(bound_trait_def) is then
+                            bound_trait_def CasaTrait::type_params = declared_params
+                            if bound_args.length declared_params.length != then
+                                trait_token Token::location f"Trait `{bound_trait_name}` expects {declared_params.length} type argument(s), got {bound_args.length}" ErrorKind::Syntax parser.state.record_error
+                            fi
+                            bound_args bound_trait_name TraitBound = parsed_bound
+                            false = duplicate_bound
+                            for existing_bound in bounds.iter do
+                                if parsed_bound existing_bound trait_bound_eq then true = duplicate_bound fi
+                            done
+                            if duplicate_bound ! then
+                                if parsed_bound bounds token.value parser bound_is_compatible ! then
+                                    trait_token.location f"Bounds on `{token.value}` have incompatible requirements for the same method" ErrorKind::TraitSignatureMismatch parser.state.record_error
+                                fi
+                                parsed_bound bounds.push
+                            fi
+                        fi
+                        cursor.peek = plus_opt
+                        if plus_opt Option::Some(plus) is then
+                            if "+" plus.value == then cursor.pop drop else false = parse_bounds fi
+                        else
+                            false = parse_bounds
+                        fi
+                    done
+                    bounds token.value trait_bounds.set = trait_bounds
                 fi
             fi
         else
@@ -1108,14 +1189,15 @@ fn parse_stack_effect cursor:TokenCursor -> StackEffect {
 
 fn build_hidden_trait_methods
     parser:Parser
-    trait_bounds:Map[str TraitBound]
+    trait_bounds:Map[str List[TraitBound]]
 -> List[HiddenTraitMethod] {
     List[HiddenTraitMethod]::new = result
     trait_bounds.keys = bound_keys
     for bound_type_var in bound_keys.iter do
-        bound_type_var trait_bounds.get.unwrap = bound
-        bound TraitBound::name parser.store.traits.get = bound_trait_opt
-        if bound_trait_opt.is_some then
+        Set[str]::new = seen_methods
+        for bound in bound_type_var trait_bounds.get.unwrap.iter do
+            bound TraitBound::name parser.store.traits.get = bound_trait_opt
+            if bound_trait_opt.is_none then continue fi
             bound_trait_opt.unwrap = bound_trait
             # Build substitution map from trait's declared type_params to the
             # concrete type_args carried on the bound.
@@ -1129,14 +1211,18 @@ fn build_hidden_trait_methods
             fi
             for bound_method in bound_trait parser.store collect_trait_methods.iter do
                 # Skip default methods — only abstract methods need hidden fn ptrs
-                if 0 bound_method TraitMethod::default_ops.length == then
+                if
+                0 bound_method TraitMethod::default_ops.length ==
+                bound_method.name seen_methods.has ! &&
+                then
+                    bound_method.name seen_methods.add = seen_methods
                     f"__trait_{bound_type_var}_{bound_method TraitMethod::name}" = hidden_name
                     bound_subs bound_type_var Type::TypeVar bound_method TraitMethod::stack_effect resolve_trait_stack_effect apply_type_subs_to_stack_effect = hidden_stack_effect
                     hidden_stack_effect stack_effect_to_function_type = hidden_type
                     hidden_type hidden_name HiddenTraitMethod result.push
                 fi
             done
-        fi
+        done
     done
     result
 }
@@ -1631,7 +1717,7 @@ fn parse_function parser:Parser cursor:TokenCursor -> Function {
 
     # Parse optional type parameters
     List[str]::new = type_vars
-    Map[str TraitBound]::new = trait_bounds
+    Map[str List[TraitBound]]::new = trait_bounds
     cursor.peek = tvars_opt
     if tvars_opt Option::Some(tvars) is then
         if "[" tvars Token::value == then
@@ -1815,6 +1901,21 @@ fn synthesize_hashable_for_enum parser:Parser casa_enum:CasaEnum {
         eq_returns eq_params StackEffect::new = eq_stack_effect
         eq_stack_effect location eq_ops eq_name Function::with_stack_effect = eq_fn
         eq_fn eq_name parser.put_function
+    fi
+
+    if "Hashable" parser.store.traits.has then
+        enum_name GenericType::new Type::Generic = receiver
+        List[Type]::new "Hashable" TraitBound = hashable_bound
+        hashable_bound trait_bound_to_type = hashable_type
+        if parser.store hashable_type receiver type_declares_trait ! then
+            location
+            Map[str List[TraitBound]]::new
+            List[str]::new
+            hashable_bound
+            receiver
+            TraitConformance
+            parser register_conformance
+        fi
     fi
 }
 
@@ -2130,7 +2231,7 @@ fn inject_impl_trait_params
     parser:Parser
     function:Function
     type_vars:List[str]
-    trait_bounds:Map[str TraitBound]
+    trait_bounds:Map[str List[TraitBound]]
 {
     function Function::stack_effect = effect
 
@@ -2145,8 +2246,8 @@ fn inject_impl_trait_params
     # Merge trait bounds
     trait_bounds.keys = bound_keys
     for bound_key in bound_keys.iter do
-        if bound_key trait_bounds.get Option::Some(bound) is then
-            bound bound_key effect StackEffect::trait_bounds.set = new_bounds
+        if bound_key trait_bounds.get Option::Some(bounds) is then
+            bounds bound_key effect StackEffect::trait_bounds.set = new_bounds
             new_bounds effect StackEffect::set_trait_bounds
         fi
     done
@@ -2175,12 +2276,155 @@ fn inject_impl_trait_params
     fi
 }
 
+fn namespace_conformance_type typ:Type type_vars:List[str] prefix:str -> Type {
+    Map[str Type]::new = substitutions
+    for type_variable in type_vars.iter do
+        f"{prefix}{type_variable}" Type::TypeVar type_variable substitutions.set drop
+    done
+    substitutions typ.substitute_t
+}
+
+fn resolve_overlap_type typ:Type bindings:Map[str Type] -> Type {
+    if typ Type::TypeVar(type_variable) is then
+        if type_variable bindings.get Option::Some(bound) is then
+            bindings bound resolve_overlap_type return
+        fi
+    fi
+    typ
+}
+
+fn overlap_type_contains type_variable:str typ:Type bindings:Map[str Type] -> bool {
+    bindings typ resolve_overlap_type = resolved
+    if resolved Type::TypeVar(name) is then type_variable name == return fi
+    if resolved Type::Generic(generic) is then
+        for parameter in generic.params.iter do
+            if bindings parameter type_variable overlap_type_contains then true return fi
+        done
+    elif resolved Type::Function(function_type) is then
+        for parameter in function_type.parameters.iter do
+            if bindings parameter type_variable overlap_type_contains then true return fi
+        done
+        for return_type in function_type.return_types.iter do
+            if bindings return_type type_variable overlap_type_contains then true return fi
+        done
+    fi
+    false
+}
+
+fn bind_overlap_type type_variable:str typ:Type bindings:Map[str Type] -> bool {
+    bindings typ resolve_overlap_type = resolved
+    if resolved Type::TypeVar(name) is then
+        if type_variable name == then true return fi
+    fi
+    if bindings resolved type_variable overlap_type_contains then false return fi
+    resolved type_variable bindings.set drop
+    true
+}
+
+fn unify_conformance_types first:Type second:Type bindings:Map[str Type] -> bool {
+    bindings first resolve_overlap_type = resolved_first
+    bindings second resolve_overlap_type = resolved_second
+    if resolved_first Type::TypeVar(first_variable) is then
+        bindings resolved_second first_variable bind_overlap_type return
+    fi
+    if resolved_second Type::TypeVar(second_variable) is then
+        bindings resolved_first second_variable bind_overlap_type return
+    fi
+    if resolved_first Type::Generic(first_generic) is then
+        if resolved_second Type::Generic(second_generic) is then
+            if first_generic.base second_generic.base != then false return fi
+            if first_generic.params.length second_generic.params.length != then false return fi
+            for pair in second_generic.params.iter first_generic.params.iter.zip do
+                if bindings pair.first pair.second unify_conformance_types ! then false return fi
+            done
+            true return
+        fi
+        false return
+    fi
+    if resolved_first Type::Function(first_function) is then
+        if resolved_second Type::Function(second_function) is then
+            if first_function.parameters.length second_function.parameters.length != then false return fi
+            if first_function.return_types.length second_function.return_types.length != then false return fi
+            for pair in second_function.parameters.iter first_function.parameters.iter.zip do
+                if bindings pair.first pair.second unify_conformance_types ! then false return fi
+            done
+            for pair in second_function.return_types.iter first_function.return_types.iter.zip do
+                if bindings pair.first pair.second unify_conformance_types ! then false return fi
+            done
+            true return
+        fi
+        false return
+    fi
+    resolved_first resolved_second.eq
+}
+
+fn conformances_overlap first:TraitConformance second:TraitConformance -> bool {
+    if first.trait_bound.name second.trait_bound.name != then false return fi
+    if first.trait_bound.type_args.length second.trait_bound.type_args.length != then false return fi
+    "left:" first.type_vars first.receiver namespace_conformance_type = first_receiver
+    "right:" second.type_vars second.receiver namespace_conformance_type = second_receiver
+    Map[str Type]::new = bindings
+    if bindings second_receiver first_receiver unify_conformance_types ! then false return fi
+    for pair in second.trait_bound.type_args.iter first.trait_bound.type_args.iter.zip do
+        "left:" first.type_vars pair.second namespace_conformance_type = first_argument
+        "right:" second.type_vars pair.first namespace_conformance_type = second_argument
+        if bindings second_argument first_argument unify_conformance_types ! then false return fi
+    done
+    true
+}
+
+fn receiver_is_local receiver:Type location:Location store:SymbolStore -> bool {
+    receiver.match_base = receiver_name
+    if receiver_name store.structs.get Option::Some(casa_struct) is then
+        casa_struct.location.file location.file == return
+    fi
+    if receiver_name store.enums.get Option::Some(casa_enum) is then
+        casa_enum.location.file location.file == return
+    fi
+    false
+}
+
+fn register_conformance parser:Parser conformance:TraitConformance {
+    for existing in parser.store.conformances.values.iter do
+        if conformance existing conformances_overlap then
+            conformance.location f"Conformance `{conformance conformance_key}` overlaps an existing conformance in `{existing.location.file}`" ErrorKind::DuplicateName parser.state.record_error
+            return
+        fi
+    done
+    conformance conformance_key = key
+    conformance key parser.put_conformance
+}
+
+fn validate_conformances parser:Parser {
+    for conformance in parser.store.conformances.values.iter do
+        if conformance.receiver Type::TypeVar(_) is then
+            conformance.location "Unrestricted blanket conformances are not allowed" ErrorKind::InvalidScope parser.state.record_error
+            continue
+        fi
+        conformance.trait_bound.name parser.store.traits.get = trait_opt
+        if trait_opt.is_none then
+            conformance.location f"Trait `{conformance.trait_bound.name}` is not defined" ErrorKind::UndefinedName parser.state.record_error
+            continue
+        fi
+        trait_opt.unwrap = casa_trait
+        if conformance.trait_bound.type_args.length casa_trait.type_params.length != then
+            conformance.location f"Trait `{casa_trait.name}` expects {casa_trait.type_params.length} type argument(s), got {conformance.trait_bound.type_args.length}" ErrorKind::Syntax parser.state.record_error
+        fi
+        if
+        casa_trait.location.file conformance.location.file !=
+        parser.store conformance.location conformance.receiver receiver_is_local ! &&
+        then
+            conformance.location f"Conformance `{conformance conformance_key}` must be declared in the module that defines the type or trait" ErrorKind::InvalidScope parser.state.record_error
+        fi
+    done
+}
+
 fn parse_impl_block parser:Parser cursor:TokenCursor {
-    fallback_token "impl" cursor expect_token_value.unwrap_or drop
+    fallback_token "impl" cursor expect_token_value.unwrap_or = impl_token
 
     # Parse optional type parameters with trait bounds
     List[str]::new = type_vars
-    Map[str TraitBound]::new = trait_bounds
+    Map[str List[TraitBound]]::new = trait_bounds
     cursor.peek = tvars_opt
     if tvars_opt Option::Some(tvars) is then
         if "[" tvars Token::value == then
@@ -2191,9 +2435,46 @@ fn parse_impl_block parser:Parser cursor:TokenCursor {
     fi
 
     cursor parse_type_ast = impl_type
+    type_vars string_list_to_set = type_var_set
+    type_var_set impl_type canonicalize_type_var = impl_type
 
     # Get base type name (without type params)
     impl_type.match_base = base_type
+
+    List[TraitBound]::new = conforming_traits
+    cursor.peek = colon_opt
+    if colon_opt Option::Some(colon) is then
+        if ":" colon.value == then
+            cursor.pop drop
+            true = parse_conforming_traits
+            while parse_conforming_traits do
+                fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = trait_token
+                trait_token.value parser.store.traits.get = trait_opt
+                trait_token cursor parse_bound_type_args = trait_args
+                0 (u64) = argument_index
+                while argument_index trait_args.length > do
+                    type_var_set argument_index trait_args.get canonicalize_type_var
+                    argument_index trait_args.set
+                    1 += argument_index
+                done
+                if trait_opt Option::Some(casa_trait) is then
+                    if trait_args.length casa_trait.type_params.length != then
+                        trait_token.location f"Trait `{trait_token.value}` expects {casa_trait.type_params.length} type argument(s), got {trait_args.length}" ErrorKind::Syntax parser.state.record_error
+                    else
+                        trait_args trait_token.value TraitBound conforming_traits.push
+                    fi
+                else
+                    trait_args trait_token.value TraitBound conforming_traits.push
+                fi
+                cursor.peek = plus_opt
+                if plus_opt Option::Some(plus) is then
+                    if "+" plus.value == then cursor.pop drop else false = parse_conforming_traits fi
+                else
+                    false = parse_conforming_traits
+                fi
+            done
+        fi
+    fi
 
     fallback_token "{" cursor expect_token_value.unwrap_or drop
     while true do
@@ -2215,6 +2496,11 @@ fn parse_impl_block parser:Parser cursor:TokenCursor {
         function fn_name parser.put_function
     done
     fallback_token "}" cursor expect_token_value.unwrap_or drop
+
+    for conforming_trait in conforming_traits.iter do
+        impl_token.location trait_bounds type_vars conforming_trait impl_type TraitConformance
+        parser register_conformance
+    done
 }
 
 # ============================================================================
@@ -3475,6 +3761,8 @@ fn expand_imports parser:Parser ops:List[Op] -> List[Op] {
 
 fn resolve_identifiers_global parser:Parser ops:List[Op] -> List[Op] {
     ops parser expand_imports = expanded_ops
+    if parser.state.has_usable_output ! then List[Op]::new return fi
+    parser validate_conformances
     if parser.state.has_usable_output ! then List[Op]::new return fi
     empty_location List[Op]::new GLOBAL_SCOPE_LABEL Function::new = dummy
     parser.state.diagnostics dummy expanded_ops parser.store resolve_identifiers

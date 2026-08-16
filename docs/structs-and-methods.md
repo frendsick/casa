@@ -233,7 +233,7 @@ impl[K: Hashable] Set[K] {
 }
 ```
 
-All methods in this block get the `K: Hashable` bound. Methods can still declare additional type parameters of their own:
+All methods in this block get the `K: Hashable` bound. Use `+` when one type variable needs multiple bounds, such as `K: Hashable + Display`. Methods can still declare additional type parameters of their own:
 
 ```casa
 impl[K: Hashable] Set[K] {
@@ -318,7 +318,7 @@ end
 
 ## Traits
 
-Types can satisfy traits by implementing the required methods in their `impl` blocks. Trait satisfaction is structural: no special declaration is needed. See [Traits](traits.md) for details.
+Types satisfy traits through an explicit conformance clause on an `impl` block. See [Traits](traits.md) for details.
 
 ```casa
 trait Hashable {
@@ -331,7 +331,7 @@ struct Point {
     y: i64
 }
 
-impl Point {
+impl Point: Hashable {
     fn hash self:Point -> i64 { self.x 31 * self.y + }
     fn eq self:Point other:Point -> bool {
         self.x other.x == self.y other.y == &&

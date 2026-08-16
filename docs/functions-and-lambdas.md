@@ -188,6 +188,12 @@ fn get[K: Hashable, V] self:Map[K V] key:K -> Option[V] {
 
 Multiple type variables are separated by commas. Variables without a `:` have no bounds. See [Traits](traits.md) for details on defining and satisfying traits.
 
+Use `+` when one variable requires multiple traits:
+
+```casa
+fn show[T: Copy + Display] value:T { value print }
+```
+
 Every type variable must appear in at least one parameter (return-only type variables are not allowed).
 
 Type variable names must not collide with built-in types (`i64`, `bool`, `char`, `cstr`, `str`, `ptr`, `array`) or user-defined struct names:

@@ -30,9 +30,13 @@ See [README.md](./README.md) for basic info, language docs, and examples.
 - **Path-style** (`import "lib/std.casa"`, `import "/abs/path.casa"`): contains `/` or ends with `.casa`. Resolved relative to the importing file (or used as-is when absolute). No search.
 - **Module-style** (`import "std"`): bare name. Resolved against the importing file's directory first, then each `-L`/`--library-path` directory in CLI order. First existing match wins.
 
-## Agent skills
+## Bootstrap releases
 
-- Always use `ponytail` skill
+- When a ready PR cannot compile with the newest stable compiler release, create
+  the next stable release from that PR and update `casa-release.env` to use it.
+- Create a prerelease compiler only when the user explicitly requests one.
+
+## Agent documentation
 
 Always load the relevant doc when the matching workflow comes up:
 

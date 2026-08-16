@@ -33,6 +33,29 @@ fn trait_test_typecheck code:str diagnostics:Diagnostics -> StackEffect {
     diagnostics TRAIT_TEST_STORE Option[Function]::None ops type_check_ops_for_test
 }
 
+fn trait_test_full_typecheck code:str diagnostics:Diagnostics {
+    diagnostics code parse_resolve_test_source = result
+    if result.ops Option::Some(ops) is then
+        result.store ops type_check = checked
+        checked.diagnostics diagnostics.merge
+    fi
+}
+
+fn trait_test_parse_modules
+    root_source:str
+    dependency_source:str
+    diagnostics:Diagnostics
+-> ParseResolveResult {
+    "/tmp/casa_trait_dependency_326.casa" = dependency_path
+    SourceStore::new = sources
+    dependency_source dependency_path sources.add
+    "/tmp/casa_trait_root_326.casa" root_source lex_source = lex_result
+    sources lex_result.diagnostics List[str]::new lex_result.tokens parse_and_resolve
+    = result
+    result.diagnostics diagnostics.merge
+    result
+}
+
 # ============================================================================
 # Trait parsing
 # ============================================================================
@@ -197,8 +220,11 @@ fn test_trait_bound_basic {
     diagnostics "trait Hashable { fn hash self:self -> i64 }\nfn tbtest[K: Hashable] K -> i64 { .hash }" trait_test_parse drop
     "tbtest" TRAIT_TEST_STORE.functions.get.unwrap = func
     "K in type_vars" "K" func Function::stack_effect StackEffect::type_vars.has assert_true
-    "K bound" "Hashable" "K" func Function::stack_effect StackEffect::trait_bounds.get.unwrap TraitBound::name assert_str_eq
-    "bare bound args" 0 "K" func Function::stack_effect StackEffect::trait_bounds.get.unwrap TraitBound::type_args.length assert_eq
+    "K" func.stack_effect.trait_bounds.get.unwrap = bounds
+    "one bound" 1 bounds.length assert_eq
+    0 bounds.get = bound
+    "K bound" "Hashable" bound.name assert_str_eq
+    "bare bound args" 0 bound.type_args.length assert_eq
 }
 
 fn test_trait_bound_with_unbounded_var {
@@ -208,7 +234,8 @@ fn test_trait_bound_with_unbounded_var {
     "tbtest" TRAIT_TEST_STORE.functions.get.unwrap = func
     "K in vars" "K" func Function::stack_effect StackEffect::type_vars.has assert_true
     "V in vars" "V" func Function::stack_effect StackEffect::type_vars.has assert_true
-    "K bound" "Hashable" "K" func Function::stack_effect StackEffect::trait_bounds.get.unwrap TraitBound::name assert_str_eq
+    "K" func.stack_effect.trait_bounds.get.unwrap = bounds
+    "K bound" "Hashable" 0 bounds.get.name assert_str_eq
     "V no bound" "V" func Function::stack_effect StackEffect::trait_bounds.get.is_none assert_true
 }
 
@@ -217,8 +244,10 @@ fn test_trait_bound_multiple_bounded {
     "trait_bound_multiple_bounded" test_start
     diagnostics "trait Hashable { fn hash self:self -> i64 }\ntrait Printable { fn to_str self:self -> str }\nfn tbtest[K: Hashable, V: Printable] K V -> i64 { .to_str drop .hash }" trait_test_parse drop
     "tbtest" TRAIT_TEST_STORE.functions.get.unwrap = func
-    "K bound" "Hashable" "K" func Function::stack_effect StackEffect::trait_bounds.get.unwrap TraitBound::name assert_str_eq
-    "V bound" "Printable" "V" func Function::stack_effect StackEffect::trait_bounds.get.unwrap TraitBound::name assert_str_eq
+    "K" func.stack_effect.trait_bounds.get.unwrap = k_bounds
+    "V" func.stack_effect.trait_bounds.get.unwrap = v_bounds
+    "K bound" "Hashable" 0 k_bounds.get.name assert_str_eq
+    "V bound" "Printable" 0 v_bounds.get.name assert_str_eq
 }
 
 fn test_trait_bound_undefined_raises {
@@ -227,6 +256,37 @@ fn test_trait_bound_undefined_raises {
     diagnostics "fn tbtest[K: Nonexistent] K -> i64 { 0 }" trait_test_parse drop
     diagnostics "has errors" assert_has_errors
     diagnostics "undefined name" ErrorKind::UndefinedName assert_error_kind
+}
+
+fn test_multiple_trait_bounds_parse_and_deduplicate_requirements {
+    Diagnostics::new = diagnostics
+    "multiple_trait_bounds_parse_and_deduplicate_requirements" test_start
+    diagnostics "trait First { fn value self:self -> i64 }\ntrait Second { fn value self:self -> i64 }\nfn read[T: First + Second + First] value:T -> i64 { value .value }\n" trait_test_parse drop
+    "read" TRAIT_TEST_STORE.functions.get.unwrap = function
+    "T" function.stack_effect.trait_bounds.get.unwrap = bounds
+    "duplicate bound removed" 2 bounds.length assert_eq
+    0 = hidden_count
+    for parameter in function.stack_effect.parameters.iter do
+        if parameter.name "__trait_" str::starts_with then 1 += hidden_count fi
+    done
+    "compatible method requirement deduplicated" 1 hidden_count assert_eq
+    diagnostics "compatible bounds accepted" assert_no_errors
+
+    Diagnostics::new = generic_diagnostics
+    generic_diagnostics "trait First { fn convert[A] self:self value:A -> A }\ntrait Second { fn convert[B] self:self value:B -> B }\nfn convert[T: First + Second, V] receiver:T value:V -> V { value receiver .convert }\n" trait_test_parse drop
+    generic_diagnostics "alpha-equivalent method requirements accepted" assert_no_errors
+
+    Diagnostics::new = call_diagnostics
+    call_diagnostics "trait First { fn value self:self -> i64 }\ntrait Second { fn value self:self -> i64 }\nstruct Both { raw: i64 }\nimpl Both: First + Second { fn value self:Both -> i64 { self.raw } }\nfn read[T: First + Second] value:T -> i64 { value .value }\n1 Both read drop\n" trait_test_full_typecheck
+    call_diagnostics "shared requirement uses one implementation" assert_no_errors
+}
+
+fn test_incompatible_trait_bounds_raise {
+    Diagnostics::new = diagnostics
+    "incompatible_trait_bounds_raise" test_start
+    diagnostics "trait Numeric { fn value self:self -> i64 }\ntrait Textual { fn value self:self -> str }\nfn read[T: Numeric + Textual] value:T { value drop }\n" trait_test_parse drop
+    diagnostics "incompatible bounds rejected" assert_has_errors
+    diagnostics "trait requirement mismatch" ErrorKind::TraitSignatureMismatch assert_error_kind
 }
 
 # ============================================================================
@@ -365,7 +425,7 @@ fn test_trait_hidden_params_creates_assign_ops {
 fn test_struct_with_impl_satisfies {
     Diagnostics::new = diagnostics
     "struct_with_impl_satisfies" test_start
-    diagnostics HASHABLE_TRAIT "struct Foo { val: i64 }\nimpl Foo { fn hash self:Foo -> i64 { self Foo::val } fn eq self:Foo other:Foo -> bool { self Foo::val other Foo::val == } }\n" str::concat trait_test_resolve drop
+    diagnostics HASHABLE_TRAIT "struct Foo { val: i64 }\nimpl Foo: Hashable { fn hash self:Foo -> i64 { self Foo::val } fn eq self:Foo other:Foo -> bool { self Foo::val other Foo::val == } }\n" str::concat trait_test_resolve drop
     "satisfies" diagnostics TRAIT_TEST_STORE Option[Function]::None "Hashable" "Foo" parse_type_str type_satisfies_trait_for_test assert_true
 }
 
@@ -376,24 +436,113 @@ fn test_struct_without_impl_does_not_satisfy {
     "does not satisfy" diagnostics TRAIT_TEST_STORE Option[Function]::None "Hashable" "Bar" parse_type_str type_satisfies_trait_for_test ! assert_true
 }
 
+fn test_matching_inherent_methods_do_not_create_conformance {
+    Diagnostics::new = diagnostics
+    "matching_inherent_methods_do_not_create_conformance" test_start
+    diagnostics HASHABLE_TRAIT "struct Coincidence { val: i64 }\nimpl Coincidence { fn hash self:Coincidence -> i64 { self.val } fn eq self:Coincidence other:Coincidence -> bool { self.val other.val == } }\n" str::concat trait_test_resolve drop
+    "matching methods are not conformance" diagnostics TRAIT_TEST_STORE Option[Function]::None "Hashable" "Coincidence" parse_type_str type_satisfies_trait_for_test ! assert_true
+}
+
+fn test_empty_trait_requires_explicit_conformance {
+    Diagnostics::new = diagnostics
+    "empty_trait_requires_explicit_conformance" test_start
+    diagnostics "trait Marker { }\nstruct Plain { value: i64 }\nstruct Marked { value: i64 }\nimpl Marked: Marker { }\n" trait_test_resolve drop
+    "plain type is not marked" diagnostics TRAIT_TEST_STORE Option[Function]::None "Marker" "Plain" parse_type_str type_satisfies_trait_for_test ! assert_true
+    "declared marker conformance" diagnostics TRAIT_TEST_STORE Option[Function]::None "Marker" "Marked" parse_type_str type_satisfies_trait_for_test assert_true
+}
+
+fn test_all_multiple_bounds_are_enforced {
+    Diagnostics::new = diagnostics
+    "all_multiple_bounds_are_enforced" test_start
+    diagnostics "trait HasValue { fn value self:self -> i64 }\ntrait Named { fn name self:self -> str }\nstruct Partial { value: i64 }\nimpl Partial: HasValue { fn value self:Partial -> i64 { self.value } fn name self:Partial -> str { self drop \"partial\" } }\nfn use[T: HasValue + Named] value:T -> i64 { value .value }\n1 Partial use drop\n" trait_test_typecheck drop
+    diagnostics "missing second conformance rejected" assert_has_errors
+    diagnostics "bound failure" ErrorKind::TypeMismatch assert_error_kind
+
+    Diagnostics::new = valid_diagnostics
+    valid_diagnostics "trait HasValue { fn value self:self -> i64 }\ntrait Named { fn name self:self -> str }\nstruct Complete { raw: i64 }\nimpl Complete: HasValue + Named { fn value self:Complete -> i64 { self.raw } fn name self:Complete -> str { self drop \"complete\" } }\nfn use[T: HasValue + Named] value:T -> str { value .value drop value .name }\n1 Complete use drop\n" trait_test_full_typecheck
+    valid_diagnostics "all declared conformances accepted" assert_no_errors
+}
+
+fn test_invalid_conformance_is_diagnosed_without_use {
+    Diagnostics::new = diagnostics
+    "invalid_conformance_is_diagnosed_without_use" test_start
+    diagnostics "trait Named { fn name self:self -> str }\nstruct Broken { value: i64 }\nimpl Broken: Named { }\n" trait_test_full_typecheck
+    diagnostics "invalid declaration rejected" assert_has_errors
+    diagnostics "conformance requirement error" ErrorKind::TraitSignatureMismatch assert_error_kind
+
+    Diagnostics::new = generic_diagnostics
+    generic_diagnostics "trait Carrier[T] { fn get self:self -> T }\nstruct Box[T] { value: T }\nimpl[T] Box[T]: Carrier[T] { fn get[U] self:Box[U] -> str { self drop \"wrong\" } }\n" trait_test_full_typecheck
+    generic_diagnostics "invalid generic declaration rejected" assert_has_errors
+    generic_diagnostics "generic conformance requirement error" ErrorKind::TraitSignatureMismatch assert_error_kind
+
+    Diagnostics::new = specialized_diagnostics
+    specialized_diagnostics "trait Carrier[T] { fn get self:self -> T }\nstruct Box[T] { value: T }\nimpl[T] Box[T]: Carrier[T] { fn get self:Box[i64] -> i64 { self.value } }\n" trait_test_full_typecheck
+    specialized_diagnostics "specialized method cannot satisfy generic declaration" assert_has_errors
+    specialized_diagnostics "specialized conformance requirement error" ErrorKind::TraitSignatureMismatch assert_error_kind
+}
+
+fn test_duplicate_and_overlapping_conformances_raise {
+    Diagnostics::new = duplicate_diagnostics
+    "duplicate_and_overlapping_conformances_raise" test_start
+    duplicate_diagnostics "trait Marker { }\nstruct Item { value: i64 }\nimpl Item: Marker { }\nimpl Item: Marker { }\n" trait_test_parse drop
+    duplicate_diagnostics "duplicate conformance rejected" assert_has_errors
+    duplicate_diagnostics "duplicate error" ErrorKind::DuplicateName assert_error_kind
+
+    Diagnostics::new = overlap_diagnostics
+    overlap_diagnostics "trait Marker[T] { }\nstruct Box[T] { value: T }\nimpl[T] Box[T]: Marker[T] { }\nimpl Box[i64]: Marker[i64] { }\n" trait_test_parse drop
+    overlap_diagnostics "overlapping conformance rejected" assert_has_errors
+    overlap_diagnostics "overlap error" ErrorKind::DuplicateName assert_error_kind
+
+    Diagnostics::new = distinct_diagnostics
+    distinct_diagnostics "trait Marker[T] { }\nstruct Item { value: i64 }\nimpl Item: Marker[i64] { }\nimpl Item: Marker[str] { }\n" trait_test_parse drop
+    distinct_diagnostics "distinct trait instantiations accepted" assert_no_errors
+    "i64 instantiation" distinct_diagnostics TRAIT_TEST_STORE Option[Function]::None "Marker[i64]" "Item" parse_type_str type_satisfies_trait_for_test assert_true
+    "str instantiation" distinct_diagnostics TRAIT_TEST_STORE Option[Function]::None "Marker[str]" "Item" parse_type_str type_satisfies_trait_for_test assert_true
+
+    Diagnostics::new = disjoint_diagnostics
+    disjoint_diagnostics "trait Marker[T] { }\nstruct Pair[A B] { first: A second: B }\nimpl[T] Pair[T T]: Marker[i64] { }\nimpl Pair[i64 str]: Marker[i64] { }\n" trait_test_parse drop
+    disjoint_diagnostics "generic patterns with no shared instantiation accepted" assert_no_errors
+
+    Diagnostics::new = blanket_diagnostics
+    blanket_diagnostics "trait Marker { }\nimpl[T] T: Marker { }\n" trait_test_parse drop
+    blanket_diagnostics "blanket conformance rejected" assert_has_errors
+    blanket_diagnostics "blanket error" ErrorKind::InvalidScope assert_error_kind
+}
+
+fn test_conformance_orphan_rule {
+    Diagnostics::new = orphan_diagnostics
+    "conformance_orphan_rule" test_start
+    orphan_diagnostics "trait Remote { }\nstruct Foreign { value: i64 }\n" "import \"/tmp/casa_trait_dependency_326.casa\"\nimpl Foreign: Remote { }\n" trait_test_parse_modules drop
+    orphan_diagnostics "third-party conformance rejected" assert_has_errors
+    orphan_diagnostics "orphan error" ErrorKind::InvalidScope assert_error_kind
+
+    Diagnostics::new = local_type_diagnostics
+    local_type_diagnostics "trait Remote { }\n" "import \"/tmp/casa_trait_dependency_326.casa\"\nstruct Local { value: i64 }\nimpl Local: Remote { }\n" trait_test_parse_modules drop
+    local_type_diagnostics "local type conformance accepted" assert_no_errors
+
+    Diagnostics::new = local_trait_diagnostics
+    local_trait_diagnostics "struct Foreign { value: i64 }\n" "import \"/tmp/casa_trait_dependency_326.casa\"\ntrait LocalTrait { }\nimpl Foreign: LocalTrait { }\n" trait_test_parse_modules drop
+    local_trait_diagnostics "local trait conformance accepted" assert_no_errors
+}
+
 fn test_partial_impl_does_not_satisfy {
     Diagnostics::new = diagnostics
     "partial_impl_does_not_satisfy" test_start
-    diagnostics HASHABLE_TRAIT "struct Baz { val: i64 }\nimpl Baz { fn hash self:Baz -> i64 { self Baz::val } }\n" str::concat trait_test_resolve drop
+    diagnostics HASHABLE_TRAIT "struct Baz { val: i64 }\nimpl Baz: Hashable { fn hash self:Baz -> i64 { self Baz::val } }\n" str::concat trait_test_resolve drop
     "does not satisfy" diagnostics TRAIT_TEST_STORE Option[Function]::None "Hashable" "Baz" parse_type_str type_satisfies_trait_for_test ! assert_true
 }
 
 fn test_struct_satisfies_generic_trait_concrete_int {
     Diagnostics::new = diagnostics
     "struct_satisfies_generic_trait_concrete_int" test_start
-    diagnostics "trait Carrier[T] { fn get self:self -> T }\nstruct Counter { val: i64 }\nimpl Counter { fn get self:Counter -> i64 { self Counter::val } }\n" trait_test_resolve drop
+    diagnostics "trait Carrier[T] { fn get self:self -> T }\nstruct Counter { val: i64 }\nimpl Counter: Carrier[i64] { fn get self:Counter -> i64 { self Counter::val } }\n" trait_test_resolve drop
     "satisfies" diagnostics TRAIT_TEST_STORE Option[Function]::None "Carrier[i64]" "Counter" parse_type_str type_satisfies_trait_for_test assert_true
 }
 
 fn test_struct_does_not_satisfy_generic_trait_wrong_inner {
     Diagnostics::new = diagnostics
     "struct_does_not_satisfy_generic_trait_wrong_inner" test_start
-    diagnostics "trait Carrier[T] { fn get self:self -> T }\nstruct Counter { val: i64 }\nimpl Counter { fn get self:Counter -> i64 { self Counter::val } }\n" trait_test_resolve drop
+    diagnostics "trait Carrier[T] { fn get self:self -> T }\nstruct Counter { val: i64 }\nimpl Counter: Carrier[i64] { fn get self:Counter -> i64 { self Counter::val } }\n" trait_test_resolve drop
     "does not satisfy str" diagnostics TRAIT_TEST_STORE Option[Function]::None "Carrier[str]" "Counter" parse_type_str type_satisfies_trait_for_test ! assert_true
 }
 
@@ -407,21 +556,21 @@ fn test_undefined_trait_returns_false {
 fn test_int_satisfies_eq_trait {
     Diagnostics::new = diagnostics
     "int_satisfies_eq_trait" test_start
-    diagnostics "trait Eq { fn eq self:self other:self -> bool }\nimpl i64 { fn eq self:i64 other:i64 -> bool { self other == } }\n" trait_test_resolve drop
+    diagnostics "trait Eq { fn eq self:self other:self -> bool }\nimpl i64: Eq { fn eq self:i64 other:i64 -> bool { self other == } }\n" trait_test_resolve drop
     "satisfies" diagnostics TRAIT_TEST_STORE Option[Function]::None "Eq" "i64" parse_type_str type_satisfies_trait_for_test assert_true
 }
 
 fn test_int_satisfies_ord_trait {
     Diagnostics::new = diagnostics
     "int_satisfies_ord_trait" test_start
-    diagnostics "trait Ord { fn lt self:self other:self -> bool }\nimpl i64 { fn lt self:i64 other:i64 -> bool { other self < } }\n" trait_test_resolve drop
+    diagnostics "trait Ord { fn lt self:self other:self -> bool }\nimpl i64: Ord { fn lt self:i64 other:i64 -> bool { other self < } }\n" trait_test_resolve drop
     "satisfies" diagnostics TRAIT_TEST_STORE Option[Function]::None "Ord" "i64" parse_type_str type_satisfies_trait_for_test assert_true
 }
 
 fn test_empty_word_trait_satisfied_by_any_type {
     Diagnostics::new = diagnostics
     "empty_word_trait_satisfied_by_any_type" test_start
-    diagnostics "trait Word { }\n" trait_test_resolve drop
+    diagnostics "trait Word { }\nimpl i64: Word { }\nimpl str: Word { }\n" trait_test_resolve drop
     "i64 satisfies" diagnostics TRAIT_TEST_STORE Option[Function]::None "Word" "i64" parse_type_str type_satisfies_trait_for_test assert_true
     "str satisfies" diagnostics TRAIT_TEST_STORE Option[Function]::None "Word" "str" parse_type_str type_satisfies_trait_for_test assert_true
 }
@@ -611,8 +760,10 @@ fn test_type_var_with_matching_bound_satisfies {
     "type_var_with_matching_bound_satisfies" test_start
     diagnostics HASHABLE_TRAIT trait_test_parse drop
     # Build a StackEffect with K bounded by Hashable
-    Map[str TraitBound]::new = bounds
-    List[Type]::new "Hashable" TraitBound "K" bounds.set = bounds
+    Map[str List[TraitBound]]::new = bounds
+    List[TraitBound]::new = k_bounds
+    List[Type]::new "Hashable" TraitBound k_bounds.push
+    k_bounds "K" bounds.set = bounds
     Set[str]::new = type_vars
     "K" type_vars.add = type_vars
     # Construct StackEffect: parameters, return_types, type_vars, trait_bounds
@@ -629,7 +780,7 @@ fn test_type_var_without_bound_does_not_satisfy {
     # Build a StackEffect with K but no trait bounds
     Set[str]::new = type_vars
     "K" type_vars.add = type_vars
-    Map[str TraitBound]::new type_vars List[Type]::new List[Parameter]::new StackEffect = sig
+    Map[str List[TraitBound]]::new type_vars List[Type]::new List[Parameter]::new StackEffect = sig
     sig empty_location List[Op]::new "test_fn" Function::with_stack_effect = func
     func Option::Some = func_opt
     "does not satisfy" diagnostics TRAIT_TEST_STORE func_opt "Hashable" "K" parse_type_str type_satisfies_trait_for_test ! assert_true
@@ -640,8 +791,10 @@ fn test_type_var_with_wrong_bound_does_not_satisfy {
     "type_var_with_wrong_bound_does_not_satisfy" test_start
     diagnostics "trait Hashable { fn hash self:self -> i64 }\ntrait Printable { fn to_str self:self -> str }\n" trait_test_parse drop
     # Build a StackEffect with K bounded by Printable, check against Hashable
-    Map[str TraitBound]::new = bounds
-    List[Type]::new "Printable" TraitBound "K" bounds.set = bounds
+    Map[str List[TraitBound]]::new = bounds
+    List[TraitBound]::new = k_bounds
+    List[Type]::new "Printable" TraitBound k_bounds.push
+    k_bounds "K" bounds.set = bounds
     Set[str]::new = type_vars
     "K" type_vars.add = type_vars
     bounds type_vars List[Type]::new List[Parameter]::new StackEffect = sig
@@ -662,12 +815,15 @@ fn test_trait_bounds_default_empty {
 
 fn test_trait_bounds_preserved_in_stack_effect {
     "trait_bounds_preserved_in_stack_effect" test_start
-    Map[str TraitBound]::new = bounds
-    List[Type]::new "Hashable" TraitBound "K" bounds.set = bounds
+    Map[str List[TraitBound]]::new = bounds
+    List[TraitBound]::new = k_bounds
+    List[Type]::new "Hashable" TraitBound k_bounds.push
+    k_bounds "K" bounds.set = bounds
     Set[str]::new = type_vars
     "K" type_vars.add = type_vars
     bounds type_vars List[Type]::new List[Parameter]::new StackEffect = sig
-    "preserved" "Hashable" "K" sig StackEffect::trait_bounds.get.unwrap TraitBound::name assert_str_eq
+    "K" sig.trait_bounds.get.unwrap = preserved_bounds
+    "preserved" "Hashable" 0 preserved_bounds.get.name assert_str_eq
 }
 
 # ============================================================================
@@ -677,7 +833,7 @@ fn test_trait_bounds_preserved_in_stack_effect {
 fn test_k_coloncolon_method_resolved_as_trait_method_call {
     Diagnostics::new = diagnostics
     "k_coloncolon_method_resolved_as_trait_method_call" test_start
-    diagnostics HASHABLE_TRAIT "struct MyType { val: i64 }\nimpl MyType {\n    fn hash self:MyType -> i64 { self MyType::val }\n    fn eq self:MyType other:MyType -> bool { self MyType::val other MyType::val == }\n}\nfn get_hash[K: Hashable] k:K -> i64 { k K::hash }\n42 MyType = m\nm get_hash drop\n" str::concat trait_test_typecheck drop
+    diagnostics HASHABLE_TRAIT "struct MyType { val: i64 }\nimpl MyType: Hashable {\n    fn hash self:MyType -> i64 { self MyType::val }\n    fn eq self:MyType other:MyType -> bool { self MyType::val other MyType::val == }\n}\nfn get_hash[K: Hashable] k:K -> i64 { k K::hash }\n42 MyType = m\nm get_hash drop\n" str::concat trait_test_typecheck drop
     "get_hash" TRAIT_TEST_STORE.functions.get.unwrap = func
     # K::hash resolves to a dedicated trait method call carrying the hidden var.
     false = found_trait_call
@@ -698,7 +854,7 @@ fn test_k_coloncolon_method_resolved_as_trait_method_call {
 fn test_ampersand_k_coloncolon_method_resolved_as_push_variable {
     Diagnostics::new = diagnostics
     "ampersand_k_coloncolon_method_resolved_as_push_variable" test_start
-    diagnostics HASHABLE_TRAIT "struct MyType { val: i64 }\nimpl MyType {\n    fn hash self:MyType -> i64 { self MyType::val }\n    fn eq self:MyType other:MyType -> bool { self MyType::val other MyType::val == }\n}\nfn get_hash_fn[K: Hashable] -> fn[K -> i64] { &K::hash }\n42 MyType = m\nm get_hash_fn drop\n" str::concat trait_test_typecheck drop
+    diagnostics HASHABLE_TRAIT "struct MyType { val: i64 }\nimpl MyType: Hashable {\n    fn hash self:MyType -> i64 { self MyType::val }\n    fn eq self:MyType other:MyType -> bool { self MyType::val other MyType::val == }\n}\nfn get_hash_fn[K: Hashable] -> fn[K -> i64] { &K::hash }\n42 MyType = m\nm get_hash_fn drop\n" str::concat trait_test_typecheck drop
     "get_hash_fn" TRAIT_TEST_STORE.functions.get.unwrap = func
     # &K::hash resolves to OpPushVar as a fn ref.
     false = found_push_var
@@ -733,7 +889,8 @@ fn test_generic_trait_bound_compound_type_arg_preserves_space {
     "generic_trait_bound_compound_type_arg_preserves_space" test_start
     diagnostics "trait Carrier[T] { fn get self:self -> T }\nfn uses[I: Carrier[Map[str i64]]] i:I -> i64 { 0 }\n" trait_test_parse drop
     "uses" TRAIT_TEST_STORE.functions.get.unwrap = func
-    "I" func Function::stack_effect StackEffect::trait_bounds.get.unwrap = bound
+    "I" func Function::stack_effect StackEffect::trait_bounds.get.unwrap = bounds
+    0 bounds.get = bound
     "preserved" "Carrier[Map[str i64]]" bound trait_bound_to_str assert_str_eq
     "structural outer" "Map[str i64]" 0 bound TraitBound::type_args.get.format assert_str_eq
     "structural nested" "str" 0 0 bound TraitBound::type_args.get.as_generic.unwrap.params.get.format assert_str_eq
@@ -743,7 +900,8 @@ fn test_generic_trait_bound_multiple_structural_args {
     Diagnostics::new = diagnostics
     "generic_trait_bound_multiple_structural_args" test_start
     diagnostics "trait Pair[A B] { fn first self:self -> A }\nfn uses[I: Pair[Map[str i64], List[str]]] i:I -> i64 { 0 }\n" trait_test_parse drop
-    "I" "uses" TRAIT_TEST_STORE.functions.get.unwrap Function::stack_effect StackEffect::trait_bounds.get.unwrap = bound
+    "I" "uses" TRAIT_TEST_STORE.functions.get.unwrap Function::stack_effect StackEffect::trait_bounds.get.unwrap = bounds
+    0 bounds.get = bound
     "argument count" 2 bound TraitBound::type_args.length assert_eq
     "first argument" "Map[str i64]" 0 bound TraitBound::type_args.get.format assert_str_eq
     "second argument" "List[str]" 1 bound TraitBound::type_args.get.format assert_str_eq
@@ -801,15 +959,16 @@ fn test_generic_trait_bound_concrete_hidden_param_type {
 fn test_generic_trait_bound_concrete_call_site_injects_fn_ptr {
     Diagnostics::new = diagnostics
     "generic_trait_bound_concrete_call_site_injects_fn_ptr" test_start
-    diagnostics "trait Carrier[T] { fn get self:self -> T }\nstruct Counter { val: i64 }\nimpl Counter { fn get self:Counter -> i64 { self Counter::val } }\nfn use_carrier[I: Carrier[i64]] i:I -> i64 { i .get }\n42 Counter = c\nc use_carrier drop\n" trait_test_typecheck drop
+    diagnostics "trait Carrier[T] { fn get self:self -> T }\nstruct Counter { val: i64 }\nimpl Counter: Carrier[i64] { fn get self:Counter -> i64 { self Counter::val } }\nfn use_carrier[I: Carrier[i64]] i:I -> i64 { i .get }\n42 Counter = c\nc use_carrier drop\n" trait_test_typecheck drop
     diagnostics "no errors" assert_no_errors
 }
 
 fn test_generic_trait_bound_default_method_uses_structural_arg {
     Diagnostics::new = diagnostics
     "generic_trait_bound_default_method_uses_structural_arg" test_start
-    diagnostics "trait Carrier[T] { fn raw self:self -> T fn keep self:self value:T -> T { self drop value } }\nstruct Counter { val: i64 }\nimpl Counter { fn raw self:Counter -> i64 { self Counter::val } }\nfn use_carrier[I: Carrier[i64]] i:I -> i64 { i .raw }\n42 Counter = counter\n7 counter .keep drop\n" trait_test_typecheck drop
-    "I" "use_carrier" TRAIT_TEST_STORE.functions.get.unwrap Function::stack_effect StackEffect::trait_bounds.get.unwrap = bound
+    diagnostics "trait Carrier[T] { fn raw self:self -> T fn keep self:self value:T -> T { self drop value } }\nstruct Counter { val: i64 }\nimpl Counter: Carrier[i64] { fn raw self:Counter -> i64 { self Counter::val } }\nfn use_carrier[I: Carrier[i64]] i:I -> i64 { i .raw }\n42 Counter = counter\n7 counter .keep drop\n" trait_test_typecheck drop
+    "I" "use_carrier" TRAIT_TEST_STORE.functions.get.unwrap Function::stack_effect StackEffect::trait_bounds.get.unwrap = bounds
+    0 bounds.get = bound
     "structural default argument" "i64" 0 bound TraitBound::type_args.get.format assert_str_eq
     diagnostics "default method resolves" assert_no_errors
 }
@@ -817,7 +976,7 @@ fn test_generic_trait_bound_default_method_uses_structural_arg {
 fn test_type_var_arg_bound_conflict_with_param_raises {
     Diagnostics::new = diagnostics
     "type_var_arg_bound_conflict_with_param_raises" test_start
-    diagnostics "trait Carrier[T] { fn get self:self -> T }\nstruct IntBox { v: i64 }\nimpl IntBox { fn get self:IntBox -> i64 { self IntBox::v } }\nfn zip[T, I: Carrier[T]] t:T i:I -> T { t drop i .get }\n\"x\" 1 IntBox zip drop\n" trait_test_typecheck drop
+    diagnostics "trait Carrier[T] { fn get self:self -> T }\nstruct IntBox { v: i64 }\nimpl IntBox: Carrier[i64] { fn get self:IntBox -> i64 { self IntBox::v } }\nfn zip[T, I: Carrier[T]] t:T i:I -> T { t drop i .get }\n\"x\" 1 IntBox zip drop\n" trait_test_typecheck drop
     diagnostics "has errors" assert_has_errors
 }
 
@@ -831,21 +990,21 @@ fn test_type_var_arg_bound_structural_mismatch_raises {
 fn test_type_var_arg_generic_trait_bound_happy_path {
     Diagnostics::new = diagnostics
     "type_var_arg_generic_trait_bound_happy_path" test_start
-    diagnostics "trait Carrier[T] { fn get self:self -> T }\nstruct IntBox { v: i64 }\nimpl IntBox { fn get self:IntBox -> i64 { self IntBox::v } }\nfn use_any[T, I: Carrier[T]] i:I -> T { i .get }\n42 IntBox = b\nb use_any drop\n" trait_test_typecheck drop
+    diagnostics "trait Carrier[T] { fn get self:self -> T }\nstruct IntBox { v: i64 }\nimpl IntBox: Carrier[i64] { fn get self:IntBox -> i64 { self IntBox::v } }\nfn use_any[T, I: Carrier[T]] i:I -> T { i .get }\n42 IntBox = b\nb use_any drop\n" trait_test_typecheck drop
     diagnostics "no errors" assert_no_errors
 }
 
 fn test_generic_trait_bound_structural_mismatch_raises {
     Diagnostics::new = diagnostics
     "generic_trait_bound_structural_mismatch_raises" test_start
-    diagnostics "trait Carrier[T] { fn get self:self -> T }\nstruct StrHolder { s: str }\nimpl StrHolder { fn get self:StrHolder -> str { self StrHolder::s } }\nfn uses[I: Carrier[i64]] i:I -> i64 { i .get }\n\"x\" StrHolder = sh\nsh uses drop\n" trait_test_typecheck drop
+    diagnostics "trait Carrier[T] { fn get self:self -> T }\nstruct StrHolder { s: str }\nimpl StrHolder: Carrier[str] { fn get self:StrHolder -> str { self StrHolder::s } }\nfn uses[I: Carrier[i64]] i:I -> i64 { i .get }\n\"x\" StrHolder = sh\nsh uses drop\n" trait_test_typecheck drop
     diagnostics "has errors" assert_has_errors
 }
 
 fn test_trait_bounded_fn_with_conflicting_type_var_raises {
     Diagnostics::new = diagnostics
     "trait_bounded_fn_with_conflicting_type_var_raises" test_start
-    diagnostics HASHABLE_TRAIT "struct A { v: i64 }\nstruct B { v: i64 }\nimpl A { fn hash self:A -> i64 { self A::v } fn eq self:A other:A -> bool { self A::v other A::v == } }\nimpl B { fn hash self:B -> i64 { self B::v } fn eq self:B other:B -> bool { self B::v other B::v == } }\nfn gnarly[K: Hashable] a:K b:K -> i64 { b drop a .hash }\n1 A = av\n2 B = bv\nbv av gnarly drop\n" str::concat trait_test_typecheck drop
+    diagnostics HASHABLE_TRAIT "struct A { v: i64 }\nstruct B { v: i64 }\nimpl A: Hashable { fn hash self:A -> i64 { self A::v } fn eq self:A other:A -> bool { self A::v other A::v == } }\nimpl B: Hashable { fn hash self:B -> i64 { self B::v } fn eq self:B other:B -> bool { self B::v other B::v == } }\nfn gnarly[K: Hashable] a:K b:K -> i64 { b drop a .hash }\n1 A = av\n2 B = bv\nbv av gnarly drop\n" str::concat trait_test_typecheck drop
     diagnostics "has errors" assert_has_errors
     diagnostics "type mismatch for conflicting type var" ErrorKind::TypeMismatch assert_error_kind
 }
@@ -874,21 +1033,21 @@ fn test_trait_with_undefined_supertrait_raises {
 fn test_supertrait_method_required_for_satisfaction {
     Diagnostics::new = diagnostics
     "supertrait_method_required_for_satisfaction" test_start
-    diagnostics "trait Eq { fn eq self:self other:self -> bool }\ntrait Hashable: Eq { fn hash self:self -> i64 }\nstruct Bare { v: i64 }\nimpl Bare { fn hash self:Bare -> i64 { self Bare::v } }\n" trait_test_resolve drop
+    diagnostics "trait Eq { fn eq self:self other:self -> bool }\ntrait Hashable: Eq { fn hash self:self -> i64 }\nstruct Bare { v: i64 }\nimpl Bare: Hashable { fn hash self:Bare -> i64 { self Bare::v } }\n" trait_test_resolve drop
     "Hashable not satisfied without Eq impl" diagnostics TRAIT_TEST_STORE Option[Function]::None "Hashable" "Bare" parse_type_str type_satisfies_trait_for_test ! assert_true
 }
 
 fn test_supertrait_satisfaction_with_full_impl {
     Diagnostics::new = diagnostics
     "supertrait_satisfaction_with_full_impl" test_start
-    diagnostics "trait Eq { fn eq self:self other:self -> bool }\ntrait Hashable: Eq { fn hash self:self -> i64 }\nstruct Full { v: i64 }\nimpl Full { fn hash self:Full -> i64 { self Full::v } fn eq self:Full other:Full -> bool { self Full::v other Full::v == } }\n" trait_test_resolve drop
+    diagnostics "trait Eq { fn eq self:self other:self -> bool }\ntrait Hashable: Eq { fn hash self:self -> i64 }\nstruct Full { v: i64 }\nimpl Full: Hashable { fn hash self:Full -> i64 { self Full::v } fn eq self:Full other:Full -> bool { self Full::v other Full::v == } }\n" trait_test_resolve drop
     "Hashable satisfied with Eq impl" diagnostics TRAIT_TEST_STORE Option[Function]::None "Hashable" "Full" parse_type_str type_satisfies_trait_for_test assert_true
 }
 
 fn test_supertrait_negative_typecheck_raises {
     Diagnostics::new = diagnostics
     "supertrait_negative_typecheck_raises" test_start
-    diagnostics "trait Eq { fn eq self:self other:self -> bool }\ntrait Hashable: Eq { fn hash self:self -> i64 }\nstruct Bare { v: i64 }\nimpl Bare { fn hash self:Bare -> i64 { self Bare::v } }\nfn use_hash[K: Hashable] k:K -> i64 { k .hash }\n1 Bare = b\nb use_hash drop\n" trait_test_typecheck drop
+    diagnostics "trait Eq { fn eq self:self other:self -> bool }\ntrait Hashable: Eq { fn hash self:self -> i64 }\nstruct Bare { v: i64 }\nimpl Bare: Hashable { fn hash self:Bare -> i64 { self Bare::v } }\nfn use_hash[K: Hashable] k:K -> i64 { k .hash }\n1 Bare = b\nb use_hash drop\n" trait_test_typecheck drop
     diagnostics "has errors" assert_has_errors
     diagnostics "missing Eq for Hashable bound" ErrorKind::TypeMismatch assert_error_kind
 }
@@ -931,7 +1090,7 @@ fn test_dot_eq_on_bounded_type_var {
 fn test_calling_trait_bounded_fn_injects_fn_push {
     Diagnostics::new = diagnostics
     "calling_trait_bounded_fn_injects_fn_push" test_start
-    diagnostics HASHABLE_TRAIT "struct MyType { val: i64 }\nimpl MyType {\n    fn hash self:MyType -> i64 { self MyType::val }\n    fn eq self:MyType other:MyType -> bool { self MyType::val other MyType::val == }\n}\nfn get_hash[K: Hashable] k:K -> i64 { k .hash }\n42 MyType = m\nm get_hash\n" str::concat trait_test_typecheck drop
+    diagnostics HASHABLE_TRAIT "struct MyType { val: i64 }\nimpl MyType: Hashable {\n    fn hash self:MyType -> i64 { self MyType::val }\n    fn eq self:MyType other:MyType -> bool { self MyType::val other MyType::val == }\n}\nfn get_hash[K: Hashable] k:K -> i64 { k .hash }\n42 MyType = m\nm get_hash\n" str::concat trait_test_typecheck drop
     "passes" true assert_true
 }
 
@@ -974,6 +1133,8 @@ test_trait_bound_basic
 test_trait_bound_with_unbounded_var
 test_trait_bound_multiple_bounded
 test_trait_bound_undefined_raises
+test_multiple_trait_bounds_parse_and_deduplicate_requirements
+test_incompatible_trait_bounds_raise
 # Hidden params
 test_trait_hidden_params_prepended
 test_trait_hidden_param_name
@@ -985,6 +1146,12 @@ test_trait_hidden_params_creates_assign_ops
 # Type satisfaction
 test_struct_with_impl_satisfies
 test_struct_without_impl_does_not_satisfy
+test_matching_inherent_methods_do_not_create_conformance
+test_empty_trait_requires_explicit_conformance
+test_all_multiple_bounds_are_enforced
+test_invalid_conformance_is_diagnosed_without_use
+test_duplicate_and_overlapping_conformances_raise
+test_conformance_orphan_rule
 test_partial_impl_does_not_satisfy
 test_struct_satisfies_generic_trait_concrete_int
 test_struct_does_not_satisfy_generic_trait_wrong_inner
