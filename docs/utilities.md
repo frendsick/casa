@@ -350,7 +350,7 @@ Executes an external command using fork/execve/wait4. Takes a `List[str]` where 
 **Stack effect:** `List[str] -> i64`
 
 ```casa
-List::new (List[str]) = args
+List[str]::new = args
 "/bin/echo" args.push
 "hello" args.push
 args run_command = exit_code

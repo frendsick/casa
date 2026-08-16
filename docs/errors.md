@@ -266,7 +266,7 @@ A type is used where a trait bound is required, but it does not implement all re
 
 ```casa
 struct Foo { x: i64 }
-Map::new (Map[Foo i64]) = m    # Foo has no hash or eq methods
+Map[Foo i64]::new = m    # Foo has no hash or eq methods
 ```
 
 ```

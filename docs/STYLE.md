@@ -313,15 +313,16 @@ without a type-name prefix is acceptable.
 
 ---
 
-## No redundant type casts
+## Explicit conversions
 
-- **MUST NOT** write a type cast `(Type)` when the compiler can derive the type:
+- **MUST** use a typed binding for literal context and a named operation for a
+  numeric conversion:
 
   ```casa
-  # MUST NOT — inference resolves this
-  42 (i64) = x
+  42 = x:i64
+  x u8::try_from = maybe_byte
 
-  # Required — crossing a type boundary
+  # Raw representation boundary
   buf (ptr) store64
   ```
 

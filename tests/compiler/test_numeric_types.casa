@@ -6,14 +6,14 @@ fn check_numeric_source code:str diagnostics:Diagnostics -> StackEffect {
     diagnostics code parse_resolve_test_source = result
     result ParseResolveResult::ops.unwrap = ops
     result ParseResolveResult::store = store
-    diagnostics store Option::None(Option[Function]) ops type_check_ops_for_test
+    diagnostics store Option[Function]::None ops type_check_ops_for_test
 }
 
 fn emit_numeric_source code:str diagnostics:Diagnostics -> str {
     diagnostics code parse_resolve_test_source = result
     result ParseResolveResult::ops.unwrap = ops
     result ParseResolveResult::store = store
-    diagnostics store Option::None(Option[Function]) ops type_check_ops_for_test drop
+    diagnostics store Option[Function]::None ops type_check_ops_for_test drop
     store ops compile_test_program emit
 }
 
@@ -180,6 +180,17 @@ fn test_literal_larger_than_u64_diagnostic {
     diagnostics "u64 range" "outside `u64` range 0..18446744073709551615" assert_error_contains
 }
 
+fn test_float_literal_overflow_diagnostic {
+    "float_literal_overflow_diagnostic" test_start
+    Diagnostics::new = f32_diagnostics
+    f32_diagnostics "1e100 = value:f32" check_numeric_source drop
+    f32_diagnostics "f32 finite overflow" "outside `f32` finite range" assert_error_contains
+
+    Diagnostics::new = f64_diagnostics
+    f64_diagnostics "1e1000 = value:f64" check_numeric_source drop
+    f64_diagnostics "f64 finite overflow" "outside `f64` finite range" assert_error_contains
+}
+
 fn test_removed_numeric_names {
     "removed_numeric_names" test_start
     Diagnostics::new = int_diagnostics
@@ -225,6 +236,165 @@ fn test_numeric_lowering {
     f64_diagnostics "1.5" emit_numeric_source = f64_assembly
     "f64 literal lowering" ".double 1.5" f64_assembly str::find 0 >= assert_true
 }
+
+fn test_float_arithmetic_and_comparison {
+    "float_arithmetic_and_comparison" test_start
+    1.5 = f32_left: f32
+    2.25 = f32_right: f32
+    "f32 addition" 3.75 f32_right f32_left + == assert_true
+    "f32 subtraction" 0.75 f32_right f32_left - == assert_true
+    "f32 multiplication" 3.375 f32_right f32_left * == assert_true
+    "f32 division" 1.5 f32_right f32_left / == assert_true
+
+    1.5 = f64_left: f64
+    2.25 = f64_right: f64
+    "f64 addition" 3.75 f64_right f64_left + == assert_true
+    "f64 ordering" f64_right f64_left < assert_true
+    0.0 0.0 / = nan: f64
+    "NaN is not equal to itself" nan nan != assert_true
+    "NaN is unordered" nan 1.0 < ! assert_true
+}
+
+fn test_named_numeric_conversions {
+    "named_numeric_conversions" test_start
+    120 = small: i8
+    "exact integer widening" 120 small i16::from == assert_true
+    16777217 = rounded_source: i32
+    "explicit integer-to-float rounding" 16777216.0 rounded_source f32::round_from == assert_true
+    257 = wrapping_source: u16
+    "integer wrapping keeps low bits" 1 wrapping_source u8::wrapping_from == assert_true
+    "float truncation" -3 -3.75 i8::trunc_from == assert_true
+
+    1069547520 = bits: u32
+    bits f32::from_bits = value
+    "f32 bits round trip" bits value.to_bits == assert_true
+    4609434218613702656 = wide_bits: u64
+    wide_bits f64::from_bits = wide_value
+    "f64 bits round trip" wide_bits wide_value.to_bits == assert_true
+    2141266757 = f32_nan_bits: u32
+    "f32 NaN payload round trip" f32_nan_bits f32_nan_bits f32::from_bits.to_bits == assert_true
+    18444492273895866369 = f64_nan_bits: u64
+    "f64 NaN payload round trip" f64_nan_bits f64_nan_bits f64::from_bits.to_bits == assert_true
+}
+
+fn test_invalid_named_conversion_diagnostic {
+    "invalid_named_conversion_diagnostic" test_start
+    Diagnostics::new = diagnostics
+    diagnostics "1 = value:i64 value u8::from" check_numeric_source drop
+    diagnostics "narrowing exact conversion rejected" assert_has_errors
+    diagnostics "conversion names its source" "does not accept `i64`" assert_error_contains
+}
+
+fn test_checked_numeric_conversions {
+    "checked_numeric_conversions" test_start
+    255 = max_byte: i64
+    "integer narrowing succeeds" 255 max_byte u8::try_from.unwrap == assert_true
+    256 = too_large: i64
+    "integer narrowing rejects range" too_large u8::try_from.is_none assert_true
+    -1 = negative: i64
+    "signed to unsigned rejects negative" negative u64::try_from.is_none assert_true
+    42.0 = whole: f64
+    "integral float succeeds" 42 whole i64::try_from.unwrap == assert_true
+    42.5 = fractional: f64
+    "fractional float rejected" fractional i64::try_from.is_none assert_true
+    "NaN rejected" f64::nan i64::try_from.is_none assert_true
+    16777216 = exact_float: i32
+    "exact integer to f32" 16777216.0 exact_float f32::try_from.unwrap == assert_true
+    16777217 = rounded_float: i32
+    "rounded integer to f32 rejected" rounded_float f32::try_from.is_none assert_true
+    1.5 = wide: f64
+    "exact narrowing float" 1.5 wide f32::try_from.unwrap == assert_true
+    1.1 = inexact_wide: f64
+    "inexact narrowing float rejected" inexact_wide f32::try_from.is_none assert_true
+}
+
+fn test_recoverable_integer_arithmetic {
+    "recoverable_integer_arithmetic" test_start
+    127 = max_i8: i8
+    "try_add rejects overflow" 1 max_i8.try_add.is_none assert_true
+    120 = base_i8: i8
+    "try_add succeeds" 127 7 base_i8.try_add.unwrap == assert_true
+    -128 = min_i8: i8
+    "try_sub rejects overflow" 1 min_i8.try_sub.is_none assert_true
+    4 = factor: i8
+    "try_mul succeeds" 8 2 factor.try_mul.unwrap == assert_true
+    "try_mul rejects overflow" 100 factor.try_mul.is_none assert_true
+    0 = zero: i8
+    "try_div rejects zero" zero factor.try_div.is_none assert_true
+    -1 = negative_one: i8
+    "try_div rejects signed minimum overflow" negative_one min_i8.try_div.is_none assert_true
+    3 = divisor: i8
+    10 = dividend: i8
+    "try_mod succeeds" 1 divisor dividend.try_mod.unwrap == assert_true
+    255 = max_u8: u8
+    "unsigned try_add rejects overflow" 1 max_u8.try_add.is_none assert_true
+    "wrapping add remains explicit" 0 1 max_u8.wrapping_add == assert_true
+}
+
+fn test_character_and_generic_construction {
+    "character_and_generic_construction" test_start
+    "codepoint" 65 'A'.codepoint == assert_true
+    65 = capital_a: u32
+    "valid scalar" 'A' capital_a char::from_codepoint.unwrap == assert_true
+    55296 = surrogate: u32
+    "surrogate rejected" surrogate char::from_codepoint.is_none assert_true
+    1114112 = too_large: u32
+    "large codepoint rejected" too_large char::from_codepoint.is_none assert_true
+
+    List[i64]::new = values
+    "explicit generic associated type" 0 values.length == assert_true
+}
+
+fn test_float_helpers {
+    "float_helpers" test_start
+    "f32 NaN" f32::nan.is_nan assert_true
+    "f32 NaN is not finite" f32::nan.is_finite ! assert_true
+    "f64 infinity" f64::infinity.is_infinite assert_true
+    "f64 infinity is not finite" f64::infinity.is_finite ! assert_true
+    1.5 = finite: f32
+    "finite" finite.is_finite assert_true
+    -1.5 = negative: f32
+    "absolute value" 1.5 negative.abs == assert_true
+    1.75 = floor_value: f32
+    "floor" 1.0 floor_value.floor == assert_true
+    1.25 = ceil_value: f32
+    "ceil" 2.0 ceil_value.ceil == assert_true
+    -1.75 = trunc_value: f32
+    "trunc" -1.0 trunc_value.trunc == assert_true
+    2.5 = round_down: f64
+    "ties to even down" 2.0 round_down.round == assert_true
+    3.5 = round_up: f64
+    "ties to even up" 4.0 round_up.round == assert_true
+}
+
+fn test_float_parsing {
+    "float_parsing" test_start
+    "f32 decimal" 1.25 "1.25".to_f32.unwrap == assert_true
+    "f64 exponent" 1500.0 "1.5e3".to_f64.unwrap == assert_true
+    "negative exponent" 0.015 "1.5e-2".to_f64.unwrap == assert_true
+    "negative zero bits" 2147483648 "-0.0".to_f32.unwrap.to_bits == assert_true
+    "NaN" "NaN".to_f64.unwrap.is_nan assert_true
+    "infinity" "-inf".to_f32.unwrap.is_infinite assert_true
+    "positive infinity" "inf".to_f64.unwrap f64::infinity == assert_true
+    "malformed decimal" "1.".to_f64.is_none assert_true
+    "malformed exponent" "1e".to_f32.is_none assert_true
+    "overflow" "1e10000".to_f64.is_none assert_true
+}
+
+fn test_float_display {
+    "float_display" test_start
+    1.5 = simple: f32
+    "simple f32" "1.5" simple.to_str assert_str_eq
+    -0.0 = negative_zero: f64
+    "negative zero" "-0.0" negative_zero.to_str assert_str_eq
+    "NaN spelling" "NaN" f32::nan.to_str assert_str_eq
+    "infinity spelling" "inf" f64::infinity.to_str assert_str_eq
+    "negative infinity spelling" "-inf" f64::neg_infinity.to_str assert_str_eq
+    0.10000000149011612 = tenth: f32
+    "f32 round trip" tenth.to_bits tenth.to_str.to_f32.unwrap.to_bits == assert_true
+    1.2345678901234567 = precise: f64
+    "f64 round trip" precise.to_bits precise.to_str.to_f64.unwrap.to_bits == assert_true
+}
 test_explicit_integer_widths
 test_explicit_float_widths
 test_numeric_literal_defaults
@@ -237,8 +407,18 @@ test_integer_literal_range_diagnostic
 test_branch_literals_are_all_range_checked
 test_negative_unsigned_literal_diagnostic
 test_literal_larger_than_u64_diagnostic
+test_float_literal_overflow_diagnostic
 test_removed_numeric_names
 test_same_width_integer_arithmetic
 test_mixed_width_integer_arithmetic_rejected
 test_numeric_lowering
+test_float_arithmetic_and_comparison
+test_named_numeric_conversions
+test_invalid_named_conversion_diagnostic
+test_checked_numeric_conversions
+test_recoverable_integer_arithmetic
+test_character_and_generic_construction
+test_float_helpers
+test_float_parsing
+test_float_display
 test_summary

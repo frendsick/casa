@@ -213,6 +213,17 @@ Parses a string as an integer, returning `Option[i64]`. Handles negative numbers
 "abc".to_int.is_none print        # true
 ```
 
+### `str::to_f32` and `str::to_f64`
+
+Parse locale-independent decimal text into `Option[f32]` or `Option[f64]`.
+Decimal exponents, signed zero, `inf`, `-inf`, and `NaN` are accepted. Malformed
+text and values outside the finite range return `None`.
+
+```casa
+"1.5e3".to_f64.unwrap print
+"not a number".to_f32.is_none print
+```
+
 ### `List[str]::join`
 
 Joins a list of strings with a separator, returning a single string.
@@ -464,6 +475,11 @@ Writes a string followed by a newline to stderr.
 
 Convert values to their string representation. All `to_str` methods can be called with dot syntax (e.g., `42.to_str`).
 
+`f32::to_str` and `f64::to_str` produce locale-independent text that parses
+back to the same IEEE representation. Signed zero, infinities, and NaN use the
+spellings accepted by the parsers above. Exact representation transport uses
+the width-matched `to_bits` and `from_bits` methods.
+
 ### `digit_to_str`
 
 Converts a single digit (0-9) to its string representation. This is a helper used internally by `i64::to_str`.
@@ -535,7 +551,8 @@ Formats an array as `[elem1, elem2, ...]`. Requires `T` to satisfy the `Display`
 **Stack effect:** `[T: Display] array[T] -> str`
 
 ```casa
-[1, 2, 3] (array[i64]) .to_str print    # [1, 2, 3]
+[1, 2, 3] = values:array[i64]
+values.to_str print    # [1, 2, 3]
 ```
 
 ### `List[T]::to_str`

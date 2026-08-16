@@ -36,9 +36,12 @@ Casa provides `f32` and `f64`. A floating-point literal adopts an immediate
 ```
 
 Decimal and exponent forms are accepted (`1.5`, `2e3`, `2.5e-2`). The old
-`float` spelling is rejected. Floating-point arithmetic and display are added
-separately; this initial surface provides the explicit types and contextual
-literals.
+`float` spelling is rejected. Finite literals that overflow their selected
+width are rejected.
+
+Arithmetic requires matching widths and preserves that width. `f32` and `f64`
+also provide `nan`, `infinity`, `neg_infinity`, `epsilon`, classification,
+absolute-value, and ties-to-even rounding helpers.
 
 ### `bool`
 
@@ -80,10 +83,13 @@ Characters support the following escape sequences:
 
 Invalid escape sequences (e.g. `\q`) produce a compile-time `SYNTAX` error. Empty char literals (`''`) are also errors.
 
-Characters can currently be cast to `i64` to get their code value:
+Use `codepoint` to inspect a character and `char::from_codepoint` to validate a
+Unicode scalar value:
 
 ```casa
-'A' (i64) print    # 65
+'A'.codepoint print                    # 65
+65 = value:u32
+value char::from_codepoint.unwrap print # A
 ```
 
 ### `str`
@@ -228,10 +234,10 @@ All items must have the same type. Heterogeneous arrays are compile-time errors:
 [1, "hello"]        # TYPE_MISMATCH error
 ```
 
-An empty array literal has an unresolved element type. The compiler infers it from the first constraining use — an explicit cast or a typed binding:
+An empty array literal has an unresolved element type. A typed binding supplies
+the required context:
 
 ```casa
-[] (array[i64])               # explicit cast resolves element type
 [] = xs:array[str]            # type annotation on the binding resolves it
 ```
 
@@ -511,6 +517,34 @@ import "std" { O_RDONLY O_WRONLY }
 ```
 
 See [Modules — Selective imports](modules.md#selective-imports) for details.
+
+## Named Numeric Conversions
+
+Numeric conversions state their behavior in the operation name:
+
+| Operation | Behavior |
+|---|---|
+| `Target::from` | Exact for every value of the source type |
+| `Target::try_from` | Exact for this value, returning `Option[Target]` |
+| `Target::round_from` | Deliberately rounds to a floating-point target |
+| `Target::trunc_from` | Truncates a float to an integer and terminates if invalid |
+| `Target::wrapping_from` | Keeps the low bits of an integer value |
+| `f32::from_bits`, `f64::from_bits` | Reconstructs an IEEE value from matching unsigned bits |
+| `to_bits` | Returns the exact matching-width IEEE representation |
+
+```casa
+120 = byte:i8
+byte i16::from = widened
+
+1000 = count:i64
+count u8::try_from = maybe_byte
+
+16777217 = large:i32
+large f32::round_from = rounded
+```
+
+Numeric widths are never converted implicitly. Character conversion likewise
+uses `codepoint` and `char::from_codepoint` rather than numeric relabeling.
 
 ## Type Casting
 

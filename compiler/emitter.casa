@@ -139,6 +139,9 @@ impl Emitter {
         done
         "bool_true: .ascii \"true\"" self.line
         "bool_false: .ascii \"false\"" self.line
+        "float_decimal_ten: .long 10" self.line
+        "arithmetic_error_msg: .ascii \"error: integer arithmetic failed\\n\"" self.line
+        ".equ arithmetic_error_msg_len, . - arithmetic_error_msg" self.line
         "env_stack_overflow_msg: .ascii \"error: env stack overflow\\n\"" self.line
         ".equ env_stack_overflow_msg_len, . - env_stack_overflow_msg" self.line
         # Static closure record per function
@@ -318,6 +321,18 @@ impl Emitter {
         "pushq %r13" self.indent
         "subq $8, %r14" self.indent
         "jmpq *(%r14)" self.indent
+        "" self.line
+
+        # Arithmetic failure handler: write error to fd 2 and exit(1).
+        "arithmetic_error:" self.line
+        "leaq arithmetic_error_msg(%rip), %rsi" self.indent
+        "movq $arithmetic_error_msg_len, %rdx" self.indent
+        "movq $2, %rdi" self.indent
+        "movq $1, %rax" self.indent
+        "syscall" self.indent
+        "movq $1, %rdi" self.indent
+        "movq $60, %rax" self.indent
+        "syscall" self.indent
         "" self.line
 
         # env_stack overflow handler: write error to fd 2 and exit(1).
@@ -624,11 +639,547 @@ impl Emitter {
                 end
                 "movq %rax, (%rsp)" self.indent
             }
+            InstValue::FloatAdd32 => "addss" self.emit_float_binary
+            InstValue::FloatAdd64 => "addsd" self.emit_float_binary
+            InstValue::FloatSub32 => "subss" self.emit_float_binary
+            InstValue::FloatSub64 => "subsd" self.emit_float_binary
+            InstValue::FloatMul32 => "mulss" self.emit_float_binary
+            InstValue::FloatMul64 => "mulsd" self.emit_float_binary
+            InstValue::FloatDiv32 => "divss" self.emit_float_binary
+            InstValue::FloatDiv64 => "divsd" self.emit_float_binary
+            InstValue::FloatEq32 => "ucomiss" "sete" self.emit_float_comparison
+            InstValue::FloatEq64 => "ucomisd" "sete" self.emit_float_comparison
+            InstValue::FloatNe32 => "ucomiss" "setne" self.emit_float_comparison
+            InstValue::FloatNe64 => "ucomisd" "setne" self.emit_float_comparison
+            InstValue::FloatLt32 => "ucomiss" "setb" self.emit_float_comparison
+            InstValue::FloatLt64 => "ucomisd" "setb" self.emit_float_comparison
+            InstValue::FloatLe32 => "ucomiss" "setbe" self.emit_float_comparison
+            InstValue::FloatLe64 => "ucomisd" "setbe" self.emit_float_comparison
+            InstValue::FloatGt32 => "ucomiss" "seta" self.emit_float_comparison
+            InstValue::FloatGt64 => "ucomisd" "seta" self.emit_float_comparison
+            InstValue::FloatGe32 => "ucomiss" "setae" self.emit_float_comparison
+            InstValue::FloatGe64 => "ucomisd" "setae" self.emit_float_comparison
+            InstValue::CheckedAdd(builtin) => "arithmetic_error" builtin self.emit_checked_add
+            InstValue::CheckedSub(builtin) => "arithmetic_error" builtin self.emit_checked_sub
+            InstValue::CheckedMul(builtin) => "arithmetic_error" builtin self.emit_checked_mul
+            InstValue::CheckedDiv(builtin) => "arithmetic_error" builtin false self.emit_checked_division
+            InstValue::CheckedMod(builtin) => "arithmetic_error" builtin true self.emit_checked_division
+            InstValue::CheckedShl(builtin) => builtin false self.emit_checked_shift
+            InstValue::CheckedShr(builtin) => builtin true self.emit_checked_shift
+            InstValue::NumericConvert(conversion) => conversion self.emit_numeric_conversion
+            InstValue::NumericTry(numeric_try) => numeric_try self.emit_numeric_try
+            InstValue::IntegerTry(integer_try) => integer_try self.emit_integer_try
+            InstValue::FloatRound(rounding) => rounding self.emit_float_round
+            InstValue::FloatFromDecimal => self.emit_float_from_decimal
+            InstValue::FloatSignificand => self.emit_float_significand
             _ => {
                 "Internal error: emit_arithmetic called with non-arithmetic InstValue\n" eprint
                 1 exit
             }
         end
+    }
+
+    fn emit_checked_range self:Emitter builtin:BuiltinType failure:str {
+        builtin match
+            BuiltinType::I8 => "movsbq (%rsp), %rax" self.indent
+            BuiltinType::I16 => "movswq (%rsp), %rax" self.indent
+            BuiltinType::I32 => "movslq (%rsp), %rax" self.indent
+            BuiltinType::U8 => "movzbq (%rsp), %rax" self.indent
+            BuiltinType::U16 => "movzwq (%rsp), %rax" self.indent
+            BuiltinType::U32 => "movl (%rsp), %eax" self.indent
+            _ => return
+        end
+        "cmpq %rax, (%rsp)" self.indent
+        f"jne {failure}" self.indent
+    }
+
+    fn emit_checked_add self:Emitter builtin:BuiltinType failure:str {
+        "popq %rax" self.indent
+        "addq %rax, (%rsp)" self.indent
+        if 64 builtin.bit_width == then
+            if builtin.is_unsigned then f"jc {failure}" else f"jo {failure}" fi self.indent
+        else
+            failure builtin self.emit_checked_range
+        fi
+    }
+
+    fn emit_checked_sub self:Emitter builtin:BuiltinType failure:str {
+        "popq %rax" self.indent
+        "subq %rax, (%rsp)" self.indent
+        if 64 builtin.bit_width == then
+            if builtin.is_unsigned then f"jc {failure}" else f"jo {failure}" fi self.indent
+        else
+            failure builtin self.emit_checked_range
+        fi
+    }
+
+    fn emit_checked_mul self:Emitter builtin:BuiltinType failure:str {
+        "popq %rax" self.indent
+        if builtin BuiltinType::U64 == then
+            "mulq (%rsp)" self.indent
+            "testq %rdx, %rdx" self.indent
+            f"jnz {failure}" self.indent
+        else
+            "imulq (%rsp), %rax" self.indent
+            if builtin BuiltinType::I64 == then f"jo {failure}" self.indent fi
+        fi
+        "movq %rax, (%rsp)" self.indent
+        if 64 builtin.bit_width != then failure builtin self.emit_checked_range fi
+    }
+
+    fn emit_checked_division self:Emitter remainder:bool builtin:BuiltinType failure:str {
+        "popq %rbx" self.indent
+        "testq %rbx, %rbx" self.indent
+        f"jz {failure}" self.indent
+        "movq (%rsp), %rax" self.indent
+        if builtin.is_unsigned then
+            "xorq %rdx, %rdx" self.indent
+            "divq %rbx" self.indent
+        else
+            builtin Type::Builtin = integer_type
+            integer_type.get_integer_min = minimum
+            self.emit_uid = uid
+            "cmpq $-1, %rbx" self.indent
+            f"jne .Ldiv_ready_{uid}" self.indent
+            f"movabsq ${minimum}, %rcx" self.indent
+            "cmpq %rcx, %rax" self.indent
+            f"je {failure}" self.indent
+            f".Ldiv_ready_{uid}:" self.line
+            "cqto" self.indent
+            "idivq %rbx" self.indent
+        fi
+        if remainder then "movq %rdx, (%rsp)" else "movq %rax, (%rsp)" fi self.indent
+    }
+
+    fn emit_checked_shift self:Emitter right:bool builtin:BuiltinType {
+        "popq %rcx" self.indent
+        f"cmpq ${builtin.bit_width}, %rcx" self.indent
+        "jae arithmetic_error" self.indent
+        if right then
+            if builtin.is_unsigned then "shrq %cl, (%rsp)" else "sarq %cl, (%rsp)" fi self.indent
+        else
+            "shlq %cl, (%rsp)" self.indent
+        fi
+    }
+
+    fn emit_normalize_numeric self:Emitter builtin:BuiltinType {
+        builtin match
+            BuiltinType::I8 => "movsbq (%rsp), %rax" self.indent
+            BuiltinType::I16 => "movswq (%rsp), %rax" self.indent
+            BuiltinType::I32 => "movslq (%rsp), %rax" self.indent
+            BuiltinType::U8 => "movzbq (%rsp), %rax" self.indent
+            BuiltinType::U16 => "movzwq (%rsp), %rax" self.indent
+            BuiltinType::U32 => "movl (%rsp), %eax" self.indent
+            _ => return
+        end
+        "movq %rax, (%rsp)" self.indent
+    }
+
+    fn emit_integer_to_float self:Emitter source:BuiltinType target:BuiltinType {
+        self.emit_uid = uid
+        "movq (%rsp), %rax" self.indent
+        if source BuiltinType::U64 == then
+            "testq %rax, %rax" self.indent
+            f"jns .Luint_float_ready_{uid}" self.indent
+            "movq %rax, %rcx" self.indent
+            "andq $1, %rcx" self.indent
+            "shrq $1, %rax" self.indent
+            "orq %rcx, %rax" self.indent
+            if target BuiltinType::F32 == then
+                "cvtsi2ssq %rax, %xmm0" self.indent
+                "addss %xmm0, %xmm0" self.indent
+            else
+                "cvtsi2sdq %rax, %xmm0" self.indent
+                "addsd %xmm0, %xmm0" self.indent
+            fi
+            f"jmp .Luint_float_done_{uid}" self.indent
+            f".Luint_float_ready_{uid}:" self.line
+        fi
+        if target BuiltinType::F32 == then
+            "cvtsi2ssq %rax, %xmm0" self.indent
+        else
+            "cvtsi2sdq %rax, %xmm0" self.indent
+        fi
+        f".Luint_float_done_{uid}:" self.line
+        if target BuiltinType::F32 == then
+            "movd %xmm0, %eax" self.indent
+            "movq %rax, (%rsp)" self.indent
+        else
+            "movq %xmm0, (%rsp)" self.indent
+        fi
+    }
+
+    fn emit_float_constant self:Emitter value:str source:BuiltinType register:str {
+        self.emit_uid = uid
+        f"jmp .Lfloat_constant_done_{uid}" self.indent
+        if source BuiltinType::F32 == then ".align 4" else ".align 8" fi self.line
+        f".Lfloat_constant_{uid}:" self.line
+        if source BuiltinType::F32 == then f".float {value}" else f".double {value}" fi self.line
+        f".Lfloat_constant_done_{uid}:" self.line
+        if source BuiltinType::F32 == then
+            f"movss .Lfloat_constant_{uid}(%rip), {register}" self.indent
+        else
+            f"movsd .Lfloat_constant_{uid}(%rip), {register}" self.indent
+        fi
+    }
+
+    fn emit_truncate_to_u64 self:Emitter source:BuiltinType failure:str {
+        self.emit_uid = uid
+        if source BuiltinType::F32 == then
+            "xorps %xmm1, %xmm1" self.indent
+            "ucomiss %xmm1, %xmm0" self.indent
+        else
+            "xorpd %xmm1, %xmm1" self.indent
+            "ucomisd %xmm1, %xmm0" self.indent
+        fi
+        f"jp {failure}" self.indent
+        f"jb {failure}" self.indent
+        "%xmm1" source "18446744073709551616.0" self.emit_float_constant
+        if source BuiltinType::F32 == then
+            "ucomiss %xmm1, %xmm0" self.indent
+        else
+            "ucomisd %xmm1, %xmm0" self.indent
+        fi
+        f"jae {failure}" self.indent
+        "%xmm1" source "9223372036854775808.0" self.emit_float_constant
+        if source BuiltinType::F32 == then
+            "ucomiss %xmm1, %xmm0" self.indent
+            f"jb .Ltrunc_u64_low_{uid}" self.indent
+            "subss %xmm1, %xmm0" self.indent
+            "cvttss2siq %xmm0, %rax" self.indent
+        else
+            "ucomisd %xmm1, %xmm0" self.indent
+            f"jb .Ltrunc_u64_low_{uid}" self.indent
+            "subsd %xmm1, %xmm0" self.indent
+            "cvttsd2siq %xmm0, %rax" self.indent
+        fi
+        "btc $63, %rax" self.indent
+        f"jmp .Ltrunc_u64_done_{uid}" self.indent
+        f".Ltrunc_u64_low_{uid}:" self.line
+        if source BuiltinType::F32 == then
+            "cvttss2siq %xmm0, %rax" self.indent
+        else
+            "cvttsd2siq %xmm0, %rax" self.indent
+        fi
+        f".Ltrunc_u64_done_{uid}:" self.line
+        "movq %rax, (%rsp)" self.indent
+    }
+
+    fn emit_float_to_integer self:Emitter source:BuiltinType target:BuiltinType failure:str {
+        if source BuiltinType::F32 == then
+            "movss (%rsp), %xmm0" self.indent
+        else
+            "movsd (%rsp), %xmm0" self.indent
+        fi
+        if target BuiltinType::U64 == then failure source self.emit_truncate_to_u64 return fi
+        if source BuiltinType::F32 == then
+            "cvttss2siq %xmm0, %rax" self.indent
+        else
+            "cvttsd2siq %xmm0, %rax" self.indent
+        fi
+        "movq %rax, (%rsp)" self.indent
+        if target BuiltinType::I64 == then
+            self.emit_uid = uid
+            "movabsq $-9223372036854775808, %rcx" self.indent
+            "cmpq %rcx, %rax" self.indent
+            f"jne .Ltrunc_i64_done_{uid}" self.indent
+            if source BuiltinType::F32 == then
+                "cvtsi2ssq %rax, %xmm1" self.indent
+                "ucomiss %xmm1, %xmm0" self.indent
+            else
+                "cvtsi2sdq %rax, %xmm1" self.indent
+                "ucomisd %xmm1, %xmm0" self.indent
+            fi
+            f"jp {failure}" self.indent
+            f"jne {failure}" self.indent
+            f".Ltrunc_i64_done_{uid}:" self.line
+        else
+            failure target self.emit_checked_range
+            target self.emit_normalize_numeric
+        fi
+    }
+
+    fn emit_numeric_conversion self:Emitter conversion:NumericConversion {
+        if
+        conversion.kind NumericConversionKind::FromBits ==
+        conversion.kind NumericConversionKind::ToBits == ||
+        then
+            return
+        fi
+        if conversion.source.is_integer conversion.target.is_integer && then
+            conversion.target self.emit_normalize_numeric
+            return
+        fi
+        if conversion.source.is_integer conversion.target.is_float && then
+            conversion.target conversion.source self.emit_integer_to_float
+            return
+        fi
+        if
+        conversion.source BuiltinType::F32 ==
+        conversion.target BuiltinType::F64 == &&
+        then
+            "movss (%rsp), %xmm0" self.indent
+            "cvtss2sd %xmm0, %xmm0" self.indent
+            "movq %xmm0, (%rsp)" self.indent
+            return
+        fi
+        if
+        conversion.source BuiltinType::F64 ==
+        conversion.target BuiltinType::F32 == &&
+        then
+            "movsd (%rsp), %xmm0" self.indent
+            "cvtsd2ss %xmm0, %xmm0" self.indent
+            "movd %xmm0, %eax" self.indent
+            "movq %rax, (%rsp)" self.indent
+            return
+        fi
+        if conversion.source.is_float conversion.target.is_integer && then
+            "arithmetic_error" conversion.target conversion.source self.emit_float_to_integer
+        fi
+    }
+
+    fn emit_numeric_try self:Emitter numeric_try:NumericTry {
+        if numeric_try.source Type::Builtin(source) is then
+            numeric_try.target = target
+            self.emit_uid = uid
+            f".Lnumeric_try_fail_{uid}" = failure
+            f".Lnumeric_try_done_{uid}" = done_label
+            "movq (%rsp), %r10" self.indent
+
+            if source.is_integer target.is_integer && then
+                target self.emit_normalize_numeric
+                if source.is_unsigned ! target.is_unsigned && then
+                    "testq %r10, %r10" self.indent
+                    f"js {failure}" self.indent
+                elif source.is_unsigned target.is_unsigned ! && then
+                    "cmpq $0, (%rsp)" self.indent
+                    f"jl {failure}" self.indent
+                fi
+                "cmpq %r10, (%rsp)" self.indent
+                f"jne {failure}" self.indent
+            elif source.is_integer target.is_float && then
+                target source self.emit_integer_to_float
+                if target BuiltinType::F32 == then
+                    "movss (%rsp), %xmm0" self.indent
+                else
+                    "movsd (%rsp), %xmm0" self.indent
+                fi
+                if source BuiltinType::U64 == then
+                    "%xmm1" target "18446744073709551616.0" self.emit_float_constant
+                    if target BuiltinType::F32 == then
+                        "ucomiss %xmm1, %xmm0" self.indent
+                    else
+                        "ucomisd %xmm1, %xmm0" self.indent
+                    fi
+                    f"jae {failure}" self.indent
+                    "%xmm1" target "9223372036854775808.0" self.emit_float_constant
+                    if target BuiltinType::F32 == then
+                        "ucomiss %xmm1, %xmm0" self.indent
+                        f"jb .Lnumeric_try_uint_low_{uid}" self.indent
+                        "subss %xmm1, %xmm0" self.indent
+                        "cvttss2siq %xmm0, %rax" self.indent
+                    else
+                        "ucomisd %xmm1, %xmm0" self.indent
+                        f"jb .Lnumeric_try_uint_low_{uid}" self.indent
+                        "subsd %xmm1, %xmm0" self.indent
+                        "cvttsd2siq %xmm0, %rax" self.indent
+                    fi
+                    "btc $63, %rax" self.indent
+                    f"jmp .Lnumeric_try_uint_done_{uid}" self.indent
+                    f".Lnumeric_try_uint_low_{uid}:" self.line
+                    if target BuiltinType::F32 == then
+                        "cvttss2siq %xmm0, %rax" self.indent
+                    else
+                        "cvttsd2siq %xmm0, %rax" self.indent
+                    fi
+                    f".Lnumeric_try_uint_done_{uid}:" self.line
+                elif target BuiltinType::F32 == then
+                    "cvttss2siq %xmm0, %rax" self.indent
+                else
+                    "cvttsd2siq %xmm0, %rax" self.indent
+                fi
+                "cmpq %r10, %rax" self.indent
+                f"jne {failure}" self.indent
+            elif source.is_float target.is_integer && then
+                failure target source self.emit_float_to_integer
+                "movq (%rsp), %r11" self.indent
+                source target self.emit_integer_to_float
+                "movq %r10, %xmm1" self.indent
+                if source BuiltinType::F32 == then
+                    "movss (%rsp), %xmm0" self.indent
+                    "ucomiss %xmm1, %xmm0" self.indent
+                else
+                    "movsd (%rsp), %xmm0" self.indent
+                    "ucomisd %xmm1, %xmm0" self.indent
+                fi
+                f"jp {failure}" self.indent
+                f"jne {failure}" self.indent
+                "movq %r11, (%rsp)" self.indent
+            elif source.is_float target.is_float && then
+                if source target != then
+                    target source NumericConversionKind::Rounded NumericConversion = conversion
+                    conversion self.emit_numeric_conversion
+                fi
+                if source BuiltinType::F64 == target BuiltinType::F32 == && then
+                    "movq (%rsp), %r11" self.indent
+                    BuiltinType::F64 BuiltinType::F32 NumericConversionKind::Exact NumericConversion
+                    self.emit_numeric_conversion
+                    "movq %r10, %xmm1" self.indent
+                    "movsd (%rsp), %xmm0" self.indent
+                    "ucomisd %xmm1, %xmm0" self.indent
+                    f"jp {failure}" self.indent
+                    f"jne {failure}" self.indent
+                    "movq %r11, (%rsp)" self.indent
+                fi
+            else
+                f"jmp {failure}" self.indent
+            fi
+            "movq $1, %rax" self.indent
+            f"jmp {done_label}" self.indent
+            f"{failure}:" self.line
+            "movq $0, (%rsp)" self.indent
+            "xorq %rax, %rax" self.indent
+            f"{done_label}:" self.line
+            "pushq %rax" self.indent
+        fi
+    }
+
+    fn emit_float_binary self:Emitter instruction:str {
+        "movq (%rsp), %xmm0" self.indent
+        "addq $8, %rsp" self.indent
+        "movq (%rsp), %xmm1" self.indent
+        f"{instruction} %xmm0, %xmm1" self.indent
+        "movq %xmm1, (%rsp)" self.indent
+    }
+
+    fn emit_float_comparison self:Emitter setcc:str instruction:str {
+        "movq (%rsp), %xmm0" self.indent
+        "addq $8, %rsp" self.indent
+        f"{instruction} (%rsp), %xmm0" self.indent
+        f"{setcc} %al" self.indent
+        if "setne" setcc == then
+            "setp %cl" self.indent
+            "orb %cl, %al" self.indent
+        else
+            "setnp %cl" self.indent
+            "andb %cl, %al" self.indent
+        fi
+        "movzbq %al, %rax" self.indent
+        "movq %rax, (%rsp)" self.indent
+    }
+
+    fn emit_float_round self:Emitter rounding:FloatRound {
+        rounding.method match
+            "__float_floor" => 1
+            "__float_ceil" => 2
+            "__float_trunc" => 3
+            _ => 0
+        end = mode
+        if rounding.target BuiltinType::F32 == then
+            "movss (%rsp), %xmm0" self.indent
+            f"roundss ${mode}, %xmm0, %xmm0" self.indent
+            "movd %xmm0, %eax" self.indent
+            "movq %rax, (%rsp)" self.indent
+        else
+            "movsd (%rsp), %xmm0" self.indent
+            f"roundsd ${mode}, %xmm0, %xmm0" self.indent
+            "movq %xmm0, (%rsp)" self.indent
+        fi
+    }
+
+    fn emit_integer_try self:Emitter integer_try:IntegerTry {
+        self.emit_uid = uid
+        f".Linteger_try_fail_{uid}" = failure
+        f".Linteger_try_done_{uid}" = done_label
+        integer_try.kind match
+            IntegerTryKind::Add => { failure integer_try.target self.emit_checked_add }
+            IntegerTryKind::Sub => { failure integer_try.target self.emit_checked_sub }
+            IntegerTryKind::Mul => { failure integer_try.target self.emit_checked_mul }
+            IntegerTryKind::Div => { failure integer_try.target false self.emit_checked_division }
+            IntegerTryKind::Mod => { failure integer_try.target true self.emit_checked_division }
+        end
+        integer_try.target self.emit_normalize_numeric
+        "pushq $1" self.indent
+        f"jmp {done_label}" self.indent
+        f"{failure}:" self.line
+        "movq $0, (%rsp)" self.indent
+        "pushq $0" self.indent
+        f"{done_label}:" self.line
+    }
+
+    fn emit_float_from_decimal self:Emitter {
+        self.emit_uid = uid
+        "fildq (%rsp)" self.indent
+        "addq $8, %rsp" self.indent
+        "popq %rcx" self.indent
+        "testq %rcx, %rcx" self.indent
+        f"jz .Ldecimal_float_done_{uid}" self.indent
+        "xorq %rdx, %rdx" self.indent
+        "testq %rcx, %rcx" self.indent
+        f"jns .Ldecimal_float_abs_ready_{uid}" self.indent
+        "negq %rcx" self.indent
+        "movq $1, %rdx" self.indent
+        f".Ldecimal_float_abs_ready_{uid}:" self.line
+        "fld1" self.indent
+        "fildl float_decimal_ten(%rip)" self.indent
+        f".Ldecimal_float_power_loop_{uid}:" self.line
+        "testq $1, %rcx" self.indent
+        f"jz .Ldecimal_float_power_skip_{uid}" self.indent
+        "fmul %st(0), %st(1)" self.indent
+        f".Ldecimal_float_power_skip_{uid}:" self.line
+        "shrq $1, %rcx" self.indent
+        f"jz .Ldecimal_float_power_done_{uid}" self.indent
+        "fmul %st(0), %st(0)" self.indent
+        f"jmp .Ldecimal_float_power_loop_{uid}" self.indent
+        f".Ldecimal_float_power_done_{uid}:" self.line
+        "fstp %st(0)" self.indent
+        "testq %rdx, %rdx" self.indent
+        f"jnz .Ldecimal_float_divide_{uid}" self.indent
+        "fmulp %st(0), %st(1)" self.indent
+        f"jmp .Ldecimal_float_done_{uid}" self.indent
+        f".Ldecimal_float_divide_{uid}:" self.line
+        "fdivrp %st(0), %st(1)" self.indent
+        f".Ldecimal_float_done_{uid}:" self.line
+        "subq $8, %rsp" self.indent
+        "fstpl (%rsp)" self.indent
+    }
+
+    fn emit_float_significand self:Emitter {
+        self.emit_uid = uid
+        "fldl (%rsp)" self.indent
+        "addq $8, %rsp" self.indent
+        "popq %rcx" self.indent
+        "testq %rcx, %rcx" self.indent
+        f"jz .Lfloat_significand_done_{uid}" self.indent
+        "xorq %rdx, %rdx" self.indent
+        "testq %rcx, %rcx" self.indent
+        f"jns .Lfloat_significand_abs_ready_{uid}" self.indent
+        "negq %rcx" self.indent
+        "movq $1, %rdx" self.indent
+        f".Lfloat_significand_abs_ready_{uid}:" self.line
+        "fld1" self.indent
+        "fildl float_decimal_ten(%rip)" self.indent
+        f".Lfloat_significand_power_loop_{uid}:" self.line
+        "testq $1, %rcx" self.indent
+        f"jz .Lfloat_significand_power_skip_{uid}" self.indent
+        "fmul %st(0), %st(1)" self.indent
+        f".Lfloat_significand_power_skip_{uid}:" self.line
+        "shrq $1, %rcx" self.indent
+        f"jz .Lfloat_significand_power_done_{uid}" self.indent
+        "fmul %st(0), %st(0)" self.indent
+        f"jmp .Lfloat_significand_power_loop_{uid}" self.indent
+        f".Lfloat_significand_power_done_{uid}:" self.line
+        "fstp %st(0)" self.indent
+        "testq %rdx, %rdx" self.indent
+        f"jnz .Lfloat_significand_divide_{uid}" self.indent
+        "fmulp %st(0), %st(1)" self.indent
+        f"jmp .Lfloat_significand_done_{uid}" self.indent
+        f".Lfloat_significand_divide_{uid}:" self.line
+        "fdivrp %st(0), %st(1)" self.indent
+        f".Lfloat_significand_done_{uid}:" self.line
+        "frndint" self.indent
+        "subq $8, %rsp" self.indent
+        "fistpq (%rsp)" self.indent
     }
 
     # ============================================================================
@@ -949,6 +1500,39 @@ impl Emitter {
             InstValue::UMod => inst self.emit_arithmetic
             InstValue::UShr => inst self.emit_arithmetic
             InstValue::NormalizeInt => inst self.emit_arithmetic
+            InstValue::CheckedAdd => inst self.emit_arithmetic
+            InstValue::CheckedSub => inst self.emit_arithmetic
+            InstValue::CheckedMul => inst self.emit_arithmetic
+            InstValue::CheckedDiv => inst self.emit_arithmetic
+            InstValue::CheckedMod => inst self.emit_arithmetic
+            InstValue::CheckedShl => inst self.emit_arithmetic
+            InstValue::CheckedShr => inst self.emit_arithmetic
+            InstValue::NumericConvert => inst self.emit_arithmetic
+            InstValue::NumericTry => inst self.emit_arithmetic
+            InstValue::IntegerTry => inst self.emit_arithmetic
+            InstValue::FloatRound => inst self.emit_arithmetic
+            InstValue::FloatFromDecimal => inst self.emit_arithmetic
+            InstValue::FloatSignificand => inst self.emit_arithmetic
+            InstValue::FloatAdd32 => inst self.emit_arithmetic
+            InstValue::FloatAdd64 => inst self.emit_arithmetic
+            InstValue::FloatSub32 => inst self.emit_arithmetic
+            InstValue::FloatSub64 => inst self.emit_arithmetic
+            InstValue::FloatMul32 => inst self.emit_arithmetic
+            InstValue::FloatMul64 => inst self.emit_arithmetic
+            InstValue::FloatDiv32 => inst self.emit_arithmetic
+            InstValue::FloatDiv64 => inst self.emit_arithmetic
+            InstValue::FloatEq32 => inst self.emit_arithmetic
+            InstValue::FloatEq64 => inst self.emit_arithmetic
+            InstValue::FloatNe32 => inst self.emit_arithmetic
+            InstValue::FloatNe64 => inst self.emit_arithmetic
+            InstValue::FloatLt32 => inst self.emit_arithmetic
+            InstValue::FloatLt64 => inst self.emit_arithmetic
+            InstValue::FloatLe32 => inst self.emit_arithmetic
+            InstValue::FloatLe64 => inst self.emit_arithmetic
+            InstValue::FloatGt32 => inst self.emit_arithmetic
+            InstValue::FloatGt64 => inst self.emit_arithmetic
+            InstValue::FloatGe32 => inst self.emit_arithmetic
+            InstValue::FloatGe64 => inst self.emit_arithmetic
 
             # Control flow / variables / functions
             InstValue::Label => is_global inst self.emit_control_flow
