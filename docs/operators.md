@@ -37,10 +37,10 @@ All arithmetic operators consume two values and produce one.
 
 | Operator | Stack Effect | Description |
 |----------|-------------|-------------|
-| `+` | `T T -> T` | Same-width integer addition; also `ptr i64 -> ptr` |
-| `-` | `T T -> T` | Same-width integer subtraction; also `ptr i64 -> ptr` |
-| `*` | `T T -> T` | Same-width integer multiplication |
-| `/` | `T T -> T` | Same-width integer division (truncates toward zero) |
+| `+` | `T T -> T` | Same-width numeric addition; also `ptr i64 -> ptr` |
+| `-` | `T T -> T` | Same-width numeric subtraction; also `ptr i64 -> ptr` |
+| `*` | `T T -> T` | Same-width numeric multiplication |
+| `/` | `T T -> T` | Same-width numeric division; integer division truncates toward zero |
 | `%` | `T T -> T` | Same-width integer remainder |
 
 ```casa
@@ -50,6 +50,16 @@ All arithmetic operators consume two values and produce one.
 14 3 / print     # 4
 14 3 % print     # 2
 ```
+
+Integer `+`, `-`, `*`, `/`, `%`, `<<`, and `>>` terminate the program when the
+result is not representable, the divisor is zero, or a shift count is outside
+the operand width. Use `try_add`, `try_sub`, `try_mul`, `try_div`, or `try_mod`
+for an `Option[T]` result. Deliberate modulo arithmetic uses `wrapping_add`,
+`wrapping_sub`, and `wrapping_mul`.
+
+Floating-point `+`, `-`, `*`, and `/` use strict IEEE round-to-nearest,
+ties-to-even execution. They preserve subnormals, signed zero, infinities, and
+NaNs and never promote `f32` to `f64` implicitly.
 
 ### Pointer Arithmetic
 
@@ -104,10 +114,12 @@ All comparison operators consume two values of the same type and push a `bool`. 
 | `>`  | `[T: Ord] T T -> bool` | Greater than |
 | `>=` | `[T: Ord] T T -> bool` | Greater than or equal |
 
-Built-in integer types, `bool`, `char`, `cstr`, `ptr`, and enums get direct
-bytecode comparison. Integer operands must have the same width. User-defined
-types must provide `impl T { fn eq ... }` (and `fn lt ...` for ordering); the
-operator then lowers to the corresponding trait method call. See
+Built-in integer and floating-point types, `bool`, `char`, `cstr`, `ptr`, and
+enums get direct bytecode comparison. Numeric operands must have the same
+width. Floating-point comparison is partial: every ordered comparison with NaN
+is false, equality with NaN is false, and inequality with NaN is true.
+User-defined types must provide `impl T { fn eq ... }` (and `fn lt ...` for
+ordering); the operator then lowers to the corresponding trait method call. See
 [traits.md](traits.md) for `Eq` and `Ord`.
 
 ```casa

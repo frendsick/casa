@@ -63,7 +63,7 @@ Enums whose variants carry no inner values automatically satisfy `Hashable` — 
 enum Color { Red Green Blue }
 
 # Works without writing impl Color { fn hash ... fn eq ... }
-Map::new(Map[Color i64]) = scores
+Map[Color i64]::new = scores
 10 Color::Red scores.set = scores
 ```
 
@@ -155,10 +155,12 @@ This pushes the function pointer for the concrete type's method.
 When calling a function with trait bounds, the compiler automatically injects the correct function pointers. You do not need to pass them manually.
 
 ```casa
-Map::new (Map[str i64]) = m
+Map[str i64]::new = m
 ```
 
-The compiler sees that `Map::new` requires `[K: Hashable, V]`, determines `K=str` from the type cast `(Map[str i64])`, verifies that `str` satisfies `Hashable`, and injects `&str::hash` and `&str::eq` behind the scenes.
+The explicit `Map[str i64]` arguments bind `K=str` and `V=i64`. The compiler
+then verifies that `str` satisfies `Hashable` and injects `&str::hash` and
+`&str::eq` behind the scenes.
 
 ## Built-in Trait: `Eq`
 
@@ -281,7 +283,7 @@ trait Iterable[T] {
     fn next self:self -> Option[T]
 
     fn collect self:self -> List[T] {
-        List::new (List[T]) = iter_result
+        List[T]::new = iter_result
         for iter_elem in self do
             iter_elem iter_result.push
         done

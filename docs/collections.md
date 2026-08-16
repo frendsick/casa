@@ -190,10 +190,11 @@ Creates an empty map with an initial capacity of 16.
 **Stack effect:** `-> Map[K V]`
 
 ```casa
-Map::new (Map[str i64]) = m
+Map[str i64]::new = m
 ```
 
-The type cast `(Map[str i64])` tells the compiler the concrete types for `K` and `V`. The compiler verifies that `str` satisfies `Hashable`.
+The explicit `Map[str i64]` arguments tell the compiler the concrete types for
+`K` and `V`. The compiler verifies that `str` satisfies `Hashable`.
 
 ### `Map::length`
 
@@ -299,7 +300,7 @@ m.values = val_list
 import "path/to/lib/std.casa"
 
 # Create a map from strings to ints
-Map::new (Map[str i64]) = m
+Map[str i64]::new = m
 
 # Insert key-value pairs
 1 "one" m.set = m
@@ -323,7 +324,7 @@ Map::new (Map[str i64]) = m
 m.length print                 # 2
 
 # Integer keys work too
-Map::new (Map[i64 str]) = m2
+Map[i64 str]::new = m2
 "hello" 1 m2.set = m2
 1 m2.get .unwrap print         # hello
 ```
@@ -353,7 +354,7 @@ Creates an empty set.
 **Stack effect:** `-> Set[K]`
 
 ```casa
-Set::new (Set[str]) = s
+Set[str]::new = s
 ```
 
 ### `Set::length`
@@ -412,7 +413,7 @@ s.to_list = elements
 import "path/to/lib/std.casa"
 
 # Create a set of strings
-Set::new (Set[str]) = s
+Set[str]::new = s
 
 # Add elements
 "apple" s.add = s
