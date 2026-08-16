@@ -1,6 +1,6 @@
 # Copy-provided Clone composes field Clone
 
-When standard Copy conformance must supply its Clone supertrait, the generated aggregate Clone implementation clones each field or active enum payload through its Clone method. It does not raw-copy the complete aggregate representation.
+When the standard Copy implementation must satisfy its Clone supertrait, the generated aggregate Clone implementation clones each field or active enum payload through its Clone method. It does not raw-copy the complete aggregate representation.
 
 A field may itself be Copy while providing customized Clone behavior. Fieldwise generation respects that customization and allows explicit aggregate cloning to allocate or run user code. Implicit aggregate Copy, `dup`, and `over` remain raw, compiler-validated, and allocation-free.
 

@@ -14,11 +14,11 @@ trait Anonymous {
 trait Entity: Named + Anonymous { }
 ```
 
-`Anonymous.name` is the single effective implementation of both inherited contracts. Explicitly inheriting both traits commits the child trait and its conforming types to those contracts; the compiler cannot validate additional semantic laws.
+`Anonymous.name` is the single effective implementation of both inherited contracts. Explicitly inheriting both traits commits the child trait and the types that implement it to those contracts; the compiler cannot validate additional semantic laws.
 
 ## Consequences
 
-- When compatible declarations have no body, a conforming type must provide one implementation.
+- When compatible declarations have no body, an implementing type must provide one implementation.
 - When exactly one compatible declaration has a body, that body supplies all of them.
-- Multiple distinct inherited bodies remain ambiguous until the child trait or conforming type provides one overriding implementation.
+- Multiple distinct inherited bodies remain ambiguous until the child trait or implementing type provides one overriding implementation.
 - The rule applies after shared declarations from diamond inheritance are deduplicated.

@@ -1,6 +1,6 @@
 # Copy types may customize Clone
 
-A type conforming to standard Copy may provide its own ordinary Clone implementation. Copy conformance supplies fieldwise Clone behavior only as a fallback when no explicit implementation exists; an explicit implementation takes precedence and is not a duplicate-conformance error.
+A type that implements standard Copy may provide its own ordinary Clone implementation. The Copy implementation supplies fieldwise Clone behavior only as a fallback when no explicit implementation exists; an explicit implementation takes precedence and is not a duplicate-implementation error.
 
 Customized Clone does not affect Copy semantics. Implicit reuse, `dup`, and `over` still perform compiler-validated, allocation-free representation copying. An explicit `.clone` call may allocate, run user code, or choose different domain behavior according to its implementation.
 
@@ -8,7 +8,7 @@ The implementation author is responsible for honoring Clone's documented semanti
 
 ## Consequences
 
-- `derives Copy` plus a handwritten Clone conformance is valid; the handwritten method replaces the fieldwise fallback.
+- `derives Copy` plus a handwritten Clone implementation is valid; the handwritten method replaces the fieldwise fallback.
 - `derives Clone` and one handwritten Clone customization merge under ADR-0090, with the handwritten hook taking precedence.
 - Generic `[T: Copy]` code may call `.clone` through the standard supertrait, but that explicit call is not guaranteed allocation-free.
 - Code requiring trivial duplication uses Copy operations rather than Clone.

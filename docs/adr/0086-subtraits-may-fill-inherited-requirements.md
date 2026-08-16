@@ -1,6 +1,6 @@
 # Subtraits may fill inherited requirements
 
-A subtrait may provide a default body for a bodyless method required by a supertrait when the method name and stack effect match exactly. The inherited requirement then has an implementation for types conforming through the subtrait:
+A subtrait may provide a default body for a bodyless method required by a supertrait when the method name and stack effect match exactly. The inherited requirement then has an implementation for types that satisfy the subtrait:
 
 ```casa
 trait PartialOrd: PartialEq {

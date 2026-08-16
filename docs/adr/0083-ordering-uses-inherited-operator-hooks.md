@@ -25,7 +25,7 @@ The standard boolean defaults interpret `partial_cmp`; Ord fills that inherited 
 ## Consequences
 
 - IEEE floats implement PartialEq and PartialOrd but not Eq or Ord.
-- `derives Ord` generates the total equality and comparison primitives and declares PartialEq, Eq, PartialOrd, and Ord conformances; standard defaults provide the partial adapter and boolean hooks.
-- A manual total implementation may place all four conformances in one impl block; operator hooks normally use their defaults.
+- `derives Ord` generates the total equality and comparison primitives and implements PartialEq, Eq, PartialOrd, and Ord; standard defaults provide the partial adapter and boolean hooks.
+- A manual total implementation may place all four traits in one impl block; operator hooks normally use their defaults.
 - Overriding a boolean hook may improve performance but must agree with `partial_cmp` or `cmp`; the compiler cannot prove this semantic law.
 - Current direct operator-to-method lowering is retained while total-order algorithms may use `cmp` to avoid repeated comparisons.

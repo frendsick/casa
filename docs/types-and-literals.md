@@ -560,7 +560,7 @@ buffer (ptr) load64 (i64)    # cast i64 -> i64 (no-op here, but useful for gener
 
 ## Printing Values
 
-`print` requires the value's type to implement the [`Display` trait](traits.md). The primitives `i64`, `bool`, `char`, `str`, and `cstr` are dispatched directly to specialized output instructions. User types must declare `Display` conformance and provide a `to_str self -> str` method, which the compiler invokes before printing the resulting string.
+`print` requires the value's type to implement the [`Display` trait](traits.md). The primitives `i64`, `bool`, `char`, `str`, and `cstr` are dispatched directly to specialized output instructions. User types must implement `Display` and provide a `to_str self -> str` method, which the compiler invokes before printing the resulting string.
 
 ```casa
 struct Point { x: i64 y: i64 }

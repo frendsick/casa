@@ -17,7 +17,7 @@ Higher-order function contracts reuse the same qualifiers instead of introducing
 
 ## Consequences
 
-- Owned values move. `dup` and the copied operand of `over` require `Copy`; `swap` and `rot` only reorder ownership. Scalars, shared borrows, and named function references are automatically `Copy`; eligible user-defined aggregates opt in with `derives Copy` or a validated empty Copy conformance. Mutable borrows, heap owners, owned resources, and types with custom cleanup are not `Copy`.
+- Owned values move. `dup` and the copied operand of `over` require `Copy`; `swap` and `rot` only reorder ownership. Scalars, shared borrows, and named function references are automatically `Copy`; eligible user-defined aggregates opt in with `derives Copy` or a validated empty Copy implementation. Mutable borrows, heap owners, owned resources, and types with custom cleanup are not `Copy`.
 - An escaping closure that borrows a local is rejected with a diagnostic suggesting `move { ... }`; captures are never silently moved or duplicated.
 - `List::slice` returns `$array[T]`, tying the zero-copy view to the borrowed list. The list cannot be mutated in a way that could invalidate the view before its last use.
 - Collection observation preserves ownership: `get` returns `Option[$T]`, `get_mut` returns `Option[mut$T]`, and `remove` returns `Option[T]`. Generic wrappers such as `Option` may temporarily carry an inferred borrow without introducing named lifetime syntax.

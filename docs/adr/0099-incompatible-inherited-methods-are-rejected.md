@@ -14,7 +14,7 @@ trait Textual {
 trait Both: Numeric + Textual { } # error
 ```
 
-Casa has no method overloading, so no conformance could provide both meanings of `value`. The compiler rejects the composition at `Both` rather than leaving every attempted implementation to fail later.
+Casa has no method overloading, so no trait implementation could provide both meanings of `value`. The compiler rejects the composition at `Both` rather than leaving every attempted implementation to fail later.
 
 ## Consequences
 

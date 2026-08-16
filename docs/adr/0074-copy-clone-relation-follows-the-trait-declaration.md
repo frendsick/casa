@@ -5,10 +5,10 @@ The compiler does not intrinsically make every Copy type satisfy Clone. The rela
 ```casa
 trait Copy { }        # Copy does not imply Clone
 
-trait Copy: Clone { } # Copy conformances must also satisfy Clone
+trait Copy: Clone { } # Copy implementations must also satisfy Clone
 ```
 
-Clone remains an ordinary explicitly implemented trait. For the standard second declaration, validated Copy conformance supplies a missing fieldwise Clone implementation so Copy types satisfy the visible supertrait without another annotation. An explicit Clone implementation takes precedence over that fallback under ADR-0088. This narrow generation does not apply to arbitrary supertraits or a freestanding Copy declaration that omits Clone.
+Clone remains an ordinary explicitly implemented trait. For the standard second declaration, a validated Copy implementation supplies a missing fieldwise Clone implementation so Copy types satisfy the visible supertrait without another annotation. An explicit Clone implementation takes precedence over that fallback under ADR-0088. This narrow generation does not apply to arbitrary supertraits or a freestanding Copy declaration that omits Clone.
 
 ## Consequences
 

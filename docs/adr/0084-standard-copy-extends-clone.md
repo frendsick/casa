@@ -10,11 +10,11 @@ Copy provides allocation-free implicit and stack duplication through `dup` and `
 
 The relationship comes from the visible standard declaration rather than an unconditional compiler rule. A freestanding library may instead declare `trait Copy { }`, in which case its Copy types have no Clone guarantee.
 
-For Casa's standard Copy declaration, `derives Copy` and the equivalent validated `impl Type: Copy { }` supply missing fieldwise Clone behavior automatically. An existing or later explicit Clone conformance takes precedence and remains in use. The compiler does not synthesize behavior for unrelated Copy supertraits.
+For Casa's standard Copy declaration, `derives Copy` and the equivalent validated `impl Type: Copy { }` supply missing fieldwise Clone behavior automatically. An existing or later explicit Clone implementation takes precedence and remains in use. The compiler does not synthesize behavior for unrelated Copy supertraits.
 
 ## Consequences
 
 - `[T: Copy]` may call Clone methods through ordinary supertrait lookup.
-- `[T: Clone]` accepts every type conforming to the standard Copy declaration.
-- Standard scalar Copy types receive trivial Clone conformance.
+- `[T: Clone]` accepts every type that implements the standard Copy declaration.
+- Standard scalar Copy types receive trivial Clone implementations.
 - `derives Copy` and `impl Type: Copy { }` remain equivalent and provide a fieldwise Clone fallback only when no explicit implementation exists.
