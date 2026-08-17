@@ -61,9 +61,13 @@ After `import "std"`, these `i64` helpers are available:
 `+` and `-` also apply byte offsets to pointers:
 
 ```casa
-16 alloc = buffer
-42 buffer (ptr) 8 + store64
+unsafe {
+    16 alloc = buffer
+    42 buffer (ptr) 8 + store64
+}
 ```
+
+Pointer arithmetic and pointer casts require an `unsafe` block.
 
 ## Bit operations
 

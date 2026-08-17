@@ -230,6 +230,7 @@ struct TypeChecker {
     moved_owners:               List[str]
     owner_events:               List[OwnerEvent]
     next_owner_generation:      u64
+    unsafe_depth:               u64
     diagnostics:                Diagnostics
 }
 
@@ -240,9 +241,33 @@ struct TypecheckResult {
     diagnostics:         Diagnostics
 }
 
+fn unsafe_operation_name operation:mut$OpValue -> str {
+    # Callers already classify the operation as unsafe. Keep enforcement if a name is missing.
+    operation match
+        OpValue::HeapAlloc => "alloc"
+        OpValue::Load8 => "load8"
+        OpValue::Load16 => "load16"
+        OpValue::Load32 => "load32"
+        OpValue::Load64 => "load64"
+        OpValue::Store8 => "store8"
+        OpValue::Store16 => "store16"
+        OpValue::Store32 => "store32"
+        OpValue::Store64 => "store64"
+        OpValue::Syscall0 => "syscall0"
+        OpValue::Syscall1 => "syscall1"
+        OpValue::Syscall2 => "syscall2"
+        OpValue::Syscall3 => "syscall3"
+        OpValue::Syscall4 => "syscall4"
+        OpValue::Syscall5 => "syscall5"
+        OpValue::Syscall6 => "syscall6"
+        _ => "operation"
+    end
+}
+
 impl TypeChecker {
     fn new store:mut$SymbolStore -> TypeChecker {
         Diagnostics::new # diagnostics
+        0 # unsafe_depth
         0 # next_owner_generation
         List[OwnerEvent]::new # owner_events
         List[str]::new # moved_owners
@@ -533,7 +558,7 @@ impl TypeChecker {
                 tc.diagnostics.record_error
             fi
             name.clone Option::Some = binding
-            op (ptr) (Op) Option::Some = source
+            unsafe { op (ptr) (Op) Option::Some = source }
         fi
         name.clone Option::Some = place
         source binding type_value type_capability place List[Op]::new tc.current_location stack_type
@@ -543,7 +568,7 @@ impl TypeChecker {
 
     fn stack_push_literal tc:mut$TypeChecker type_value:mut$Type op:mut$Op {
         List[Op]::new = literals
-        op (ptr) (Op) literals.push
+        unsafe { op (ptr) (Op) literals.push }
         Option[Op]::None Option[str]::None ValueCapability::Owned Option[str]::None literals
         tc.current_location type_value TypedValue
         tc.stack.values.push
@@ -958,7 +983,7 @@ impl TypeChecker {
             fi
             if resolved ! then literal_bindings value.literals type_variable tc.record_literal_binding fi
         fi
-        actual type_variable bindings (ptr) (Map[str Type]) tc.bind_type_var drop
+        unsafe { actual type_variable bindings (ptr) (Map[str Type]) tc.bind_type_var drop }
         true
     }
 
@@ -1036,7 +1061,7 @@ impl TypeChecker {
                 while bind_index expected_params.length > do
                     if bind_index expected_params.get.type_var_name Option::Some(bind_name) is then
                         if bind_name effect StackEffect::type_vars.has then
-                            bind_index actual_g.params.get bind_name bindings (ptr) (Map[str Type]) tc.bind_type_var drop
+                            unsafe { bind_index actual_g.params.get bind_name bindings (ptr) (Map[str Type]) tc.bind_type_var drop }
                         fi
                     fi
                     1 += bind_index
@@ -1065,7 +1090,7 @@ impl TypeChecker {
         for expected_param in expected_params.iter do
             if expected_param.type_var_name Option::Some(unk_name) is then
                 if unk_name effect StackEffect::type_vars.has then
-                    TYPE_UNKNOWN_T unk_name bindings (ptr) (Map[str Type]) tc.bind_type_var drop
+                    unsafe { TYPE_UNKNOWN_T unk_name bindings (ptr) (Map[str Type]) tc.bind_type_var drop }
                 fi
             fi
         done
@@ -1101,7 +1126,7 @@ impl TypeChecker {
         if actual.is_unknown_placeholder then
             for type_var2 in type_var_list.iter do
                 if type_var2 expected Parameter::typ.type_contains_var then
-                    TYPE_UNKNOWN_T type_var2 bindings (ptr) (Map[str Type]) tc.bind_type_var drop
+                    unsafe { TYPE_UNKNOWN_T type_var2 bindings (ptr) (Map[str Type]) tc.bind_type_var drop }
                 fi
             done
             true return
@@ -1123,7 +1148,7 @@ impl TypeChecker {
                         do
                             param_index expected_fn_params.get = expected_param
                             param_index actual_fn_params.get = actual_param
-                            bindings (ptr) (Map[str Type]) actual_param expected_param bind_semantic_type_arguments drop
+                            unsafe { bindings (ptr) (Map[str Type]) actual_param expected_param bind_semantic_type_arguments drop }
                             1 += param_index
                         done
                         expected_fn.return_types = expected_fn_returns
@@ -1135,7 +1160,7 @@ impl TypeChecker {
                         do
                             return_index expected_fn_returns.get = expected_return
                             return_index actual_fn_returns.get = actual_return
-                            bindings (ptr) (Map[str Type]) actual_return expected_return bind_semantic_type_arguments drop
+                            unsafe { bindings (ptr) (Map[str Type]) actual_return expected_return bind_semantic_type_arguments drop }
                             1 += return_index
                         done
                     }
@@ -1208,7 +1233,7 @@ impl TypeChecker {
         if actual_target.borrow_target Option::Some(borrowed_target) is then
             borrowed_target = actual_target
         fi
-        bindings (ptr) (Map[str Type]) actual_target target_opt.unwrap bind_semantic_type_arguments drop
+        unsafe { bindings (ptr) (Map[str Type]) actual_target target_opt.unwrap bind_semantic_type_arguments drop }
         bindings target_opt.unwrap.substitute_t = resolved_target
         if tc.store actual_target resolved_target unify_type_t.is_none then
             f"Expected `{expected.typ.format}`, got `{value.type_value.format}`"
@@ -1410,6 +1435,7 @@ impl TypeChecker {
                 value.type_value = source_type
             fi
             if "from_codepoint_unchecked" call.method == then
+                "char::from_codepoint_unchecked" op tc.require_unsafe
                 if call.target BuiltinType::Char != then
                     op.location "Only `char::from_codepoint_unchecked` is defined" ErrorKind::TypeMismatch tc.diagnostics.record_error
                 fi
@@ -1555,6 +1581,8 @@ impl TypeChecker {
         operation OpValue::Add is operation OpValue::Sub is ||
         left.type_value TYPE_PTR_T.eq &&
         then
+            if operation OpValue::Add is then "+" else "-" fi = operator
+            operator op tc.require_unsafe
             TYPE_I64_T right tc.resolve_integer_value drop
             TYPE_PTR_T Option::Some op Op::set_type_hint
             TYPE_PTR_T tc.stack_push_type
@@ -1831,7 +1859,14 @@ impl TypeChecker {
 }
 
 impl TypeChecker {
+    fn require_unsafe tc:mut$TypeChecker op:mut$Op operation:mut$str {
+        if 0 tc.unsafe_depth != then return fi
+        op.location f"Unsafe operation `{operation}` requires an `unsafe` block" ErrorKind::InvalidScope tc.diagnostics.record_error
+    }
+
     fn check_memory tc:mut$TypeChecker op:mut$Op function_opt:mut$Option[Function] {
+        op.value unsafe_operation_name = operation
+        operation op tc.require_unsafe
         tc.store function_opt Option[Type]::None op.value
         analyze_operation = semantics
         if semantics.stack_effect Option::None is then return fi
@@ -3018,6 +3053,7 @@ impl TypeChecker {
             fn_name tc.store.functions.get = fn_opt
             if fn_opt.is_some then
                 fn_opt.unwrap = function
+                if function.is_unsafe then fn_name op tc.require_unsafe fi
                 tc.diagnostics tc.store function ensure_typechecked
                 tc.store function_opt Option[Type]::None fn_value
                 analyze_operation = semantics
@@ -3793,7 +3829,7 @@ fn instantiate_default_trait_method
     resolved_stack_effect empty_location synth_ops synth_fn_name Function::with_stack_effect = synth_fn
     synth_vars synth_fn Function::set_variables
     true synth_fn Function::set_is_used
-    synth_fn (ptr) (Function) synth_fn_name store.functions.set drop
+    unsafe { synth_fn (ptr) (Function) synth_fn_name store.functions.set drop }
     diagnostics store synth_fn ensure_typechecked
     synth_fn synth_fn_name store.functions.set drop
 
@@ -3995,6 +4031,7 @@ impl TypeChecker {
                     fi
                 fi
                 if fn_name tc.store.functions.get Option::Some(function) is then
+                    if function.is_unsafe then fn_name op tc.require_unsafe fi
                     if function Function::is_typechecked ! then
                         function Function::ops clone_ops = function_ops
                         tc.diagnostics function function_ops tc.store resolve_identifiers
@@ -4148,6 +4185,14 @@ impl TypeChecker {
             "" = checker.current_expect_ctx
             false = checker.underflow_reported_this_op
             current_op.value = op_value
+            if op_value OpValue::UnsafeStart is then
+                1 += checker.unsafe_depth
+                continue
+            fi
+            if op_value OpValue::UnsafeEnd is then
+                if 0 checker.unsafe_depth != then 1 -= checker.unsafe_depth fi
+                continue
+            fi
             if
             op_value OpValue::Dup is
             op_value OpValue::Over is ||
@@ -4356,6 +4401,9 @@ impl TypeChecker {
             if op_value OpValue::TypeCast(cast_type) is then
                 current_op Op::location function_opt cast_type checker.validate_type_exists
                 checker.stack_pop_value = cast_value
+                if cast_type TYPE_PTR_T.eq cast_value.type_value TYPE_PTR_T.eq || then
+                    "pointer cast" current_op checker.require_unsafe
+                fi
                 if cast_type TYPE_PTR_T.eq then
                     cast_value checker.release_value
                 else
@@ -4424,7 +4472,7 @@ fn check_ops
     diagnostics:mut$Diagnostics
 -> StackEffect {
     store TypeChecker::new = checker
-    diagnostics (ptr) (Diagnostics) = checker.diagnostics
+    unsafe { diagnostics (ptr) (Diagnostics) = checker.diagnostics }
     Option[u64]::None = budget
     if function_opt.is_some then
         function_opt.unwrap = the_function
@@ -4514,7 +4562,7 @@ fn check_functions store:mut$SymbolStore diagnostics:mut$Diagnostics {
             continue
         fi
         diagnostics.error_count = errors_before
-        current_fn (ptr) (Function) Option::Some = current_fn_opt
+        unsafe { current_fn (ptr) (Function) Option::Some = current_fn_opt }
         diagnostics store current_fn_opt resolved_ops check_ops = inferred_stack_effect
         resolved_ops current_fn Function::set_ops
         diagnostics.error_count errors_before < = had_errors

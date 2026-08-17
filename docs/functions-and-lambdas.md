@@ -65,6 +65,33 @@ fn apply operation:fn[i64 -> i64] value:i64 -> i64 {
 The function value must be on top when `exec` runs. Its arguments stay below
 it.
 
+## Unsafe boundaries
+
+Raw memory operations, pointer arithmetic and conversion, and Linux system
+calls must be inside an `unsafe` block:
+
+```casa
+fn read_byte address:ptr -> i64 {
+    unsafe { address load8 }
+}
+```
+
+The block permits only designated unsafe operations. Type, ownership, borrow,
+control-flow, and stack-effect checks still apply.
+
+Use `unsafe fn` when callers must uphold a contract that the function cannot
+check. Calls to an unsafe function also require an `unsafe` block. An unsafe
+function body does not become an implicit unsafe block:
+
+```casa
+unsafe fn copy_bytes destination:ptr source:ptr count:u64 {
+    unsafe { count source destination memcpy }
+}
+```
+
+Unsafe functions cannot be used as function values. Put the unsafe call in a
+safe wrapper when the wrapper can validate and preserve a safe contract.
+
 ## Bindings
 
 `= name` pops the top value and binds it. The first assignment fixes the

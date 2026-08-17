@@ -270,10 +270,10 @@ without a type-name prefix is acceptable.
   ```casa
   # MUST
   const ALIVE_THRESHOLD 64
-  if ALIVE_THRESHOLD cell load8 < then ...
+  if unsafe { ALIVE_THRESHOLD cell load8 < } then ...
 
   # MUST NOT
-  if 64 cell load8 < then ...
+  if unsafe { 64 cell load8 < } then ...
   ```
 
 ---
@@ -323,7 +323,7 @@ without a type-name prefix is acceptable.
   x u8::try_from = maybe_byte
 
   # Raw representation boundary
-  buf (ptr) store64
+  unsafe { buf (ptr) store64 }
   ```
 
 ---
