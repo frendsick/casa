@@ -16,9 +16,14 @@ Write to a temporary file so a formatter failure cannot replace the source:
 ./casafmt < program.casa > program.casa.tmp && mv program.casa.tmp program.casa
 ```
 
-On a lexing error, `casafmt` writes the original source and exits with status
-`1`. The command above leaves `program.casa` unchanged. The formatter does not
-perform a complete syntax check, so compile the result as usual.
+`casafmt` validates input and output with the compiler syntax parser. This check
+does not load imports, resolve identifiers, or typecheck. On a lexical, syntax,
+output-validation, or source-preservation error, `casafmt` writes the original
+source unchanged, reports the error on standard error, and exits with status
+`1`. The command above leaves `program.casa` unchanged.
+
+The formatter accepts LF, CRLF, and bare CR line endings. Successful output uses
+LF and ends with exactly one newline.
 
 The remaining sections define the mechanical rules that `casafmt` enforces.
 All rules are MUST unless noted otherwise.
