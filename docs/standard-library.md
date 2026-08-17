@@ -75,8 +75,8 @@ A generic iterator wrapper returned by `.iter` on `array[T]`, `List[T]`, and `st
 **Definition:**
 
 ```casa
-struct Iter {
-    next_fn: ptr
+struct Iter[T] {
+    next_fn: fn[-> Option[T]]
 }
 ```
 
