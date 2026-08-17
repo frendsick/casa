@@ -1,6 +1,16 @@
 # Strings and IO
 
-String operations, character classification, file I/O, output functions, and type conversions. All functions are defined in `lib/std.casa` and available via `import`.
+String operations, character classification, output functions, and type conversions
+come from the `std` module. File and other OS operations come from the `os`
+module:
+
+```casa
+import "std"
+import "os"
+```
+
+Compile programs that use these modules from the repository root with
+`./casac -L lib program.casa`.
 
 ## String Methods
 
@@ -255,7 +265,7 @@ Functions for reading, writing, and managing files. All file operations use Linu
 
 ### File I/O Constants
 
-The standard library provides constants for common file open flags:
+The `os` module provides constants for common file open flags:
 
 | Constant | Value | Description |
 |----------|-------|-------------|
@@ -313,29 +323,34 @@ Closes a file descriptor. Returns 0 on success, or a negative value on error.
 fd file::close drop
 ```
 
-### `FileError`
+### `IoError`
 
-The high-level file operations (`file::read_all`, `file::write_all`, `file::remove`) report failures through a `FileError` enum wrapped in `Result`:
+The high-level file operations (`file::read_all`, `file::write_all`,
+`file::remove`) report failures through an `IoError` enum wrapped in `Result`:
 
 ```casa
-enum FileError {
+enum IoError {
     NotFound
     PermissionDenied
     AlreadyExists
     IsDirectory
     NotDirectory
+    NotEmpty
     BadFd
     Other (i64)    # raw errno for cases not covered above
 }
 ```
 
-`FileError` implements `Display`, so it can be printed with `to_str` or interpolated in f-strings. The free function `errno_to_file_error` converts a negative syscall return value to the appropriate `FileError`.
+`IoError` implements `Display`, so it can be printed with `to_str` or
+interpolated in f-strings. The `errno_to_io_error` function converts a negative
+system call result to the applicable `IoError`.
 
 ### `file::read_all`
 
-Reads the entire contents of a file into a string. Returns `Result::Ok(content)` on success or `Result::Error(FileError)` if the file cannot be opened or read.
+Reads the entire contents of a file into a string. Returns `Result::Ok(content)`
+on success or `Result::Error(IoError)` if the file cannot be opened or read.
 
-**Stack effect:** `str -> Result[str FileError]`
+**Stack effect:** `str -> Result[str IoError]`
 
 ```casa
 "input.txt" file::read_all match
@@ -348,9 +363,10 @@ Match directly on the `Result` rather than probing with `file::exists` first; th
 
 ### `file::write_all`
 
-Writes a string to a file, creating or truncating it. Returns `Result::Ok(true)` on success or `Result::Error(FileError)` if the file cannot be opened.
+Writes a string to a file, creating or truncating it. Returns `Result::Ok(true)`
+on success or `Result::Error(IoError)` if the file cannot be opened.
 
-**Stack effect:** `str str -> Result[bool FileError]`
+**Stack effect:** `str str -> Result[bool IoError]`
 
 ```casa
 "Hello, world!\n" "output.txt" file::write_all drop
@@ -358,9 +374,11 @@ Writes a string to a file, creating or truncating it. Returns `Result::Ok(true)`
 
 ### `file::remove`
 
-Deletes a file. Returns `Result::Ok(true)` on success or `Result::Error(FileError)` if the syscall fails (e.g. the file is missing).
+Deletes a file. Returns `Result::Ok(true)` on success or
+`Result::Error(IoError)` if the system call fails, for example when the file is
+missing.
 
-**Stack effect:** `str -> Result[bool FileError]`
+**Stack effect:** `str -> Result[bool IoError]`
 
 ```casa
 "temp.txt" file::remove drop

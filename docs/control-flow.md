@@ -80,8 +80,6 @@ fi
 # result type: Option[i64]
 ```
 
-The same applies to bare `array` and `array[T]`.
-
 If there is no `else` branch, the `if`/`elif` branches must not change the stack at all (since the "no match" path leaves the stack unchanged).
 
 ### Variant Checking with `is`

@@ -6,11 +6,8 @@ The standard library provides core types and functions used by most Casa program
 import "std"
 ```
 
-…and pass `-L path/to/lib` to `casac`. Or import by path:
-
-```casa
-import "path/to/lib/std.casa"
-```
+Compile the program from the repository root with
+`./casac -L lib program.casa`.
 
 For full import resolution rules, selective imports, and `-L` search paths, see [Modules](modules.md).
 
@@ -66,7 +63,10 @@ The return type matches the array's element type. For example, calling `nth` on 
 
 ## Iteration
 
-All standard collections provide a `.iter` method that returns an `Iter[T]` value. `Iter[T]` satisfies the `Iterable[T]` trait (see [Traits](traits.md#built-in-trait-iterablet)), so the default methods `collect`, `map`, `filter`, `fold`, `count`, `any`, `all`, and `find` are available.
+All standard collections provide a `.iter` method that returns an `Iter[T]`
+value. `Iter[T]` satisfies the `Iterable[T]` trait (see
+[Traits](traits.md#built-in-trait-iterablet)), so all default methods below are
+available.
 
 ### `Iter[T]`
 
@@ -76,9 +76,7 @@ A generic iterator wrapper returned by `.iter` on `array[T]`, `List[T]`, and `st
 
 ```casa
 struct Iter {
-    get:    ptr
-    length: u64
-    index:  u64
+    next_fn: ptr
 }
 ```
 
@@ -144,7 +142,7 @@ Reduces to a single value using an accumulator and a function.
 
 Returns the number of elements.
 
-**Stack effect:** `Iter[T] -> i64`
+**Stack effect:** `Iter[T] -> u64`
 
 ```casa
 [1 2 3].iter.count print    # 3
@@ -178,6 +176,41 @@ Returns the first element satisfying the predicate, or `Option::None`.
 
 ```casa
 { 2 < } [1 2 3].iter.find .unwrap print    # 2
+```
+
+#### Additional Combinators
+
+`I` below is any type that satisfies `Iterable[T]`.
+
+| Method | Stack effect | Behavior |
+|--------|--------------|----------|
+| `take` | `I u64 -> Iter[T]` | Yield at most the first `n` elements. |
+| `skip` | `I u64 -> Iter[T]` | Omit the first `n` elements. |
+| `take_while` | `I fn[T -> bool] -> Iter[T]` | Yield elements while the predicate is true. |
+| `skip_while` | `I fn[T -> bool] -> Iter[T]` | Omit elements while the predicate is true. |
+| `enumerate` | `I -> Iter[Pair[i64 T]]` | Pair each element with its zero-based index. |
+| `zip` | `I Iter[U] -> Iter[Pair[T U]]` | Pair elements until either iterator ends. |
+| `chain` | `I Iter[T] -> Iter[T]` | Yield the receiver, then the other iterator. |
+| `flat_map` | `I fn[T -> Iter[U]] -> Iter[U]` | Map to iterators and flatten them lazily. |
+| `reduce` | `I fn[T T -> T] -> Option[T]` | Reduce without an initial value. |
+| `min_by` | `I fn[T T -> bool] -> Option[T]` | Find the minimum by a comparison function. |
+| `max_by` | `I fn[T T -> bool] -> Option[T]` | Find the maximum by a comparison function. |
+| `partition` | `I fn[T -> bool] -> Pair[List[T] List[T]]` | Split elements by a predicate. |
+| `sum` | `I -> i64` | Cast elements to `i64` and add them. |
+
+`reduce`, `min_by`, and `max_by` return `Option::None` for an empty iterator.
+`sum` returns zero. See
+[`iterator_combinators.casa`](../examples/iterator_combinators.casa) for runnable
+examples.
+
+### Ordered `Iter[T]` Methods
+
+`Iter[T]` provides `min` and `max` when `T` satisfies `Ord`. Each method returns
+`Option::None` for an empty iterator.
+
+```casa
+[3, 1, 4] (array[i64]).iter.min
+[3, 1, 4] (array[i64]).iter.max
 ```
 
 ## Option
@@ -421,7 +454,7 @@ The standard library declares traits with primitive implementations. See [Traits
 | `Display: Word` | `to_str self -> str` (extends `Word`) | -- | `i64`, `bool`, `char`, `str`, `cstr`, `ptr`, `array[T]`, `List[T]`, `Option[T]`, `Result[T E]` |
 | `Word` | (marker) | -- | every single-slot type |
 | `Hashable: Eq + Word` | `hash self -> i64` (extends `Eq`, `Word`) | -- | `i64`, `str`, payload-free enums (auto-derived) |
-| `Iterable[T]` | `next self -> Option[T]` | `collect`, `map`, `filter`, `fold`, `count`, `any`, `all`, `find` | `Iter[T]` |
+| `Iterable[T]` | `next self -> Option[T]` | all methods in [the default method reference](#iterablet-default-methods) | `Iter[T]` |
 
 ## See Also
 
