@@ -79,8 +79,8 @@ Color::Blue print                 # 2
 Color print                       # 3
 ```
 
-Payload-free enums automatically implement `Hashable`. See
-[Traits](traits.md#auto-derived-hashable-for-payload-free-enums) for use as map
-keys or set elements.
+Payload-free enums automatically implement `Hashable`. See the
+[built-in trait catalog](traits.md#built-in-traits) for use as map keys or set
+elements.
 
 See [`examples/enum.casa`](../examples/enum.casa) for more runnable examples.

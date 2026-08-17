@@ -65,7 +65,7 @@ The return type matches the array's element type. For example, calling `nth` on 
 
 All standard collections provide a `.iter` method that returns an `Iter[T]`
 value. `Iter[T]` satisfies the `Iterable[T]` trait (see
-[Traits](traits.md#built-in-trait-iterablet)), so all default methods below are
+[Traits](traits.md#built-in-traits)), so all default methods below are
 available.
 
 ### `Iter[T]`

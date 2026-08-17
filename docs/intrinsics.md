@@ -31,7 +31,7 @@ Intrinsics are compiler-provided operations. They need no import.
 ```
 
 Primitive display types print directly. User-defined types must implement
-[`Display`](traits.md#built-in-trait-display). See
+[`Display`](traits.md#built-in-traits). See
 [Functions and Lambdas](functions-and-lambdas.md#function-values) for `exec`.
 
 ## Process values
