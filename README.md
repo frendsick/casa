@@ -80,10 +80,11 @@ Library references:
 
 | Topic | Reference |
 |---|---|
-| Arrays, iterators, `Option`, and `Result` | [Standard Library](docs/standard-library.md) |
-| Lists, maps, and sets | [Collections](docs/collections.md) |
-| Text and operating-system I/O | [Strings and IO](docs/strings-and-io.md) |
-| Logging, timing, arguments, and processes | [Utilities](docs/utilities.md) |
+| `Option`, `Result`, and propagation | [Standard Library](docs/standard-library.md) |
+| Collections and iterators | [Collections](docs/collections.md) |
+| Text, characters, and output | [Text and Characters](docs/strings-and-io.md) |
+| Files, directories, environment, and processes | [Operating-System APIs](docs/os.md) |
+| Logging, timing, arguments, JSON, and parsing | [Specialist Libraries](docs/utilities.md) |
 | Parser building blocks | [Parser Library](docs/parser.md) |
 
 Tooling:

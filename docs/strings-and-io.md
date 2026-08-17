@@ -1,635 +1,132 @@
-# Strings and IO
+# Text, Characters, and Output
 
-String operations, character classification, output functions, and type conversions
-come from the `std` module. File and other OS operations come from the `os`
-module:
+Import `std` for the methods and functions on this page:
 
 ```casa
 import "std"
-import "os"
 ```
 
-Compile programs that use these modules from the repository root with
-`./casac -L lib program.casa`.
+Strings use byte indexes. Character classification and case conversion cover
+ASCII.
 
-## String Methods
+## String API
 
-Methods for working with `str` values. Method calls on any `str` receiver are resolved to `str::method`.
+| Method | Result or action |
+|---|---|
+| `length self:str -> u64` | Length in bytes |
+| `at self:str index:u64 -> char` | Character at a byte index |
+| `eq self:str other:str -> bool` | Content equality. `==` is the usual form |
+| `substring length:u64 start:u64 self:str -> str` | Copy a byte range |
+| `find needle:str self:str -> i64` | First byte index, or `-1` |
+| `starts_with prefix:str self:str -> bool` | Whether text starts with a prefix |
+| `ends_with suffix:str self:str -> bool` | Whether text ends with a suffix |
+| `concat suffix:str self:str -> str` | Concatenated text |
+| `contains needle:str self:str -> bool` | Whether text contains a substring |
+| `split delimiter:str self:str -> List[str]` | Split text into parts |
+| `trim self:str -> str` | Remove surrounding ASCII whitespace |
+| `replace old:str replacement:str self:str -> str` | Replace all matches |
+| `to_upper self:str -> str` | Uppercase ASCII letters |
+| `to_lower self:str -> str` | Lowercase ASCII letters |
+| `repeat count:u64 self:str -> str` | Repeat text |
+| `reverse self:str -> str` | Reverse the bytes |
+| `iter self:str -> Iter[char]` | Iterator over characters |
 
-### `str::length`
-
-Returns the length of a string in bytes.
-
-**Stack effect:** `str -> i64`
-
-```casa
-"hello".length print    # 5
-"".length print         # 0
-```
-
-### `str::at`
-
-Returns the character at the given index.
-
-**Stack effect:** `str i64 -> char`
-
-```casa
-0 "hello".at print      # h
-4 "hello".at print      # o
-```
-
-### `str::set`
-
-Writes a character at the given index in a string (mutates in place).
-
-**Stack effect:** `str i64 char -> None`
+Functions with more than one string argument are often clearest with qualified
+names:
 
 ```casa
-14 alloc (str) = buf
-5 buf (ptr) store64
-'H' 0 buf.set
-'i' 1 buf.set
-'\0' 2 buf.set
-buf print    # Hi
-```
-
-### `str::as_cstr`
-
-Returns a `cstr` pointing to the string's byte data (skipping the 8-byte length prefix). The returned `cstr` is null-terminated.
-
-**Stack effect:** `str -> cstr`
-
-```casa
-"hello" .as_cstr print    # hello
-```
-
-### `str::eq`
-
-Compares two strings by content. Returns `true` if they have the same length and identical bytes.
-
-**Stack effect:** `str str -> bool`
-
-```casa
-"hello" "hello" str::eq print    # true
-"hello" "world" str::eq print    # false
-```
-
-### `str::substring`
-
-Extracts a substring starting at `start` with the given `len`.
-
-**Stack effect:** `i64 i64 str -> str`
-
-```casa
-3 1 "hello".substring print    # ell
-```
-
-### `str::find`
-
-Finds the first occurrence of `needle` in the string. Returns the index, or -1 if not found.
-
-**Stack effect:** `str str -> i64`
-
-```casa
-"lo" "hello".find print     # 3
-"xyz" "hello".find print    # -1
-```
-
-### `str::starts_with`
-
-Returns `true` if the string starts with the given prefix.
-
-**Stack effect:** `str str -> bool`
-
-```casa
-"hel" "hello".starts_with print    # true
-"xyz" "hello".starts_with print    # false
-```
-
-### `str::ends_with`
-
-Returns `true` if the string ends with the given suffix.
-
-**Stack effect:** `str str -> bool`
-
-```casa
-"llo" "hello".ends_with print    # true
-"xyz" "hello".ends_with print    # false
-```
-
-### `str::concat`
-
-Concatenates two strings, returning a new string.
-
-**Stack effect:** `str str -> str`
-
-```casa
-"world" "hello " str::concat print    # hello world
-```
-
-### `str::contains`
-
-Returns `true` if the string contains the given substring.
-
-**Stack effect:** `str str -> bool`
-
-```casa
-"ell" "hello".contains print    # true
-"xyz" "hello".contains print    # false
-```
-
-### `str::split`
-
-Splits a string by a delimiter, returning a `List[str]` of the parts.
-
-**Stack effect:** `str str -> List[str]`
-
-```casa
+"hello" 1 3 str::substring print    # ell
 "," "a,b,c".split = parts
-parts.length print    # 3
-0 parts.get print     # a
 ```
 
-### `str::trim`
-
-Removes leading and trailing whitespace (spaces, tabs, newlines, carriage returns).
-
-**Stack effect:** `str -> str`
-
-```casa
-"  hello  ".trim print    # hello
-```
-
-### `str::replace`
-
-Replaces all occurrences of `old` with `new_str`, returning a new string.
-
-**Stack effect:** `str str str -> str`
-
-```casa
-"world" "there" "hello there".replace print    # hello world
-```
-
-### `str::to_upper`
-
-Returns a new string with all ASCII lowercase letters converted to uppercase. Non-alpha characters are unchanged.
-
-**Stack effect:** `str -> str`
-
-```casa
-"hello".to_upper print    # HELLO
-```
-
-### `str::to_lower`
-
-Returns a new string with all ASCII uppercase letters converted to lowercase. Non-alpha characters are unchanged.
-
-**Stack effect:** `str -> str`
-
-```casa
-"HELLO".to_lower print    # hello
-```
-
-### `str::repeat`
-
-Returns a new string that repeats the original `n` times. Returns an empty string when `n` is 0.
-
-**Stack effect:** `str i64 -> str`
-
-```casa
-3 "ha".repeat print    # hahaha
-0 "x".repeat print     # (empty)
-```
-
-### `str::reverse`
-
-Returns a new string with the characters in reverse order.
-
-**Stack effect:** `str -> str`
-
-```casa
-"hello".reverse print    # olleh
-```
-
-### `str::to_int`
-
-Parses a string as an integer, returning `Option[i64]`. Handles negative numbers (leading `-`). Returns `None` for empty strings, non-digit characters, or a bare `-`. Does not tolerate leading or trailing whitespace — use `str::trim` first if needed.
-
-**Stack effect:** `str -> Option[i64]`
-
-```casa
-"42".to_int.unwrap print          # 42
-"-7".to_int.unwrap print          # -7
-"abc".to_int.is_none print        # true
-```
-
-### `str::to_f32` and `str::to_f64`
-
-Parse locale-independent decimal text into `Option[f32]` or `Option[f64]`.
-Decimal exponents, signed zero, `inf`, `-inf`, and `NaN` are accepted. Malformed
-text and values outside the finite range return `None`.
-
-```casa
-"1.5e3".to_f64.unwrap print
-"not a number".to_f32.is_none print
-```
-
-### `List[str]::join`
-
-Joins a list of strings with a separator, returning a single string.
-
-**Stack effect:** `List[str] str -> str`
+`List[str]::join` performs the inverse of `split`:
 
 ```casa
 ["a", "b", "c"] List::from_array = parts
 ", " parts.join print    # a, b, c
 ```
 
-## C String Methods
+See [`examples/string_utilities.casa`](../examples/string_utilities.casa) for
+the transformation methods.
 
-Methods for working with `cstr` values. Method calls on any `cstr` receiver are resolved to `cstr::method`.
+## Parse text
 
-### `cstr::to_str`
+| Method | Result |
+|---|---|
+| `to_int self:str -> Option[i64]` | Signed decimal integer |
+| `to_f32 self:str -> Option[f32]` | 32-bit decimal floating-point value |
+| `to_f64 self:str -> Option[f64]` | 64-bit decimal floating-point value |
 
-Converts a null-terminated C string to a `str`. Scans for the null byte to determine length, then allocates a new string with a length prefix and copies the bytes.
-
-**Stack effect:** `cstr -> str`
-
-```casa
-"hello" .as_cstr .to_str print    # hello
-```
-
-## File I/O
-
-Functions for reading, writing, and managing files. All file operations use Linux system calls internally.
-
-### File I/O Constants
-
-The `os` module provides constants for common file open flags:
-
-| Constant | Value | Description |
-|----------|-------|-------------|
-| `O_RDONLY` | 0 | Open for reading only |
-| `O_WRONLY` | 1 | Open for writing only |
-| `O_CREAT` | 64 | Create the file if it does not exist |
-| `O_TRUNC` | 512 | Truncate the file to zero length |
-
-Flags can be combined with the bitwise OR operator (`|`):
+Malformed input returns `Option::None`. Integer parsing does not ignore
+whitespace, so call `trim` first when needed. Floating-point parsing accepts
+decimal exponents, signed zero, `inf`, `-inf`, and `NaN`.
 
 ```casa
-O_WRONLY O_CREAT | O_TRUNC |    # open for writing, create if needed, truncate
+" -42 ".trim.to_int .unwrap print
+"1.5e3".to_f64 .unwrap print
 ```
 
-### `file::open`
+## Characters
 
-Opens a file and returns a file descriptor. Returns a negative value on error.
-
-**Stack effect:** `str i64 i64 -> i64`
+| Method | Result or action |
+|---|---|
+| `codepoint self:char -> u32` | Unicode scalar value |
+| `char::from_codepoint value:u32 -> Option[char]` | Validated character |
+| `char::from_codepoint_unchecked value:u32 -> char` | Character without validation |
+| `is_digit self:char -> bool` | ASCII digit |
+| `is_upper self:char -> bool` | ASCII uppercase letter |
+| `is_lower self:char -> bool` | ASCII lowercase letter |
+| `is_alpha self:char -> bool` | ASCII letter |
+| `is_space self:char -> bool` | ASCII space, tab, newline, or carriage return |
+| `eq self:char other:char -> bool` | Equality |
+| `lt self:char other:char -> bool` | Codepoint ordering |
 
 ```casa
-0 O_RDONLY "input.txt" file::open = fd
+'A'.codepoint print          # 65
+'7'.is_digit print           # true
+65 = value:u32
+value char::from_codepoint .unwrap print
 ```
 
-The `mode` parameter sets file permissions when creating a new file (e.g., 420 for `rw-r--r--`). It is ignored when opening an existing file.
+## Formatting and output
 
-### `file::read`
+`print` writes any value that implements `Display`. `println`, `eprint`, and
+`eprintln` accept strings:
 
-Reads up to `size` bytes from a file descriptor into a buffer. Returns the number of bytes read, or a negative value on error.
-
-**Stack effect:** `i64 ptr i64 -> i64`
+| Function | Destination |
+|---|---|
+| `print` | Standard output |
+| `println text:str` | Standard output, then newline |
+| `eprint text:str` | Standard error |
+| `eprintln text:str` | Standard error, then newline |
 
 ```casa
-1024 alloc = buf
-1024 buf fd file::read = bytes_read
+"ready" println
+"warning" eprintln
 ```
 
-### `file::write`
-
-Writes a string to a file descriptor. Returns the number of bytes written, or a negative value on error.
-
-**Stack effect:** `i64 str -> i64`
+Use `.to_str` on a `Display` value, or use string interpolation:
 
 ```casa
-"Hello, file!\n" fd file::write drop
+42.to_str = answer
+f"answer: {answer}" println
 ```
 
-### `file::close`
+See the [built-in trait catalog](traits.md#built-in-traits) for displayable
+types and [Types and Literals](types-and-literals.md#string-interpolation) for
+f-strings.
 
-Closes a file descriptor. Returns 0 on success, or a negative value on error.
+## C strings and mutable buffers
 
-**Stack effect:** `i64 -> i64`
+`as_cstr` returns a null-terminated view for system interfaces. `to_str`
+copies a `cstr` into Casa text:
 
 ```casa
-fd file::close drop
+"hello".as_cstr = raw:cstr
+raw.to_str print
 ```
 
-### `IoError`
-
-The high-level file operations (`file::read_all`, `file::write_all`,
-`file::remove`) report failures through an `IoError` enum wrapped in `Result`:
-
-```casa
-enum IoError {
-    NotFound
-    PermissionDenied
-    AlreadyExists
-    IsDirectory
-    NotDirectory
-    NotEmpty
-    BadFd
-    Other (i64)    # raw errno for cases not covered above
-}
-```
-
-`IoError` implements `Display`, so it can be printed with `to_str` or
-interpolated in f-strings. The `errno_to_io_error` function converts a negative
-system call result to the applicable `IoError`.
-
-### `file::read_all`
-
-Reads the entire contents of a file into a string. Returns `Result::Ok(content)`
-on success or `Result::Error(IoError)` if the file cannot be opened or read.
-
-**Stack effect:** `str -> Result[str IoError]`
-
-```casa
-"input.txt" file::read_all match
-    Result::Ok(content)  => content print
-    Result::Error(read_err) => f"read failed: {read_err.to_str}\n" eprint
-end
-```
-
-Match directly on the `Result` rather than probing with `file::exists` first; the latter introduces a TOCTOU race because the file can disappear between the two calls.
-
-### `file::write_all`
-
-Writes a string to a file, creating or truncating it. Returns `Result::Ok(true)`
-on success or `Result::Error(IoError)` if the file cannot be opened.
-
-**Stack effect:** `str str -> Result[bool IoError]`
-
-```casa
-"Hello, world!\n" "output.txt" file::write_all drop
-```
-
-### `file::remove`
-
-Deletes a file. Returns `Result::Ok(true)` on success or
-`Result::Error(IoError)` if the system call fails, for example when the file is
-missing.
-
-**Stack effect:** `str -> Result[bool IoError]`
-
-```casa
-"temp.txt" file::remove drop
-```
-
-### `file::exists`
-
-Returns `true` when the path can be opened for reading, `false` otherwise (missing file, permission denied). Safe to use as a probe when the existence check is needed for control flow that does not later read the file (to read the file, match on `file::read_all` directly to avoid a TOCTOU race).
-
-**Stack effect:** `str -> bool`
-
-```casa
-"/tmp/casa.lock" file::exists.to_str print
-```
-
-See [`examples/file_io.casa`](../examples/file_io.casa) for a full program using file I/O.
-
-## Character Classification
-
-Methods on `char` for classifying ASCII characters.
-
-### `char::is_digit`
-
-Returns `true` if the character is an ASCII digit (`'0'`-`'9'`).
-
-**Stack effect:** `char -> bool`
-
-```casa
-'0'.is_digit print    # true
-'A'.is_digit print    # false
-```
-
-### `char::is_upper`
-
-Returns `true` if the character is an uppercase ASCII letter (`'A'`-`'Z'`).
-
-**Stack effect:** `char -> bool`
-
-```casa
-'A'.is_upper print    # true
-'a'.is_upper print    # false
-```
-
-### `char::is_lower`
-
-Returns `true` if the character is a lowercase ASCII letter (`'a'`-`'z'`).
-
-**Stack effect:** `char -> bool`
-
-```casa
-'a'.is_lower print    # true
-'A'.is_lower print    # false
-```
-
-### `char::is_alpha`
-
-Returns `true` if the character is an ASCII letter (uppercase or lowercase).
-
-**Stack effect:** `char -> bool`
-
-```casa
-'A'.is_alpha print    # true
-'0'.is_alpha print    # false
-```
-
-### `char::is_space`
-
-Returns `true` if the character is ASCII whitespace (space, tab, newline, or carriage return).
-
-**Stack effect:** `char -> bool`
-
-```casa
-' '.is_space print    # true
-'A'.is_space print    # false
-```
-
-## Stdout Output
-
-### `println`
-
-Writes a string followed by a newline to stdout.
-
-**Stack effect:** `str -> None`
-
-```casa
-"Hello world!" println
-```
-
-## Stderr Output
-
-### `eprint`
-
-Writes a string to stderr (file descriptor 2).
-
-**Stack effect:** `str -> None`
-
-```casa
-"warning: something happened\n" eprint
-```
-
-### `eprintln`
-
-Writes a string followed by a newline to stderr.
-
-**Stack effect:** `str -> None`
-
-```casa
-"error: file not found" eprintln
-```
-
-## Type Conversions
-
-Convert values to their string representation. All `to_str` methods can be called with dot syntax (e.g., `42.to_str`).
-
-`f32::to_str` and `f64::to_str` produce locale-independent text that parses
-back to the same IEEE representation. Signed zero, infinities, and NaN use the
-spellings accepted by the parsers above. Exact representation transport uses
-the width-matched `to_bits` and `from_bits` methods.
-
-### `digit_to_str`
-
-Converts a single digit (0-9) to its string representation. This is a helper used internally by `i64::to_str`.
-
-**Stack effect:** `i64 -> str`
-
-```casa
-5 digit_to_str print    # 5
-```
-
-### `i64::to_str`
-
-Converts an integer to its string representation. Handles negative numbers and zero.
-
-**Stack effect:** `i64 -> str`
-
-```casa
-42.to_str print         # 42
-0.to_str print          # 0
--123.to_str print       # -123
-```
-
-### `bool::to_str`
-
-Converts a boolean to `"true"` or `"false"`.
-
-**Stack effect:** `bool -> str`
-
-```casa
-true.to_str print       # true
-false.to_str print      # false
-```
-
-### `str::to_str`
-
-Identity function. Returns the string unchanged.
-
-**Stack effect:** `str -> str`
-
-```casa
-"hello".to_str print    # hello
-```
-
-### `ptr::to_str`
-
-Converts a pointer to a string by casting its address to an integer and converting that.
-
-**Stack effect:** `ptr -> str`
-
-```casa
-10 alloc = buf
-buf.to_str print        # prints the address as a decimal number
-```
-
-### `char::to_str`
-
-Wraps a single character in a one-character string.
-
-**Stack effect:** `char -> str`
-
-```casa
-'A'.to_str print    # A
-```
-
-### `array[T]::to_str`
-
-Formats an array as `[elem1, elem2, ...]`. Requires `T` to satisfy the `Display` trait.
-
-**Stack effect:** `[T: Display] array[T] -> str`
-
-```casa
-[1, 2, 3] = values:array[i64]
-values.to_str print    # [1, 2, 3]
-```
-
-### `List[T]::to_str`
-
-Formats a `List` the same way as an array. Requires `T` to satisfy the `Display` trait.
-
-**Stack effect:** `[T: Display] List[T] -> str`
-
-### `Option[T]::to_str`
-
-Formats an `Option` as `Some(value)` or `None`. Requires `T` to satisfy the `Display` trait.
-
-**Stack effect:** `[T: Display] Option[T] -> str`
-
-```casa
-5 Option::Some .to_str print                # Some(5)
-Option::None (Option[i64]) .to_str print    # None
-```
-
-### `Result[T E]::to_str`
-
-Formats a `Result` as `Ok(value)` or `Error(err)`. Requires both `T` and `E` to satisfy the `Display` trait.
-
-**Stack effect:** `[T: Display, E: Display] Result[T E] -> str`
-
-```casa
-99 Result::Ok (Result[i64 str]) .to_str print       # Ok(99)
-"oops" Result::Error (Result[i64 str]) .to_str print # Error(oops)
-```
-
-## Hash Helpers
-
-Standalone hash functions used by the built-in `Hashable` trait implementations.
-
-### `str_hash`
-
-Computes a hash for a string using the djb2 algorithm. Returns a non-negative integer.
-
-**Stack effect:** `str -> i64`
-
-```casa
-"hello" str_hash print    # prints hash value
-```
-
-### `int_hash`
-
-Returns the absolute value of an integer, for use as a hash.
-
-**Stack effect:** `i64 -> i64`
-
-```casa
--42 int_hash print    # 42
-42 int_hash print     # 42
-```
-
-## See Also
-
-- [Standard Library](standard-library.md) -- arrays, Option, and Result
-- [Modules](modules.md) -- import directives and module resolution
-- [Collections](collections.md) -- List, Map, Set, and StringBuilder
-- [Traits](traits.md) -- the `Display` trait used by type conversions
-- [Types and Literals](types-and-literals.md) -- primitive type definitions
+Low-level code can use `str::from_cstr pointer:ptr -> str` and
+`set self:str index:u64 character:char` when it owns a suitable buffer. These
+operations do not validate buffer capacity. Prefer normal string operations in
+application code.

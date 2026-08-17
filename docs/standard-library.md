@@ -12,8 +12,9 @@ Compile with a library path that contains `std.casa`, such as
 The main library references are:
 
 - [Collections and Iterators](collections.md)
-- [Text and I/O](strings-and-io.md)
-- [Operating-system utilities](utilities.md)
+- [Text, characters, and output](strings-and-io.md)
+- [Operating-system APIs](os.md)
+- [Specialist libraries](utilities.md)
 - [Generics and Traits](traits.md#built-in-traits)
 
 This page is the canonical reference for `Option`, `Result`, and `?`.
