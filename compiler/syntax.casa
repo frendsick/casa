@@ -88,6 +88,7 @@ struct Parser {
     search_paths:   List[str]
     sources:        SourceStore
     state:          ParseState
+    syntax_only:    bool
 }
 
 struct ParseResolveResult {
@@ -96,8 +97,33 @@ struct ParseResolveResult {
     diagnostics: Diagnostics
 }
 
+# Data-only facts used to prove that formatting preserves source meaning.
+
+struct SyntaxTokenFact {
+    spelling: str
+    kind:     TokenKind
+}
+
+struct SyntaxCommentFact {
+    text:                  str
+    preceding_token_count: u64
+    attached_to_preceding: bool
+}
+
+struct SyntaxFacts {
+    meaningful_tokens: List[SyntaxTokenFact]
+    comments:          List[SyntaxCommentFact]
+}
+
+struct SyntaxResult {
+    tokens:      List[Token]
+    facts:       Option[SyntaxFacts]
+    diagnostics: Diagnostics
+}
+
 impl Parser {
     fn new store:mut$SymbolStore diagnostics:mut$Diagnostics sources:SourceStore -> Parser {
+        false
         diagnostics ParseState::new
         sources
         List[str]::new
@@ -1076,7 +1102,7 @@ fn parse_type_variables parser:mut$Parser cursor:mut$TokenCursor -> ParsedTypeVa
                         fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = trait_token
                         trait_token Token::value = bound_trait_name
                         bound_trait_name parser.store.traits.get = bound_trait_def_opt
-                        if bound_trait_def_opt.is_none then
+                        if bound_trait_def_opt.is_none parser.syntax_only ! && then
                             trait_token Token::location f"Trait `{bound_trait_name}` is not defined" ErrorKind::UndefinedName parser.state.record_error
                         fi
                         trait_token cursor parse_bound_type_args = bound_args
@@ -1096,6 +1122,8 @@ fn parse_type_variables parser:mut$Parser cursor:mut$TokenCursor -> ParsedTypeVa
                                 fi
                                 parsed_bound bounds.push
                             fi
+                        elif parser.syntax_only then
+                            bound_args bound_trait_name TraitBound bounds.push
                         fi
                         cursor.peek = plus_opt
                         if plus_opt Option::Some(plus) is then
@@ -3211,7 +3239,10 @@ fn is_match_arm_boundary parser:mut$Parser cursor:mut$TokenCursor -> bool {
     if "=>" next_token Token::value == then true return fi
     if "if" next_token Token::value == then true return fi
     # StructName { ... } =>
-    if "{" next_token Token::value == token Token::value parser.store.structs.get.is_some && then
+    if
+    "{" next_token Token::value ==
+    token Token::value parser.store.structs.get.is_some parser.syntax_only || &&
+    then
         true return
     fi
     # EnumName::Variant(bindings) => or EnumName::Variant(bindings) if ...
@@ -3242,7 +3273,7 @@ fn parse_struct_match_pattern
 -> StructPattern {
     fallback_token "{" cursor expect_token_value.unwrap_or drop
     name_token Token::value parser.store.structs.get = struct_opt
-    if struct_opt.is_none then
+    if struct_opt.is_none parser.syntax_only ! && then
         name_token Token::location f"Struct `{name_token Token::value}` is not defined" ErrorKind::UndefinedName parser.state.record_error
     fi
     Map[str str]::new = bindings
@@ -3563,8 +3594,13 @@ fn handle_keyword_import parser:mut$Parser cursor:mut$TokenCursor -> Op {
     cursor path_token get_op_literal = literal_op
     if literal_op.value OpValue::PushStr(spec) is then
         path_token Token::location = path_location
-        path_location Location::file = importing_file
-        path_location spec importing_file parser resolve_import = resolved
+        if parser.syntax_only then
+            spec.clone
+        else
+            path_location Location::file = importing_file
+            path_location spec importing_file parser resolve_import
+        fi
+        = resolved
 
         cursor.peek = next_opt
         if { Token::value "{" == } next_opt.filter.is_some then
@@ -3940,7 +3976,9 @@ fn get_op_keyword
             if "fn" const_next Token::value == then
                 cursor parser parse_function = function
                 true function Function::set_is_const_fn
-                parser.state.diagnostics function validate_const_fn_body
+                if parser.syntax_only ! then
+                    parser.state.diagnostics function validate_const_fn_body
+                fi
                 if function Function::name parser.store.functions.get.is_some then
                     function Function::location f"Identifier `{function Function::name}` is already defined" ErrorKind::DuplicateName parser.state.record_error
                 fi
@@ -3973,7 +4011,13 @@ fn get_op_keyword
         const_value_token_opt.unwrap = const_value_token
         if "{" const_value_token Token::value == then
             cursor.retreat
-            token Token::location cursor parser eval_const_block = const_block_val
+            if parser.syntax_only then
+                "const" cursor parser parse_block_ops drop
+                0 IntegerLiteral::from_int ConstantValue::Int
+            else
+                token Token::location cursor parser eval_const_block
+            fi
+            = const_block_val
             token Token::location const_block_val const_name.clone Constant = casa_const
             casa_const const_name parser.put_constant
         elif TokenKind::Literal const_value_token Token::kind == then
@@ -3982,6 +4026,12 @@ fn get_op_keyword
             casa_const const_name parser.put_constant
         elif TokenKind::Identifier const_value_token Token::kind == then
             const_value_token Token::value = const_ref_name
+            if parser.syntax_only then
+                0 IntegerLiteral::from_int ConstantValue::Int = syntax_const_value
+                token Token::location syntax_const_value const_name.clone Constant = casa_const
+                casa_const const_name parser.put_constant
+                return
+            fi
             const_ref_name parser.store.constants.get = const_ref_opt
             if const_ref_opt Option::Some(const_ref) is then
                 token Token::location const_ref Constant::value const_name.clone Constant = casa_const
@@ -4286,6 +4336,97 @@ fn parse_ops parser:mut$Parser tokens:List[Token] -> List[Op] {
         fi
     done
     ops
+}
+
+fn syntax_parser_tokens tokens:$List[Token] -> List[Token] {
+    List[Token]::new = result
+    for token in tokens.iter do
+        if TokenKind::Comment token.kind == then continue fi
+        if TokenKind::Newline token.kind == then continue fi
+        token.location.clone token.kind token.value.clone Token result.push
+    done
+    result
+}
+
+fn logical_comment_text token:$Token -> str {
+    1 (u64) = start
+    if 1 token.value.length > then
+        if ' ' 1 token.value.at == then 2 (u64) = start fi
+    fi
+    token.value start token.value.length start - str::substring
+}
+
+fn build_syntax_facts source:$str tokens:$List[Token] -> SyntaxFacts {
+    List[SyntaxTokenFact]::new = meaningful_tokens
+    List[SyntaxCommentFact]::new = comments
+    0 (u64) = meaningful_count
+    false = line_has_meaningful_token
+
+    for token in tokens.iter do
+        if TokenKind::Newline token.kind == then
+            false = line_has_meaningful_token
+        elif TokenKind::Comment token.kind == then
+            token logical_comment_text = text
+            line_has_meaningful_token meaningful_count text SyntaxCommentFact comments.push
+        elif TokenKind::Eof token.kind != then
+            token.location.span.length = length
+            token.location.span.offset = offset
+            source offset length str::substring = spelling
+            token.kind spelling SyntaxTokenFact meaningful_tokens.push
+            1 += meaningful_count
+            true = line_has_meaningful_token
+        fi
+    done
+
+    comments meaningful_tokens SyntaxFacts
+}
+
+fn syntax_facts_match expected:$SyntaxFacts actual:$SyntaxFacts -> bool {
+    if actual.meaningful_tokens.length expected.meaningful_tokens.length != then false return fi
+    if actual.comments.length expected.comments.length != then false return fi
+
+    0 (u64) = index
+    while index expected.meaningful_tokens.length > do
+        index expected.meaningful_tokens.get = expected_token
+        index actual.meaningful_tokens.get = actual_token
+        if actual_token.kind expected_token.kind != then false return fi
+        if actual_token.spelling expected_token.spelling != then false return fi
+        1 += index
+    done
+
+    0 (u64) = index
+    while index expected.comments.length > do
+        index expected.comments.get = expected_comment
+        index actual.comments.get = actual_comment
+        if actual_comment.text expected_comment.text != then false return fi
+        if actual_comment.preceding_token_count expected_comment.preceding_token_count != then false return fi
+        if actual_comment.attached_to_preceding expected_comment.attached_to_preceding != then false return fi
+        1 += index
+    done
+    true
+}
+# Recognize one complete root file without resolving names or loading imports.
+
+fn analyze_syntax source:$str file:$str -> SyntaxResult {
+    SourceStore::new = sources
+    source file sources.add
+    file source lex_source_fmt = lex_result
+    lex_result.tokens = tokens
+    if lex_result.diagnostics.has_errors then
+        lex_result.diagnostics Option[SyntaxFacts]::None tokens SyntaxResult return
+    fi
+
+    tokens syntax_parser_tokens = parser_tokens
+    sources lex_result.diagnostics symbol_store_new Parser::new = parser
+    true = parser.syntax_only
+    parser_tokens parser parse_ops drop
+
+    if parser.state.has_usable_output parser.state.diagnostics.has_errors ! && then
+        tokens source build_syntax_facts = facts
+        parser.state.diagnostics facts Option::Some tokens SyntaxResult
+    else
+        parser.state.diagnostics Option[SyntaxFacts]::None tokens SyntaxResult
+    fi
 }
 
 impl Parser {

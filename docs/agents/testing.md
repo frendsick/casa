@@ -61,7 +61,7 @@ tests/test_examples.sh fibonacci          # only fibonacci example
 tests/test_formatter.sh indent            # only golden file tests matching "indent"
 ```
 
-When `test_formatter.sh` has filters, idempotency and error passthrough tests
+When `test_formatter.sh` has filters, idempotency and safety tests
 are skipped (they only run in the full suite).
 
 `test_bootstrap.sh` has no filters — it always runs both self-compilation and
@@ -73,7 +73,7 @@ fixed-point tests.
 |---|---|
 | `test_compiler.sh` | Unit tests (`tests/compiler/test_*.casa`) and error fixtures (`tests/compiler/errors/*.casa`) |
 | `test_examples.sh` | Example programs (`examples/*.casa`) against expected output |
-| `test_formatter.sh` | Golden file formatting, idempotency sweep, error passthrough |
+| `test_formatter.sh` | Golden file formatting, idempotency sweep, safety checks |
 | `test_bootstrap.sh` | Self-compilation (3-stage) and fixed-point verification |
 
 ## CI bootstrap compiler
