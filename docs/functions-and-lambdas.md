@@ -1,338 +1,124 @@
 # Functions and Lambdas
 
-Casa functions are defined with `fn` and called by name. Lambdas create anonymous functions as stack values. Both support closures and generics.
+Casa functions consume stack values and can push results. Functions are
+declared at global scope and called by name.
 
-## Functions
-
-Functions are defined with `fn` at global scope. They can be called before their definition (forward references are allowed).
-
-### Syntax
-
-```
-fn name[TypeVar ...] param:type ... -> return_type ... {
-    body
-}
-```
-
-The `[TypeVar ...]` part is optional — see [Generic Functions](#generic-functions) below.
-
-Parameters are consumed from the top of the stack in declaration order: the first parameter is on top, and the last parameter is deepest. Return types describe what the function leaves on the stack after it returns.
-
-### Basic Example
+## Declare and call a function
 
 ```casa
-fn local_add a:i64 b:i64 -> i64 {
-    a b +
+fn divide dividend:i64 divisor:i64 -> i64 {
+    dividend divisor /
 }
 
-34 35 local_add print   # 69
+3 12 divide print    # 4
 ```
 
-When `34 35 local_add` is called, `35` is assigned to `a` (first param, popped from top) and `34` is assigned to `b` (second param, popped next). The result is the same since addition is commutative.
+Parameters are listed in consumption order. The first parameter receives the
+topmost value, so `dividend` receives `12` and `divisor` receives `3` in this
+call.
 
-### No Parameters
-
-Functions can have no explicit parameters. They can still consume values from the stack if the body does so, and the type checker will infer the stack effect.
+Use unnamed inputs when a local name adds no clarity:
 
 ```casa
-fn global_add -> i64 {
-    global_a global_b +
-}
+fn square i64 -> i64 { dup * }
+
+6 square print    # 36
 ```
 
-### No Return Type
-
-If a function returns nothing, omit the `-> type` part:
+Omit `->` when a function pushes no result:
 
 ```casa
 fn greet name:str {
-    name print
+    f"Hello, {name}!\n" print
 }
 ```
 
-### Stack effect inference
+A function can push multiple results by listing each output type after `->`.
+Calls can appear before the declaration. Use `return` to leave a function
+early. Every exit path must produce the declared outputs.
 
-Type annotations are optional. The type checker can infer the full stack effect by replaying the function's operations on a symbolic stack.
+See [Generics and Traits](traits.md) for type parameters and trait bounds.
+
+## Function values
+
+`&name` pushes a named function as a value. `exec` calls the function value on
+top of the stack:
 
 ```casa
-fn double {
-    2 *
-}
-# Inferred stack effect: i64 -> i64
+fn increment value:i64 -> i64 { value 1 + }
+
+&increment = operation
+41 operation exec print    # 42
 ```
 
-When both an explicit stack effect and an inferred one are available, the type checker verifies that they match.
-
-### Calling Functions
-
-Push the arguments onto the stack, then write the function name:
+Its type records the stack effect. For example, `&increment` has type
+`fn[i64 -> i64]`. A function can accept that type as a parameter:
 
 ```casa
-20 fib print
-```
-
-### Function References
-
-The `&name` syntax pushes a named function onto the stack as a value instead of calling it.
-
-**Stack effect:** `-> fn[sig]`
-
-```casa
-fn add a:i64 b:i64 -> i64 { a b + }
-
-&add                # pushes fn[i64 i64 -> i64]
-3 5 &add exec       # calls add, result: 8
-&add = my_fn        # store in variable
-3 5 my_fn exec      # call via variable, result: 8
-```
-
-This works for struct accessors and methods too:
-
-```casa
-struct Point { x: i64 y: i64 }
-
-&Point::x           # pushes fn[Point -> i64]
-
-impl Point {
-    fn sum self:Point -> i64 { self.x self.y + }
+fn apply operation:fn[i64 -> i64] value:i64 -> i64 {
+    value operation exec
 }
 
-&Point::sum          # pushes fn[Point -> i64]
+40 { 2 + } apply print    # 42
 ```
 
-Use `exec` to call the function reference, just like with lambdas. See [`exec`](#exec) for details.
+The function value must be on top when `exec` runs. Its arguments stay below
+it.
 
-### Early Return
+## Bindings
 
-Use `return` to exit a function early. The stack at the `return` point must match the function's return type.
+`= name` pops the top value and binds it. The first assignment fixes the
+binding's type:
 
 ```casa
-fn fib number:i64 -> i64 {
-    if number 1 >= then
-        number return
-    elif number 0 == then
-        number return
-    fi
-
-    number 1 - fib
-    number 2 - fib +
-}
+42 = count
+1 += count
+count print
 ```
 
-See [`examples/fibonacci.casa`](../examples/fibonacci.casa).
-
-### Generic Functions
-
-Functions can declare type variables in square brackets after the name. Type variables are resolved to concrete types at each call site, enabling type-safe polymorphism.
-
-**Stack effect:** `args... -> returns...` (type variables resolve to the actual types at the call site)
-
-```casa
-fn id[T] T -> T { }       # T -> T
-42 id print                # i64 -> i64, prints 42
-"hello" id print           # str -> str, prints hello
-```
-
-Multiple type variables:
-
-```casa
-fn swap_t[T1 T2] T1 T2 -> T1 T2 { swap }   # T1 T2 -> T1 T2
-5 "hi" swap_t              # i64 str -> str i64
-```
-
-Generic functions can mix type variables with concrete types and named parameters:
-
-```casa
-fn first[T1 T2] a:T1 b:T2 -> T1 { a }
-fn wrap[T] T -> T i64 { 42 }
-```
-
-The built-in stack intrinsics use the same generic surface syntax:
-
-```casa
-# drop[T]         T -> None
-# dup[T]          T -> T T
-# swap[T1 T2]     T1 T2 -> T2 T1
-# over[T1 T2]     T1 T2 -> T2 T1 T2
-# rot[T1 T2 T3]   T1 T2 T3 -> T3 T1 T2
-fn keep_top[T1 T2] T1 T2 -> T1 { swap drop }
-42 "kept" keep_top         # "kept" (deeper i64 dropped, top str kept)
-```
-
-The type checker enforces consistency — if the same type variable appears multiple times in the parameters, all occurrences must bind to the same type:
-
-```casa
-fn pair[T] T T -> T T { }
-42 42 pair        # OK: both T=i64
-42 "hi" pair      # ERROR: T bound to i64 and str
-```
-
-Generic type parameters also work in `impl` block methods:
-
-```casa
-impl Box {
-    fn apply[T] self:Box T -> T { }
-}
-```
-
-### Trait Bounds
-
-Type variables can have trait bounds that restrict which types are accepted. Use `K: TraitName` syntax:
-
-```casa
-fn get[K: Hashable, V] self:Map[K V] key:K -> Option[V] {
-    key K::hash self.capacity % = idx
-    ...
-}
-```
-
-Multiple type variables are separated by commas. Variables without a `:` have no bounds. See [Traits](traits.md) for details on defining and satisfying traits.
-
-Use `+` when one variable requires multiple traits:
-
-```casa
-fn show[T: Copy + Display] value:T { value print }
-```
-
-Every type variable must appear in at least one parameter (return-only type variables are not allowed).
-
-Type variable names must not collide with built-in types (`i64`, `bool`, `char`, `cstr`, `str`, `ptr`, `array`) or user-defined struct names:
-
-```casa
-fn bad[i64] i64 -> i64 { }     # ERROR: shadows built-in type
-fn bad[MyStruct] MyStruct -> MyStruct { }   # ERROR: shadows struct type
-fn good[T] T -> T { }         # OK
-```
-
-### Restrictions
-
-- Functions must be defined at **global scope** — no nested function definitions (use lambdas instead).
-- A function's stack effect mismatch is detected when the function is **called**, not at its definition.
-
-## Variables
-
-### Global Variables
-
-Declared at the top level, visible everywhere (including inside functions):
-
-```casa
-1 = global_a
-2 = global_b
-
-fn global_add -> i64 {
-    global_a global_b +
-}
-```
-
-### Global Declarations
-
-By default, `= X` inside a function **always creates a local**, even if a global named `X` exists.
-To write to a global from inside a function, declare it with `global X` at the top of the function body:
+A binding inside a function is local, even when a global has the same name.
+Declare a global at the start of a function before you assign it:
 
 ```casa
 0 = COUNTER
 
-fn increment {
+fn increment_counter {
     global COUNTER
     1 += COUNTER
 }
 ```
 
-**Rules:**
-- `global X` must appear before any other statements in the function body.
-- `global X` is not allowed at the top level or inside a lambda.
-- `global X` requires that `X` is already declared as a global variable.
-- Multiple `global` declarations are allowed, one per line.
+`global NAME` must appear before other statements. The global must already
+exist. Lambdas cannot declare globals.
 
-### Local Variables
-
-Declared inside a function, scoped to that function:
+Use `= name:Type` when the value needs an explicit type:
 
 ```casa
-fn fizzbuzz number:i64 {
-    number 3 % 0 == = fizz    # fizz is local
-    number 5 % 0 == = buzz    # buzz is local
-    # ...
-}
+Option::None = result:Option[i64]
 ```
 
-### Assignment Operators
+See [Operators](operators.md#assignment) for assignment forms.
 
-| Operator | Stack Effect | Description |
-|----------|-------------|-------------|
-| `= target` | `T -> None` | Assign top of stack to a variable or variable-rooted field path |
-| `= name:type` | `T -> None` | Assign with type annotation |
-| `+= target` | `i64 -> None` | Add to an `i64` variable or field path |
-| `-= target` | `i64 -> None` | Subtract from an `i64` variable or field path |
+## Lambdas and closures
 
-A variable's type is set on first assignment and cannot change:
-
-```casa
-42 = x       # x is i64
-"hi" = x     # ERROR: cannot assign str to i64 variable
-```
-
-The `= name:type` form annotates the variable type explicitly. The type checker verifies the stack value is compatible and uses the annotated type for the variable. This is useful for narrowing a bare `Option` (or other unresolved generic) to a concrete type:
-
-```casa
-Option::None = empty:Option[i64]    # narrow bare Option to Option[i64]
-```
-
-## Lambdas
-
-Lambdas are anonymous functions created with braces `{ body }`. They push a function value onto the stack.
-
-**Stack effect:** `-> fn[sig]`
-
-### Basic Example
-
-```casa
-{ 2 * }              # type: fn[i64 -> i64]
-21 swap exec print   # 42
-```
-
-### Storing and Calling
+Braces create an anonymous function value:
 
 ```casa
 { 1 + } = increment
-41 increment exec print   # 42
+41 increment exec print    # 42
 ```
 
-### Closures
+The compiler infers a lambda's stack effect from its body and the context in
+which it is used. Here, `increment` has type `fn[i64 -> i64]`.
 
-Lambdas capture variables from their enclosing scope:
+A lambda can capture bindings from its enclosing scope. Captured values are
+copied when the lambda is created:
 
 ```casa
 10 = offset
 { offset + } = add_offset
-32 add_offset exec print   # 42
+32 add_offset exec print    # 42
 ```
 
-Captured variables are copied at the time the lambda is created.
-
-### Passing Lambdas
-
-Lambdas are first-class values and can be passed to functions:
-
-```casa
-fn apply_twice f:fn[i64 -> i64] x:i64 -> i64 {
-    x f exec f exec
-}
-
-40 { 1 + } apply_twice print   # 42
-```
-
-### `exec`
-
-Calls the function value on top of the stack.
-
-**Stack effect:** `args... fn[sig] -> results...`
-
-The function value must be on top of the stack, with its arguments below. For `fn[i64 -> i64]`, exec pops the function and one `i64`, then pushes one `i64`.
-
-## See Also
-
-- [Types and Literals](types-and-literals.md) -- primitive types and type casting
-- [Control Flow](control-flow.md) -- conditionals, loops, and match
-- [Structs and Methods](structs-and-methods.md) -- `impl` blocks and method definitions
-- [Built-in Intrinsics](intrinsics.md) -- stack manipulation, IO, memory, and syscall intrinsics
+Use a lambda for a short callback. Use a named function when the operation is
+shared or needs its own documentation.
