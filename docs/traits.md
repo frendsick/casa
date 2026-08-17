@@ -1,6 +1,8 @@
 # Traits
 
-Traits define a set of required methods that a type must implement. They enable bounded polymorphism: functions can require that a type variable satisfies a trait, and the compiler verifies this at each call site.
+Traits define a set of required methods that a type must implement. Generic
+functions can require that a type variable satisfies a trait, and the compiler
+verifies this at each call site.
 
 ## Defining a Trait
 
@@ -19,7 +21,8 @@ trait Hashable: Eq + Word {
 }
 ```
 
-This declares the minimum equality and hashing hooks used by the language and standard library.
+This declares the minimum equality and hashing methods used by the language and
+standard library.
 
 ## Implementing a Trait
 
@@ -140,11 +143,16 @@ struct Set[K] { map: Map[K i64] }       # correct
 impl[K: Hashable] Set[K] { ... }        # bounds go here
 ```
 
-## Coherence
+## Trait Implementation Rules
 
-A trait implementation must be in the module that defines either the receiver type or the trait. A third module cannot implement an imported trait for an imported type.
+A trait implementation must be declared in the module that defines either the
+type or the trait. A third module cannot implement an imported trait for an
+imported type. This restriction is the orphan rule.
 
-Each receiver and fully instantiated trait pair can have only one implementation. Distinct instantiations such as `Marker[i64]` and `Marker[str]` can coexist. Overlapping generic implementations and unrestricted `impl[T] T: Trait` blanket implementations are rejected.
+Each receiver and fully instantiated trait pair can have only one implementation.
+Distinct instantiations such as `Marker[i64]` and `Marker[str]` can coexist.
+Overlapping generic implementations and `impl[T] T: Trait` implementations for
+every type are rejected.
 
 ## Calling Trait Methods
 
@@ -172,7 +180,8 @@ fn example[K: Hashable] key:K -> i64 {
 
 Both forms are equivalent. The compiler resolves them to the correct method for the concrete type at each call site.
 
-An inherent method wins over trait defaults. If more than one trait implementation supplies a coherent candidate, qualify the call with the trait:
+An inherent method wins over trait defaults. If more than one trait implementation
+supplies a compatible candidate, qualify the call with the trait:
 
 ```casa
 value First::render
@@ -353,9 +362,15 @@ One compatible inherited default satisfies matching requirements. Two unrelated 
 
 ## Language Trait Contracts
 
-The compiler recognizes `Eq`, `Ord`, `Hashable`, `Display`, and `Iterable` only when their effective declarations contain the required hooks with the correct stack effects. Hooks can be inherited. A malformed declaration is rejected at its declaration and identifies the missing or incompatible hook.
+The compiler recognizes `Eq`, `Ord`, `Hashable`, `Display`, and `Iterable` only
+when their effective declarations contain the required methods with the correct
+stack effects. These methods can be inherited. A malformed declaration is
+rejected at its declaration and identifies the missing or incompatible method.
 
-These traits can add supertraits and default methods. They cannot add other bodyless requirements because compiler-provided primitive behavior cannot implement unknown hooks. Primitive comparison, printing, and formatting remain available without importing the standard library.
+These traits can add supertraits and default methods. They cannot add other
+bodyless requirements because compiler-provided primitive behavior cannot
+implement unknown methods. Primitive comparison, printing, and formatting remain
+available without importing the standard library.
 
 ### Built-in Trait: `Iterable[T]`
 

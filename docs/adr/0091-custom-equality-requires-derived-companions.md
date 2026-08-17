@@ -1,6 +1,6 @@
 # Custom equality requires derived companions
 
-When a type customizes `eq`, the compiler cannot independently derive field-based behavior whose correctness depends on the equality relation. If the same type requests derived Hashable or Ord, it must also provide the corresponding `hash` or `cmp` hook explicitly.
+When a type customizes `eq`, the compiler cannot independently derive field-based behavior whose correctness depends on the equality relation. If the same type requests derived Hashable or Ord, it must also provide the corresponding `hash` or `cmp` method explicitly.
 
 ```casa
 struct User derives Eq Hashable {
@@ -14,7 +14,7 @@ impl User: PartialEq + Hashable {
 }
 ```
 
-Generated companions remain available when they delegate to the customized hook. The standard `ne` default calls `eq`; ordering boolean defaults call `partial_cmp`; Ord's partial adapter calls `cmp`. These defaults automatically observe customized behavior and require no duplicate implementation.
+Generated companions remain available when they delegate to the customized method. The standard `ne` default calls `eq`; ordering boolean defaults call `partial_cmp`; Ord's partial adapter calls `cmp`. These defaults automatically observe customized behavior and require no duplicate implementation.
 
 ## Consequences
 

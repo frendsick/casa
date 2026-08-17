@@ -1,6 +1,6 @@
-# Partial and total equality share hooks
+# Partial and total equality share operator methods
 
-Partial and total equality use the same `eq` and `ne` operator hooks. The standard declarations place them on PartialEq and make Eq the explicit lawful-total refinement:
+Partial and total equality use the same `eq` and `ne` operator methods. The standard declarations place them on PartialEq and make Eq the explicit lawful-total refinement:
 
 ```casa
 trait PartialEq {
@@ -14,7 +14,7 @@ trait PartialEq {
 trait Eq: PartialEq { }
 ```
 
-The compiler validates effective trait shape after collecting inherited methods. A reserved Eq declaration must therefore expose correctly typed `eq` and `ne` hooks either directly or through supertraits; an empty standalone `trait Eq { }` is invalid as the language Eq contract.
+The compiler validates effective trait shape after collecting inherited methods. A reserved Eq declaration must therefore expose correctly typed `eq` and `ne` operator methods either directly or through supertraits; an empty standalone `trait Eq { }` is invalid as the language Eq contract.
 
 Explicit implementation distinguishes semantic strength, so separate method names such as `partial_eq` are unnecessary. A float may implement PartialEq without adopting Eq, while a lawful total value explicitly implements both. Equality operators accept PartialEq and lower to `eq` or `ne`; Hashable requires Eq.
 

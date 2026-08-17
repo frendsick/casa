@@ -1,14 +1,14 @@
 # Custom destruction uses a reserved drop method
 
-A type defines custom cleanup with the reserved inherent method `fn drop mut$self`. This is a compiler lifecycle hook rather than a trait implementation. Casa does not define a public `Drop` trait, a derivation, or a generic destructor bound.
+A type defines custom cleanup with the reserved inherent method `fn drop mut$self`. This is a compiler-called cleanup method rather than a trait implementation. Casa does not define a public `Drop` trait, a derivation, or a generic destructor bound.
 
-The compiler accepts only the exact mutable-borrow receiver and no-output stack effect. Source code cannot call the method directly; the `drop` intrinsic consumes an owner and the compiler invokes the hook automatically during the same destruction lowering used at scope exits and early returns.
+The compiler accepts only the exact mutable-borrow receiver and no-output stack effect. Source code cannot call the method directly; the `drop` intrinsic consumes an owner and the compiler calls the cleanup method automatically during the same destruction lowering used at scope exits and early returns.
 
 ## Considered options
 
 - A compiler-known `Drop` trait fits explicit implementation syntax, but remains special in invocation and ownership while offering little useful generic abstraction.
 - Dedicated destructor grammar makes the lifecycle role explicit, but adds syntax for behavior already identified by one reserved method.
-- Requiring explicit `close` calls avoids a compiler hook, but permits resource leaks on ordinary control-flow exits.
+- Requiring explicit `close` calls avoids a compiler-called cleanup method, but permits resource leaks on ordinary control-flow exits.
 - A reserved method is local, explicit, and reuses existing method declarations without pretending cleanup is an ordinary callable capability.
 
 ## Consequences

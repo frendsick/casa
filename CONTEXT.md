@@ -140,6 +140,18 @@ _Avoid_: Default method signature
 A type explicitly implements a trait with `impl Type: Trait`, and its available methods satisfy every required **Stack effect**.
 _Avoid_: Accidental implementation from matching method names
 
+**Language trait method**:
+A method that a reserved language-integrated trait must provide with a compiler-validated **Stack effect**. Name its role directly, such as operator method or formatting method.
+
+**Trait implementation rules**:
+The rules that control where a trait implementation may be declared and reject duplicate or overlapping implementations.
+
+**Borrowed value**:
+The live `T` accessed through a shared `$T` or exclusive `mut$T` borrow.
+
+**Compiler-called cleanup method**:
+The reserved inherent `drop` method that the compiler calls during destruction and source code cannot call directly.
+
 ### Bootstrap
 
 **Bootstrap compiler**:
@@ -230,20 +242,20 @@ _Avoid_: Release lint, tag lint
 - Every closure is repeatable. Invoking it may consume explicit arguments but may not leave a captured non-`Copy` owner consumed; Casa has no single-use function type.
 - Standard `Copy` is a methodless marker extending Clone; it may be used implicitly and never allocates or calls user code. `derives Copy` and `impl Type: Copy { }` establish the same compiler-validated implementation and supply missing fieldwise Clone behavior. A freestanding Copy declaration may omit that supertrait and relationship.
 - A Copy type may provide a customized Clone implementation, which takes precedence over the fieldwise fallback. Generated aggregate Clone calls field Clone methods, while implicit Copy remains allocation-free; explicit Clone cost and semantics belong to the implementation author.
-- Reserved language-integrated traits use minimum compiler-validated hook contracts while allowing additional default methods and supertraits. Primitive operations remain available without importing those declarations.
-- `!=` lowers to the active equality trait's `ne` hook. The standard default negates `eq`; overrides must preserve that semantic inverse.
-- PartialEq owns the shared `eq` and `ne` hooks; Eq extends PartialEq as the explicit lawful-total marker. The compiler validates Eq's effective inherited shape, and `derives Eq` implements both traits.
-- PartialOrd owns `partial_cmp` and the `lt`, `le`, `gt`, and `ge` operator hooks; Ord extends PartialOrd and Eq, adds `cmp`, and provides the inherited `partial_cmp` default. The compiler validates the complete effective inherited shape.
+- Reserved language-integrated traits use minimum compiler-validated **Language trait method** contracts while allowing additional default methods and supertraits. Primitive operations remain available without importing those declarations.
+- `!=` lowers to the active equality trait's `ne` operator method. The standard default negates `eq`; overrides must preserve that semantic inverse.
+- PartialEq owns the shared `eq` and `ne` operator methods; Eq extends PartialEq as the explicit lawful-total marker. The compiler validates Eq's effective inherited shape, and `derives Eq` implements both traits.
+- PartialOrd owns `partial_cmp` and the `lt`, `le`, `gt`, and `ge` operator methods; Ord extends PartialOrd and Eq, adds `cmp`, and provides the inherited `partial_cmp` default. The compiler validates the complete effective inherited shape.
 - `Clone` is an explicit, infallible trait operation that may allocate or run user code; allocation failure terminates. Stack operations and implicit reuse never invoke it.
 - `Clone` is declared in `std`, not injected by the compiler. The compiler recognizes its canonical identity only for explicit `derives Clone` generation.
 - `array[T]` owns fixed-length runtime-sized storage and is never `Copy`; it implements `Clone` when `T: Clone`. `List[T]` remains the growable sequence.
 - Standard value owners implement `Clone` when their owned contents do; identity-bearing resources and exclusive borrows do not receive automatic implementations.
 - Structs and enums may opt into generated explicit duplication with `derives Clone`; derivation is conditional on every owned field or payload implementing `Clone` and never implies `Copy`.
-- Derived trait methods are fallbacks: one handwritten customization block may override generated hooks and merge into the same trait implementation. Multiple handwritten implementations remain errors, and source order has no effect.
+- Derived trait methods are fallbacks: one handwritten customization block may override generated methods and merge into the same trait implementation. Multiple handwritten implementations remain errors, and source order has no effect.
 - Custom `eq` requires explicit `hash` when Hashable is derived and explicit `cmp` when Ord is derived; compiler generation cannot infer those consistency laws.
 - Finite recursive owned types may derive Clone. Trait implementation checking resolves recursive obligations as one dependency cycle; runtime cloning traverses and may allocate for the complete structure.
 - Finite recursive owned types may also derive Eq, Ord, and Hashable through cycle-aware trait implementation checking. Generated operations recursively traverse finite payloads.
-- Recursive destruction initially uses call-stack recursion and preserves LIFO hook and reverse-field order. Deep-chain tests and benchmarks report the practical stack limit before iterative lowering is considered.
+- Recursive destruction initially uses call-stack recursion and preserves the order of the **Compiler-called cleanup method** and reverse-field destruction. Deep-chain tests and benchmarks report the practical stack limit before iterative lowering is considered.
 - `Ordering` is the ordinary standard enum `Less`, `Equal`, `Greater`; it is compiler-validated only when generated Ord behavior needs it. Option remains ordinary library code.
 - Standard Ordering initially derives Eq and Copy, but not Ord or Hashable.
 - A subtrait may provide a matching default body for an inherited bodyless requirement; Ord uses this to adapt `cmp` into PartialOrd's `partial_cmp` without compiler knowledge of Option.
@@ -252,7 +264,7 @@ _Avoid_: Release lint, tag lint
 - Implementing a subtrait satisfies every transitive supertrait once inherited requirements are met; an explicit supertrait implementation is reused rather than duplicated.
 - A trait declaration is rejected when distinct inherited methods share a name but have incompatible stack effects; Casa does not overload methods.
 - One inherited default method satisfies every compatible bodyless requirement; zero bodies require an implementation and multiple distinct bodies require an override.
-- A type may implement multiple distinct instantiations of one generic trait; implementation coherence is keyed by receiver type and fully instantiated trait.
+- A type may implement multiple distinct instantiations of one generic trait; the **Trait implementation rules** identify implementations by receiver type and fully instantiated trait.
 - Ambiguous trait implementation method calls use postfix trait qualification such as `token Convert[i64]::convert`; return types never drive overload resolution.
 - Ambiguous trait implementation method pointers fully qualify receiver and trait, such as `&Token::Convert[i64]::convert`; unambiguous pointers retain `&Token::method`.
 - Inside a trait default, an unqualified call to one of that trait's methods resolves within the same instantiated trait implementation; another trait requires explicit qualification.
@@ -268,8 +280,8 @@ _Avoid_: Release lint, tag lint
 - An owner cannot move, be replaced, or be destroyed while any derived borrow remains live; Casa does not automatically pin owners or transfer loans across moves.
 - Safe code cannot construct an owner containing a borrow into itself; use offsets or on-demand views instead of pinning and staged initialization.
 - `$T` and `mut$T` are always non-null live references; absence uses ordinary enums such as stdlib `Option`, without compiler special-casing.
-- Equality, ordering, hashing, and display on a borrow forward to the referent's traits rather than observing its address; raw `ptr` equality remains address equality.
-- Under standard `Copy: Clone`, cloning `$T` produces another shared `$T`; explicitly calling `T::clone` through the borrow produces a new owned referent.
+- Equality, ordering, hashing, and display on a borrow use the **Borrowed value**'s traits rather than observing its address; raw `ptr` equality remains address equality.
+- Under standard `Copy: Clone`, cloning `$T` produces another shared `$T`; explicitly calling `T::clone` through the borrow clones the **Borrowed value** into a new owner.
 - Method availability follows receiver capability uniformly: `self` requires ownership, `$self` accepts owned/shared/exclusive access, and `mut$self` accepts owned/exclusive access.
 - `mut$T` is affine and not Copy; when `T: Clone`, `mut$T.clone` may call `T.clone` through a temporary shared reborrow and returns an owned `T`.
 - `ptr::from_ref` safely obtains `ptr` from `$T`; owned and exclusive values may reborrow, and no separate `from_mut` exists because raw pointers have no mutability.
@@ -287,7 +299,7 @@ _Avoid_: Release lint, tag lint
 - Fixed-width raw integer loads and stores allow unaligned addresses on x86-64 but still require every accessed byte to be valid; typed raw operations retain natural alignment.
 - Multibyte raw integer loads and stores use explicit x86-64 little-endian byte order; other protocol orders require library conversion.
 - `memcpy` remains an ordinary unsafe stdlib function for non-overlapping initialized byte regions; typed ownership moves do not use raw byte copying.
-- The compiler intrinsic `copy` has `[T: Copy] $T -> T`, materializing an owned allocation-free copy of a borrowed referent without invoking Clone.
+- The compiler intrinsic `copy` has `[T: Copy] $T -> T`, materializing an owned allocation-free copy of the **Borrowed value** without invoking Clone.
 - Aggregate padding is unspecified and may be uninitialized; safe operations use fields, and `size_of[T]` does not make padding readable byte data.
 - Unsafe `ptr::read[T]` requires an already valid initialized `T`; invalid booleans, Unicode scalars, enum tags, borrows, or owners cause undefined behavior rather than runtime validation.
 - Character conversion uses safe `character.codepoint` and stdlib `char::from_codepoint -> Option[char]`; only the validating wrapper knows `Option`, while the compiler supplies narrow lossless and unsafe unchecked code-point primitives.

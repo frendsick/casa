@@ -16,7 +16,7 @@ Derivation generates ordinary explicit Clone behavior and may therefore allocate
 ## Consequences
 
 - Generic `Pair[T] derives Clone` implements `Clone` when `T: Clone` without placing bounds on constructing or moving `Pair[T]`.
-- A handwritten Clone hook overrides the generated fallback under ADR-0090; two handwritten Clone implementations remain a conflict.
+- A handwritten Clone method overrides the generated fallback under ADR-0090; two handwritten Clone implementations remain a conflict.
 - Clone derivation reuses the established `derives` syntax and adds no general attribute or metaprogramming mechanism.
 - Types choose whether to expose duplication; Clone is not inferred merely because all fields support it.
 - Recursive Clone obligations are resolved as dependency cycles under ADR-0093 rather than rejected or expanded indefinitely.

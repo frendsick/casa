@@ -8,7 +8,7 @@ exclusive dup   # error
 
 Duplicating an exclusive borrow would create simultaneous mutable aliases and violate its defining invariant. An exclusive borrow remains affine and may only be moved between bindings, arguments, and returns.
 
-When `T` implements Clone, ordinary receiver lookup may call that referent method through a shared reborrow and return an owned `T`:
+When `T` implements Clone, ordinary receiver lookup may call that borrowed value's method through a shared reborrow and return an owned `T`:
 
 ```casa
 exclusive.clone         # mut$Buffer -> Buffer

@@ -20,7 +20,7 @@ A type implementing only PartialOrd must still supply `partial_cmp`. A type impl
 
 ## Consequences
 
-- `derives Ord` needs to generate total comparison primitives while standard defaults provide the partial adapter and boolean hooks.
+- `derives Ord` needs to generate total comparison primitives while standard defaults provide the partial adapter and boolean operator methods.
 - A subtrait cannot change an inherited method's stack effect.
 - One matching body may satisfy identical inherited requirements; incompatible same-name requirements remain a declaration error.
-- An inherent method still overrides a default under the existing coherence rule.
+- An inherent method still overrides a default under the existing trait implementation rule.

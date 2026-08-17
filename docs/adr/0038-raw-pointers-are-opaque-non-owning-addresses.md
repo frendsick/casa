@@ -4,7 +4,7 @@
 
 Casa keeps the existing standalone `load8`, `load16`, `load32`, `load64`, `store8`, `store16`, `store32`, and `store64` intrinsics rather than duplicating them as `ptr` methods. Under ADR-0129 they operate only on their exact unsigned integer widths. Existing pointer `+` and `-` operations also remain and take `u64` byte offsets under ADR-0128. Loads, stores, pointer arithmetic, and the new `ptr::as_ref[T]` and `ptr::as_mut[T]` operations require an `unsafe` context. ADR-0122 later adds `ptr::read[T]` and `ptr::write[T]` as unsafe ownership-moving operations for initialized generic storage.
 
-`ptr::as_ref[T]` produces `$T`; `ptr::as_mut[T]` produces `mut$T`. The caller must establish that the address is non-null, correctly aligned, points to a valid live `T` for the complete inferred borrow, and, for `as_mut`, is exclusively accessible. These operations do not create ownership or copy the referent. ADR-0121 adds the safe reverse operation `ptr::from_ref`, which obtains the raw address of either borrow kind without preserving its lifetime.
+`ptr::as_ref[T]` produces `$T`; `ptr::as_mut[T]` produces `mut$T`. The caller must establish that the address is non-null, correctly aligned, points to a valid live `T` for the complete inferred borrow, and, for `as_mut`, is exclusively accessible. These operations do not create ownership or copy the borrowed value. ADR-0121 adds the safe reverse operation `ptr::from_ref`, which obtains the raw address of either borrow kind without preserving its lifetime.
 
 ## Considered options
 

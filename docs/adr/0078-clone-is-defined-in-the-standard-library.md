@@ -8,7 +8,7 @@ trait Clone {
 }
 ```
 
-Code imports it through the ordinary module system when it needs to name the trait. Clone implementations, bounds, method dispatch, coherence, and derivation otherwise use the same machinery as other standard-library traits. The compiler does not special-case `Option`, `Result`, arrays, or any other Clone implementation.
+Code imports it through the ordinary module system when it needs to name the trait. Clone implementations, bounds, method dispatch, trait implementation rules, and derivation otherwise use the same machinery as other standard-library traits. The compiler does not special-case `Option`, `Result`, arrays, or any other Clone implementation.
 
 The compiler recognizes the canonical standard-library trait identity when expanding `derives Clone` and when supplying missing fieldwise behavior required by the standard Copy implementation. An unrelated user trait also named `Clone` does not acquire derivation behavior.
 

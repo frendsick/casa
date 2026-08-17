@@ -30,6 +30,6 @@ impl Item: Described { }
 - Generic bounds are satisfied by declared trait implementations rather than a global scan for matching methods.
 - `impl[T: Eq] Pair[T]: Eq { ... }` declares a conditional generic trait implementation.
 - `derives Eq`, `derives Ord`, `derives Hashable`, `derives Clone`, and `derives Copy` implement traits and generate any required methods. Copy implementations are additionally subject to compiler representation validation.
-- Default methods are considered only from traits the receiver explicitly implements, including their supertraits. Ambiguity follows the separate default-method coherence rule.
+- Default methods are considered only from traits the receiver explicitly implements, including their supertraits. Ambiguity follows the separate default-method conflict rule.
 - Ordinary `impl Type { ... }` blocks continue to define inherent methods without implementing a trait.
-- Rules governing where a trait implementation may be declared and whether it may be repeated require a separate coherence decision.
+- Rules governing where a trait implementation may be declared and whether it may be repeated require a separate decision about trait implementation rules.

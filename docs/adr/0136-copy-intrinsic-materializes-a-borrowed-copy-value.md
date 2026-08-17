@@ -6,7 +6,7 @@ Casa adds the compiler intrinsic:
 copy # [T: Copy] $T -> T
 ```
 
-It produces one owned `T` by performing the same compiler-validated, allocation-free representation copy used by `dup` and `over`, but reads the value through a shared borrow. The referent remains initialized and unchanged.
+It produces one owned `T` by performing the same compiler-validated, allocation-free representation copy used by `dup` and `over`, but reads the value through a shared borrow. The borrowed value remains initialized and unchanged.
 
 ```casa
 fn copied[T: Copy] value:$T -> T {
@@ -23,4 +23,4 @@ fn copied[T: Copy] value:$T -> T {
 - `copy` invokes no Clone implementation, user code, allocator, or destructor.
 - Compiler lowering uses `T`'s layout and does not require aggregate padding to contain initialized user-observable bytes.
 - Concrete built-in copyable values remain usable without importing the standard library. Generic code names the active compiler-validated Copy trait in its bound.
-- `copy` is rejected when the referent is not Copy; use explicit `T::clone` when allocation or type-specific duplication is acceptable.
+- `copy` is rejected when the borrowed value is not Copy; use explicit `T::clone` when allocation or type-specific duplication is acceptable.

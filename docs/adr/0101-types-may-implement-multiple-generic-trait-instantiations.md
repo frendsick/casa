@@ -16,7 +16,7 @@ impl Token: Convert[str] {
 }
 ```
 
-The coherence identity is the receiver type plus the fully instantiated trait, not merely the receiver and trait name. The two implementations above are distinct; a second `Token: Convert[i64]` remains a duplicate.
+The trait implementation identity is the receiver type plus the fully instantiated trait, not merely the receiver and trait name. The two implementations above are distinct; a second `Token: Convert[i64]` remains a duplicate.
 
 ## Consequences
 
