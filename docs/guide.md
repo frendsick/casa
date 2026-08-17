@@ -125,10 +125,7 @@ fn rating score:i64 -> str {
 Remember that comparison uses the topmost value as its left operand. Therefore,
 `90 score >=` means `score >= 90`.
 
-## Compose a program
-
-The following program combines an import, a typed function, an array, a binding,
-a loop, method syntax, and string interpolation:
+## Try a complete program
 
 ```casa
 import "std"
@@ -150,13 +147,13 @@ for score in scores.iter do
 done
 ```
 
-Save it as `ratings.casa`, then compile and run it:
+Save it as `ratings.casa`. Then, compile and run it:
 
 ```sh
 ./casac ratings.casa -L lib -r
 ```
 
-The output is:
+Output:
 
 ```text
 72: keep practicing
