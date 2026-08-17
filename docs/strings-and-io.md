@@ -46,9 +46,6 @@ names:
 ", " parts.join print    # a, b, c
 ```
 
-See [`examples/string_utilities.casa`](../examples/string_utilities.casa) for
-the transformation methods.
-
 ## Parse text
 
 | Method | Result |

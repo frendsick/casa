@@ -61,8 +61,8 @@ provides these checks:
 | `is_writable` | Owner-writable mode bit |
 | `is_executable` | Owner-executable mode bit |
 
-See [`examples/file_io.casa`](../examples/file_io.casa) for a runnable file
-example.
+The complete [OS example](../examples/os_interaction.casa) creates, inspects,
+and removes a file and directory.
 
 ## Directories
 
@@ -94,8 +94,8 @@ The mode is a Linux permission value. For example, `493` is octal `0755`.
 "src/main.casa" path::extension print  # casa
 ```
 
-See [`examples/os_interaction.casa`](../examples/os_interaction.casa) for
-files, directories, environment variables, and paths.
+See the [OS example](../examples/os_interaction.casa) for files, directories,
+environment variables, paths, and a child process.
 
 ## Arguments and processes
 
@@ -112,8 +112,9 @@ List[str]::new = command
 command run_command = exit_code
 ```
 
-See [`examples/command_line_args.casa`](../examples/command_line_args.casa) and
-[`examples/run_command.casa`](../examples/run_command.casa).
+See the [argument parser example](../examples/argparse.casa) for a command-line
+interface and the [OS example](../examples/os_interaction.casa) for
+`run_command`.
 
 ## Advanced file descriptors
 

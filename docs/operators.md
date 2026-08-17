@@ -46,6 +46,18 @@ an invalid shift. The standard library provides `try_add`, `try_sub`,
 It also provides `wrapping_add`, `wrapping_sub`, and `wrapping_mul` for
 deliberate modulo arithmetic.
 
+After `import "std"`, these `i64` helpers are available:
+
+| Method | Result |
+|---|---|
+| `abs self:i64 -> i64` | Absolute value |
+| `min self:i64 other:i64 -> i64` | Smaller value |
+| `max self:i64 other:i64 -> i64` | Larger value |
+| `clamp self:i64 low:i64 high:i64 -> i64` | Value limited to the inclusive range |
+| `pow self:i64 exponent:i64 -> i64` | Integer exponentiation |
+
+`f32` and `f64` also provide `abs`.
+
 `+` and `-` also apply byte offsets to pointers:
 
 ```casa

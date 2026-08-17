@@ -56,8 +56,6 @@ Callbacks are pushed before the option receiver:
 { 2 * } 5 Option::Some .map    # Option::Some(10)
 ```
 
-See [`examples/option.casa`](../examples/option.casa) for the common methods.
-
 ## Result
 
 `Result[T E]` represents a successful value or an error. It is defined as
@@ -89,8 +87,6 @@ end
 | `and_then self:Result[T E] transform:fn[T -> Result[U E]] -> Result[U E]` | Chain a fallible operation |
 | `or_else self:Result[T E] recover:fn[E -> Result[T F]] -> Result[T F]` | Recover from an error |
 
-See [`examples/result.casa`](../examples/result.casa) for the common methods.
-
 ## Propagate with `?`
 
 Inside a function, `?` unwraps `Some` or `Ok`. On `None` or `Error`, it returns
@@ -114,9 +110,8 @@ An `Option[T]` can propagate into another `Option`. A `Result[T E]` can
 propagate into another `Result` with the same error type. Use `map_error` first
 when the error type must change.
 
-See [`examples/propagate_option.casa`](../examples/propagate_option.casa) and
-[`examples/propagate_result.casa`](../examples/propagate_result.casa) for
-runnable programs.
+See [`examples/propagate_result.casa`](../examples/propagate_result.casa) for a
+runnable file operation that uses `?`.
 
 ## Advanced low-level helper
 

@@ -94,7 +94,8 @@ Tooling:
 - [Formatter usage and rules](docs/FORMAT.md)
 - [Casa style](docs/STYLE.md)
 
-See [`examples/`](examples/) for runnable programs.
+See the [curated examples](examples/README.md) for runnable programs ordered
+from introductory to advanced.
 
 ## Build from source
 

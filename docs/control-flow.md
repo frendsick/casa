@@ -162,5 +162,4 @@ A guard must produce one `bool`. Pattern bindings are available in the guard.
 A guarded arm does not count toward exhaustiveness because its condition can be
 false.
 
-See [`examples/match_guard.casa`](../examples/match_guard.casa) for a runnable
-guard example.
+See [`examples/enum.casa`](../examples/enum.casa) for guards on enum payloads.
