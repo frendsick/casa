@@ -30,6 +30,7 @@ The examples are ordered from introductory programs to low-level system code.
 | 18 | [`timer.casa`](timer.casa) | Local and global timers |
 | 19 | [`freestanding_primitives.casa`](freestanding_primitives.casa) | Primitive operations without the standard library |
 | 20 | [`sized_memory.casa`](sized_memory.casa) | Unsafe allocation and sized memory access |
-| 21 | [`game_of_life.casa`](game_of_life.casa) | An interactive terminal program with raw Linux calls |
+| 21 | [`unicode.casa`](unicode.casa) | Direct Unicode, Unicode escapes, and code-point conversion |
+| 22 | [`game_of_life.casa`](game_of_life.casa) | An interactive terminal program with raw Linux calls |
 
 `game_of_life.casa` needs an interactive terminal. Stop it with Ctrl+C.

@@ -8,16 +8,90 @@ import "error"
 # ============================================================================
 # Escape sequence map
 # ============================================================================
-Map[i64 str]::new = ESCAPE_SEQUENCES
-"\n" 'n' (i64) ESCAPE_SEQUENCES.set = ESCAPE_SEQUENCES
-"\t" 't' (i64) ESCAPE_SEQUENCES.set = ESCAPE_SEQUENCES
-"\\" '\\' (i64) ESCAPE_SEQUENCES.set = ESCAPE_SEQUENCES
-"\"" '"' (i64) ESCAPE_SEQUENCES.set = ESCAPE_SEQUENCES
-"\0" '0' (i64) ESCAPE_SEQUENCES.set = ESCAPE_SEQUENCES
-"\r" 'r' (i64) ESCAPE_SEQUENCES.set = ESCAPE_SEQUENCES
-"{" '{' (i64) ESCAPE_SEQUENCES.set = ESCAPE_SEQUENCES
-"}" '}' (i64) ESCAPE_SEQUENCES.set = ESCAPE_SEQUENCES
-"'" '\'' (i64) ESCAPE_SEQUENCES.set = ESCAPE_SEQUENCES
+Map[char str]::new = ESCAPE_SEQUENCES
+"\n" 'n' ESCAPE_SEQUENCES.set = ESCAPE_SEQUENCES
+"\t" 't' ESCAPE_SEQUENCES.set = ESCAPE_SEQUENCES
+"\\" '\\' ESCAPE_SEQUENCES.set = ESCAPE_SEQUENCES
+"\"" '"' ESCAPE_SEQUENCES.set = ESCAPE_SEQUENCES
+"\0" '0' ESCAPE_SEQUENCES.set = ESCAPE_SEQUENCES
+"\r" 'r' ESCAPE_SEQUENCES.set = ESCAPE_SEQUENCES
+"{" '{' ESCAPE_SEQUENCES.set = ESCAPE_SEQUENCES
+"}" '}' ESCAPE_SEQUENCES.set = ESCAPE_SEQUENCES
+"'" '\'' ESCAPE_SEQUENCES.set = ESCAPE_SEQUENCES
+
+# ============================================================================
+# UTF-8 decoding
+# ============================================================================
+
+struct DecodedUtf8Scalar {
+    codepoint:   u32
+    byte_length: u64
+}
+
+fn is_unicode_scalar codepoint:u32 -> bool {
+    1114111 codepoint <=
+    55296 codepoint >= 57343 codepoint <= && ! &&
+}
+
+fn utf8_byte offset:u64 source:$str -> Option[u32] {
+    if source.length offset >= then Option[u32]::None return fi
+    offset source.at.codepoint Option::Some
+}
+
+fn is_utf8_continuation byte:u32 -> bool {
+    128 byte >= 191 byte <= &&
+}
+# Decode one scalar without replacing malformed input.
+
+fn decode_utf8_scalar offset:u64 source:$str -> Option[DecodedUtf8Scalar] {
+    source offset utf8_byte = first_opt
+    if first_opt.is_none then Option[DecodedUtf8Scalar]::None return fi
+    first_opt.unwrap = first
+    if 127 first <= then 1 first DecodedUtf8Scalar Option::Some return fi
+
+    source offset 1 + utf8_byte = second_opt
+    if second_opt.is_none then Option[DecodedUtf8Scalar]::None return fi
+    second_opt.unwrap = second
+    if second is_utf8_continuation ! then Option[DecodedUtf8Scalar]::None return fi
+
+    if 194 first >= 223 first <= && then
+        first 31 & 6 << second 63 & | = codepoint
+        2 codepoint DecodedUtf8Scalar Option::Some return
+    fi
+
+    source offset 2 + utf8_byte = third_opt
+    if third_opt.is_none then Option[DecodedUtf8Scalar]::None return fi
+    third_opt.unwrap = third
+    if third is_utf8_continuation ! then Option[DecodedUtf8Scalar]::None return fi
+
+    if 224 first >= 239 first <= && then
+        first 15 & 12 <<
+        second 63 & 6 << |
+        third 63 & |
+        = codepoint
+        if 2048 codepoint >= codepoint is_unicode_scalar && then
+            3 codepoint DecodedUtf8Scalar Option::Some return
+        fi
+        Option[DecodedUtf8Scalar]::None return
+    fi
+
+    source offset 3 + utf8_byte = fourth_opt
+    if fourth_opt.is_none then Option[DecodedUtf8Scalar]::None return fi
+    fourth_opt.unwrap = fourth
+    if fourth is_utf8_continuation ! then Option[DecodedUtf8Scalar]::None return fi
+
+    if 240 first >= 244 first <= && then
+        first 7 & 18 <<
+        second 63 & 12 << |
+        third 63 & 6 << |
+        fourth 63 & |
+        = codepoint
+        if 65536 codepoint >= codepoint is_unicode_scalar && then
+            4 codepoint DecodedUtf8Scalar Option::Some return
+        fi
+    fi
+    Option[DecodedUtf8Scalar]::None
+}
 
 # ============================================================================
 # Lexer state
@@ -350,20 +424,77 @@ impl Lexer {
             loc "Invalid hex digit in \\x escape" ErrorKind::Syntax self.add_error
             "" Option::Some return
         fi
-        high_value 16 * low_value + (char) = hex_char
-        StringBuilder::new = hex_builder
-        hex_char hex_builder.append_char
-        hex_builder.build Option::Some
+        high_value 16 * low_value + = hex_value
+        if 127 hex_value > then
+            4 self Lexer::cursor Cursor::pos 4 - self.loc = loc
+            loc "Non-ASCII \\x escape is not valid text; use \\u{...}" ErrorKind::Syntax self.add_error
+            "" Option::Some return
+        fi
+        unsafe { hex_value (u32) char::from_codepoint_unchecked }.to_str Option::Some
+    }
+
+    fn parse_unicode_escape self:mut$Lexer -> Option[str] {
+        self Lexer::cursor Cursor::pos 2 - = start
+        self Lexer::cursor.advance = open_opt
+        if open_opt.is_none then
+            2 start self.loc "Expected `{` after \\u" ErrorKind::Syntax self.add_error
+            "" Option::Some return
+        fi
+        if open_opt Option::Some(open) is then
+            if '{' open != then
+                3 start self.loc "Expected `{` after \\u" ErrorKind::Syntax self.add_error
+                "" Option::Some return
+            fi
+        fi
+
+        0 (u32) = codepoint
+        0 (u64) = digit_count
+        false = invalid_digit
+        false = closed
+        while self Lexer::cursor.is_eof ! do
+            self Lexer::cursor.advance = digit_opt
+            if digit_opt.is_none then break fi
+            digit_opt.unwrap = digit_char
+            if '}' digit_char == then
+                true = closed
+                break
+            fi
+            1 += digit_count
+            digit_char hex_digit_value = digit
+            if 0 digit < then
+                true = invalid_digit
+            elif 6 digit_count <= then
+                codepoint 16 * digit (u32) + = codepoint
+            fi
+        done
+
+        self Lexer::cursor Cursor::pos start - = length
+        if closed ! then
+            length start self.loc "Unclosed Unicode escape" ErrorKind::Syntax self.add_error
+            "" Option::Some return
+        fi
+        if invalid_digit 0 digit_count == || 6 digit_count > || then
+            length start self.loc "Invalid Unicode escape" ErrorKind::Syntax self.add_error
+            "" Option::Some return
+        fi
+        if codepoint is_unicode_scalar ! then
+            length start self.loc "Unicode escape is not a scalar value" ErrorKind::Syntax self.add_error
+            "" Option::Some return
+        fi
+        unsafe { codepoint char::from_codepoint_unchecked }.to_str Option::Some
     }
 
     fn parse_escape self:mut$Lexer -> Option[str] {
         self Lexer::cursor.advance ? = char_val
-        char_val (i64) ESCAPE_SEQUENCES.get = result
+        char_val ESCAPE_SEQUENCES.get = result
         if result.is_some then
             result return
         fi
         if 'x' char_val == then
             self.parse_hex_escape return
+        fi
+        if 'u' char_val == then
+            self.parse_unicode_escape return
         fi
         2 self Lexer::cursor Cursor::pos 2 - self.loc = loc
         loc "Invalid escape sequence" ErrorKind::Syntax self.add_error
@@ -406,7 +537,7 @@ impl Lexer {
         self Lexer::cursor Cursor::pos = start
         self Lexer::cursor.advance drop # skip '
 
-        self Lexer::cursor.advance = next_opt
+        self Lexer::cursor.peek = next_opt
         if next_opt.is_none then
             self Lexer::cursor Cursor::pos start - start self.loc = error_loc
             error_loc "Unclosed char literal" ErrorKind::Syntax self.add_error
@@ -416,6 +547,7 @@ impl Lexer {
         "" = char_value
 
         if '\\' next_char == then
+            self Lexer::cursor.advance drop
             self.parse_escape = escape
             if escape.is_none then
                 self Lexer::cursor Cursor::pos start - start self.loc = error_loc2
@@ -423,13 +555,21 @@ impl Lexer {
             fi
             escape.unwrap = char_value
         elif '\'' next_char == then
+            self Lexer::cursor.advance drop
             self Lexer::cursor Cursor::pos start - start self.loc = error_loc3
             error_loc3 "Empty char literal" ErrorKind::Syntax self.add_error
             error_loc3 TokenKind::Literal "'\0'" Token::new return
         else
-            StringBuilder::new = char_builder
-            next_char char_builder.append_char
-            char_builder.build = char_value
+            self Lexer::cursor Cursor::source = source
+            self Lexer::cursor Cursor::pos = scalar_offset
+            source scalar_offset decode_utf8_scalar = decoded_opt
+            if decoded_opt Option::Some(decoded) is then
+                source scalar_offset decoded.byte_length str::substring = char_value
+                decoded.byte_length self Lexer::cursor Cursor::skip
+            else
+                self Lexer::cursor.advance drop
+                1 scalar_offset self.loc "Invalid UTF-8 in char literal" ErrorKind::Syntax self.add_error
+            fi
         fi
 
         # Expect closing '
@@ -441,7 +581,13 @@ impl Lexer {
             if closing Option::Some(closing_char) is then
                 if '\'' closing_char != then
                     self Lexer::cursor Cursor::pos start - start self.loc = error_loc5
-                    error_loc5 "Unclosed char literal" ErrorKind::Syntax self.add_error
+                    error_loc5 "Character literal must contain exactly one Unicode scalar value" ErrorKind::Syntax self.add_error
+                    while self Lexer::cursor.is_eof ! do
+                        self Lexer::cursor.advance = recovery_opt
+                        if recovery_opt Option::Some(recovery_char) is then
+                            if '\'' recovery_char == '\n' recovery_char == || then break fi
+                        fi
+                    done
                 fi
             fi
         fi
@@ -705,6 +851,18 @@ impl Lexer {
     }
 
     fn lex self:mut$Lexer -> LexResult {
+        self Lexer::cursor Cursor::source = source
+        0 (u64) = utf8_offset
+        while utf8_offset source.length > do
+            source utf8_offset decode_utf8_scalar = decoded_opt
+            if decoded_opt Option::Some(decoded) is then
+                decoded.byte_length += utf8_offset
+            else
+                1 utf8_offset self.loc "Source is not valid UTF-8" ErrorKind::Syntax self.add_error
+                1 += utf8_offset
+            fi
+        done
+
         List[Token]::new = tokens
         while self Lexer::cursor.is_eof ! do
             self.skip_whitespace
@@ -754,11 +912,11 @@ impl Lexer {
 
 fn hex_digit_value character:char -> i64 {
     if '0' character >= '9' character <= && then
-        character (i64) '0' (i64) -
+        character.codepoint i64::from '0'.codepoint i64::from -
     elif 'a' character >= 'f' character <= && then
-        character (i64) 'a' (i64) - 10 +
+        character.codepoint i64::from 'a'.codepoint i64::from - 10 +
     elif 'A' character >= 'F' character <= && then
-        character (i64) 'A' (i64) - 10 +
+        character.codepoint i64::from 'A'.codepoint i64::from - 10 +
     else
         -1
     fi

@@ -6,8 +6,10 @@ Import `std` for the methods and functions on this page:
 import "std"
 ```
 
-Strings use byte indexes. Character classification and case conversion cover
-ASCII.
+Source files and string literals contain valid UTF-8. The current string
+collection API still uses byte indexes, and character classification and case
+conversion cover ASCII. Use the code-point APIs when you need one Unicode
+scalar value.
 
 ## String API
 
@@ -80,10 +82,15 @@ decimal exponents, signed zero, `inf`, `-inf`, and `NaN`.
 
 ```casa
 'A'.codepoint print          # 65
+'😀'.codepoint print         # 128512
 '7'.is_digit print           # true
 65 = value:u32
 value char::from_codepoint .unwrap print
 ```
+
+`char::from_codepoint` rejects surrogate values and values above `U+10FFFF`.
+The unchecked form requires `unsafe` and has undefined behavior for a value
+that is not a Unicode scalar.
 
 ## Formatting and output
 
