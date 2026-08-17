@@ -69,7 +69,7 @@ decimal exponents, signed zero, `inf`, `-inf`, and `NaN`.
 |---|---|
 | `codepoint self:char -> u32` | Unicode scalar value |
 | `char::from_codepoint value:u32 -> Option[char]` | Validated character |
-| `char::from_codepoint_unchecked value:u32 -> char` | Character without validation |
+| `unsafe fn char::from_codepoint_unchecked value:u32 -> char` | Character without validation |
 | `is_digit self:char -> bool` | ASCII digit |
 | `is_upper self:char -> bool` | ASCII uppercase letter |
 | `is_lower self:char -> bool` | ASCII lowercase letter |

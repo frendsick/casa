@@ -2109,11 +2109,13 @@ fn create_member_accessor
     # Getter
     f"{struct_name}::{member_name}" = getter_name
     List[Op]::new = getter_ops
+    location Location::clone OpValue::UnsafeStart Op::new getter_ops.push
     location Location::clone TYPE_PTR_T OpValue::TypeCast Op::new getter_ops.push
     location Location::clone offset (i64) make_integer_op_value Op::new getter_ops.push
     location Location::clone OpValue::Add Op::new getter_ops.push
     location Location::clone OpValue::Load64 Op::new getter_ops.push
     location Location::clone member_type clone_type OpValue::TypeCast Op::new getter_ops.push
+    location Location::clone OpValue::UnsafeEnd Op::new getter_ops.push
 
     List[Parameter]::new = getter_params
     "" SHARED_BORROW_TYPE param_type clone_type apply_borrow_type Parameter::named getter_params.push
@@ -2133,6 +2135,7 @@ fn create_member_accessor
     # Setter
     f"{struct_name}::set_{member_name}" = setter_name
     List[Op]::new = setter_ops
+    location Location::clone OpValue::UnsafeStart Op::new setter_ops.push
     location Location::clone TYPE_PTR_T OpValue::TypeCast Op::new setter_ops.push
     location Location::clone offset (i64) make_integer_op_value Op::new setter_ops.push
     location Location::clone OpValue::Add Op::new setter_ops.push
@@ -2140,6 +2143,7 @@ fn create_member_accessor
     location Location::clone TYPE_U64_T OpValue::TypeCast Op::new setter_ops.push
     location Location::clone OpValue::Swap Op::new setter_ops.push
     location Location::clone OpValue::Store64 Op::new setter_ops.push
+    location Location::clone OpValue::UnsafeEnd Op::new setter_ops.push
 
     List[Parameter]::new = setter_params
     "" EXCLUSIVE_BORROW_TYPE param_type clone_type apply_borrow_type Parameter::named setter_params.push
@@ -3140,10 +3144,17 @@ fn parse_impl_block parser:mut$Parser cursor:mut$TokenCursor {
     while true do
         cursor.peek = fn_opt
         if fn_opt.is_none then break fi
+        false = is_unsafe_method
         if fn_opt Option::Some(fn_token) is then
-            if "fn" fn_token Token::value != then break fi
+            if "unsafe" fn_token Token::value == then
+                true = is_unsafe_method
+                cursor.pop drop
+            elif "fn" fn_token Token::value != then
+                break
+            fi
         fi
         cursor parser parse_function = function
+        is_unsafe_method function Function::set_is_unsafe
         function Function::name = method_name
         if "drop" method_name == 0 implemented_traits.length != && then
             function.location "`drop` must be declared in an inherent implementation" ErrorKind::InvalidScope parser.state.record_error
@@ -3782,6 +3793,33 @@ fn get_op_keyword
         token Token::location f"Token `{token Token::value}` is not a keyword" ErrorKind::Syntax parser.state.record_error
     fi
     keyword_opt.unwrap = keyword
+
+    # unsafe function declaration or lexical block
+    if KeywordKind::Unsafe keyword == then
+        cursor.peek = unsafe_next_opt
+        if unsafe_next_opt Option::Some(unsafe_next) is then
+            if "fn" unsafe_next Token::value == then
+                parser token Token::location "Functions" function_name require_global_scope
+                cursor parser parse_function = function
+                true function Function::set_is_unsafe
+                if function Function::name parser.store.functions.get.is_some then
+                    function Function::location f"Identifier `{function Function::name}` is already defined" ErrorKind::DuplicateName parser.state.record_error
+                fi
+                function Function::name = unsafe_function_name
+                function unsafe_function_name parser.put_function
+                return
+            fi
+            if "{" unsafe_next Token::value == then
+                token Token::location OpValue::UnsafeStart Op::new ops.push
+                function_name cursor parser parse_block_ops = unsafe_ops
+                for unsafe_op in unsafe_ops.iter do unsafe_op ops.push done
+                token Token::location OpValue::UnsafeEnd Op::new ops.push
+                return
+            fi
+        fi
+        token Token::location "Expected `fn` or `{` after `unsafe`" ErrorKind::Syntax parser.state.record_error
+        return
+    fi
 
     # Simple keyword -> OpValue lookup
     keyword keyword_to_op_value = simple_opt
@@ -4735,6 +4773,10 @@ fn try_resolve_fn_ref
         = method_opt
         if method_opt Option::Some(method) is then
             if method.function_name store.functions.get Option::Some(method_function) is then
+                if method_function.is_unsafe then
+                    op Op::location f"Unsafe function `{method.function_name}` cannot be referenced" ErrorKind::InvalidScope CasaError::new resolve_errors.push
+                    true return
+                fi
                 method.function_name.clone OpValue::FnPush op Op::set_value
                 true method_function Function::set_is_used
                 true return
@@ -4758,6 +4800,10 @@ fn try_resolve_fn_ref
         = method_opt
         if method_opt Option::Some(method) is then
             if method.function_name store.functions.get Option::Some(method_function) is then
+                if method_function.is_unsafe then
+                    op Op::location f"Unsafe function `{method.function_name}` cannot be referenced" ErrorKind::InvalidScope CasaError::new resolve_errors.push
+                    true return
+                fi
                 method.function_name.clone OpValue::FnPush op Op::set_value
                 true method_function Function::set_is_used
                 true return
@@ -4766,6 +4812,10 @@ fn try_resolve_fn_ref
     fi
     ref_name store.functions.get = ref_fn_opt
     if ref_fn_opt Option::Some(ref_fn) is then
+        if ref_fn.is_unsafe then
+            op Op::location f"Unsafe function `{ref_name}` cannot be referenced" ErrorKind::InvalidScope CasaError::new resolve_errors.push
+            true return
+        fi
         ref_name OpValue::FnPush op Op::set_value
         true ref_fn Function::set_is_used
     else

@@ -52,7 +52,8 @@ Prefer the standard-library process helpers unless raw startup data is needed.
 ## Advanced memory access
 
 These operations expose raw byte-addressed memory. Prefer standard-library
-collections and strings for application code.
+collections and strings for application code. Each operation must be inside
+an `unsafe` block.
 
 | Intrinsic | Stack effect | Action |
 |---|---|---|
@@ -70,22 +71,26 @@ Inputs in a stack effect are listed from the top downward. The value is pushed
 before the destination pointer at a store call:
 
 ```casa
-16 alloc = buffer
-42 buffer (ptr) store64
-buffer (ptr) load64 print    # 42
+unsafe {
+    16 alloc = buffer
+    42 buffer (ptr) store64
+    buffer (ptr) load64 print    # 42
+}
 ```
 
 Pointer offsets are measured in bytes.
 
-`memcpy destination:ptr source:ptr count:u64` is a `std` function, not an
-intrinsic. It becomes available after `import "std"` and copies raw bytes.
-Prefer typed collections and text operations unless raw memory is required.
+`unsafe fn memcpy destination:ptr source:ptr count:u64` is a `std` function,
+not an intrinsic. It becomes available after `import "std"` and copies raw
+bytes. Its call must also be inside an `unsafe` block. Prefer typed collections
+and text operations unless raw memory is required.
 
 ## Advanced Linux system calls
 
 `syscall0` through `syscall6` invoke Linux x86-64 system calls directly. Push
 the arguments in reverse register order, then push the syscall number. The
-number is the topmost value when the intrinsic runs.
+number is the topmost value when the intrinsic runs. Each call must be inside
+an `unsafe` block.
 
 | Intrinsic | Stack effect |
 |---|---|
@@ -111,7 +116,7 @@ Each argument must fit one machine word. The kernel return value is `i64`.
 
 ```casa
 # exit(0)
-0 60 syscall1 drop
+unsafe { 0 60 syscall1 drop }
 ```
 
 The [operating-system APIs](os.md) provide safer operations for normal
