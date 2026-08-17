@@ -34,12 +34,14 @@ struct BytecodeCompiler {
     label_counter:     u64
     op_label_map:      Map[Op u64]
     function_bytecode: Map[str List[InstValue]]
+    owner_flags:       Map[str u64]
     failure:           Option[BytecodeFailure]
 }
 
 impl BytecodeCompiler {
     fn new store:$SymbolStore ops:mut$List[Op] -> BytecodeCompiler {
         Option[BytecodeFailure]::None
+        Map[str u64]::new
         Map[str List[InstValue]]::new
         Map[Op u64]::new
         0
@@ -56,6 +58,7 @@ impl BytecodeCompiler {
 
     fn child self:mut$BytecodeCompiler function:mut$Function ops:mut$List[Op] -> BytecodeCompiler {
         self.failure
+        Map[str u64]::new
         self.function_bytecode
         self.op_label_map
         self.label_counter
@@ -146,6 +149,334 @@ impl BytecodeCompiler {
         fi
         f"Variable `{variable_name}` is missing during bytecode compilation" compiler.record_failure
         0 ResolvedVariable::Local
+    }
+}
+
+# ============================================================================
+# Deterministic destruction
+# ============================================================================
+
+impl BytecodeCompiler {
+    fn compile_drop_hook
+        compiler:mut$BytecodeCompiler
+        typ:mut$Type
+        op:mut$Op
+        bytecode:mut$List[InstValue]
+    {
+        f"{typ.match_base}::drop" = function_name
+        if function_name compiler.store.functions.get Option::Some(function) is then
+            InstValue::Dup bytecode.push
+            op function compiler.compile_function
+            function_name InstValue::FnCall bytecode.push
+        fi
+    }
+
+    fn compile_array_destruction
+        compiler:mut$BytecodeCompiler
+        element_type:mut$Type
+        op:mut$Op
+        bytecode:mut$List[InstValue]
+    {
+        compiler.locals_count = array_local
+        1 += compiler.locals_count
+        compiler.locals_count = index_local
+        1 += compiler.locals_count
+        array_local InstValue::LocalSet bytecode.push
+        array_local InstValue::LocalGet bytecode.push
+        WORD_SIZE InstValue::Push bytecode.push
+        InstValue::Add bytecode.push
+        InstValue::Load64 bytecode.push
+        index_local InstValue::LocalSet bytecode.push
+
+        compiler.new_label = start_label
+        compiler.new_label = element_label
+        compiler.new_label = end_label
+        start_label InstValue::Label bytecode.push
+        index_local InstValue::LocalGet bytecode.push
+        0 InstValue::Push bytecode.push
+        InstValue::Eq bytecode.push
+        element_label InstValue::JumpNe bytecode.push
+        end_label InstValue::Jump bytecode.push
+        element_label InstValue::Label bytecode.push
+        index_local InstValue::LocalGet bytecode.push
+        1 InstValue::Push bytecode.push
+        InstValue::Sub bytecode.push
+        index_local InstValue::LocalSet bytecode.push
+        array_local InstValue::LocalGet bytecode.push
+        InstValue::Load64 bytecode.push
+        index_local InstValue::LocalGet bytecode.push
+        WORD_SIZE InstValue::Push bytecode.push
+        InstValue::Mul bytecode.push
+        InstValue::Add bytecode.push
+        InstValue::Load64 bytecode.push
+        bytecode op element_type compiler.compile_destruction
+        start_label InstValue::Jump bytecode.push
+        end_label InstValue::Label bytecode.push
+    }
+
+    fn compile_struct_fields
+        compiler:mut$BytecodeCompiler
+        typ:mut$Type
+        casa_struct:mut$CasaStruct
+        skipped:mut$List[str]
+        op:mut$Op
+        bytecode:mut$List[InstValue]
+    {
+        casa_struct.type_vars typ aggregate_type_bindings = substitutions
+        casa_struct.members.length = member_index
+        while 0 member_index != do
+            1 -= member_index
+            member_index casa_struct.members.get = member
+            if member.name skipped string_list_contains then continue fi
+            substitutions member.typ.substitute_t = member_type
+            InstValue::Dup bytecode.push
+            member_index WORD_SIZE * = offset
+            if 0 offset != then
+                offset (i64) InstValue::Push bytecode.push
+                InstValue::Add bytecode.push
+            fi
+            InstValue::Load64 bytecode.push
+            bytecode op member_type compiler.compile_destruction
+        done
+        InstValue::Drop bytecode.push
+    }
+
+    fn compile_enum_variant_fields
+        compiler:mut$BytecodeCompiler
+        typ:mut$Type
+        casa_enum:mut$CasaEnum
+        variant_name:mut$str
+        skipped_count:u64
+        op:mut$Op
+        bytecode:mut$List[InstValue]
+    {
+        casa_enum.type_vars typ aggregate_type_bindings = substitutions
+        if variant_name casa_enum.variant_types.get Option::Some(payload_types) is then
+            payload_types.length = payload_index
+            while skipped_count payload_index > do
+                1 -= payload_index
+                substitutions payload_index payload_types.get.substitute_t = payload_type
+                InstValue::Dup bytecode.push
+                payload_index 1 + WORD_SIZE * (i64) InstValue::Push bytecode.push
+                InstValue::Add bytecode.push
+                InstValue::Load64 bytecode.push
+                bytecode op payload_type compiler.compile_destruction
+            done
+        fi
+        InstValue::Drop bytecode.push
+    }
+
+    fn compile_enum_fields
+        compiler:mut$BytecodeCompiler
+        typ:mut$Type
+        casa_enum:mut$CasaEnum
+        op:mut$Op
+        bytecode:mut$List[InstValue]
+    {
+        compiler.locals_count = enum_local
+        1 += compiler.locals_count
+        enum_local InstValue::LocalSet bytecode.push
+        compiler.new_label = end_label
+        0 (u64) = variant_index
+        while variant_index casa_enum.variants.length > do
+            compiler.new_label = next_label
+            enum_local InstValue::LocalGet bytecode.push
+            InstValue::Load64 bytecode.push
+            variant_index (i64) InstValue::Push bytecode.push
+            InstValue::Eq bytecode.push
+            next_label InstValue::JumpNe bytecode.push
+            enum_local InstValue::LocalGet bytecode.push
+            variant_index casa_enum.variants.get = variant_name
+            bytecode op 0 variant_name casa_enum typ compiler.compile_enum_variant_fields
+            end_label InstValue::Jump bytecode.push
+            next_label InstValue::Label bytecode.push
+            1 += variant_index
+        done
+        end_label InstValue::Label bytecode.push
+    }
+
+    fn compile_destruction_body
+        compiler:mut$BytecodeCompiler
+        typ:mut$Type
+        op:mut$Op
+        bytecode:mut$List[InstValue]
+    {
+        if typ.is_borrow then InstValue::Drop bytecode.push return fi
+        bytecode op typ compiler.compile_drop_hook
+        if typ Type::Generic(generic) is then
+            if "array" generic.base == then
+                if 0 generic.params.length == then InstValue::Drop bytecode.push return fi
+                bytecode op 0 generic.params.get compiler.compile_array_destruction
+                return
+            fi
+            if generic.base compiler.store.structs.get Option::Some(casa_struct) is then
+                List[str]::new = skipped
+                bytecode op skipped casa_struct typ compiler.compile_struct_fields
+                return
+            fi
+            if generic.base compiler.store.enums.get Option::Some(casa_enum) is then
+                if casa_enum has_inner_values then
+                    bytecode op casa_enum typ compiler.compile_enum_fields
+                else
+                    InstValue::Drop bytecode.push
+                fi
+                return
+            fi
+        fi
+        InstValue::Drop bytecode.push
+    }
+
+    fn destruction_needs_function compiler:mut$BytecodeCompiler typ:mut$Type -> bool {
+        compiler.store typ type_needs_destruction_in_store
+    }
+
+    fn ensure_destruction_function compiler:mut$BytecodeCompiler typ:mut$Type op:mut$Op -> str {
+        f"__drop_{typ.format}" = function_name
+        if function_name compiler.function_bytecode.has then function_name return fi
+        List[InstValue]::new function_name.clone compiler.function_bytecode.set drop
+
+        List[Op]::new = empty_ops
+        empty_location empty_ops function_name.clone Function::new = function
+        List[Op]::new = destructor_ops
+        destructor_ops function compiler.child = destructor
+        List[InstValue]::new = body
+        body op typ destructor.compile_destruction_body
+        destructor.failure = compiler.failure
+        destructor.label_counter = compiler.label_counter
+        destructor.function_bytecode = compiler.function_bytecode
+        if compiler.has_failed then function_name return fi
+
+        List[InstValue]::new = function_bytecode
+        if 0 destructor.locals_count != then
+            destructor.locals_count InstValue::LocalsInit function_bytecode.push
+        fi
+        for instruction in body.iter do instruction function_bytecode.push done
+        if 0 destructor.locals_count != then
+            destructor.locals_count InstValue::LocalsUninit function_bytecode.push
+        fi
+        InstValue::FnReturn function_bytecode.push
+        function_bytecode function_name.clone compiler.function_bytecode.set drop
+        function_name
+    }
+
+    fn compile_destruction
+        compiler:mut$BytecodeCompiler
+        typ:mut$Type
+        op:mut$Op
+        bytecode:mut$List[InstValue]
+    {
+        if typ compiler.destruction_needs_function ! then
+            InstValue::Drop bytecode.push
+            return
+        fi
+        op typ compiler.ensure_destruction_function = function_name
+        function_name InstValue::FnCall bytecode.push
+    }
+
+    fn compile_match_destruction
+        compiler:mut$BytecodeCompiler
+        op:mut$Op
+        bytecode:mut$List[InstValue]
+    {
+        if op.type_hint Option::None is then InstValue::Drop bytecode.push return fi
+        op.type_hint.unwrap = typ
+        if typ compiler.destruction_needs_function ! then
+            InstValue::Drop bytecode.push
+            return
+        fi
+        bytecode op typ compiler.compile_drop_hook
+        if typ Type::Generic(generic) is then
+            if generic.base compiler.store.structs.get Option::Some(casa_struct) is then
+                List[str]::new = skipped
+                if op pattern_value_of PatternValue::Struct(struct_pattern) is then
+                    struct_pattern.bindings.keys = skipped
+                fi
+                bytecode op skipped casa_struct typ compiler.compile_struct_fields
+                return
+            fi
+            if generic.base compiler.store.enums.get Option::Some(casa_enum) is then
+                if casa_enum has_inner_values ! then InstValue::Drop bytecode.push return fi
+                if op pattern_value_of PatternValue::EnumVariant(variant) is then
+                    if op pattern_is_wildcard then
+                        bytecode op casa_enum typ compiler.compile_enum_fields
+                    else
+                        variant.bindings.length = skipped_count
+                        bytecode op skipped_count variant.variant_name casa_enum typ
+                        compiler.compile_enum_variant_fields
+                    fi
+                    return
+                fi
+            fi
+        fi
+        InstValue::Drop bytecode.push
+    }
+
+    fn owner_flag compiler:mut$BytecodeCompiler name:mut$str -> u64 {
+        if name compiler.owner_flags.get Option::Some(flag) is then flag return fi
+        compiler.locals_count = flag
+        1 += compiler.locals_count
+        flag name.clone compiler.owner_flags.set = compiler.owner_flags
+        flag
+    }
+
+    fn set_owner_flag
+        compiler:mut$BytecodeCompiler
+        name:mut$str
+        value:u64
+        bytecode:mut$List[InstValue]
+    {
+        name compiler.owner_flag = flag
+        value (i64) InstValue::Push bytecode.push
+        flag InstValue::LocalSet bytecode.push
+    }
+
+    fn compile_active_owner_cleanup
+        compiler:mut$BytecodeCompiler
+        event:mut$OwnerEvent
+        op:mut$Op
+        bytecode:mut$List[InstValue]
+    {
+        event.name compiler.owner_flag = flag
+        compiler.new_label = cleanup_label
+        compiler.new_label = end_label
+        flag InstValue::LocalGet bytecode.push
+        0 InstValue::Push bytecode.push
+        InstValue::Eq bytecode.push
+        cleanup_label InstValue::JumpNe bytecode.push
+        end_label InstValue::Jump bytecode.push
+        cleanup_label InstValue::Label bytecode.push
+        event.name compiler.resolve_variable = resolved
+        bytecode resolved.emit_get
+        bytecode op event.typ compiler.compile_destruction
+        bytecode 0 event.name compiler.set_owner_flag
+        end_label InstValue::Label bytecode.push
+    }
+
+    fn compile_owner_cleanup
+        compiler:mut$BytecodeCompiler
+        event:mut$OwnerEvent
+        op:mut$Op
+        bytecode:mut$List[InstValue]
+    {
+        event.name compiler.owner_flag = flag
+        compiler.new_label = end_label
+        flag InstValue::LocalGet bytecode.push
+        event.generation (i64) InstValue::Push bytecode.push
+        InstValue::Eq bytecode.push
+        end_label InstValue::JumpNe bytecode.push
+        event.name compiler.resolve_variable = resolved
+        bytecode resolved.emit_get
+        bytecode op event.typ compiler.compile_destruction
+        bytecode 0 event.name compiler.set_owner_flag
+        end_label InstValue::Label bytecode.push
+    }
+
+    fn compile_owner_cleanups compiler:mut$BytecodeCompiler op:mut$Op bytecode:mut$List[InstValue] {
+        if op compiler.store.op_ownership.get Option::Some(ownership) is then
+            for event in ownership.cleanups.iter do
+                bytecode op event compiler.compile_owner_cleanup
+            done
+        fi
     }
 }
 
@@ -444,20 +775,26 @@ impl BytecodeCompiler {
                 true "`elif` without parent `if`" start_targets OpValue::IfStart op_index ops compiler.require_matching drop
                 op_index compiler.ops.get compiler.op_to_label = elif_label
                 false "`elif` without matching `fi`" end_targets OpValue::IfEnd op_index ops compiler.require_matching = end_label_2
+                bytecode op compiler.compile_owner_cleanups
                 end_label_2 InstValue::Jump bytecode.push
                 elif_label InstValue::Label bytecode.push
+                bytecode op compiler.compile_owner_cleanups
             }
             OpValue::IfElse => {
                 true "`else` without parent `if`" start_targets OpValue::IfStart op_index ops compiler.require_matching drop
                 op_index compiler.ops.get compiler.op_to_label = else_label
                 false "`else` without matching `fi`" end_targets OpValue::IfEnd op_index ops compiler.require_matching = end_label_3
+                bytecode op compiler.compile_owner_cleanups
                 end_label_3 InstValue::Jump bytecode.push
                 else_label InstValue::Label bytecode.push
+                bytecode op compiler.compile_owner_cleanups
             }
             OpValue::IfEnd => {
                 true "`fi` without parent `if`" start_targets OpValue::IfStart op_index ops compiler.require_matching drop
                 op_index compiler.ops.get compiler.op_to_label = fi_label
+                bytecode op compiler.compile_owner_cleanups
                 fi_label InstValue::Label bytecode.push
+                bytecode op compiler.compile_owner_cleanups
             }
             OpValue::IfStart => false "`if` without matching `fi`" end_targets OpValue::IfEnd op_index ops compiler.require_matching drop
             _ => {
@@ -503,8 +840,10 @@ impl BytecodeCompiler {
             OpValue::WhileEnd => {
                 op_index compiler.ops.get compiler.op_to_label = while_label
                 true "`done` without parent `while`" start_targets OpValue::WhileStart op_index ops compiler.require_matching = loop_start
+                bytecode op compiler.compile_owner_cleanups
                 loop_start InstValue::Jump bytecode.push
                 while_label InstValue::Label bytecode.push
+                bytecode op compiler.compile_owner_cleanups
             }
             OpValue::WhileStart => {
                 op_index compiler.ops.get compiler.op_to_label = start_label
@@ -694,7 +1033,12 @@ impl BytecodeCompiler {
                     "Guarded match arm has no following label during bytecode compilation" compiler.record_failure
                 fi
             fi
-            InstValue::Drop bytecode.push
+            if op compiler.store.op_ownership.get Option::Some(ownership) is then
+                for event in ownership.assignments.iter do
+                    bytecode event.generation event.name compiler.set_owner_flag
+                done
+            fi
+            bytecode op compiler.compile_match_destruction
         fi
     }
 }
@@ -719,9 +1063,11 @@ impl BytecodeCompiler {
             existing.is_some ! = is_first
 
             if is_first ! then
+                bytecode op compiler.compile_owner_cleanups
                 end_label InstValue::Jump bytecode.push
                 if existing Option::Some(label) is then
                     label InstValue::Label bytecode.push
+                    bytecode op compiler.compile_owner_cleanups
                 else
                     "Match arm label is missing during bytecode compilation" compiler.record_failure
                 fi
@@ -733,7 +1079,9 @@ impl BytecodeCompiler {
             bytecode next_arm is_last op compiler.compile_match_op
         elif match_value OpValue::MatchEnd is then
             op_index compiler.ops.get compiler.op_to_label = end_match_label
+            bytecode op compiler.compile_owner_cleanups
             end_match_label InstValue::Label bytecode.push
+            bytecode op compiler.compile_owner_cleanups
         fi
     }
 }
@@ -1272,6 +1620,24 @@ impl BytecodeCompiler {
         bytecode:mut$List[InstValue]
     {
         op.value = op_value
+        if
+        op_value OpValue::IfElif is
+        op_value OpValue::IfElse is ||
+        op_value OpValue::IfEnd is ||
+        op_value OpValue::WhileEnd is ||
+        op_value OpValue::MatchArm is ||
+        op_value OpValue::MatchEnd is || !
+        then
+            bytecode op compiler.compile_owner_cleanups
+        fi
+        if op_value OpValue::Drop is then
+            if op.type_hint Option::Some(drop_type) is then
+                bytecode op drop_type compiler.compile_destruction
+            else
+                InstValue::Drop bytecode.push
+            fi
+            return
+        fi
         op_value direct_op_to_inst = direct_inst_opt
         false = has_type_hint
         "" = type_hint_name
@@ -1375,7 +1741,17 @@ impl BytecodeCompiler {
         op_value OpValue::AssignInc is ||
         op_value OpValue::AssignVar is ||
         then
+            if op compiler.store.op_ownership.get Option::Some(ownership) is then
+                for event in ownership.assignments.iter do
+                    bytecode op event compiler.compile_active_owner_cleanup
+                done
+            fi
             bytecode op compiler.compile_assignment
+            if op compiler.store.op_ownership.get Option::Some(ownership) is then
+                for event in ownership.assignments.iter do
+                    bytecode event.generation event.name compiler.set_owner_flag
+                done
+            fi
         elif op_value OpValue::FstringConcat(fstring_count) is then
             fstring_count InstValue::FstringConcat bytecode.push
         elif op_value OpValue::PrimitiveToStr(builtin) is then
@@ -1485,10 +1861,20 @@ impl BytecodeCompiler {
         elif op_value OpValue::PushVar(var_name) is then
             var_name compiler.resolve_variable = var_resolved
             bytecode var_resolved.emit_get
+            if op compiler.store.op_ownership.get Option::Some(ownership) is then
+                if ownership.moves_owner then
+                    if var_name compiler.owner_flags.get Option::Some(flag) is then
+                        0 InstValue::Push bytecode.push
+                        flag InstValue::LocalSet bytecode.push
+                    fi
+                fi
+            fi
         elif op_value OpValue::StructNew is then
             bytecode op compiler.compile_struct_new
         elif op_value OpValue::StructLiteral is then
             bytecode op compiler.compile_struct_literal
+        elif op_value OpValue::OwnerCleanup is then
+            # Ownership metadata emitted before operation dispatch.
         elif
         op_value OpValue::WhileBreak is
         op_value OpValue::WhileCondition is ||

@@ -433,6 +433,34 @@ struct Op {
     value:                OpValue
 }
 
+struct OwnerEvent {
+    name:       str
+    typ:        Type
+    generation: u64
+}
+
+impl OwnerEvent {
+    fn new name:mut$str typ:mut$Type generation:u64 -> OwnerEvent {
+        generation typ name OwnerEvent
+    }
+
+    fn clone self:mut$OwnerEvent -> OwnerEvent {
+        self.generation self.typ clone_type self.name.clone OwnerEvent
+    }
+}
+
+struct OpOwnership {
+    assignments: List[OwnerEvent]
+    cleanups:    List[OwnerEvent]
+    moves_owner: bool
+}
+
+impl OpOwnership {
+    fn new -> OpOwnership {
+        false List[OwnerEvent]::new List[OwnerEvent]::new OpOwnership
+    }
+}
+
 struct QualifiedMethod {
     trait_type:  Type
     method_name: str
@@ -449,6 +477,28 @@ impl Op: Hashable {
 
     fn hash self:$Op -> i64 { self (i64) int_hash }
     fn eq self:$Op other:$Op -> bool { self (i64) other (i64) == }
+}
+
+fn ensure_op_ownership store:mut$SymbolStore op:mut$Op -> OpOwnership {
+    if op store.op_ownership.get Option::Some(ownership) is then ownership return fi
+    OpOwnership::new = ownership
+    ownership op store.op_ownership.set drop
+    op store.op_ownership.get.unwrap
+}
+
+fn add_owner_assignment store:mut$SymbolStore op:mut$Op event:OwnerEvent {
+    op store ensure_op_ownership = ownership
+    event ownership.assignments.push
+}
+
+fn add_owner_cleanup store:mut$SymbolStore op:mut$Op event:OwnerEvent {
+    op store ensure_op_ownership = ownership
+    event ownership.cleanups.push
+}
+
+fn set_moves_owner store:mut$SymbolStore op:mut$Op {
+    op store ensure_op_ownership = ownership
+    true = ownership.moves_owner
 }
 
 fn clone_ops ops:$List[Op] -> List[Op] {
@@ -807,6 +857,7 @@ enum OpValue {
     FnExec
     FnPush (str)
     FnReturn
+    OwnerCleanup
     MethodCall (str)
     QualifiedMethodCall (QualifiedMethod)
     TraitMethodCall (str)
@@ -2471,15 +2522,16 @@ fn string_list_contains items:$List[str] value:$str -> bool {
 # ============================================================================
 
 struct SymbolStore {
-    functions:   Map[str Function]
-    variables:   Map[str Variable]
-    constants:   Map[str Constant]
-    enums:       Map[str CasaEnum]
-    structs:     Map[str CasaStruct]
-    traits:      Map[str CasaTrait]
-    trait_impls: Map[str TraitImpl]
-    builtins:    Set[str]
-    copy_types:  Map[str bool]
+    functions:    Map[str Function]
+    variables:    Map[str Variable]
+    constants:    Map[str Constant]
+    enums:        Map[str CasaEnum]
+    structs:      Map[str CasaStruct]
+    traits:       Map[str CasaTrait]
+    trait_impls:  Map[str TraitImpl]
+    builtins:     Set[str]
+    copy_types:   Map[str bool]
+    op_ownership: Map[Op OpOwnership]
 }
 
 fn symbol_store_new -> SymbolStore {
@@ -2501,6 +2553,7 @@ fn symbol_store_new -> SymbolStore {
     "ptr" builtins.add = builtins
     "array" builtins.add = builtins
 
+    Map[Op OpOwnership]::new
     Map[str bool]::new
     builtins
     Map[str TraitImpl]::new
@@ -2511,4 +2564,58 @@ fn symbol_store_new -> SymbolStore {
     Map[str Variable]::new
     Map[str Function]::new
     SymbolStore
+}
+
+fn aggregate_type_bindings typ:mut$Type type_vars:mut$List[str] -> Map[str Type] {
+    Map[str Type]::new = bindings
+    if typ.type_params Option::Some(type_params) is then
+        for pair in type_params.iter type_vars.iter.zip do
+            pair.second pair.first bindings.set = bindings
+        done
+    fi
+    bindings
+}
+
+fn type_needs_destruction typ:mut$Type store:mut$SymbolStore visiting:mut$Set[str] -> bool {
+    if typ.is_borrow then false return fi
+    if f"{typ.match_base}::drop" store.functions.has then true return fi
+    if typ Type::Generic(generic) is then
+        typ.format = type_name
+        if type_name visiting.has then false return fi
+        type_name.clone visiting.add drop
+        if "array" generic.base == then
+            if 0 generic.params.length != then
+                visiting store 0 generic.params.get type_needs_destruction = needed
+                type_name visiting.remove drop
+                needed return
+            fi
+        elif generic.base store.structs.get Option::Some(casa_struct) is then
+            casa_struct.type_vars typ aggregate_type_bindings = substitutions
+            for member in casa_struct.members.iter do
+                substitutions member.typ.substitute_t = member_type
+                if visiting store member_type type_needs_destruction then
+                    type_name visiting.remove drop
+                    true return
+                fi
+            done
+        elif generic.base store.enums.get Option::Some(casa_enum) is then
+            casa_enum.type_vars typ aggregate_type_bindings = substitutions
+            for payload_types in casa_enum.variant_types.values.iter do
+                for payload_type in payload_types.iter do
+                    substitutions payload_type.substitute_t = resolved_payload
+                    if visiting store resolved_payload type_needs_destruction then
+                        type_name visiting.remove drop
+                        true return
+                    fi
+                done
+            done
+        fi
+        type_name visiting.remove drop
+    fi
+    false
+}
+
+fn type_needs_destruction_in_store typ:mut$Type store:mut$SymbolStore -> bool {
+    Set[str]::new = visiting
+    visiting store typ type_needs_destruction
 }

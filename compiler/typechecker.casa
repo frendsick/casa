@@ -23,6 +23,7 @@ struct TypedValue {
     origin:     Location
     literals:   List[Op]
     binding:    Option[str]
+    source:     Option[Op]
 }
 
 fn contains_op ops:mut$List[Op] candidate:mut$Op -> bool {
@@ -67,7 +68,7 @@ impl TypedStack {
         0 (u64) = index
         while index self.values.length > do
             index self.values.get = value
-            value.binding value.literals value.origin index types.get clone_type
+            value.source value.binding value.literals value.origin index types.get clone_type
             TypedValue index self.values.set
             1 += index
         done
@@ -119,6 +120,7 @@ struct WhileContext {
     owners_before:           List[str]
     condition_present:       bool
     current_branch_location: Location
+    scope_depth:             u64
 }
 
 struct MatchContext {
@@ -152,7 +154,8 @@ impl IfContext {
 }
 
 impl WhileContext {
-    fn new -> WhileContext {
+    fn new scope_depth:u64 -> WhileContext {
+        scope_depth
         empty_location
         false
         List[str]::new
@@ -194,6 +197,8 @@ struct TypeChecker {
     underflow_reported_this_op: bool
     scope:                      BlockScope
     moved_owners:               List[str]
+    owner_events:               List[OwnerEvent]
+    next_owner_generation:      u64
     diagnostics:                Diagnostics
 }
 
@@ -207,6 +212,8 @@ struct TypecheckResult {
 impl TypeChecker {
     fn new store:mut$SymbolStore -> TypeChecker {
         Diagnostics::new # diagnostics
+        0 # next_owner_generation
+        List[OwnerEvent]::new # owner_events
         List[str]::new # moved_owners
         BlockScope::new # scope
         false # underflow_reported_this_op
@@ -407,8 +414,63 @@ impl TypeChecker {
         is_copy
     }
 
+    fn record_owner_assignment
+        tc:mut$TypeChecker
+        op:mut$Op
+        name:mut$str
+        typ:mut$Type
+        function_opt:mut$Option[Function]
+        is_global:bool
+    {
+        if is_global function_opt.is_some && then return fi
+        if typ.is_borrow function_opt typ tc.type_is_copy || then return fi
+        if tc.store typ type_needs_destruction_in_store ! then return fi
+        1 += tc.next_owner_generation
+        tc.next_owner_generation typ name OwnerEvent::new = event
+        event.clone op tc.store add_owner_assignment
+        event tc.owner_events.push
+    }
+
+    fn owner_cleanups_for_names tc:mut$TypeChecker names:mut$List[str] -> List[OwnerEvent] {
+        List[OwnerEvent]::new = cleanups
+        tc.owner_events.length = event_index
+        while 0 event_index != do
+            1 -= event_index
+            event_index tc.owner_events.get = event
+            if event.name names string_list_contains then event.clone cleanups.push fi
+        done
+        cleanups
+    }
+
+    fn remove_owner_events_for_names tc:mut$TypeChecker names:mut$List[str] {
+        List[OwnerEvent]::new = remaining
+        for event in tc.owner_events.iter do
+            if event.name names string_list_contains ! then event remaining.push fi
+        done
+        remaining = tc.owner_events
+    }
+
+    fn attach_owner_cleanups tc:mut$TypeChecker op:mut$Op names:mut$List[str] remove:bool {
+        names tc.owner_cleanups_for_names = cleanups
+        for cleanup in cleanups.iter do cleanup op tc.store add_owner_cleanup done
+        if remove then names tc.remove_owner_events_for_names fi
+    }
+
+    fn attach_scope_cleanups tc:mut$TypeChecker op:mut$Op {
+        tc.scope.current_names = names
+        true names op tc.attach_owner_cleanups
+    }
+
+    fn attach_all_owner_cleanups tc:mut$TypeChecker op:mut$Op {
+        tc.owner_events.length = event_index
+        while 0 event_index != do
+            1 -= event_index
+            event_index tc.owner_events.get.clone op tc.store add_owner_cleanup
+        done
+    }
+
     fn stack_push_type tc:mut$TypeChecker type_value:mut$Type {
-        Option[str]::None List[Op]::new tc.current_location type_value TypedValue
+        Option[Op]::None Option[str]::None List[Op]::new tc.current_location type_value TypedValue
         tc.stack.values.push
     }
 
@@ -420,6 +482,7 @@ impl TypeChecker {
         function_opt:mut$Option[Function]
     {
         Option[str]::None = binding
+        Option[Op]::None = source
         type_value clone_type = stack_type
         if type_value.borrow_target Option::Some(target) is then
             if function_opt target tc.type_is_copy then target = stack_type fi
@@ -434,14 +497,16 @@ impl TypeChecker {
                 tc.diagnostics.record_error
             fi
             name.clone Option::Some = binding
+            op (ptr) (Op) Option::Some = source
         fi
-        binding List[Op]::new tc.current_location stack_type TypedValue tc.stack.values.push
+        source binding List[Op]::new tc.current_location stack_type TypedValue tc.stack.values.push
     }
 
     fn stack_push_literal tc:mut$TypeChecker type_value:mut$Type op:mut$Op {
         List[Op]::new = literals
         op (ptr) (Op) literals.push
-        Option[str]::None literals tc.current_location type_value TypedValue tc.stack.values.push
+        Option[Op]::None Option[str]::None literals tc.current_location type_value TypedValue
+        tc.stack.values.push
     }
 }
 
@@ -471,6 +536,9 @@ impl TypeChecker {
                 return
             fi
             true name tc.set_owner_moved
+            if value.source Option::Some(source_op) is then
+                source_op tc.store set_moves_owner
+            fi
         fi
     }
 
@@ -516,7 +584,7 @@ impl TypeChecker {
         if 0 value.literals.length != then
             value.type_value resolve_numeric_literal_default = resolved
             tc.diagnostics resolved value.resolve_literals drop
-            value.binding List[Op]::new value.origin resolved clone_type
+            value.source value.binding List[Op]::new value.origin resolved clone_type
             TypedValue top tc.stack.values.set
             resolved return
         fi
@@ -529,10 +597,10 @@ impl TypeChecker {
         if 0 tc.stack.values.length == then
             if tc.within_param_cap then
                 TYPE_UNKNOWN_T Parameter::new tc.parameters.push
-                Option[str]::None List[Op]::new empty_location TYPE_UNKNOWN_T TypedValue return
+                Option[Op]::None Option[str]::None List[Op]::new empty_location TYPE_UNKNOWN_T TypedValue return
             fi
             tc.stack_underflow_message tc.report_stack_underflow
-            Option[str]::None List[Op]::new empty_location TYPE_MISSING_T TypedValue return
+            Option[Op]::None Option[str]::None List[Op]::new empty_location TYPE_MISSING_T TypedValue return
         fi
         tc.stack.values.pop
     }
@@ -571,7 +639,7 @@ impl TypeChecker {
             if inferred.is_unknown_placeholder ! inferred TYPE_MISSING_T.eq ! && then
                 tc.diagnostics inferred right.resolve_literals drop
                 inferred Parameter::new tc.parameters.push
-                Option[str]::None List[Op]::new empty_location inferred TypedValue return
+                Option[Op]::None Option[str]::None List[Op]::new empty_location inferred TypedValue return
             fi
         fi
         tc.stack_pop_value
@@ -860,7 +928,7 @@ impl TypeChecker {
         return_type bindings resolve_return_type_t = resolved
         if return_type.type_var_name Option::Some(type_variable) is then
             if type_variable literal_bindings.get Option::Some(literals) is then
-                Option[str]::None literals tc.current_location resolved TypedValue
+                Option[Op]::None Option[str]::None literals tc.current_location resolved TypedValue
                 tc.stack.values.push
                 return
             fi
@@ -1708,7 +1776,7 @@ impl TypeChecker {
         if op.value OpValue::Dup is then
             if 1 depth < then false return fi
             depth 1 - tc.stack.values.get = value
-            Option[str]::None value.literals.shallow_copy value.origin
+            Option[Op]::None Option[str]::None value.literals.shallow_copy value.origin
             value.type_value clone_type
             TypedValue tc.stack.values.push
             true return
@@ -1725,7 +1793,7 @@ impl TypeChecker {
         if op.value OpValue::Over is then
             if 2 depth < then false return fi
             depth 2 - tc.stack.values.get = value
-            Option[str]::None value.literals.shallow_copy value.origin
+            Option[Op]::None Option[str]::None value.literals.shallow_copy value.origin
             value.type_value clone_type
             TypedValue tc.stack.values.push
             true return
@@ -1745,6 +1813,9 @@ impl TypeChecker {
 
     fn apply_fixed_semantics tc:mut$TypeChecker op:mut$Op function_opt:mut$Option[Function] {
         if op tc.apply_stack_reordering then return fi
+        if op.value OpValue::Drop is 0 tc.stack.values.length != && then
+            tc.stack_peek_type clone_type Option::Some op Op::set_type_hint
+        fi
         tc.store function_opt Option[Type]::None op.value
         analyze_operation = semantics
         if semantics.stack_effect Option::Some(effect) is then
@@ -1972,7 +2043,10 @@ impl TypeChecker {
                 "local" effective_type_t scoped_type var_name op tc.unify_assignment_type = unified_scoped
                 unified_scoped var_name tc.scope.set_type drop
                 effective_type_t tc.expect_type_t
-                if is_global ! then false var_name tc.set_owner_moved fi
+                if is_global ! then
+                    false var_name tc.set_owner_moved
+                    is_global function_opt unified_scoped var_name op tc.record_owner_assignment
+                fi
                 return
             fi
 
@@ -1990,9 +2064,12 @@ impl TypeChecker {
                     fi
                     "local" effective_type_t current_local_type var_name op tc.unify_assignment_type = unified_local
                     unified_local var_name tc.scope.set_type drop
-                    unified_local local_var Variable::set_typ
                     effective_type_t tc.expect_type_t
-                    if is_global ! then false var_name tc.set_owner_moved fi
+                    if is_global ! then
+                        false var_name tc.set_owner_moved
+                        is_global function_opt unified_local var_name op tc.record_owner_assignment
+                    fi
+                    unified_local local_var Variable::set_typ
                     return
                 fi
             fi
@@ -2004,10 +2081,13 @@ impl TypeChecker {
                 "global" effective_type_t global_var op tc.unify_variable_assignment
                 effective_type_t tc.expect_type_t
                 if is_global ! then false var_name tc.set_owner_moved fi
+                var_name tc.store.variables.get.unwrap.typ = global_type
+                is_global function_opt global_type var_name op tc.record_owner_assignment
                 return
             fi
             effective_type_t tc.expect_type_t
             if is_global ! then false var_name tc.set_owner_moved fi
+            is_global function_opt effective_type_t var_name op tc.record_owner_assignment
         fi
     }
 }
@@ -2119,6 +2199,7 @@ impl TypeChecker {
         then
             # Close the preceding branch scope and open a fresh one. Each
             # branch gets independent is-bindings and block-local variables.
+            op tc.attach_scope_cleanups
             tc.scope.exit
             tc.scope.enter
             if 0 tc.branched_stacks.length == then return fi
@@ -2154,6 +2235,7 @@ impl TypeChecker {
             fi
         elif if_value OpValue::IfEnd is then
             # Close the final branch scope.
+            op tc.attach_scope_cleanups
             tc.scope.exit
             tc.branched_stacks.pop = top_frame
             if top_frame BranchFrame::BranchIf(if_ctx) is then
@@ -2186,10 +2268,21 @@ impl TypeChecker {
 # ============================================================================
 
 impl TypeChecker {
+    fn current_while_scope_depth tc:mut$TypeChecker -> Option[u64] {
+        tc.branched_stacks.length = frame_index
+        while 0 frame_index != do
+            1 -= frame_index
+            if frame_index tc.branched_stacks.get BranchFrame::BranchWhile(while_ctx) is then
+                while_ctx.scope_depth Option::Some return
+            fi
+        done
+        Option[u64]::None
+    }
+
     fn check_while_block tc:mut$TypeChecker op:mut$Op {
         op.value = while_value
         if while_value OpValue::WhileStart is then
-            WhileContext::new = while_ctx
+            tc.scope.frames.length 1 + WhileContext::new = while_ctx
             tc.moved_owners.shallow_copy = while_ctx.owners_before
             tc.stack while_ctx WhileContext::before.restore
             op Op::location while_ctx WhileContext::set_current_branch_location
@@ -2208,7 +2301,12 @@ impl TypeChecker {
         while_value OpValue::WhileContinue is ||
         then
             if 0 tc.branched_stacks.length == then return fi
+            if tc.current_while_scope_depth Option::Some(scope_depth) is then
+                scope_depth tc.scope.names_from = names
+                false names op tc.attach_owner_cleanups
+            fi
         elif while_value OpValue::WhileEnd is then
+            op tc.attach_scope_cleanups
             tc.branched_stacks.pop = top_frame
             if top_frame BranchFrame::BranchWhile(while_ctx) is then
                 while_ctx.owners_before.shallow_copy = tc.moved_owners
@@ -2620,7 +2718,7 @@ impl TypeChecker {
                 if 0 value.literals.length != then
                     actual resolve_numeric_literal_default = fallback
                     existing_option fallback value tc.resolve_type_var_literals = actual
-                    value.binding List[Op]::new value.origin actual TypedValue
+                    value.source value.binding List[Op]::new value.origin actual TypedValue
                     stack_index tc.stack.values.set
                 fi
                 location bindings actual type_variable tc.bind_concrete_type_variable return
@@ -2872,6 +2970,8 @@ impl TypeChecker {
                 List[Type]::new List[Type]::new FunctionType Type::Function tc.stack_push_type
             fi
         elif fn_value OpValue::FnReturn is then
+            for return_value in tc.stack.values.iter do return_value tc.consume_value done
+            op tc.attach_all_owner_cleanups
             if tc.has_return_types ! then
                 true = tc.has_return_types
                 tc.stack tc.return_types.restore
@@ -3187,6 +3287,10 @@ impl TypeChecker {
                     true = tc.underflow_reported_this_op
                 fi
             fi
+            if 0 tc.stack.values.length != then
+                tc.stack.values.length 1 - tc.stack.values.get = match_subject
+                match_subject tc.consume_value
+            fi
             tc.stack_pop_type = match_type
             match_type MatchContext::new = match_ctx
             tc.moved_owners.shallow_copy = match_ctx.owners_before
@@ -3206,6 +3310,7 @@ impl TypeChecker {
                 match_ctx.owners_before.shallow_copy = tc.moved_owners
                 # Close the final arm's scope frame (only opened if an arm ran).
                 if match_ctx MatchContext::condition_present then
+                    op tc.attach_scope_cleanups
                     tc.scope.exit
                 fi
                 # Record last arm label
@@ -3737,6 +3842,9 @@ impl TypeChecker {
             qualified.method_name Option::Some = method_name_opt
         fi
         if method_name_opt Option::Some(method_name) is then
+            if "drop" method_name == then
+                op.location "Reserved `drop` methods cannot be called directly; use the `drop` intrinsic" ErrorKind::InvalidScope tc.diagnostics.record_error
+            fi
             tc.stack_peek_type = receiver
             if "clone" method_name == then
                 op.location receiver tc.ensure_function_clone_method
@@ -4169,7 +4277,7 @@ impl TypeChecker {
             if 0 return_value.literals.length != then
                 return_index declared_returns.get = declared_return
                 diagnostics declared_return return_value.resolve_literals drop
-                return_value.binding List[Op]::new return_value.origin
+                return_value.source return_value.binding List[Op]::new return_value.origin
                 declared_return TypedValue
                 return_index checker.stack.values.set
             fi
@@ -4210,11 +4318,16 @@ fn check_ops
         stack_value checker.consume_value
         stack_value.type_value resolve_numeric_literal_default = final_type
         diagnostics final_type stack_value.resolve_literals drop
-        stack_value.binding List[Op]::new stack_value.origin final_type
+        stack_value.source stack_value.binding List[Op]::new stack_value.origin final_type
         TypedValue
         stack_index checker.stack.values.set
         1 += stack_index
     done
+    if 0 checker.owner_events.length != then
+        checker.current_location OpValue::OwnerCleanup Op::new = cleanup_op
+        cleanup_op checker.attach_all_owner_cleanups
+        cleanup_op ops.push
+    fi
     diagnostics ops resolve_default_literals
 
     # Build inferred stack effect
