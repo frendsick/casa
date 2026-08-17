@@ -99,6 +99,36 @@ Option::None = result:Option[i64]
 
 See [Operators](operators.md#assignment) for assignment forms.
 
+## Ownership and borrows
+
+A plain `T` parameter consumes an owned value. Non-Copy owners can be consumed
+only once:
+
+```casa
+fn consume text:str { text drop }
+
+"one owner" = text
+text consume
+# text consume    # Error: text was already moved.
+```
+
+Use `$T` for shared access and `mut$T` for exclusive mutable access. Calls
+borrow an available owner automatically:
+
+```casa
+fn length text:$str -> u64 { text.length }
+fn clear text:mut$str { text.clear }
+
+"Casa" = text
+text length print
+text clear
+text length print
+```
+
+Shared borrows are Copy. Exclusive borrows and non-Copy owners are affine.
+`dup` and the copied value of `over` require `Copy`. `swap` and `rot` only move
+values, so they also work with non-Copy owners.
+
 ## Lambdas and closures
 
 Braces create an anonymous function value:
@@ -111,8 +141,8 @@ Braces create an anonymous function value:
 The compiler infers a lambda's stack effect from its body and the context in
 which it is used. Here, `increment` has type `fn[i64 -> i64]`.
 
-A lambda can capture bindings from its enclosing scope. Captured values are
-copied when the lambda is created:
+A lambda can capture bindings from its enclosing scope. Copy values are copied.
+A non-Copy owner moves into the lambda:
 
 ```casa
 10 = offset

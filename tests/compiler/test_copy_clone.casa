@@ -2,7 +2,7 @@ import "std"
 import "../../compiler/typechecker.casa"
 import "helpers.casa"
 
-const COPY_TRAITS "trait Clone { fn clone self:self -> self } trait Copy: Clone { } "
+const COPY_TRAITS "trait Clone { fn clone self:$self -> self } trait Copy: Clone { } "
 
 struct CopyPoint derives Copy {
     value: i64
@@ -17,7 +17,7 @@ struct CustomCopy derives Copy {
 }
 
 impl CustomCopy: Clone {
-    fn clone self:CustomCopy -> CustomCopy {
+    fn clone self:$CustomCopy -> CustomCopy {
         self.value 1 + CustomCopy
     }
 }
@@ -28,18 +28,18 @@ struct CopyWrapper derives Copy {
 
 enum CopyChoice derives Copy {
     None
-    Some(CustomCopy)
+    Some (CustomCopy)
 }
 
 impl CustomClone: Clone {
-    fn clone self:CustomClone -> CustomClone {
+    fn clone self:$CustomClone -> CustomClone {
         self.value 1 + CustomClone
     }
 }
 
 fn identity value:i64 -> i64 { value }
 
-fn check_source diagnostics:Diagnostics source:str {
+fn check_source diagnostics:mut$Diagnostics source:$str {
     diagnostics source parse_resolve_test_source = result
     if result.ops Option::Some(ops) is then
         result.store ops type_check = checked
@@ -120,6 +120,53 @@ fn test_over_checks_the_copied_value {
     valid_diagnostics "non-Copy top value is only moved" assert_no_errors
 }
 
+fn test_affine_owner_reuse_is_rejected {
+    "affine_owner_reuse_is_rejected" test_start
+    Diagnostics::new = diagnostics
+    COPY_TRAITS
+    "struct Owner { value: str } fn consume owner:Owner { } fn reuse owner:Owner { owner consume owner consume }"
+    str::concat diagnostics check_source
+    diagnostics "use after move" "Owner `owner` was already moved" assert_error_contains
+
+    Diagnostics::new = aggregate_diagnostics
+    COPY_TRAITS
+    "struct Owner { value: str } struct Box { value: Owner } fn move_into_box owner:Owner { owner Box drop owner drop }"
+    str::concat aggregate_diagnostics check_source
+    aggregate_diagnostics "aggregate consumes owner" "Owner `owner` was already moved"
+    assert_error_contains
+
+    Diagnostics::new = return_diagnostics
+    COPY_TRAITS
+    "struct Owner { value: str } fn duplicate owner:Owner -> Owner Owner { owner owner }"
+    str::concat return_diagnostics check_source
+    return_diagnostics "return duplication consumes owner" "Owner `owner` was already moved"
+    assert_error_contains
+
+    Diagnostics::new = rebind_diagnostics
+    COPY_TRAITS
+    "struct Owner { value: str } fn rebind owner:Owner -> Owner { owner = owner owner }"
+    str::concat rebind_diagnostics check_source
+    rebind_diagnostics "self-rebinding preserves the new owner" assert_no_errors
+}
+
+fn test_borrowed_calls_preserve_owner {
+    "borrowed_calls_preserve_owner" test_start
+    Diagnostics::new = diagnostics
+    COPY_TRAITS
+    "struct Owner { value: i64 } fn inspect owner:$Owner { owner.value drop } fn reuse owner:Owner { owner inspect owner inspect }"
+    str::concat diagnostics check_source
+    diagnostics "shared calls preserve owner" assert_no_errors
+}
+
+fn test_stack_reordering_preserves_owner_identity {
+    "stack_reordering_preserves_owner_identity" test_start
+    Diagnostics::new = diagnostics
+    COPY_TRAITS
+    "struct Owner { value: i64 } fn inspect owner:$Owner { owner.value drop } fn reorder owner:Owner { owner 1 swap inspect drop owner 1 true rot inspect drop drop 1 owner over drop inspect drop owner inspect }"
+    str::concat diagnostics check_source
+    diagnostics "swap rot and over preserve owner" assert_no_errors
+}
+
 fn test_copy_derivation_validates_fields {
     "copy_derivation_validates_fields" test_start
     Diagnostics::new = diagnostics
@@ -190,6 +237,9 @@ test_copy_intrinsics_and_fallback_clone
 test_standard_owner_clone_composes
 test_non_copy_dup_is_rejected
 test_over_checks_the_copied_value
+test_affine_owner_reuse_is_rejected
+test_borrowed_calls_preserve_owner
+test_stack_reordering_preserves_owner_identity
 test_copy_derivation_validates_fields
 test_explicit_copy_implementation_is_validated
 test_copy_bound_and_clone_supertrait

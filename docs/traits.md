@@ -140,7 +140,7 @@ Clone is always explicit and can allocate or run user code:
 
 ```casa
 impl Document: Clone {
-    fn clone self:Document -> Document {
+    fn clone self:$Document -> Document {
         self.title.clone Document
     }
 }
