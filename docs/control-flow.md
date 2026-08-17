@@ -1,90 +1,70 @@
-# Control Flow
+# Control Flow and Patterns
 
-Casa provides conditionals, loops, and pattern matching for controlling program flow. All conditions must leave a `bool` on the stack.
+Casa conditions consume a `bool`. Branches and loops must keep the value stack
+consistent.
 
 ## Conditionals
 
-Casa uses `if`/`elif`/`else`/`fi` for branching. Each condition must be followed by `then`.
-
-### Syntax
-
-```
-if <condition> then
-    <body>
-elif <condition> then
-    <body>
-else
-    <body>
-fi
-```
-
-The condition must leave a `bool` on top of the stack (it is consumed by `then`).
-
-### Basic Example
+Use `if`, optional `elif` and `else` branches, and `fi`:
 
 ```casa
-42 = guess
-42 = number
+82 = score
 
-if guess number > then
-    "Too low" print
-elif guess number < then
-    "Too high" print
+if 90 score >= then
+    "excellent"
+elif 60 score >= then
+    "pass"
 else
-    "Correct!" print
+    "retry"
 fi
+print
 ```
 
-### Stack Interaction
+Each condition is followed by `then`. All continuing branches must leave the
+same types on the stack. If there is no `else`, the body must leave the stack
+unchanged because the condition can be false.
 
-Conditionals can leave values on the stack, but all branches must leave the stack in the same state. This is enforced by the type checker.
+Bindings created inside a branch exist only in that branch. An assignment
+updates an outer binding when one exists. Otherwise it creates a branch-local
+binding.
+
+## While loops
+
+`while` evaluates its condition before each iteration:
 
 ```casa
-42 = guess
-42 = number
-
-if guess number > then
-    "Too low"
-elif guess number < then
-    "Too high"
-else
-    "Correct!"
-fi
-
-print    # prints whatever the branch pushed
+0 = index
+while 5 index < do
+    index print "\n" print
+    1 += index
+done
 ```
 
-### Stack Consistency
+Use `break` to leave the innermost loop. Use `continue` to start its next
+condition check.
 
-All branches of a conditional must produce the same stack effect. The following is a type error:
+The stack at the end of the body, at `break`, and at `continue` must match the
+stack before the loop. A loop cannot accumulate values between iterations.
+
+## For loops
+
+`for` consumes an iterator and binds each yielded value:
 
 ```casa
-# ERROR: branches leave different stack states
-if true then
-    1
-else
-    "hello"
-fi
+import "std"
+
+for number in [1, 2, 3].iter do
+    number print "\n" print
+done
 ```
 
-The first branch pushes an `i64`, the second pushes a `str` — the type checker rejects this.
+The iterable expression is evaluated once. `break` and `continue` work as they
+do in a `while` loop. See [Collections](collections.md) for standard iterators
+and [`Iterable`](traits.md#built-in-trait-iterablet) for custom iterators.
 
-Compatible types are allowed across branches. For example, `Option::None` (bare `Option`) and `Option::Some` (`Option[T]`) can appear in different branches. The type checker unifies them to the more specific type:
+## Test and bind an enum variant
 
-```casa
-if condition then
-    Option::None           # Option
-else
-    42 Option::Some        # Option[i64]
-fi
-# result type: Option[i64]
-```
-
-If there is no `else` branch, the `if`/`elif` branches must not change the stack at all (since the "no match" path leaves the stack unchanged).
-
-### Variant Checking with `is`
-
-The `is` keyword can be used in `if`/`elif` conditions to check and destructure enum variants. See [Enums — Variant Checking with `is`](enums.md#variant-checking-with-is) for details.
+`is` consumes an enum value and reports whether it has a given variant:
 
 ```casa
 enum Shape {
@@ -94,335 +74,93 @@ enum Shape {
 }
 
 10 Shape::Circle = shape
+shape Shape::Circle is print    # true
+```
 
+In an `if` or `elif` condition, the pattern can bind carried values:
+
+```casa
 if shape Shape::Circle(radius) is then
-    "radius=" print
-    radius print
-elif shape Shape::Rectangle(w h) is then
-    "area=" print
-    w h * print
+    f"radius: {radius}\n" print
+elif shape Shape::Rectangle(width height) is then
+    width height * print
 fi
 ```
 
-Bindings introduced by `is` are scoped to the branch whose condition created
-them. They are not visible in sibling `elif`/`else` branches or after `fi`.
-Bindings may not shadow an accessible local variable; choose a different binding
-name when an outer local with the same name is already in scope. Assignments
-inside a branch mutate an outer variable when one exists, otherwise they create a
-branch-local variable.
+These bindings exist only in the branch whose pattern created them. They
+cannot shadow an accessible local binding. A binding pattern is not valid
+outside an `if` or `elif` condition.
 
-## Loops
+## Match a value
 
-Casa has `while`/`do`/`done` loops with `break` and `continue`.
-
-### Syntax
-
-```
-while <condition> do
-    <body>
-done
-```
-
-The condition must leave a `bool` on top of the stack (consumed by `do`).
-
-### Basic Example
+`match` selects one pattern and can produce a value:
 
 ```casa
-0 = i
-while i 10 > do
-    i print
-    1 += i
-done
-```
+enum Status { Ready Busy Failed(str) }
 
-### Infinite Loops
-
-Use `true` as the condition with `break` to exit:
-
-```casa
-0 = i
-while true do
-    i print
-    1 += i
-    if i 5 <= then
-        break
-    fi
-done
-```
-
-### `break` and `continue`
-
-- `break` — exit the innermost loop immediately
-- `continue` — skip the rest of the loop body and jump to the condition
-
-```casa
-0 = index
-while true do
-    index print
-
-    if index 15 <= then
-        break
-    fi
-
-    if index 2 % 0 == then
-        3 += index
-        continue
-    fi
-
-    1 += index
-done
-```
-
-### Stack Consistency in Loops
-
-The stack state must be identical:
-1. Before the loop starts and after the loop ends
-2. At the start of each iteration (before the condition)
-3. At every `break` and `continue` point
-
-The type checker enforces that loops do not accumulate or consume stack values across iterations.
-
-## For Loops
-
-Casa has `for`/`in`/`do`/`done` loops that iterate over any value whose type
-provides a `next` method returning `Option[T]`.
-
-### Syntax
-
-```
-for <ident> in <iterable> do
-    <body>
-done
-```
-
-The iterable expression is evaluated once. On each iteration the loop calls
-`<iterable_type>::next`; if it returns `Option::Some(value)`, `value` is
-bound to `<ident>` and the body runs. If it returns `Option::None`, the loop
-exits. `break` and `continue` work the same way as in `while`.
-
-### Iterating Standard Collections
-
-The standard library provides `.iter` for `array[T]`, `List[T]`, and `str`:
-
-```casa
-[1 2 3] = nums
-for n in nums.iter do
-    n print "\n" print
-done
-
-for c in "casa".iter do
-    c print "\n" print
-done
-```
-
-### Custom Iterators
-
-Any struct that provides a `next` method returning `Option[T]` can be used
-in a `for` loop. The `Iterable[T]` trait in `lib/std.casa` documents the
-contract and provides default methods like `collect`, `map`, `filter`, and
-others (see [Traits -- Iterable](traits.md#built-in-trait-iterablet)):
-
-```casa
-trait Iterable[T] {
-    fn next self:self -> Option[T]
-
-    # default methods: collect, map, filter, fold, count, any, all, find
-}
-```
-
-A `Counter` that yields integers from `0` up to (but not including) a
-limit:
-
-```casa
-struct Counter { value:i64 limit:i64 }
-
-impl Counter {
-    fn next self:Counter -> Option[i64] {
-        if self Counter::limit self Counter::value >= then
-            Option::None (Option[i64]) return
-        fi
-        self Counter::value = current
-        1 += self.value
-        current Option::Some
-    }
-}
-
-Counter { value: 0 limit: 5 } = c
-for x in c do
-    x print "\n" print
-done
-```
-
-Note that iterators are stateful: a single `Counter` instance can be
-consumed only once. Re-bind the iterable in each outer iteration if you
-want to restart it.
-
-## Match
-
-Casa has exhaustive pattern matching using `match`/`end`. Match works with enum types, struct types, and literal types (`bool`, `i64`, `char`, `str`).
-
-### Syntax
-
-```
-<value> match
-    <pattern1> [if <guard>] => <body>
-    <pattern2> [if <guard>] => <body>
-    ...
+Status::Ready = status
+status match
+    Status::Ready => "ready"
+    Status::Busy => "busy"
+    Status::Failed(message) => f"failed: {message}"
 end
+print
 ```
 
-The `match` keyword pops a value from the stack. Each arm specifies a pattern followed by `=>` and a body. An optional `if <guard>` between the pattern and `=>` adds a boolean condition that must also hold. The block is closed with `end`.
-
-Pattern bindings are scoped to their own arm body. They are visible in that
-arm's guard and body only, not in sibling arms and not after `end`. A pattern
-binding may not shadow an accessible local variable. Assignments inside an arm
-mutate an outer variable when one exists, otherwise they create an arm-local
-variable.
-
-### Block Arm Bodies
-
-Multiline arm bodies require `{}`:
+Each arm has a pattern, `=>`, and a body. Use braces for a multiline body:
 
 ```casa
-circle match
+shape match
     Shape::Circle(radius) => {
-        "Circle with radius: " print
+        "circle: " print
         radius print
-        "\n" print
     }
-    Shape::Rectangle(width height) => {
-        width height * print
-        "\n" print
-    }
-    Shape::Point => "point\n" print
+    Shape::Rectangle(width height) => width height * print
+    Shape::Point => "point" print
 end
 ```
 
-Single-line arms do not need braces. Braced and unbraced arms can be mixed freely.
-
-### Enum Matching
+Pattern bindings exist in that arm only. Struct patterns can name all or some
+fields:
 
 ```casa
-enum Color { Red Green Blue }
-
-Color::Green match
-    Color::Red => "red" print
-    Color::Green => "green" print
-    Color::Blue => "blue" print
+person match
+    Person { name: name } => name print
 end
 ```
 
-### Literal Matching
+Literal patterns work with booleans, integers, characters, and strings. `_`
+matches any remaining value.
 
-Match on `bool`, `i64`, `char`, and `str` values using literal patterns:
+## Exhaustiveness
 
-```casa
-fn describe n:i64 {
-    n match
-        0 => "zero" print
-        1 => "one" print
-        _ => "other" print
-    end
-}
+Every `match` must handle every possible input:
 
-flag match
-    true => "yes" print
-    false => "no" print
-end
+- An enum match must cover every variant or use `_`.
+- A boolean match must cover `true` and `false` or use `_`.
+- An integer, character, or string match must use `_`.
+- One matching struct pattern is exhaustive. `_` is also valid.
 
-ch match
-    'a' => "letter a" print
-    _ => "something else" print
-end
+Duplicate unguarded arms are compile-time errors. All arms must leave the same
+stack effect, just like branches of an `if`.
 
-name match
-    "Alice" => "Hi Alice" print
-    "Bob" => "Hi Bob" print
-    _ => "Hi stranger" print
-end
-```
+## Guards
 
-### Exhaustiveness
-
-All match blocks must be exhaustive:
-
-- **Enums**: All variants must be covered, or a wildcard `_` arm must be present.
-- **Bool**: Both `true` and `false` must be covered, or a wildcard `_` arm must be present.
-- **Int, char, str**: A wildcard `_` arm is always required (infinite domain).
-- **Structs**: A struct pattern or wildcard `_` arm must be present.
-
-Missing arms are a compile-time error. Duplicate arms are also rejected.
+Add `if condition` before `=>` to restrict an arm:
 
 ```casa
-color match
-    Color::Red => "red" print
-    _ => "other" print
-end
-```
-
-### Guard Clauses
-
-An arm may carry an `if <cond>` guard between the pattern and `=>`. The arm fires only when the pattern matches AND the guard returns `true`. The guard expression is a regular Casa expression that must leave a single `bool` on the stack; pattern bindings are in scope inside the guard.
-
-```casa
-fn classify n:i64 -> str {
-    n match
-        _ if 0 n > => "positive"
-        _ if 0 n == => "zero"
+fn classify number:i64 -> str {
+    number match
+        _ if 0 number > => "positive"
+        _ if 0 number == => "zero"
         _ => "negative"
     end
 }
 ```
 
-Guarded arms do not count toward exhaustiveness (the guard may fail at runtime), so an unguarded fallback — a wildcard arm or full enum coverage — is still required. Duplicate-arm detection also skips guarded arms, so a guarded literal may appear alongside an unguarded arm for the same value.
+A guard must produce one `bool`. Pattern bindings are available in the guard.
+A guarded arm does not count toward exhaustiveness because its condition can be
+false.
 
-See [`examples/match_guard.casa`](../examples/match_guard.casa) for a full program.
-
-### Match as Expression
-
-Match arms can leave values on the stack. All arms must produce the same stack effect:
-
-```casa
-Color::Blue match
-    Color::Red => 0
-    Color::Green => 1
-    Color::Blue => 2
-end
-print    # 2
-```
-
-See [Enums](enums.md) for full details on enum types and match.
-
-## Nested Control Flow
-
-Conditionals and loops can be freely nested:
-
-```casa
-1 = index
-30 = last
-
-while index last >= do
-    index 3 % 0 == = fizz
-    index 5 % 0 == = buzz
-
-    if fizz buzz && then
-        "FizzBuzz" print
-    elif fizz then
-        "Fizz" print
-    elif buzz then
-        "Buzz" print
-    else
-        index print
-    fi
-
-    1 += index
-done
-```
-
-See [`examples/fizzbuzz.casa`](../examples/fizzbuzz.casa) for the full program.
-
-## See Also
-
-- [Enums](enums.md) -- enum types and variant checking with `is`
-- [Functions and Lambdas](functions-and-lambdas.md) -- function definitions and lambdas
-- [Types and Literals](types-and-literals.md) -- `Option` and `Result` type unification in branches
+See [`examples/match_guard.casa`](../examples/match_guard.casa) for a runnable
+guard example.
