@@ -129,6 +129,9 @@ person match
 end
 ```
 
+An owned match subject is consumed. Non-Copy fields move into named bindings,
+and the compiler destroys omitted fields.
+
 Literal patterns work with booleans, integers, characters, and strings. `_`
 matches any remaining value.
 

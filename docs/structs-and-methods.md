@@ -93,6 +93,27 @@ Copy is allocation-free. Use an explicit `Clone` conformance when
 duplication must allocate or call field Clone methods. See
 [Copy and Clone](traits.md#copy-and-clone).
 
+## Custom destruction
+
+Define the reserved inherent `drop` method when a type needs custom cleanup:
+
+```casa
+impl Person {
+    fn drop self:mut$Person {
+        self.age print
+    }
+}
+```
+
+The method must have the exact stack effect `self:mut$Person -> None`. It cannot
+be called or referenced directly. The compiler calls it when an owner is
+destroyed. A type with this method cannot implement `Copy`.
+
+Casa destroys owners in reverse acquisition order on normal scope exits,
+returns, and loop exits. It calls a custom `drop` method first, then destroys
+the fields in reverse declaration order. The `drop` intrinsic starts the same
+process immediately.
+
 ## Alternative stack constructor
 
 For compact stack-oriented code, push fields in reverse declaration order and
@@ -118,4 +139,6 @@ Partial patterns are allowed. See
 [Control Flow and Patterns](control-flow.md#match-a-value) for binding scope,
 stack consistency, and exhaustiveness.
 
-See [`examples/struct.casa`](../examples/struct.casa) for a runnable example.
+See [`examples/struct.casa`](../examples/struct.casa) and
+[`examples/destruction.casa`](../examples/destruction.casa) for runnable
+examples.

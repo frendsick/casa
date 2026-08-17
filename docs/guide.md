@@ -94,7 +94,9 @@ answer print
 An owned value that does not implement `Copy` moves when an operation consumes
 it. The source binding cannot be used again. A parameter of type `$T` observes
 an owned value without moving it. A `mut$T` parameter can update it through an
-exclusive borrow.
+exclusive borrow. Casa destroys each remaining owner when its scope ends. See
+[Custom destruction](structs-and-methods.md#custom-destruction) for cleanup
+methods and destruction order.
 
 The compiler infers the binding type. Add an annotation when inference needs
 help:

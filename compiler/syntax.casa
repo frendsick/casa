@@ -830,7 +830,7 @@ fn get_op_delimiter
 
     # Dot . method
     if "." value == then
-        fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = method_token
+        cursor expect_function_name = method_token
         method_token Token::location method_token Token::value OpValue::MethodCall Op::new ops.push
         return
     fi
@@ -1748,9 +1748,16 @@ fn eval_const_block
 # parse_function - parse function definition
 # ============================================================================
 
+fn expect_function_name cursor:mut$TokenCursor -> Token {
+    if cursor.peek Option::Some(token) is then
+        if "drop" token.value == then cursor.pop.unwrap return fi
+    fi
+    fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or
+}
+
 fn parse_function parser:mut$Parser cursor:mut$TokenCursor -> Function {
     fallback_token "fn" cursor expect_token_value.unwrap_or drop
-    fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
+    cursor expect_function_name = name_token
 
     # Parse optional type parameters
     List[str]::new = type_vars
@@ -2336,7 +2343,10 @@ fn parse_trait parser:mut$Parser cursor:mut$TokenCursor -> CasaTrait {
                 false = parse_trait_loop
             else
                 cursor.pop drop # consume fn
-                fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = method_name
+                cursor expect_function_name = method_name
+                if "drop" method_name Token::value == then
+                    method_name Token::location "`drop` is reserved for inherent cleanup methods" ErrorKind::InvalidScope parser.state.record_error
+                fi
 
                 # Parse optional method-level type parameters (e.g., fn map[U])
                 List[str]::new = method_type_vars
@@ -2801,6 +2811,7 @@ fn copy_representation_is_eligible
         }
         Type::Generic(generic) => {
             if "array" generic.base == then false return fi
+            if f"{generic.base}::drop" store.functions.has then false return fi
             if generic.base visiting.has then false return fi
             Map[str Type]::new = substitutions
             if generic.base store.structs.get Option::Some(casa_struct) is then
@@ -2855,6 +2866,45 @@ fn copy_field_is_eligible
         fi
     fi
     visiting store trait_bounds typ copy_representation_is_eligible
+}
+
+fn validate_drop_methods parser:mut$Parser {
+    for pair in parser.store.functions.iter do
+        if "drop" pair.first == then
+            pair.second.location "`drop` must be declared in an inherent implementation" ErrorKind::InvalidScope parser.state.record_error
+            continue
+        fi
+        pair.first "::" str::split = name_parts
+        if 2 name_parts.length != then continue fi
+        if "drop" 1 name_parts.get != then continue fi
+        pair.second = function
+        function.stack_effect = effect
+        false = valid
+        if 1 effect.parameters.length == 0 effect.return_types.length == && then
+            0 effect.parameters.get = receiver
+            if "self" receiver.name == receiver.typ.is_exclusive_borrow && then
+                if receiver.typ.borrow_target Option::Some(target) is then
+                    if 0 name_parts.get target.match_base == then true = valid fi
+                fi
+            fi
+        fi
+        if valid ! then
+            function.location "Reserved `drop` method must have stack effect `self:mut$self -> None`" ErrorKind::SignatureMismatch parser.state.record_error
+            continue
+        fi
+        0 effect.parameters.get.typ.borrow_target.unwrap = receiver_type
+        false = receiver_is_copy
+        if receiver_type Type::Builtin(builtin) is then
+            builtin BuiltinType::Str != = receiver_is_copy
+        fi
+        "Copy" GenericType::new Type::Generic = copy_type
+        if parser.store copy_type receiver_type type_has_satisfying_trait_impl then
+            true = receiver_is_copy
+        fi
+        if receiver_is_copy then
+            function.location "A `Copy` type cannot define a reserved `drop` method" ErrorKind::TraitSignatureMismatch parser.state.record_error
+        fi
+    done
 }
 
 fn validate_copy_trait_impl parser:mut$Parser trait_impl:mut$TraitImpl trait_type:mut$Type {
@@ -3092,6 +3142,9 @@ fn parse_impl_block parser:mut$Parser cursor:mut$TokenCursor {
         fi
         cursor parser parse_function = function
         function Function::name = method_name
+        if "drop" method_name == 0 implemented_traits.length != && then
+            function.location "`drop` must be declared in an inherent implementation" ErrorKind::InvalidScope parser.state.record_error
+        fi
         "" = fn_name
         if 0 implemented_traits.length != then
             0 implemented_traits.get trait_bound_to_type.format = trait_name
@@ -4450,6 +4503,7 @@ fn resolve_identifiers_global parser:mut$Parser ops:List[Op] -> List[Op] {
     if parser validate_traits ! then List[Op]::new return fi
     parser derive_copy_for_aggregates
     parser register_builtin_copy_impls
+    parser validate_drop_methods
     parser finalize_trait_impl_methods
     parser synthesize_copy_clone_fallbacks
     parser validate_trait_impls
@@ -4660,6 +4714,10 @@ fn try_resolve_fn_ref
         true return
     fi
     ref_name "::" str::split = ref_parts
+    if 2 ref_parts.length == "drop" ref_parts.length 1 - ref_parts.get == && then
+        op Op::location "Reserved `drop` methods cannot be referenced" ErrorKind::InvalidScope CasaError::new resolve_errors.push
+        true return
+    fi
     if 3 ref_parts.length == then
         0 ref_parts.get parse_type_str = receiver_type
         1 ref_parts.get GenericType::new Type::Generic = qualifier_type
@@ -4774,6 +4832,11 @@ fn resolve_plain_identifier
     ident:mut$str
     resolve_errors:mut$List[CasaError]
 {
+    ident "::" str::split = identifier_parts
+    if 2 identifier_parts.length == "drop" identifier_parts.length 1 - identifier_parts.get == && then
+        op Op::location "Reserved `drop` methods cannot be called directly; use the `drop` intrinsic" ErrorKind::InvalidScope CasaError::new resolve_errors.push
+        return
+    fi
     if ident function Function::variables variable_list_contains then
         ident.clone OpValue::PushVar op Op::set_value
         return

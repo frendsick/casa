@@ -6,7 +6,7 @@ Intrinsics are compiler-provided operations. They need no import.
 
 | Intrinsic | Stack effect | Action |
 |---|---|---|
-| `drop` | `T -> None` | Discard the top value |
+| `drop` | `T -> None` | Destroy the top owned value |
 | `dup` | `[T: Copy] T -> T T` | Duplicate the top value |
 | `copy` | `[T: Copy] T -> T` | Produce an owned Copy value |
 | `swap` | `T1 T2 -> T2 T1` | Swap the top two values |
@@ -19,7 +19,8 @@ Intrinsics are compiler-provided operations. They need no import.
 ```
 
 `swap` and `rot` only move values. They accept non-Copy values. `dup`, `over`,
-and `copy` never call Clone and never allocate.
+and `copy` never call Clone and never allocate. `drop` runs the same custom
+cleanup and recursive field destruction as a scope exit.
 
 ## Output and inspection
 
