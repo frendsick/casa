@@ -50,11 +50,11 @@ An `impl` block adds methods to a type:
 
 ```casa
 impl Person {
-    fn birthday self:Person {
+    fn birthday self:mut$Person {
         1 += self.age
     }
 
-    fn description self:Person -> str {
+    fn description self:$Person -> str {
         f"{self.name}, age {self.age}"
     }
 }

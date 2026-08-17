@@ -22,9 +22,10 @@ struct TypedValue {
     type_value: Type
     origin:     Location
     literals:   List[Op]
+    binding:    Option[str]
 }
 
-fn contains_op ops:List[Op] candidate:Op -> bool {
+fn contains_op ops:mut$List[Op] candidate:mut$Op -> bool {
     for op in ops.iter do
         if candidate op.eq then true return fi
     done
@@ -32,7 +33,7 @@ fn contains_op ops:List[Op] candidate:Op -> bool {
 }
 
 impl TypedValue {
-    fn resolve_literals self:TypedValue target:Type diagnostics:Diagnostics -> bool {
+    fn resolve_literals self:$TypedValue target:$Type diagnostics:mut$Diagnostics -> bool {
         true = valid
         for literal in self.literals.iter do
             if diagnostics target literal.resolve_literal ! then false = valid fi
@@ -43,40 +44,41 @@ impl TypedValue {
 
 impl TypedStack {
     fn new -> TypedStack {
-        List[TypedValue]:: new TypedStack
+        List[TypedValue]::new TypedStack
     }
 
-    fn snapshot self:TypedStack -> TypedStack {
+    fn snapshot self:$TypedStack -> TypedStack {
         self.values.shallow_copy TypedStack
     }
 
-    fn restore self:TypedStack source:TypedStack {
+    fn restore self:mut$TypedStack source:$TypedStack {
         source.values.shallow_copy = self.values
     }
 
-    fn get_types self:TypedStack -> List[Type] {
-        List[Type]:: new = types
+    fn get_types self:$TypedStack -> List[Type] {
+        List[Type]::new = types
         for value in self.values.iter do
-            value.type_value types.push
+            value.type_value clone_type types.push
         done
         types
     }
 
-    fn set_types self:TypedStack types:List[Type] {
+    fn set_types self:mut$TypedStack types:$List[Type] {
         0 (u64) = index
         while index self.values.length > do
             index self.values.get = value
-            value.literals value.origin index types.get TypedValue index self.values.set
+            value.binding value.literals value.origin index types.get clone_type
+            TypedValue index self.values.set
             1 += index
         done
     }
 
     # Pure stack comparison on the types slice (origins are not compared).
-    fn equals self:TypedStack other:TypedStack -> bool {
+    fn equals self:$TypedStack other:$TypedStack -> bool {
         self.get_types other.get_types stacks_equal
     }
 
-    fn merge_literals self:TypedStack candidate:TypedStack {
+    fn merge_literals self:mut$TypedStack candidate:$TypedStack {
         0 (u64) = index
         while index self.values.length > do
             index self.values.get = value
@@ -91,7 +93,7 @@ impl TypedStack {
     }
 
     # Produce unified types and retain literal origins from both stacks.
-    fn unify_types self:TypedStack candidate:TypedStack store:SymbolStore -> List[Type] {
+    fn unify_types self:mut$TypedStack candidate:$TypedStack store:mut$SymbolStore -> List[Type] {
         store self.get_types candidate.get_types stacks_compatible = unified
         if unified.length self.values.length == then candidate self.merge_literals fi
         unified
@@ -105,6 +107,7 @@ impl TypedStack {
 struct IfContext {
     before:                  TypedStack
     after:                   TypedStack
+    owners_before:           List[str]
     condition_present:       bool
     default_present:         bool
     current_branch_label:    str
@@ -113,6 +116,7 @@ struct IfContext {
 
 struct WhileContext {
     before:                  TypedStack
+    owners_before:           List[str]
     condition_present:       bool
     current_branch_location: Location
 }
@@ -120,6 +124,7 @@ struct WhileContext {
 struct MatchContext {
     before:                  TypedStack
     after:                   TypedStack
+    owners_before:           List[str]
     condition_present:       bool
     branch_records:          List[str]
     match_type:              Type
@@ -139,6 +144,7 @@ impl IfContext {
         ""
         false
         false
+        List[str]::new
         TypedStack::new
         TypedStack::new
         IfContext
@@ -149,6 +155,7 @@ impl WhileContext {
     fn new -> WhileContext {
         empty_location
         false
+        List[str]::new
         TypedStack::new
         WhileContext
     }
@@ -159,8 +166,9 @@ impl MatchContext {
         empty_location
         ""
         match_type
-        List[str]:: new
+        List[str]::new
         false
+        List[str]::new
         TypedStack::new
         TypedStack::new
         MatchContext
@@ -185,6 +193,7 @@ struct TypeChecker {
     param_cap:                  Option[u64]
     underflow_reported_this_op: bool
     scope:                      BlockScope
+    moved_owners:               List[str]
     diagnostics:                Diagnostics
 }
 
@@ -196,53 +205,54 @@ struct TypecheckResult {
 }
 
 impl TypeChecker {
-    fn new store:SymbolStore -> TypeChecker {
+    fn new store:mut$SymbolStore -> TypeChecker {
         Diagnostics::new # diagnostics
+        List[str]::new # moved_owners
         BlockScope::new # scope
         false # underflow_reported_this_op
-        Option[u64]:: None # param_cap
+        Option[u64]::None # param_cap
         store # store
         false # in_branch_condition
         "" # current_expect_ctx
         "" # current_op_context
         empty_location # current_location
-        List[BranchFrame]:: new # branched_stacks
+        List[BranchFrame]::new # branched_stacks
         false # has_return_types
         TypedStack::new # return_types
-        List[Parameter]:: new # parameters
+        List[Parameter]::new # parameters
         TypedStack::new # stack
         TypeChecker
     }
 }
 
-fn resolve_numeric_literal_default type_value:Type -> Type {
+fn resolve_numeric_literal_default type_value:$Type -> Type {
     if type_value.is_integer_literal_t then TYPE_I64_T return fi
     if type_value.is_float_literal_t then TYPE_F64_T return fi
     type_value match
         Type::Generic(generic) => {
-            List[Type]:: new = parameters
+            List[Type]::new = parameters
             for parameter in generic.params.iter do
                 parameter resolve_numeric_literal_default parameters.push
             done
-            parameters generic.base GenericType Type::Generic
+            parameters generic.base.clone GenericType Type::Generic
         }
         Type::Function(function_type) => {
-            List[Type]:: new = parameters
+            List[Type]::new = parameters
             for parameter in function_type.parameters.iter do
                 parameter resolve_numeric_literal_default parameters.push
             done
-            List[Type]:: new = return_types
+            List[Type]::new = return_types
             for return_type in function_type.return_types.iter do
                 return_type resolve_numeric_literal_default return_types.push
             done
             return_types parameters FunctionType Type::Function
         }
-        _ => type_value
+        _ => type_value clone_type
     end
 }
 
 impl Op {
-    fn has_numeric_literal self:Op -> bool {
+    fn has_numeric_literal self:$Op -> bool {
         self.value match
             OpValue::PushInt(_) => true
             OpValue::PushFloat(_) => true
@@ -262,7 +272,12 @@ impl Op {
         end
     }
 
-    fn resolve_array_literals self:Op items:List[Op] target:Type diagnostics:Diagnostics -> bool {
+    fn resolve_array_literals
+        self:mut$Op
+        items:$List[Op]
+        target:$Type
+        diagnostics:mut$Diagnostics
+    -> bool {
         target.as_generic = generic_option
         if generic_option.is_none then false return fi
         generic_option.unwrap = generic
@@ -274,11 +289,11 @@ impl Op {
                 false = valid
             fi
         done
-        if valid then target Option::Some self Op::set_type_hint fi
+        if valid then target clone_type Option::Some self Op::set_type_hint fi
         valid
     }
 
-    fn resolve_literal self:Op target:Type diagnostics:Diagnostics -> bool {
+    fn resolve_literal self:mut$Op target:$Type diagnostics:mut$Diagnostics -> bool {
         self.value match
             OpValue::PushInt(literal) => {
                 if target.is_integer_type_t ! then
@@ -291,7 +306,7 @@ impl Op {
                     self.location f"Integer literal `{literal.raw}` is outside `{target.format}` range {minimum}..{maximum}" ErrorKind::TypeMismatch diagnostics.record_error
                     false return
                 fi
-                target Option::Some self Op::set_type_hint
+                target clone_type Option::Some self Op::set_type_hint
                 true
             }
             OpValue::PushFloat(value) => {
@@ -306,7 +321,7 @@ impl Op {
                     self.location f"Floating-point literal `{value}` is outside `{target.format}` finite range" ErrorKind::TypeMismatch diagnostics.record_error
                     false return
                 fi
-                target Option::Some self Op::set_type_hint
+                target clone_type Option::Some self Op::set_type_hint
                 true
             }
             OpValue::PushArray(items) => diagnostics target items self.resolve_array_literals
@@ -315,7 +330,7 @@ impl Op {
     }
 }
 
-fn resolve_default_literals ops:List[Op] diagnostics:Diagnostics {
+fn resolve_default_literals ops:mut$List[Op] diagnostics:mut$Diagnostics {
     for op in ops.iter do
         if op.type_hint.is_none then
             if op.value OpValue::PushInt is then
@@ -335,7 +350,7 @@ fn resolve_default_literals ops:List[Op] diagnostics:Diagnostics {
 }
 
 impl TypeChecker {
-    fn within_param_cap tc:TypeChecker -> bool {
+    fn within_param_cap tc:mut$TypeChecker -> bool {
         if tc.param_cap Option::Some(cap) is then
             cap tc.parameters.length < return
         fi
@@ -345,7 +360,7 @@ impl TypeChecker {
 # Raise a TypeMismatch error at the type checker's current location.
 
 impl TypeChecker {
-    fn raise_type_mismatch tc:TypeChecker message:str {
+    fn raise_type_mismatch tc:mut$TypeChecker message:str {
         tc.current_location message ErrorKind::TypeMismatch tc.diagnostics.record_error
     }
 }
@@ -355,19 +370,122 @@ impl TypeChecker {
 # ============================================================================
 
 impl TypeChecker {
-    fn stack_push_type tc:TypeChecker type_value:Type {
-        List[Op]:: new tc.current_location type_value TypedValue tc.stack.values.push
+    fn owner_is_moved tc:mut$TypeChecker name:$str -> bool {
+        name tc.moved_owners string_list_contains
     }
 
-    fn stack_push_literal tc:TypeChecker type_value:Type op:Op {
-        List[Op]:: new = literals
-        op literals.push
-        literals tc.current_location type_value TypedValue tc.stack.values.push
+    fn set_owner_moved tc:mut$TypeChecker name:$str moved:bool {
+        name tc.moved_owners string_list_index = index
+        if moved then
+            if 0 index < then name.clone tc.moved_owners.push fi
+            return
+        fi
+        if 0 index >= then
+            tc.moved_owners.pop = last
+            if tc.moved_owners.length index (u64) < then
+                last index (u64) tc.moved_owners.set
+            fi
+        fi
+    }
+
+    fn type_is_copy tc:mut$TypeChecker typ:mut$Type function_opt:mut$Option[Function] -> bool {
+        if typ.is_shared_borrow then true return fi
+        if typ.is_exclusive_borrow then false return fi
+        if typ Type::Builtin(builtin) is then builtin BuiltinType::Str != return fi
+        if typ Type::Function(_) is then true return fi
+        if typ.has_unresolved_type_var then
+            "Copy" GenericType::new Type::Generic = unresolved_copy_type
+            if tc.store function_opt unresolved_copy_type typ matches_trait_bound then true return fi
+            tc.store unresolved_copy_type typ type_has_satisfying_trait_impl return
+        fi
+        typ.format = type_name
+        if type_name tc.store.copy_types.get Option::Some(cached) is then cached return fi
+        "Copy" GenericType::new Type::Generic = copy_type
+        tc.store function_opt copy_type typ matches_trait_bound = is_copy
+        if is_copy ! then tc.store copy_type typ type_has_satisfying_trait_impl = is_copy fi
+        is_copy type_name tc.store.copy_types.set drop
+        is_copy
+    }
+
+    fn stack_push_type tc:mut$TypeChecker type_value:mut$Type {
+        Option[str]::None List[Op]::new tc.current_location type_value TypedValue
+        tc.stack.values.push
+    }
+
+    fn stack_push_binding
+        tc:mut$TypeChecker
+        type_value:mut$Type
+        name:mut$str
+        op:mut$Op
+        function_opt:mut$Option[Function]
+    {
+        Option[str]::None = binding
+        type_value clone_type = stack_type
+        if type_value.borrow_target Option::Some(target) is then
+            if function_opt target tc.type_is_copy then target = stack_type fi
+        fi
+        if
+        function_opt.is_some
+        type_value.is_borrow ! &&
+        function_opt type_value tc.type_is_copy ! &&
+        then
+            if name tc.owner_is_moved then
+                op.location f"Owner `{name}` was already moved" ErrorKind::InvalidVariable
+                tc.diagnostics.record_error
+            fi
+            name.clone Option::Some = binding
+        fi
+        binding List[Op]::new tc.current_location stack_type TypedValue tc.stack.values.push
+    }
+
+    fn stack_push_literal tc:mut$TypeChecker type_value:mut$Type op:mut$Op {
+        List[Op]::new = literals
+        op (ptr) (Op) literals.push
+        Option[str]::None literals tc.current_location type_value TypedValue tc.stack.values.push
+    }
+}
+
+fn borrow_argument_matches expected:mut$Type actual:mut$Type store:mut$SymbolStore -> bool {
+    expected.borrow_target = expected_target_opt
+    if expected_target_opt.is_none then false return fi
+    if expected.is_exclusive_borrow actual.is_shared_borrow && then false return fi
+    actual clone_type = actual_target
+    if actual.borrow_target Option::Some(borrowed_target) is then borrowed_target = actual_target fi
+    store actual_target expected_target_opt.unwrap unify_type_t.is_some
+}
+
+fn borrowed_copy_argument_matches tc:mut$TypeChecker expected:mut$Type actual:mut$Type -> bool {
+    if actual.borrow_target Option::Some(target) is then
+        if tc.store target expected unify_type_t.is_none then false return fi
+        Option[Function]::None target tc.type_is_copy return
+    fi
+    false
+}
+
+impl TypeChecker {
+    fn consume_value tc:mut$TypeChecker value:mut$TypedValue {
+        if value.binding Option::Some(name) is then
+            if name tc.owner_is_moved then
+                tc.current_location f"Owner `{name}` was already moved"
+                ErrorKind::InvalidVariable tc.diagnostics.record_error
+                return
+            fi
+            true name tc.set_owner_moved
+        fi
+    }
+
+    fn release_value tc:mut$TypeChecker value:mut$TypedValue {
+        if value.binding Option::Some(name) is then
+            if name tc.owner_is_moved then
+                tc.current_location f"Owner `{name}` was already moved"
+                ErrorKind::InvalidVariable tc.diagnostics.record_error
+            fi
+        fi
     }
 }
 
 impl TypeChecker {
-    fn report_stack_underflow tc:TypeChecker message:str {
+    fn report_stack_underflow tc:mut$TypeChecker message:str {
         if tc.underflow_reported_this_op then return fi
         tc.current_location message ErrorKind::StackUnderflow tc.diagnostics.record_error
         true = tc.underflow_reported_this_op
@@ -375,7 +493,7 @@ impl TypeChecker {
 }
 
 impl TypeChecker {
-    fn stack_underflow_message tc:TypeChecker -> str {
+    fn stack_underflow_message tc:mut$TypeChecker -> str {
         tc.current_expect_ctx = expect_what
         if "" expect_what == then
             "Stack underflow: expected a value but stack is empty" return
@@ -385,7 +503,7 @@ impl TypeChecker {
 }
 
 impl TypeChecker {
-    fn stack_peek_type tc:TypeChecker -> Type {
+    fn stack_peek_type tc:mut$TypeChecker -> Type {
         if 0 tc.stack.values.length == then
             if tc.within_param_cap then
                 TYPE_UNKNOWN_T return
@@ -398,7 +516,8 @@ impl TypeChecker {
         if 0 value.literals.length != then
             value.type_value resolve_numeric_literal_default = resolved
             tc.diagnostics resolved value.resolve_literals drop
-            List[Op]:: new value.origin resolved TypedValue top tc.stack.values.set
+            value.binding List[Op]::new value.origin resolved clone_type
+            TypedValue top tc.stack.values.set
             resolved return
         fi
         value.type_value
@@ -406,19 +525,19 @@ impl TypeChecker {
 }
 
 impl TypeChecker {
-    fn stack_pop_value tc:TypeChecker -> TypedValue {
+    fn stack_pop_value tc:mut$TypeChecker -> TypedValue {
         if 0 tc.stack.values.length == then
             if tc.within_param_cap then
                 TYPE_UNKNOWN_T Parameter::new tc.parameters.push
-                List[Op]:: new empty_location TYPE_UNKNOWN_T TypedValue return
+                Option[str]::None List[Op]::new empty_location TYPE_UNKNOWN_T TypedValue return
             fi
             tc.stack_underflow_message tc.report_stack_underflow
-            List[Op]:: new empty_location TYPE_MISSING_T TypedValue return
+            Option[str]::None List[Op]::new empty_location TYPE_MISSING_T TypedValue return
         fi
         tc.stack.values.pop
     }
 
-    fn stack_pop_type tc:TypeChecker -> Type {
+    fn stack_pop_type tc:mut$TypeChecker -> Type {
         tc.stack_pop_value = value
         if 0 value.literals.length != then
             value.type_value resolve_numeric_literal_default = resolved
@@ -430,7 +549,7 @@ impl TypeChecker {
 }
 
 impl TypeChecker {
-    fn stack_pop_drop tc:TypeChecker {
+    fn stack_pop_drop tc:mut$TypeChecker {
         if 0 tc.stack.values.length == then
             if tc.within_param_cap then
                 TYPE_UNKNOWN_T Parameter::new tc.parameters.push
@@ -439,19 +558,20 @@ impl TypeChecker {
             tc.stack_underflow_message tc.report_stack_underflow
             return
         fi
-        tc.stack_pop_type drop
+        tc.stack_pop_value = value
+        value tc.consume_value
     }
 }
 # Infer a lambda's missing left operand from the concrete right operand.
 
 impl TypeChecker {
-    fn stack_pop_left_like tc:TypeChecker right:TypedValue -> TypedValue {
+    fn stack_pop_left_like tc:mut$TypeChecker right:mut$TypedValue -> TypedValue {
         if 0 tc.stack.values.length == tc.within_param_cap && then
             right.type_value resolve_numeric_literal_default = inferred
             if inferred.is_unknown_placeholder ! inferred TYPE_MISSING_T.eq ! && then
                 tc.diagnostics inferred right.resolve_literals drop
                 inferred Parameter::new tc.parameters.push
-                List[Op]:: new empty_location inferred TypedValue return
+                Option[str]::None List[Op]::new empty_location inferred TypedValue return
             fi
         fi
         tc.stack_pop_value
@@ -459,7 +579,7 @@ impl TypeChecker {
 }
 
 impl TypeChecker {
-    fn expect_type_t tc:TypeChecker expected:Type {
+    fn expect_type_t tc:mut$TypeChecker expected:mut$Type {
         if 0 tc.stack.values.length == then
             if tc.within_param_cap then
                 expected Parameter::new tc.parameters.push
@@ -470,6 +590,7 @@ impl TypeChecker {
         fi
         tc.stack_pop_value = et_value
         et_value.type_value = et_actual_t
+        if expected.is_borrow then et_value tc.release_value else et_value tc.consume_value fi
         if 0 et_value.literals.length != then
             if expected.is_unknown_placeholder expected.has_unresolved_type_var || then
                 et_actual_t resolve_numeric_literal_default = literal_default
@@ -478,6 +599,8 @@ impl TypeChecker {
             fi
             if tc.diagnostics expected et_value.resolve_literals then return fi
         fi
+        if tc.store et_actual_t expected borrow_argument_matches then return fi
+        if et_actual_t expected tc borrowed_copy_argument_matches then return fi
         if tc.store et_actual_t expected unify_type_t.is_some then return fi
         et_actual_t.format = et_actual
         expected.format = et_expected
@@ -493,7 +616,11 @@ impl TypeChecker {
 # Type compatibility
 # ============================================================================
 
-fn type_exists_recursive_t typ:Type function_opt:Option[Function] store:SymbolStore -> bool {
+fn type_exists_recursive_t
+    typ:mut$Type
+    function_opt:mut$Option[Function]
+    store:mut$SymbolStore
+-> bool {
     typ match
         Type::Unknown => { false }
         Type::Builtin(_) => { true }
@@ -507,6 +634,8 @@ fn type_exists_recursive_t typ:Type function_opt:Option[Function] store:SymbolSt
             for param in generic.params.iter do
                 if store function_opt param type_exists_recursive_t ! then false return fi
             done
+            if SHARED_BORROW_TYPE generic.base == then true return fi
+            if EXCLUSIVE_BORROW_TYPE generic.base == then true return fi
             if generic.base store.structs.get.is_some then true return fi
             if generic.base store.enums.get.is_some then true return fi
             if "array" generic.base == then true return fi
@@ -529,10 +658,10 @@ fn type_exists_recursive_t typ:Type function_opt:Option[Function] store:SymbolSt
 
 impl TypeChecker {
     fn validate_type_exists
-        self:TypeChecker
-        typ:Type
-        function_opt:Option[Function]
-        location:Location
+        self:mut$TypeChecker
+        typ:mut$Type
+        function_opt:mut$Option[Function]
+        location:mut$Location
     {
         if self.store function_opt typ type_exists_recursive_t then return fi
         location f"type `{typ.format}` does not exist" ErrorKind::Syntax self.diagnostics.record_error
@@ -546,24 +675,24 @@ impl TypeChecker {
 # Stack compatibility — unify element-wise, returns empty list on mismatch
 # ============================================================================
 
-fn stacks_compatible stack_a:List[Type] stack_b:List[Type] store:SymbolStore -> List[Type] {
+fn stacks_compatible stack_a:$List[Type] stack_b:$List[Type] store:mut$SymbolStore -> List[Type] {
     if stack_a.length stack_b.length != then
-        List[Type]:: new return
+        List[Type]::new return
     fi
-    List[Type]:: new = result
+    List[Type]::new = result
     0 (u64) = index
     while index stack_a.length > do
         if index stack_b.get index stack_a.get.eq then
-            index stack_a.get result.push
+            index stack_a.get clone_type result.push
         else
             store index stack_b.get index stack_a.get unify_type_t = unified
             if unified.is_none then
-                List[Type]:: new return
+                List[Type]::new return
             fi
             if unified Option::Some(unified_type) is then
                 unified_type result.push
             else
-                List[Type]:: new return
+                List[Type]::new return
             fi
         fi
         1 += index
@@ -571,7 +700,7 @@ fn stacks_compatible stack_a:List[Type] stack_b:List[Type] store:SymbolStore -> 
     result
 }
 
-fn stacks_equal stack_a:List[Type] stack_b:List[Type] -> bool {
+fn stacks_equal stack_a:$List[Type] stack_b:$List[Type] -> bool {
     if stack_a.length stack_b.length != then false return fi
     for pair in stack_b.iter stack_a.iter.zip do
         if pair.second pair.first.eq ! then false return fi
@@ -583,58 +712,58 @@ fn stacks_equal stack_a:List[Type] stack_b:List[Type] -> bool {
 # Apply stack effect: pop params, push returns, with type variable binding.
 # ============================================================================
 
-fn resolve_return_type_t bindings:Map[str Type] ret:Type -> Type {
+fn resolve_return_type_t bindings:$Map[str Type] ret:$Type -> Type {
     ret match
         Type::TypeVar(name) => {
             if name bindings.get Option::Some(bound) is then
-                bound
+                bound clone_type
             else
-                name Type::TypeVar
+                name.clone Type::TypeVar
             fi
         }
         Type::Generic(generic) => {
             if 0 generic.params.length == then
                 if generic.base bindings.get Option::Some(bound) is then
-                    bound return
+                    bound clone_type return
                 fi
-                generic.params generic.base GenericType Type::Generic return
+                generic.params.shallow_copy generic.base.clone GenericType Type::Generic return
             fi
-            List[Type]:: new = new_params
+            List[Type]::new = new_params
             for param in generic.params.iter do
                 param bindings resolve_return_type_t new_params.push
             done
-            new_params generic.base GenericType Type::Generic
+            new_params generic.base.clone GenericType Type::Generic
         }
         Type::Function(fn_type) => {
-            List[Type]:: new = new_params
+            List[Type]::new = new_params
             for param in fn_type.parameters.iter do
                 param bindings resolve_return_type_t new_params.push
             done
-            List[Type]:: new = new_returns
+            List[Type]::new = new_returns
             for ret_inner in fn_type.return_types.iter do
                 ret_inner bindings resolve_return_type_t new_returns.push
             done
             new_returns new_params FunctionType Type::Function
         }
         Type::Unknown => { Type::Unknown }
-        Type::Builtin(builtin) => { builtin Type::Builtin }
+        Type::Builtin(builtin) => { builtin (i64) (BuiltinType) Type::Builtin }
     end
 }
 
 impl TypeChecker {
     fn bind_type_var
-        tc:TypeChecker
+        tc:mut$TypeChecker
         bindings:Map[str Type]
-        type_var:str
-        actual:Type
+        type_var:$str
+        actual:$Type
     -> Map[str Type] {
         type_var bindings.get = existing
         if existing.is_none then
-            actual type_var bindings.set return
+            actual clone_type type_var.clone bindings.set return
         fi
         existing.unwrap = bound
         if bound.has_unresolved_type_var actual.has_unresolved_type_var ! && then
-            actual type_var bindings.set return
+            actual clone_type type_var.clone bindings.set return
         fi
         actual.is_unknown_placeholder = actual_unknown
         bound.is_unknown_placeholder = bound_unknown
@@ -643,7 +772,7 @@ impl TypeChecker {
         bound.has_unresolved_type_var ||
         actual_unknown ! &&
         then
-            actual type_var bindings.set return
+            actual clone_type type_var.clone bindings.set return
         fi
         if
         bound actual.eq !
@@ -659,15 +788,15 @@ impl TypeChecker {
 
 impl TypeChecker {
     fn resolve_type_var_literals
-        tc:TypeChecker
-        value:TypedValue
+        tc:mut$TypeChecker
+        value:mut$TypedValue
         fallback:Type
-        bound:Option[Type]
+        bound:mut$Option[Type]
     -> Type {
         fallback = target
         if bound Option::Some(candidate) is then
             if candidate.is_integer_type_t candidate.is_float_type_t || then
-                candidate = target
+                candidate clone_type = target
             fi
         fi
         tc.diagnostics target value.resolve_literals drop
@@ -677,34 +806,35 @@ impl TypeChecker {
 
 impl TypeChecker {
     fn record_literal_binding
-        tc:TypeChecker
-        type_variable:str
-        literals:List[Op]
-        literal_bindings:Map[str List[Op]]
+        tc:mut$TypeChecker
+        type_variable:mut$str
+        literals:mut$List[Op]
+        literal_bindings:mut$Map[str List[Op]]
     {
         if type_variable literal_bindings.get Option::Some(bound_literals) is then
             for literal in literals.iter do literal bound_literals.push done
         else
-            literals.shallow_copy type_variable literal_bindings.set = literal_bindings
+            literals.shallow_copy type_variable.clone literal_bindings.set drop
         fi
     }
 
     fn bind_direct_type_variable_parameter
-        tc:TypeChecker
-        parameter:Parameter
-        effect:StackEffect
-        bindings:Map[str Type]
-        literal_bindings:Map[str List[Op]]
-    -> Option[Map[str Type]] {
+        tc:mut$TypeChecker
+        parameter:$Parameter
+        effect:mut$StackEffect
+        bindings:mut$Map[str Type]
+        literal_bindings:mut$Map[str List[Op]]
+    -> bool {
         parameter.typ.type_var_name = type_variable_option
         if type_variable_option.is_none then
-            Option[Map[str Type]]:: None return
+            false return
         fi
         type_variable_option.unwrap = type_variable
         if type_variable effect.type_vars.has ! then
-            Option[Map[str Type]]:: None return
+            false return
         fi
         tc.stack_pop_value = value
+        if parameter.typ.is_borrow then value tc.release_value else value tc.consume_value fi
         value.type_value = actual
         if 0 value.literals.length != then
             type_variable bindings.get = bound
@@ -717,19 +847,21 @@ impl TypeChecker {
             fi
             if resolved ! then literal_bindings value.literals type_variable tc.record_literal_binding fi
         fi
-        actual type_variable bindings tc.bind_type_var Option::Some
+        actual type_variable bindings (ptr) (Map[str Type]) tc.bind_type_var drop
+        true
     }
 
     fn push_resolved_return
-        tc:TypeChecker
-        return_type:Type
-        bindings:Map[str Type]
-        literal_bindings:Map[str List[Op]]
+        tc:mut$TypeChecker
+        return_type:mut$Type
+        bindings:mut$Map[str Type]
+        literal_bindings:mut$Map[str List[Op]]
     {
         return_type bindings resolve_return_type_t = resolved
         if return_type.type_var_name Option::Some(type_variable) is then
             if type_variable literal_bindings.get Option::Some(literals) is then
-                literals tc.current_location resolved TypedValue tc.stack.values.push
+                Option[str]::None literals tc.current_location resolved TypedValue
+                tc.stack.values.push
                 return
             fi
         fi
@@ -739,10 +871,10 @@ impl TypeChecker {
 
 impl TypeChecker {
     fn bind_generic_param
-        tc:TypeChecker
-        bindings:Map[str Type]
-        expected:Parameter
-        effect:StackEffect
+        tc:mut$TypeChecker
+        bindings:mut$Map[str Type]
+        expected:mut$Parameter
+        effect:mut$StackEffect
     -> bool {
         # Bind type vars from a parameterized param like Map[K V].
         expected Parameter::typ.base = base_opt
@@ -763,6 +895,7 @@ impl TypeChecker {
 
         base_opt.unwrap = base
         tc.stack_pop_value = value
+        if expected.typ.is_borrow then value tc.release_value else value tc.consume_value fi
         value.type_value = actual
         bindings expected.typ.substitute_t = resolved_expected
         if 0 value.literals.length != then
@@ -776,7 +909,7 @@ impl TypeChecker {
         actual match
             Type::Generic(actual_g) => {
                 if 0 actual_g.params.length == then
-                    expected_params bindings effect tc.bind_unknowns = bindings
+                    expected_params bindings effect tc.bind_unknowns
                     true return
                 fi
                 if base actual_g.base != then
@@ -791,7 +924,7 @@ impl TypeChecker {
                 while bind_index expected_params.length > do
                     if bind_index expected_params.get.type_var_name Option::Some(bind_name) is then
                         if bind_name effect StackEffect::type_vars.has then
-                            bind_index actual_g.params.get bind_name bindings tc.bind_type_var = bindings
+                            bind_index actual_g.params.get bind_name bindings (ptr) (Map[str Type]) tc.bind_type_var drop
                         fi
                     fi
                     1 += bind_index
@@ -799,7 +932,7 @@ impl TypeChecker {
                 true return
             }
             Type::Unknown => {
-                expected_params bindings effect tc.bind_unknowns = bindings
+                expected_params bindings effect tc.bind_unknowns
                 true return
             }
             _ => {
@@ -812,28 +945,27 @@ impl TypeChecker {
 
 impl TypeChecker {
     fn bind_unknowns
-        tc:TypeChecker
-        effect:StackEffect
-        bindings:Map[str Type]
-        expected_params:List[Type]
-    -> Map[str Type] {
+        tc:mut$TypeChecker
+        effect:mut$StackEffect
+        bindings:mut$Map[str Type]
+        expected_params:mut$List[Type]
+    {
         for expected_param in expected_params.iter do
             if expected_param.type_var_name Option::Some(unk_name) is then
                 if unk_name effect StackEffect::type_vars.has then
-                    TYPE_UNKNOWN_T unk_name bindings tc.bind_type_var = bindings
+                    TYPE_UNKNOWN_T unk_name bindings (ptr) (Map[str Type]) tc.bind_type_var drop
                 fi
             fi
         done
-        bindings
     }
 }
 
 impl TypeChecker {
     fn bind_fn_param
-        tc:TypeChecker
-        bindings:Map[str Type]
-        expected:Parameter
-        effect:StackEffect
+        tc:mut$TypeChecker
+        bindings:mut$Map[str Type]
+        expected:mut$Parameter
+        effect:mut$StackEffect
     -> bool {
         # Bind type vars from a function-type param like fn[T -> T].
         if expected Parameter::typ.is_fn_type_t ! then false return fi
@@ -847,11 +979,17 @@ impl TypeChecker {
         done
         if has_type_var ! then false return fi
 
-        tc.stack_pop_type = actual
+        tc.stack_pop_value = function_value
+        if expected.typ.is_borrow then
+            function_value tc.release_value
+        else
+            function_value tc.consume_value
+        fi
+        function_value.type_value = actual
         if actual.is_unknown_placeholder then
             for type_var2 in type_var_list.iter do
                 if type_var2 expected Parameter::typ.type_contains_var then
-                    TYPE_UNKNOWN_T type_var2 bindings tc.bind_type_var = bindings
+                    TYPE_UNKNOWN_T type_var2 bindings (ptr) (Map[str Type]) tc.bind_type_var drop
                 fi
             done
             true return
@@ -871,10 +1009,9 @@ impl TypeChecker {
                         param_index expected_fn_params.length >
                         param_index actual_fn_params.length > &&
                         do
-                            param_index expected_fn_params.get.format = expected_param_name
-                            if expected_param_name effect StackEffect::type_vars.has then
-                                param_index actual_fn_params.get expected_param_name bindings tc.bind_type_var = bindings
-                            fi
+                            param_index expected_fn_params.get = expected_param
+                            param_index actual_fn_params.get = actual_param
+                            bindings (ptr) (Map[str Type]) actual_param expected_param bind_semantic_type_arguments drop
                             1 += param_index
                         done
                         expected_fn.return_types = expected_fn_returns
@@ -884,10 +1021,9 @@ impl TypeChecker {
                         return_index expected_fn_returns.length >
                         return_index actual_fn_returns.length > &&
                         do
-                            return_index expected_fn_returns.get.format = expected_return_name
-                            if expected_return_name effect StackEffect::type_vars.has then
-                                return_index actual_fn_returns.get expected_return_name bindings tc.bind_type_var = bindings
-                            fi
+                            return_index expected_fn_returns.get = expected_return
+                            return_index actual_fn_returns.get = actual_return
+                            bindings (ptr) (Map[str Type]) actual_return expected_return bind_semantic_type_arguments drop
                             1 += return_index
                         done
                     }
@@ -901,9 +1037,36 @@ impl TypeChecker {
 }
 
 impl TypeChecker {
+    fn bind_borrow_parameter
+        tc:mut$TypeChecker
+        expected:mut$Parameter
+        bindings:mut$Map[str Type]
+    -> bool {
+        expected.typ.borrow_target = target_opt
+        if target_opt.is_none then false return fi
+        tc.stack_pop_value = value
+        value tc.release_value
+        value.type_value = actual_target
+        if expected.typ.is_exclusive_borrow actual_target.is_shared_borrow && then
+            f"Expected `{expected.typ.format}`, got `{value.type_value.format}`"
+            tc.raise_type_mismatch
+            true return
+        fi
+        if actual_target.borrow_target Option::Some(borrowed_target) is then
+            borrowed_target = actual_target
+        fi
+        bindings (ptr) (Map[str Type]) actual_target target_opt.unwrap bind_semantic_type_arguments drop
+        bindings target_opt.unwrap.substitute_t = resolved_target
+        if tc.store actual_target resolved_target unify_type_t.is_none then
+            f"Expected `{expected.typ.format}`, got `{value.type_value.format}`"
+            tc.raise_type_mismatch
+        fi
+        true
+    }
+
     fn bind_concrete_stack_constraints
-        tc:TypeChecker
-        effect:StackEffect
+        tc:mut$TypeChecker
+        effect:mut$StackEffect
         bindings:Map[str Type]
     -> Map[str Type] {
         tc.stack.values.length = depth
@@ -920,7 +1083,12 @@ impl TypeChecker {
         bindings
     }
 
-    fn apply_stack_effect tc:TypeChecker effect:StackEffect name:str return_hint:Option[Type] {
+    fn apply_stack_effect
+        tc:mut$TypeChecker
+        effect:mut$StackEffect
+        name:mut$str
+        return_hint:Option[Type]
+    {
         # Simple case: no type variables
         if 0 effect StackEffect::type_vars.length == then
             0 (u64) = index
@@ -941,8 +1109,8 @@ impl TypeChecker {
         fi
 
         # Generic case: bind type variables
-        Map[str Type]:: new = bindings
-        Map[str List[Op]]:: new = literal_bindings
+        Map[str Type]::new = bindings
+        Map[str List[Op]]::new = literal_bindings
         if return_hint Option::Some(hint) is then
             for return_type in effect StackEffect::return_types.iter do
                 effect.type_vars hint return_type bindings bind_generic_params_standalone = bindings
@@ -959,8 +1127,12 @@ impl TypeChecker {
                 param Parameter::name = tc.current_expect_ctx
             fi
 
-            if literal_bindings bindings effect param tc.bind_direct_type_variable_parameter Option::Some(updated_bindings) is then
-                updated_bindings = bindings
+            if bindings param tc.bind_borrow_parameter then
+                1 += index
+                continue
+            fi
+
+            if literal_bindings bindings effect param tc.bind_direct_type_variable_parameter then
                 1 += index
                 continue
             fi
@@ -993,7 +1165,7 @@ impl TypeChecker {
 # Check arithmetic operations
 # ============================================================================
 
-fn exact_numeric_conversion source:BuiltinType target:BuiltinType -> bool {
+fn exact_numeric_conversion source:mut$BuiltinType target:mut$BuiltinType -> bool {
     if source target == then true return fi
     if source.is_integer target.is_integer && then
         source.bit_width = source_width
@@ -1017,7 +1189,7 @@ fn exact_numeric_conversion source:BuiltinType target:BuiltinType -> bool {
     false
 }
 
-fn numeric_conversion_allowed conversion:NumericConversion -> bool {
+fn numeric_conversion_allowed conversion:mut$NumericConversion -> bool {
     conversion.kind match
         NumericConversionKind::Exact => conversion.target conversion.source exact_numeric_conversion
         NumericConversionKind::Rounded => {
@@ -1044,7 +1216,7 @@ fn numeric_conversion_allowed conversion:NumericConversion -> bool {
 }
 
 impl TypeChecker {
-    fn check_numeric_call tc:TypeChecker op:Op {
+    fn check_numeric_call tc:mut$TypeChecker op:mut$Op {
         if op.value OpValue::NumericCall(call) is then
             if "__float_significand" call.method == then
                 tc.stack_pop_value = value
@@ -1101,7 +1273,7 @@ impl TypeChecker {
                 then
                     call.target source_type NumericTry OpValue::NumericTry op Op::set_value
                     call.target Type::Builtin Option::Some op Op::set_type_hint
-                    List[Type]:: new = option_params
+                    List[Type]::new = option_params
                     call.target Type::Builtin option_params.push
                     option_params "Option" GenericType Type::Generic tc.stack_push_type
                     return
@@ -1132,7 +1304,7 @@ impl TypeChecker {
         fi
     }
 
-    fn resolve_float_value tc:TypeChecker value:TypedValue target:Type -> bool {
+    fn resolve_float_value tc:mut$TypeChecker value:mut$TypedValue target:mut$Type -> bool {
         if 0 value.literals.length != then
             tc.diagnostics target value.resolve_literals return
         fi
@@ -1141,7 +1313,7 @@ impl TypeChecker {
         false
     }
 
-    fn resolve_integer_value tc:TypeChecker value:TypedValue target:Type -> bool {
+    fn resolve_integer_value tc:mut$TypeChecker value:mut$TypedValue target:mut$Type -> bool {
         if 0 value.literals.length != then
             tc.diagnostics target value.resolve_literals return
         fi
@@ -1150,7 +1322,7 @@ impl TypeChecker {
         false
     }
 
-    fn check_integer_operation tc:TypeChecker op:Op {
+    fn check_integer_operation tc:mut$TypeChecker op:mut$Op {
         op.value = operation
         if operation OpValue::BitNot is then
             tc.stack_pop_value = value
@@ -1168,7 +1340,7 @@ impl TypeChecker {
                 return
             fi
             target value tc.resolve_integer_value drop
-            target Option::Some op Op::set_type_hint
+            target clone_type Option::Some op Op::set_type_hint
             target tc.stack_push_type
             return
         fi
@@ -1207,7 +1379,7 @@ impl TypeChecker {
             fi
             float_target left tc.resolve_float_value drop
             float_target right tc.resolve_float_value drop
-            float_target Option::Some op Op::set_type_hint
+            float_target clone_type Option::Some op Op::set_type_hint
             float_target tc.stack_push_type
             return
         fi
@@ -1220,7 +1392,7 @@ impl TypeChecker {
                 return
             fi
             target left tc.resolve_integer_value drop
-            target Option::Some op Op::set_type_hint
+            target clone_type Option::Some op Op::set_type_hint
             target tc.stack_push_type
             return
         fi
@@ -1249,7 +1421,7 @@ impl TypeChecker {
         fi
         target left tc.resolve_integer_value drop
         target right tc.resolve_integer_value drop
-        target Option::Some op Op::set_type_hint
+        target clone_type Option::Some op Op::set_type_hint
         target tc.stack_push_type
     }
 }
@@ -1260,7 +1432,7 @@ impl TypeChecker {
 # Primitive comparisons are emitted as direct bytecode. `str` is handled
 # separately because it only supports `==`/`!=` and carries a type hint.
 
-fn comparison_op_str cmp_value:OpValue -> str {
+fn comparison_op_str cmp_value:mut$OpValue -> str {
     if cmp_value OpValue::Eq is then "==" return fi
     if cmp_value OpValue::Ne is then "!=" return fi
     if cmp_value OpValue::Lt is then "<" return fi
@@ -1270,17 +1442,19 @@ fn comparison_op_str cmp_value:OpValue -> str {
 }
 
 impl TypeChecker {
-    fn check_float_to_bits tc:TypeChecker op:Op method_name:str -> bool {
+    fn check_float_to_bits tc:mut$TypeChecker op:mut$Op method_name:mut$str -> bool {
         if "to_bits" method_name != then false return fi
         tc.stack_pop_value = value
         if value.type_value Type::Builtin(source) is then
             if source.is_float then
                 if source BuiltinType::F32 == then BuiltinType::U32 else BuiltinType::U64 fi
                 = target
-                target source NumericConversionKind::ToBits NumericConversion = conversion
+                target (i64) = target_value
+                target_value (BuiltinType) source (i64) (BuiltinType)
+                NumericConversionKind::ToBits NumericConversion = conversion
                 conversion OpValue::NumericConvert op Op::set_value
-                target Type::Builtin Option::Some op Op::set_type_hint
-                target Type::Builtin tc.stack_push_type
+                target_value (BuiltinType) Type::Builtin Option::Some op Op::set_type_hint
+                target_value (BuiltinType) Type::Builtin tc.stack_push_type
                 true return
             fi
         fi
@@ -1290,11 +1464,11 @@ impl TypeChecker {
     }
 
     fn check_comparison
-        tc:TypeChecker
-        op:Op
-        ops:List[Op]
+        tc:mut$TypeChecker
+        op:mut$Op
+        ops:mut$List[Op]
         op_index:u64
-        function_opt:Option[Function]
+        function_opt:mut$Option[Function]
     -> u64 {
         op.value = cmp_value
         cmp_value OpValue::Eq is cmp_value OpValue::Ne is || = is_eq_op
@@ -1302,6 +1476,8 @@ impl TypeChecker {
         f"value with trait `{trait_name}`" = tc.current_expect_ctx
         tc.stack_pop_value = value1
         value1 tc.stack_pop_left_like = value2
+        value1 tc.release_value
+        value2 tc.release_value
         TYPE_I64_T = integer_target
         value1.type_value = type1_t
         value2.type_value = type2_t
@@ -1327,9 +1503,9 @@ impl TypeChecker {
         then
             integer_target value1 tc.resolve_integer_value drop
             integer_target value2 tc.resolve_integer_value drop
-            integer_target = type1_t
-            integer_target = type2_t
-            integer_target Option::Some op Op::set_type_hint
+            integer_target clone_type = type1_t
+            integer_target clone_type = type2_t
+            integer_target clone_type Option::Some op Op::set_type_hint
         fi
         if
         value1.type_value.is_float_type_t value1.type_value.is_float_literal_t ||
@@ -1344,10 +1520,12 @@ impl TypeChecker {
             fi
             float_target value1 tc.resolve_float_value drop
             float_target value2 tc.resolve_float_value drop
-            float_target = type1_t
-            float_target = type2_t
-            float_target Option::Some op Op::set_type_hint
+            float_target clone_type = type1_t
+            float_target clone_type = type2_t
+            float_target clone_type Option::Some op Op::set_type_hint
         fi
+        if type1_t.borrow_target Option::Some(target1) is then target1 = type1_t fi
+        if type2_t.borrow_target Option::Some(target2) is then target2 = type2_t fi
         type1_t.format = type1
         type2_t.format = type2
         type1_t.match_base = base1
@@ -1382,12 +1560,12 @@ impl TypeChecker {
         fi
         # Other primitives: bytecode handles the comparison directly.
         if type1_t.is_primitive_compare_type_t then
-            if type1_t.is_integer_type_t then type1_t Option::Some op Op::set_type_hint fi
+            if type1_t.is_integer_type_t then type1_t clone_type Option::Some op Op::set_type_hint fi
             TYPE_BOOL_T tc.stack_push_type
             op_index return
         fi
         # User-defined types must satisfy Eq (or Ord) explicitly.
-        tc.store function_opt type1_t Option::Some cmp_value analyze_operation
+        tc.store function_opt type1_t clone_type Option::Some cmp_value analyze_operation
         = semantics
         trait_name GenericType::new Type::Generic = trait_type
         if tc.diagnostics tc.store function_opt trait_type type1_t type_satisfies_trait ! then
@@ -1414,8 +1592,8 @@ impl TypeChecker {
 # ============================================================================
 
 impl TypeChecker {
-    fn check_boolean tc:TypeChecker op:Op {
-        Option[Function]:: None op tc.apply_fixed_semantics
+    fn check_boolean tc:mut$TypeChecker op:mut$Op {
+        Option[Function]::None op tc.apply_fixed_semantics
     }
 }
 
@@ -1424,8 +1602,8 @@ impl TypeChecker {
 # ============================================================================
 
 impl TypeChecker {
-    fn check_bitwise tc:TypeChecker op:Op {
-        Option[Function]:: None op tc.apply_fixed_semantics
+    fn check_bitwise tc:mut$TypeChecker op:mut$Op {
+        Option[Function]::None op tc.apply_fixed_semantics
     }
 }
 
@@ -1434,8 +1612,8 @@ impl TypeChecker {
 # ============================================================================
 
 impl TypeChecker {
-    fn check_stack_ops tc:TypeChecker op:Op {
-        Option[Function]:: None op tc.apply_fixed_semantics
+    fn check_stack_ops tc:mut$TypeChecker op:mut$Op {
+        Option[Function]::None op tc.apply_fixed_semantics
     }
 }
 
@@ -1444,7 +1622,7 @@ impl TypeChecker {
 # ============================================================================
 # Returns true if `bound` names `Word` directly or transitively via supertraits.
 
-fn bound_implies_word bound:TraitBound store:SymbolStore -> bool {
+fn bound_implies_word bound:mut$TraitBound store:mut$SymbolStore -> bool {
     bound TraitBound::name = bound_name
     if "Word" bound_name == then true return fi
     bound_name store.traits.get = bound_trait_opt
@@ -1464,7 +1642,12 @@ fn bound_implies_word bound:TraitBound store:SymbolStore -> bool {
 # satisfy `Word` automatically.
 
 impl TypeChecker {
-    fn check_word_bounds tc:TypeChecker bounds:List[TraitBound] type_name:str op:Op {
+    fn check_word_bounds
+        tc:mut$TypeChecker
+        bounds:mut$List[TraitBound]
+        type_name:mut$str
+        op:mut$Op
+    {
         for bound in bounds.iter do
             if tc.store bound bound_implies_word then return fi
         done
@@ -1473,7 +1656,12 @@ impl TypeChecker {
         fi
     }
 
-    fn assert_word_bound tc:TypeChecker op:Op typ:Type function_opt:Option[Function] {
+    fn assert_word_bound
+        tc:mut$TypeChecker
+        op:mut$Op
+        typ:mut$Type
+        function_opt:mut$Option[Function]
+    {
         if typ.is_unknown_placeholder then return fi
         if function_opt Option::Some(function) is then
             if typ Type::TypeVar(type_name) is then
@@ -1489,8 +1677,8 @@ impl TypeChecker {
 }
 
 impl TypeChecker {
-    fn check_memory tc:TypeChecker op:Op function_opt:Option[Function] {
-        tc.store function_opt Option[Type]:: None op.value
+    fn check_memory tc:mut$TypeChecker op:mut$Op function_opt:mut$Option[Function] {
+        tc.store function_opt Option[Type]::None op.value
         analyze_operation = semantics
         if semantics.stack_effect Option::None is then return fi
         semantics.stack_effect.unwrap = effect
@@ -1515,11 +1703,52 @@ impl TypeChecker {
 }
 
 impl TypeChecker {
-    fn apply_fixed_semantics tc:TypeChecker op:Op function_opt:Option[Function] {
-        tc.store function_opt Option[Type]:: None op.value
+    fn apply_stack_reordering tc:mut$TypeChecker op:mut$Op -> bool {
+        tc.stack.values.length = depth
+        if op.value OpValue::Dup is then
+            if 1 depth < then false return fi
+            depth 1 - tc.stack.values.get = value
+            Option[str]::None value.literals.shallow_copy value.origin
+            value.type_value clone_type
+            TypedValue tc.stack.values.push
+            true return
+        fi
+        if op.value OpValue::Copy is then 1 depth >= return fi
+        if op.value OpValue::Swap is then
+            if 2 depth < then false return fi
+            tc.stack.values.pop = top
+            tc.stack.values.pop = below
+            top tc.stack.values.push
+            below tc.stack.values.push
+            true return
+        fi
+        if op.value OpValue::Over is then
+            if 2 depth < then false return fi
+            depth 2 - tc.stack.values.get = value
+            Option[str]::None value.literals.shallow_copy value.origin
+            value.type_value clone_type
+            TypedValue tc.stack.values.push
+            true return
+        fi
+        if op.value OpValue::Rot is then
+            if 3 depth < then false return fi
+            tc.stack.values.pop = top
+            tc.stack.values.pop = middle
+            tc.stack.values.pop = bottom
+            middle tc.stack.values.push
+            top tc.stack.values.push
+            bottom tc.stack.values.push
+            true return
+        fi
+        false
+    }
+
+    fn apply_fixed_semantics tc:mut$TypeChecker op:mut$Op function_opt:mut$Option[Function] {
+        if op tc.apply_stack_reordering then return fi
+        tc.store function_opt Option[Type]::None op.value
         analyze_operation = semantics
         if semantics.stack_effect Option::Some(effect) is then
-            Option[Type]:: None "" effect tc.apply_stack_effect
+            Option[Type]::None "" effect tc.apply_stack_effect
         fi
     }
 }
@@ -1532,17 +1761,17 @@ impl TypeChecker {
 
 impl TypeChecker {
     fn unify_variable_assignment
-        self:TypeChecker
-        op:Op
+        self:mut$TypeChecker
+        op:mut$Op
         variable:Variable
-        effective_type:Type
+        effective_type:mut$Type
         scope:str
     {
         variable Variable::name = var_name
         variable Variable::typ = pre_type
         pre_type.is_unknown pre_type.is_unknown_placeholder || = pre_unknown
         if pre_unknown effective_type.is_unknown_placeholder ! && then
-            effective_type variable Variable::set_typ
+            effective_type clone_type variable Variable::set_typ
         fi
         self.store effective_type variable Variable::typ unify_type_t = unified
         if unified.is_none then
@@ -1555,17 +1784,17 @@ impl TypeChecker {
 
 impl TypeChecker {
     fn unify_assignment_type
-        self:TypeChecker
-        op:Op
-        var_name:str
+        self:mut$TypeChecker
+        op:mut$Op
+        var_name:mut$str
         current_type:Type
-        effective_type:Type
+        effective_type:mut$Type
         scope:str
     -> Type {
         current_type = stored_type
         stored_type.is_unknown stored_type.is_unknown_placeholder || = pre_unknown
         if pre_unknown effective_type.is_unknown_placeholder ! && then
-            effective_type = stored_type
+            effective_type clone_type = stored_type
         fi
         self.store effective_type stored_type unify_type_t = unified
         if unified.is_none then
@@ -1580,7 +1809,11 @@ impl TypeChecker {
 }
 
 impl TypeChecker {
-    fn local_var_type tc:TypeChecker var_name:str function_opt:Option[Function] -> Option[Type] {
+    fn local_var_type
+        tc:mut$TypeChecker
+        var_name:mut$str
+        function_opt:mut$Option[Function]
+    -> Option[Type] {
         if var_name tc.scope.lookup Option::Some(binding_type) is then
             binding_type Option::Some return
         fi
@@ -1590,10 +1823,14 @@ impl TypeChecker {
                 local_index (u64) function Function::variables.get Variable::typ Option::Some return
             fi
         fi
-        Option[Type]:: None
+        Option[Type]::None
     }
 
-    fn is_global_assignment self:TypeChecker var_name:str function_opt:Option[Function] -> bool {
+    fn is_global_assignment
+        self:mut$TypeChecker
+        var_name:mut$str
+        function_opt:mut$Option[Function]
+    -> bool {
         if var_name self.store.variables.has ! then false return fi
         if function_opt Option::Some(function) is then
             var_name function Function::variables variable_list_contains ! return
@@ -1601,7 +1838,7 @@ impl TypeChecker {
         true
     }
 
-    fn record_implicit_binding self:TypeChecker var_name:str op:Op {
+    fn record_implicit_binding self:mut$TypeChecker var_name:mut$str op:mut$Op {
         if var_name self.scope.bind ! then
             f"Binding `{var_name}` shadows an existing variable; choose a different name" = message
             op Op::location message ErrorKind::DuplicateName self.diagnostics.record_error
@@ -1609,11 +1846,11 @@ impl TypeChecker {
     }
 
     fn lower_field_assignment
-        tc:TypeChecker
-        op:Op
-        ops:List[Op]
+        tc:mut$TypeChecker
+        op:mut$Op
+        ops:mut$List[Op]
         op_index:u64
-        function_opt:Option[Function]
+        function_opt:mut$Option[Function]
         parts:List[str]
     {
         op.value OpValue::AssignInc is = increment
@@ -1621,10 +1858,10 @@ impl TypeChecker {
         0 parts.get = root
         op Op::location = location
 
-        root OpValue::PushVar = root_value
+        root.clone OpValue::PushVar = root_value
         if function_opt Option::Some(function) is then
             if root function Function::captures variable_list_contains then
-                root OpValue::PushCapture = root_value
+                root.clone OpValue::PushCapture = root_value
             fi
         fi
         root_value op Op::set_value
@@ -1634,24 +1871,30 @@ impl TypeChecker {
         1 (u64) = field_index
         if increment decrement || then
             while field_index parts.length > do
-                location field_index parts.get OpValue::MethodCall Op::new = getter
+                location.clone field_index parts.get OpValue::MethodCall Op::new = getter
                 insert_index getter ops.insert
                 1 += insert_index
                 1 += field_index
             done
             if decrement then
-                location OpValue::Swap Op::new = swap_op
+                location.clone OpValue::Swap Op::new = swap_op
                 insert_index swap_op ops.insert
                 1 += insert_index
-                location OpValue::Sub Op::new = sub_op
+                location.clone OpValue::Sub Op::new = sub_op
                 insert_index sub_op ops.insert
             else
-                location OpValue::Add Op::new = add_op
+                location.clone OpValue::Add Op::new = add_op
                 insert_index add_op ops.insert
             fi
             1 += insert_index
 
-            location root_value Op::new = root_op
+            root.clone OpValue::PushVar = second_root_value
+            if function_opt Option::Some(function) is then
+                if root function Function::captures variable_list_contains then
+                    root.clone OpValue::PushCapture = second_root_value
+                fi
+            fi
+            location.clone second_root_value Op::new = root_op
             insert_index root_op ops.insert
             1 += insert_index
             1 (u64) = field_index
@@ -1669,11 +1912,11 @@ impl TypeChecker {
     }
 
     fn check_assignment
-        tc:TypeChecker
-        op:Op
-        ops:List[Op]
+        tc:mut$TypeChecker
+        op:mut$Op
+        ops:mut$List[Op]
         op_index:u64
-        function_opt:Option[Function]
+        function_opt:mut$Option[Function]
     {
         op op_str_value "." str::split = target_parts
         if target_parts.length 1 < then
@@ -1729,6 +1972,7 @@ impl TypeChecker {
                 "local" effective_type_t scoped_type var_name op tc.unify_assignment_type = unified_scoped
                 unified_scoped var_name tc.scope.set_type drop
                 effective_type_t tc.expect_type_t
+                if is_global ! then false var_name tc.set_owner_moved fi
                 return
             fi
 
@@ -1748,6 +1992,7 @@ impl TypeChecker {
                     unified_local var_name tc.scope.set_type drop
                     unified_local local_var Variable::set_typ
                     effective_type_t tc.expect_type_t
+                    if is_global ! then false var_name tc.set_owner_moved fi
                     return
                 fi
             fi
@@ -1758,23 +2003,25 @@ impl TypeChecker {
                 global_opt.unwrap = global_var
                 "global" effective_type_t global_var op tc.unify_variable_assignment
                 effective_type_t tc.expect_type_t
+                if is_global ! then false var_name tc.set_owner_moved fi
                 return
             fi
             effective_type_t tc.expect_type_t
+            if is_global ! then false var_name tc.set_owner_moved fi
         fi
     }
 }
 
 impl TypeChecker {
-    fn check_trait_method_call tc:TypeChecker op:Op function_opt:Option[Function] {
+    fn check_trait_method_call tc:mut$TypeChecker op:mut$Op function_opt:mut$Option[Function] {
         if function_opt.is_none then return fi
         tc.stack_peek_type = receiver
-        tc.store function_opt receiver Option::Some op.value analyze_operation
+        tc.store function_opt receiver clone_type Option::Some op.value analyze_operation
         = semantics
         if semantics.stack_effect Option::Some(effect) is then
             if semantics.method Option::Some(method) is then
                 method.method_name receiver.make_method_key = method_key
-                Option[Type]:: None method_key effect tc.apply_stack_effect
+                Option[Type]::None method_key effect tc.apply_stack_effect
             fi
         fi
     }
@@ -1785,14 +2032,15 @@ impl TypeChecker {
 # ============================================================================
 
 impl TypeChecker {
-    fn check_push_var tc:TypeChecker op:Op function_opt:Option[Function] {
+    fn check_push_var tc:mut$TypeChecker op:mut$Op function_opt:mut$Option[Function] {
         if op.value OpValue::PushCapture(capture_name) is then
             if function_opt.is_some then
                 function_opt.unwrap = function
                 capture_name function Function::captures variable_list_index = capture_index
                 if 0 capture_index >= then
                     if capture_index (u64) function Function::captures.get Variable::typ.is_unknown ! then
-                        capture_index (u64) function Function::captures.get Variable::typ tc.stack_push_type
+                        capture_index (u64) function Function::captures.get Variable::typ = capture_type
+                        function_opt op capture_name capture_type tc.stack_push_binding
                         return
                     fi
                 fi
@@ -1812,7 +2060,7 @@ impl TypeChecker {
             # Check local variables first
             if function_opt var_name tc.local_var_type Option::Some(local_type) is then
                 if local_type.is_unknown ! then
-                    local_type tc.stack_push_type
+                    function_opt op var_name local_type tc.stack_push_binding
                 else
                     TYPE_UNKNOWN_T tc.stack_push_type
                 fi
@@ -1840,7 +2088,7 @@ impl TypeChecker {
 # ============================================================================
 
 impl TypeChecker {
-    fn check_if_block tc:TypeChecker op:Op {
+    fn check_if_block tc:mut$TypeChecker op:mut$Op {
         op.value = if_value
         if if_value OpValue::IfStart is then
             IfContext::new = if_ctx
@@ -1859,6 +2107,7 @@ impl TypeChecker {
             if top_frame BranchFrame::BranchIf(if_ctx) is then
                 if if_ctx IfContext::condition_present ! then
                     true if_ctx IfContext::set_condition_present
+                    tc.moved_owners.shallow_copy = if_ctx.owners_before
                     tc.stack if_ctx IfContext::before.restore
                     tc.stack if_ctx IfContext::after.restore
                     "if" if_ctx IfContext::set_current_branch_label
@@ -1875,6 +2124,7 @@ impl TypeChecker {
             if 0 tc.branched_stacks.length == then return fi
             tc.branched_stacks.length 1 - tc.branched_stacks.get = top_frame
             if top_frame BranchFrame::BranchIf(if_ctx) is then
+                if_ctx.owners_before.shallow_copy = tc.moved_owners
                 if if_value OpValue::IfElse is then
                     true if_ctx IfContext::set_default_present
                     false = tc.in_branch_condition
@@ -1907,6 +2157,7 @@ impl TypeChecker {
             tc.scope.exit
             tc.branched_stacks.pop = top_frame
             if top_frame BranchFrame::BranchIf(if_ctx) is then
+                if_ctx.owners_before.shallow_copy = tc.moved_owners
                 if_ctx IfContext::before = if_before
                 if_ctx IfContext::after = if_after
                 if if_before tc.stack.equals if_after if_before.equals && then
@@ -1935,10 +2186,11 @@ impl TypeChecker {
 # ============================================================================
 
 impl TypeChecker {
-    fn check_while_block tc:TypeChecker op:Op {
+    fn check_while_block tc:mut$TypeChecker op:mut$Op {
         op.value = while_value
         if while_value OpValue::WhileStart is then
             WhileContext::new = while_ctx
+            tc.moved_owners.shallow_copy = while_ctx.owners_before
             tc.stack while_ctx WhileContext::before.restore
             op Op::location while_ctx WhileContext::set_current_branch_location
             while_ctx BranchFrame::BranchWhile = while_frame
@@ -1957,7 +2209,10 @@ impl TypeChecker {
         then
             if 0 tc.branched_stacks.length == then return fi
         elif while_value OpValue::WhileEnd is then
-            tc.branched_stacks.pop drop
+            tc.branched_stacks.pop = top_frame
+            if top_frame BranchFrame::BranchWhile(while_ctx) is then
+                while_ctx.owners_before.shallow_copy = tc.moved_owners
+            fi
             tc.scope.exit
         fi
     }
@@ -1969,9 +2224,9 @@ impl TypeChecker {
 
 fn bind_generic_params_standalone
     bindings:Map[str Type]
-    expected_type:Type
-    actual_type:Type
-    type_vars:Set[str]
+    expected_type:$Type
+    actual_type:$Type
+    type_vars:$Set[str]
 -> Map[str Type] {
     if expected_type.as_generic.is_none then bindings return fi
     expected_type.as_generic.unwrap = expected_g
@@ -1988,7 +2243,7 @@ fn bind_generic_params_standalone
             tv_name type_vars.has
             tv_name bindings.get.is_none &&
             then
-                index actual_g.params.get tv_name bindings.set = bindings
+                index actual_g.params.get tv_name.clone bindings.set = bindings
             fi
         fi
         1 += index
@@ -1997,10 +2252,10 @@ fn bind_generic_params_standalone
 }
 
 fn matches_trait_bound
-    receiver:Type
-    trait_type:Type
-    function_opt:Option[Function]
-    store:SymbolStore
+    receiver:mut$Type
+    trait_type:mut$Type
+    function_opt:mut$Option[Function]
+    store:mut$SymbolStore
 -> bool {
     if function_opt Option::Some(function) is then
         if receiver Type::TypeVar(type_var_name) is then
@@ -2016,50 +2271,50 @@ fn matches_trait_bound
     false
 }
 
-fn bind_stack_effect_pattern pattern:StackEffect actual:StackEffect -> Option[Map[str Type]] {
+fn bind_stack_effect_pattern pattern:$StackEffect actual:$StackEffect -> Option[Map[str Type]] {
     if pattern.parameters.length actual.parameters.length != then
-        Option[Map[str Type]]:: None return
+        Option[Map[str Type]]::None return
     fi
     if pattern.return_types.length actual.return_types.length != then
-        Option[Map[str Type]]:: None return
+        Option[Map[str Type]]::None return
     fi
-    Map[str Type]:: new = bindings
+    Map[str Type]::new = bindings
     for pair in actual.parameters.iter pattern.parameters.iter.zip do
         if bindings pair.second.typ pair.first.typ bind_trait_impl_type ! then
-            Option[Map[str Type]]:: None return
+            Option[Map[str Type]]::None return
         fi
     done
     for pair in actual.return_types.iter pattern.return_types.iter.zip do
         if bindings pair.second pair.first bind_trait_impl_type ! then
-            Option[Map[str Type]]:: None return
+            Option[Map[str Type]]::None return
         fi
     done
     bindings Option::Some
 }
 
-fn stack_effect_type_variables effect:StackEffect -> Set[str] {
-    Set[str]:: new = type_variables
+fn stack_effect_type_variables effect:mut$StackEffect -> Set[str] {
+    Set[str]::new = type_variables
     for parameter in effect.parameters.iter do
-        type_variables parameter.typ collect_stack_effect_type_vars = type_variables
+        type_variables parameter.typ collect_stack_effect_type_vars
     done
     for return_type in effect.return_types.iter do
-        type_variables return_type collect_stack_effect_type_vars = type_variables
+        type_variables return_type collect_stack_effect_type_vars
     done
     type_variables
 }
 
 fn trait_method_effects_match
-    expected:StackEffect
-    actual:StackEffect
+    expected:mut$StackEffect
+    actual:mut$StackEffect
     generic_declaration:bool
 -> bool {
-    List[Parameter]:: new = actual_parameters
+    List[Parameter]::new = actual_parameters
     for parameter in actual.parameters.iter do
         if parameter.name "__trait_" str::starts_with ! then
             parameter actual_parameters.push
         fi
     done
-    actual.return_types actual_parameters StackEffect::new = visible_actual
+    actual.return_types.shallow_copy actual_parameters StackEffect::new = visible_actual
     visible_actual expected bind_stack_effect_pattern = expected_match
     if generic_declaration then
         if expected_match.is_none then false return fi
@@ -2076,10 +2331,10 @@ fn trait_method_effects_match
 }
 
 fn type_has_trait_shape
-    receiver:Type
-    trait_type:Type
-    store:SymbolStore
-    diagnostics:Diagnostics
+    receiver:mut$Type
+    trait_type:mut$Type
+    store:mut$SymbolStore
+    diagnostics:mut$Diagnostics
     generic_declaration:bool
 -> bool {
     trait_type.match_base = trait_lookup_name
@@ -2087,7 +2342,7 @@ fn type_has_trait_shape
     if trait_opt.is_none then false return fi
     trait_opt.unwrap = trait_def
     # Build substitution map from the trait's structural type arguments.
-    Map[str Type]:: new = trait_subs
+    Map[str Type]::new = trait_subs
     if trait_type.type_params Option::Some(trait_args) is then
         trait_def CasaTrait::type_params = tparams
         if trait_args.length tparams.length == then
@@ -2097,7 +2352,7 @@ fn type_has_trait_shape
         fi
     fi
     for method in trait_def store collect_trait_methods.iter do
-        Option[Function]:: None = fn_opt
+        Option[Function]::None = fn_opt
         if store receiver method.name find_semantic_method_function Option::Some(fn_name) is then
             fn_name store.functions.get = fn_opt
         fi
@@ -2125,23 +2380,28 @@ fn type_has_trait_shape
 }
 
 fn type_satisfies_trait
-    receiver:Type
-    trait_type:Type
-    function_opt:Option[Function]
-    store:SymbolStore
-    diagnostics:Diagnostics
+    receiver:mut$Type
+    trait_type:mut$Type
+    function_opt:mut$Option[Function]
+    store:mut$SymbolStore
+    diagnostics:mut$Diagnostics
 -> bool {
-    if "Clone" trait_type.match_base == receiver Type::Function(_) is && then
+    receiver clone_type = receiver_type
+    if receiver.borrow_target Option::Some(target) is then
+        if "Copy" trait_type.match_base == receiver.is_shared_borrow && then true return fi
+        target = receiver_type
+    fi
+    if "Clone" trait_type.match_base == receiver_type Type::Function(_) is && then
         "Copy" GenericType::new Type::Generic = copy_type
         if store trait_type copy_type trait_type_implies then true return fi
     fi
-    if store function_opt trait_type receiver matches_trait_bound then true return fi
-    if store trait_type receiver type_has_satisfying_trait_impl ! then false return fi
-    false diagnostics store trait_type receiver type_has_trait_shape
+    if store function_opt trait_type receiver_type matches_trait_bound then true return fi
+    if store trait_type receiver_type type_has_satisfying_trait_impl ! then false return fi
+    false diagnostics store trait_type receiver_type type_has_trait_shape
 }
 
-fn find_tparam_index tparams:List[str] name:str -> Option[u64] {
-    Option[u64]:: None = found_index
+fn find_tparam_index tparams:mut$List[str] name:mut$str -> Option[u64] {
+    Option[u64]::None = found_index
     0 (u64) = scan_index
     while scan_index tparams.length > do
         if scan_index tparams.get name == then
@@ -2153,16 +2413,16 @@ fn find_tparam_index tparams:List[str] name:str -> Option[u64] {
 }
 
 fn try_bind_caller_tvar
-    bindings:Map[str Type]
-    effect:StackEffect
-    caller_ref:Type
-    concrete:Type
--> Map[str Type] {
-    if caller_ref.type_var_name.is_none then bindings return fi
+    bindings:mut$Map[str Type]
+    effect:mut$StackEffect
+    caller_ref:mut$Type
+    concrete:mut$Type
+{
+    if caller_ref.type_var_name.is_none then return fi
     caller_ref.type_var_name.unwrap = caller_type_var
-    if caller_type_var effect StackEffect::type_vars.has ! then bindings return fi
-    if caller_type_var bindings.get.is_some then bindings return fi
-    concrete caller_type_var bindings.set return
+    if caller_type_var effect StackEffect::type_vars.has ! then return fi
+    if caller_type_var bindings.get.is_some then return fi
+    concrete clone_type caller_type_var bindings.set drop
 }
 # Given a single (trait-side expected type, concrete-side actual type) pair
 # from a method stack-effect diff, if the expected type references a trait
@@ -2171,26 +2431,27 @@ fn try_bind_caller_tvar
 # references (`T`) and one-level nested generics (`Option[T]` vs `Option[i64]`).
 
 fn bind_from_type_slot
-    bindings:Map[str Type]
-    effect:StackEffect
-    tparams:List[str]
-    bargs:List[Type]
-    expected:Type
-    actual:Type
--> Map[str Type] {
+    bindings:mut$Map[str Type]
+    effect:mut$StackEffect
+    tparams:mut$List[str]
+    bargs:mut$List[Type]
+    expected:mut$Type
+    actual:mut$Type
+{
     if expected.type_var_name Option::Some(direct_tv_name) is then
         direct_tv_name tparams find_tparam_index = direct_tp_idx
         if direct_tp_idx Option::Some(direct_index) is then
             direct_index bargs.get = direct_caller_ref
-            actual direct_caller_ref effect bindings try_bind_caller_tvar return
+            actual direct_caller_ref effect bindings try_bind_caller_tvar
+            return
         fi
-        bindings return
+        return
     fi
-    if expected.as_generic.is_none then bindings return fi
+    if expected.as_generic.is_none then return fi
     expected.as_generic.unwrap = expected_g
-    if actual.as_generic.is_none then bindings return fi
+    if actual.as_generic.is_none then return fi
     actual.as_generic.unwrap = actual_g
-    if expected_g.base actual_g.base != then bindings return fi
+    if expected_g.base actual_g.base != then return fi
     0 (u64) = slot_index
     while
     slot_index expected_g.params.length >
@@ -2200,22 +2461,21 @@ fn bind_from_type_slot
             nested_name tparams find_tparam_index = nested_tp_idx
             if nested_tp_idx Option::Some(nested_index) is then
                 nested_index bargs.get = nested_caller_ref
-                slot_index actual_g.params.get nested_caller_ref effect bindings try_bind_caller_tvar = bindings
+                slot_index actual_g.params.get nested_caller_ref effect bindings try_bind_caller_tvar
             fi
         fi
         1 += slot_index
     done
-    bindings
 }
 
 fn diff_method_stack_effect
-    bindings:Map[str Type]
-    effect:StackEffect
-    tparams:List[str]
-    bargs:List[Type]
+    bindings:mut$Map[str Type]
+    effect:mut$StackEffect
+    tparams:mut$List[str]
+    bargs:mut$List[Type]
     trait_resolved:StackEffect
     impl_stack_effect:StackEffect
--> Map[str Type] {
+{
     0 (u64) = param_index
     while
     param_index trait_resolved StackEffect::parameters.length >
@@ -2223,7 +2483,7 @@ fn diff_method_stack_effect
     do
         param_index trait_resolved StackEffect::parameters.get Parameter::typ = expected_param
         param_index impl_stack_effect StackEffect::parameters.get Parameter::typ = actual_param
-        actual_param expected_param bargs tparams effect bindings bind_from_type_slot = bindings
+        actual_param expected_param bargs tparams effect bindings bind_from_type_slot
         1 += param_index
     done
     0 (u64) = return_index
@@ -2233,25 +2493,24 @@ fn diff_method_stack_effect
     do
         return_index trait_resolved StackEffect::return_types.get = expected_return
         return_index impl_stack_effect StackEffect::return_types.get = actual_return
-        actual_return expected_return bargs tparams effect bindings bind_from_type_slot = bindings
+        actual_return expected_return bargs tparams effect bindings bind_from_type_slot
         1 += return_index
     done
-    bindings
 }
 
 fn method_diff_bind_for_bound
-    bindings:Map[str Type]
-    effect:StackEffect
-    bound:TraitBound
-    concrete:Type
-    store:SymbolStore
--> Map[str Type] {
+    bindings:mut$Map[str Type]
+    effect:mut$StackEffect
+    bound:mut$TraitBound
+    concrete:mut$Type
+    store:mut$SymbolStore
+{
     bound TraitBound::name store.traits.get = trait_opt
-    if trait_opt.is_none then bindings return fi
+    if trait_opt.is_none then return fi
     trait_opt.unwrap = trait_def
     trait_def CasaTrait::type_params = trait_params
     bound TraitBound::type_args = bound_args
-    if bound_args.length trait_params.length != then bindings return fi
+    if bound_args.length trait_params.length != then return fi
     for trait_method in trait_def CasaTrait::methods.iter do
         store Option[Function]::None concrete trait_method.name resolve_method_semantics
         = method_opt
@@ -2261,34 +2520,32 @@ fn method_diff_bind_for_bound
                 concrete trait_method TraitMethod::stack_effect resolve_trait_stack_effect
                 = trait_resolved
                 concrete_fn Function::stack_effect trait_resolved bound_args trait_params effect
-                bindings diff_method_stack_effect = bindings
+                bindings diff_method_stack_effect
             fi
         fi
     done
-    bindings
 }
 
 fn method_diff_bind_all
-    effect:StackEffect
-    function_opt:Option[Function]
-    bindings:Map[str Type]
-    store:SymbolStore
--> Map[str Type] {
+    effect:mut$StackEffect
+    function_opt:mut$Option[Function]
+    bindings:mut$Map[str Type]
+    store:mut$SymbolStore
+{
     effect StackEffect::trait_bounds.keys = bound_keys
     for bound_type_var in bound_keys.iter do
         if bound_type_var effect StackEffect::trait_bounds.get Option::Some(bound_constraints) is then
             bound_type_var bindings.get = concrete_opt
             if concrete_opt Option::Some(concrete) is then
                 for bound_constraint in bound_constraints.iter do
-                    store concrete bound_constraint effect bindings method_diff_bind_for_bound = bindings
+                    store concrete bound_constraint effect bindings method_diff_bind_for_bound
                 done
             fi
         fi
     done
-    bindings
 }
 
-fn bounds_imply_trait bounds:List[TraitBound] target:Type store:SymbolStore -> bool {
+fn bounds_imply_trait bounds:mut$List[TraitBound] target:mut$Type store:mut$SymbolStore -> bool {
     for bound in bounds.iter do
         bound trait_bound_to_type = direct
         if store target direct trait_type_implies then true return fi
@@ -2297,46 +2554,46 @@ fn bounds_imply_trait bounds:List[TraitBound] target:Type store:SymbolStore -> b
 }
 
 impl TypeChecker {
-    fn ensure_function_clone_method tc:TypeChecker typ:Type location:Location {
+    fn ensure_function_clone_method tc:mut$TypeChecker typ:mut$Type location:mut$Location {
         if typ Type::Function(_) is ! then return fi
         if "Copy" tc.store.traits.has ! "Clone" tc.store.traits.has ! || then return fi
         "Copy" GenericType::new Type::Generic = copy_type
-        "Clone" GenericType::new Type::Generic = clone_type
-        if tc.store clone_type copy_type trait_type_implies ! then return fi
+        "Clone" GenericType::new Type::Generic = clone_trait_type
+        if tc.store clone_trait_type copy_type trait_type_implies ! then return fi
 
         "clone" typ.make_method_key = function_name
         if function_name tc.store.functions.has then return fi
 
         List[Parameter]::new = parameters
-        "self" typ Parameter::named parameters.push
+        "self" typ clone_type Parameter::named parameters.push
         List[Type]::new = returns
-        typ returns.push
+        typ clone_type returns.push
         returns parameters StackEffect::new = effect
 
         List[Op]::new = ops
-        location "self" OpValue::AssignVar Op::new ops.push
-        location "self" OpValue::PushVar Op::new ops.push
-        effect location ops function_name Function::with_stack_effect = function
+        location.clone "self" OpValue::AssignVar Op::new ops.push
+        location.clone "self" OpValue::PushVar Op::new ops.push
+        effect location.clone ops function_name.clone Function::with_stack_effect = function
         List[Variable]::new = variables
-        typ "self" Variable variables.push
+        typ clone_type "self" Variable variables.push
         variables function Function::set_variables
         function function_name tc.store.functions.set drop
     }
 
     fn bind_concrete_type_variable
-        tc:TypeChecker
-        name:str
-        actual:Type
+        tc:mut$TypeChecker
+        name:$str
+        actual:$Type
         bindings:Map[str Type]
-        location:Location
+        location:mut$Location
     -> Map[str Type] {
         name bindings.get = existing_option
         if existing_option.is_none then
-            actual name bindings.set return
+            actual clone_type name.clone bindings.set return
         fi
         existing_option.unwrap = existing
         if existing.has_unresolved_type_var actual.has_unresolved_type_var ! && then
-            actual name bindings.set return
+            actual clone_type name.clone bindings.set return
         fi
         if existing actual.eq ! then
             location f"Type variable `{name}` bound to `{existing.format}` but got `{actual.format}`" ErrorKind::TypeMismatch tc.diagnostics.record_error
@@ -2345,43 +2602,47 @@ impl TypeChecker {
     }
 
     fn bind_stack_parameter
-        tc:TypeChecker
+        tc:mut$TypeChecker
         parameter:Parameter
         stack_index:u64
-        effect:StackEffect
+        effect:mut$StackEffect
         bindings:Map[str Type]
-        location:Location
+        location:mut$Location
     -> Map[str Type] {
         stack_index tc.stack.values.get = value
         value.type_value = actual
-        if parameter.typ.type_var_name Option::Some(type_variable) is then
+        if actual.borrow_target Option::Some(actual_target) is then actual_target = actual fi
+        parameter.typ = pattern
+        if pattern.borrow_target Option::Some(target) is then target = pattern fi
+        if pattern.type_var_name Option::Some(type_variable) is then
             if type_variable effect.type_vars.has then
                 type_variable bindings.get = existing_option
                 if 0 value.literals.length != then
                     actual resolve_numeric_literal_default = fallback
                     existing_option fallback value tc.resolve_type_var_literals = actual
-                    List[Op]:: new value.origin actual TypedValue stack_index tc.stack.values.set
+                    value.binding List[Op]::new value.origin actual TypedValue
+                    stack_index tc.stack.values.set
                 fi
                 location bindings actual type_variable tc.bind_concrete_type_variable return
             fi
         fi
-        effect.type_vars actual parameter.typ bindings bind_generic_params_standalone
+        effect.type_vars actual pattern bindings bind_generic_params_standalone
     }
 
     fn inject_trait_fn_ptrs
-        tc:TypeChecker
-        effect:StackEffect
-        ops:List[Op]
+        tc:mut$TypeChecker
+        effect:mut$StackEffect
+        ops:mut$List[Op]
         op_index:u64
-        location:Location
-        function_opt:Option[Function]
+        location:mut$Location
+        function_opt:mut$Option[Function]
         return_hint:Option[Type]
     -> u64 {
         # Bind type variables from the stack (peek at positions)
-        Map[str Type]:: new = bindings
+        Map[str Type]::new = bindings
 
         # Collect non-hidden parameters
-        List[Parameter]:: new = non_hidden
+        List[Parameter]::new = non_hidden
         for param in effect StackEffect::parameters.iter do
             if param Parameter::name "__trait_" str::starts_with ! then
                 param non_hidden.push
@@ -2405,7 +2666,7 @@ impl TypeChecker {
         # bound from the stack, inspect the concrete type's implementation of
         # each trait method and diff its stack effect against the trait's declared
         # stack effect to bind T. Single pass in declaration order.
-        tc.store bindings function_opt effect method_diff_bind_all = bindings
+        tc.store bindings function_opt effect method_diff_bind_all
 
         if return_hint Option::Some(hint) is then
             for return_type in effect StackEffect::return_types.iter do
@@ -2437,7 +2698,7 @@ impl TypeChecker {
             fi
             concrete_opt.unwrap = concrete_t
             concrete_t.format = concrete
-            Set[str]:: new = seen_methods
+            Set[str]::new = seen_methods
             trait_bounds.length = bound_index
             while 0 bound_index != do
                 1 -= bound_index
@@ -2480,7 +2741,7 @@ impl TypeChecker {
                         fi
                         if is_forwarding then
                             f"__trait_{concrete}_{method TraitMethod::name}" = hidden_var
-                            location hidden_var OpValue::PushVar Op::new = push_op
+                            location.clone hidden_var OpValue::PushVar Op::new = push_op
                             insert_pos push_op ops.insert
                             1 += insert_pos
                             1 += inserted
@@ -2489,7 +2750,7 @@ impl TypeChecker {
                         else
                             tc.store Option[Function]::None concrete_t method.name
                             resolve_method_semantics = method_semantics_opt
-                            Option[Function]:: None = global_fn_opt
+                            Option[Function]::None = global_fn_opt
                             "" = fn_name
                             if method_semantics_opt Option::Some(method_semantics) is then
                                 method_semantics.function_name = fn_name
@@ -2499,10 +2760,12 @@ impl TypeChecker {
                                 global_fn_opt.unwrap = global_fn
                                 if global_fn Function::is_used ! then
                                     true global_fn Function::set_is_used
-                                    tc.diagnostics global_fn global_fn Function::ops tc.store resolve_identifiers global_fn Function::set_ops
+                                    global_fn Function::ops clone_ops = global_ops
+                                    tc.diagnostics global_fn global_ops tc.store resolve_identifiers
+                                    global_fn Function::set_ops
                                 fi
                                 tc.diagnostics tc.store global_fn ensure_typechecked
-                                location fn_name OpValue::FnPush Op::new = push_op
+                                location.clone fn_name OpValue::FnPush Op::new = push_op
                                 insert_pos push_op ops.insert
                                 1 += insert_pos
                                 1 += inserted
@@ -2524,7 +2787,7 @@ impl TypeChecker {
 # ============================================================================
 
 impl TypeChecker {
-    fn sync_capture_types tc:TypeChecker lambda:Function function_opt:Option[Function] {
+    fn sync_capture_types tc:mut$TypeChecker lambda:mut$Function function_opt:mut$Option[Function] {
         if function_opt.is_none then return fi
         for capture in lambda Function::captures.iter do
             capture Variable::name = capture_name
@@ -2537,11 +2800,11 @@ impl TypeChecker {
     }
 
     fn check_function_ops
-        tc:TypeChecker
-        op:Op
-        ops:List[Op]
+        tc:mut$TypeChecker
+        op:mut$Op
+        ops:mut$List[Op]
         op_index:u64
-        function_opt:Option[Function]
+        function_opt:mut$Option[Function]
     -> u64 {
         op.value = fn_value
         if fn_value OpValue::FnCall(fn_name) is then
@@ -2549,7 +2812,7 @@ impl TypeChecker {
             if fn_opt.is_some then
                 fn_opt.unwrap = function
                 tc.diagnostics tc.store function ensure_typechecked
-                tc.store function_opt Option[Type]:: None fn_value
+                tc.store function_opt Option[Type]::None fn_value
                 analyze_operation = semantics
                 if semantics.stack_effect Option::None is then op_index return fi
                 semantics.stack_effect.unwrap = effect
@@ -2590,7 +2853,7 @@ impl TypeChecker {
                 analyze_operation = semantics
                 if semantics.stack_effect Option::Some(effect) is then
                     if 0 effect.parameters.length != 0 effect.return_types.length != || then
-                        Option[Type]:: None "exec" effect tc.apply_stack_effect
+                        Option[Type]::None "exec" effect tc.apply_stack_effect
                     fi
                 fi
             fi
@@ -2600,13 +2863,13 @@ impl TypeChecker {
                 push_fn_opt.unwrap = push_fn
                 function_opt push_fn tc.sync_capture_types
                 tc.diagnostics tc.store push_fn ensure_typechecked
-                tc.store function_opt Option[Type]:: None fn_value
+                tc.store function_opt Option[Type]::None fn_value
                 analyze_operation = semantics
                 if semantics.stack_effect Option::Some(effect) is then
-                    Option[Type]:: None "" effect tc.apply_stack_effect
+                    Option[Type]::None "" effect tc.apply_stack_effect
                 fi
             else
-                List[Type]:: new List[Type]:: new FunctionType Type::Function tc.stack_push_type
+                List[Type]::new List[Type]::new FunctionType Type::Function tc.stack_push_type
             fi
         elif fn_value OpValue::FnReturn is then
             if tc.has_return_types ! then
@@ -2617,10 +2880,13 @@ impl TypeChecker {
                 tc.branched_stacks.length 1 - tc.branched_stacks.get = top_frame
                 if top_frame BranchFrame::BranchIf(if_ctx) is then
                     if_ctx IfContext::before tc.stack.restore
+                    if_ctx.owners_before.shallow_copy = tc.moved_owners
                 elif top_frame BranchFrame::BranchWhile(while_ctx) is then
                     while_ctx WhileContext::before tc.stack.restore
+                    while_ctx.owners_before.shallow_copy = tc.moved_owners
                 elif top_frame BranchFrame::BranchMatch(match_ctx) is then
                     match_ctx MatchContext::before tc.stack.restore
+                    match_ctx.owners_before.shallow_copy = tc.moved_owners
                 fi
             fi
         fi
@@ -2633,7 +2899,7 @@ impl TypeChecker {
 # ============================================================================
 
 impl TypeChecker {
-    fn check_literals tc:TypeChecker op:Op function_opt:Option[Function] {
+    fn check_literals tc:mut$TypeChecker op:mut$Op function_opt:mut$Option[Function] {
         op.value = literal_value
         if literal_value OpValue::PushInt is then
             if op.type_hint Option::Some(integer_type) is then
@@ -2651,7 +2917,7 @@ impl TypeChecker {
             fi
         elif literal_value OpValue::PushArray(items) is then
             if 0 items.length == then
-                List[Type]:: new = empty_params
+                List[Type]::new = empty_params
                 TYPE_UNKNOWN_T empty_params.push
                 empty_params "array" GenericType Type::Generic tc.stack_push_type
             else
@@ -2669,7 +2935,7 @@ impl TypeChecker {
                     fi
                     1 += items_idx
                 done
-                List[Type]:: new = item_params
+                List[Type]::new = item_params
                 elem_type_t item_params.push
                 item_params "array" GenericType Type::Generic = array_type
                 if op.has_numeric_literal then
@@ -2690,20 +2956,20 @@ impl TypeChecker {
 
 impl TypeChecker {
     fn check_io
-        tc:TypeChecker
-        op:Op
-        ops:List[Op]
+        tc:mut$TypeChecker
+        op:mut$Op
+        ops:mut$List[Op]
         op_index:u64
-        function_opt:Option[Function]
+        function_opt:mut$Option[Function]
     -> u64 {
         "value with trait `Display`" = tc.current_expect_ctx
         tc.stack_peek_type = peek_t
         peek_t.format = typ
-        tc.store function_opt peek_t Option::Some op.value analyze_operation = semantics
+        tc.store function_opt peek_t clone_type Option::Some op.value analyze_operation = semantics
         if semantics.resolved_operation Option::Some(resolved_operation) is then
             tc.stack_pop_drop
             resolved_operation op Op::set_value
-            peek_t Option::Some op Op::set_type_hint
+            peek_t clone_type Option::Some op Op::set_type_hint
             op_index return
         fi
         if TYPE_MISSING typ == TYPE_UNKNOWN typ == || then
@@ -2733,8 +2999,14 @@ impl TypeChecker {
 # ============================================================================
 
 impl TypeChecker {
-    fn check_typeof tc:TypeChecker op:Op {
-        tc.stack_pop_type = typ
+    fn check_typeof tc:mut$TypeChecker op:mut$Op {
+        tc.stack_pop_value = value
+        value tc.release_value
+        value.type_value = typ
+        if 0 value.literals.length != then
+            typ resolve_numeric_literal_default = typ
+            tc.diagnostics typ value.resolve_literals drop
+        fi
         typ Option::Some op Op::set_type_hint
         TYPE_STR_T tc.stack_push_type
     }
@@ -2745,7 +3017,7 @@ impl TypeChecker {
 # ============================================================================
 
 impl TypeChecker {
-    fn check_syscalls tc:TypeChecker op:Op function_opt:Option[Function] {
+    fn check_syscalls tc:mut$TypeChecker op:mut$Op function_opt:mut$Option[Function] {
         function_opt op tc.check_memory
     }
 }
@@ -2755,7 +3027,7 @@ impl TypeChecker {
 # ============================================================================
 
 impl TypeChecker {
-    fn check_enum_variant tc:TypeChecker op:Op function_opt:Option[Function] {
+    fn check_enum_variant tc:mut$TypeChecker op:mut$Op function_opt:mut$Option[Function] {
         if op.value OpValue::PushEnumVariant(variant) is then
             variant EnumVariant::enum_name = enum_name
             enum_name tc.store.enums.get = enum_opt
@@ -2765,7 +3037,7 @@ impl TypeChecker {
             fi
             enum_opt.unwrap = casa_enum
             variant EnumVariant::variant_name casa_enum CasaEnum::variant_types.get = inner_opt
-            List[Type]:: new = inner_types
+            List[Type]::new = inner_types
             if inner_opt Option::Some(found_inner_types) is then
                 found_inner_types = inner_types
             fi
@@ -2785,8 +3057,8 @@ impl TypeChecker {
             if 0 casa_enum CasaEnum::type_vars.length != then
                 # Generic enum variant (e.g. Option::Some with T)
                 # Bind type vars from inner values
-                Map[str Type]:: new = bindings
-                Set[str]:: new = type_vars
+                Map[str Type]::new = bindings
+                Set[str]::new = type_vars
                 for type_var in casa_enum CasaEnum::type_vars.iter do
                     type_var type_vars.add = type_vars
                 done
@@ -2816,11 +3088,15 @@ impl TypeChecker {
 # ============================================================================
 
 impl TypeChecker {
-    fn check_is tc:TypeChecker op:Op function_opt:Option[Function] {
-        tc.stack_pop_type = typ
-        typ.match_base = base
+    fn check_is tc:mut$TypeChecker op:mut$Op function_opt:mut$Option[Function] {
+        tc.stack_pop_value = subject
+        subject tc.release_value
+        subject.type_value = typ
+        typ clone_type = subject_type
+        if typ.borrow_target Option::Some(target) is then target = subject_type fi
+        subject_type.match_base = base
         if base tc.store.enums.get.is_none then
-            f"`is` requires an enum type, got `{typ.format}`" tc.raise_type_mismatch
+            f"`is` requires an enum type, got `{subject_type.format}`" tc.raise_type_mismatch
             TYPE_BOOL_T tc.stack_push_type
             return
         fi
@@ -2851,7 +3127,7 @@ impl TypeChecker {
             for binding_var in variant EnumVariant::bindings.iter do
                 op binding_var tc.record_implicit_binding
             done
-            typ variant function_opt tc register_enum_pattern_bindings
+            subject_type variant function_opt tc register_enum_pattern_bindings
         fi
         TYPE_BOOL_T tc.stack_push_type
     }
@@ -2862,16 +3138,17 @@ impl TypeChecker {
 # ============================================================================
 
 fn set_binding_type
-    tc:TypeChecker
-    var_name:str
-    field_type:Type
-    function_opt:Option[Function]
-    store:SymbolStore
+    tc:mut$TypeChecker
+    var_name:mut$str
+    field_type:mut$Type
+    function_opt:mut$Option[Function]
+    store:mut$SymbolStore
 {
+    false var_name tc.set_owner_moved
     field_type var_name tc.scope.set_type = scope_updated
     if function_opt.is_none then
         if var_name store.variables.get Option::Some(global_var) is then
-            field_type global_var Variable::set_typ
+            field_type clone_type global_var Variable::set_typ
             return
         fi
     fi
@@ -2888,12 +3165,12 @@ fn set_binding_type
     fi
     var_name store.variables.get = global_opt
     if global_opt Option::Some(global_var_fallback) is then
-        field_type global_var_fallback Variable::set_typ
+        field_type clone_type global_var_fallback Variable::set_typ
     fi
 }
 
 impl TypeChecker {
-    fn check_match tc:TypeChecker op:Op function_opt:Option[Function] {
+    fn check_match tc:mut$TypeChecker op:mut$Op function_opt:mut$Option[Function] {
         op.value = match_value
         if match_value OpValue::MatchStart is then
             if 0 tc.stack.values.length == then
@@ -2912,6 +3189,7 @@ impl TypeChecker {
             fi
             tc.stack_pop_type = match_type
             match_type MatchContext::new = match_ctx
+            tc.moved_owners.shallow_copy = match_ctx.owners_before
             # Snapshot the entry stack state eagerly so that an OpFnReturn visiting
             # this frame before any OpMatchArm still finds a correct `before` to
             # restore from. Matches the pre-refactor make_branched_stack behavior.
@@ -2925,6 +3203,7 @@ impl TypeChecker {
         elif match_value OpValue::MatchEnd is then
             tc.branched_stacks.pop = top_frame
             if top_frame BranchFrame::BranchMatch(match_ctx) is then
+                match_ctx.owners_before.shallow_copy = tc.moved_owners
                 # Close the final arm's scope frame (only opened if an arm ran).
                 if match_ctx MatchContext::condition_present then
                     tc.scope.exit
@@ -2957,10 +3236,10 @@ impl TypeChecker {
                 end_match_type.match_base = end_base
 
                 # Build covered set
-                Set[str]:: new = covered_set
+                Set[str]::new = covered_set
                 for record in match_ctx MatchContext::branch_records.iter do
                     if record "__covered:" str::starts_with then
-                        record 10 record.length 10 - str::substring covered_set.add = covered_set
+                        record.clone 10 record.length 10 - str::substring covered_set.add = covered_set
                     fi
                 done
                 MATCH_WILDCARD covered_set.has = has_wildcard
@@ -2968,14 +3247,14 @@ impl TypeChecker {
                 # Check exhaustiveness
                 if end_base tc.store.enums.get.is_some has_wildcard ! && then
                     end_base tc.store.enums.get.unwrap = end_enum
-                    List[str]:: new = missing
+                    List[str]::new = missing
                     for variant_name in end_enum CasaEnum::variants.iter do
                         if variant_name covered_set.has ! then
                             variant_name missing.push
                         fi
                     done
                     if 0 missing.length != then
-                        List[str]:: new = formatted_missing
+                        List[str]::new = formatted_missing
                         for variant_name in missing.iter do
                             f"`{end_base}::{variant_name}`" formatted_missing.push
                         done
@@ -2997,7 +3276,7 @@ impl TypeChecker {
                 then
                     if has_wildcard ! then
                         if "bool" end_base == then
-                            List[str]:: new = bool_missing
+                            List[str]::new = bool_missing
                             if "true" covered_set.has ! then "true" bool_missing.push fi
                             if "false" covered_set.has ! then "false" bool_missing.push fi
                             if 0 bool_missing.length != then
@@ -3039,26 +3318,31 @@ impl TypeChecker {
 # ============================================================================
 
 impl TypeChecker {
-    fn resolve_struct_member_literal tc:TypeChecker value:TypedValue expected:Type -> Type {
+    fn resolve_struct_member_literal
+        tc:mut$TypeChecker
+        value:mut$TypedValue
+        expected:mut$Type
+    -> Type {
         value.type_value = actual
         if 0 value.literals.length == then actual return fi
         if expected.has_unresolved_type_var then
             actual resolve_numeric_literal_default = actual
         else
-            expected = actual
+            expected clone_type = actual
         fi
         tc.diagnostics actual value.resolve_literals drop
         actual
     }
 
-    fn check_struct_new tc:TypeChecker op:Op {
+    fn check_struct_new tc:mut$TypeChecker op:mut$Op {
         if op.value OpValue::StructNew(casa_struct) is then
             casa_struct CasaStruct::name = name
             # Build type variable bindings from actual stack values
-            Map[str Type]:: new = bindings
+            Map[str Type]::new = bindings
             for member in casa_struct CasaStruct::members.iter do
                 member Member::typ = expected
                 tc.stack_pop_value = value
+                value tc.consume_value
                 bindings expected.substitute_t = resolved_expected
                 resolved_expected value tc.resolve_struct_member_literal = actual
                 if 0 casa_struct CasaStruct::type_vars.length != then
@@ -3084,7 +3368,7 @@ impl TypeChecker {
 # ============================================================================
 
 impl TypeChecker {
-    fn check_struct_literal tc:TypeChecker op:Op {
+    fn check_struct_literal tc:mut$TypeChecker op:mut$Op {
         if op.value OpValue::StructLiteral(literal) is then
             literal StructLiteral::struct_name = name
             name tc.store.structs.get = struct_opt
@@ -3115,7 +3399,12 @@ impl TypeChecker {
 # Instantiate default trait method for a concrete type
 # ============================================================================
 
-fn qualify_default_method_calls ops:List[Op] trait_type:Type receiver:Type store:SymbolStore {
+fn qualify_default_method_calls
+    ops:mut$List[Op]
+    trait_type:mut$Type
+    receiver:mut$Type
+    store:mut$SymbolStore
+{
     for body_op in ops.iter do
         if body_op.value OpValue::MethodCall(method_name) is then
             store receiver method_name collect_method_qualifiers = qualifiers
@@ -3136,9 +3425,9 @@ fn qualify_default_method_calls ops:List[Op] trait_type:Type receiver:Type store
 
 fn instantiate_default_trait_method
     semantics:MethodSemantics
-    receiver:Type
-    store:SymbolStore
-    diagnostics:Diagnostics
+    receiver:mut$Type
+    store:mut$SymbolStore
+    diagnostics:mut$Diagnostics
 -> Option[str] {
     semantics.function_name = receiver_key
     receiver_key store.functions.get = already_opt
@@ -3147,12 +3436,12 @@ fn instantiate_default_trait_method
     fi
     semantics.trait_name store.traits.get = trait_opt
     if trait_opt Option::None is then
-        Option[str]:: None return
+        Option[str]::None return
     fi
     trait_opt.unwrap = trait_def
     store trait_def semantics.method_name find_semantic_trait_method = default_method_opt
     if default_method_opt Option::None is then
-        Option[str]:: None return
+        Option[str]::None return
     fi
     default_method_opt.unwrap = default_method
 
@@ -3162,7 +3451,7 @@ fn instantiate_default_trait_method
         resolved_trait_type = required_trait_type
     fi
     if store required_trait_type receiver type_has_semantic_trait_shape ! then
-        Option[str]:: None return
+        Option[str]::None return
     fi
 
     trait_def CasaTrait::type_params = type_params
@@ -3173,16 +3462,16 @@ fn instantiate_default_trait_method
 
     # For generic receivers, keep trait type params as function type vars.
     # For non-generic receivers, substitute trait type params with concrete types.
-    Map[str Type]:: new = trait_subs
-    receiver = default_self_type
+    Map[str Type]::new = trait_subs
+    receiver clone_type = default_self_type
     empty_stack_effect = resolved_stack_effect
     if fn_base_opt.is_some then
         fn_base_opt.unwrap = base_name
-        List[Type]:: new = default_type_params
+        List[Type]::new = default_type_params
         for type_param in type_params.iter do
-            type_param Type::TypeVar default_type_params.push
+            type_param.clone Type::TypeVar default_type_params.push
         done
-        default_type_params base_name GenericType Type::Generic = default_self_type
+        default_type_params base_name.clone GenericType Type::Generic = default_self_type
         default_self_type default_method TraitMethod::stack_effect resolve_trait_stack_effect = resolved_stack_effect
     else
         if semantics.trait_type Option::Some(resolved_trait_type) is then
@@ -3193,7 +3482,7 @@ fn instantiate_default_trait_method
             fi
         fi
         # Infer trait type params from concrete method stack effects
-        Set[str]:: new = type_param_set
+        Set[str]::new = type_param_set
         for type_param in type_params.iter do
             type_param type_param_set.add = type_param_set
         done
@@ -3201,7 +3490,7 @@ fn instantiate_default_trait_method
             if 0 infer_method TraitMethod::default_ops.length == then
                 store Option[Function]::None receiver infer_method TraitMethod::name
                 resolve_method_semantics = infer_method_opt
-                Option[Function]:: None = infer_fn_opt
+                Option[Function]::None = infer_fn_opt
                 if infer_method_opt Option::Some(infer_semantics) is then
                     infer_semantics.function_name store.functions.get = infer_fn_opt
                 fi
@@ -3228,7 +3517,7 @@ fn instantiate_default_trait_method
         done
     fi
 
-    default_self_type TRAIT_SELF_TYPE trait_subs.set = trait_subs
+    default_self_type clone_type TRAIT_SELF_TYPE trait_subs.set = trait_subs
 
     # Add method-level type vars to stack effect
     for method_type_var in default_method TraitMethod::type_vars.iter do
@@ -3237,8 +3526,8 @@ fn instantiate_default_trait_method
     done
 
     # Build function ops: parameter assignments + cloned body
-    List[Op]:: new = synth_ops
-    List[Variable]:: new = synth_vars
+    List[Op]::new = synth_ops
+    List[Variable]::new = synth_vars
     for synth_param in resolved_stack_effect StackEffect::parameters.iter do
         if "" synth_param Parameter::name != then
             synth_param Parameter::typ synth_param Parameter::name Variable synth_vars.push
@@ -3269,8 +3558,8 @@ fn instantiate_default_trait_method
             if semantics.trait_type Option::Some(default_trait_type) is then
                 store receiver default_trait_type lambda_ops qualify_default_method_calls
             fi
-            List[Parameter]:: new = lambda_params
-            List[Type]:: new = lambda_returns
+            List[Parameter]::new = lambda_params
+            List[Type]::new = lambda_returns
             lambda_returns lambda_params StackEffect::new = lambda_effect
             for lambda_type_var in resolved_stack_effect StackEffect::type_vars.iter do
                 lambda_type_var lambda_effect StackEffect::type_vars.add = lambda_tvs
@@ -3290,25 +3579,26 @@ fn instantiate_default_trait_method
     resolved_stack_effect empty_location synth_ops synth_fn_name Function::with_stack_effect = synth_fn
     synth_vars synth_fn Function::set_variables
     true synth_fn Function::set_is_used
-    synth_fn synth_fn_name store.functions.set drop
+    synth_fn (ptr) (Function) synth_fn_name store.functions.set drop
     diagnostics store synth_fn ensure_typechecked
+    synth_fn synth_fn_name store.functions.set drop
 
     synth_fn_name Option::Some
 }
 
 impl TypeChecker {
     fn apply_trait_bound_method_semantics
-        tc:TypeChecker
+        tc:mut$TypeChecker
         semantics:MethodSemantics
-        receiver:Type
-        op:Op
-        ops:List[Op]
+        receiver:mut$Type
+        op:mut$Op
+        ops:mut$List[Op]
         op_index:u64
     -> u64 {
         tc.stack_pop_drop
         receiver tc.stack_push_type
         semantics.method_name receiver.make_method_key = method_key
-        Option[Type]:: None method_key semantics.stack_effect tc.apply_stack_effect
+        Option[Type]::None method_key semantics.stack_effect tc.apply_stack_effect
         semantics.function_name OpValue::PushVar op Op::set_value
         op.location OpValue::FnExec Op::new = exec_op
         op_index exec_op ops.insert
@@ -3321,7 +3611,7 @@ impl TypeChecker {
 # ============================================================================
 
 impl TypeChecker {
-    fn check_char_codepoint tc:TypeChecker op:Op method_name:str -> bool {
+    fn check_char_codepoint tc:mut$TypeChecker op:mut$Op method_name:mut$str -> bool {
         if "codepoint" method_name != then false return fi
         tc.stack_pop_value = value
         if value.type_value TYPE_CHAR_T.eq ! then
@@ -3334,7 +3624,7 @@ impl TypeChecker {
         true
     }
 
-    fn check_try_integer_method tc:TypeChecker op:Op method_name:str -> bool {
+    fn check_try_integer_method tc:mut$TypeChecker op:mut$Op method_name:mut$str -> bool {
         if
         "try_add" method_name ==
         "try_sub" method_name == ||
@@ -3355,7 +3645,7 @@ impl TypeChecker {
         if target_type Type::Builtin(target) is then
             target_type receiver tc.resolve_integer_value drop
             target_type other tc.resolve_integer_value drop
-            method_name match
+            method_name.clone match
                 "try_add" => IntegerTryKind::Add
                 "try_sub" => IntegerTryKind::Sub
                 "try_mul" => IntegerTryKind::Mul
@@ -3363,9 +3653,9 @@ impl TypeChecker {
                 _ => IntegerTryKind::Mod
             end = kind
             target kind IntegerTry OpValue::IntegerTry op Op::set_value
-            target_type Option::Some op Op::set_type_hint
-            List[Type]:: new = option_params
-            target_type option_params.push
+            target_type clone_type Option::Some op Op::set_type_hint
+            List[Type]::new = option_params
+            target_type clone_type option_params.push
             option_params "Option" GenericType Type::Generic tc.stack_push_type
             true return
         fi
@@ -3374,7 +3664,7 @@ impl TypeChecker {
         true
     }
 
-    fn check_float_round tc:TypeChecker op:Op method_name:str -> bool {
+    fn check_float_round tc:mut$TypeChecker op:mut$Op method_name:mut$str -> bool {
         if
         "__float_floor" method_name ==
         "__float_ceil" method_name == ||
@@ -3386,10 +3676,11 @@ impl TypeChecker {
         tc.stack_pop_value = value
         if value.type_value Type::Builtin(target) is then
             if target.is_float then
-                target method_name FloatRound = rounding
+                target (i64) = target_value
+                target_value (BuiltinType) method_name FloatRound = rounding
                 rounding OpValue::FloatRound op Op::set_value
-                target Type::Builtin Option::Some op Op::set_type_hint
-                target Type::Builtin tc.stack_push_type
+                target_value (BuiltinType) Type::Builtin Option::Some op Op::set_type_hint
+                target_value (BuiltinType) Type::Builtin tc.stack_push_type
                 true return
             fi
         fi
@@ -3398,7 +3689,7 @@ impl TypeChecker {
         true
     }
 
-    fn check_wrapping_method tc:TypeChecker op:Op method_name:str -> bool {
+    fn check_wrapping_method tc:mut$TypeChecker op:mut$Op method_name:mut$str -> bool {
         if
         "wrapping_add" method_name ==
         "wrapping_sub" method_name == ||
@@ -3427,17 +3718,17 @@ impl TypeChecker {
         else
             OpValue::WrappingMul op Op::set_value
         fi
-        target Option::Some op Op::set_type_hint
+        target clone_type Option::Some op Op::set_type_hint
         target tc.stack_push_type
         true
     }
 
     fn check_method_call
-        tc:TypeChecker
-        op:Op
-        ops:List[Op]
+        tc:mut$TypeChecker
+        op:mut$Op
+        ops:mut$List[Op]
         op_index:u64
-        function_opt:Option[Function]
+        function_opt:mut$Option[Function]
     -> u64 {
         Option[str]::None = method_name_opt
         if op.value OpValue::MethodCall(method_name) is then
@@ -3457,7 +3748,7 @@ impl TypeChecker {
                 if method_name op tc.check_try_integer_method then op_index return fi
                 if method_name op tc.check_wrapping_method then op_index return fi
             fi
-            tc.store function_opt receiver Option::Some op.value
+            tc.store function_opt receiver clone_type Option::Some op.value
             analyze_operation = semantics
             if semantics.method Option::Some(method_semantics) is then
                 if method_semantics.kind MethodSemanticsKind::TraitBound is then
@@ -3474,17 +3765,18 @@ impl TypeChecker {
                 fi
                 if fn_name tc.store.functions.get Option::Some(function) is then
                     if function Function::is_typechecked ! then
-                        tc.diagnostics function function Function::ops tc.store
-                        resolve_identifiers function Function::set_ops
+                        function Function::ops clone_ops = function_ops
+                        tc.diagnostics function function_ops tc.store resolve_identifiers
+                        function Function::set_ops
                         true function Function::set_is_used
                     fi
                     tc.diagnostics tc.store function ensure_typechecked
                     function Function::stack_effect = effect
                     if 0 effect StackEffect::trait_bounds.keys.length != then
-                        Option[Type]:: None function_opt op Op::location op_index ops effect
+                        Option[Type]::None function_opt op Op::location op_index ops effect
                         tc.inject_trait_fn_ptrs += op_index
                     fi
-                    Option[Type]:: None fn_name effect tc.apply_stack_effect
+                    Option[Type]::None fn_name effect tc.apply_stack_effect
                     fn_name OpValue::FnCall op Op::set_value
                     op_index return
                 fi
@@ -3510,11 +3802,11 @@ impl TypeChecker {
 
 impl TypeChecker {
     fn check_fstring_to_str
-        tc:TypeChecker
-        op:Op
-        ops:List[Op]
+        tc:mut$TypeChecker
+        op:mut$Op
+        ops:mut$List[Op]
         op_index:u64
-        function_opt:Option[Function]
+        function_opt:mut$Option[Function]
     -> u64 {
         "value with trait `Display`" = tc.current_expect_ctx
         if TYPE_STR_T tc.stack_peek_type.eq then
@@ -3540,7 +3832,7 @@ impl TypeChecker {
                 op_index return
             fi
         fi
-        tc.store function_opt fstring_type_t Option::Some op.value
+        tc.store function_opt fstring_type_t clone_type Option::Some op.value
         analyze_operation = semantics
         "Display" GenericType::new Type::Generic = display_type
         if tc.diagnostics tc.store function_opt display_type fstring_type_t type_satisfies_trait ! then
@@ -3562,17 +3854,18 @@ impl TypeChecker {
 # Ensure a function is typechecked
 # ============================================================================
 
-fn ensure_typechecked function:Function store:SymbolStore diagnostics:Diagnostics {
+fn ensure_typechecked function:mut$Function store:mut$SymbolStore diagnostics:mut$Diagnostics {
     if function Function::is_typechecked then return fi
     true function Function::set_is_typechecked
-    diagnostics function function Function::ops store resolve_identifiers = resolved_ops
-    resolved_ops function Function::set_ops
+    function Function::ops clone_ops = function_ops
+    diagnostics function function_ops store resolve_identifiers = resolved_ops
     diagnostics store function Option::Some resolved_ops check_ops = inferred_stack_effect
+    resolved_ops function Function::set_ops
     if function Function::stack_effect stack_effect_to_str "None -> None" == then
         if function.name "lambda__" str::starts_with then
             inferred_stack_effect function Function::set_stack_effect
         else
-            Map[str StackEffect]:: new = inferred_effects
+            Map[str StackEffect]::new = inferred_effects
             store inferred_effects function analyze_function_semantics
             = semantics
             semantics.inferred_effect function Function::set_stack_effect
@@ -3585,7 +3878,7 @@ fn ensure_typechecked function:Function store:SymbolStore diagnostics:Diagnostic
 # ============================================================================
 
 impl TypeChecker {
-    fn check_copy_operation tc:TypeChecker op:Op function_opt:Option[Function] {
+    fn check_copy_operation tc:mut$TypeChecker op:mut$Op function_opt:mut$Option[Function] {
         tc.stack.values.length = depth
         0 (u64) = copied_index
         if op.value OpValue::Over is then
@@ -3604,7 +3897,11 @@ impl TypeChecker {
         function_opt op tc.apply_fixed_semantics
     }
 
-    fn run_type_check_ops checker:TypeChecker ops:List[Op] function_opt:Option[Function] {
+    fn run_type_check_ops
+        checker:mut$TypeChecker
+        ops:mut$List[Op]
+        function_opt:mut$Option[Function]
+    {
         0 (u64) = op_index
         while op_index ops.length > do
             op_index ops.get = current_op
@@ -3820,7 +4117,12 @@ impl TypeChecker {
             # Type cast
             if op_value OpValue::TypeCast(cast_type) is then
                 current_op Op::location function_opt cast_type checker.validate_type_exists
-                checker.stack_pop_type drop
+                checker.stack_pop_value = cast_value
+                if cast_type TYPE_PTR_T.eq then
+                    cast_value checker.release_value
+                else
+                    cast_value checker.consume_value
+                fi
                 cast_type checker.stack_push_type
                 continue
             fi
@@ -3855,9 +4157,9 @@ impl TypeChecker {
 
 impl TypeChecker {
     fn resolve_declared_return_literals
-        checker:TypeChecker
-        function:Function
-        diagnostics:Diagnostics
+        checker:mut$TypeChecker
+        function:mut$Function
+        diagnostics:mut$Diagnostics
     {
         function.stack_effect.return_types = declared_returns
         if declared_returns.length checker.stack.values.length != then return fi
@@ -3867,7 +4169,8 @@ impl TypeChecker {
             if 0 return_value.literals.length != then
                 return_index declared_returns.get = declared_return
                 diagnostics declared_return return_value.resolve_literals drop
-                List[Op]:: new return_value.origin declared_return TypedValue
+                return_value.binding List[Op]::new return_value.origin
+                declared_return TypedValue
                 return_index checker.stack.values.set
             fi
             1 += return_index
@@ -3876,16 +4179,19 @@ impl TypeChecker {
 }
 
 fn check_ops
-    ops:List[Op]
-    function_opt:Option[Function]
-    store:SymbolStore
-    diagnostics:Diagnostics
+    ops:mut$List[Op]
+    function_opt:mut$Option[Function]
+    store:mut$SymbolStore
+    diagnostics:mut$Diagnostics
 -> StackEffect {
     store TypeChecker::new = checker
-    diagnostics = checker.diagnostics
-    Option[u64]:: None = budget
+    diagnostics (ptr) (Diagnostics) = checker.diagnostics
+    Option[u64]::None = budget
     if function_opt.is_some then
         function_opt.unwrap = the_function
+        for variable in the_function.variables.iter do
+            true variable.name checker.set_owner_moved
+        done
         if the_function Function::name "lambda__" str::starts_with ! then
             the_function Function::stack_effect StackEffect::parameters.length Option::Some = budget
         fi
@@ -3901,15 +4207,18 @@ fn check_ops
     0 (u64) = stack_index
     while stack_index checker.stack.values.length > do
         stack_index checker.stack.values.get = stack_value
+        stack_value checker.consume_value
         stack_value.type_value resolve_numeric_literal_default = final_type
         diagnostics final_type stack_value.resolve_literals drop
-        List[Op]:: new stack_value.origin final_type TypedValue stack_index checker.stack.values.set
+        stack_value.binding List[Op]::new stack_value.origin final_type
+        TypedValue
+        stack_index checker.stack.values.set
         1 += stack_index
     done
     diagnostics ops resolve_default_literals
 
     # Build inferred stack effect
-    List[Type]:: new = inferred_returns
+    List[Type]::new = inferred_returns
     for inferred_value in checker.stack.values.iter do
         inferred_value.type_value inferred_returns.push
     done
@@ -3925,7 +4234,7 @@ fn check_ops
         0 declared StackEffect::type_vars.length == &&
         then
             if inferred declared stack_effect_matches ! then
-                declared_function Function::location f"Invalid stack effect for function `{declared_function Function::name}`" ErrorKind::SignatureMismatch diagnostics.record_error
+                declared_function Function::location f"Invalid stack effect for function `{declared_function Function::name}`: expected `{declared stack_effect_to_str}`, got `{inferred stack_effect_to_str}`" ErrorKind::SignatureMismatch diagnostics.record_error
             fi
         fi
         # Update inferred stack effect with declared return types for type-var functions
@@ -3941,7 +4250,7 @@ fn check_ops
 # Type check all functions
 # ============================================================================
 
-fn check_functions store:SymbolStore diagnostics:Diagnostics {
+fn check_functions store:mut$SymbolStore diagnostics:mut$Diagnostics {
     for pair in store.functions.iter do
         pair.first = func_name
         pair.second = current_fn
@@ -3952,20 +4261,23 @@ fn check_functions store:SymbolStore diagnostics:Diagnostics {
             continue
         fi
         true current_fn Function::set_is_typechecked
-        diagnostics current_fn current_fn Function::ops store resolve_identifiers = resolved_ops
-        resolved_ops current_fn Function::set_ops
+        current_fn Function::ops clone_ops = current_ops
+        diagnostics current_fn current_ops store resolve_identifiers = resolved_ops
         # Skip type checking for functions with trait bounds (checked on demand)
         if 0 current_fn Function::stack_effect StackEffect::trait_bounds.keys.length != then
+            resolved_ops current_fn Function::set_ops
             continue
         fi
         diagnostics.error_count = errors_before
-        diagnostics store current_fn Option::Some current_fn Function::ops check_ops = inferred_stack_effect
+        current_fn (ptr) (Function) Option::Some = current_fn_opt
+        diagnostics store current_fn_opt resolved_ops check_ops = inferred_stack_effect
+        resolved_ops current_fn Function::set_ops
         diagnostics.error_count errors_before < = had_errors
         if had_errors then
             continue
         fi
         if current_fn Function::stack_effect stack_effect_to_str "None -> None" == then
-            Map[str StackEffect]:: new = inferred_effects
+            Map[str StackEffect]::new = inferred_effects
             store inferred_effects current_fn analyze_function_semantics
             = semantics
             semantics.inferred_effect current_fn Function::set_stack_effect
@@ -3973,7 +4285,7 @@ fn check_functions store:SymbolStore diagnostics:Diagnostics {
     done
 }
 
-fn check_trait_impls store:SymbolStore diagnostics:Diagnostics {
+fn check_trait_impls store:mut$SymbolStore diagnostics:mut$Diagnostics {
     for trait_impl in store.trait_impls.values.iter do
         trait_impl.trait_bound trait_bound_to_type = trait_type
         Set[str]::new = checked_methods
@@ -4005,7 +4317,7 @@ fn check_trait_impls store:SymbolStore diagnostics:Diagnostics {
     done
 }
 
-fn type_check ops:List[Op] store:SymbolStore -> TypecheckResult {
+fn type_check ops:mut$List[Op] store:mut$SymbolStore -> TypecheckResult {
     Diagnostics::new = diagnostics
     diagnostics store Option::None ops check_ops = global_stack_effect
     diagnostics store check_functions
