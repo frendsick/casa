@@ -32,8 +32,12 @@ See [README.md](./README.md) for basic info, language docs, and examples.
 
 ## Bootstrap releases
 
-- When a ready PR cannot compile with the newest stable compiler release, create
-  the next stable release from that PR and update `casa-release.env` to use it.
+- When the newest stable compiler cannot compile valid Casa syntax used by
+  repository sources, create the next stable release and update
+  `casa-release.env` to use it. This applies even when the stable compiler can
+  still bootstrap `casa.casa`.
+- Intentional invalid-input fixtures and non-executable documentation snippets
+  do not require a release.
 - Create a prerelease compiler only when the user explicitly requests one.
 
 ## Agent documentation

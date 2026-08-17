@@ -1,6 +1,6 @@
 # Stable bootstrap compiler for PR CI
 
-PR CI uses the latest stable released **Bootstrap compiler** by default: the release tag lives in **casa-release.env**, and CI builds the branch compiler from that stable release before checking self-compilation and **Fixed point** behavior. Compiler-language changes should be staged so they remain bootstrappable from the stable release; a **Temporary compiler release** is allowed only as part of **Staged bootstrap repair**, guarded by the `bootstrap-override` pull request label and followed by cleanup back to a stable release tag.
+PR CI uses the latest stable released **Bootstrap compiler** by default: the release tag lives in **casa-release.env**, and CI builds the branch compiler from that stable release before checking self-compilation and **Fixed point** behavior. Compiler-language changes should be staged so they remain bootstrappable from the stable release. The stable release must also compile valid Casa syntax used by repository sources. When repository syntax crosses that compatibility line, publish the next stable release and update **casa-release.env**, even if the old release can still bootstrap `casa.casa`. Intentional invalid-input fixtures and non-executable documentation snippets are excluded. A **Temporary compiler release** is allowed only as part of **Staged bootstrap repair**, guarded by the `bootstrap-override` pull request label and followed by cleanup back to a stable release tag.
 
 **Considered Options**
 
