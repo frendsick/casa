@@ -1909,6 +1909,7 @@ fn synthesize_hashable_for_enum parser:Parser casa_enum:CasaEnum {
         hashable_bound trait_bound_to_type = hashable_type
         if parser.store hashable_type receiver type_has_satisfying_trait_impl ! then
             location
+            Map[str str]::new
             Map[str List[TraitBound]]:: new
             List[str]:: new
             hashable_bound
@@ -2147,9 +2148,6 @@ fn parse_trait parser:Parser cursor:TokenCursor -> CasaTrait {
             fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = super_token
             super_token Token::value = super_name
             super_name parser.store.traits.get = super_def_opt
-            if super_def_opt.is_none then
-                super_token Token::location f"Supertrait `{super_name}` is not defined" ErrorKind::UndefinedName parser.state.record_error
-            fi
             super_token cursor parse_bound_type_args = super_args
             if super_def_opt Option::Some(super_def) is then
                 super_def CasaTrait::type_params = super_params
@@ -2395,6 +2393,205 @@ fn register_trait_impl parser:Parser trait_impl:TraitImpl {
     trait_impl key parser.put_trait_impl
 }
 
+fn normalize_trait_method_effect candidate:TraitMethodCandidate -> StackEffect {
+    Map[str Type]::new = substitutions
+    0 (u64) = index
+    for type_variable in candidate.method.type_vars.iter do
+        f"method_type_{index}" Type::TypeVar type_variable substitutions.set = substitutions
+        1 += index
+    done
+    substitutions candidate.effect apply_type_subs_to_stack_effect
+}
+
+fn validate_trait_method_compatibility parser:Parser casa_trait:CasaTrait -> bool {
+    casa_trait trait_definition_type = trait_type
+    trait_type parser.store collect_trait_method_candidates = candidates
+    0 (u64) = first_index
+    while first_index candidates.length > do
+        first_index candidates.get = first
+        first normalize_trait_method_effect = first_effect
+        first_index 1 + = second_index
+        while second_index candidates.length > do
+            second_index candidates.get = second
+            if first.method.name second.method.name == then
+                second normalize_trait_method_effect = second_effect
+                if first_effect second_effect stack_effect_shapes_equal ! then
+                    casa_trait.location f"Trait `{casa_trait.name}` inherits incompatible `{first.method.name}` methods from `{first.trait_type.format}` and `{second.trait_type.format}`" ErrorKind::TraitSignatureMismatch parser.state.record_error
+                    false return
+                fi
+            fi
+            1 += second_index
+        done
+        1 += first_index
+    done
+    true
+}
+
+fn language_trait_hook_kind trait_name:str method_name:str -> i64 {
+    if "Eq" trait_name == then
+        if "eq" method_name == "ne" method_name == || then 1 return fi
+    elif "Ord" trait_name == then
+        if
+        "lt" method_name == "le" method_name == ||
+        "gt" method_name == || "ge" method_name == ||
+        then 1 return fi
+    elif "Hashable" trait_name == then
+        if "hash" method_name == then 2 return fi
+    elif "Display" trait_name == "to_str" method_name == && then
+        3 return
+    elif "Iterable" trait_name == "next" method_name == && then
+        4 return
+    fi
+    0
+}
+
+fn language_trait_hook_matches
+    candidate:TraitMethodCandidate
+    hook_kind:i64
+    casa_trait:CasaTrait
+-> bool {
+    candidate.effect = effect
+    if 1 hook_kind == then
+        if 2 effect.parameters.length != then false return fi
+        if 0 effect.parameters.get.typ.is_self_type ! then false return fi
+        if 1 effect.parameters.get.typ.is_self_type ! then false return fi
+        if 1 effect.return_types.length != then false return fi
+        0 effect.return_types.get TYPE_BOOL_T.eq return
+    fi
+    if 1 effect.parameters.length != then false return fi
+    if 0 effect.parameters.get.typ.is_self_type ! then false return fi
+    if 1 effect.return_types.length != then false return fi
+    if 2 hook_kind == then 0 effect.return_types.get TYPE_I64_T.eq return fi
+    if 3 hook_kind == then 0 effect.return_types.get TYPE_STR_T.eq return fi
+    if 4 hook_kind == then
+        if 1 casa_trait.type_params.length != then false return fi
+        List[Type]::new = option_args
+        0 casa_trait.type_params.get Type::TypeVar option_args.push
+        option_args "Option" GenericType Type::Generic = expected
+        0 effect.return_types.get expected.eq return
+    fi
+    false
+}
+
+fn validate_language_trait_contract parser:Parser casa_trait:CasaTrait -> bool {
+    casa_trait.name = trait_name
+    if
+    "Eq" trait_name != "Ord" trait_name != &&
+    "Hashable" trait_name != && "Display" trait_name != &&
+    "Iterable" trait_name != &&
+    then true return fi
+    if "Iterable" trait_name == then
+        if 1 casa_trait.type_params.length != then
+            casa_trait.location "Language trait `Iterable` expects one type parameter" ErrorKind::TraitSignatureMismatch parser.state.record_error
+            false return
+        fi
+    elif 0 casa_trait.type_params.length != then
+        casa_trait.location f"Language trait `{trait_name}` expects no type parameters" ErrorKind::TraitSignatureMismatch parser.state.record_error
+        false return
+    fi
+    casa_trait trait_definition_type = trait_type
+    trait_type parser.store collect_trait_method_candidates = candidates
+    List[str]::new = required
+    if "Eq" trait_name == then
+        "eq" required.push "ne" required.push
+    elif "Ord" trait_name == then
+        "lt" required.push "le" required.push "gt" required.push "ge" required.push
+    elif "Hashable" trait_name == then "hash" required.push
+elif "Display" trait_name == then "to_str" required.push
+else "next" required.push fi
+    true = valid
+    for required_name in required.iter do
+        false = found
+        for candidate in candidates.iter do
+            if required_name candidate.method.name != then continue fi
+            true = found
+            required_name trait_name language_trait_hook_kind = hook_kind
+            if casa_trait hook_kind candidate language_trait_hook_matches ! then
+                casa_trait.location f"Language trait `{trait_name}` has incompatible `{required_name}` hook" ErrorKind::TraitSignatureMismatch parser.state.record_error
+                false = valid
+            fi
+        done
+        if found ! then
+            casa_trait.location f"Language trait `{trait_name}` is missing required `{required_name}` hook" ErrorKind::TraitSignatureMismatch parser.state.record_error
+            false = valid
+        fi
+    done
+    for candidate in candidates.iter do
+        if 0 candidate.method.default_ops.length != then continue fi
+        if candidate.trait_type trait_type.eq ! then continue fi
+        candidate.method.name trait_name language_trait_hook_kind = hook_kind
+        if 0 hook_kind == then
+            casa_trait.location f"Language trait `{trait_name}` cannot add bodyless `{candidate.method.name}` requirement" ErrorKind::TraitSignatureMismatch parser.state.record_error
+            false = valid
+        fi
+    done
+    valid
+}
+
+fn validate_trait_visit
+    parser:Parser
+    trait_name:str
+    path:List[str]
+    visiting:Set[str]
+    checked:Set[str]
+    valid:List[bool]
+{
+    if trait_name checked.has then return fi
+    if trait_name visiting.has then
+        trait_name path string_list_index = cycle_start
+        List[str]::new = cycle
+        cycle_start (u64) path.iter.skip = cycle_items
+        for item in cycle_items do item cycle.push done
+        trait_name cycle.push
+        " -> " cycle.join = cycle_path
+        trait_name parser.store.traits.get.unwrap.location
+        f"Trait inheritance cycle: {cycle_path}"
+        ErrorKind::TraitSignatureMismatch
+        parser.state.record_error
+        false 0 valid.set
+        return
+    fi
+    trait_name parser.store.traits.get = trait_opt
+    if trait_opt.is_none then return fi
+    trait_name visiting.add = visiting
+    trait_name path.push
+    trait_opt.unwrap = casa_trait
+    for supertrait in casa_trait.supertraits.iter do
+        supertrait.name parser.store.traits.get = supertrait_opt
+        if supertrait_opt.is_none then
+            casa_trait.location f"Supertrait `{supertrait.name}` is not defined" ErrorKind::UndefinedName parser.state.record_error
+            false 0 valid.set
+            continue
+        fi
+        if supertrait.type_args.length supertrait_opt.unwrap.type_params.length != then
+            casa_trait.location f"Supertrait `{supertrait.name}` expects {supertrait_opt.unwrap.type_params.length} type argument(s), got {supertrait.type_args.length}" ErrorKind::Syntax parser.state.record_error
+            false 0 valid.set
+            continue
+        fi
+        valid checked visiting path supertrait.name parser validate_trait_visit
+    done
+    path.pop drop
+    trait_name visiting.remove = visiting
+    trait_name checked.add = checked
+}
+
+fn validate_traits parser:Parser -> bool {
+    Set[str]::new = checked
+    Set[str]::new = visiting
+    List[str]::new = path
+    List[bool]::new = valid
+    true valid.push
+    for trait_name in parser.store.traits.keys.iter do
+        valid checked visiting path trait_name parser validate_trait_visit
+    done
+    if 0 valid.get ! then false return fi
+    for casa_trait in parser.store.traits.values.iter do
+        if casa_trait parser validate_trait_method_compatibility ! then false 0 valid.set fi
+        if casa_trait parser validate_language_trait_contract ! then false 0 valid.set fi
+    done
+    0 valid.get
+}
+
 fn validate_trait_impls parser:Parser {
     for trait_impl in parser.store.trait_impls.values.iter do
         if trait_impl.receiver Type::TypeVar(_) is then
@@ -2416,6 +2613,30 @@ fn validate_trait_impls parser:Parser {
         then
             trait_impl.location f"Trait implementation `{trait_impl trait_impl_key}` must be declared in the module that defines the type or trait" ErrorKind::InvalidScope parser.state.record_error
         fi
+    done
+}
+
+fn finalize_trait_impl_methods parser:Parser {
+    for trait_impl in parser.store.trait_impls.values.iter do
+        trait_impl.trait_bound trait_bound_to_type = trait_type
+        Map[str str]::new = trait_methods
+        for pair in trait_impl.methods.iter do
+            pair.first = method_name
+            pair.second = function_name
+            if parser.store method_name trait_type trait_type_has_method then
+                function_name method_name trait_methods.set = trait_methods
+                continue
+            fi
+            f"{trait_impl.receiver.match_base}::{method_name}" = inherent_name
+            if inherent_name parser.store.functions.has ! then
+                if function_name parser.store.functions.get Option::Some(function) is then
+                    function.clone_for_import = inherent_function
+                    inherent_name inherent_function Function::set_name
+                    inherent_function inherent_name parser.store.functions.set drop
+                fi
+            fi
+        done
+        trait_methods trait_impl TraitImpl::set_methods
     done
 }
 
@@ -2442,6 +2663,7 @@ fn parse_impl_block parser:Parser cursor:TokenCursor {
     impl_type.match_base = base_type
 
     List[TraitBound]:: new = implemented_traits
+    Map[str str]::new = trait_impl_methods
     cursor.peek = colon_opt
     if colon_opt Option::Some(colon) is then
         if ":" colon.value == then
@@ -2484,7 +2706,15 @@ fn parse_impl_block parser:Parser cursor:TokenCursor {
             if "fn" fn_token Token::value != then break fi
         fi
         cursor parser parse_function = function
-        f"{base_type}::{function Function::name}" = fn_name
+        function Function::name = method_name
+        "" = fn_name
+        if 0 implemented_traits.length != then
+            0 implemented_traits.get trait_bound_to_type.format = trait_name
+            f"{base_type}::{trait_name}::{method_name}" = fn_name
+            fn_name method_name trait_impl_methods.set = trait_impl_methods
+        else
+            f"{base_type}::{method_name}" = fn_name
+        fi
         fn_name function Function::set_name
         # Merge inherited type vars and trait bounds from impl block
         if 0 type_vars.length != then
@@ -2498,7 +2728,7 @@ fn parse_impl_block parser:Parser cursor:TokenCursor {
     fallback_token "}" cursor expect_token_value.unwrap_or drop
 
     for implemented_trait in implemented_traits.iter do
-        impl_token.location trait_bounds type_vars implemented_trait impl_type TraitImpl
+        impl_token.location trait_impl_methods trait_bounds type_vars implemented_trait impl_type TraitImpl
         parser register_trait_impl
     done
 }
@@ -3762,6 +3992,8 @@ fn expand_imports parser:Parser ops:List[Op] -> List[Op] {
 fn resolve_identifiers_global parser:Parser ops:List[Op] -> List[Op] {
     ops parser expand_imports = expanded_ops
     if parser.state.has_usable_output ! then List[Op]:: new return fi
+    if parser validate_traits ! then List[Op]:: new return fi
+    parser finalize_trait_impl_methods
     parser validate_trait_impls
     if parser.state.has_usable_output ! then List[Op]:: new return fi
     empty_location List[Op]:: new GLOBAL_SCOPE_LABEL Function::new = dummy
@@ -3854,6 +4086,7 @@ fn resolve_identifiers
             if resolve_errors ident current_op function store try_resolve_fn_ref then continue fi
             if ident current_op try_resolve_numeric_call then continue fi
             if resolve_errors ident current_op store try_resolve_enum_variant_ident then continue fi
+            if ident current_op store try_resolve_qualified_trait_method then continue fi
             if ident current_op function try_resolve_trait_method_call then continue fi
             resolve_errors ident current_op function store resolve_plain_identifier
             if current_op.value OpValue::FnCall(resolved_fn_name) is then
@@ -3963,6 +4196,26 @@ fn try_resolve_fn_ref
         op Op::location "Expected function name after `&`" ErrorKind::Syntax CasaError::new resolve_errors.push
         true return
     fi
+    ref_name "::" str::split = ref_parts
+    if 3 ref_parts.length == then
+        0 ref_parts.get parse_type_str = receiver_type
+        1 ref_parts.get GenericType::new Type::Generic = qualifier_type
+        if op.type_hint Option::Some(hint) is then
+            if hint.type_params Option::Some(type_arguments) is then
+                type_arguments 1 ref_parts.get GenericType Type::Generic = qualifier_type
+            fi
+        fi
+        2 ref_parts.get = method_name
+        store receiver_type qualifier_type method_name resolve_qualified_method_semantics
+        = method_opt
+        if method_opt Option::Some(method) is then
+            if method.function_name store.functions.get Option::Some(method_function) is then
+                method.function_name OpValue::FnPush op Op::set_value
+                true method_function Function::set_is_used
+                true return
+            fi
+        fi
+    fi
     if ref_name "::" str::find 0 <= then
         ref_name 0 ref_name "::" str::find(u64) str::substring = ref_type_var
         ref_type_var function Function::stack_effect StackEffect::trait_bounds.get = ref_bound_opt
@@ -3971,6 +4224,19 @@ fn try_resolve_fn_ref
             f"__trait_{ref_type_var}_{ref_trait_method}" = ref_hidden
             ref_hidden OpValue::PushVar op Op::set_value
             true return
+        fi
+    fi
+    if 2 ref_parts.length == then
+        0 ref_parts.get parse_type_str = receiver_type
+        1 ref_parts.get = method_name
+        store Option[Function]::None receiver_type method_name resolve_method_semantics
+        = method_opt
+        if method_opt Option::Some(method) is then
+            if method.function_name store.functions.get Option::Some(method_function) is then
+                method.function_name OpValue::FnPush op Op::set_value
+                true method_function Function::set_is_used
+                true return
+            fi
         fi
     fi
     ref_name store.functions.get = ref_fn_opt
@@ -4020,6 +4286,18 @@ fn try_resolve_trait_method_call function:Function op:Op ident:str -> bool {
         hidden_var Variable::new function Function::variables.push
     fi
     hidden_var OpValue::TraitMethodCall op Op::set_value
+    true
+}
+
+fn try_resolve_qualified_trait_method store:SymbolStore op:Op ident:str -> bool {
+    ident "::" str::split = parts
+    if 2 parts.length != then false return fi
+    0 parts.get = trait_name
+    if trait_name store.traits.has ! then false return fi
+    1 parts.get = method_name
+    trait_name GenericType::new Type::Generic = trait_type
+    if op.type_hint Option::Some(hint) is then hint = trait_type fi
+    method_name trait_type QualifiedMethod OpValue::QualifiedMethodCall op Op::set_value
     true
 }
 # Resolve a bare identifier after `&`-ref, enum-variant, and trait-method

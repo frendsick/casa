@@ -2102,6 +2102,13 @@ fn type_has_trait_shape
             fn_name store.functions.get = fn_opt
         fi
         if fn_opt.is_none then
+            store receiver method.name resolve_default_method_semantics = semantics_opt
+            if semantics_opt Option::Some(method_semantics) is then
+                if method_semantics.kind MethodSemanticsKind::DefaultMethod is then continue fi
+                method_semantics.function_name store.functions.get = fn_opt
+            fi
+        fi
+        if fn_opt.is_none then
             # Default methods (with a body) don't require a concrete implementation
             if 0 method TraitMethod::default_ops.length != then
                 continue
@@ -2242,8 +2249,10 @@ fn method_diff_bind_for_bound
     bound TraitBound::type_args = bound_args
     if bound_args.length trait_params.length != then bindings return fi
     for trait_method in trait_def CasaTrait::methods.iter do
-        store concrete trait_method.name find_semantic_method_function = function_opt
-        if function_opt Option::Some(function_name) is then
+        store Option[Function]::None concrete trait_method.name resolve_method_semantics
+        = method_opt
+        if method_opt Option::Some(method_semantics) is then
+            method_semantics.function_name = function_name
             if function_name store.functions.get Option::Some(concrete_fn) is then
                 concrete trait_method TraitMethod::stack_effect resolve_trait_stack_effect
                 = trait_resolved
@@ -2445,12 +2454,12 @@ impl TypeChecker {
                             concrete_t method TraitMethod::stack_effect resolve_trait_stack_effect = forward_stack_effect
                             forward_stack_effect stack_effect_to_function_type tc.stack_push_type
                         else
-                            tc.store concrete_t method.name find_semantic_method_function
-                            = fn_name_opt
+                            tc.store Option[Function]::None concrete_t method.name
+                            resolve_method_semantics = method_semantics_opt
                             Option[Function]:: None = global_fn_opt
                             "" = fn_name
-                            if fn_name_opt Option::Some(found_name) is then
-                                found_name = fn_name
+                            if method_semantics_opt Option::Some(method_semantics) is then
+                                method_semantics.function_name = fn_name
                                 fn_name tc.store.functions.get = global_fn_opt
                             fi
                             if global_fn_opt.is_some then
@@ -3077,6 +3086,25 @@ impl TypeChecker {
 # Instantiate default trait method for a concrete type
 # ============================================================================
 
+fn qualify_default_method_calls ops:List[Op] trait_type:Type receiver:Type store:SymbolStore {
+    for body_op in ops.iter do
+        if body_op.value OpValue::MethodCall(method_name) is then
+            store receiver method_name collect_method_qualifiers = qualifiers
+            if
+            store method_name trait_type trait_type_has_method
+            qualifiers.length 1 < &&
+            then
+                method_name trait_type QualifiedMethod OpValue::QualifiedMethodCall
+                body_op Op::set_value
+            fi
+        elif body_op.value OpValue::PushArray(items) is then
+            store receiver trait_type items qualify_default_method_calls
+        elif body_op.value OpValue::ExprGroup(items) is then
+            store receiver trait_type items qualify_default_method_calls
+        fi
+    done
+}
+
 fn instantiate_default_trait_method
     semantics:MethodSemantics
     receiver:Type
@@ -3100,7 +3128,11 @@ fn instantiate_default_trait_method
     default_method_opt.unwrap = default_method
 
     # Check that receiver implements all abstract methods
-    if store trait_def receiver type_has_semantic_trait_shape ! then
+    trait_def trait_definition_type = required_trait_type
+    if semantics.trait_type Option::Some(resolved_trait_type) is then
+        resolved_trait_type = required_trait_type
+    fi
+    if store required_trait_type receiver type_has_semantic_trait_shape ! then
         Option[str]:: None return
     fi
 
@@ -3124,6 +3156,13 @@ fn instantiate_default_trait_method
         default_type_params base_name GenericType Type::Generic = default_self_type
         default_self_type default_method TraitMethod::stack_effect resolve_trait_stack_effect = resolved_stack_effect
     else
+        if semantics.trait_type Option::Some(resolved_trait_type) is then
+            if resolved_trait_type.type_params Option::Some(trait_args) is then
+                for pair in trait_args.iter type_params.iter.zip do
+                    pair.second pair.first trait_subs.set = trait_subs
+                done
+            fi
+        fi
         # Infer trait type params from concrete method stack effects
         Set[str]:: new = type_param_set
         for type_param in type_params.iter do
@@ -3131,11 +3170,11 @@ fn instantiate_default_trait_method
         done
         for infer_method in trait_def CasaTrait::methods.iter do
             if 0 infer_method TraitMethod::default_ops.length == then
-                store receiver infer_method TraitMethod::name find_semantic_method_function
-                = infer_fn_name_opt
+                store Option[Function]::None receiver infer_method TraitMethod::name
+                resolve_method_semantics = infer_method_opt
                 Option[Function]:: None = infer_fn_opt
-                if infer_fn_name_opt Option::Some(infer_fn_name) is then
-                    infer_fn_name store.functions.get = infer_fn_opt
+                if infer_method_opt Option::Some(infer_semantics) is then
+                    infer_semantics.function_name store.functions.get = infer_fn_opt
                 fi
                 if infer_fn_opt.is_some then
                     infer_fn_opt.unwrap = infer_fn
@@ -3182,6 +3221,9 @@ fn instantiate_default_trait_method
     if 0 trait_subs.length != then
         trait_subs cloned_body substitute_ops_types
     fi
+    if semantics.trait_type Option::Some(default_trait_type) is then
+        store receiver default_trait_type cloned_body qualify_default_method_calls
+    fi
     0 (u64) = cloned_lambda_index
     for body_op in cloned_body.iter do
         if body_op.value OpValue::FnPush(lambda_name) is then
@@ -3194,6 +3236,9 @@ fn instantiate_default_trait_method
             lambda Function::ops clone_ops = lambda_ops
             if 0 trait_subs.length != then
                 trait_subs lambda_ops substitute_ops_types
+            fi
+            if semantics.trait_type Option::Some(default_trait_type) is then
+                store receiver default_trait_type lambda_ops qualify_default_method_calls
             fi
             List[Parameter]:: new = lambda_params
             List[Type]:: new = lambda_returns
@@ -3365,13 +3410,21 @@ impl TypeChecker {
         op_index:u64
         function_opt:Option[Function]
     -> u64 {
+        Option[str]::None = method_name_opt
         if op.value OpValue::MethodCall(method_name) is then
+            method_name Option::Some = method_name_opt
+        elif op.value OpValue::QualifiedMethodCall(qualified) is then
+            qualified.method_name Option::Some = method_name_opt
+        fi
+        if method_name_opt Option::Some(method_name) is then
             tc.stack_peek_type = receiver
-            if method_name op tc.check_float_to_bits then op_index return fi
-            if method_name op tc.check_char_codepoint then op_index return fi
-            if method_name op tc.check_float_round then op_index return fi
-            if method_name op tc.check_try_integer_method then op_index return fi
-            if method_name op tc.check_wrapping_method then op_index return fi
+            if op.value OpValue::MethodCall is then
+                if method_name op tc.check_float_to_bits then op_index return fi
+                if method_name op tc.check_char_codepoint then op_index return fi
+                if method_name op tc.check_float_round then op_index return fi
+                if method_name op tc.check_try_integer_method then op_index return fi
+                if method_name op tc.check_wrapping_method then op_index return fi
+            fi
             tc.store function_opt receiver Option::Some op.value
             analyze_operation = semantics
             if semantics.method Option::Some(method_semantics) is then
@@ -3405,8 +3458,15 @@ impl TypeChecker {
                 fi
             fi
             method_name receiver.make_method_key = missing_name
-            op.location f"Method `{missing_name}` does not exist"
-            ErrorKind::UndefinedName tc.diagnostics.record_error
+            tc.store receiver method_name collect_method_qualifiers = qualifiers
+            if qualifiers.length 1 < then
+                ", " qualifiers.join = qualifier_list
+                op.location f"Method `{missing_name}` is ambiguous between `{qualifier_list}`. Use a trait-qualified call"
+                ErrorKind::TraitSignatureMismatch tc.diagnostics.record_error
+            else
+                op.location f"Method `{missing_name}` does not exist"
+                ErrorKind::UndefinedName tc.diagnostics.record_error
+            fi
         fi
         op_index
     }
@@ -3434,6 +3494,19 @@ impl TypeChecker {
             tc.stack_pop_drop
             TYPE_STR_T tc.stack_push_type
             op_index return
+        fi
+        if fstring_type_t Type::Builtin(builtin) is then
+            if
+            builtin.is_integer
+            builtin BuiltinType::Bool == ||
+            builtin BuiltinType::Char == ||
+            builtin BuiltinType::Cstr == ||
+            then
+                builtin OpValue::PrimitiveToStr op Op::set_value
+                tc.stack_pop_drop
+                TYPE_STR_T tc.stack_push_type
+                op_index return
+            fi
         fi
         tc.store function_opt fstring_type_t Option::Some op.value
         analyze_operation = semantics
@@ -3665,7 +3738,10 @@ impl TypeChecker {
             fi
 
             # Method call
-            if op_value OpValue::MethodCall is then
+            if
+            op_value OpValue::MethodCall is
+            op_value OpValue::QualifiedMethodCall is ||
+            then
                 function_opt op_index ops current_op checker.check_method_call = op_index
                 continue
             fi
@@ -3841,7 +3917,30 @@ fn check_functions store:SymbolStore diagnostics:Diagnostics {
 fn check_trait_impls store:SymbolStore diagnostics:Diagnostics {
     for trait_impl in store.trait_impls.values.iter do
         trait_impl.trait_bound trait_bound_to_type = trait_type
-        if true diagnostics store trait_type trait_impl.receiver type_has_trait_shape ! then
+        Set[str]::new = checked_methods
+        true = valid
+        for candidate in trait_type store collect_trait_method_candidates.iter do
+            candidate.method.name = method_name
+            if method_name checked_methods.has then continue fi
+            method_name checked_methods.add = checked_methods
+            method_name trait_impl.methods.get = function_name_opt
+            if function_name_opt.is_none then
+                store trait_impl.receiver method_name find_semantic_method_function = function_name_opt
+            fi
+            if function_name_opt Option::Some(function_name) is then
+                function_name store.functions.get = function_opt
+                if function_opt.is_none then false = valid continue fi
+                function_opt.unwrap = implementation
+                diagnostics store implementation ensure_typechecked
+                trait_impl.receiver candidate.effect resolve_trait_stack_effect = expected
+                if true implementation.stack_effect expected trait_method_effects_match ! then
+                    false = valid
+                fi
+            elif store trait_type method_name find_trait_default_method.is_none then
+                false = valid
+            fi
+        done
+        if valid ! then
             trait_impl.location f"Trait implementation `{trait_impl.receiver.format}: {trait_type.format}` does not satisfy the trait requirements" ErrorKind::TraitSignatureMismatch diagnostics.record_error
         fi
     done

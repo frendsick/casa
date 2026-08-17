@@ -46,12 +46,26 @@ impl Emitter {
 }
 
 # ============================================================================
-# sanitize_name: replace :: with __ in label names
+# Convert a source-level function name to an assembler-safe label.
 # ============================================================================
 
 fn sanitize_name name:str -> str {
     name "::" str::split = parts
-    "__" parts.join
+    "__" parts.join = namespaced
+    StringBuilder::new = result
+    for character in namespaced.iter do
+        if
+        character.is_alpha
+        character.is_digit ||
+        '_' character == ||
+        ':' character == ||
+        then
+            character result.append_char
+        else
+            '_' result.append_char
+        fi
+    done
+    result.build
 }
 
 # ============================================================================
@@ -276,6 +290,91 @@ impl Emitter {
         "movq $1, %rdi" self.indent
         "movq $1, %rax" self.indent
         "syscall" self.indent
+        "subq $8, %r14" self.indent
+        "jmpq *(%r14)" self.indent
+        "" self.line
+
+        # primitive_to_str: value in %rdi, kind in %r8, pushes an owned str.
+        # Kinds: 0 signed integer, 1 unsigned integer, 2 bool, 3 char, 4 cstr.
+        "primitive_to_str:" self.line
+        "cmpq $2, %r8" self.indent
+        "je .Lpts_bool" self.indent
+        "cmpq $3, %r8" self.indent
+        "je .Lpts_char" self.indent
+        "cmpq $4, %r8" self.indent
+        "je .Lpts_cstr" self.indent
+        "movq %rdi, %rax" self.indent
+        "leaq print_buf+32(%rip), %rsi" self.indent
+        "testq %rax, %rax" self.indent
+        "jnz .Lpts_integer_nonzero" self.indent
+        "decq %rsi" self.indent
+        "movb $48, (%rsi)" self.indent
+        "jmp .Lpts_integer_done" self.indent
+        ".Lpts_integer_nonzero:" self.line
+        "testq %r8, %r8" self.indent
+        "jnz .Lpts_integer_abs" self.indent
+        "testq %rax, %rax" self.indent
+        "jns .Lpts_integer_abs" self.indent
+        "negq %rax" self.indent
+        ".Lpts_integer_abs:" self.line
+        "movq $10, %rcx" self.indent
+        ".Lpts_integer_loop:" self.line
+        "decq %rsi" self.indent
+        "xorq %rdx, %rdx" self.indent
+        "divq %rcx" self.indent
+        "addb $48, %dl" self.indent
+        "movb %dl, (%rsi)" self.indent
+        "testq %rax, %rax" self.indent
+        "jnz .Lpts_integer_loop" self.indent
+        "testq %r8, %r8" self.indent
+        "jnz .Lpts_integer_done" self.indent
+        "testq %rdi, %rdi" self.indent
+        "jns .Lpts_integer_done" self.indent
+        "decq %rsi" self.indent
+        "movb $45, (%rsi)" self.indent
+        ".Lpts_integer_done:" self.line
+        "leaq print_buf+32(%rip), %rdx" self.indent
+        "subq %rsi, %rdx" self.indent
+        "jmp .Lpts_copy" self.indent
+        ".Lpts_bool:" self.line
+        "testq %rdi, %rdi" self.indent
+        "jz .Lpts_bool_false" self.indent
+        "leaq bool_true(%rip), %rsi" self.indent
+        "movq $4, %rdx" self.indent
+        "jmp .Lpts_copy" self.indent
+        ".Lpts_bool_false:" self.line
+        "leaq bool_false(%rip), %rsi" self.indent
+        "movq $5, %rdx" self.indent
+        "jmp .Lpts_copy" self.indent
+        ".Lpts_char:" self.line
+        "movb %dil, print_buf(%rip)" self.indent
+        "leaq print_buf(%rip), %rsi" self.indent
+        "movq $1, %rdx" self.indent
+        "jmp .Lpts_copy" self.indent
+        ".Lpts_cstr:" self.line
+        "movq %rdi, %rsi" self.indent
+        "movq %rdi, %rax" self.indent
+        ".Lpts_cstr_loop:" self.line
+        "cmpb $0, (%rax)" self.indent
+        "je .Lpts_cstr_done" self.indent
+        "incq %rax" self.indent
+        "jmp .Lpts_cstr_loop" self.indent
+        ".Lpts_cstr_done:" self.line
+        "movq %rax, %rdx" self.indent
+        "subq %rsi, %rdx" self.indent
+        ".Lpts_copy:" self.line
+        "leaq heap(%rip), %rbx" self.indent
+        "movq heap_ptr(%rip), %rax" self.indent
+        "leaq (%rbx,%rax), %r13" self.indent
+        "movq %rdx, (%r13)" self.indent
+        "leaq 8(%r13), %rdi" self.indent
+        "movq %rdx, %rcx" self.indent
+        "rep movsb" self.indent
+        "movb $0, (%rdi)" self.indent
+        "addq $9, %rdx" self.indent
+        "addq %rdx, %rax" self.indent
+        "movq %rax, heap_ptr(%rip)" self.indent
+        "pushq %r13" self.indent
         "subq $8, %r14" self.indent
         "jmpq *(%r14)" self.indent
         "" self.line
@@ -1423,6 +1522,21 @@ impl Emitter {
                 f"movq ${fstring_count}, %rdi" self.indent
                 "concat_done" "str_concat" self.emit_call_via_return_stack
             }
+            InstValue::PrimitiveToStr(builtin) => {
+                "popq %rdi" self.indent
+                0 = kind
+                if builtin.is_unsigned then
+                    1 = kind
+                elif builtin BuiltinType::Bool == then
+                    2 = kind
+                elif builtin BuiltinType::Char == then
+                    3 = kind
+                elif builtin BuiltinType::Cstr == then
+                    4 = kind
+                fi
+                f"movq ${kind}, %r8" self.indent
+                f"to_str_{builtin.format}_done" "primitive_to_str" self.emit_call_via_return_stack
+            }
             _ => {
                 "Internal error: emit_io_ops called with non-IO InstValue\n" eprint
                 1 exit
@@ -1574,6 +1688,7 @@ impl Emitter {
             InstValue::PrintChar => inst self.emit_io_ops
             InstValue::PrintCstr => inst self.emit_io_ops
             InstValue::FstringConcat => inst self.emit_io_ops
+            InstValue::PrimitiveToStr => inst self.emit_io_ops
 
             # String equality
             InstValue::StrEq => self.emit_str_eq

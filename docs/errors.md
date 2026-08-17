@@ -275,7 +275,7 @@ error[MISSING_TRAIT_METHOD]: Type `Foo` does not satisfy trait `Hashable`
 
 ### `TRAIT_SIGNATURE_MISMATCH`
 
-An explicit trait implementation has a missing method or a method whose stack effect does not match the trait requirement. Incompatible same-name requirements from multiple bounds also use this error.
+This error reports an invalid trait declaration or implementation. It includes missing or incompatible language hooks, inheritance cycles, incompatible inherited methods, ambiguous method candidates, and implementation methods with the wrong stack effect. The message identifies the conflicting trait or hook when possible.
 
 ```
 error[TRAIT_SIGNATURE_MISMATCH]: Method signature does not match trait requirement

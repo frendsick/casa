@@ -7,13 +7,19 @@ Traits define a set of required methods that a type must implement. They enable 
 Use the `trait` keyword to declare a trait with one or more method declarations. Required methods have no body; default methods optionally include a body (see [Default Methods](#default-methods)). Use `self` as a placeholder for the implementing type.
 
 ```casa
-trait Hashable {
-    fn hash self:self -> i64
+trait Eq {
     fn eq self:self other:self -> bool
+    fn ne self:self other:self -> bool { other self.eq ! }
+}
+
+trait Word { }
+
+trait Hashable: Eq + Word {
+    fn hash self:self -> i64
 }
 ```
 
-This declares that any type implementing `Hashable` must have a `hash` method (taking self, returning `i64`) and an `eq` method (taking self and another value of the same type, returning `bool`).
+This declares the minimum equality and hashing hooks used by the language and standard library.
 
 ## Implementing a Trait
 
@@ -166,6 +172,15 @@ fn example[K: Hashable] key:K -> i64 {
 
 Both forms are equivalent. The compiler resolves them to the correct method for the concrete type at each call site.
 
+An inherent method wins over trait defaults. If more than one trait implementation supplies a coherent candidate, qualify the call with the trait:
+
+```casa
+value First::render
+value Second::render
+```
+
+The compiler rejects an ambiguous unqualified call and lists the available trait qualifiers.
+
 ## Trait Method References
 
 Use `&K::method` to push a trait method as a function pointer without calling it:
@@ -177,6 +192,12 @@ fn get_hasher[K: Hashable] -> fn[K -> i64] {
 ```
 
 This pushes the function pointer for the concrete type's method.
+
+Use the receiver and trait names when more than one trait method pointer is available:
+
+```casa
+&Token::Convert[i64]::convert
+```
 
 ## Auto-Injection at Call Sites
 
@@ -298,7 +319,7 @@ Multiple supertraits are listed with `+`. Implementing `Hashable` also satisfies
 
 Trait-bounded code may call methods declared by any supertrait directly. For example, inside a function bounded by `K: Hashable`, both `K::hash` and `K::eq` resolve correctly.
 
-Supertraits are checked at the trait's declaration site: each supertrait must already be defined.
+Supertrait names can refer to traits declared later in the same module. The compiler rejects undefined supertraits, inheritance cycles, generic arity errors, and inherited methods with incompatible stack effects. A diamond inherits one shared declaration or default only once.
 
 ## Default Methods
 
@@ -327,6 +348,14 @@ trait Iterable[T] {
 ```
 
 Here `next` is the only required method. `collect` and `count` are default methods: any type that implements `next` returning `Option[T]` automatically gets `collect` and `count` without writing them.
+
+One compatible inherited default satisfies matching requirements. Two unrelated defaults with the same name are ambiguous. Add an inherent method or use a trait-qualified call to select the intended behavior.
+
+## Language Trait Contracts
+
+The compiler recognizes `Eq`, `Ord`, `Hashable`, `Display`, and `Iterable` only when their effective declarations contain the required hooks with the correct stack effects. Hooks can be inherited. A malformed declaration is rejected at its declaration and identifies the missing or incompatible hook.
+
+These traits can add supertraits and default methods. They cannot add other bodyless requirements because compiler-provided primitive behavior cannot implement unknown hooks. Primitive comparison, printing, and formatting remain available without importing the standard library.
 
 ### Built-in Trait: `Iterable[T]`
 
