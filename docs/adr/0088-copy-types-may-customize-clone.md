@@ -9,6 +9,6 @@ The implementation author is responsible for honoring Clone's documented semanti
 ## Consequences
 
 - `derives Copy` plus a handwritten Clone implementation is valid; the handwritten method replaces the fieldwise fallback.
-- `derives Clone` and one handwritten Clone customization merge under ADR-0090, with the handwritten hook taking precedence.
+- `derives Clone` and one handwritten Clone customization merge under ADR-0090, with the handwritten method taking precedence.
 - Generic `[T: Copy]` code may call `.clone` through the standard supertrait, but that explicit call is not guaranteed allocation-free.
 - Code requiring trivial duplication uses Copy operations rather than Clone.

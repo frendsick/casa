@@ -6,7 +6,7 @@ The initial standard library exposes these associated values and methods for bot
 - `is_nan`, `is_infinite`, and `is_finite`
 - `abs`, `floor`, `ceil`, `trunc`, and `round`
 
-`round` selects the nearest integral floating-point value with ties-to-even. These names are ordinary standard-library APIs; the compiler does not recognize them as traits or language hooks.
+`round` selects the nearest integral floating-point value with ties-to-even. These names are ordinary standard-library APIs; the compiler does not recognize them as traits or language trait methods.
 
 ## Consequences
 

@@ -1,6 +1,6 @@
 # Owned bindings may lend mutable borrows
 
-Every owned local binding and owned parameter may be reassigned, mutated, or lent as `mut$T`. Casa adds no `mut` binding declaration. Shared `$T` parameters cannot mutate their referent; exclusive `mut$T` parameters can. Borrow exclusivity, rather than a declaration modifier, is the safety boundary.
+Every owned local binding and owned parameter may be reassigned, mutated, or lent as `mut$T`. Casa adds no `mut` binding declaration. Shared `$T` parameters cannot mutate the borrowed value; exclusive `mut$T` parameters can. Borrow exclusivity, rather than a declaration modifier, is the safety boundary.
 
 An owned parameter still receives its value by move, so mutating that local owner does not mutate a caller binding. A caller-visible mutation requires a `mut$T` parameter. Reassigning an owned binding destroys its previous value exactly once after the compiler verifies that no borrow remains live.
 

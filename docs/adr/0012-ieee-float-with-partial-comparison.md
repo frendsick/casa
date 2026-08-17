@@ -10,7 +10,7 @@ Casa's `f32` and `f64` types are IEEE-754 values and may contain NaN or infinity
 
 ## Consequences
 
-- PartialEq provides the shared `eq` and `ne` operator hooks, while Eq is the explicit total-equality refinement. PartialOrd provides `partial_cmp` plus the four boolean ordering hooks; Ord adds `cmp` and total-order semantics.
+- PartialEq provides the shared `eq` and `ne` operator methods, while Eq is the explicit total-equality refinement. PartialOrd provides `partial_cmp` plus the four boolean ordering methods; Ord adds `cmp` and total-order semantics.
 - `f32` and `f64` cannot be `Map` or `Set` keys directly.
 - A validated finite-number wrapper may provide lawful `Eq`, `Ord`, and `Hashable` as a library type.
 - Integer-to-float and float-to-integer conversions remain explicit.
