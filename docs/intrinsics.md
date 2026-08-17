@@ -7,15 +7,19 @@ Intrinsics are compiler-provided operations. They need no import.
 | Intrinsic | Stack effect | Action |
 |---|---|---|
 | `drop` | `T -> None` | Discard the top value |
-| `dup` | `T -> T T` | Duplicate the top value |
+| `dup` | `[T: Copy] T -> T T` | Duplicate the top value |
+| `copy` | `[T: Copy] T -> T` | Produce an owned Copy value |
 | `swap` | `T1 T2 -> T2 T1` | Swap the top two values |
-| `over` | `T1 T2 -> T2 T1 T2` | Copy the second value to the top |
+| `over` | `[T2: Copy] T1 T2 -> T2 T1 T2` | Copy the second value to the top |
 | `rot` | `T1 T2 T3 -> T3 T1 T2` | Rotate the top three values |
 
 ```casa
 1 2 drop print       # 1
 3 dup + print        # 6
 ```
+
+`swap` and `rot` only move values. They accept non-Copy values. `dup`, `over`,
+and `copy` never call Clone and never allocate.
 
 ## Output and inspection
 

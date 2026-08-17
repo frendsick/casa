@@ -19,6 +19,7 @@ import "std"
 |---|---|
 | `length self:array[T] -> u64` | Number of elements |
 | `nth self:array[T] index:u64 -> T` | Element at a zero-based index |
+| `clone self:array[T] -> array[T]` | Independent array when `T: Clone` |
 | `iter self:array[T] -> Iter[T]` | Iterator over the elements |
 | `contains self:array[str] needle:str -> bool` | Whether a string array contains `needle` |
 
@@ -48,7 +49,7 @@ numbers.sort
 | `to_array self:List[T] -> array[T]` | Array view of the whole list |
 | `swap_at self:List[T] first:u64 second:u64` | Exchange two elements |
 | `reverse self:List[T]` | Reverse in place |
-| `clone self:List[T] -> List[T]` | New list with the same element values |
+| `clone self:List[T] -> List[T]` | Independent list when `T: Clone` |
 | `iter self:List[T] -> Iter[T]` | Iterator over the elements |
 | `sort self:List[T]` | Sort in place when `T` implements `Ord` |
 | `sort_by self:List[T] compare:fn[T T -> bool]` | Sort in place with a callback |
@@ -87,6 +88,7 @@ end
 | `iter self:Map[K V] -> Iter[Pair[K V]]` | Iterator over key-value pairs |
 | `keys self:Map[K V] -> List[K]` | List of keys |
 | `values self:Map[K V] -> List[V]` | List of values |
+| `clone self:Map[K V] -> Map[K V]` | Independent map when `K: Clone` and `V: Clone` |
 
 Rebind the result of `set` and `delete`, as shown above. Iteration order is not
 specified.
@@ -114,6 +116,7 @@ Set[str]::new = names
 | `remove self:Set[K] key:K -> Set[K]` | Remove a value if present |
 | `iter self:Set[K] -> Iter[K]` | Iterator over the values |
 | `to_list self:Set[K] -> List[K]` | Values in unspecified order |
+| `clone self:Set[K] -> Set[K]` | Independent set when `K: Clone` |
 
 Rebind the result of `add` and `remove`.
 

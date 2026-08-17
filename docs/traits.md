@@ -95,6 +95,8 @@ their relationships and language uses.
 
 | Trait | Requirement | Extends | Used by |
 |---|---|---|---|
+| `Clone` | `clone self:self -> self` | None | Explicit value duplication |
+| `Copy` | No methods | `Clone` | `dup`, `over`, and `copy` |
 | `Eq` | `eq self:self other:self -> bool` | None | `==` and `!=` |
 | `Ord` | `lt self:self other:self -> bool` | None | `<`, `<=`, `>`, and `>=` |
 | `Word` | No methods | None | Raw memory stores and system calls |
@@ -111,6 +113,42 @@ values need an explicit implementation.
 
 Primitive comparisons and printing remain available without importing `std`.
 
+## Copy and Clone
+
+`Copy` marks values whose representation can be duplicated without allocation
+or user code. Scalars, raw pointers, C string pointers, and named function
+references are Copy. Owned `str`, arrays, and collections are not.
+
+Eligible structs and enums opt in with `derives Copy` or an empty
+implementation:
+
+```casa
+struct Point derives Copy {
+    x: i64
+    y: i64
+}
+
+impl Point: Copy { }
+```
+
+Both forms validate every field or payload. A generic derivation requires each
+type argument to implement Copy. The standard `Copy: Clone` declaration also
+provides explicit `.clone` behavior unless the type supplies a custom Clone
+implementation.
+
+Clone is always explicit and can allocate or run user code:
+
+```casa
+impl Document: Clone {
+    fn clone self:Document -> Document {
+        self.title.clone Document
+    }
+}
+```
+
+`str`, `array[T]`, `List[T]`, `Option[T]`, `Result[T E]`, `Map[K V]`, and
+`Set[T]` implement Clone when their owned contents implement Clone.
+
 ## Advanced trait implementations
 
 An implementation must provide every required method with the declared stack
@@ -124,7 +162,8 @@ impl Item: Describe + Stored {
 }
 ```
 
-A methodless marker trait still needs an explicit empty block. A trait
+A methodless marker trait still needs an explicit empty block unless it uses a
+supported `derives` clause. A trait
 implementation must be in the module that defines the type or the trait. The
 same type and fully specified trait can have only one implementation.
 
