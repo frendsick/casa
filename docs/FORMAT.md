@@ -234,7 +234,7 @@ An unsafe function prefixes the declaration with `unsafe`. The same rule
 applies to the wrapped form, whose first line is `unsafe fn name`:
 
 ```casa
-unsafe fn read_word address:ptr -> i64 {
+unsafe fn read_word address:ptr -> u64 {
     unsafe { address load64 }
 }
 ```

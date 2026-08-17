@@ -8,7 +8,7 @@ import "common"
 const INT32_MAX 2147483647
 const INT32_MIN -2147483648
 const RETURN_STACK_SIZE 65536
-const HEAP_SIZE 1610612736
+const HEAP_SIZE 2147483648
 
 # ============================================================================
 # Emitter state
@@ -126,12 +126,14 @@ impl Emitter {
         f"env_stack: .skip {RETURN_STACK_SIZE}" self.line
         "env_sp: .skip 8" self.line
         "current_env: .skip 8" self.line
-        f"heap: .skip {HEAP_SIZE}" self.line
+        ".align 16" self.line
         "heap_ptr: .skip 8" self.line
+        "free_list: .skip 8" self.line
         "__argc: .skip 8" self.line
         "__argv: .skip 8" self.line
         "__envp: .skip 8" self.line
         "print_buf: .skip 32" self.line
+        f"heap: .skip {HEAP_SIZE}" self.line
         "" self.line
     }
 
@@ -158,6 +160,8 @@ impl Emitter {
         ".equ arithmetic_error_msg_len, . - arithmetic_error_msg" self.line
         "env_stack_overflow_msg: .ascii \"error: env stack overflow\\n\"" self.line
         ".equ env_stack_overflow_msg_len, . - env_stack_overflow_msg" self.line
+        "allocation_failure_msg: .ascii \"fatal: allocation failed\\n\"" self.line
+        ".equ allocation_failure_msg_len, . - allocation_failure_msg" self.line
         # Static closure record per function
         for name in self.program.functions.keys.iter do
             name sanitize_name = label
@@ -217,7 +221,91 @@ impl Emitter {
     # Helper subroutines
     # ============================================================================
 
+    # ponytail: first-fit reuse does not split or coalesce blocks; add both if
+    # fragmentation becomes measurable before the fixed heap is exhausted.
+    fn emit_heap_helpers self:mut$Emitter {
+        # heap_alloc: requested byte count in %rdi, pushes an aligned pointer.
+        "heap_alloc:" self.line
+        "testq %rdi, %rdi" self.indent
+        "jz .Lheap_alloc_null" self.indent
+        "movq %rdi, %rax" self.indent
+        "addq $7, %rax" self.indent
+        "jc .Lheap_alloc_oom" self.indent
+        "andq $-8, %rax" self.indent
+        "movq free_list(%rip), %rcx" self.indent
+        "xorq %rdx, %rdx" self.indent
+        ".Lheap_alloc_search:" self.line
+        "testq %rcx, %rcx" self.indent
+        "jz .Lheap_alloc_bump" self.indent
+        "cmpq %rax, (%rcx)" self.indent
+        "jae .Lheap_alloc_reuse" self.indent
+        "movq %rcx, %rdx" self.indent
+        "movq 8(%rcx), %rcx" self.indent
+        "jmp .Lheap_alloc_search" self.indent
+        ".Lheap_alloc_reuse:" self.line
+        "movq 8(%rcx), %r8" self.indent
+        "testq %rdx, %rdx" self.indent
+        "jz .Lheap_alloc_reuse_head" self.indent
+        "movq %r8, 8(%rdx)" self.indent
+        "jmp .Lheap_alloc_return_block" self.indent
+        ".Lheap_alloc_reuse_head:" self.line
+        "movq %r8, free_list(%rip)" self.indent
+        ".Lheap_alloc_return_block:" self.line
+        "leaq 8(%rcx), %rax" self.indent
+        "pushq %rax" self.indent
+        "jmp .Lheap_alloc_return" self.indent
+        ".Lheap_alloc_bump:" self.line
+        "movq heap_ptr(%rip), %rcx" self.indent
+        "addq $7, %rcx" self.indent
+        "andq $-8, %rcx" self.indent
+        "movq %rax, %r8" self.indent
+        "addq $8, %r8" self.indent
+        "jc .Lheap_alloc_oom" self.indent
+        "addq %rcx, %r8" self.indent
+        "jc .Lheap_alloc_oom" self.indent
+        f"movq ${HEAP_SIZE}, %r9" self.indent
+        "cmpq %r9, %r8" self.indent
+        "ja .Lheap_alloc_oom" self.indent
+        "leaq heap(%rip), %r9" self.indent
+        "leaq (%r9,%rcx), %rcx" self.indent
+        "movq %rax, (%rcx)" self.indent
+        "movq %r8, heap_ptr(%rip)" self.indent
+        "leaq 8(%rcx), %rax" self.indent
+        "pushq %rax" self.indent
+        "jmp .Lheap_alloc_return" self.indent
+        ".Lheap_alloc_null:" self.line
+        "pushq $0" self.indent
+        ".Lheap_alloc_return:" self.line
+        "subq $8, %r14" self.indent
+        "jmpq *(%r14)" self.indent
+        ".Lheap_alloc_oom:" self.line
+        "movq $1, %rax" self.indent
+        "movq $2, %rdi" self.indent
+        "leaq allocation_failure_msg(%rip), %rsi" self.indent
+        "movq $allocation_failure_msg_len, %rdx" self.indent
+        "syscall" self.indent
+        "movq $60, %rax" self.indent
+        "movq $1, %rdi" self.indent
+        "syscall" self.indent
+        "" self.line
+
+        # heap_free: pointer in %rdi, returns the complete allocation for reuse.
+        "heap_free:" self.line
+        "testq %rdi, %rdi" self.indent
+        "jz .Lheap_free_return" self.indent
+        "leaq -8(%rdi), %rax" self.indent
+        "movq free_list(%rip), %rcx" self.indent
+        "movq %rcx, 8(%rax)" self.indent
+        "movq %rax, free_list(%rip)" self.indent
+        ".Lheap_free_return:" self.line
+        "subq $8, %r14" self.indent
+        "jmpq *(%r14)" self.indent
+        "" self.line
+    }
+
     fn emit_helpers self:mut$Emitter {
+        self.emit_heap_helpers
+
         # print_int: value in %rdi, returns via r14
         "print_int:" self.line
         "movq %rdi, %rax" self.indent
@@ -1508,13 +1596,12 @@ impl Emitter {
     fn emit_memory self:mut$Emitter inst:mut$InstValue {
         inst match
             InstValue::HeapAlloc => {
-                "popq %rax" self.indent
-                "leaq heap(%rip), %rbx" self.indent
-                "movq heap_ptr(%rip), %rcx" self.indent
-                "leaq (%rbx,%rcx), %rdx" self.indent
-                "pushq %rdx" self.indent
-                "addq %rax, %rcx" self.indent
-                "movq %rcx, heap_ptr(%rip)" self.indent
+                "popq %rdi" self.indent
+                "heap_alloc_done" "heap_alloc" self.emit_call_via_return_stack
+            }
+            InstValue::HeapFree => {
+                "popq %rdi" self.indent
+                "heap_free_done" "heap_free" self.emit_call_via_return_stack
             }
             InstValue::Load8 => "%eax" "movzbl" self.emit_load
             InstValue::Load16 => "%eax" "movzwl" self.emit_load
@@ -1742,6 +1829,7 @@ impl Emitter {
 
             # Memory operations
             InstValue::HeapAlloc => inst self.emit_memory
+            InstValue::HeapFree => inst self.emit_memory
             InstValue::Load8 => inst self.emit_memory
             InstValue::Load16 => inst self.emit_memory
             InstValue::Load32 => inst self.emit_memory
