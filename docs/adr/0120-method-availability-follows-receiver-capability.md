@@ -18,5 +18,5 @@ Method lookup first considers the exact value type. If that type has no applicab
 - A `$self` method is callable through owned, shared, or exclusive access; exclusive access is weakened by an ordinary shared reborrow.
 - A `mut$self` method is callable through an owner or exclusive borrow, never a shared borrow.
 - If `T: Clone`, `mut$T.clone` may resolve to `T.clone` and return an owned `T`; this is ordinary `$self` receiver lookup.
-- If `$T` has its own Clone conformance through standard `Copy: Clone`, `$T.clone` selects that exact conformance and returns `$T`. `T::clone` explicitly clones the referent.
+- If `$T` has its own Clone implementation through standard `Copy: Clone`, `$T.clone` selects that exact implementation and returns `$T`. `T::clone` explicitly clones the referent.
 - Expected return types never choose a method implementation.

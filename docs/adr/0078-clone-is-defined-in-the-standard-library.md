@@ -10,7 +10,7 @@ trait Clone {
 
 Code imports it through the ordinary module system when it needs to name the trait. Clone implementations, bounds, method dispatch, coherence, and derivation otherwise use the same machinery as other standard-library traits. The compiler does not special-case `Option`, `Result`, arrays, or any other Clone implementation.
 
-The compiler recognizes the canonical standard-library trait identity when expanding `derives Clone` and when supplying missing fieldwise behavior required by standard Copy conformance. An unrelated user trait also named `Clone` does not acquire derivation behavior.
+The compiler recognizes the canonical standard-library trait identity when expanding `derives Clone` and when supplying missing fieldwise behavior required by the standard Copy implementation. An unrelated user trait also named `Clone` does not acquire derivation behavior.
 
 ## Considered options
 
@@ -19,7 +19,7 @@ The compiler recognizes the canonical standard-library trait identity when expan
 
 ## Consequences
 
-- `import "std" { Clone }` makes `[T: Clone]`, `derives Clone`, and explicit Clone conformances available.
+- `import "std" { Clone }` makes `[T: Clone]`, `derives Clone`, and explicit Clone implementations available.
 - Clone can evolve through its visible standard-library declaration, subject to its language-level contract.
-- The compiler owns no implicit Clone method bodies; bodies come from standard implementations, handwritten conformances, or explicit `derives Clone` generation.
+- The compiler owns no implicit Clone method bodies; bodies come from standard implementations, handwritten implementations, or explicit `derives Clone` generation.
 - Casa adds no general implicit prelude solely for Clone.

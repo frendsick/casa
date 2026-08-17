@@ -1,6 +1,6 @@
-# Trait defaults resolve methods in their own conformance
+# Trait defaults resolve methods in their own implementation
 
-Inside a trait default method, an unqualified call to another method declared by that trait resolves within the same instantiated conformance:
+Inside a trait default method, an unqualified call to another method declared by that trait resolves within the same instantiated trait implementation:
 
 ```casa
 trait Convert[T] {
@@ -17,6 +17,6 @@ If `Token` implements both `Convert[i64]` and `Convert[str]`, the first `optiona
 ## Consequences
 
 - The enclosing instantiated trait is the lexical lookup context for its default bodies.
-- Default methods remain source-generic and are specialized with their conformance under ordinary monomorphization.
+- Default methods remain source-generic and are specialized with their trait implementation under ordinary monomorphization.
 - A default intentionally calling another trait uses explicit qualification, such as `self OtherTrait::method`.
 - A trait's own requirement wins only through this lexical context; ordinary call sites retain the normal inherent-method and ambiguity rules.

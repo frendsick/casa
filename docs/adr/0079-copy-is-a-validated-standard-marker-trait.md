@@ -6,9 +6,9 @@
 trait Copy { }
 ```
 
-The compiler integrates the canonical Copy declaration with implicit binding reuse, `dup`, and `over`. It also validates every Copy conformance: the representation must be safely duplicable without allocation or user code, every owned field must be Copy, and the type must not contain an exclusive borrow, owned indirection, or custom destruction.
+The compiler integrates the canonical Copy declaration with implicit binding reuse, `dup`, and `over`. It also validates every Copy implementation: the representation must be safely duplicable without allocation or user code, every owned field must be Copy, and the type must not contain an exclusive borrow, owned indirection, or custom destruction.
 
-User-defined structs and enums may establish the same conformance either inline or in an ordinary empty implementation:
+User-defined structs and enums may establish the same implementation either inline or in an ordinary empty implementation:
 
 ```casa
 struct Point derives Copy {
@@ -30,6 +30,6 @@ Both forms run identical validation. `derives Copy` is the colocated shorthand; 
 
 - `[T: Copy]` uses ordinary trait-bound and supertrait machinery. Any additional requirement is visible in the active declaration.
 - Selectively importing Copy also imports any declared supertrait dependencies.
-- Built-in scalars, shared borrows, raw pointers, and named function references receive compiler-provided conformance to the canonical marker.
+- Built-in scalars, shared borrows, raw pointers, and named function references receive compiler-provided implementations of the canonical marker.
 - A freestanding program may supply the reserved Copy declaration itself, subject to the minimum-contract rule in ADR-0080.
 - The unavoidable compiler integration is limited to eligibility validation and the operations whose semantics depend on bitwise copying.

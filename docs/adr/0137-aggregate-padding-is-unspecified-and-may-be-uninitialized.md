@@ -16,5 +16,5 @@ Any bytes between `small` and `large`, or after the final field, exist only to s
 - Compiler-generated Copy may copy initialized fields or propagate opaque representation bytes without making padding observable as values.
 - Equality, ordering, hashing, Clone generation, and serialization operate on fields and variants rather than comparing raw aggregate bytes.
 - `size_of[T]` includes padding for allocation and stride but does not imply that every byte may be read as an initialized `u8`.
-- The ordinary stdlib `memcpy` is valid only when the caller knows every copied source byte is initialized; Copy conformance alone does not establish that for aggregate padding.
+- The ordinary stdlib `memcpy` is valid only when the caller knows every copied source byte is initialized; a Copy implementation alone does not establish that for aggregate padding.
 - Casa does not zero padding on construction merely to stabilize unused bytes or make raw representation serialization possible.

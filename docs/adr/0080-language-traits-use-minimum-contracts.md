@@ -2,9 +2,9 @@
 
 Primitive operations have intrinsic semantics and remain available when no standard library is present. Traits connect the same syntax to user-defined types and generic bounds, but the compiler validates only the minimum hook contract required by that language feature.
 
-A declaration using a reserved language-trait name must provide each required hook with the expected stack effect. It may add default methods and supertraits; those remain ordinary trait behavior. Additional bodyless required methods are rejected because compiler-provided primitive conformances and derivation could not implement unknown behavior.
+A declaration using a reserved language-trait name must provide each required hook with the expected stack effect. It may add default methods and supertraits; those remain ordinary trait behavior. Additional bodyless required methods are rejected because compiler-provided primitive implementations and derivation could not implement unknown behavior.
 
-Copy has the smallest contract: it is a methodless marker whose conformances the compiler validates for representation-safe, allocation-free duplication. Its declaration may have ordinary supertraits, but the compiler does not require Clone unconditionally. Clone is guaranteed when the active Copy declaration extends Clone; Casa's standard declaration does, and validated Copy conformance supplies missing fieldwise Clone behavior.
+Copy has the smallest contract: it is a methodless marker whose implementations the compiler validates for representation-safe, allocation-free duplication. Its declaration may have ordinary supertraits, but the compiler does not require Clone unconditionally. Clone is guaranteed when the active Copy declaration extends Clone; Casa's standard declaration does, and a validated Copy implementation supplies missing fieldwise Clone behavior.
 
 ## Consequences
 

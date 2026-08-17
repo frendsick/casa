@@ -8,7 +8,7 @@ fn ne $self other:$self -> bool {
 }
 ```
 
-A conforming type may override `ne` when it has a more direct implementation, but the trait contract requires `ne` to remain the logical inverse of `eq`. The compiler checks the hook's stack effect but cannot prove that semantic law, just as it cannot prove reflexivity or transitivity.
+A type that implements the trait may override `ne` when it has a more direct implementation, but the trait contract requires `ne` to remain the logical inverse of `eq`. The compiler checks the hook's stack effect but cannot prove that semantic law, just as it cannot prove reflexivity or transitivity.
 
 ## Consequences
 

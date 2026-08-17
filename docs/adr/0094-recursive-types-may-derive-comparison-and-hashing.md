@@ -11,7 +11,7 @@ enum Tree derives Eq Ord Hashable Clone {
 
 Generated equality, ordering, and hashing recursively visit payloads using their ordinary field or variant order. Safe affine ownership prevents owned cycles, so each operation traverses a finite value. Compiler-managed recursive indirection remains an ownership detail and makes the type non-Copy.
 
-The conformance checker resolves mutually recursive derivations as strongly connected components. Self-recursive obligations are provisionally accepted within the component, while every external field dependency must satisfy the requested capability.
+The trait implementation checker resolves mutually recursive derivations as strongly connected components. Self-recursive obligations are provisionally accepted within the component, while every external field dependency must satisfy the requested capability.
 
 ## Consequences
 

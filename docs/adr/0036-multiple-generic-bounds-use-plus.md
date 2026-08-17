@@ -15,7 +15,7 @@ fn show_twice[T: Copy + Display] value:T {
 ## Considered options
 
 - Allowing only one bound keeps the current representation, but cannot express code that both duplicates and observes a generic value.
-- Nested helper traits could combine requirements, but would create otherwise meaningless declarations and extra conformance boilerplate.
+- Nested helper traits could combine requirements, but would create otherwise meaningless declarations and extra implementation boilerplate.
 - `where` clauses scale to large contracts, but add a second bounds grammar before Casa has contracts large enough to need it.
 - Reusing `+` is compact and matches existing supertrait syntax.
 

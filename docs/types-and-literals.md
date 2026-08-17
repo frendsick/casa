@@ -146,14 +146,14 @@ F-strings let you embed expressions inside a string literal. Prefix a string wit
 f"hello {name}" print    # hello world
 ```
 
-Any expression whose type satisfies the [`Display`](traits.md#built-in-trait-display) trait can be interpolated. The compiler automatically calls `to_str` on non-string values, so explicit conversions are no longer required:
+Any expression whose type satisfies the [`Display`](traits.md#built-in-trait-display) trait can be interpolated. The compiler automatically calls `to_str` on user-defined and generic values. Integer, boolean, character, string, and C string values use intrinsic formatting and do not require the standard library:
 
 ```casa
 42 = n
 f"count: {n}"    # count: 42
 ```
 
-Types that do not implement `Display` — for example, custom structs without a `to_str` method — are rejected at compile time with a dedicated f-string error.
+Other types that do not implement `Display`, such as custom structs without a `to_str` method, are rejected at compile time with a dedicated f-string error.
 
 Multiple expressions are supported:
 
@@ -560,7 +560,7 @@ buffer (ptr) load64 (i64)    # cast i64 -> i64 (no-op here, but useful for gener
 
 ## Printing Values
 
-`print` requires the value's type to implement the [`Display` trait](traits.md). The primitives `i64`, `bool`, `char`, `str`, and `cstr` are dispatched directly to specialized output instructions. User types must declare `Display` conformance and provide a `to_str self -> str` method, which the compiler invokes before printing the resulting string.
+`print` requires the value's type to implement the [`Display` trait](traits.md). Integer, boolean, character, string, and C string primitives are dispatched directly to specialized output instructions. User types must implement `Display` and provide a `to_str self -> str` method, which the compiler invokes before printing the resulting string.
 
 ```casa
 struct Point { x: i64 y: i64 }

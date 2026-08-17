@@ -11,7 +11,7 @@ enum Node derives Clone {
 
 Generated Clone recursively clones each payload and allocates any compiler-managed recursive indirection required by the destination. Safe affine ownership prevents cycles, so every constructible source value has a finite traversal. Clone remains explicit and may be proportional to the complete recursive structure.
 
-The conformance checker treats a recursive derivation dependency as one strongly connected component. It provisionally validates self-recursive Clone requirements, then requires every non-recursive field dependency to satisfy Clone. It must not recursively instantiate the same obligation without termination.
+The trait implementation checker treats a recursive derivation dependency as one strongly connected component. It provisionally validates self-recursive Clone requirements, then requires every non-recursive field dependency to satisfy Clone. It must not recursively instantiate the same obligation without termination.
 
 ## Consequences
 

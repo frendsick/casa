@@ -319,7 +319,7 @@ end
 
 ## Traits
 
-Types satisfy traits through an explicit conformance clause on an `impl` block. See [Traits](traits.md) for details.
+Types satisfy traits through an explicit trait list on an `impl` block. See [Traits](traits.md) for details.
 
 ```casa
 trait Hashable {

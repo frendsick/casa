@@ -1,6 +1,6 @@
 # Explicit methods override derived fallbacks
 
-Derivation supplies fallback methods and conformance. A handwritten method with the same trait hook and exact stack effect takes precedence, and the compiler generates only the missing methods:
+Derivation supplies fallback methods and a trait implementation. A handwritten method with the same trait hook and exact stack effect takes precedence, and the compiler generates only the missing methods:
 
 ```casa
 struct Point derives Eq {
@@ -15,7 +15,7 @@ impl Point: PartialEq {
 }
 ```
 
-The derived and handwritten declarations merge into one conformance for coherence purposes. This merge is allowed only between a type's own derive clause and one explicit customization block for the same conformance; two handwritten conformances remain a duplicate error. Collection and generation are source-order independent.
+The derived and handwritten declarations merge into one trait implementation for coherence purposes. This merge is allowed only between a type's own derive clause and one explicit customization block for the same trait implementation; two handwritten implementations remain a duplicate error. Collection and generation are source-order independent.
 
 An explicit method with the wrong stack effect is diagnosed rather than ignored in favor of the fallback. Safe-code ownership and borrowing checks still apply to customized bodies; semantic trait laws remain the implementation author's responsibility unless a separate derivation-consistency rule says otherwise.
 

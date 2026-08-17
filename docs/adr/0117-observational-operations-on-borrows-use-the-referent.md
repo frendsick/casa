@@ -13,7 +13,7 @@ The comparison above invokes `Point`'s equality hooks exactly as comparison of t
 ## Consequences
 
 - Borrowed and owned views of the same value have consistent equality, ordering, hashing, and display behavior.
-- Borrow types do not acquire separate user-overridable observational conformances merely because they are borrows; ordinary method lookup reaches the referent type.
+- Borrow types do not acquire separate user-overridable observational trait implementations merely because they are borrows; ordinary method lookup reaches the referent type.
 - `mut$T` weakens to `$T` for observation and is not mutated by these operations.
 - Ordinary safe code has no borrow-identity comparison.
 - Equality on existing raw `ptr` values compares addresses and remains distinct from referent equality.
