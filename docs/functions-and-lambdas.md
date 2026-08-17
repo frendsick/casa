@@ -76,6 +76,13 @@ fn read_byte address:ptr -> i64 {
 }
 ```
 
+Raw storage uses `u64 alloc -> ptr` and `ptr free -> None`. Allocating zero
+bytes returns the null pointer. Freeing null does nothing. A positive allocation
+returns aligned storage or terminates the process if storage is exhausted.
+`free` releases only a complete live allocation returned by `alloc`. Double
+free, use after free, and freeing foreign or interior pointers are undefined
+behavior.
+
 The block permits only designated unsafe operations. Type, ownership, borrow,
 control-flow, and stack-effect checks still apply.
 

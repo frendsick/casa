@@ -57,7 +57,8 @@ an `unsafe` block.
 
 | Intrinsic | Stack effect | Action |
 |---|---|---|
-| `alloc` | `u64 -> ptr` | Allocate bytes on the heap |
+| `alloc` | `u64 -> ptr` | Allocate bytes or terminate on failure |
+| `free` | `ptr -> None` | Release a complete live allocation |
 | `load8` | `ptr -> i64` | Load 8 bits and zero-extend them |
 | `load16` | `ptr -> i64` | Load 16 bits and zero-extend them |
 | `load32` | `ptr -> i64` | Load 32 bits and zero-extend them |
@@ -79,6 +80,10 @@ unsafe {
 ```
 
 Pointer offsets are measured in bytes.
+
+`0 alloc` returns null, and `free` does nothing when given null. A positive
+allocation is non-null. Double free, use after free, and freeing an interior or
+foreign pointer are undefined behavior.
 
 `unsafe fn memcpy destination:ptr source:ptr count:u64` is a `std` function,
 not an intrinsic. It becomes available after `import "std"` and copies raw
