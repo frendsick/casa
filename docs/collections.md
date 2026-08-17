@@ -112,6 +112,7 @@ Set[str]::new = names
 | `has self:Set[K] key:K -> bool` | Whether a value exists |
 | `add self:Set[K] key:K -> Set[K]` | Add a value |
 | `remove self:Set[K] key:K -> Set[K]` | Remove a value if present |
+| `iter self:Set[K] -> Iter[K]` | Iterator over the values |
 | `to_list self:Set[K] -> List[K]` | Values in unspecified order |
 
 Rebind the result of `add` and `remove`.
@@ -147,6 +148,7 @@ builder.build print
 | `List[T]` | `Iter[T]` |
 | `str` | `Iter[char]` |
 | `Map[K V]` | `Iter[Pair[K V]]` |
+| `Set[K]` | `Iter[K]` |
 
 A `for` loop consumes the iterator. Create another iterator to traverse the
 source again.
