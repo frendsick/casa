@@ -6,15 +6,15 @@ declared at global scope and called by name.
 ## Declare and call a function
 
 ```casa
-fn divide dividend:i64 divisor:i64 -> i64 {
-    dividend divisor /
+fn subtract left:i64 right:i64 -> i64 {
+    left right -
 }
 
-3 12 divide print    # 4
+3 12 subtract print    # 9
 ```
 
 Parameters are listed in consumption order. The first parameter receives the
-topmost value, so `dividend` receives `12` and `divisor` receives `3` in this
+topmost value, so `left` receives `12` and `right` receives `3` in this
 call.
 
 Use unnamed inputs when a local name adds no clarity:

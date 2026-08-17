@@ -29,6 +29,19 @@ present match
 end
 ```
 
+Use an optional result for an operation that can fail:
+
+```casa
+fn divide dividend:i64 divisor:i64 -> Option[i64] {
+    divisor dividend.try_div
+}
+
+0 12 divide match
+    Option::Some(value) => value print
+    Option::None => "cannot divide by zero" print
+end
+```
+
 | Method | Result or action |
 |---|---|
 | `is_some self:Option[T] -> bool` | Whether a value is present |
