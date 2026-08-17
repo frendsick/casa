@@ -1,6 +1,8 @@
 # Collections
 
-Casa provides generic container types for dynamic data. All collections are defined in `lib/std.casa` and available via `import`.
+Casa provides generic container types for dynamic data. Import them from the
+`std` module and compile from the repository root with
+`./casac -L lib program.casa`.
 
 ## `List[T]`
 
@@ -142,7 +144,7 @@ Joins a list of strings with a separator, returning a single string.
 ### Complete Example
 
 ```casa
-import "path/to/lib/std.casa"
+import "std"
 
 List::new = v
 10 v.push
@@ -297,7 +299,7 @@ m.values = val_list
 ### Complete Example
 
 ```casa
-import "path/to/lib/std.casa"
+import "std"
 
 # Create a map from strings to ints
 Map[str i64]::new = m
@@ -410,7 +412,7 @@ s.to_list = elements
 ### Complete Example
 
 ```casa
-import "path/to/lib/std.casa"
+import "std"
 
 # Create a set of strings
 Set[str]::new = s

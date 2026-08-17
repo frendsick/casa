@@ -1,13 +1,15 @@
 # Utilities
 
-Application-level utilities for logging, timing, command-line argument parsing, and process execution.
+Application-level utilities for logging, timing, command-line argument parsing,
+and process execution. Compile the examples from the repository root with
+`./casac -L lib program.casa`.
 
 ## Logging
 
-The logging library is in `lib/log.casa`. Import it with:
+Import the logging library as a module:
 
 ```casa
-import "path/to/lib/log.casa"
+import "log"
 ```
 
 It provides leveled logging to stderr. Messages above the current log level (more verbose) are suppressed. The default level is `LogLevel::Warning`.
@@ -80,7 +82,7 @@ f"token count: {count .to_str}" log_debug
 ### Complete Example
 
 ```casa
-import "path/to/lib/log.casa"
+import "log"
 
 # Default level is Warning — only Error and Warning are shown
 "this is hidden" log_info
@@ -94,10 +96,10 @@ LogLevel::Info log_set_level
 
 ## Timer
 
-The timer library is in `lib/timer.casa`. Import it with:
+Import the timer library as a module:
 
 ```casa
-import "path/to/lib/timer.casa"
+import "timer"
 ```
 
 It provides high-resolution timing using `clock_gettime` with `CLOCK_MONOTONIC`. Timer implements the `Display` trait, formatting elapsed time as fractional seconds (e.g., `"1.042s"`).
@@ -167,7 +169,7 @@ Returns elapsed nanoseconds from the global timer. Exits with an error if `timer
 ### Complete Example
 
 ```casa
-import "path/to/lib/timer.casa"
+import "timer"
 
 Timer::new = timer
 
@@ -212,10 +214,10 @@ Returns the nth command-line argument as a string (zero-indexed). Prints an erro
 
 ## Argument Parser
 
-The argument parser library is in `lib/argparse.casa`. Import it with:
+Import the argument parser library as a module:
 
 ```casa
-import "path/to/lib/argparse.casa"
+import "argparse"
 ```
 
 It provides a declarative API for defining and parsing CLI arguments, with auto-generated help output similar to Python's `argparse`.
@@ -314,7 +316,7 @@ Returns `Option::Some` wrapping the collected `List[str]` for a registered multi
 ### Complete Example
 
 ```casa
-import "path/to/lib/argparse.casa"
+import "argparse"
 
 ArgParser::new = parser
 "input file" "input" parser .add_positional

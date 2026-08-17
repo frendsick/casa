@@ -1,6 +1,7 @@
 # Structs and Methods
 
-Structs group named, typed fields into a single type. Methods are added via `impl` blocks, and dot/arrow syntax provides convenient access.
+Structs group named, typed fields into a single type. Methods are added via
+`impl` blocks. Dot access and field assignment provide convenient access.
 
 ## Defining a Struct
 

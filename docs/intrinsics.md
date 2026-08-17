@@ -59,16 +59,16 @@ true print                  # true
 
 ### `typeof`
 
-Consumes the top of the stack and prints its type name to stdout.
+Consumes the top of the stack and returns its type name as a string.
 
-**Stack effect:** `a -> None`
+**Stack effect:** `T -> str`
 
 Works with all types: `i64`, `bool`, `str`, `char`, `ptr`, `array`, `fn`, structs, and enums.
 
 ```casa
-42 typeof                   # i64
-true typeof                 # bool
-"hello" typeof              # str
+42 typeof print             # i64
+true typeof print           # bool
+"hello" typeof print        # str
 ```
 
 ## Memory Intrinsics

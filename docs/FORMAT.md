@@ -42,8 +42,8 @@ fn fizzbuzz number:i64 {
 - Inside a function body, no more than **1 consecutive blank line** (SHOULD).
 
 ```casa
-import "path/to/lib/std.casa"
-import "path/to/lib/io.casa"
+import "std"
+import "os"
 
 16 = BUFFER_SIZE
 

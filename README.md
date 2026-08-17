@@ -99,7 +99,7 @@ Start with the core language docs (1-9), then explore the library and tooling do
 | 3 | [Modules](docs/modules.md) | Import directives, module resolution, selective imports, library paths |
 | 4 | [Functions and Lambdas](docs/functions-and-lambdas.md) | Functions, lambdas, closures, variables |
 | 5 | [Control Flow](docs/control-flow.md) | Conditionals, loops, `for` iterators, `match` pattern matching |
-| 6 | [Structs and Methods](docs/structs-and-methods.md) | Struct definition, accessors, `impl` blocks, dot/arrow syntax |
+| 6 | [Structs and Methods](docs/structs-and-methods.md) | Struct definition, accessors, `impl` blocks, dot access, field assignment |
 | 7 | [Enums](docs/enums.md) | Enum types, variant constructors, `is` destructuring |
 | 8 | [Traits](docs/traits.md) | Trait definitions, explicit conformance, trait bounds, `Hashable` |
 | 9 | [Built-in Intrinsics](docs/intrinsics.md) | Stack manipulation, IO, memory, and syscall intrinsics |
