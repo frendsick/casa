@@ -1,8 +1,6 @@
 # Casa
 
-Casa is a statically typed, stack-based programming language that compiles to
-x86-64 Linux executables. Programs compose small functions through a typed value
-stack.
+Casa is a statically typed, stack-based programming language for Linux.
 
 ```casa
 "Hello, world!\n" print
@@ -16,8 +14,7 @@ stack.
 
 ## Install
 
-Clone the repository and download the compiler configured by
-`casa-release.env`:
+Clone the repository and download the compiler:
 
 ```sh
 git clone https://github.com/frendsick/casa.git
@@ -58,9 +55,7 @@ Common compiler options:
 
 ## Learn Casa
 
-Start with the [Casa guide](docs/guide.md). It builds one program while
-introducing the value stack, operand order, bindings, functions, control flow,
-imports, and collections.
+Start with the [Casa guide](docs/guide.md).
 
 Use the topic references when you need exact behavior:
 
@@ -104,7 +99,3 @@ Casa is self-hosted. Build the compiler with an existing `casac`:
 ```sh
 ./casac casa.casa -o casac -L lib
 ```
-
-Build and configure the [language server](docs/language-server.md), or build and
-use the formatter from the [Casa Format Guide](docs/FORMAT.md). Contributor
-naming and style conventions are in [STYLE.md](docs/STYLE.md).
