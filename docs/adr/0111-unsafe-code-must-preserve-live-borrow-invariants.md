@@ -6,7 +6,7 @@ Unsafe raw-memory operations must preserve the lifetime, validity, and aliasing 
 value = view
 
 unsafe {
-    address 42 store64 # undefined behavior if address points into value
+    42 address store64 # undefined behavior if address points into value
 }
 
 view.inspect

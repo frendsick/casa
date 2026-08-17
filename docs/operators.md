@@ -58,7 +58,7 @@ After `import "std"`, these `i64` helpers are available:
 
 `f32` and `f64` also provide `abs`.
 
-`+` and `-` also apply byte offsets to pointers:
+`+` and `-` also apply `u64` byte offsets to pointers without element scaling:
 
 ```casa
 unsafe {

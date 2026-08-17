@@ -71,7 +71,7 @@ Raw memory operations, pointer arithmetic and conversion, and Linux system
 calls must be inside an `unsafe` block:
 
 ```casa
-fn read_byte address:ptr -> i64 {
+fn read_byte address:ptr -> u8 {
     unsafe { address load8 }
 }
 ```
@@ -82,6 +82,24 @@ returns aligned storage or terminates the process if storage is exhausted.
 `free` releases only a complete live allocation returned by `alloc`. Double
 free, use after free, and freeing foreign or interior pointers are undefined
 behavior.
+
+Pointer `+` and `-` use `u64` byte offsets and do not scale by an element type.
+Raw loads and stores use the matching unsigned integer width:
+
+| Operation | Stack effect |
+|---|---|
+| `load8` | `ptr -> u8` |
+| `load16` | `ptr -> u16` |
+| `load32` | `ptr -> u32` |
+| `load64` | `ptr -> u64` |
+| `store8` | `ptr u8 -> None` |
+| `store16` | `ptr u16 -> None` |
+| `store32` | `ptr u32 -> None` |
+| `store64` | `ptr u64 -> None` |
+
+The x86-64 target permits unaligned access. Multibyte operations use
+little-endian byte order. Every accessed byte must still belong to valid live
+storage.
 
 The block permits only designated unsafe operations. Type, ownership, borrow,
 control-flow, and stack-effect checks still apply.

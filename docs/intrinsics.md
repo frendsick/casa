@@ -59,14 +59,14 @@ an `unsafe` block.
 |---|---|---|
 | `alloc` | `u64 -> ptr` | Allocate bytes or terminate on failure |
 | `free` | `ptr -> None` | Release a complete live allocation |
-| `load8` | `ptr -> i64` | Load 8 bits and zero-extend them |
-| `load16` | `ptr -> i64` | Load 16 bits and zero-extend them |
-| `load32` | `ptr -> i64` | Load 32 bits and zero-extend them |
-| `load64` | `ptr -> i64` | Load 64 bits |
-| `store8` | `[T: Word] ptr T -> None` | Store the low 8 bits |
-| `store16` | `[T: Word] ptr T -> None` | Store the low 16 bits |
-| `store32` | `[T: Word] ptr T -> None` | Store the low 32 bits |
-| `store64` | `[T: Word] ptr T -> None` | Store 64 bits |
+| `load8` | `ptr -> u8` | Load an unsigned 8-bit value |
+| `load16` | `ptr -> u16` | Load an unsigned 16-bit value |
+| `load32` | `ptr -> u32` | Load an unsigned 32-bit value |
+| `load64` | `ptr -> u64` | Load an unsigned 64-bit value |
+| `store8` | `ptr u8 -> None` | Store an 8-bit value |
+| `store16` | `ptr u16 -> None` | Store a 16-bit value |
+| `store32` | `ptr u32 -> None` | Store a 32-bit value |
+| `store64` | `ptr u64 -> None` | Store a 64-bit value |
 
 Inputs in a stack effect are listed from the top downward. The value is pushed
 before the destination pointer at a store call:
@@ -79,7 +79,8 @@ unsafe {
 }
 ```
 
-Pointer offsets are measured in bytes.
+Pointer `+` and `-` take `u64` byte offsets. Multibyte loads and stores permit
+unaligned addresses and use little-endian byte order.
 
 `0 alloc` returns null, and `free` does nothing when given null. A positive
 allocation is non-null. Double free, use after free, and freeing an interior or
