@@ -18,12 +18,43 @@ struct TypedStack {
     values: List[TypedValue]
 }
 
+enum ValueCapability {
+    Owned
+    Shared
+    Exclusive
+}
+
 struct TypedValue {
     type_value: Type
     origin:     Location
     literals:   List[Op]
+    place:      Option[str]
+    capability: ValueCapability
     binding:    Option[str]
     source:     Option[Op]
+}
+
+fn type_capability typ:mut$Type -> ValueCapability {
+    if typ.is_shared_borrow then ValueCapability::Shared return fi
+    if typ.is_exclusive_borrow then ValueCapability::Exclusive return fi
+    ValueCapability::Owned
+}
+
+fn method_receiver_type effect:$StackEffect -> Option[Type] {
+    for parameter in effect.parameters.iter do
+        if parameter.name "__trait_" str::starts_with ! then
+            parameter.typ clone_type Option::Some return
+        fi
+    done
+    Option[Type]::None
+}
+
+fn capability_matches_receiver capability:$ValueCapability expected:mut$Type -> bool {
+    if capability ValueCapability::Shared is then expected.is_shared_borrow return fi
+    if capability ValueCapability::Exclusive is then
+        expected.is_shared_borrow expected.is_exclusive_borrow || return
+    fi
+    true
 }
 
 fn contains_op ops:mut$List[Op] candidate:mut$Op -> bool {
@@ -68,8 +99,8 @@ impl TypedStack {
         0 (u64) = index
         while index self.values.length > do
             index self.values.get = value
-            value.source value.binding value.literals value.origin index types.get clone_type
-            TypedValue index self.values.set
+            value.source value.binding value.capability value.place value.literals value.origin
+            index types.get clone_type TypedValue index self.values.set
             1 += index
         done
     }
@@ -384,7 +415,7 @@ impl TypeChecker {
     fn set_owner_moved tc:mut$TypeChecker name:$str moved:bool {
         name tc.moved_owners string_list_index = index
         if moved then
-            if 0 index < then name.clone tc.moved_owners.push fi
+            if 0 index < then name str::Clone::clone tc.moved_owners.push fi
             return
         fi
         if 0 index >= then
@@ -470,7 +501,8 @@ impl TypeChecker {
     }
 
     fn stack_push_type tc:mut$TypeChecker type_value:mut$Type {
-        Option[Op]::None Option[str]::None List[Op]::new tc.current_location type_value TypedValue
+        Option[Op]::None Option[str]::None type_value type_capability Option[str]::None
+        List[Op]::new tc.current_location type_value TypedValue
         tc.stack.values.push
     }
 
@@ -484,8 +516,12 @@ impl TypeChecker {
         Option[str]::None = binding
         Option[Op]::None = source
         type_value clone_type = stack_type
+        false = preserve_borrow
+        if function_opt Option::Some(function) is then
+            if f"{type_value.format}::clone" function.name == then true = preserve_borrow fi
+        fi
         if type_value.borrow_target Option::Some(target) is then
-            if function_opt target tc.type_is_copy then target = stack_type fi
+            if preserve_borrow ! function_opt target tc.type_is_copy && then target = stack_type fi
         fi
         if
         function_opt.is_some
@@ -499,13 +535,17 @@ impl TypeChecker {
             name.clone Option::Some = binding
             op (ptr) (Op) Option::Some = source
         fi
-        source binding List[Op]::new tc.current_location stack_type TypedValue tc.stack.values.push
+        name.clone Option::Some = place
+        source binding type_value type_capability place List[Op]::new tc.current_location stack_type
+        TypedValue
+        tc.stack.values.push
     }
 
     fn stack_push_literal tc:mut$TypeChecker type_value:mut$Type op:mut$Op {
         List[Op]::new = literals
         op (ptr) (Op) literals.push
-        Option[Op]::None Option[str]::None literals tc.current_location type_value TypedValue
+        Option[Op]::None Option[str]::None ValueCapability::Owned Option[str]::None literals
+        tc.current_location type_value TypedValue
         tc.stack.values.push
     }
 }
@@ -584,8 +624,8 @@ impl TypeChecker {
         if 0 value.literals.length != then
             value.type_value resolve_numeric_literal_default = resolved
             tc.diagnostics resolved value.resolve_literals drop
-            value.source value.binding List[Op]::new value.origin resolved clone_type
-            TypedValue top tc.stack.values.set
+            value.source value.binding value.capability value.place List[Op]::new value.origin
+            resolved clone_type TypedValue top tc.stack.values.set
             resolved return
         fi
         value.type_value
@@ -597,10 +637,12 @@ impl TypeChecker {
         if 0 tc.stack.values.length == then
             if tc.within_param_cap then
                 TYPE_UNKNOWN_T Parameter::new tc.parameters.push
-                Option[Op]::None Option[str]::None List[Op]::new empty_location TYPE_UNKNOWN_T TypedValue return
+                Option[Op]::None Option[str]::None ValueCapability::Owned Option[str]::None
+                List[Op]::new empty_location TYPE_UNKNOWN_T TypedValue return
             fi
             tc.stack_underflow_message tc.report_stack_underflow
-            Option[Op]::None Option[str]::None List[Op]::new empty_location TYPE_MISSING_T TypedValue return
+            Option[Op]::None Option[str]::None ValueCapability::Owned Option[str]::None
+            List[Op]::new empty_location TYPE_MISSING_T TypedValue return
         fi
         tc.stack.values.pop
     }
@@ -639,7 +681,8 @@ impl TypeChecker {
             if inferred.is_unknown_placeholder ! inferred TYPE_MISSING_T.eq ! && then
                 tc.diagnostics inferred right.resolve_literals drop
                 inferred Parameter::new tc.parameters.push
-                Option[Op]::None Option[str]::None List[Op]::new empty_location inferred TypedValue return
+                Option[Op]::None Option[str]::None ValueCapability::Owned Option[str]::None
+                List[Op]::new empty_location inferred TypedValue return
             fi
         fi
         tc.stack_pop_value
@@ -786,7 +829,7 @@ fn resolve_return_type_t bindings:$Map[str Type] ret:$Type -> Type {
             if name bindings.get Option::Some(bound) is then
                 bound clone_type
             else
-                name.clone Type::TypeVar
+                name str::Clone::clone Type::TypeVar
             fi
         }
         Type::Generic(generic) => {
@@ -827,11 +870,11 @@ impl TypeChecker {
     -> Map[str Type] {
         type_var bindings.get = existing
         if existing.is_none then
-            actual clone_type type_var.clone bindings.set return
+            actual clone_type type_var str::Clone::clone bindings.set return
         fi
         existing.unwrap = bound
         if bound.has_unresolved_type_var actual.has_unresolved_type_var ! && then
-            actual clone_type type_var.clone bindings.set return
+            actual clone_type type_var str::Clone::clone bindings.set return
         fi
         actual.is_unknown_placeholder = actual_unknown
         bound.is_unknown_placeholder = bound_unknown
@@ -840,7 +883,7 @@ impl TypeChecker {
         bound.has_unresolved_type_var ||
         actual_unknown ! &&
         then
-            actual clone_type type_var.clone bindings.set return
+            actual clone_type type_var str::Clone::clone bindings.set return
         fi
         if
         bound actual.eq !
@@ -928,7 +971,8 @@ impl TypeChecker {
         return_type bindings resolve_return_type_t = resolved
         if return_type.type_var_name Option::Some(type_variable) is then
             if type_variable literal_bindings.get Option::Some(literals) is then
-                Option[Op]::None Option[str]::None literals tc.current_location resolved TypedValue
+                Option[Op]::None Option[str]::None resolved type_capability Option[str]::None
+                literals tc.current_location resolved TypedValue
                 tc.stack.values.push
                 return
             fi
@@ -1105,6 +1149,47 @@ impl TypeChecker {
 }
 
 impl TypeChecker {
+    fn check_call_borrow_pair
+        tc:mut$TypeChecker
+        first_type:$Type
+        first_value:$TypedValue
+        second_type:$Type
+        second_value:$TypedValue
+    {
+        if second_type.is_borrow ! then return fi
+        if first_type.is_exclusive_borrow second_type.is_exclusive_borrow || ! then return fi
+        if first_value.place Option::Some(first_name) is then
+            if second_value.place Option::Some(second_name) is then
+                if first_name second_name != then return fi
+                if first_type.is_exclusive_borrow second_type.is_exclusive_borrow && then
+                    f"Cannot borrow `{first_name}` exclusively more than once in one call"
+                else
+                    f"Cannot borrow `{first_name}` exclusively while it is also borrowed in the same call"
+                fi = message
+                tc.current_location message ErrorKind::InvalidVariable tc.diagnostics.record_error
+            fi
+        fi
+    }
+
+    fn check_call_borrow_conflicts tc:mut$TypeChecker effect:mut$StackEffect {
+        tc.stack.values.length = depth
+        0 (u64) = first_index
+        while first_index effect.parameters.length > first_index depth > && do
+            first_index effect.parameters.get.typ clone_type = first_type
+            if first_type.is_borrow then
+                depth 1 - first_index - tc.stack.values.get = first_value
+                first_index 1 + = second_index
+                while second_index effect.parameters.length > second_index depth > && do
+                    second_index effect.parameters.get.typ clone_type = second_type
+                    depth 1 - second_index - tc.stack.values.get = second_value
+                    second_value second_type first_value first_type tc.check_call_borrow_pair
+                    1 += second_index
+                done
+            fi
+            1 += first_index
+        done
+    }
+
     fn bind_borrow_parameter
         tc:mut$TypeChecker
         expected:mut$Parameter
@@ -1157,6 +1242,7 @@ impl TypeChecker {
         name:mut$str
         return_hint:Option[Type]
     {
+        effect tc.check_call_borrow_conflicts
         # Simple case: no type variables
         if 0 effect StackEffect::type_vars.length == then
             0 (u64) = index
@@ -1776,8 +1862,8 @@ impl TypeChecker {
         if op.value OpValue::Dup is then
             if 1 depth < then false return fi
             depth 1 - tc.stack.values.get = value
-            Option[Op]::None Option[str]::None value.literals.shallow_copy value.origin
-            value.type_value clone_type
+            Option[Op]::None Option[str]::None value.capability value.place
+            value.literals.shallow_copy value.origin value.type_value clone_type
             TypedValue tc.stack.values.push
             true return
         fi
@@ -1793,8 +1879,8 @@ impl TypeChecker {
         if op.value OpValue::Over is then
             if 2 depth < then false return fi
             depth 2 - tc.stack.values.get = value
-            Option[Op]::None Option[str]::None value.literals.shallow_copy value.origin
-            value.type_value clone_type
+            Option[Op]::None Option[str]::None value.capability value.place
+            value.literals.shallow_copy value.origin value.type_value clone_type
             TypedValue tc.stack.values.push
             true return
         fi
@@ -2093,13 +2179,35 @@ impl TypeChecker {
 }
 
 impl TypeChecker {
+    fn check_method_receiver_capability
+        tc:mut$TypeChecker
+        effect:mut$StackEffect
+        capability:$ValueCapability
+        method_name:mut$str
+    {
+        if effect method_receiver_type Option::Some(expected_receiver) is then
+            if expected_receiver capability capability_matches_receiver ! then
+                if expected_receiver.is_exclusive_borrow then "exclusive" else "owned" fi
+                = requirement
+                tc.current_location
+                f"Method `{method_name}` requires an {requirement} receiver"
+                ErrorKind::TypeMismatch tc.diagnostics.record_error
+            fi
+        fi
+    }
+
     fn check_trait_method_call tc:mut$TypeChecker op:mut$Op function_opt:mut$Option[Function] {
         if function_opt.is_none then return fi
         tc.stack_peek_type = receiver
+        ValueCapability::Owned = receiver_capability
+        if 0 tc.stack.values.length != then
+            tc.stack.values.length 1 - tc.stack.values.get.capability = receiver_capability
+        fi
         tc.store function_opt receiver clone_type Option::Some op.value analyze_operation
         = semantics
         if semantics.stack_effect Option::Some(effect) is then
             if semantics.method Option::Some(method) is then
+                method.method_name receiver_capability effect tc.check_method_receiver_capability
                 method.method_name receiver.make_method_key = method_key
                 Option[Type]::None method_key effect tc.apply_stack_effect
             fi
@@ -2653,7 +2761,7 @@ fn bounds_imply_trait bounds:mut$List[TraitBound] target:mut$Type store:mut$Symb
 
 impl TypeChecker {
     fn ensure_function_clone_method tc:mut$TypeChecker typ:mut$Type location:mut$Location {
-        if typ Type::Function(_) is ! then return fi
+        if typ Type::Function(_) is ! typ.is_shared_borrow ! && then return fi
         if "Copy" tc.store.traits.has ! "Clone" tc.store.traits.has ! || then return fi
         "Copy" GenericType::new Type::Generic = copy_type
         "Clone" GenericType::new Type::Generic = clone_trait_type
@@ -2687,11 +2795,11 @@ impl TypeChecker {
     -> Map[str Type] {
         name bindings.get = existing_option
         if existing_option.is_none then
-            actual clone_type name.clone bindings.set return
+            actual clone_type name str::Clone::clone bindings.set return
         fi
         existing_option.unwrap = existing
         if existing.has_unresolved_type_var actual.has_unresolved_type_var ! && then
-            actual clone_type name.clone bindings.set return
+            actual clone_type name str::Clone::clone bindings.set return
         fi
         if existing actual.eq ! then
             location f"Type variable `{name}` bound to `{existing.format}` but got `{actual.format}`" ErrorKind::TypeMismatch tc.diagnostics.record_error
@@ -2718,7 +2826,8 @@ impl TypeChecker {
                 if 0 value.literals.length != then
                     actual resolve_numeric_literal_default = fallback
                     existing_option fallback value tc.resolve_type_var_literals = actual
-                    value.source value.binding List[Op]::new value.origin actual TypedValue
+                    value.source value.binding value.capability value.place List[Op]::new value.origin
+                    actual TypedValue
                     stack_index tc.stack.values.set
                 fi
                 location bindings actual type_variable tc.bind_concrete_type_variable return
@@ -3517,7 +3626,7 @@ fn qualify_default_method_calls
             store method_name trait_type trait_type_has_method
             qualifiers.length 1 < &&
             then
-                method_name trait_type QualifiedMethod OpValue::QualifiedMethodCall
+                method_name trait_type false QualifiedMethod OpValue::QualifiedMethodCall
                 body_op Op::set_value
             fi
         elif body_op.value OpValue::PushArray(items) is then
@@ -3846,8 +3955,20 @@ impl TypeChecker {
                 op.location "Reserved `drop` methods cannot be called directly; use the `drop` intrinsic" ErrorKind::InvalidScope tc.diagnostics.record_error
             fi
             tc.stack_peek_type = receiver
+            ValueCapability::Owned = receiver_capability
+            if 0 tc.stack.values.length != then
+                tc.stack.values.length 1 - tc.stack.values.get.capability = receiver_capability
+            fi
+            receiver clone_type = lookup_receiver
+            if receiver.is_borrow ! then
+                if receiver_capability ValueCapability::Shared is then
+                    SHARED_BORROW_TYPE receiver clone_type apply_borrow_type = lookup_receiver
+                elif receiver_capability ValueCapability::Exclusive is then
+                    EXCLUSIVE_BORROW_TYPE receiver clone_type apply_borrow_type = lookup_receiver
+                fi
+            fi
             if "clone" method_name == then
-                op.location receiver tc.ensure_function_clone_method
+                op.location lookup_receiver tc.ensure_function_clone_method
             fi
             if op.value OpValue::MethodCall is then
                 if method_name op tc.check_float_to_bits then op_index return fi
@@ -3856,9 +3977,11 @@ impl TypeChecker {
                 if method_name op tc.check_try_integer_method then op_index return fi
                 if method_name op tc.check_wrapping_method then op_index return fi
             fi
-            tc.store function_opt receiver clone_type Option::Some op.value
+            tc.store function_opt lookup_receiver clone_type Option::Some op.value
             analyze_operation = semantics
             if semantics.method Option::Some(method_semantics) is then
+                method_name receiver_capability method_semantics.stack_effect
+                tc.check_method_receiver_capability
                 if method_semantics.kind MethodSemanticsKind::TraitBound is then
                     op_index ops op receiver method_semantics
                     tc.apply_trait_bound_method_semantics return
@@ -3996,10 +4119,17 @@ impl TypeChecker {
             if 0 depth == then function_opt op tc.apply_fixed_semantics return fi
             depth 1 - = copied_index
         fi
-        copied_index tc.stack.values.get.type_value = copied_type
+        copied_index tc.stack.values.get = copied_value
+        copied_value.type_value clone_type = copied_type
+        if copied_type.is_borrow ! then
+            if copied_value.capability ValueCapability::Shared is then
+                SHARED_BORROW_TYPE copied_type clone_type apply_borrow_type = copied_type
+            elif copied_value.capability ValueCapability::Exclusive is then
+                EXCLUSIVE_BORROW_TYPE copied_type clone_type apply_borrow_type = copied_type
+            fi
+        fi
         copied_type resolve_numeric_literal_default = copy_check_type
-        "Copy" GenericType::new Type::Generic = copy_type
-        if tc.diagnostics tc.store function_opt copy_type copy_check_type type_satisfies_trait ! then
+        if function_opt copy_check_type tc.type_is_copy ! then
             op.location f"Type `{copied_type.format}` does not satisfy trait `Copy`" ErrorKind::TypeMismatch tc.diagnostics.record_error
         fi
         function_opt op tc.apply_fixed_semantics
@@ -4277,7 +4407,8 @@ impl TypeChecker {
             if 0 return_value.literals.length != then
                 return_index declared_returns.get = declared_return
                 diagnostics declared_return return_value.resolve_literals drop
-                return_value.source return_value.binding List[Op]::new return_value.origin
+                return_value.source return_value.binding return_value.capability return_value.place
+                List[Op]::new return_value.origin
                 declared_return TypedValue
                 return_index checker.stack.values.set
             fi
@@ -4318,7 +4449,8 @@ fn check_ops
         stack_value checker.consume_value
         stack_value.type_value resolve_numeric_literal_default = final_type
         diagnostics final_type stack_value.resolve_literals drop
-        stack_value.source stack_value.binding List[Op]::new stack_value.origin final_type
+        stack_value.source stack_value.binding stack_value.capability stack_value.place List[Op]::new
+        stack_value.origin final_type
         TypedValue
         stack_index checker.stack.values.set
         1 += stack_index
