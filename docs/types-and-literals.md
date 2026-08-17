@@ -93,11 +93,12 @@ Array literals infer one common element type:
 ```
 
 The annotation gives an empty array its element type. See
-[Collections and Errors](standard-library.md),
-[Functions and Lambdas](functions-and-lambdas.md),
-[Structs and Methods](structs-and-methods.md), and [Enums](enums.md) for the
-operations on these types. Raw pointers are covered in
-[Built-in Intrinsics](intrinsics.md#advanced-memory-access).
+[Collections](collections.md),
+[Optional Values and Errors](optional-values-and-errors.md),
+[Functions and Lambdas](functions-and-lambdas.md), [Structs and
+Methods](structs-and-methods.md), and [Enums](enums.md) for operations on these
+types. Raw pointers are covered in [Built-in
+Intrinsics](intrinsics.md#advanced-memory-access).
 
 ## Constants
 

@@ -1,6 +1,7 @@
-# Standard Library
+# Optional Values and Errors
 
-The core standard library is `lib/std.casa`:
+`Option`, `Result`, and `?` represent absent values and recoverable errors.
+Import them from `std`:
 
 ```casa
 import "std"
@@ -8,16 +9,6 @@ import "std"
 
 Compile with a library path that contains `std.casa`, such as
 `casac -L lib program.casa`. See [Modules](modules.md) for import resolution.
-
-The main library references are:
-
-- [Collections and Iterators](collections.md)
-- [Text, characters, and output](strings-and-io.md)
-- [Operating-system APIs](os.md)
-- [Specialist libraries](utilities.md)
-- [Generics and Traits](traits.md#built-in-traits)
-
-This page is the canonical reference for `Option`, `Result`, and `?`.
 
 ## Option
 
@@ -112,9 +103,3 @@ when the error type must change.
 
 See [`examples/propagate_result.casa`](../examples/propagate_result.casa) for a
 runnable file operation that uses `?`.
-
-## Advanced low-level helper
-
-`memcpy destination:ptr source:ptr count:u64` copies raw bytes. Prefer typed
-collections and text operations unless raw memory is required. See
-[Built-in Intrinsics](intrinsics.md#advanced-memory-access).

@@ -172,5 +172,6 @@ The output is:
 - [Control Flow](control-flow.md) covers loops and exhaustive matching.
 - [Structs and Methods](structs-and-methods.md) and [Enums](enums.md) cover custom
   data types.
-- [Standard Library](standard-library.md) and [Collections](collections.md) cover
-  reusable data structures and iterator operations.
+- [Optional Values and Errors](optional-values-and-errors.md) covers `Option`,
+  `Result`, and `?`.
+- [Collections](collections.md) covers reusable data structures and iterators.

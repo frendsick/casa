@@ -72,6 +72,10 @@ buffer (ptr) load64 print    # 42
 
 Pointer offsets are measured in bytes.
 
+`memcpy destination:ptr source:ptr count:u64` is a `std` function, not an
+intrinsic. It becomes available after `import "std"` and copies raw bytes.
+Prefer typed collections and text operations unless raw memory is required.
+
 ## Advanced Linux system calls
 
 `syscall0` through `syscall6` invoke Linux x86-64 system calls directly. Push
@@ -105,5 +109,5 @@ Each argument must fit one machine word. The kernel return value is `i64`.
 0 60 syscall1 drop
 ```
 
-The [standard library](standard-library.md) provides safer operating-system
-operations for normal programs.
+The [operating-system APIs](os.md) provide safer operations for normal
+programs.

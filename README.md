@@ -75,7 +75,7 @@ Library references:
 
 | Topic | Reference |
 |---|---|
-| `Option`, `Result`, and propagation | [Standard Library](docs/standard-library.md) |
+| Optional values and errors | [Optional Values and Errors](docs/optional-values-and-errors.md) |
 | Collections and iterators | [Collections](docs/collections.md) |
 | Text, characters, and output | [Text and Characters](docs/strings-and-io.md) |
 | Files, directories, environment, and processes | [Operating-System APIs](docs/os.md) |
