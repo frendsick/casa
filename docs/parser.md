@@ -1,289 +1,54 @@
 # Parser Library
 
-The parser library provides cursor-based text scanning primitives for building
-parsers in Casa. Import it as a module:
+Import `parser` for cursor-based text scanning:
 
 ```casa
 import "parser"
 ```
 
-Compile the program from the repository root with
-`./casac -L lib program.casa`.
+`Cursor` contains the source string and a mutable `u64` position. `ParseError`
+contains a message and the `u64` position at which parsing failed.
 
-The parser library includes the standard library (`lib/std.casa`) automatically.
+## Cursor API
 
-## Structs
-
-### `Cursor`
-
-A cursor tracks a position within a source string. All scanning methods operate on a shared cursor, advancing its position as characters are consumed.
-
-```casa
-struct Cursor {
-    source: str
-    pos:    i64
-}
-```
-
-### `ParseError`
-
-Returned by parsers when input does not match the expected pattern. Contains a human-readable message and the position where the error occurred.
-
-```casa
-struct ParseError {
-    message: str
-    pos:     i64
-}
-```
-
-## Cursor Methods
-
-### `Cursor::new`
-
-Creates a cursor at position 0.
-
-**Stack effect:** `str -> Cursor`
+| Method | Result or action |
+|---|---|
+| `Cursor::new source:str -> Cursor` | Cursor at position `0` |
+| `is_eof self:Cursor -> bool` | Whether the position reached the end |
+| `peek self:Cursor -> Option[char]` | Current character without advancing |
+| `peek_at self:Cursor offset:u64 -> Option[char]` | Character at a relative offset |
+| `advance self:Cursor -> Option[char]` | Current character, then advance |
+| `starts_with self:Cursor prefix:str -> bool` | Match remaining text without advancing |
+| `expect_char self:Cursor expected:char -> Result[char ParseError]` | Consume one expected character |
+| `skip self:Cursor count:u64` | Advance by a count |
+| `take_string self:Cursor target:str -> Result[str ParseError]` | Consume exact text |
+| `skip_while self:Cursor predicate:fn[char -> bool]` | Advance while matching |
+| `take_while self:Cursor predicate:fn[char -> bool] -> str` | Consume and return matching text |
+| `save self:Cursor -> u64` | Current position |
+| `restore self:Cursor saved:u64` | Return to a saved position |
 
 ```casa
-"hello world" Cursor::new = cursor
+"name=42" Cursor::new = cursor
+&char::is_alpha cursor.take_while print    # name
+'=' cursor.expect_char drop
+cursor parse_int .unwrap print           # 42
 ```
 
-### `Cursor::is_eof`
-
-Returns `true` if the cursor is at or past the end of the source string.
-
-**Stack effect:** `Cursor -> bool`
-
-```casa
-"" Cursor::new .is_eof print    # true
-```
-
-### `Cursor::peek`
-
-Returns the current character without advancing the cursor. Returns `Option::None` at EOF.
-
-**Stack effect:** `Cursor -> Option[char]`
-
-```casa
-"hello" Cursor::new .peek .unwrap print    # h
-```
-
-### `Cursor::peek_at`
-
-Returns the character at `pos + offset` without advancing the cursor. Returns `Option::None` if out of bounds.
-
-**Stack effect:** `Cursor i64 -> Option[char]`
-
-```casa
-2 "hello" Cursor::new .peek_at .unwrap print    # l
-```
-
-### `Cursor::advance`
-
-Returns the current character and advances the cursor by one. Returns `Option::None` at EOF.
-
-**Stack effect:** `Cursor -> Option[char]`
-
-```casa
-"hello" Cursor::new = cursor
-cursor.advance .unwrap print    # h
-cursor.advance .unwrap print    # e
-```
-
-### `Cursor::starts_with`
-
-Checks if the remaining input (from the current position) starts with the given prefix.
-
-**Stack effect:** `Cursor str -> bool`
-
-```casa
-"hello" Cursor::new = cursor
-"hel" cursor.starts_with print    # true
-"xyz" cursor.starts_with print    # false
-```
-
-### `Cursor::expect_char`
-
-Consumes the next character if it matches `expected`. Returns `Result::Ok` with the character on success, or `Result::Error` with a `ParseError` on mismatch or EOF.
-
-**Stack effect:** `Cursor char -> Result[char ParseError]`
-
-```casa
-"abc" Cursor::new = cursor
-'a' cursor.expect_char .unwrap print    # a
-```
-
-### `Cursor::skip`
-
-Advances the cursor position by `n` characters without returning them.
-
-**Stack effect:** `Cursor i64 -> None`
-
-```casa
-"hello" Cursor::new = cursor
-3 cursor.skip
-cursor.peek .unwrap print    # l
-```
-
-### `Cursor::take_string`
-
-Consumes the exact target string if the remaining input starts with it. Returns `Result::Ok` with the matched string on success, or `Result::Error` with a `ParseError` on mismatch.
-
-**Stack effect:** `Cursor str -> Result[str ParseError]`
-
-```casa
-"hello world" Cursor::new = cursor
-"hello" cursor.take_string .unwrap print    # hello
-```
-
-### `Cursor::skip_while`
-
-Advances the cursor while the predicate returns `true` for the current character.
-
-**Stack effect:** `Cursor fn[char -> bool] -> None`
-
-```casa
-"   hello" Cursor::new = cursor
-{ .is_space } cursor.skip_while
-cursor.peek .unwrap print    # h
-```
-
-### `Cursor::take_while`
-
-Collects characters while the predicate returns `true`, returning them as a substring. Uses `str::substring` internally, so no character-by-character allocation is needed.
-
-**Stack effect:** `Cursor fn[char -> bool] -> str`
-
-```casa
-"abc123" Cursor::new = cursor
-{ .is_alpha } cursor.take_while print    # abc
-{ .is_digit } cursor.take_while print    # 123
-```
-
-### `Cursor::save`
-
-Returns the current cursor position for later backtracking.
-
-**Stack effect:** `Cursor -> i64`
-
-### `Cursor::restore`
-
-Sets the cursor position back to a previously saved value.
-
-**Stack effect:** `Cursor i64 -> None`
-
-```casa
-"test" Cursor::new = cursor
-cursor.save = saved
-cursor.advance drop
-cursor.advance drop
-saved cursor.restore
-cursor.peek .unwrap print    # t
-```
-
-## Helper Functions
-
-### `chars_to_str`
-
-Converts a `List[char]` to a `str`. Allocates a new string with the correct length and null terminator.
-
-**Stack effect:** `List[char] -> str`
-
-### `str_to_int`
-
-Converts a digit string to an integer. Handles optional leading `-` for negative numbers.
-
-**Stack effect:** `str -> i64`
-
-```casa
-"42" str_to_int print      # 42
-"-7" str_to_int print      # -7
-```
-
-### `is_ident_start`
-
-Returns `true` if the character is alphabetic or an underscore. Suitable for the first character of an identifier.
-
-**Stack effect:** `char -> bool`
-
-### `is_ident_char`
-
-Returns `true` if the character is alphanumeric or an underscore. Suitable for subsequent characters of an identifier.
-
-**Stack effect:** `char -> bool`
-
-## High-Level Parsers
-
-### `skip_whitespace`
-
-Skips spaces, tabs, newlines, and carriage returns.
-
-**Stack effect:** `Cursor -> None`
-
-```casa
-"   hello" Cursor::new = cursor
-cursor skip_whitespace
-cursor.pos print    # 3
-```
-
-### `parse_int`
-
-Parses an integer with optional leading `-`. Returns `Result::Error` if no digits are found. Restores cursor position on failure.
-
-**Stack effect:** `Cursor -> Result[i64 ParseError]`
-
-```casa
-"42" Cursor::new parse_int .unwrap print      # 42
-"-7" Cursor::new parse_int .unwrap print      # -7
-"abc" Cursor::new parse_int .is_error print   # true
-```
-
-### `parse_identifier`
-
-Parses an identifier matching `[a-zA-Z_][a-zA-Z0-9_]*`. Returns `Result::Error` if the current character is not a valid identifier start. Restores cursor position on failure.
-
-**Stack effect:** `Cursor -> Result[str ParseError]`
-
-```casa
-"my_var" Cursor::new parse_identifier .unwrap print    # my_var
-```
-
-### `parse_escape`
-
-Parses an escape sequence after the `\` has been consumed. Recognizes: `\n`, `\t`, `\\`, `\"`, `\'`, `\0`, `\r`, `\{`, `\}`.
-
-**Stack effect:** `Cursor -> Result[char ParseError]`
-
-### `parse_quoted_string`
-
-Parses a double-quoted string with escape sequences. Consumes the opening and closing `"` characters. Returns the string contents (with escapes processed).
-
-**Stack effect:** `Cursor -> Result[str ParseError]`
-
-### `parse_char_literal`
-
-Parses a single-quoted character literal with escape sequences. Consumes the opening and closing `'` characters. Returns the character value.
-
-**Stack effect:** `Cursor -> Result[char ParseError]`
-
-## Complete Example
-
-```casa
-import "parser"
-
-# Parse integers and identifiers from input
-"abc123" Cursor::new = cursor
-{ .is_alpha } cursor.take_while = letters
-{ .is_digit } cursor.take_while = digits
-letters print    # abc
-digits print     # 123
-
-# Parse with backtracking
-"test" Cursor::new = cursor2
-cursor2.save = pos
-&is_ident_char cursor2.take_while print    # test
-pos cursor2.restore
-{ .is_alpha } cursor2.take_while print   # test
-```
-
-See [`examples/parser.casa`](../examples/parser.casa) for a full program demonstrating all parser library features.
+## Ready-made parsers
+
+| Function | Result |
+|---|---|
+| `skip_whitespace cursor:Cursor` | Skip ASCII whitespace |
+| `parse_int cursor:Cursor -> Result[i64 ParseError]` | Signed decimal integer |
+| `parse_identifier cursor:Cursor -> Result[str ParseError]` | Casa-style identifier |
+| `parse_escape cursor:Cursor -> Result[char ParseError]` | Character after a backslash |
+| `parse_quoted_string cursor:Cursor -> Result[str ParseError]` | Double-quoted text |
+| `parse_char_literal cursor:Cursor -> Result[char ParseError]` | Single-quoted character |
+
+The library also exports `str_to_int`, `is_ident_start`, and `is_ident_char` for
+custom parsers.
+
+Use `save` and `restore` when alternatives need backtracking. The ready-made
+integer and quoted-literal parsers restore their starting position on failure.
+
+See [`examples/parser.casa`](../examples/parser.casa) for a runnable parser.

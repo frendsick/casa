@@ -1,21 +1,8 @@
 # Enums
 
-Enums define a type with a fixed set of named variants. Variants can carry inner values, making enums suitable for modeling alternatives and tagged unions.
+An enum defines a closed set of variants. A variant can carry values.
 
-## Defining an Enum
-
-Use the `enum` keyword followed by the type name and a list of variants in braces.
-
-```casa
-enum Color { Red Green Blue }
-enum Direction { North South East West }
-```
-
-Each variant is a distinct value of the enum type. An enum must have at least one variant. Variant names must be unique within the enum.
-
-## Variants with Inner Values
-
-Variants can carry inner values by specifying types in parentheses.
+## Define an enum
 
 ```casa
 enum Shape {
@@ -25,238 +12,75 @@ enum Shape {
 }
 ```
 
-An enum can mix variants with and without inner values. When any variant has inner values, all variants are heap-allocated at runtime.
+An enum must have at least one variant. Variant names are unique within the
+enum.
 
-## Generic Enums
-
-Enums can have type parameters, written in brackets after the name.
+Enums can have type parameters:
 
 ```casa
 enum Option[T] { None Some(T) }
 enum Result[T E] { Error(E) Ok(T) }
 ```
 
-The type parameters are resolved when constructing or matching on the enum.
+See [Traits](traits.md) for the general rules for type parameters.
 
-## Variant Constructors
+## Construct a variant
 
-Access variants using the `EnumName::VariantName` syntax.
-
-**Stack effect (plain):** `-> EnumName`
+Use `Enum::Variant`. Push carried values before the constructor:
 
 ```casa
-Color::Red        # pushes a Color value
-Direction::North  # pushes a Direction value
+Shape::Point
+10 Shape::Circle
+3 4 Shape::Rectangle
 ```
 
-For variants with inner values, push the inner values onto the stack first.
-
-**Stack effect (with inner values):** `inner_values -> EnumName`
+The carried values determine generic type parameters when possible:
 
 ```casa
-10 Shape::Circle           # pushes Shape with radius 10
-3 4 Shape::Rectangle       # pushes Shape with width 3, height 4
-Shape::Point               # pushes Shape with no inner values
+42 Option::Some          # Option[i64]
+"not found" Result::Error
 ```
 
-For generic enums, the type parameters are inferred from the inner values.
+An empty generic variant often needs context:
 
 ```casa
-42 Option::Some            # pushes Option[i64]
-Option::None               # pushes Option[T] (generic)
-"hello" Option::Some       # pushes Option[str]
+Option::None = result:Option[i64]
 ```
 
-Variants can be assigned to variables:
+## Process an enum
+
+Use `is` for one conditional variant check. Use `match` when each variant needs
+its own behavior:
 
 ```casa
-Color::Blue = my_color
-42 Option::Some = maybe_int
-```
-
-## Comparison
-
-Enum values of the same type can be compared with all comparison operators (`==`, `!=`, `<`, `<=`, `>`, `>=`). Ordering is based on the declaration order of variants (0-based ordinal). For data-carrying enums, comparison checks the variant tag only (not inner values).
-
-**Stack effect:** `EnumName EnumName -> bool`
-
-```casa
-Color::Red Color::Red == print     # true
-Color::Red Color::Blue != print    # true
-Color::Blue Color::Red < print     # true (Red < Blue, ordinal 0 < 2)
-Color::Red Color::Blue > print     # true (Blue > Red, ordinal 2 > 0)
-```
-
-Comparing values of different enum types is a compile-time error:
-
-```casa
-# ERROR: cannot compare Color and Direction
-Color::Red Direction::North ==
-```
-
-Comparing an enum value with a non-enum type (e.g. `i64`) is also a compile-time error.
-
-## Variant Checking with `is`
-
-The `is` keyword checks whether an enum value is a specific variant. It consumes the enum value and pushes a `bool`.
-
-**Stack effect:** `EnumName -> bool`
-
-```casa
-Color::Red = color
-color Color::Red is print     # true
-color Color::Blue is print    # false
-```
-
-### Destructuring with `is`
-
-Inside `if`/`elif` conditions, `is` can destructure inner values into bindings. The bindings are available in the corresponding `then`-block only.
-
-```casa
-enum Shape {
-    Circle(i64)
-    Rectangle(i64 i64)
-    Point
-}
-
-10 Shape::Circle = shape
-
-if shape Shape::Circle(radius) is then
-    radius print
-fi
-```
-
-Use `elif` to check multiple variants:
-
-```casa
-if shape Shape::Circle(r) is then
-    r print
-elif shape Shape::Rectangle(w h) is then
-    w h * print
-fi
-```
-
-For generic enums, binding types are inferred from the concrete enum type:
-
-```casa
-42 Option::Some = maybe
-if maybe Option::Some(value) is then
-    value print    # value has type i64
-fi
-```
-
-The binding is not visible in sibling branches, in `else`, or after `fi`.
-Implicit `is` bindings may not shadow an accessible local variable.
-
-Using `is` with bindings outside of `if`/`elif` conditions is a compile-time error:
-
-```casa
-# ERROR: `is` with bindings is only allowed in `if`/`elif` conditions
-shape Shape::Circle(r) is
-```
-
-## Printing
-
-Printing an enum value outputs its ordinal (0-based index in the declaration order).
-
-```casa
-Color::Red print     # 0
-Color::Green print   # 1
-Color::Blue print    # 2
-```
-
-## Match
-
-Enums support exhaustive pattern matching with `match`/`end`. Variants with inner values can be destructured into bindings. All variants must be covered, or a wildcard `_` arm must be present.
-
-```casa
-enum Color { Red Green Blue }
-
-Color::Green match
-    Color::Red => "red" print
-    Color::Green => "green" print
-    Color::Blue => "blue" print
-end
-```
-
-See [Control Flow -- Match](control-flow.md#match) for full syntax, destructuring, wildcard arms, match as expression, and exhaustiveness rules.
-
-## Enums in Functions
-
-Enum types work as function parameters and return types.
-
-```casa
-enum Direction { North South East West }
-
-fn is_vertical d:Direction -> bool {
-    d match
-        Direction::North => true
-        Direction::South => true
-        Direction::East => false
-        Direction::West => false
+fn area shape:Shape -> i64 {
+    shape match
+        Shape::Circle(radius) => radius radius *
+        Shape::Rectangle(width height) => width height *
+        Shape::Point => 0
     end
 }
-
-Direction::North is_vertical print   # true
 ```
 
-## Enums in Conditionals
+See [Control Flow and Patterns](control-flow.md#test-and-bind-an-enum-variant)
+for `is`, pattern bindings, guards, and exhaustive `match`.
 
-Enum values can be used in `if` conditions with comparison operators:
+## Other enum operations
 
-```casa
-Color::Red = my_color
-
-if my_color Color::Red == then
-    "it is red" print
-fi
-```
-
-## Complete Example
+Enums can be compared when their types match. Variant order follows declaration
+order. Printing an enum writes its zero-based variant number. Using the enum
+name as a value produces its number of variants:
 
 ```casa
 enum Color { Red Green Blue }
 
-# Variant constructor
-Color::Green = color
-
-# Comparison
-color Color::Green == print    # true
-
-# Match as expression
-color match
-    Color::Red => "red"
-    Color::Green => "green"
-    Color::Blue => "blue"
-end
-print    # green
-
-# Print ordinal
-Color::Blue print    # 2
+Color::Red Color::Blue > print    # true, because Blue follows Red
+Color::Blue print                 # 2
+Color print                       # 3
 ```
 
-## Variant Count
+Payload-free enums automatically implement `Hashable`. See the
+[built-in trait catalog](traits.md#built-in-traits) for use as map keys or set
+elements.
 
-Using the enum name as a value pushes the number of variants as an `i64`.
-
-**Stack effect:** `-> i64`
-
-```casa
-enum Color { Red Green Blue }
-
-Color print    # 3
-```
-
-This is resolved at compile time.
-
-See [`examples/enum.casa`](../examples/enum.casa).
-
-## Auto-derived `Hashable`
-
-Enums whose variants carry no inner values are automatically `Hashable`, so they can be used as `Map` keys or `Set` elements without writing an `impl` block. See [Traits -- Auto-derived `Hashable` for Payload-Free Enums](traits.md#auto-derived-hashable-for-payload-free-enums).
-
-## See Also
-
-- [Control Flow -- Match](control-flow.md#match) -- full match syntax, destructuring, and exhaustiveness rules
-- [Traits](traits.md) -- defining and implementing traits for enum types
-- [Types and Literals](types-and-literals.md) -- `Option[T]` and `Result[T E]` as built-in enums
+See [`examples/enum.casa`](../examples/enum.casa) for more runnable examples.

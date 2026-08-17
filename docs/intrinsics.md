@@ -1,152 +1,113 @@
 # Built-in Intrinsics
 
-Intrinsics are operations built into the compiler. They are available in every Casa program without any `import` directive.
+Intrinsics are compiler-provided operations. They need no import.
 
-## Stack Intrinsics
+## Stack operations
 
-Operations for manipulating the stack directly.
-
-| Intrinsic | Stack effect | Description |
-|-----------|-------------|-------------|
-| `drop` | `T -> None` | Discard top of stack |
-| `dup` | `T -> T T` | Duplicate top of stack |
-| `swap` | `T1 T2 -> T2 T1` | Swap top two values |
-| `over` | `T1 T2 -> T2 T1 T2` | Copy second value to top |
-| `rot` | `T1 T2 T3 -> T3 T1 T2` | Rotate top three values |
-
-Type variables resolve at the call site, so the same intrinsic works on any value type:
-`42 dup` produces two `i64`s on the stack, `"hi" dup` produces two `str`s.
-
-### Examples
+| Intrinsic | Stack effect | Action |
+|---|---|---|
+| `drop` | `T -> None` | Discard the top value |
+| `dup` | `T -> T T` | Duplicate the top value |
+| `swap` | `T1 T2 -> T2 T1` | Swap the top two values |
+| `over` | `T1 T2 -> T2 T1 T2` | Copy the second value to the top |
+| `rot` | `T1 T2 T3 -> T3 T1 T2` | Rotate the top three values |
 
 ```casa
 1 2 drop print       # 1
-
-3 dup print print    # 3 3
-
-9 10 swap
-print print          # 9 10
-
-4 5 over
-print print print    # 4 5 4
-
-6 7 8 rot
-print print print    # 6 8 7
+3 dup + print        # 6
 ```
 
-See [`examples/stack_operations.casa`](../examples/stack_operations.casa).
+## Output and inspection
 
-## IO
-
-### `print`
-
-Prints the top of the stack to stdout. Requires the value's type to implement the `Display` trait.
-
-**Stack effect:** `[T: Display] T -> None`
-
-All integer widths, plus `bool`, `char`, `str`, and `cstr`, can be printed
-directly. Other types must implement `Display` (a `to_str self -> str` method);
-the compiler lowers `value print` to `value to_str` followed by a string print.
+| Intrinsic | Stack effect | Action |
+|---|---|---|
+| `print` | `[T: Display] T -> None` | Write a value to standard output |
+| `typeof` | `T -> str` | Return the compile-time type name |
+| `exec` | `fn[...] -> ...` | Call a function value on the top of the stack |
 
 ```casa
-42 print                    # 42
-true print                  # true
-"Hello" print               # Hello
-'A' print                   # A
-"Hello" .as_cstr print      # Hello
-"Hello" print "\n" print    # Hello followed by a newline
+42 print
+"hello" typeof print    # str
 ```
 
-### `typeof`
+Primitive display types print directly. User-defined types must implement
+[`Display`](traits.md#built-in-traits). See
+[Functions and Lambdas](functions-and-lambdas.md#function-values) for `exec`.
 
-Consumes the top of the stack and returns its type name as a string.
+## Process values
 
-**Stack effect:** `T -> str`
+| Intrinsic | Stack effect | Value |
+|---|---|---|
+| `argc` | `None -> u64` | Command-line argument count |
+| `argv` | `None -> ptr` | Command-line argument vector |
+| `envp` | `None -> ptr` | Environment vector |
 
-Works with all types: `i64`, `bool`, `str`, `char`, `ptr`, `array`, `fn`, structs, and enums.
+Prefer the standard-library process helpers unless raw startup data is needed.
+
+## Advanced memory access
+
+These operations expose raw byte-addressed memory. Prefer standard-library
+collections and strings for application code.
+
+| Intrinsic | Stack effect | Action |
+|---|---|---|
+| `alloc` | `u64 -> ptr` | Allocate bytes on the heap |
+| `load8` | `ptr -> i64` | Load 8 bits and zero-extend them |
+| `load16` | `ptr -> i64` | Load 16 bits and zero-extend them |
+| `load32` | `ptr -> i64` | Load 32 bits and zero-extend them |
+| `load64` | `ptr -> i64` | Load 64 bits |
+| `store8` | `[T: Word] ptr T -> None` | Store the low 8 bits |
+| `store16` | `[T: Word] ptr T -> None` | Store the low 16 bits |
+| `store32` | `[T: Word] ptr T -> None` | Store the low 32 bits |
+| `store64` | `[T: Word] ptr T -> None` | Store 64 bits |
+
+Inputs in a stack effect are listed from the top downward. The value is pushed
+before the destination pointer at a store call:
 
 ```casa
-42 typeof print             # i64
-true typeof print           # bool
-"hello" typeof print        # str
+16 alloc = buffer
+42 buffer (ptr) store64
+buffer (ptr) load64 print    # 42
 ```
 
-## Memory Intrinsics
+Pointer offsets are measured in bytes.
 
-Low-level byte-addressed memory access for building data structures. All load/store intrinsics use absolute addressing.
+`memcpy destination:ptr source:ptr count:u64` is a `std` function, not an
+intrinsic. It becomes available after `import "std"` and copies raw bytes.
+Prefer typed collections and text operations unless raw memory is required.
 
-| Intrinsic | Stack Effect | Description |
-|-----------|-------------|-------------|
-| `alloc` | `u64 -> ptr` | Allocate N bytes of heap memory, return pointer |
-| `load8` | `ptr -> i64` | Load 8-bit value from address (zero-extended) |
-| `load16` | `ptr -> i64` | Load 16-bit value from address (zero-extended) |
-| `load32` | `ptr -> i64` | Load 32-bit value from address (zero-extended) |
-| `load64` | `ptr -> i64` | Load 64-bit value from address |
-| `store8` | `[T: Word] T ptr -> None` | Store 8-bit value to address |
-| `store16` | `[T: Word] T ptr -> None` | Store 16-bit value to address |
-| `store32` | `[T: Word] T ptr -> None` | Store 32-bit value to address |
-| `store64` | `[T: Word] T ptr -> None` | Store 64-bit value to address |
+## Advanced Linux system calls
 
-The value type must satisfy the [`Word`](traits.md#built-in-trait-word) marker
-trait, which constrains it to a single-slot value. Every primitive, enum
-variant, struct reference, and array reference satisfies `Word` automatically.
+`syscall0` through `syscall6` invoke Linux x86-64 system calls directly. Push
+the arguments in reverse register order, then push the syscall number. The
+number is the topmost value when the intrinsic runs.
 
-### Examples
+| Intrinsic | Stack effect |
+|---|---|
+| `syscall0` | `i64 -> i64` |
+| `syscall1` | `i64 A1 -> i64` |
+| `syscall2` | `i64 A1 A2 -> i64` |
+| `syscall3` | `i64 A1 A2 A3 -> i64` |
+| `syscall4` | `i64 A1 A2 A3 A4 -> i64` |
+| `syscall5` | `i64 A1 A2 A3 A4 A5 -> i64` |
+| `syscall6` | `i64 A1 A2 A3 A4 A5 A6 -> i64` |
 
-```casa
-32 alloc = buf                # allocate 32 bytes
-42 buf (ptr) store64          # store 64-bit value at buf
-buf (ptr) load64 print        # 42
+Each argument must fit one machine word. The kernel return value is `i64`.
 
-255 buf (ptr) 8 + store8      # store 8-bit value at byte offset 8
-buf (ptr) 8 + load8 print     # 255
-
-100000 buf (ptr) 16 + store32 # store 32-bit value at byte offset 16
-buf (ptr) 16 + load32 print   # 100000
-```
-
-Values are addressed by byte offset. Use pointer arithmetic (`+`) to access different offsets within an allocated block. Choose the load/store size that matches your data width.
-
-## Syscall Intrinsics
-
-Direct Linux system call access. Each intrinsic pops N+1 values from the stack (the syscall number on top, then arguments in order) and pushes the kernel return value as `i64`. The syscall number must be `i64`. Each argument must satisfy the [`Word`](traits.md#built-in-trait-word) marker trait so that exactly one register-sized value lands in the corresponding syscall register.
-
-| Intrinsic | Stack Effect | Description |
-|-----------|-------------|-------------|
-| `syscall0` | `nr -> i64` | Syscall with 0 args |
-| `syscall1` | `[A1: Word] A1 nr -> i64` | Syscall with 1 arg |
-| `syscall2` | `[A1: Word A2: Word] A2 A1 nr -> i64` | Syscall with 2 args |
-| `syscall3` | `[A1: Word A2: Word A3: Word] A3 A2 A1 nr -> i64` | Syscall with 3 args |
-| `syscall4` | `[A1: Word ... A4: Word] A4 A3 A2 A1 nr -> i64` | Syscall with 4 args |
-| `syscall5` | `[A1: Word ... A5: Word] A5 A4 A3 A2 A1 nr -> i64` | Syscall with 5 args |
-| `syscall6` | `[A1: Word ... A6: Word] A6 A5 A4 A3 A2 A1 nr -> i64` | Syscall with 6 args |
-
-### Register Mapping
-
-Arguments are placed in registers following the Linux x86-64 syscall convention:
-
-| Argument | Register |
-|----------|----------|
+| Value | Register |
+|---|---|
 | Syscall number | `%rax` |
-| arg1 | `%rdi` |
-| arg2 | `%rsi` |
-| arg3 | `%rdx` |
-| arg4 | `%r10` |
-| arg5 | `%r8` |
-| arg6 | `%r9` |
-
-### Examples
+| Argument 1 | `%rdi` |
+| Argument 2 | `%rsi` |
+| Argument 3 | `%rdx` |
+| Argument 4 | `%r10` |
+| Argument 5 | `%r8` |
+| Argument 6 | `%r9` |
 
 ```casa
 # exit(0)
 0 60 syscall1 drop
-
-# write(1, buf, len) where buf is a string pointer and len is its length
-len buf 1 1 syscall3 drop
 ```
 
-## See Also
-
-- [Types and Literals](types-and-literals.md) -- primitive types used by intrinsics
-- [Operators](operators.md) -- arithmetic and comparison operators
-- [Standard Library](standard-library.md) -- higher-level abstractions built on these primitives
+The [operating-system APIs](os.md) provide safer operations for normal
+programs.

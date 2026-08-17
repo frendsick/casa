@@ -1,374 +1,120 @@
-# Utilities
+# Specialist Libraries
 
-Application-level utilities for logging, timing, command-line argument parsing,
-and process execution. Compile the examples from the repository root with
-`./casac -L lib program.casa`.
+Compile module-style imports with a library path such as `casac -L lib`.
+
+| Module | Purpose | Runnable example |
+|---|---|---|
+| `log` | Leveled messages to standard error | [`examples/log.casa`](../examples/log.casa) |
+| `timer` | Monotonic elapsed time | [`examples/timer.casa`](../examples/timer.casa) |
+| `argparse` | Command-line definitions and help | [`examples/argparse.casa`](../examples/argparse.casa) |
+| `parser` | Cursor-based text parsers | [`examples/parser.casa`](../examples/parser.casa) |
+| `json` | JSON values, parsing, and serialization | See [JSON](#json) |
+| `os` | Files, directories, environment, paths, and processes | [OS reference](os.md) |
 
 ## Logging
 
-Import the logging library as a module:
-
-```casa
-import "log"
-```
-
-It provides leveled logging to stderr. Messages above the current log level (more verbose) are suppressed. The default level is `LogLevel::Warning`.
-
-### `LogLevel`
-
-An enum with four variants, ordered from least to most verbose:
-
-| Variant | Ordinal | Description |
-|---------|---------|-------------|
-| `LogLevel::Error` | 0 | Critical errors |
-| `LogLevel::Warning` | 1 | Warnings (default level) |
-| `LogLevel::Info` | 2 | Informational messages |
-| `LogLevel::Debug` | 3 | Debug details |
-
-### `log_set_level`
-
-Sets the global log level. Messages at or below this level are printed.
-
-**Stack effect:** `LogLevel -> None`
-
-```casa
-LogLevel::Info log_set_level
-```
-
-### `log_error`
-
-Logs a message at ERROR level.
-
-**Stack effect:** `str -> None`
-
-```casa
-"something went wrong" log_error
-# stderr: [ERROR] something went wrong
-```
-
-### `log_warning`
-
-Logs a message at WARNING level.
-
-**Stack effect:** `str -> None`
-
-```casa
-"deprecated feature used" log_warning
-# stderr: [WARNING] deprecated feature used
-```
-
-### `log_info`
-
-Logs a message at INFO level.
-
-**Stack effect:** `str -> None`
-
-```casa
-"processing file" log_info
-# stderr: [INFO] processing file
-```
-
-### `log_debug`
-
-Logs a message at DEBUG level.
-
-**Stack effect:** `str -> None`
-
-```casa
-f"token count: {count .to_str}" log_debug
-# stderr: [DEBUG] token count: 42
-```
-
-### Complete Example
-
 ```casa
 import "log"
 
-# Default level is Warning — only Error and Warning are shown
-"this is hidden" log_info
-"this is visible" log_warning
-
-# Raise the level to see Info messages
 LogLevel::Info log_set_level
-"now this is visible" log_info
-"still visible" log_warning
+"server started" log_info
 ```
 
-## Timer
+The default level is `Warning`. A selected level includes less verbose levels.
 
-Import the timer library as a module:
+| API | Action |
+|---|---|
+| `LogLevel::Error`, `Warning`, `Info`, `Debug` | Available levels |
+| `log_set_level level:LogLevel` | Set the active level |
+| `log_error message:str` | Log an error |
+| `log_warning message:str` | Log a warning |
+| `log_info message:str` | Log information |
+| `log_debug message:str` | Log debugging detail |
 
-```casa
-import "timer"
-```
-
-It provides high-resolution timing using `clock_gettime` with `CLOCK_MONOTONIC`. Timer implements the `Display` trait, formatting elapsed time as fractional seconds (e.g., `"1.042s"`).
-
-### `Timer::new`
-
-Creates a new Timer and starts it immediately.
-
-**Stack effect:** `-> Timer`
-
-```casa
-Timer::new = timer
-```
-
-### `Timer::elapsed_ns`
-
-Returns elapsed nanoseconds since the Timer was created.
-
-**Stack effect:** `Timer -> i64`
-
-```casa
-timer .elapsed_ns print   # e.g. 42000000
-```
-
-### `Timer::elapsed_ms`
-
-Returns elapsed milliseconds since the Timer was created.
-
-**Stack effect:** `Timer -> i64`
-
-```casa
-timer .elapsed_ms print   # e.g. 42
-```
-
-### `Timer::to_str`
-
-Returns the elapsed time formatted as fractional seconds. Implements the `Display` trait, so Timer can be used directly in format strings.
-
-**Stack effect:** `Timer -> str`
-
-```casa
-f"Elapsed: {timer}\n" print   # e.g. Elapsed: 1.042s
-```
-
-### Global Convenience Functions
-
-A global timer can be used without managing a Timer struct directly.
-
-#### `timer_start`
-
-Starts the global timer.
-
-**Stack effect:** `-> None`
-
-#### `timer_elapsed_ms`
-
-Returns elapsed milliseconds from the global timer. Exits with an error if `timer_start` has not been called.
-
-**Stack effect:** `-> i64`
-
-#### `timer_elapsed_ns`
-
-Returns elapsed nanoseconds from the global timer. Exits with an error if `timer_start` has not been called.
-
-**Stack effect:** `-> i64`
-
-### Complete Example
+## Timing
 
 ```casa
 import "timer"
 
 Timer::new = timer
-
-# Do some work
-0 = count
-while 100000 count > do
-    1 += count
-done
-
-f"Elapsed: {timer}\n" print
-f"Elapsed ms: {timer .elapsed_ms}\n" print
+f"elapsed: {timer}\n" print
 ```
 
-## Command-Line Arguments
+| API | Result or action |
+|---|---|
+| `Timer::new -> Timer` | Start a timer |
+| `elapsed_ns self:Timer -> i64` | Elapsed nanoseconds |
+| `elapsed_ms self:Timer -> i64` | Elapsed milliseconds |
+| `to_str self:Timer -> str` | Fractional seconds, such as `1.042s` |
+| `timer_start` | Start the global timer |
+| `timer_elapsed_ns -> i64` | Global elapsed nanoseconds |
+| `timer_elapsed_ms -> i64` | Global elapsed milliseconds |
 
-### `argc`
+The global elapsed functions terminate if `timer_start` was not called.
 
-Pushes the number of command-line arguments onto the stack.
-
-**Stack effect:** `-> i64`
-
-```casa
-argc print    # prints the argument count
-```
-
-### `argv`
-
-Pushes a pointer to the argument array onto the stack.
-
-**Stack effect:** `-> ptr`
-
-### `get_arg`
-
-Returns the nth command-line argument as a string (zero-indexed). Prints an error to stderr and exits if the index is out of bounds.
-
-**Stack effect:** `i64 -> str`
-
-```casa
-0 get_arg print    # prints the program name
-1 get_arg print    # prints the first argument
-```
-
-## Argument Parser
-
-Import the argument parser library as a module:
-
-```casa
-import "argparse"
-```
-
-It provides a declarative API for defining and parsing CLI arguments, with auto-generated help output similar to Python's `argparse`.
-
-### `ArgParser::new`
-
-Creates a new argument parser. The program name used in help/error output is derived from `basename(argv[0])`.
-
-**Stack effect:** `-> ArgParser`
-
-```casa
-ArgParser::new = parser
-```
-
-### `ArgParser::add_positional`
-
-Adds a required positional argument.
-
-**Stack effect:** `ArgParser str str -> None`
-
-```casa
-"input file" "input" parser .add_positional
-```
-
-### `ArgParser::add_flag`
-
-Adds a boolean flag (store-true). Pass `""` for `short_flag` or `long_flag` if only one form is needed.
-
-**Stack effect:** `ArgParser str str str str -> None`
-
-```casa
-"verbose output" "--verbose" "-v" "verbose" parser .add_flag
-```
-
-### `ArgParser::add_option`
-
-Adds an option that takes a string value.
-
-**Stack effect:** `ArgParser str str str str -> None`
-
-```casa
-"output binary name" "--output" "-o" "output" parser .add_option
-```
-
-### `ArgParser::add_multi_option`
-
-Adds an option that takes a string value and may appear multiple times. Each occurrence appends its value to a list retrieved with `ParsedArgs::get_multi`.
-
-**Stack effect:** `ArgParser str str str str -> None`
-
-```casa
-"library search path" "--library-path" "-L" "library_path" parser .add_multi_option
-```
-
-### `ArgParser::parse_args`
-
-Parses `argc`/`argv` and returns the results. Automatically handles `-h`/`--help` (prints help and exits). Prints a usage error and exits on unrecognized arguments or missing positionals.
-
-**Stack effect:** `ArgParser -> ParsedArgs`
-
-```casa
-parser .parse_args = args
-```
-
-### `ParsedArgs::get`
-
-Returns an `Option[str]` for the named argument. Returns `Option::Some` with the value if provided, `Option::None` if not.
-
-**Stack effect:** `ParsedArgs str -> Option[str]`
-
-```casa
-"input" args .get .unwrap = input_file
-"output" args .get = output_opt    # Option::None if -o not given
-```
-
-### `ParsedArgs::get_flag`
-
-Returns `true` if the flag was set, `false` otherwise.
-
-**Stack effect:** `ParsedArgs str -> bool`
-
-```casa
-"verbose" args .get_flag = is_verbose
-```
-
-### `ParsedArgs::get_multi`
-
-Returns `Option::Some` wrapping the collected `List[str]` for a registered multi-option (the list is empty if the flag was never given). Returns `Option::None` if the name was never registered as a multi-option, mirroring `ParsedArgs::get`.
-
-**Stack effect:** `ParsedArgs str -> Option[List[str]]`
-
-```casa
-"library_path" args .get_multi .unwrap = library_paths
-```
-
-### Complete Example
+## Argument parsing
 
 ```casa
 import "argparse"
 
 ArgParser::new = parser
-"input file" "input" parser .add_positional
-"output file" "--output" "-o" "output" parser .add_option
-"verbose output" "--verbose" "-v" "verbose" parser .add_flag
-parser .parse_args = args
-
-"input" args .get .unwrap = input_file
-"output" args .get = output_opt
-"verbose" args .get_flag = is_verbose
+"input file" "input" parser.add_positional
+"verbose output" "--verbose" "-v" "verbose" parser.add_flag
+parser.parse_args = arguments
 ```
 
-Assuming the compiled binary is named `myapp`, running `./myapp --help` produces:
+`parse_args` handles `-h` and `--help`. Invalid arguments print usage and
+terminate with exit code `2`.
 
-```
-usage: myapp [-h] [-o OUTPUT] [-v] input
+| API | Result or action |
+|---|---|
+| `ArgParser::new -> ArgParser` | Parser named from argument `0` |
+| `add_positional self name help_text` | Required positional value |
+| `add_flag self name short long help_text` | Boolean flag |
+| `add_option self name short long help_text` | Option with one string value |
+| `add_multi_option self name short long help_text` | Repeatable string option |
+| `parse_args self -> ParsedArgs` | Parse process arguments |
+| `get self:ParsedArgs name:str -> Option[str]` | Positional or option value |
+| `get_flag self:ParsedArgs name:str -> bool` | Flag state |
+| `get_multi self:ParsedArgs name:str -> Option[List[str]]` | Repeatable values |
 
-positional arguments:
-  input               input file
+Use `""` when an option has no short or long spelling.
 
-options:
-  -h, --help          show this help message and exit
-  -o, --output OUTPUT output file
-  -v, --verbose       verbose output
-```
+## Parser building blocks
 
-## Process Execution
+Import `parser` for a mutable `Cursor`, `ParseError`, and parsers for integers,
+identifiers, strings, characters, and escapes. See the compact
+[Parser Library](parser.md) reference.
 
-### `run_command`
-
-Executes an external command using fork/execve/wait4. Takes a `List[str]` where the first element is the executable path and the remaining elements are arguments. Returns the child process exit code.
-
-**Stack effect:** `List[str] -> i64`
+## JSON
 
 ```casa
-List[str]::new = args
-"/bin/echo" args.push
-"hello" args.push
-args run_command = exit_code
+import "json"
+
+"{\"name\":\"Ada\"}" Cursor::new json_parse .unwrap = value
+"name" value json_get_str .unwrap print
 ```
 
-Prints an error to stderr and exits if fork fails. If execve fails (command not found), the child process exits with code 1.
+`JsonValue` variants are `JsonNull`, `JsonBool`, `JsonInt`, `JsonString`,
+`JsonArray`, and `JsonObject`.
 
-### `chars_to_str`
+| API | Result |
+|---|---|
+| `json_parse cursor:Cursor -> Result[JsonValue ParseError]` | Parse one value |
+| `json_serialize value:JsonValue -> str` | Serialize a value |
+| `json_escape_string text:str -> str` | Escape string contents |
+| `json_get_value value key -> Option[JsonValue]` | Object member |
+| `json_get_str value key -> Option[str]` | String member |
+| `json_get_int value key -> Option[i64]` | Integer member |
+| `json_get_bool value key -> Option[bool]` | Boolean member |
+| `json_get_object value key -> Option[JsonValue]` | Object member |
+| `json_get_array value key -> Option[List[JsonValue]]` | Array member |
+| `json_object -> Map[str JsonValue]` | Empty object map |
+| `json_set value key map -> Map[str JsonValue]` | Add an object member |
 
-Converts a `List[char]` to a `str`. Used internally by `StringBuilder::build`.
+JSON numbers are integers. Unicode `\uXXXX` escapes currently decode as `?`.
 
-**Stack effect:** `List[char] -> str`
+## Processes
 
-## See Also
-
-- [Standard Library](standard-library.md) -- arrays, Option, and Result
-- [Modules](modules.md) -- import directives and module resolution
-- [Collections](collections.md) -- List, Map, Set, and StringBuilder
-- [Strings and IO](strings-and-io.md) -- string methods and file I/O
+Process arguments and `run_command` are documented with the other
+[operating-system APIs](os.md#arguments-and-processes).

@@ -1,590 +1,159 @@
 # Types and Literals
 
-Casa is a statically typed language. Types are checked at compile time and most can be inferred automatically — you rarely need to write type annotations outside of function declarations.
+Casa checks types at compile time. Literals usually get their type from the
+operation or binding that uses them.
 
-## Primitive Types
+## Primitive types
 
-### Integers
+| Type | Values |
+|---|---|
+| `i8`, `i16`, `i32`, `i64` | Signed integers |
+| `u8`, `u16`, `u32`, `u64` | Unsigned integers |
+| `f32`, `f64` | Floating-point numbers |
+| `bool` | `true` or `false` |
+| `char` | One character |
+| `str` | A Casa string |
+| `cstr` | A null-terminated C string |
 
-Casa provides signed `i8`, `i16`, `i32`, and `i64` integers, plus unsigned
-`u8`, `u16`, `u32`, and `u64` integers. Integer operations require matching
-widths; stored values are never implicitly promoted or converted.
-
-```casa
-127 = signed_byte:i8
-255 = unsigned_byte:u8
-42 print                       # unconstrained literal defaults to i64
-18446744073709551615 = max:u64
-```
-
-An integer literal adopts an immediate integer context, including an annotated
-binding, function parameter, collection element, or same-width operation. The
-compiler rejects values outside that type's range. A literal with no integer
-context defaults to `i64`.
-
-The old `int` and `byte` type names are not aliases and are rejected.
-
-### Floating point
-
-Casa provides `f32` and `f64`. A floating-point literal adopts an immediate
-`f32` or `f64` context and otherwise defaults to `f64`.
+An unconstrained integer literal defaults to `i64`. An unconstrained
+floating-point literal defaults to `f64`. A nearby annotation or parameter can
+select another width:
 
 ```casa
-1.5 = single:f32
-1.5 = double:f64
-1.5 typeof             # f64
+255 = byte:u8
+1.5 = ratio:f32
+42 typeof print       # i64
 ```
 
-Decimal and exponent forms are accepted (`1.5`, `2e3`, `2.5e-2`). The old
-`float` spelling is rejected. Finite literals that overflow their selected
-width are rejected.
+Numeric operations require matching widths. Casa does not implicitly widen or
+narrow stored numeric values.
 
-Arithmetic requires matching widths and preserves that width. `f32` and `f64`
-also provide `nan`, `infinity`, `neg_infinity`, `epsilon`, classification,
-absolute-value, and ties-to-even rounding helpers.
+## Characters and strings
 
-### `bool`
-
-Boolean type with two values: `true` and `false`.
+Character literals use single quotes. String literals use double quotes:
 
 ```casa
-true print     # true
-false print    # false
+'A' print
+"Hello" print
 ```
 
-### `char`
+Both forms support these escapes:
 
-Single character type. Character literals are enclosed in single quotes.
-
-```casa
-'A' print      # A
-'z' print      # z
-```
-
-Characters support the following escape sequences:
-
-| Sequence | Meaning |
-|----------|---------|
+| Escape | Value |
+|---|---|
 | `\n` | Newline |
 | `\t` | Tab |
-| `\\` | Literal backslash |
-| `\'` | Single quote |
-| `\0` | Null byte |
 | `\r` | Carriage return |
-| `\xHH` | Hex byte (two hex digits, e.g. `\x1b`) |
-
-```casa
-'\n' print     # prints a newline
-'\t' print     # prints a tab
-'\\' print     # prints a backslash
-'\'' print     # prints a single quote
-'\x41' print   # prints A (0x41 = 65)
-```
-
-Invalid escape sequences (e.g. `\q`) produce a compile-time `SYNTAX` error. Empty char literals (`''`) are also errors.
-
-Use `codepoint` to inspect a character and `char::from_codepoint` to validate a
-Unicode scalar value:
-
-```casa
-'A'.codepoint print                    # 65
-65 = value:u32
-value char::from_codepoint.unwrap print # A
-```
-
-### `str`
-
-String type. String literals are enclosed in double quotes. Internally, strings are stored as `[8-byte length][N bytes data][\0]`, with the pointer pointing to the length prefix.
-
-```casa
-"Hello world!" print
-```
-
-Convert to string with `.to_str` (identity, see [Strings and IO](strings-and-io.md#type-conversions)).
-
-Strings support the following escape sequences:
-
-| Sequence | Meaning |
-|----------|---------|
-| `\n` | Newline |
-| `\t` | Tab |
-| `\\` | Literal backslash |
-| `\"` | Double quote |
 | `\0` | Null byte |
-| `\r` | Carriage return |
-| `\{` | Literal left brace |
-| `\}` | Literal right brace |
-| `\xHH` | Hex byte (two hex digits, e.g. `\x1b`) |
+| `\\` | Backslash |
+| `\xHH` | One byte written as two hexadecimal digits |
+
+Use `\'` for a quote in a character and `\"` for a quote in a string.
+Invalid escapes are compile-time errors.
+
+`cstr` has no literal syntax. Convert a `str` when an operating-system or C
+interface needs a null-terminated string:
 
 ```casa
-"hello\nworld" print    # prints on two lines
-"say \"hi\"" print      # say "hi"
-"col1\tcol2" print      # tab-separated
-"\x1b[31mred\x1b[0m"    # ANSI escape: red text
+"hello" .as_cstr = message:cstr
 ```
 
-Invalid escape sequences (e.g. `\q`) produce a compile-time `SYNTAX` error.
+See [Text and I/O](strings-and-io.md) for string operations and conversions.
 
-### `cstr`
+## String interpolation
 
-Null-terminated C string type. There is no literal syntax for `cstr`. Create one from a `str` using `str::as_cstr` (see [Strings and IO](strings-and-io.md#stras_cstr)). The `cstr` points directly to the byte data (no length prefix), terminated by a null byte.
+Prefix a string with `f` and put expressions inside braces:
 
 ```casa
-"hello" .as_cstr print    # hello
+"Ada" = name
+3 = count
+f"{name} has {count} tasks\n" print
 ```
 
-Convert to `str` with `cstr::to_str` (see [Strings and IO](strings-and-io.md#cstrto_str)).
+Each expression must implement [`Display`](traits.md#built-in-traits).
+Use `\{` and `\}` for literal braces.
 
-### F-Strings (String Interpolation)
+## Other types
 
-F-strings let you embed expressions inside a string literal. Prefix a string with `f` and wrap expressions in `{}`.
+| Type | Purpose |
+|---|---|
+| `ptr` | A raw memory address |
+| `array[T]` | A fixed-length array literal |
+| `fn[inputs -> outputs]` | A function value |
+| `Option[T]` | A value that can be absent |
+| `Result[T E]` | A success value or an error |
+| Struct name | A user-defined product type |
+| Enum name | A user-defined variant type |
 
-**Stack effect:** `-> str`
+Array literals infer one common element type:
 
 ```casa
-"world" = name
-f"hello {name}" print    # hello world
+[1, 2, 3] = numbers:array[i64]
+[] = names:array[str]
 ```
 
-Any expression whose type satisfies the [`Display`](traits.md#built-in-trait-display) trait can be interpolated. The compiler automatically calls `to_str` on user-defined and generic values. Integer, boolean, character, string, and C string values use intrinsic formatting and do not require the standard library:
-
-```casa
-42 = n
-f"count: {n}"    # count: 42
-```
-
-Other types that do not implement `Display`, such as custom structs without a `to_str` method, are rejected at compile time with a dedicated f-string error.
-
-Multiple expressions are supported:
-
-```casa
-"Alice" = first
-"Smith" = last
-f"{first} {last}" print    # Alice Smith
-```
-
-Use `\{` and `\}` to produce literal braces:
-
-```casa
-f"\{x\}" print    # {x}
-```
-
-Escape sequences work inside f-strings just like regular strings (`\n`, `\t`, `\\`, `\"`, `\0`, `\r`, `\xHH`):
-
-```casa
-f"line1\nline2" print
-# line1
-# line2
-```
-
-An f-string with no expressions is equivalent to a regular string:
-
-```casa
-f"hello"    # same as "hello"
-```
-
-## Composite Types
-
-### `ptr`
-
-Heap pointer returned by `alloc`. Used with sized load/store intrinsics (`load8`/`load16`/`load32`/`load64` and `store8`/`store16`/`store32`/`store64`) for byte-addressed memory access. Load/store intrinsics use absolute addressing.
-
-```casa
-32 alloc = buffer              # allocate 32 bytes
-42 buffer (ptr) store64        # store 64-bit value at buffer
-buffer (ptr) load64 print      # 42
-```
-
-Convert to string with `.to_str` (see [Strings and IO](strings-and-io.md#type-conversions)).
-
-Pointer arithmetic is supported with `+` and `-` using byte offsets:
-
-```casa
-32 alloc = buffer
-99 buffer (ptr) 8 + store64    # store 99 at byte offset 8
-buffer (ptr) 8 + load64 print  # 99
-```
-
-See [Built-in Intrinsics -- Memory Intrinsics](intrinsics.md#memory-intrinsics) for details.
-
-### `array[T]`
-
-Fixed-size, statically typed array literal. The element type `T` is inferred from the items in the array.
-
-```casa
-[1, 2, 3]          # type: array[i64]
-["a", "b", "c"]    # type: array[str]
-[true, false]       # type: array[bool]
-```
-
-Array items can be literals, variables, enum variants, function references, lambdas, or struct literals:
-
-```casa
-42 = x
-[x, 2, 3]                            # type: array[i64]
-[Color::Red, Color::Blue]            # type: array[Color]
-[double, triple]                      # type: array[fn[i64 -> i64]]
-[{ 1 + }]                            # type: array[fn[i64 -> i64]]
-[Point { x: 1, y: 2 }]              # type: array[Point]
-```
-
-All items must have the same type. Heterogeneous arrays are compile-time errors:
-
-```casa
-[1, "hello"]        # TYPE_MISMATCH error
-```
-
-An empty array literal has an unresolved element type. A typed binding supplies
-the required context:
-
-```casa
-[] = xs:array[str]            # type annotation on the binding resolves it
-```
-
-If the inference frame closes without resolution, the compiler emits a `TYPE_MISMATCH` error:
-
-```casa
-[] = xs xs drop               # error: cannot infer element type of empty array
-```
-
-Arrays can be nested. The element type is inferred recursively:
-
-```casa
-[[1, 2], [3, 4]]   # type: array[array[i64]]
-```
-
-The bare type name `array` matches any `array[T]` for backward compatibility (e.g. in function declarations).
-
-Each array has a 16-byte header: the data pointer at offset 0 and the length at offset 8. Elements are stored contiguously in the data area, each taking 8 bytes.
-
-See [Standard Library — Arrays](standard-library.md#arrays) for `array::length` and `array::nth`.
-
-### `fn[sig]`
-
-Function type representing a lambda or function reference. The brackets contain a stack effect that describes the consumed and produced types.
-
-```casa
-{ 2 * }           # type: fn[i64 -> i64]
-{ 1 + }           # type: fn[i64 -> i64]
-{ drop "hi" }     # type: fn[T -> str]
-```
-
-Call a function value with `exec`:
-
-```casa
-{ 2 * } = double
-21 double exec print   # 42
-```
-
-`fn[sig]` can be used as a parameter type in function declarations, allowing functions to accept callbacks:
-
-```casa
-fn apply f:fn[i64 -> i64] x:i64 -> i64 {
-    x f exec
-}
-
-40 { 2 + } apply print   # 42
-```
-
-See [Functions and Lambdas](functions-and-lambdas.md#lambdas) for details.
-
-### `Option[T]`
-
-Optional type representing a value that may or may not be present. `Option` is an enum defined in `lib/std.casa`:
-
-```casa
-enum Option[T] { None Some(T) }
-```
-
-`Option::None` pushes an empty option with bare type `Option`. It is compatible with any `Option[T]`.
-
-**Stack effect:** `-> Option`
-
-`Option::Some` wraps the top-of-stack value into an option. The resulting type is `Option[T]` where `T` is the type of the wrapped value.
-
-**Stack effect:** `T -> Option[T]`
-
-```casa
-42 Option::Some          # type: Option[i64]
-"hello" Option::Some     # type: Option[str]
-Option::None             # type: Option (compatible with any Option[T])
-```
-
-At runtime, an option is heap-allocated as 16 bytes: `[tag, value]` where each field is 8 bytes. The tag is `1` for `Some` and `0` for `None`.
-
-Options stored in variables retain their type:
-
-```casa
-42 Option::Some = x      # x has type Option[i64]
-Option::None = y         # y has type Option (bare)
-```
-
-A bare `Option` type matches any `Option[T]` in function declarations, similar to how bare `array` matches any `array[T]`:
-
-```casa
-fn check opt:Option -> bool { true }
-42 Option::Some check    # works: Option[i64] matches bare Option
-```
-
-`Option::None` and `Option::Some` can appear in different branches of a conditional. The type checker unifies them to the more specific `Option[T]`:
-
-```casa
-fn safe_head arr:array[i64] -> Option[i64] {
-    if 0 arr .length > then
-        0 arr array::nth Option::Some
-    else
-        Option::None
-    fi
-}
-```
-
-See [Standard Library -- Option](standard-library.md#option) for `is_some`, `is_none`, `unwrap`, and `unwrap_or`.
-
-### `Result[T E]`
-
-Result type representing either a success value (`Result::Ok`) or an error value (`Result::Error`). `Result` is an enum defined in `lib/std.casa`:
-
-```casa
-enum Result[T E] { Error(E) Ok(T) }
-```
-
-`Result::Ok` wraps the top-of-stack value into a result. The resulting type is `Result[T E]` where `T` is the type of the wrapped value and `E` remains an unbound type variable until constrained by a use site or annotation.
-
-**Stack effect:** `T -> Result[T E]`
-
-`Result::Error` wraps the top-of-stack value into an error result. The resulting type is `Result[T E]` where `E` is the type of the error value and `T` remains unbound.
-
-**Stack effect:** `E -> Result[T E]`
-
-```casa
-42 Result::Ok            # type: Result[i64 E]
-"not found" Result::Error # type: Result[T str]
-```
-
-At runtime, a result is heap-allocated as 16 bytes: `[tag, value]` where each field is 8 bytes. The tag is `1` for `Ok` and `0` for `Error`.
-
-Results stored in variables retain their type:
-
-```casa
-42 Result::Ok = x                    # x has type Result[i64 E]
-"not found" Result::Error = y        # y has type Result[T str]
-```
-
-Type annotations can narrow the type to specify both type parameters:
-
-```casa
-42 Result::Ok = x:Result[i64 str]    # x has type Result[i64 str]
-```
-
-A bare `Result` type matches any `Result[T E]` in function declarations, similar to how bare `Option` matches any `Option[T]`:
-
-```casa
-fn check res:Result -> bool { true }
-42 Result::Ok check    # works: Result[i64 E] matches bare Result
-```
-
-`Result::Ok` and `Result::Error` can appear in different branches of a conditional. The type checker unifies them to the more specific `Result[T E]`:
-
-```casa
-fn divide dividend:i64 divisor:i64 -> Result[i64 str] {
-    if 0 divisor == then
-        "division by zero" Result::Error
-    else
-        dividend divisor / Result::Ok
-    fi
-}
-```
-
-See [Standard Library -- Result](standard-library.md#result) for `is_ok`, `is_error`, `unwrap`, `unwrap_error`, and `unwrap_or`.
-
-### User-Defined Structs
-
-Struct names are types. After defining a struct, its name can be used as a type.
-
-```casa
-struct Point {
-    x: i64
-    y: i64
-}
-
-10 20 Point = p    # p has type Point
-```
-
-See [Structs and Methods](structs-and-methods.md) for details.
-
-### User-Defined Enums
-
-Enum names are types. After defining an enum, its name can be used as a type. Variants are accessed with `EnumName::VariantName`.
-
-```casa
-enum Color { Red Green Blue }
-
-Color::Red = c    # c has type Color
-```
-
-Enum values support all comparison operators (`==`, `!=`, `<`, `<=`, `>`, `>=`) on the same enum type. Ordering is by declaration order. Printing outputs the ordinal. Pattern matching is done with `match`/`end`.
-
-See [Enums](enums.md) for details.
-
-## Type Variables (Generics)
-
-Type variables let functions declare type relationships between inputs and outputs. They are declared in square brackets after the function name and are resolved to concrete types at each call site.
-
-```casa
-fn id[T] T -> T { }
-42 id        # T=i64, returns i64
-"hi" id      # T=str, returns str
-```
-
-Type variables can have trait bounds to constrain which types are accepted:
-
-```casa
-fn hash_key[K: Hashable] key:K -> i64 {
-    key K::hash
-}
-```
-
-Use `+` to require multiple traits, for example `[T: Copy + Display]`.
-
-Type variables are purely compile-time, including trait bounds. See [Functions and Lambdas — Generic Functions](functions-and-lambdas.md#generic-functions) and [Traits](traits.md) for details.
+The annotation gives an empty array its element type. See
+[Collections](collections.md),
+[Optional Values and Errors](optional-values-and-errors.md),
+[Functions and Lambdas](functions-and-lambdas.md), [Structs and
+Methods](structs-and-methods.md), and [Enums](enums.md) for operations on these
+types. Raw pointers are covered in [Built-in
+Intrinsics](intrinsics.md#advanced-memory-access).
 
 ## Constants
 
-Constants are compile-time values declared with `const`. They are inlined as literal values at every usage site.
-
-### Syntax
-
-```
-const NAME value
-```
-
-The value can be a contextual numeric literal, a `str`, `bool`, or `char`
-literal, a reference to another constant, or a block expression. Numeric
-constants retain their literal spelling and are typed at each use site.
+Declare a global compile-time value with `const`:
 
 ```casa
-const MAX_SIZE 100
+const LIMIT 100
 const GREETING "hello"
-const DEBUG false
-const NEWLINE '\n'
 ```
 
-Constants must be declared at global scope. The name must be unique — it cannot conflict with existing functions, variables, structs, or enums. By convention, constants use `SCREAMING_SNAKE_CASE` (see [STYLE.md](STYLE.md)).
-
-### Referencing Other Constants
-
-A constant can reference a previously declared constant by name:
+A constant can use an earlier constant. A block can evaluate supported
+operators and `const fn` calls at compile time:
 
 ```casa
-const WORD_SIZE 8
-const DOUBLE_WORD WORD_SIZE
+const fn double value:i64 -> i64 { value 2 * }
+const DOUBLE_LIMIT { LIMIT double }
 ```
 
-The referenced constant must be declared before the referencing constant.
+A `const fn` can also run like a normal function. Its body cannot use control
+flow or global variables, and it can call only other `const fn` functions.
 
-### Block Expressions
+## Numeric conversions
 
-Use `const NAME { expr }` to evaluate an arithmetic or logical expression at compile time:
-
-```casa
-const fn double x:i64 -> i64 { x 2 * }
-const DOUBLED { MAX_SIZE double }
-const SUM { 3 4 + }
-```
-
-Block expressions support arithmetic (`+`, `-`, `*`, `/`, `%`), bitwise (`&`, `|`, `^`, `~`, `<<`, `>>`), comparison (`==`, `!=`, `<`, `>`, `<=`, `>=`), boolean (`&&`, `||`, `!`), and calls to `const fn` functions.
-
-### `const fn`
-
-A `const fn` is a function that can be evaluated at compile time inside `const { ... }` block expressions. It can also be called at runtime like a regular function.
-
-```casa
-const fn add a:i64 b:i64 -> i64 { a b + }
-
-const SEVEN { 3 4 add }    # evaluated at compile time
-3 4 add print               # called at runtime
-```
-
-`const fn` bodies have restrictions:
-- No control flow (`if`, `while`)
-- No global variable access
-- Can reference constants and call other `const fn` functions
-
-### Importing Constants
-
-Constants can be imported with selective imports:
-
-```casa
-import "std" { O_RDONLY O_WRONLY }
-```
-
-See [Modules — Selective imports](modules.md#selective-imports) for details.
-
-## Named Numeric Conversions
-
-Numeric conversions state their behavior in the operation name:
+Import `std` to use named numeric conversions:
 
 | Operation | Behavior |
 |---|---|
-| `Target::from` | Exact for every value of the source type |
-| `Target::try_from` | Exact for this value, returning `Option[Target]` |
-| `Target::round_from` | Deliberately rounds to a floating-point target |
-| `Target::trunc_from` | Truncates a float to an integer and terminates if invalid |
-| `Target::wrapping_from` | Keeps the low bits of an integer value |
-| `f32::from_bits`, `f64::from_bits` | Reconstructs an IEEE value from matching unsigned bits |
-| `to_bits` | Returns the exact matching-width IEEE representation |
+| `Target::from` | Convert every source value exactly |
+| `Target::try_from` | Return `Option[Target]` if this value is exact |
+| `Target::round_from` | Round to a floating-point target |
+| `Target::trunc_from` | Truncate a float to an integer, or terminate if invalid |
+| `Target::wrapping_from` | Keep the low integer bits |
 
 ```casa
+import "std"
+
 120 = byte:i8
 byte i16::from = widened
 
 1000 = count:i64
 count u8::try_from = maybe_byte
-
-16777217 = large:i32
-large f32::round_from = rounded
 ```
 
-Numeric widths are never converted implicitly. Character conversion likewise
-uses `codepoint` and `char::from_codepoint` rather than numeric relabeling.
-
-## Type Casting
-
-The `(TypeName)` syntax casts the top of the stack to the given type. This is a compile-time annotation only — no runtime check is performed.
-
-**Stack effect:** `a -> TypeName`
-
-```casa
-buffer (ptr) load64 (i64)    # cast i64 -> i64 (no-op here, but useful for generic data)
-```
-
-## Printing Values
-
-`print` requires the value's type to implement the [`Display` trait](traits.md). Integer, boolean, character, string, and C string primitives are dispatched directly to specialized output instructions. User types must implement `Display` and provide a `to_str self -> str` method, which the compiler invokes before printing the resulting string.
-
-```casa
-struct Point { x: i64 y: i64 }
-impl Point {
-    fn to_str self:Point -> str { f"({self.x}, {self.y})" }
-}
-1 2 Point print    # (1, 2)
-```
+Use these operations for numeric conversion. `(Type)` only changes the
+compiler's interpretation of the top stack value. It performs no runtime
+conversion or check. This makes casts useful for low-level memory and system
+interfaces, but unsafe for general conversion.
 
 ## Comments
 
-Line comments start with `#` and extend to the end of the line.
+`#` starts a comment that continues to the end of the line:
 
 ```casa
-# This is a comment
-42 print  # This is also a comment
+# Print the answer.
+42 print
 ```
 
-There are no block comments.
-
-## See Also
-
-- [Operators](operators.md) -- arithmetic, comparison, and assignment operators
-- [Functions and Lambdas](functions-and-lambdas.md) -- function types, lambdas, and variables
-- [Structs and Methods](structs-and-methods.md) -- user-defined struct types
-- [Enums](enums.md) -- user-defined enum types
-- [Standard Library](standard-library.md) -- `Option`, `Result`, and array operations
+Casa has no block comments.

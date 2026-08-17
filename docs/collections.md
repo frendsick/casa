@@ -1,501 +1,206 @@
-# Collections
+# Collections and Iterators
 
-Casa provides generic container types for dynamic data. Import them from the
-`std` module and compile from the repository root with
-`./casac -L lib program.casa`.
-
-## `List[T]`
-
-A generic dynamic list that grows automatically when items are pushed. The type parameter `T` tracks the element type at compile time.
-
-### Definition
-
-```casa
-struct List {
-    data:     ptr
-    size:     u64
-    capacity: u64
-}
-```
-
-### `List::new`
-
-Creates an empty `List` with an initial capacity of 8.
-
-**Stack effect:** `-> List`
-
-```casa
-List::new = v
-```
-
-### `List::from_array`
-
-Creates a `List[T]` from a fixed-size array. The list's size and capacity are both set to the array's length. The data pointer points directly into the array's data.
-
-**Stack effect:** `array[T] -> List[T]`
-
-```casa
-[1, 2, 3] List::from_array = list
-```
-
-### `List::length`
-
-Returns the number of elements in the list.
-
-**Stack effect:** `List -> i64`
-
-```casa
-list.length print    # 3
-```
-
-### `List::get`
-
-Returns the element at index `n` (zero-indexed). Prints an error and exits if the index is out of bounds.
-
-**Stack effect:** `List[T] i64 -> T`
-
-```casa
-0 list.get print    # 1
-2 list.get print    # 3
-```
-
-The return type matches the list's element type. For example, calling `get` on a `List[i64]` returns `i64`.
-
-### `List::set`
-
-Sets the element at index `n`. Prints an error and exits if the index is out of bounds.
-
-**Stack effect:** `List[T] i64 T -> None`
-
-```casa
-99 1 list.set
-1 list.get print    # 99
-```
-
-### `List::push`
-
-Appends an item to the list. If the list is at capacity, it allocates a new buffer with double the capacity and copies the existing elements.
-
-**Stack effect:** `List[T] T -> None`
-
-```casa
-4 list.push
-list.length print    # 4
-3 list.get print     # 4
-```
-
-### `List::pop`
-
-Removes and returns the last element. Prints an error and exits if the list is empty.
-
-**Stack effect:** `List[T] -> T`
-
-```casa
-list.pop print          # 4
-list.length print       # 3
-```
-
-### `List::insert`
-
-Inserts an item at the given index, shifting subsequent elements right. Prints an error and exits if the index is out of bounds.
-
-**Stack effect:** `List[T] T i64 -> None`
-
-```casa
-99 1 list.insert
-1 list.get print    # 99
-```
-
-### `List::slice`
-
-Returns an `array[T]` view into the list's data from index `start` (inclusive) to `stop` (exclusive). This is a zero-copy operation. Prints an error and exits if the range is out of bounds.
-
-**Stack effect:** `List[T] i64 i64 -> array[T]`
-
-```casa
-3 1 list.slice = sliced
-sliced.length print          # 2
-0 sliced array::nth print    # 2
-```
-
-### `List::to_array`
-
-Returns an `array[T]` view of the entire list. This is a zero-copy operation equivalent to `0 self.size self.slice`.
-
-**Stack effect:** `List[T] -> array[T]`
-
-```casa
-list.to_array = arr
-arr.length print    # 3
-```
-
-### `List[str]::join`
-
-Joins a list of strings with a separator, returning a single string.
-
-**Stack effect:** `List[str] str -> str`
-
-```casa
-["a", "b", "c"] List::from_array = parts
-", " parts.join print    # a, b, c
-"" parts.join print      # abc
-```
-
-### Complete Example
+Import `std` to use the collection methods on this page:
 
 ```casa
 import "std"
-
-List::new = v
-10 v.push
-20 v.push
-30 v.push
-v.length print          # 3
-0 v.get print           # 10
-2 v.get print           # 30
-
-99 1 v.set
-1 v.get print           # 99
-
-v.pop print             # 30
-v.length print          # 2
-
-[100, 200, 300] List::from_array = v2
-3 1 v2.slice = sliced
-sliced.length print     # 2
 ```
 
-See [`examples/vec.casa`](../examples/vec.casa) for a full program demonstrating all List methods.
+## Arrays
 
-## `Map[K V]`
-
-A generic hash map using separate chaining. Keys must satisfy the `Hashable` trait (see [Traits](traits.md)). The type parameters `K` and `V` track key and value types at compile time.
-
-### Definition
+`array[T]` is a fixed-length sequence created with bracket syntax:
 
 ```casa
-struct Map {
-    buckets:  ptr
-    size:     u64
-    capacity: u64
-}
-
-impl[K: Hashable, V] Map[K V] { ... }
+[10, 20, 30] = numbers:array[i64]
+1 numbers.nth print    # 20
 ```
 
-All Map methods are defined in an `impl` block with `K: Hashable` and `V` type parameters. Individual methods inherit these bounds.
+| Method | Result or action |
+|---|---|
+| `length self:array[T] -> u64` | Number of elements |
+| `nth self:array[T] index:u64 -> T` | Element at a zero-based index |
+| `iter self:array[T] -> Iter[T]` | Iterator over the elements |
+| `contains self:array[str] needle:str -> bool` | Whether a string array contains `needle` |
 
-### `Map::new`
+Array length cannot change. Use `List[T]` when values must be added or removed.
 
-Creates an empty map with an initial capacity of 16.
+## Lists
 
-**Stack effect:** `-> Map[K V]`
+`List[T]` is a growable sequence:
 
 ```casa
-Map[str i64]::new = m
+[3, 1, 2] List::from_array = numbers
+numbers.sort
+0 numbers.get print    # 1
 ```
 
-The explicit `Map[str i64]` arguments tell the compiler the concrete types for
-`K` and `V`. The compiler verifies that `str` satisfies `Hashable`.
+| Method | Result or action |
+|---|---|
+| `List[T]::new -> List[T]` | Empty list |
+| `from_array values:array[T] -> List[T]` | List containing the array values |
+| `length self:List[T] -> u64` | Number of elements |
+| `get self:List[T] index:u64 -> T` | Element at a zero-based index |
+| `set self:List[T] index:u64 value:T` | Replace an element |
+| `push self:List[T] value:T` | Add at the end |
+| `pop self:List[T] -> T` | Remove and return the last element |
+| `insert self:List[T] value:T index:u64` | Insert before `index` |
+| `slice self:List[T] start:u64 stop:u64 -> array[T]` | Array view of `[start, stop)` |
+| `to_array self:List[T] -> array[T]` | Array view of the whole list |
+| `swap_at self:List[T] first:u64 second:u64` | Exchange two elements |
+| `reverse self:List[T]` | Reverse in place |
+| `clone self:List[T] -> List[T]` | New list with the same element values |
+| `iter self:List[T] -> Iter[T]` | Iterator over the elements |
+| `sort self:List[T]` | Sort in place when `T` implements `Ord` |
+| `sort_by self:List[T] compare:fn[T T -> bool]` | Sort in place with a callback |
+| `sort_by_range self:List[T] low:u64 high:u64 compare:fn[T T -> bool]` | Sort an inclusive index range |
+| `join self:List[str] separator:str -> str` | Join a string list |
+| `contains self:List[str] needle:str -> bool` | Whether a string list contains `needle` |
 
-### `Map::length`
+Out-of-range indexing, slicing, insertion, and popping an empty list terminate
+the program.
 
-Returns the number of key-value pairs in the map.
+See [`examples/sorting.casa`](../examples/sorting.casa) for sorting and
+reversing.
 
-**Stack effect:** `Map[K V] -> i64`
+## Maps
+
+`Map[K V]` associates unique keys with values. `K` must implement `Hashable`:
 
 ```casa
-m.length print    # 0
+Map[str i64]::new = scores
+10 "Ada" scores.set = scores
+
+"Ada" scores.get match
+    Option::Some(score) => score print
+    Option::None => "missing" print
+end
 ```
 
-### `Map::get`
+| Method | Result or action |
+|---|---|
+| `Map[K V]::new -> Map[K V]` | Empty map |
+| `length self:Map[K V] -> u64` | Number of entries |
+| `get self:Map[K V] key:K -> Option[V]` | Value for a key, if present |
+| `has self:Map[K V] key:K -> bool` | Whether a key exists |
+| `set self:Map[K V] key:K value:V -> Map[K V]` | Insert or replace an entry |
+| `delete self:Map[K V] key:K -> Map[K V]` | Remove an entry if present |
+| `iter self:Map[K V] -> Iter[Pair[K V]]` | Iterator over key-value pairs |
+| `keys self:Map[K V] -> List[K]` | List of keys |
+| `values self:Map[K V] -> List[V]` | List of values |
 
-Looks up a key and returns `Option[V]`. Returns `Option::Some` with the value if found, `Option::None` otherwise.
+Rebind the result of `set` and `delete`, as shown above. Iteration order is not
+specified.
 
-**Stack effect:** `Map[K V] K -> Option[V]`
+See [`examples/hash_map.casa`](../examples/hash_map.casa) for a runnable map
+example.
+
+## Sets
+
+`Set[K]` stores unique `Hashable` values:
 
 ```casa
-"hello" m.get .unwrap print    # prints the value for "hello"
-"missing" m.get .is_none print # true
+Set[str]::new = names
+"Ada" names.add = names
+"Grace" names.add = names
+"Ada" names.has print    # true
 ```
 
-### `Map::has`
+| Method | Result or action |
+|---|---|
+| `Set[K]::new -> Set[K]` | Empty set |
+| `length self:Set[K] -> u64` | Number of values |
+| `has self:Set[K] key:K -> bool` | Whether a value exists |
+| `add self:Set[K] key:K -> Set[K]` | Add a value |
+| `remove self:Set[K] key:K -> Set[K]` | Remove a value if present |
+| `to_list self:Set[K] -> List[K]` | Values in unspecified order |
 
-Returns `true` if the key exists in the map.
+Rebind the result of `add` and `remove`.
 
-**Stack effect:** `Map[K V] K -> bool`
+## String builders
+
+`StringBuilder` avoids repeated string concatenation when text is assembled in
+steps:
 
 ```casa
-"hello" m.has print    # true or false
+StringBuilder::new = builder
+"Hello" builder.append
+", " builder.append
+"Casa" builder.append
+builder.build print
 ```
 
-### `Map::set`
+| Method | Result or action |
+|---|---|
+| `StringBuilder::new -> StringBuilder` | Empty builder |
+| `append self:StringBuilder text:str` | Add a string |
+| `append_char self:StringBuilder character:char` | Add one character |
+| `build self:StringBuilder -> str` | Build the current text |
+| `length self:StringBuilder -> u64` | Current character count |
 
-Inserts or updates a key-value pair. Returns the updated map. Automatically resizes at 75% load factor.
+## Iterator sources
 
-**Stack effect:** `Map[K V] V K -> Map[K V]`
+`.iter` creates a stateful, single-pass iterator:
+
+| Source | Iterator |
+|---|---|
+| `array[T]` | `Iter[T]` |
+| `List[T]` | `Iter[T]` |
+| `str` | `Iter[char]` |
+| `Map[K V]` | `Iter[Pair[K V]]` |
+
+A `for` loop consumes the iterator. Create another iterator to traverse the
+source again.
+
+## Lazy iterator operations
+
+Lazy operations return `Iter` and do no work until the result is consumed.
+
+| Method | Result |
+|---|---|
+| `map self:I transform:fn[T -> U] -> Iter[U]` | Transform each value |
+| `filter self:I predicate:fn[T -> bool] -> Iter[T]` | Keep matching values |
+| `take self:I count:u64 -> Iter[T]` | Yield at most `count` values |
+| `skip self:I count:u64 -> Iter[T]` | Omit the first `count` values |
+| `take_while self:I predicate:fn[T -> bool] -> Iter[T]` | Yield while the predicate is true |
+| `skip_while self:I predicate:fn[T -> bool] -> Iter[T]` | Omit values while the predicate is true |
+| `enumerate self:I -> Iter[Pair[i64 T]]` | Pair each value with its zero-based index |
+| `zip self:I other:Iter[U] -> Iter[Pair[T U]]` | Pair values until either iterator ends |
+| `chain self:I other:Iter[T] -> Iter[T]` | Yield from `self`, then `other` |
+| `flat_map self:I transform:fn[T -> Iter[U]] -> Iter[U]` | Transform and flatten one level |
+
+`I` is any type that implements `Iterable[T]`.
+
+## Terminal iterator operations
+
+Terminal operations advance or consume the iterator and return a non-iterator
+value.
+
+| Method | Result |
+|---|---|
+| `next self:I -> Option[T]` | Next value, if present |
+| `collect self:I -> List[T]` | All remaining values |
+| `fold self:I initial:U combine:fn[U T -> U] -> U` | Reduce from an initial value |
+| `count self:I -> u64` | Number of remaining values |
+| `any self:I predicate:fn[T -> bool] -> bool` | Whether any value matches |
+| `all self:I predicate:fn[T -> bool] -> bool` | Whether every value matches |
+| `find self:I predicate:fn[T -> bool] -> Option[T]` | First matching value |
+| `reduce self:I combine:fn[T T -> T] -> Option[T]` | Reduce from the first value |
+| `min_by self:I compare:fn[T T -> bool] -> Option[T]` | Minimum selected by a callback |
+| `max_by self:I compare:fn[T T -> bool] -> Option[T]` | Maximum selected by a callback |
+| `partition self:I predicate:fn[T -> bool] -> Pair[List[T] List[T]]` | Matching and non-matching lists |
+| `sum self:I -> i64` | Interpret values as `i64` and add them |
+| `min self:Iter[T] -> Option[T]` | Minimum value when `T` implements `Ord` |
+| `max self:Iter[T] -> Option[T]` | Maximum value when `T` implements `Ord` |
+
+This pipeline skips two values, takes four, keeps even values, and doubles
+them. Only `collect` runs the pipeline:
 
 ```casa
-1 "one" m.set = m
+2 [1, 2, 3, 4, 5, 6, 7] (array[i64]).iter.skip = rest
+4 rest.take = window
+{ 2 % 0 == } window.filter = even
+{ 2 * } even.map.collect = doubled
 ```
 
-### `Map::delete`
-
-Removes a key from the map. Returns the updated map. If the key does not exist, the map is returned unchanged.
-
-**Stack effect:** `Map[K V] K -> Map[K V]`
-
-```casa
-"one" m.delete = m
-```
-
-### `Map::iter`
-
-Returns a lazy `Iter[Pair[K V]]` that yields key-value pairs on demand. Each pair's `.first` field is the key (`K`) and `.second` field is the value (`V`). The iterator walks hash buckets using closure state, so no intermediate list is allocated.
-
-**Stack effect:** `Map[K V] -> Iter[Pair[K V]]`
-
-```casa
-for pair in m.iter do
-    pair.first (str) = key
-    pair.second (i64) = val
-    f"{key}: {val}\n" print
-done
-```
-
-Because `Iter` implements the `Iterable` trait, all iterator combinators (`map`, `filter`, `take`, `count`, `collect`, etc.) work on the result:
-
-```casa
-# Count entries
-m.iter.count print
-
-# Collect into a list of pairs
-m.iter.collect = pairs
-
-# Take first 5 entries
-5 m.iter.take.collect = first_five
-```
-
-### `Map::keys`
-
-Returns a `List[K]` of all keys in the map. Implemented in terms of `Map::iter`.
-
-**Stack effect:** `Map[K V] -> List[K]`
-
-```casa
-m.keys = key_list
-```
-
-### `Map::values`
-
-Returns a `List[V]` of all values in the map. Implemented in terms of `Map::iter`.
-
-**Stack effect:** `Map[K V] -> List[V]`
-
-```casa
-m.values = val_list
-```
-
-### Complete Example
-
-```casa
-import "std"
-
-# Create a map from strings to ints
-Map[str i64]::new = m
-
-# Insert key-value pairs
-1 "one" m.set = m
-2 "two" m.set = m
-3 "three" m.set = m
-
-# Look up values
-"one" m.get .unwrap print      # 1
-"two" m.get .unwrap print      # 2
-
-# Check membership
-"one" m.has print              # true
-"four" m.has print             # false
-
-# Update a value
-42 "one" m.set = m
-"one" m.get .unwrap print      # 42
-
-# Delete a key
-"two" m.delete = m
-m.length print                 # 2
-
-# Integer keys work too
-Map[i64 str]::new = m2
-"hello" 1 m2.set = m2
-1 m2.get .unwrap print         # hello
-```
-
-See [`examples/hash_map.casa`](../examples/hash_map.casa) for a full program.
-
-## `Set[K]`
-
-A generic hash set backed by a `Map[K i64]`. Keys must satisfy the `Hashable` trait (see [Traits](traits.md)). The type parameter `K` tracks the element type at compile time.
-
-### Definition
-
-```casa
-struct Set[K] {
-    map: Map[K i64]
-}
-
-impl[K: Hashable] Set[K] { ... }
-```
-
-Set uses a struct-level type parameter `K` with a typed `Map[K i64]` field. All methods are in an `impl` block with the `K: Hashable` bound.
-
-### `Set::new`
-
-Creates an empty set.
-
-**Stack effect:** `-> Set[K]`
-
-```casa
-Set[str]::new = s
-```
-
-### `Set::length`
-
-Returns the number of elements in the set.
-
-**Stack effect:** `Set[K] -> i64`
-
-```casa
-s.length print    # 0
-```
-
-### `Set::has`
-
-Returns `true` if the element is in the set.
-
-**Stack effect:** `Set[K] K -> bool`
-
-```casa
-"apple" s.has print    # true or false
-```
-
-### `Set::add`
-
-Adds an element to the set. Returns the updated set. Adding a duplicate has no effect.
-
-**Stack effect:** `Set[K] K -> Set[K]`
-
-```casa
-"apple" s.add = s
-```
-
-### `Set::remove`
-
-Removes an element from the set. Returns the updated set. If the element does not exist, the set is returned unchanged.
-
-**Stack effect:** `Set[K] K -> Set[K]`
-
-```casa
-"apple" s.remove = s
-```
-
-### `Set::to_list`
-
-Returns a `List[K]` of all elements in the set.
-
-**Stack effect:** `Set[K] -> List[K]`
-
-```casa
-s.to_list = elements
-```
-
-### Complete Example
-
-```casa
-import "std"
-
-# Create a set of strings
-Set[str]::new = s
-
-# Add elements
-"apple" s.add = s
-"banana" s.add = s
-"cherry" s.add = s
-
-s.length print         # 3
-"apple" s.has print    # true
-"grape" s.has print    # false
-
-# Remove an element
-"banana" s.remove = s
-s.length print         # 2
-"banana" s.has print   # false
-```
-
-See [`examples/hash_map.casa`](../examples/hash_map.casa) for a full program using both Map and Set.
-
-## `StringBuilder`
-
-A mutable string builder backed by `List[char]`. Useful for efficiently constructing strings from many parts.
-
-### Definition
-
-```casa
-struct StringBuilder {
-    chars: List[char]
-}
-```
-
-### `StringBuilder::new`
-
-Creates an empty `StringBuilder`.
-
-**Stack effect:** `-> StringBuilder`
-
-```casa
-StringBuilder::new = sb
-```
-
-### `StringBuilder::append`
-
-Appends a string to the builder.
-
-**Stack effect:** `StringBuilder str -> None`
-
-```casa
-"hello " sb.append
-"world" sb.append
-```
-
-### `StringBuilder::append_char`
-
-Appends a single character to the builder.
-
-**Stack effect:** `StringBuilder char -> None`
-
-```casa
-'!' sb.append_char
-```
-
-### `StringBuilder::build`
-
-Converts the builder's contents into a string.
-
-**Stack effect:** `StringBuilder -> str`
-
-```casa
-sb.build print    # hello world!
-```
-
-### `StringBuilder::length`
-
-Returns the number of characters in the builder.
-
-**Stack effect:** `StringBuilder -> i64`
-
-## See Also
-
-- [Standard Library](standard-library.md) -- arrays, Option, and Result
-- [Modules](modules.md) -- import directives and module resolution
-- [Strings and IO](strings-and-io.md) -- string methods, file I/O, and type conversions
-- [Traits](traits.md) -- the `Hashable` trait required by Map and Set keys
+See [`examples/iterator_combinators.casa`](../examples/iterator_combinators.casa)
+for every lazy and terminal operation.

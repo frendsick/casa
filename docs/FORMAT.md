@@ -1,6 +1,26 @@
 # Casa Format Guide
 
-Mechanical formatting rules for Casa source files enforced by `casafmt`.
+`casafmt` reads Casa source from standard input and writes formatted source to
+standard output.
+
+Build a current compiler first, then build the formatter:
+
+```sh
+./casac casa.casa -o casac-next -L lib
+./casac-next formatter/format.casa -o casafmt -L lib
+```
+
+Write to a temporary file so a formatter failure cannot replace the source:
+
+```sh
+./casafmt < program.casa > program.casa.tmp && mv program.casa.tmp program.casa
+```
+
+On a lexing error, `casafmt` writes the original source and exits with status
+`1`. The command above leaves `program.casa` unchanged. The formatter does not
+perform a complete syntax check, so compile the result as usual.
+
+The remaining sections define the mechanical rules that `casafmt` enforces.
 All rules are MUST unless noted otherwise.
 
 See [STYLE.md](./STYLE.md) for naming conventions and idiomatic patterns.
@@ -82,8 +102,8 @@ Trailing spaces or tabs at the end of a line are forbidden.
 ## Comments
 
 - Always write one space between `#` and the comment text: `# text` not `#text`.
-- Section separator comments may use either `=` or `-` repeated characters — author's
-  choice. Both are acceptable; do not mix styles within a file.
+- Section separator comments may use either `=` or `-` repeated characters.
+  Choose one style and do not mix styles within a file.
 
 ```casa
 # ============================================================================
@@ -232,7 +252,7 @@ value
 
 ## `if` / `elif` / `else` / `fi`
 
-**Statements** — always split across lines. `if`, `then`, body, and `fi` each on their
+**Statements:** always split across lines. `if`, `then`, body, and `fi` each on their
 own lines:
 
 ```casa
@@ -245,14 +265,14 @@ else
 fi
 ```
 
-**Value expressions** — single-line form is allowed when the entire `if` is used as an
+**Value expressions:** single-line form is allowed when the entire `if` is used as an
 inline value (e.g. assigned to a variable or returned):
 
 ```casa
 if b then "true" else "false" fi = result
 ```
 
-**Multiple conditions** — each condition on its own line, with the boolean operator
+**Multiple conditions:** each condition on its own line, with the boolean operator
 at the end of the condition line it connects to:
 
 ```casa
