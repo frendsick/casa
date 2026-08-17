@@ -11,7 +11,7 @@ operation or binding that uses them.
 | `u8`, `u16`, `u32`, `u64` | Unsigned integers |
 | `f32`, `f64` | Floating-point numbers |
 | `bool` | `true` or `false` |
-| `char` | One character |
+| `char` | One Unicode scalar value |
 | `str` | A Casa string |
 | `cstr` | A null-terminated C string |
 
@@ -34,7 +34,8 @@ Character literals use single quotes. String literals use double quotes:
 
 ```casa
 'A' print
-"Hello" print
+'😀' print
+"Hallå, 世界" print
 ```
 
 Both forms support these escapes:
@@ -46,10 +47,18 @@ Both forms support these escapes:
 | `\r` | Carriage return |
 | `\0` | Null byte |
 | `\\` | Backslash |
-| `\xHH` | One byte written as two hexadecimal digits |
+| `\xHH` | One ASCII scalar from `00` through `7F` |
+| `\u{H...}` | One Unicode scalar written with 1 through 6 hexadecimal digits |
 
 Use `\'` for a quote in a character and `\"` for a quote in a string.
-Invalid escapes are compile-time errors.
+Source files and text literals must be valid UTF-8. A character literal must
+contain exactly one Unicode scalar. Surrogates, values above `U+10FFFF`, and
+non-ASCII `\x` escapes are compile-time errors.
+
+```casa
+'\u{1F600}' print       # 😀
+"\u{3BB}" print         # λ
+```
 
 `cstr` has no literal syntax. Convert a `str` when an operating-system or C
 interface needs a null-terminated string:
@@ -142,7 +151,12 @@ byte i16::from = widened
 count u8::try_from = maybe_byte
 ```
 
-Use these operations for numeric conversion. `(Type)` only changes the
+Use these operations for numeric conversion. Convert characters with
+`.codepoint`, `char::from_codepoint`, or the narrow unsafe
+`char::from_codepoint_unchecked` primitive. Representation casts to or from
+`char` are compile-time errors.
+
+`(Type)` only changes the
 compiler's interpretation of the top stack value. It performs no runtime
 conversion or check. This makes casts useful for low-level memory and system
 interfaces, but unsafe for general conversion.
