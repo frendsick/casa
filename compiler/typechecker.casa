@@ -47,11 +47,11 @@ impl TypedStack {
     }
 
     fn snapshot self:TypedStack -> TypedStack {
-        self.values.clone TypedStack
+        self.values.shallow_copy TypedStack
     }
 
     fn restore self:TypedStack source:TypedStack {
-        source.values.clone = self.values
+        source.values.shallow_copy = self.values
     }
 
     fn get_types self:TypedStack -> List[Type] {
@@ -685,7 +685,7 @@ impl TypeChecker {
         if type_variable literal_bindings.get Option::Some(bound_literals) is then
             for literal in literals.iter do literal bound_literals.push done
         else
-            literals.clone type_variable literal_bindings.set = literal_bindings
+            literals.shallow_copy type_variable literal_bindings.set = literal_bindings
         fi
     }
 
@@ -2131,6 +2131,10 @@ fn type_satisfies_trait
     store:SymbolStore
     diagnostics:Diagnostics
 -> bool {
+    if "Clone" trait_type.match_base == receiver Type::Function(_) is && then
+        "Copy" GenericType::new Type::Generic = copy_type
+        if store trait_type copy_type trait_type_implies then true return fi
+    fi
     if store function_opt trait_type receiver matches_trait_bound then true return fi
     if store trait_type receiver type_has_satisfying_trait_impl ! then false return fi
     false diagnostics store trait_type receiver type_has_trait_shape
@@ -2293,6 +2297,32 @@ fn bounds_imply_trait bounds:List[TraitBound] target:Type store:SymbolStore -> b
 }
 
 impl TypeChecker {
+    fn ensure_function_clone_method tc:TypeChecker typ:Type location:Location {
+        if typ Type::Function(_) is ! then return fi
+        if "Copy" tc.store.traits.has ! "Clone" tc.store.traits.has ! || then return fi
+        "Copy" GenericType::new Type::Generic = copy_type
+        "Clone" GenericType::new Type::Generic = clone_type
+        if tc.store clone_type copy_type trait_type_implies ! then return fi
+
+        "clone" typ.make_method_key = function_name
+        if function_name tc.store.functions.has then return fi
+
+        List[Parameter]::new = parameters
+        "self" typ Parameter::named parameters.push
+        List[Type]::new = returns
+        typ returns.push
+        returns parameters StackEffect::new = effect
+
+        List[Op]::new = ops
+        location "self" OpValue::AssignVar Op::new ops.push
+        location "self" OpValue::PushVar Op::new ops.push
+        effect location ops function_name Function::with_stack_effect = function
+        List[Variable]::new = variables
+        typ "self" Variable variables.push
+        variables function Function::set_variables
+        function function_name tc.store.functions.set drop
+    }
+
     fn bind_concrete_type_variable
         tc:TypeChecker
         name:str
@@ -2445,6 +2475,9 @@ impl TypeChecker {
                     method.name seen_methods.has ! &&
                     then
                         method.name seen_methods.add = seen_methods
+                        if "clone" method.name == then
+                            location concrete_t tc.ensure_function_clone_method
+                        fi
                         if is_forwarding then
                             f"__trait_{concrete}_{method TraitMethod::name}" = hidden_var
                             location hidden_var OpValue::PushVar Op::new = push_op
@@ -3414,6 +3447,9 @@ impl TypeChecker {
         fi
         if method_name_opt Option::Some(method_name) is then
             tc.stack_peek_type = receiver
+            if "clone" method_name == then
+                op.location receiver tc.ensure_function_clone_method
+            fi
             if op.value OpValue::MethodCall is then
                 if method_name op tc.check_float_to_bits then op_index return fi
                 if method_name op tc.check_char_codepoint then op_index return fi
@@ -3549,6 +3585,25 @@ fn ensure_typechecked function:Function store:SymbolStore diagnostics:Diagnostic
 # ============================================================================
 
 impl TypeChecker {
+    fn check_copy_operation tc:TypeChecker op:Op function_opt:Option[Function] {
+        tc.stack.values.length = depth
+        0 (u64) = copied_index
+        if op.value OpValue::Over is then
+            if depth 2 < then function_opt op tc.apply_fixed_semantics return fi
+            depth 2 - = copied_index
+        else
+            if 0 depth == then function_opt op tc.apply_fixed_semantics return fi
+            depth 1 - = copied_index
+        fi
+        copied_index tc.stack.values.get.type_value = copied_type
+        copied_type resolve_numeric_literal_default = copy_check_type
+        "Copy" GenericType::new Type::Generic = copy_type
+        if tc.diagnostics tc.store function_opt copy_type copy_check_type type_satisfies_trait ! then
+            op.location f"Type `{copied_type.format}` does not satisfy trait `Copy`" ErrorKind::TypeMismatch tc.diagnostics.record_error
+        fi
+        function_opt op tc.apply_fixed_semantics
+    }
+
     fn run_type_check_ops checker:TypeChecker ops:List[Op] function_opt:Option[Function] {
         0 (u64) = op_index
         while op_index ops.length > do
@@ -3558,6 +3613,14 @@ impl TypeChecker {
             "" = checker.current_expect_ctx
             false = checker.underflow_reported_this_op
             current_op.value = op_value
+            if
+            op_value OpValue::Dup is
+            op_value OpValue::Over is ||
+            op_value OpValue::Copy is ||
+            then
+                function_opt current_op checker.check_copy_operation
+                continue
+            fi
             if
             op_value OpValue::Add is
             op_value OpValue::Sub is ||

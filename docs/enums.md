@@ -83,4 +83,8 @@ Payload-free enums automatically implement `Hashable`. See the
 [built-in trait catalog](traits.md#built-in-traits) for use as map keys or set
 elements.
 
+An enum can `derive Copy` when every carried value is Copy. Clone remains an
+explicit operation and can be customized. See
+[Copy and Clone](traits.md#copy-and-clone).
+
 See [`examples/enum.casa`](../examples/enum.casa) for more runnable examples.

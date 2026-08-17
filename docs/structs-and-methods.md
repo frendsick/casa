@@ -76,6 +76,23 @@ methods.
 See [Traits](traits.md) for generic structs, generic `impl` blocks, and trait
 implementations.
 
+## Derive Copy
+
+A struct can derive `Copy` when every field is Copy:
+
+```casa
+struct Point derives Copy {
+    x: i64
+    y: i64
+}
+
+2 1 Point dup
+```
+
+Copy is allocation-free. Use an explicit `Clone` conformance when
+duplication must allocate or call field Clone methods. See
+[Copy and Clone](traits.md#copy-and-clone).
+
 ## Alternative stack constructor
 
 For compact stack-oriented code, push fields in reverse declaration order and

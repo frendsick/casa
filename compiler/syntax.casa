@@ -1785,6 +1785,24 @@ fn parse_function parser:Parser cursor:TokenCursor -> Function {
 # parse_enum - parse enum definition
 # ============================================================================
 
+fn parse_derived_traits cursor:TokenCursor -> List[str] {
+    List[str]::new = derived_traits
+    if cursor.peek Option::Some(token) is then
+        if "derives" token.value != then derived_traits return fi
+        cursor.pop drop
+        while true do
+            if cursor.peek Option::Some(derived) is then
+                if "{" derived.value == then break fi
+                fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or
+                Token::value derived_traits.push
+            else
+                break
+            fi
+        done
+    fi
+    derived_traits
+}
+
 fn parse_enum parser:Parser cursor:TokenCursor -> CasaEnum {
     fallback_token "enum" cursor expect_token_value.unwrap_or drop
     fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
@@ -1797,6 +1815,8 @@ fn parse_enum parser:Parser cursor:TokenCursor -> CasaEnum {
             cursor parser parse_type_variables.names = type_vars
         fi
     fi
+
+    cursor parse_derived_traits = derived_traits
 
     fallback_token "{" cursor expect_token_value.unwrap_or drop
     List[str]:: new = variants
@@ -1863,7 +1883,7 @@ fn parse_enum parser:Parser cursor:TokenCursor -> CasaEnum {
         done
     fi
 
-    variant_locations type_vars variant_types name_token Token::location variants name_token Token::value CasaEnum
+    variant_locations derived_traits type_vars variant_types name_token Token::location variants name_token Token::value CasaEnum
 }
 
 # ============================================================================
@@ -1923,6 +1943,96 @@ fn synthesize_hashable_for_enum parser:Parser casa_enum:CasaEnum {
 fn derive_hashable_for_enums parser:Parser {
     for casa_enum in parser.store.enums.values.iter do
         casa_enum parser synthesize_hashable_for_enum
+    done
+}
+
+fn register_derived_copy
+    parser:Parser
+    name:str
+    type_vars:List[str]
+    required_type_vars:Set[str]
+    location:Location
+{
+    List[Type]::new = arguments
+    for type_variable in type_vars.iter do
+        type_variable Type::TypeVar arguments.push
+    done
+    arguments name GenericType Type::Generic = receiver
+    List[Type]::new "Copy" TraitBound = copy_bound
+    if parser.store copy_bound trait_bound_to_type receiver type_has_satisfying_trait_impl then return fi
+    Map[str List[TraitBound]]::new = trait_bounds
+    for type_variable in type_vars.iter do
+        if type_variable required_type_vars.has ! then continue fi
+        List[TraitBound]::new = type_bounds
+        List[Type]::new "Copy" TraitBound type_bounds.push
+        type_bounds type_variable trait_bounds.set = trait_bounds
+    done
+    location
+    Map[str str]::new
+    trait_bounds
+    type_vars
+    copy_bound
+    receiver
+    TraitImpl
+    parser register_trait_impl
+}
+
+fn derive_copy_for_aggregates parser:Parser {
+    for casa_struct in parser.store.structs.values.iter do
+        for derived_trait in casa_struct.derived_traits.iter do
+            if "Copy" derived_trait == then
+                Set[str]::new = required_type_vars
+                for type_variable in casa_struct.type_vars.iter do
+                    for member in casa_struct.members.iter do
+                        if type_variable member.typ.type_contains_var then
+                            type_variable required_type_vars.add = required_type_vars
+                            break
+                        fi
+                    done
+                done
+                casa_struct.location required_type_vars casa_struct.type_vars casa_struct.name parser
+                register_derived_copy
+            else
+                casa_struct.location f"Derivation for trait `{derived_trait}` is not supported" ErrorKind::InvalidScope parser.state.record_error
+            fi
+        done
+    done
+    for casa_enum in parser.store.enums.values.iter do
+        for derived_trait in casa_enum.derived_traits.iter do
+            if "Copy" derived_trait == then
+                Set[str]::new = required_type_vars
+                for type_variable in casa_enum.type_vars.iter do
+                    for payload_types in casa_enum.variant_types.values.iter do
+                        for payload_type in payload_types.iter do
+                            if type_variable payload_type.type_contains_var then
+                                type_variable required_type_vars.add = required_type_vars
+                            fi
+                        done
+                    done
+                done
+                casa_enum.location required_type_vars casa_enum.type_vars casa_enum.name parser
+                register_derived_copy
+            else
+                casa_enum.location f"Derivation for trait `{derived_trait}` is not supported" ErrorKind::InvalidScope parser.state.record_error
+            fi
+        done
+    done
+}
+
+fn register_builtin_copy_impls parser:Parser {
+    if "Copy" parser.store.traits.has ! then return fi
+    for builtin_name in parser.store.builtins.iter do
+        if "str" builtin_name == "array" builtin_name == || then continue fi
+        builtin_name parse_type_str = receiver
+        if parser.store "Copy" receiver find_satisfying_trait_type.is_some then continue fi
+        "Copy" parser.store.traits.get.unwrap.location
+        Map[str str]::new
+        Map[str List[TraitBound]]::new
+        List[str]::new
+        List[Type]::new "Copy" TraitBound
+        receiver
+        TraitImpl
+        parser register_trait_impl
     done
 }
 
@@ -2019,6 +2129,8 @@ fn parse_struct parser:Parser cursor:TokenCursor -> CasaStruct {
         fi
     fi
 
+    cursor parse_derived_traits = derived_traits
+
     List[Member]:: new = members
     type_vars string_list_to_set = struct_type_vars
     fallback_token "{" cursor expect_token_value.unwrap_or drop
@@ -2039,7 +2151,7 @@ fn parse_struct parser:Parser cursor:TokenCursor -> CasaStruct {
         member_type member_token Token::value Member members.push
     done
 
-    type_vars name_token Token::location members name_token Token::value CasaStruct
+    derived_traits type_vars name_token Token::location members name_token Token::value CasaStruct
 }
 
 # ============================================================================
@@ -2441,6 +2553,8 @@ fn language_trait_method_kind trait_name:str method_name:str -> i64 {
         3 return
     elif "Iterable" trait_name == "next" method_name == && then
         4 return
+    elif "Clone" trait_name == "clone" method_name == && then
+        5 return
     fi
     0
 }
@@ -2470,6 +2584,7 @@ fn language_trait_method_matches
         option_args "Option" GenericType Type::Generic = expected
         0 effect.return_types.get expected.eq return
     fi
+    if 5 method_kind == then 0 effect.return_types.get.is_self_type return fi
     false
 }
 
@@ -2477,6 +2592,7 @@ fn language_trait_method_role method_kind:i64 -> str {
     if 1 method_kind == then "operator method" return fi
     if 2 method_kind == then "hashing method" return fi
     if 3 method_kind == then "formatting method" return fi
+    if 5 method_kind == then "cloning method" return fi
     "trait method"
 }
 
@@ -2485,7 +2601,8 @@ fn validate_language_trait_contract parser:Parser casa_trait:CasaTrait -> bool {
     if
     "Eq" trait_name != "Ord" trait_name != &&
     "Hashable" trait_name != && "Display" trait_name != &&
-    "Iterable" trait_name != &&
+    "Iterable" trait_name != && "Copy" trait_name != &&
+    "Clone" trait_name != &&
     then true return fi
     if "Iterable" trait_name == then
         if 1 casa_trait.type_params.length != then
@@ -2494,6 +2611,11 @@ fn validate_language_trait_contract parser:Parser casa_trait:CasaTrait -> bool {
         fi
     elif 0 casa_trait.type_params.length != then
         casa_trait.location f"Language trait `{trait_name}` expects no type parameters" ErrorKind::TraitSignatureMismatch parser.state.record_error
+        false return
+    fi
+    if "Copy" trait_name == then
+        if 0 casa_trait.methods.length == then true return fi
+        casa_trait.location "Language trait `Copy` must not declare methods" ErrorKind::TraitSignatureMismatch parser.state.record_error
         false return
     fi
     casa_trait trait_definition_type = trait_type
@@ -2505,7 +2627,8 @@ fn validate_language_trait_contract parser:Parser casa_trait:CasaTrait -> bool {
         "lt" required.push "le" required.push "gt" required.push "ge" required.push
     elif "Hashable" trait_name == then "hash" required.push
 elif "Display" trait_name == then "to_str" required.push
-else "next" required.push fi
+elif "Iterable" trait_name == then "next" required.push
+else "clone" required.push fi
     true = valid
     for required_name in required.iter do
         false = found
@@ -2601,6 +2724,205 @@ fn validate_traits parser:Parser -> bool {
     0 valid.get
 }
 
+fn copy_representation_is_eligible
+    typ:Type
+    trait_bounds:Map[str List[TraitBound]]
+    store:SymbolStore
+    visiting:Set[str]
+-> bool {
+    typ match
+        Type::Builtin(builtin) => { builtin BuiltinType::Str != }
+        Type::Function(_) => { true }
+        Type::Unknown => { false }
+        Type::TypeVar(type_variable) => {
+            if type_variable trait_bounds.get Option::Some(bounds) is then
+                "Copy" GenericType::new Type::Generic = copy_type
+                for bound in bounds.iter do
+                    if store copy_type bound trait_bound_to_type trait_type_implies then
+                        true return
+                    fi
+                done
+            fi
+            false
+        }
+        Type::Generic(generic) => {
+            if "array" generic.base == then false return fi
+            if generic.base visiting.has then false return fi
+            Map[str Type]::new = substitutions
+            if generic.base store.structs.get Option::Some(casa_struct) is then
+                if generic.params.length casa_struct.type_vars.length != then false return fi
+                for pair in generic.params.iter casa_struct.type_vars.iter.zip do
+                    pair.second pair.first substitutions.set = substitutions
+                done
+                generic.base visiting.add = visiting
+                for member in casa_struct.members.iter do
+                    substitutions member.typ.substitute_t = member_type
+                    if visiting store trait_bounds member_type copy_field_is_eligible ! then
+                        generic.base visiting.remove = visiting
+                        false return
+                    fi
+                done
+                generic.base visiting.remove = visiting
+                true return
+            fi
+            if generic.base store.enums.get Option::Some(casa_enum) is then
+                if generic.params.length casa_enum.type_vars.length != then false return fi
+                for pair in generic.params.iter casa_enum.type_vars.iter.zip do
+                    pair.second pair.first substitutions.set = substitutions
+                done
+                generic.base visiting.add = visiting
+                for payload_types in casa_enum.variant_types.values.iter do
+                    for payload_type in payload_types.iter do
+                        substitutions payload_type.substitute_t = resolved_payload
+                        if visiting store trait_bounds resolved_payload copy_field_is_eligible ! then
+                            generic.base visiting.remove = visiting
+                            false return
+                        fi
+                    done
+                done
+                generic.base visiting.remove = visiting
+                true return
+            fi
+            false
+        }
+    end
+}
+
+fn copy_field_is_eligible
+    typ:Type
+    trait_bounds:Map[str List[TraitBound]]
+    store:SymbolStore
+    visiting:Set[str]
+-> bool {
+    if typ Type::Generic(generic) is then
+        if generic.base store.structs.has generic.base store.enums.has || then
+            "Copy" GenericType::new Type::Generic = copy_type
+            if store copy_type typ type_has_satisfying_trait_impl ! then false return fi
+        fi
+    fi
+    visiting store trait_bounds typ copy_representation_is_eligible
+}
+
+fn validate_copy_trait_impl parser:Parser trait_impl:TraitImpl trait_type:Type {
+    "Copy" GenericType::new Type::Generic = copy_type
+    if parser.store copy_type trait_type trait_type_implies ! then return fi
+    Set[str]::new = visiting
+    if visiting parser.store trait_impl.trait_bounds trait_impl.receiver copy_representation_is_eligible then return fi
+    trait_impl.location f"Type `{trait_impl.receiver.format}` cannot implement `Copy` because its representation is not safely copyable" ErrorKind::TraitSignatureMismatch parser.state.record_error
+}
+
+fn append_struct_copy_clone_body
+    casa_struct:CasaStruct
+    location:Location
+    ops:List[Op]
+{
+    casa_struct.members.length = member_index
+    while 0 member_index != do
+        1 -= member_index
+        member_index casa_struct.members.get = member
+        location "self" OpValue::PushVar Op::new ops.push
+        location member.name OpValue::MethodCall Op::new ops.push
+        location "clone" OpValue::MethodCall Op::new ops.push
+    done
+    location casa_struct OpValue::StructNew Op::new ops.push
+}
+
+fn append_enum_copy_clone_body casa_enum:CasaEnum location:Location ops:List[Op] {
+    location "self" OpValue::PushVar Op::new ops.push
+    location OpValue::MatchStart Op::new ops.push
+    0 (u64) = variant_index
+    for variant_name in casa_enum.variants.iter do
+        List[str]::new = bindings
+        if variant_name casa_enum.variant_types.get Option::Some(payload_types) is then
+            0 (u64) = payload_index
+            while payload_index payload_types.length > do
+                f"__copy_clone_{variant_index}_{payload_index}" bindings.push
+                1 += payload_index
+            done
+        fi
+        variant_index (i64) Option::Some variant_name casa_enum.name EnumVariant::new = pattern_variant
+        bindings pattern_variant EnumVariant::set_bindings
+        List[Op]::new pattern_variant PatternValue::EnumVariant MatchArm::new = arm
+        location arm OpValue::MatchArm Op::new ops.push
+        bindings.length = binding_index
+        while 0 binding_index != do
+            1 -= binding_index
+            location binding_index bindings.get OpValue::PushVar Op::new ops.push
+            location "clone" OpValue::MethodCall Op::new ops.push
+        done
+        variant_index (i64) Option::Some variant_name casa_enum.name EnumVariant::new = constructor
+        location constructor OpValue::PushEnumVariant Op::new ops.push
+        1 += variant_index
+    done
+    location OpValue::MatchEnd Op::new ops.push
+}
+
+fn make_copy_clone_fallback
+    parser:Parser
+    trait_impl:TraitImpl
+    function_name:str
+-> Function {
+    List[Parameter]::new = parameters
+    "self" trait_impl.receiver Parameter::named parameters.push
+    List[Type]::new = returns
+    trait_impl.receiver returns.push
+    returns parameters StackEffect::new = effect
+    trait_impl.type_vars string_list_to_set = effect.type_vars
+    trait_impl.trait_bounds effect StackEffect::set_trait_bounds
+
+    List[Op]::new = ops
+    List[Variable]::new = variables
+    if 0 trait_impl.trait_bounds.keys.length != then
+        List[Parameter]::new = hidden_parameters
+        trait_impl.trait_bounds parser build_hidden_trait_methods = hidden_methods
+        for hidden in hidden_methods.iter do
+            hidden.var_name hidden.fn_type Parameter::named hidden_parameters.push
+            hidden.fn_type hidden.var_name Variable variables.push
+            trait_impl.location hidden.var_name OpValue::AssignVar Op::new = hidden_assign
+            hidden.fn_type Option::Some hidden_assign Op::set_type_hint
+            hidden_assign ops.push
+        done
+        for parameter in effect.parameters.iter do parameter hidden_parameters.push done
+        hidden_parameters effect StackEffect::set_parameters
+    fi
+    trait_impl.receiver "self" Variable variables.push
+    trait_impl.location "self" OpValue::AssignVar Op::new ops.push
+    trait_impl.receiver.match_base = receiver_name
+    if receiver_name parser.store.structs.get Option::Some(casa_struct) is then
+        ops trait_impl.location casa_struct append_struct_copy_clone_body
+    elif receiver_name parser.store.enums.get Option::Some(casa_enum) is then
+        ops trait_impl.location casa_enum append_enum_copy_clone_body
+    else
+        trait_impl.location "self" OpValue::PushVar Op::new ops.push
+    fi
+
+    effect trait_impl.location ops function_name Function::with_stack_effect = function
+    variables function Function::set_variables
+    function
+}
+
+fn synthesize_copy_clone_fallbacks parser:Parser {
+    if "Copy" parser.store.traits.has ! "Clone" parser.store.traits.has ! || then return fi
+    "Copy" GenericType::new Type::Generic = copy_type
+    "Clone" GenericType::new Type::Generic = clone_type
+    if parser.store clone_type copy_type trait_type_implies ! then return fi
+    for trait_impl in parser.store.trait_impls.values.iter do
+        trait_impl.trait_bound trait_bound_to_type = implemented_trait
+        if parser.store copy_type implemented_trait trait_type_implies ! then continue fi
+        parser.store clone_type Option::Some trait_impl.receiver "clone" resolve_trait_method_semantics_for = clone_method
+        if clone_method Option::Some(method) is then
+            method.function_name "clone" trait_impl.methods.set = trait_impl.methods
+            continue
+        fi
+        f"{trait_impl.receiver.match_base}::Copy::clone" = function_name
+        if function_name parser.store.functions.has ! then
+            function_name trait_impl parser make_copy_clone_fallback = function
+            function function_name parser.store.functions.set drop
+        fi
+        function_name "clone" trait_impl.methods.set = trait_impl.methods
+    done
+}
+
 fn validate_trait_impls parser:Parser {
     for trait_impl in parser.store.trait_impls.values.iter do
         if trait_impl.receiver Type::TypeVar(_) is then
@@ -2613,6 +2935,8 @@ fn validate_trait_impls parser:Parser {
             continue
         fi
         trait_opt.unwrap = casa_trait
+        trait_impl.trait_bound trait_bound_to_type = trait_type
+        trait_type trait_impl parser validate_copy_trait_impl
         if trait_impl.trait_bound.type_args.length casa_trait.type_params.length != then
             trait_impl.location f"Trait `{casa_trait.name}` expects {casa_trait.type_params.length} type argument(s), got {trait_impl.trait_bound.type_args.length}" ErrorKind::Syntax parser.state.record_error
         fi
@@ -3164,7 +3488,9 @@ fn handle_selective_import parser:Parser selective:SelectiveImport location:Loca
 fn handle_question_operator parser:Parser token:Token function_name:str ops:List[Op] {
     token Token::location = loc
 
-    loc OpValue::Dup Op::new ops.push
+    # This temporary branch copy does not escape. #353 replaces it with the
+    # ownership-aware propagation protocol.
+    loc OpValue::PropagationDup Op::new ops.push
     loc OpValue::IfStart Op::new ops.push
     loc "is_ok" OpValue::MethodCall Op::new ops.push
     loc OpValue::Not Op::new ops.push
@@ -4002,7 +4328,10 @@ fn resolve_identifiers_global parser:Parser ops:List[Op] -> List[Op] {
     ops parser expand_imports = expanded_ops
     if parser.state.has_usable_output ! then List[Op]:: new return fi
     if parser validate_traits ! then List[Op]:: new return fi
+    parser derive_copy_for_aggregates
+    parser register_builtin_copy_impls
     parser finalize_trait_impl_methods
+    parser synthesize_copy_clone_fallbacks
     parser validate_trait_impls
     if parser.state.has_usable_output ! then List[Op]:: new return fi
     empty_location List[Op]:: new GLOBAL_SCOPE_LABEL Function::new = dummy

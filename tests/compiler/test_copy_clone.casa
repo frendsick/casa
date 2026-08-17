@@ -1,0 +1,199 @@
+import "std"
+import "../../compiler/typechecker.casa"
+import "helpers.casa"
+
+const COPY_TRAITS "trait Clone { fn clone self:self -> self } trait Copy: Clone { } "
+
+struct CopyPoint derives Copy {
+    value: i64
+}
+
+struct CustomClone {
+    value: i64
+}
+
+struct CustomCopy derives Copy {
+    value: i64
+}
+
+impl CustomCopy: Clone {
+    fn clone self:CustomCopy -> CustomCopy {
+        self.value 1 + CustomCopy
+    }
+}
+
+struct CopyWrapper derives Copy {
+    inner: CustomCopy
+}
+
+enum CopyChoice derives Copy {
+    None
+    Some(CustomCopy)
+}
+
+impl CustomClone: Clone {
+    fn clone self:CustomClone -> CustomClone {
+        self.value 1 + CustomClone
+    }
+}
+
+fn identity value:i64 -> i64 { value }
+
+fn check_source diagnostics:Diagnostics source:str {
+    diagnostics source parse_resolve_test_source = result
+    if result.ops Option::Some(ops) is then
+        result.store ops type_check = checked
+        checked.diagnostics diagnostics.merge
+    fi
+}
+
+fn test_copy_intrinsics_and_fallback_clone {
+    "copy_intrinsics_and_fallback_clone" test_start
+    7 CopyPoint = point
+    point dup = first = second
+    "dup first" 7 first.value assert_eq
+    "dup second" 7 second.value assert_eq
+    "copy" 7 point copy.value assert_eq
+    "fallback clone" 7 point.clone.value assert_eq
+
+    8 CustomCopy dup = copied_first = copied_second
+    "Copy does not call custom Clone" 8 copied_first.value assert_eq
+    "Copy preserves the source value" 8 copied_second.value assert_eq
+
+    8 CustomCopy CopyWrapper.clone.inner = cloned_inner
+    "fallback clone composes field Clone" 9 cloned_inner.value assert_eq
+
+    10 CustomCopy CopyChoice::Some.clone = cloned_choice
+    cloned_choice match
+        CopyChoice::Some(value) => {
+            "fallback clone composes payload Clone" 11 value.value assert_eq
+        }
+        CopyChoice::None => { "expected cloned payload" false assert_true }
+    end
+}
+
+fn test_standard_owner_clone_composes {
+    "standard_owner_clone_composes" test_start
+    List[CustomClone]::new = values
+    4 CustomClone values.push
+    values.clone = cloned_values
+    "list clone uses element Clone" 5 0 cloned_values.get.value assert_eq
+
+    6 CustomClone Option::Some.clone.unwrap = cloned_option
+    "option clone uses payload Clone" 7 cloned_option.value assert_eq
+
+    [8 9].clone = cloned_array
+    "array clone length" 2 cloned_array.length assert_eq
+    "array clone value" 9 1 cloned_array.nth assert_eq
+
+    "hello" = original
+    original.clone = cloned_text
+    "str clone value" original cloned_text str::eq assert_true
+    "str clone owns distinct storage" original (ptr) cloned_text (ptr) != assert_true
+
+    Map[i64 CustomClone]::new = values_by_id
+    10 CustomClone 1 values_by_id.set = values_by_id
+    values_by_id.clone = cloned_map
+    "map clone uses value Clone" 11 1 cloned_map.get.unwrap.value assert_eq
+
+    Set[str]::new = names
+    "Casa" names.add = names
+    names.clone = cloned_names
+    "set clone retains values" "Casa" cloned_names.has assert_true
+}
+
+fn test_non_copy_dup_is_rejected {
+    "non_copy_dup_is_rejected" test_start
+    Diagnostics::new = diagnostics
+    COPY_TRAITS "\"owned\" dup" str::concat diagnostics check_source
+    diagnostics "mentions Copy" "does not satisfy trait `Copy`" assert_error_contains
+}
+
+fn test_over_checks_the_copied_value {
+    "over_checks_the_copied_value" test_start
+    Diagnostics::new = diagnostics
+    COPY_TRAITS "struct Owner { value: str } \"owned\" Owner 1 over" str::concat diagnostics check_source
+    diagnostics "deeper owner rejected" "Type `Owner` does not satisfy trait `Copy`" assert_error_contains
+
+    Diagnostics::new = valid_diagnostics
+    COPY_TRAITS "struct Owner { value: str } 1 \"owned\" Owner over" str::concat valid_diagnostics check_source
+    valid_diagnostics "non-Copy top value is only moved" assert_no_errors
+}
+
+fn test_copy_derivation_validates_fields {
+    "copy_derivation_validates_fields" test_start
+    Diagnostics::new = diagnostics
+    COPY_TRAITS "struct Bad derives Copy { value: str }" str::concat diagnostics check_source
+    diagnostics "invalid representation" "cannot implement `Copy`" assert_error_contains
+
+    Diagnostics::new = phantom_diagnostics
+    phantom_diagnostics
+    COPY_TRAITS "struct Phantom[T] derives Copy { value: i64 }" str::concat
+    parse_resolve_test_source = result
+    phantom_diagnostics result.store Option[Function]::None "Copy" "Phantom[str]" parse_type_str
+    type_satisfies_trait_for_test
+    = phantom_is_copy
+    "unused generic parameter does not need Copy" phantom_is_copy assert_true
+
+    Diagnostics::new = generic_diagnostics
+    COPY_TRAITS "struct Holder[T] derives Copy { value: T } \"owned\" Holder dup" str::concat
+    generic_diagnostics check_source
+    generic_diagnostics "used generic parameter requires Copy" "does not satisfy trait `Copy`"
+    assert_error_contains
+}
+
+fn test_explicit_copy_implementation_is_validated {
+    "explicit_copy_implementation_is_validated" test_start
+    Diagnostics::new = invalid_diagnostics
+    COPY_TRAITS "struct Bad { value: str } impl Bad: Copy { }" str::concat
+    invalid_diagnostics check_source
+    invalid_diagnostics "invalid explicit implementation" "cannot implement `Copy`"
+    assert_error_contains
+
+    Diagnostics::new = valid_diagnostics
+    COPY_TRAITS "struct Good { value: i64 } impl Good: Copy { } 1 Good dup drop drop"
+    str::concat valid_diagnostics check_source
+    valid_diagnostics "valid explicit implementation" assert_no_errors
+}
+
+fn test_copy_bound_and_clone_supertrait {
+    "copy_bound_and_clone_supertrait" test_start
+    Diagnostics::new = diagnostics
+    COPY_TRAITS "struct Point derives Copy { value: i64 } fn duplicate[T: Copy] value:T -> T T { value dup } fn cloned[T: Clone] value:T -> T { value T::clone } 1 Point duplicate drop cloned drop" str::concat diagnostics check_source
+    diagnostics "Copy works as a Clone supertrait" assert_no_errors
+}
+
+fn test_named_function_clone {
+    "named_function_clone" test_start
+    12 &identity.clone exec = direct
+    "direct function clone" 12 direct assert_eq
+
+    Diagnostics::new = diagnostics
+    COPY_TRAITS "fn cloned[T: Clone] value:T -> T { value T::clone } fn identity value:i64 -> i64 { value } &identity cloned drop" str::concat diagnostics check_source
+    diagnostics "function Copy works as a Clone supertrait" assert_no_errors
+}
+
+fn test_copy_contract_is_methodless {
+    "copy_contract_is_methodless" test_start
+    Diagnostics::new = diagnostics
+    "trait Copy { fn duplicate self:self -> self }" diagnostics check_source
+    diagnostics "methodless contract" "must not declare methods" assert_error_contains
+}
+
+fn test_clone_contract_is_infallible_self_to_self {
+    "clone_contract_is_infallible_self_to_self" test_start
+    Diagnostics::new = diagnostics
+    "trait Clone { fn clone self:self -> Option[self] }" diagnostics check_source
+    diagnostics "Clone result contract" "incompatible `clone`" assert_error_contains
+}
+test_copy_intrinsics_and_fallback_clone
+test_standard_owner_clone_composes
+test_non_copy_dup_is_rejected
+test_over_checks_the_copied_value
+test_copy_derivation_validates_fields
+test_explicit_copy_implementation_is_validated
+test_copy_bound_and_clone_supertrait
+test_named_function_clone
+test_copy_contract_is_methodless
+test_clone_contract_is_infallible_self_to_self
+test_summary

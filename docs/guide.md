@@ -35,7 +35,7 @@ order.
 
 ```text
 print: [T: Display] T -> None
-dup:   T -> T T
+dup:   [T: Copy] T -> T T
 +:     T T -> T
 ```
 
