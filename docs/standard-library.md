@@ -1,464 +1,124 @@
 # Standard Library
 
-The standard library provides core types and functions used by most Casa programs. It is in `lib/std.casa`. Import it as a module:
+The core standard library is `lib/std.casa`:
 
 ```casa
 import "std"
 ```
 
-Compile the program from the repository root with
-`./casac -L lib program.casa`.
+Compile with a library path that contains `std.casa`, such as
+`casac -L lib program.casa`. See [Modules](modules.md) for import resolution.
 
-For full import resolution rules, selective imports, and `-L` search paths, see [Modules](modules.md).
+The main library references are:
 
-## `memcpy`
+- [Collections and Iterators](collections.md)
+- [Text and I/O](strings-and-io.md)
+- [Operating-system utilities](utilities.md)
+- [Generics and Traits](traits.md#built-in-traits)
 
-Copies `n` bytes from one pointer to another.
-
-**Stack effect:** `dst src n -> None`
-
-```casa
-24 alloc = src
-10 src (ptr) store64
-20 src (ptr) 8 + store64
-30 src (ptr) 16 + store64
-
-24 alloc = dst
-24 src dst memcpy
-
-dst (ptr) load64 print        # 10
-dst (ptr) 8 + load64 print    # 20
-dst (ptr) 16 + load64 print   # 30
-```
-
-## Arrays
-
-Arrays are fixed-size heap-allocated sequences created with bracket syntax. Each array has a 16-byte header: the data pointer at offset 0 and the length at offset 8. Elements are stored contiguously after the header, each taking 8 bytes.
-
-### `array::length`
-
-Returns the length of an array.
-
-**Stack effect:** `array -> i64`
-
-```casa
-[1, 2, 3] = arr
-arr.length print    # 3
-```
-
-### `array::nth`
-
-Returns the nth element of an array (zero-indexed). This is a generic function that returns the element type of the array.
-
-**Stack effect:** `array[T] n -> T`
-
-```casa
-[10, 20, 30] = arr
-1 arr array::nth print    # 20
-# or with dot syntax:
-1 arr.nth print           # 20
-```
-
-The return type matches the array's element type. For example, calling `nth` on an `array[i64]` returns `i64`, not `any`.
-
-## Iteration
-
-All standard collections provide a `.iter` method that returns an `Iter[T]`
-value. `Iter[T]` satisfies the `Iterable[T]` trait (see
-[Traits](traits.md#built-in-traits)), so all default methods below are
-available.
-
-### `Iter[T]`
-
-A generic iterator wrapper returned by `.iter` on `array[T]`, `List[T]`, and `str`.
-
-**Definition:**
-
-```casa
-struct Iter[T] {
-    next_fn: fn[-> Option[T]]
-}
-```
-
-### `.iter` on Collections
-
-| Collection | Method | Returns |
-|------------|--------|---------|
-| `array[T]` | `array::iter` | `Iter[T]` |
-| `List[T]` | `List::iter` | `Iter[T]` |
-| `str` | `str::iter` | `Iter[char]` |
-
-```casa
-[1 2 3].iter           # Iter[i64]
-my_list.iter           # Iter[T]
-"hello".iter           # Iter[char]
-```
-
-### `Iterable[T]` Default Methods
-
-Default methods are available on any type satisfying `Iterable[T]`, including `Iter[T]` (the return of `.iter`) and custom iterators.
-
-#### `collect`
-
-Collects all elements into a `List[T]`.
-
-**Stack effect:** `Iter[T] -> List[T]`
-
-```casa
-[1 2 3].iter.collect    # List[i64] with elements 1, 2, 3
-```
-
-#### `map`
-
-Applies a function to each element, returning a lazy `Iter[U]`. Use `.collect` to materialize a `List[U]`.
-
-**Stack effect:** `Iter[T] fn[T -> U] -> Iter[U]`
-
-```casa
-{ 2 * } [1 2 3].iter.map.collect    # List[i64] with elements 2, 4, 6
-```
-
-#### `filter`
-
-Returns a lazy `Iter[T]` of elements for which the function returns `true`. Use `.collect` to materialize a `List[T]`.
-
-**Stack effect:** `Iter[T] fn[T -> bool] -> Iter[T]`
-
-```casa
-{ 2 % 0 == } [1 2 3 4].iter.filter.collect    # List[i64] with elements 2, 4
-```
-
-#### `fold`
-
-Reduces to a single value using an accumulator and a function.
-
-**Stack effect:** `Iter[T] U fn[U T -> U] -> U`
-
-```casa
-{ + } 0 [1 2 3].iter.fold print    # 6
-```
-
-#### `count`
-
-Returns the number of elements.
-
-**Stack effect:** `Iter[T] -> u64`
-
-```casa
-[1 2 3].iter.count print    # 3
-```
-
-#### `any`
-
-Returns `true` if any element satisfies the predicate.
-
-**Stack effect:** `Iter[T] fn[T -> bool] -> bool`
-
-```casa
-{ 3 == } [1 2 3].iter.any print    # true
-```
-
-#### `all`
-
-Returns `true` if all elements satisfy the predicate.
-
-**Stack effect:** `Iter[T] fn[T -> bool] -> bool`
-
-```casa
-{ 0 < } [1 2 3].iter.all print    # true
-```
-
-#### `find`
-
-Returns the first element satisfying the predicate, or `Option::None`.
-
-**Stack effect:** `Iter[T] fn[T -> bool] -> Option[T]`
-
-```casa
-{ 2 < } [1 2 3].iter.find .unwrap print    # 2
-```
-
-#### Additional Combinators
-
-`I` below is any type that satisfies `Iterable[T]`.
-
-| Method | Stack effect | Behavior |
-|--------|--------------|----------|
-| `take` | `I u64 -> Iter[T]` | Yield at most the first `n` elements. |
-| `skip` | `I u64 -> Iter[T]` | Omit the first `n` elements. |
-| `take_while` | `I fn[T -> bool] -> Iter[T]` | Yield elements while the predicate is true. |
-| `skip_while` | `I fn[T -> bool] -> Iter[T]` | Omit elements while the predicate is true. |
-| `enumerate` | `I -> Iter[Pair[i64 T]]` | Pair each element with its zero-based index. |
-| `zip` | `I Iter[U] -> Iter[Pair[T U]]` | Pair elements until either iterator ends. |
-| `chain` | `I Iter[T] -> Iter[T]` | Yield the receiver, then the other iterator. |
-| `flat_map` | `I fn[T -> Iter[U]] -> Iter[U]` | Map to iterators and flatten them lazily. |
-| `reduce` | `I fn[T T -> T] -> Option[T]` | Reduce without an initial value. |
-| `min_by` | `I fn[T T -> bool] -> Option[T]` | Find the minimum by a comparison function. |
-| `max_by` | `I fn[T T -> bool] -> Option[T]` | Find the maximum by a comparison function. |
-| `partition` | `I fn[T -> bool] -> Pair[List[T] List[T]]` | Split elements by a predicate. |
-| `sum` | `I -> i64` | Cast elements to `i64` and add them. |
-
-`reduce`, `min_by`, and `max_by` return `Option::None` for an empty iterator.
-`sum` returns zero. See
-[`iterator_combinators.casa`](../examples/iterator_combinators.casa) for runnable
-examples.
-
-### Ordered `Iter[T]` Methods
-
-`Iter[T]` provides `min` and `max` when `T` satisfies `Ord`. Each method returns
-`Option::None` for an empty iterator.
-
-```casa
-[3, 1, 4] (array[i64]).iter.min
-[3, 1, 4] (array[i64]).iter.max
-```
+This page is the canonical reference for `Option`, `Result`, and `?`.
 
 ## Option
 
-`Option[T]` is an enum representing a value that may or may not exist. It is defined as:
+`Option[T]` represents a value that can be present or absent. It is defined as
+`enum Option[T] { None Some(T) }`.
 
 ```casa
-enum Option[T] { None Some(T) }
+42 Option::Some = present:Option[i64]
+Option::None = absent:Option[i64]
 ```
 
-Methods are resolved via `Option::method`.
-
-### `Option::is_some`
-
-Returns `true` if the option contains a value.
-
-**Stack effect:** `Option -> bool`
+Prefer pattern matching when both cases need behavior:
 
 ```casa
-42 Option::Some .is_some print       # true
-Option::None .is_some print          # false
-```
-
-### `Option::is_none`
-
-Returns `true` if the option is empty.
-
-**Stack effect:** `Option -> bool`
-
-```casa
-42 Option::Some .is_none print       # false
-Option::None .is_none print          # true
-```
-
-### `Option::unwrap`
-
-Extracts the contained value. Prints an error and exits with code 60 if called on `None`.
-
-**Stack effect:** `Option[T] -> T`
-
-```casa
-42 Option::Some .unwrap print        # 42
-Option::None .unwrap                 # error: called unwrap on None
-```
-
-### `Option::unwrap_or`
-
-Returns the contained value, or a default if the option is empty.
-
-**Stack effect:** `Option[T] T -> T`
-
-```casa
-0 42 Option::Some .unwrap_or print   # 42
-0 Option::None .unwrap_or print      # 0
-```
-
-### `Option::map`
-
-Transforms the contained value with `f` if Some, otherwise returns None.
-
-**Stack effect:** `fn[T -> U] Option[T] -> Option[U]`
-
-```casa
-{ 2 * } 5 Option::Some .map       # Option::Some(10)
-{ 2 * } Option::None .map         # Option::None
-```
-
-### `Option::and_then`
-
-Returns None if the option is empty, otherwise calls `f` with the contained value and returns the result.
-
-**Stack effect:** `fn[T -> Option[U]] Option[T] -> Option[U]`
-
-```casa
-{ 1 + Option::Some } 5 Option::Some .and_then   # Option::Some(6)
-{ 1 + Option::Some } Option::None .and_then     # Option::None
-```
-
-### `Option::or_else`
-
-Returns the option if it contains a value, otherwise calls `f` and returns its result.
-
-**Stack effect:** `fn[-> Option[T]] Option[T] -> Option[T]`
-
-```casa
-{ 0 Option::Some } Option::None .or_else        # Option::Some(0)
-{ 0 Option::Some } 5 Option::Some .or_else      # Option::Some(5)
-```
-
-### `Option::filter`
-
-Returns the option if it contains a value and the predicate returns true, otherwise returns None.
-
-**Stack effect:** `fn[T -> bool] Option[T] -> Option[T]`
-
-```casa
-{ 3 > } 5 Option::Some .filter    # Option::Some(5)
-{ 3 > } 2 Option::Some .filter    # Option::None
-{ 3 > } Option::None .filter      # Option::None
-```
-
-### Match on Option
-
-Use `match` with destructuring to handle Option values:
-
-```casa
-42 Option::Some match
+present match
     Option::Some(value) => value print
     Option::None => "nothing" print
 end
 ```
 
+| Method | Result or action |
+|---|---|
+| `is_some self:Option[T] -> bool` | Whether a value is present |
+| `is_none self:Option[T] -> bool` | Whether no value is present |
+| `is_ok self:Option[T] -> bool` | Alias used by `?` |
+| `unwrap self:Option[T] -> T` | Present value, or terminate on `None` |
+| `unwrap_or self:Option[T] default:T -> T` | Present value or `default` |
+| `map self:Option[T] transform:fn[T -> U] -> Option[U]` | Transform a present value |
+| `and_then self:Option[T] transform:fn[T -> Option[U]] -> Option[U]` | Chain an optional operation |
+| `or_else self:Option[T] fallback:fn[-> Option[T]] -> Option[T]` | Compute a fallback for `None` |
+| `filter self:Option[T] predicate:fn[T -> bool] -> Option[T]` | Keep a present value only if it matches |
+
+Callbacks are pushed before the option receiver:
+
+```casa
+{ 2 * } 5 Option::Some .map    # Option::Some(10)
+```
+
+See [`examples/option.casa`](../examples/option.casa) for the common methods.
+
 ## Result
 
-`Result[T E]` is an enum representing success or failure. It is defined as:
+`Result[T E]` represents a successful value or an error. It is defined as
+`enum Result[T E] { Error(E) Ok(T) }`.
 
 ```casa
-enum Result[T E] { Error(E) Ok(T) }
+42 Result::Ok = success:Result[i64 str]
+"invalid input" Result::Error = failure:Result[i64 str]
 ```
 
-Methods are resolved via `Result::method`.
-
-### `Result::is_ok`
-
-Returns `true` if the result contains a success value.
-
-**Stack effect:** `Result -> bool`
+Handle both cases with `match`:
 
 ```casa
-42 Result::Ok .is_ok print                  # true
-"error" Result::Error .is_ok print          # false
-```
-
-### `Result::is_error`
-
-Returns `true` if the result contains an error value.
-
-**Stack effect:** `Result -> bool`
-
-```casa
-42 Result::Ok .is_error print               # false
-"error" Result::Error .is_error print       # true
-```
-
-### `Result::unwrap`
-
-Extracts the success value. Prints an error and exits with code 60 if called on an `Error` result.
-
-**Stack effect:** `Result[T E] -> T`
-
-```casa
-42 Result::Ok .unwrap print                 # 42
-"error" Result::Error .unwrap               # error: called unwrap on error
-```
-
-### `Result::unwrap_error`
-
-Extracts the error value. Prints an error and exits with code 60 if called on an `Ok` result.
-
-**Stack effect:** `Result[T E] -> E`
-
-```casa
-"error" Result::Error .unwrap_error print   # error
-42 Result::Ok .unwrap_error                 # error: called unwrap_error on ok
-```
-
-### `Result::unwrap_or`
-
-Returns the success value, or a default if the result is an error.
-
-**Stack effect:** `Result[T E] T -> T`
-
-```casa
-0 42 Result::Ok .unwrap_or print            # 42
-0 "error" Result::Error .unwrap_or print    # 0
-```
-
-### `Result::map`
-
-Transforms the Ok value with `f`, leaving Error unchanged.
-
-**Stack effect:** `fn[T -> U] Result[T E] -> Result[U E]`
-
-```casa
-{ 2 * } 5 Result::Ok .map                 # Result::Ok(10)
-{ 2 * } "err" Result::Error .map          # Result::Error("err")
-```
-
-### `Result::map_error`
-
-Transforms the Error value with `f`, leaving Ok unchanged.
-
-**Stack effect:** `fn[E -> F] Result[T E] -> Result[T F]`
-
-```casa
-{ "wrapped: " swap str::concat } "err" Result::Error .map_error   # Result::Error("wrapped: err")
-{ "wrapped: " swap str::concat } 5 Result::Ok .map_error          # Result::Ok(5)
-```
-
-### `Result::and_then`
-
-Returns the error if the result is Error, otherwise calls `f` with the Ok value and returns the result.
-
-**Stack effect:** `fn[T -> Result[U E]] Result[T E] -> Result[U E]`
-
-```casa
-{ 1 + Result::Ok } 5 Result::Ok .and_then         # Result::Ok(6)
-{ 1 + Result::Ok } "err" Result::Error .and_then   # Result::Error("err")
-```
-
-### `Result::or_else`
-
-Returns the Ok value if present, otherwise calls `f` with the Error value for recovery.
-
-**Stack effect:** `fn[E -> Result[T F]] Result[T E] -> Result[T F]`
-
-```casa
-{ drop 0 Result::Ok } "err" Result::Error .or_else   # Result::Ok(0)
-{ drop 0 Result::Ok } 5 Result::Ok .or_else          # Result::Ok(5)
-```
-
-### Match on Result
-
-Use `match` with destructuring to handle Result values:
-
-```casa
-42 Result::Ok match
+failure match
     Result::Ok(value) => value print
-    Result::Error(err) => err print
+    Result::Error(message) => message print
 end
 ```
 
-## Built-in Traits
+| Method | Result or action |
+|---|---|
+| `is_ok self:Result[T E] -> bool` | Whether the result is successful |
+| `is_error self:Result[T E] -> bool` | Whether the result is an error |
+| `unwrap self:Result[T E] -> T` | Success value, or terminate on `Error` |
+| `unwrap_error self:Result[T E] -> E` | Error value, or terminate on `Ok` |
+| `unwrap_or self:Result[T E] default:T -> T` | Success value or `default` |
+| `map self:Result[T E] transform:fn[T -> U] -> Result[U E]` | Transform a success value |
+| `map_error self:Result[T E] transform:fn[E -> F] -> Result[T F]` | Transform an error value |
+| `and_then self:Result[T E] transform:fn[T -> Result[U E]] -> Result[U E]` | Chain a fallible operation |
+| `or_else self:Result[T E] recover:fn[E -> Result[T F]] -> Result[T F]` | Recover from an error |
 
-The standard library declares traits with primitive implementations. See [Traits](traits.md) for details.
+See [`examples/result.casa`](../examples/result.casa) for the common methods.
 
-| Trait | Required | Defaults | Built-in impls |
-|-------|----------|----------|----------------|
-| `Eq` | `eq self other -> bool` | `ne` | `i64`, `bool`, `char`, `str`, `cstr`, `ptr` |
-| `Ord` | `lt self other -> bool` | `le`, `gt`, `ge` | `i64`, `char` |
-| `Display: Word` | `to_str self -> str` (extends `Word`) | -- | `i64`, `bool`, `char`, `str`, `cstr`, `ptr`, `array[T]`, `List[T]`, `Option[T]`, `Result[T E]` |
-| `Word` | (marker) | -- | every single-slot type |
-| `Hashable: Eq + Word` | `hash self -> i64` (extends `Eq`, `Word`) | -- | `i64`, `str`, payload-free enums (auto-derived) |
-| `Iterable[T]` | `next self -> Option[T]` | all methods in [the default method reference](#iterablet-default-methods) | `Iter[T]` |
+## Propagate with `?`
 
-## See Also
+Inside a function, `?` unwraps `Some` or `Ok`. On `None` or `Error`, it returns
+from the function immediately:
 
-- [Collections](collections.md) -- List, Map, Set, and StringBuilder
-- [Strings and IO](strings-and-io.md) -- string methods, file I/O, type conversions, and output functions
-- [Utilities](utilities.md) -- logging, timer, argument parsing, and process execution
-- [Types and Literals](types-and-literals.md) -- primitive and composite type definitions
+```casa
+fn half_if_even value:i64 -> Option[i64] {
+    if value 2 % 0 == then
+        value 2 / Option::Some
+    else
+        Option::None
+    fi
+}
+
+fn quarter_if_even value:i64 -> Option[i64] {
+    value half_if_even ? 2 / Option::Some
+}
+```
+
+An `Option[T]` can propagate into another `Option`. A `Result[T E]` can
+propagate into another `Result` with the same error type. Use `map_error` first
+when the error type must change.
+
+See [`examples/propagate_option.casa`](../examples/propagate_option.casa) and
+[`examples/propagate_result.casa`](../examples/propagate_result.casa) for
+runnable programs.
+
+## Advanced low-level helper
+
+`memcpy destination:ptr source:ptr count:u64` copies raw bytes. Prefer typed
+collections and text operations unless raw memory is required. See
+[Built-in Intrinsics](intrinsics.md#advanced-memory-access).
