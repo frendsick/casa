@@ -1,304 +1,108 @@
-# Errors
+# Understand Compiler Diagnostics
 
-The Casa compiler provides Rust-style error diagnostics with source context. When errors are detected, the compiler shows the error kind, a description, the file location, and the relevant source line with carets highlighting the problematic span.
+Start with the first diagnostic in your source file. Later diagnostics can be
+caused by the same problem.
 
-## Error Format
-
-```
-error[UNDEFINED_NAME]: Identifier `foo` is not defined
-  --> examples/fizzbuzz.casa:15:5
-   |
-15 | foo
-   | ^^^
-```
-
-Each error includes:
-
-- **Error kind** in brackets (e.g. `UNDEFINED_NAME`)
-- **Message** describing the problem
-- **File path, line, and column** where the error occurs
-- **Source line** with carets (`^^^`) underlining the relevant span
-
-Some errors include additional context:
-
-- **Expected** and **Got** (or **Inferred**) lines showing what was expected versus what was found
-- **Notes** with secondary source annotations pointing to related locations (e.g. where a mismatched value was originally pushed, or which branches have incompatible stack effects)
-
-When multiple errors are found, they are all printed before the compiler stops, followed by a summary line:
-
-```
-Found 3 error(s).
+```text
+error[TYPE_MISMATCH]: Type mismatch
+  --> program.casa:7:12
+  |
+7 | "text" consume_number
+  |        ^^^^^^^^^^^^^^
+  Expected: i64
+  Got: str
 ```
 
-## Error Kinds
+Read it in this order:
 
-### `SYNTAX`
+1. `program.casa:7:12` identifies the file, line, and column.
+2. The carets identify the operation that detected the problem.
+3. `Expected` is what the operation needs at that stack position.
+4. `Got` is the value that was present.
 
-Malformed tokens or structural problems in the source code.
+The error code in brackets is useful for searching this reference, but the
+message and type details usually give the fix.
+
+## Fix stack and type errors
+
+A stack effect lists consumed values from the top of the stack downward:
+
+```text
+consume_number: i64 -> None
+```
+
+For a `TYPE_MISMATCH`, trace the values before the highlighted operation. Check
+which value is on top, its type, and the function's parameter order. Remember
+that a function's first parameter receives the topmost value.
+
+`STACK_UNDERFLOW` means that an operation needs a value that is not present.
+Look for a missing literal, an earlier operation that consumed the value, or a
+branch that does not produce it.
+
+`STACK_MISMATCH` means that continuing branches leave different stack states.
+Trace each `if`, `match`, or loop path from the same starting stack. Every path
+that continues must leave the same number and types of values.
+
+`SIGNATURE_MISMATCH` means that a function body does not produce its declared
+stack effect. Compare the declared inputs and outputs with every `return` and
+with the end of the function body.
+
+See [Casa Guide](guide.md#read-stack-effects) for stack-effect notation and
+[Functions and Lambdas](functions-and-lambdas.md#declare-and-call-a-function)
+for parameter order.
+
+## Expected, got, and inferred types
+
+Some diagnostics use `Inferred` instead of `Got`. `Inferred` describes the
+stack effect or type calculated from the body. The same rule applies: compare
+it with `Expected`, then find the first position where they differ.
+
+An integer or floating-point literal can also need more context. Add a type
+annotation when the surrounding operation cannot select a concrete width:
 
 ```casa
-"unterminated string
+0 = offset:u64
 ```
 
-```
-error[SYNTAX]: Unclosed string literal
-```
-
-Invalid escape sequences in strings are also reported as `SYNTAX` errors:
-
-```casa
-"bad\q"
-```
-
-```
-error[SYNTAX]: Invalid escape sequence `\q`
-```
-
-### `UNEXPECTED_TOKEN`
-
-The parser expected one token but found another.
-
-```casa
-struct Foo { x i64 }
-```
-
-```
-error[UNEXPECTED_TOKEN]: Unexpected token
-  Expected: `:`
-  Got: `i64`
-```
-
-### `UNDEFINED_NAME`
-
-An identifier is used but not defined as a function, variable, struct, or intrinsic.
-
-```casa
-foo bar baz
-```
-
-```
-error[UNDEFINED_NAME]: Identifier `foo` is not defined
-error[UNDEFINED_NAME]: Identifier `bar` is not defined
-error[UNDEFINED_NAME]: Identifier `baz` is not defined
-Found 3 error(s).
-```
-
-Multiple undefined names are collected and reported together.
-
-### `DUPLICATE_NAME`
-
-An identifier is defined more than once in a context where duplicates are not allowed.
-
-```casa
-fn foo { }
-fn foo { }
-```
-
-```
-error[DUPLICATE_NAME]: Identifier `foo` is already defined
-```
-
-### `INVALID_SCOPE`
-
-A construct appears in a scope where it is not allowed (e.g. defining a function inside another function).
-
-```casa
-fn outer {
-    fn inner { }
-}
-```
-
-```
-error[INVALID_SCOPE]: Functions should be defined in the global scope
-```
-
-This also applies to `impl` blocks and `struct` definitions:
-
-```casa
-fn outer {
-    impl Foo { }
-}
-```
-
-```
-error[INVALID_SCOPE]: Implementation blocks should be defined in the global scope
-```
-
-### `STACK_UNDERFLOW`
-
-An operation tried to consume a value (or values) from the stack but the stack was empty.
-
-```casa
-fn foo { print rot }
-```
-
-```
-error[STACK_UNDERFLOW]: Stack underflow: expected value with trait `Display` but stack is empty
-error[STACK_UNDERFLOW]: Stack underflow: expected argument 1 of `rot` but stack is empty
-```
-
-The expectation phrase identifies what the operation needed:
-
-- `value with trait `T`` — operations that dispatch on a trait (e.g. `print`, `==`, `<`)
-- `argument N of `op`` — stack intrinsics that consume more than one value (`swap`, `over`, `rot`); `N` counts from the top of the stack (1 = topmost)
-- `value for `op`` — single-value stack intrinsics (`drop`, `dup`)
-- `parameter N of `name`` — function call missing arguments
-- `value` — generic fallback when no operation-specific context is available
-
-When a slot cannot be filled, downstream operations may show `<missing>` for the absent value. See [Cascade Errors](#cascade-errors).
-
-### `TYPE_MISMATCH`
-
-A type does not match what was expected.
-
-```casa
-fn bad[T] T T -> T T { }
-42 "hi" bad
-```
-
-```
-error[TYPE_MISMATCH]: Type variable `T` bound to `str` but got `i64`
-```
-
-If `got` shows `<missing>`, an earlier error left the slot without a real type — fix the earlier error first. See [Cascade Errors](#cascade-errors).
-
-### `STACK_MISMATCH`
-
-Branches of a conditional or loop leave the stack in inconsistent states. The error shows each branch's stack effect so you can see which branch diverges.
-
-```casa
-fn branchy bool -> i64 {
-    if dup then
-        1 2
-    else
-        3
-    fi
-}
-```
-
-```
-error[STACK_MISMATCH]: Branches have incompatible stack effects
-  --> examples/multi_error.casa:27:5
-   |
-27 |     fi
-   |     ^^
-  Note: `if` branch has signature `? -> ? i64 i64`
-  --> examples/multi_error.casa:23:5
-   |
-23 |     if dup then
-   |     ^^
-  Note: `else` branch has signature `? -> ? i64`
-  --> examples/multi_error.casa:25:5
-   |
-25 |     else
-   |     ^^^^
-```
-
-### `SIGNATURE_MISMATCH`
-
-A function's declared stack effect does not match the inferred stack effect from its body.
-
-```casa
-fn bad a:i64 -> str { a 1 + }
-bad
-```
-
-```
-error[SIGNATURE_MISMATCH]: Invalid signature for function `bad`
-  Expected: i64 -> str
-  Inferred: ? -> i64
-```
-
-### `INVALID_VARIABLE`
-
-Attempting to assign a value of a different type to an existing variable.
-
-```casa
-42 = x
-"hello" = x
-```
-
-```
-error[INVALID_VARIABLE]: Cannot override global variable `x` of type `i64` with other type `str`
-```
-
-### `UNMATCHED_BLOCK`
-
-A block construct is missing its closing keyword or has mismatched block markers.
-
-```casa
-if true then
-    42 print
-```
-
-```
-error[UNMATCHED_BLOCK]: `if` without matching `fi`
-```
-
-## Cascade Errors
-
-When the compiler reports an error that consumes a value from the stack — most commonly `STACK_UNDERFLOW` — the affected slot is tagged with the placeholder type `<missing>` so type checking can keep going. If a later operation reads that slot, you may see `<missing>` in its diagnostic:
-
-```casa
-fn two_generics[T] a:T b:T { }
-fn foo {
-    print           # underflow: nothing to print
-    2 two_generics  # this also fails because the underflow tainted the stack
-}
-```
-
-```
-error[STACK_UNDERFLOW]: Stack underflow: expected value with trait `Display` but stack is empty
-error[TYPE_MISMATCH]: Type variable `T` bound to `i64` but got `<missing>`
-```
-
-The second error is a *cascade* — its real cause is the underflow above. Fix the upstream error first; the cascade error usually disappears on its own. `<missing>` is distinct from `?` (an unconstrained type that the compiler is still inferring).
-
-## Multi-Error Collection
-
-The compiler collects as many errors as possible within each compilation phase before stopping. For example, the identifier resolution phase will report all undefined names at once rather than stopping at the first one.
-
-Within a single function, type checking stops at the first error because the stack state becomes unreliable. However, when checking all functions, errors from different functions are collected and reported together.
-
-### `MISSING_TRAIT_METHOD`
-
-A trait-dependent operation is used on a type that does not implement the required trait.
-
-```casa
-struct Foo { x: i64 }
-Map[Foo i64]::new = m    # Foo does not implement Hashable
-```
-
-```
-error[MISSING_TRAIT_METHOD]: Type `Foo` does not satisfy trait `Hashable`
-```
-
-### `TRAIT_SIGNATURE_MISMATCH`
-
-This error reports an invalid trait declaration or implementation. It includes
-missing or incompatible language trait methods, inheritance cycles, incompatible
-inherited methods, ambiguous method candidates, and implementation methods with
-the wrong stack effect. The message identifies the conflicting trait or method
-when possible.
-
-```
-error[TRAIT_SIGNATURE_MISMATCH]: Method signature does not match trait requirement
-```
-
-## Warnings
-
-The compiler also reports non-fatal warnings. Currently the only warning kind is:
-
-### `UNUSED_PARAMETER`
-
-A function parameter is declared but not used in the function body and is instead passed through the stack untouched.
-
-```
-warning[UNUSED_PARAMETER]: Unused parameter `i64` in function `add`
-```
-
-## See Also
-
-- [Language Server](language-server.md) -- real-time diagnostics in your editor
-- [Types and Literals](types-and-literals.md) -- type system that generates these errors
-- [Traits](traits.md) -- trait-related error kinds
+## Notes and related locations
+
+A diagnostic can include one or more `Note` sections. A note points to a related
+declaration, branch, or value origin. The main location shows where the compiler
+detected the error. The note helps identify where the conflicting value or rule
+came from.
+
+## Cascade errors
+
+The compiler can continue after some failures so that it can report more than
+one problem. A missing stack value is represented internally as `<missing>`.
+If a later diagnostic contains `<missing>`, fix the earlier underflow first.
+The later diagnostic will often disappear.
+
+The compiler can also report independent errors from different functions or
+compilation phases. After each edit, compile again and start with the earliest
+remaining error in your code.
+
+## Error-code reference
+
+| Code | Meaning |
+|---|---|
+| `SYNTAX` | Invalid source form or unsupported construct |
+| `UNEXPECTED_TOKEN` | A different token was required |
+| `UNDEFINED_NAME` | A name cannot be resolved |
+| `UNDEFINED_GLOBAL` | A `global` declaration does not name a global binding |
+| `DUPLICATE_NAME` | A name or declaration is repeated |
+| `INVALID_SCOPE` | A construct appears in a scope where it is not allowed |
+| `TYPE_MISMATCH` | A value has the wrong type |
+| `STACK_UNDERFLOW` | An operation does not have enough input values |
+| `STACK_MISMATCH` | Control-flow paths leave incompatible stacks |
+| `SIGNATURE_MISMATCH` | A function body does not match its declared stack effect |
+| `INVALID_VARIABLE` | A binding or assignment is invalid |
+| `UNMATCHED_BLOCK` | A block is missing its matching keyword |
+| `MISSING_TRAIT_METHOD` | A type does not satisfy a required trait |
+| `TRAIT_SIGNATURE_MISMATCH` | A trait declaration or implementation is incompatible |
+
+The CLI recognizes `UNUSED_PARAMETER` and `LOSSY_TYPE_ANNOTATION` warning codes.
+Warnings do not stop compilation.
+
+Use the [language server](language-server.md) to see compiler diagnostics in an
+editor.

@@ -91,7 +91,7 @@ Tooling:
 
 - [Compiler diagnostics](docs/errors.md)
 - [Language server](docs/language-server.md)
-- [Formatter rules](docs/FORMAT.md)
+- [Formatter usage and rules](docs/FORMAT.md)
 - [Casa style](docs/STYLE.md)
 
 See [`examples/`](examples/) for runnable programs.
@@ -104,12 +104,6 @@ Casa is self-hosted. Build the compiler with an existing `casac`:
 ./casac casa.casa -o casac -L lib
 ```
 
-Build the language server and formatter in the same way:
-
-```sh
-./casac lsp.casa -o casa_lsp -L lib
-./casac formatter/format.casa -o casafmt -L lib
-```
-
-Contributor conventions are in [FORMAT.md](docs/FORMAT.md) and
-[STYLE.md](docs/STYLE.md).
+Build and configure the [language server](docs/language-server.md), or build and
+use the formatter from the [Casa Format Guide](docs/FORMAT.md). Contributor
+naming and style conventions are in [STYLE.md](docs/STYLE.md).
