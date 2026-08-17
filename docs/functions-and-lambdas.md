@@ -129,6 +129,17 @@ Shared borrows are Copy. Exclusive borrows and non-Copy owners are affine.
 `dup` and the copied value of `over` require `Copy`. `swap` and `rot` only move
 values, so they also work with non-Copy owners.
 
+An owner or exclusive borrow can be reborrowed for a call. When the call does
+not return a borrow, the reborrow ends when the call returns. One call cannot
+borrow the same binding exclusively more than once or combine shared and
+exclusive borrows of that binding:
+
+```casa
+fn replace_both left:mut$Person right:mut$Person { }
+
+# person person replace_both  # Error: the exclusive arguments alias.
+```
+
 ## Lambdas and closures
 
 Braces create an anonymous function value:

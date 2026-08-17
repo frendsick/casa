@@ -73,6 +73,23 @@ person Person::description print
 A type can have more than one `impl` block. Built-in types can also have
 methods.
 
+The declared receiver controls which values can call a method:
+
+| Receiver | Owned `T` | Shared `$T` | Exclusive `mut$T` |
+|---|---|---|---|
+| `self:T` | Yes, and consumes it | No | No |
+| `self:$T` | Yes | Yes | Yes, through a shared reborrow |
+| `self:mut$T` | Yes | No | Yes |
+
+Method lookup checks the exact value type before it checks the borrowed type.
+For example, `.clone` on a shared borrow returns another shared borrow when the
+borrow is Copy and Copy extends Clone. When `Person` implements Clone, use
+`Person::clone` to call the borrowed value's method and produce a new owner:
+
+```casa
+person Person::clone
+```
+
 See [Traits](traits.md) for generic structs, generic `impl` blocks, and trait
 implementations.
 
