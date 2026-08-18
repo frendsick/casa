@@ -150,6 +150,10 @@ end
 An owned match subject is consumed. Non-Copy fields move into named bindings,
 and the compiler destroys omitted fields.
 
+A borrowed match subject stays available. A `$T` subject binds shared field
+borrows. A `mut$T` subject binds exclusive field borrows. Omitted fields stay
+in the subject and are not destroyed.
+
 Literal patterns work with booleans, integers, characters, and strings. `_`
 matches any remaining value.
 

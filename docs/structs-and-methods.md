@@ -36,6 +36,10 @@ Nested assignment is valid when each field exists:
 "Helsinki" = employee.address.city
 ```
 
+Loans to different named fields can be used together. A loan to the complete
+struct overlaps every field loan. Nested fields overlap when one path contains
+the other.
+
 Every field also has generated `Type::field` and `Type::set_field` functions.
 Dot syntax is the usual form:
 

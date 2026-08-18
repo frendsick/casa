@@ -210,6 +210,20 @@ other drop
 A function cannot return a borrow of a local owner. The diagnostic identifies
 the local owner that would escape.
 
+A function can return multiple exclusive field borrows when their named paths
+do not overlap:
+
+```casa
+fn split pair:mut$Pair -> mut$Item mut$Item {
+    pair.left
+    pair.right
+}
+```
+
+The compiler rejects duplicate or nested overlapping outputs. After a call,
+the returned borrows keep the complete borrowed input loaned because field
+paths are not part of a public function type.
+
 ## Lambdas and closures
 
 Braces create an anonymous function value:
