@@ -1,4 +1,5 @@
 # Method availability follows receiver capability
+status: borrow Clone consequences superseded by ADR-0150
 
 Method availability is determined by the declared receiver and the capability available at the call site:
 

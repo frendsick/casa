@@ -86,12 +86,12 @@ The declared receiver controls which values can call a method:
 | `self:mut$T` | Yes | No | Yes |
 
 Method lookup checks the exact value type before it checks the borrowed type.
-For example, `.clone` on a shared borrow returns another shared borrow when the
-borrow is Copy and Copy extends Clone. When `Person` implements Clone, use
-`Person::clone` to call the borrowed value's method and produce a new owner:
+Shared borrows do not implement Clone. When `Person` implements Clone, `.clone`
+on `$Person` or `mut$Person` calls that implementation and produces a new
+owner:
 
 ```casa
-person Person::clone
+person.clone
 ```
 
 See [Traits](traits.md) for generic structs, generic `impl` blocks, and trait
@@ -103,7 +103,7 @@ function that returns such an aggregate preserves the same origin.
 
 ## Derive Copy
 
-A struct can derive `Copy` when every field is Copy:
+A struct can derive `Copy` when every stored field is representation-copyable:
 
 ```casa
 struct Point derives Copy {
@@ -117,6 +117,10 @@ struct Point derives Copy {
 Copy is allocation-free. Use an explicit `Clone` conformance when
 duplication must allocate or call field Clone methods. See
 [Copy and Clone](traits.md#copy-and-clone).
+
+A shared-borrow field is representation-copyable even though `$T` does not
+satisfy a Copy bound. Copy-generated Clone preserves that borrow and its owner
+origin.
 
 ## Custom destruction
 

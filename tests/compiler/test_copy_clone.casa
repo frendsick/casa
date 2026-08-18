@@ -26,9 +26,18 @@ struct CopyWrapper derives Copy {
     inner: CustomCopy
 }
 
+struct BorrowView derives Copy {
+    value: $CustomClone
+}
+
 enum CopyChoice derives Copy {
     None
     Some (CustomCopy)
+}
+
+enum BorrowChoice derives Copy {
+    None
+    Some ($CustomClone)
 }
 
 impl CustomClone: Clone {
@@ -38,6 +47,16 @@ impl CustomClone: Clone {
 }
 
 fn identity value:i64 -> i64 { value }
+
+fn clone_shared value:$CustomClone -> CustomClone { value.clone }
+
+fn clone_exclusive value:mut$CustomClone -> CustomClone { value.clone }
+
+fn clone_borrow_view value:$CustomClone -> BorrowView { value BorrowView.clone }
+
+fn clone_borrow_choice value:$CustomClone -> BorrowChoice {
+    value BorrowChoice::Some.clone
+}
 
 fn check_source diagnostics:mut$Diagnostics source:$str {
     diagnostics source parse_resolve_test_source = result
@@ -102,6 +121,23 @@ fn test_standard_owner_clone_composes {
     "set clone retains values" "Casa" cloned_names.has assert_true
 }
 
+fn test_borrow_clone_uses_borrowed_value {
+    "borrow_clone_uses_borrowed_value" test_start
+    4 CustomClone = value
+    "shared borrow clone owns a value" 5 value clone_shared.value assert_eq
+    "exclusive borrow clone owns a value" 5 value clone_exclusive.value assert_eq
+
+    value clone_borrow_view = view
+    "generated struct Clone preserves a shared borrow" 4 view.value.value assert_eq
+
+    value clone_borrow_choice match
+        BorrowChoice::Some(borrowed) => {
+            "generated enum Clone preserves a shared borrow" 4 borrowed.value assert_eq
+        }
+        BorrowChoice::None => { "expected borrowed payload" false assert_true }
+    end
+}
+
 fn test_non_copy_dup_is_rejected {
     "non_copy_dup_is_rejected" test_start
     Diagnostics::new = diagnostics
@@ -118,6 +154,23 @@ fn test_over_checks_the_copied_value {
     Diagnostics::new = valid_diagnostics
     COPY_TRAITS "struct Owner { value: str } 1 \"owned\" Owner over" str::concat valid_diagnostics check_source
     valid_diagnostics "non-Copy top value is only moved" assert_no_errors
+}
+
+fn test_shared_borrow_duplication_preserves_origins {
+    "shared_borrow_duplication_preserves_origins" test_start
+    Diagnostics::new = diagnostics
+    COPY_TRAITS
+    "struct Owner { value: str } fn view owner:$Owner -> $Owner { owner } fn inspect owner:$Owner { } fn invalid owner:Owner { owner view = borrowed borrowed dup drop 1 borrowed over drop drop owner drop }"
+    str::concat diagnostics check_source
+    diagnostics "duplicated shared borrows retain their origin"
+    "Cannot move owner `owner` while it is borrowed" assert_error_contains
+
+    Diagnostics::new = clone_diagnostics
+    COPY_TRAITS
+    "struct Owner { value: str } struct View derives Copy { value: $Owner } fn make_view owner:$Owner -> View { owner View } fn invalid owner:Owner { owner make_view.clone owner drop drop }"
+    str::concat clone_diagnostics check_source
+    clone_diagnostics "generated Clone retains a stored borrow origin"
+    "Cannot move owner `owner` while it is borrowed" assert_error_contains
 }
 
 fn test_affine_owner_reuse_is_rejected {
@@ -161,7 +214,7 @@ fn test_borrowed_calls_preserve_owner {
 fn test_receiver_capabilities {
     "receiver_capabilities" test_start
     COPY_TRAITS
-    "struct Item derives Copy { value: i64 } impl Item { fn take self:Item { } fn read self:$Item { } fn write self:mut$Item { } } fn owned item:Item { item.read item.write item.take } fn shared item:$Item { item.read } fn exclusive item:mut$Item { item.read item.write } fn clone_view item:$Item -> $Item { item.clone } fn clone_value item:mut$Item -> Item { item.clone } fn clone_qualified item:$Item -> Item { item Item::clone }"
+    "struct Item derives Copy { value: i64 } impl Item { fn take self:Item { } fn read self:$Item { } fn write self:mut$Item { } } fn owned item:Item { item.read item.write item.take } fn shared item:$Item { item.read } fn exclusive item:mut$Item { item.read item.write } fn clone_shared item:$Item -> Item { item.clone } fn clone_exclusive item:mut$Item -> Item { item.clone }"
     str::concat = declarations
 
     Diagnostics::new = valid_diagnostics
@@ -492,8 +545,36 @@ fn test_explicit_copy_implementation_is_validated {
 fn test_copy_bound_and_clone_supertrait {
     "copy_bound_and_clone_supertrait" test_start
     Diagnostics::new = diagnostics
-    COPY_TRAITS "struct Point derives Copy { value: i64 } fn duplicate[T: Copy] value:T -> T T { value dup } fn cloned[T: Clone] value:T -> T { value T::clone } 1 Point duplicate drop cloned drop" str::concat diagnostics check_source
+    COPY_TRAITS "struct Point derives Copy { value: i64 } fn duplicate[T: Copy] value:T -> T T { value dup } fn cloned[T: Clone] value:T -> T { value.clone } 1 Point duplicate drop cloned drop" str::concat diagnostics check_source
     diagnostics "Copy works as a Clone supertrait" assert_no_errors
+}
+
+fn test_borrows_do_not_satisfy_copy_or_clone {
+    "borrows_do_not_satisfy_copy_or_clone" test_start
+    Diagnostics::new = diagnostics
+    diagnostics COPY_TRAITS "struct Item derives Copy { value: i64 }" str::concat
+    parse_resolve_test_source = result
+
+    diagnostics result.store Option[Function]::None "Copy" "$Item" parse_type_str
+    type_satisfies_trait_for_test = borrow_is_copy
+    "shared borrow does not satisfy Copy" borrow_is_copy ! assert_true
+
+    diagnostics result.store Option[Function]::None "Clone" "$Item" parse_type_str
+    type_satisfies_trait_for_test = borrow_is_clone
+    "shared borrow does not satisfy Clone" borrow_is_clone ! assert_true
+
+    result.store "Clone" parse_type_str "$Item" parse_type_str
+    type_has_satisfying_trait_impl = semantic_borrow_is_clone
+    "shared borrow fails lower-level Clone constraints" semantic_borrow_is_clone !
+    assert_true
+
+    diagnostics result.store Option[Function]::None "Copy" "Item" parse_type_str
+    type_satisfies_trait_for_test = item_is_copy
+    "owned Copy type still satisfies Copy" item_is_copy assert_true
+
+    diagnostics result.store Option[Function]::None "Clone" "Item" parse_type_str
+    type_satisfies_trait_for_test = item_is_clone
+    "owned Copy type still satisfies Clone" item_is_clone assert_true
 }
 
 fn test_named_function_clone {
@@ -502,7 +583,7 @@ fn test_named_function_clone {
     "direct function clone" 12 direct assert_eq
 
     Diagnostics::new = diagnostics
-    COPY_TRAITS "fn cloned[T: Clone] value:T -> T { value T::clone } fn identity value:i64 -> i64 { value } &identity cloned drop" str::concat diagnostics check_source
+    COPY_TRAITS "fn cloned[T: Clone] value:T -> T { value.clone } fn identity value:i64 -> i64 { value } &identity cloned drop" str::concat diagnostics check_source
     diagnostics "function Copy works as a Clone supertrait" assert_no_errors
 }
 
@@ -521,8 +602,10 @@ fn test_clone_contract_is_infallible_self_to_self {
 }
 test_copy_intrinsics_and_fallback_clone
 test_standard_owner_clone_composes
+test_borrow_clone_uses_borrowed_value
 test_non_copy_dup_is_rejected
 test_over_checks_the_copied_value
+test_shared_borrow_duplication_preserves_origins
 test_affine_owner_reuse_is_rejected
 test_borrowed_calls_preserve_owner
 test_receiver_capabilities
@@ -539,6 +622,7 @@ test_stack_reordering_preserves_owner_identity
 test_copy_derivation_validates_fields
 test_explicit_copy_implementation_is_validated
 test_copy_bound_and_clone_supertrait
+test_borrows_do_not_satisfy_copy_or_clone
 test_named_function_clone
 test_copy_contract_is_methodless
 test_clone_contract_is_infallible_self_to_self

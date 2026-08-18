@@ -12,10 +12,9 @@ When `T` implements Clone, ordinary receiver lookup may call that borrowed value
 
 ```casa
 exclusive.clone         # mut$Buffer -> Buffer
-exclusive Buffer::clone # mut$Buffer -> Buffer
 ```
 
-Both calls weaken `exclusive` to a temporary shared reborrow. The exclusive borrow becomes usable again after that call ends. ADR-0120 supersedes the earlier decision to reject unqualified `exclusive.clone`; no Clone-specific lookup exception is needed.
+The call weakens `exclusive` to a temporary shared reborrow. The exclusive borrow becomes usable again after that call ends. ADR-0120 supersedes the earlier decision to reject unqualified `exclusive.clone`. ADR-0150 confirms that this calls the borrowed value's implementation and needs no Clone-specific lookup exception.
 
 ## Consequences
 

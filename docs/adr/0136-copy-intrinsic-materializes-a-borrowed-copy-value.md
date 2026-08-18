@@ -23,4 +23,4 @@ fn copied[T: Copy] value:$T -> T {
 - `copy` invokes no Clone implementation, user code, allocator, or destructor.
 - Compiler lowering uses `T`'s layout and does not require aggregate padding to contain initialized user-observable bytes.
 - Concrete built-in copyable values remain usable without importing the standard library. Generic code names the active compiler-validated Copy trait in its bound.
-- `copy` is rejected when the borrowed value is not Copy; use explicit `T::clone` when allocation or type-specific duplication is acceptable.
+- `copy` is rejected when the borrowed value is not Copy. Use `.clone` when allocation or type-specific duplication is acceptable.

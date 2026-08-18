@@ -18,7 +18,8 @@ Intrinsics are compiler-provided operations. They need no import.
 3 dup + print        # 6
 ```
 
-`swap` and `rot` only move values. They accept non-Copy values. `dup`, `over`,
+`swap` and `rot` only move values. They accept non-Copy values. `dup` and `over`
+also duplicate shared borrows without making `$T` satisfy Copy. `dup`, `over`,
 and `copy` never call Clone and never allocate. `drop` runs the same custom
 cleanup and recursive field destruction as a scope exit.
 

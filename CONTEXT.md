@@ -241,7 +241,7 @@ _Avoid_: Release lint, tag lint
 - First-class function values are monomorphic. A generic named function reference supplies all type arguments explicitly, such as `&id[i64]`; direct generic calls still infer them.
 - Every closure is repeatable. Invoking it may consume explicit arguments but may not leave a captured non-`Copy` owner consumed; Casa has no single-use function type.
 - Standard `Copy` is a methodless marker extending Clone; it may be used implicitly and never allocates or calls user code. `derives Copy` and `impl Type: Copy { }` establish the same compiler-validated implementation and supply missing fieldwise Clone behavior. A freestanding Copy declaration may omit that supertrait and relationship.
-- A Copy type may provide a customized Clone implementation, which takes precedence over the fieldwise fallback. Generated aggregate Clone calls field Clone methods, while implicit Copy remains allocation-free; explicit Clone cost and semantics belong to the implementation author.
+- A Copy type may provide a customized Clone implementation, which takes precedence over the fieldwise fallback. Generated aggregate Clone calls field Clone methods and preserves stored shared borrows with their origins, while implicit Copy remains allocation-free. The implementation author controls explicit Clone cost and semantics.
 - Reserved language-integrated traits use minimum compiler-validated **Language trait method** contracts while allowing additional default methods and supertraits. Primitive operations remain available without importing those declarations.
 - `!=` lowers to the active equality trait's `ne` operator method. The standard default negates `eq`; overrides must preserve that semantic inverse.
 - PartialEq owns the shared `eq` and `ne` operator methods; Eq extends PartialEq as the explicit lawful-total marker. The compiler validates Eq's effective inherited shape, and `derives Eq` implements both traits.
@@ -281,9 +281,9 @@ _Avoid_: Release lint, tag lint
 - Safe code cannot construct an owner containing a borrow into itself; use offsets or on-demand views instead of pinning and staged initialization.
 - `$T` and `mut$T` are always non-null live references; absence uses ordinary enums such as stdlib `Option`, without compiler special-casing.
 - Equality, ordering, hashing, and display on a borrow use the **Borrowed value**'s traits rather than observing its address; raw `ptr` equality remains address equality.
-- Under standard `Copy: Clone`, cloning `$T` produces another shared `$T`; explicitly calling `T::clone` through the borrow clones the **Borrowed value** into a new owner.
+- Shared `$T` can be duplicated with `dup` and `over`, but it does not satisfy `Copy` or `Clone`. When `T: Clone`, `$T.clone` calls the **Borrowed value** implementation and returns an owned `T`.
 - Method availability follows receiver capability uniformly: `self` requires ownership, `$self` accepts owned/shared/exclusive access, and `mut$self` accepts owned/exclusive access.
-- `mut$T` is affine and not Copy; when `T: Clone`, `mut$T.clone` may call `T.clone` through a temporary shared reborrow and returns an owned `T`.
+- `mut$T` is affine and not Copy. When `T: Clone`, `mut$T.clone` calls the **Borrowed value** implementation through a temporary shared reborrow and returns an owned `T`.
 - `ptr::from_ref` safely obtains `ptr` from `$T`; owned and exclusive values may reborrow, and no separate `from_mut` exists because raw pointers have no mutability.
 - Unsafe `ptr::read[T]` and `ptr::write[T]` move ownership out of and into initialized generic storage; their caller maintains validity and initialization state.
 - Unsafe raw storage uses `u64 alloc -> ptr` and `ptr free -> None`; `free` releases bytes only and never replaces typed destruction.
