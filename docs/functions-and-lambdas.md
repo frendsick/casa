@@ -192,6 +192,24 @@ fn replace_both left:mut$Person right:mut$Person { }
 # person person replace_both  # Error: the exclusive arguments alias.
 ```
 
+A returned borrow keeps each compatible borrowed input loaned until its last
+use. The caller cannot know which input supplied an opaque result:
+
+```casa
+fn select first:$Person second:$Person choose_first:bool -> $Person {
+    if choose_first then first else second fi
+}
+
+true other person select = selected
+# person drop       # Error: selected can borrow person.
+selected.description print
+person drop
+other drop
+```
+
+A function cannot return a borrow of a local owner. The diagnostic identifies
+the local owner that would escape.
+
 ## Lambdas and closures
 
 Braces create an anonymous function value:
