@@ -177,9 +177,10 @@ text clear
 text length print
 ```
 
-Shared borrows are Copy. Exclusive borrows and non-Copy owners are affine.
-`dup` and the copied value of `over` require `Copy`. `swap` and `rot` only move
-values, so they also work with non-Copy owners.
+Shared borrows can be duplicated with `dup` and `over`, but they do not satisfy
+`Copy` bounds. Exclusive borrows and non-Copy owners are affine. For owned
+values, `dup` and the copied value of `over` require `Copy`. `swap` and `rot`
+only move values, so they also work with non-Copy owners.
 
 An owner or exclusive borrow can be reborrowed for a call. When the call does
 not return a borrow, the reborrow ends when the call returns. One call cannot
