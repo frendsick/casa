@@ -28,6 +28,21 @@ Bindings created inside a branch exist only in that branch. An assignment
 updates an outer binding when one exists. Otherwise it creates a branch-local
 binding.
 
+An owned binding remains available after `fi` only when every branch that can
+reach `fi` leaves it available. A branch can consume the owner when it returns,
+or when it assigns a replacement before the join:
+
+```casa
+if should_stop then
+    request send
+    return
+fi
+request send
+```
+
+Loans also merge at the join. If a borrow can refer to an owner on any branch,
+that owner stays loaned until the borrow's last use.
+
 ## While loops
 
 `while` evaluates its condition before each iteration:
@@ -45,6 +60,9 @@ condition check.
 
 The stack at the end of the body, at `break`, and at `continue` must match the
 stack before the loop. A loop cannot accumulate values between iterations.
+The same rule applies to ownership. Each normal back-edge and `continue` must
+restore the availability and loans present at the loop header. Loop exits merge
+the condition-false path with every reachable `break`.
 
 ## For loops
 
@@ -147,6 +165,9 @@ Every `match` must handle every possible input:
 Duplicate unguarded arms are compile-time errors. All arms must leave the same
 stack effect, just like branches of an `if`.
 
+Ownership also joins across arms. An arm that returns does not affect the join.
+An owner consumed by any arm that reaches `end` is unavailable after `end`.
+
 ## Guards
 
 Add `if condition` before `=>` to restrict an arm:
@@ -162,7 +183,8 @@ fn classify number:i64 -> str {
 ```
 
 A guard must produce one `bool`. Pattern bindings are available in the guard.
-A guarded arm does not count toward exhaustiveness because its condition can be
-false.
+A guard cannot move an owner because a false guard must leave the subject and
+outer bindings available to later arms. A guarded arm does not count toward
+exhaustiveness because its condition can be false.
 
 See [`examples/enum.casa`](../examples/enum.casa) for guards on enum payloads.

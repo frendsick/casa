@@ -275,10 +275,41 @@ impl TypedStack {
 # Branch contexts — one specialized struct per branch kind (if / while / match).
 # ============================================================================
 
+struct OwnershipFlow {
+    moved: List[str]
+    loans: Map[str List[str]]
+}
+
+impl OwnershipFlow {
+    fn new -> OwnershipFlow {
+        Map[str List[str]]::new List[str]::new OwnershipFlow
+    }
+
+    fn merge flow:OwnershipFlow other:$OwnershipFlow -> OwnershipFlow {
+        for name in other.moved.iter do
+            if name flow.moved string_list_contains ! then name.clone flow.moved.push fi
+        done
+        for pair in other.loans.iter do
+            List[str]::new = origins
+            if pair.first flow.loans.get Option::Some(existing) is then
+                existing.shallow_copy = origins
+            fi
+            for origin in pair.second.iter do
+                if origin origins string_list_contains ! then origin.clone origins.push fi
+            done
+            origins pair.first.clone flow.loans.set = flow.loans
+        done
+        flow
+    }
+}
+
 struct IfContext {
     before:                  TypedStack
     after:                   TypedStack
-    owners_before:           List[str]
+    flow_before:             OwnershipFlow
+    flow_after:              OwnershipFlow
+    entry_continues:         bool
+    has_continuing_branch:   bool
     condition_present:       bool
     default_present:         bool
     current_branch_label:    str
@@ -287,7 +318,10 @@ struct IfContext {
 
 struct WhileContext {
     before:                  TypedStack
-    owners_before:           List[str]
+    flow_before:             OwnershipFlow
+    flow_exit:               OwnershipFlow
+    entry_continues:         bool
+    has_exit:                bool
     condition_present:       bool
     current_branch_location: Location
     scope_depth:             u64
@@ -296,7 +330,10 @@ struct WhileContext {
 struct MatchContext {
     before:                  TypedStack
     after:                   TypedStack
-    owners_before:           List[str]
+    flow_before:             OwnershipFlow
+    flow_after:              OwnershipFlow
+    entry_continues:         bool
+    has_continuing_arm:      bool
     condition_present:       bool
     branch_records:          List[str]
     match_type:              Type
@@ -317,7 +354,10 @@ impl IfContext {
         ""
         false
         false
-        List[str]::new
+        false
+        false
+        OwnershipFlow::new
+        OwnershipFlow::new
         TypedStack::new
         TypedStack::new
         IfContext
@@ -329,7 +369,10 @@ impl WhileContext {
         scope_depth
         empty_location
         false
-        List[str]::new
+        false
+        false
+        OwnershipFlow::new
+        OwnershipFlow::new
         TypedStack::new
         WhileContext
     }
@@ -343,7 +386,10 @@ impl MatchContext {
         match_type
         List[str]::new
         false
-        List[str]::new
+        false
+        false
+        OwnershipFlow::new
+        OwnershipFlow::new
         TypedStack::new
         TypedStack::new
         MatchContext
@@ -364,6 +410,7 @@ struct TypeChecker {
     current_op_context:         str
     current_expect_ctx:         str
     in_branch_condition:        bool
+    path_continues:             bool
     store:                      SymbolStore
     param_cap:                  Option[u64]
     underflow_reported_this_op: bool
@@ -421,6 +468,7 @@ impl TypeChecker {
         false # underflow_reported_this_op
         Option[u64]::None # param_cap
         store # store
+        true # path_continues
         false # in_branch_condition
         "" # current_expect_ctx
         "" # current_op_context
@@ -579,6 +627,101 @@ impl TypeChecker {
 # ============================================================================
 
 impl TypeChecker {
+    fn current_ownership_flow tc:mut$TypeChecker -> OwnershipFlow {
+        List[str]::new = moved
+        for name in tc.moved_owners.iter do
+            if name tc.scope.lookup.is_some then name.clone moved.push fi
+        done
+        Map[str List[str]]::new = loans
+        for pair in tc.binding_origins.iter do
+            if pair.first tc.scope.lookup.is_some then
+                pair.second.shallow_copy pair.first.clone loans.set = loans
+            fi
+        done
+        loans moved OwnershipFlow
+    }
+
+    fn restore_ownership_flow tc:mut$TypeChecker flow:$OwnershipFlow {
+        flow.moved.shallow_copy = tc.moved_owners
+        Map[str List[str]]::new = loans
+        for pair in flow.loans.iter do
+            pair.second.shallow_copy pair.first.clone loans.set = loans
+        done
+        loans = tc.binding_origins
+    }
+
+    fn remove_flow_names tc:mut$TypeChecker names:$List[str] {
+        for name in names.iter do
+            false name tc.set_owner_moved
+            if name tc.binding_origins.has then
+                name tc.binding_origins.delete = tc.binding_origins
+            fi
+        done
+    }
+
+    fn merge_current_ownership_flow tc:mut$TypeChecker flow:OwnershipFlow -> OwnershipFlow {
+        if tc.path_continues then tc.current_ownership_flow flow.merge return fi
+        flow
+    }
+
+    fn report_loop_flow_difference
+        tc:mut$TypeChecker
+        expected:$OwnershipFlow
+        local_names:$List[str]
+        op:mut$Op
+    {
+        tc.current_ownership_flow = current
+        for name in current.moved.iter do
+            if
+            name local_names string_list_contains !
+            name expected.moved string_list_contains ! &&
+            then
+                op.location f"Loop back-edge does not restore ownership of `{name}`"
+                ErrorKind::InvalidVariable tc.diagnostics.record_error
+            fi
+        done
+        for name in expected.moved.iter do
+            if
+            name local_names string_list_contains !
+            name current.moved string_list_contains ! &&
+            then
+                op.location f"Loop back-edge changes ownership of `{name}`"
+                ErrorKind::InvalidVariable tc.diagnostics.record_error
+            fi
+        done
+        for pair in current.loans.iter do
+            if pair.first local_names string_list_contains then continue fi
+            if pair.first tc.scope.lookup Option::Some(typ) is then
+                if tc.store typ type_has_borrow ! then continue fi
+            fi
+            false = same
+            if pair.first expected.loans.get Option::Some(origins) is then
+                pair.second.length origins.length == = same
+                if same then
+                    for origin in pair.second.iter do
+                        if origin origins string_list_contains ! then false = same fi
+                    done
+                fi
+            fi
+            if same ! then
+                op.location f"Loop back-edge changes loans for `{pair.first}`"
+                ErrorKind::InvalidVariable tc.diagnostics.record_error
+            fi
+        done
+        for pair in expected.loans.iter do
+            if pair.first tc.scope.lookup Option::Some(typ) is then
+                if tc.store typ type_has_borrow ! then continue fi
+            fi
+            if
+            pair.first local_names string_list_contains !
+            pair.first current.loans.has ! &&
+            then
+                op.location f"Loop back-edge does not restore loans for `{pair.first}`"
+                ErrorKind::InvalidVariable tc.diagnostics.record_error
+            fi
+        done
+    }
+
     fn owner_is_moved tc:mut$TypeChecker name:$str -> bool {
         name tc.moved_owners string_list_contains
     }
@@ -649,6 +792,19 @@ impl TypeChecker {
             if binding_name tc.binding_origins.get Option::Some(origins) is then
                 for origin in origins.iter do
                     if owner origin origin_matches_place then true return fi
+                done
+            fi
+        done
+        for frame in tc.branched_stacks.iter do
+            if frame BranchFrame::BranchWhile(while_ctx) is then
+                for pair in while_ctx.flow_before.loans.iter do
+                    if
+                    pair.first owner ==
+                    pair.first tc.scope.lookup.is_none ||
+                    then continue fi
+                    for origin in pair.second.iter do
+                        if owner origin origin_matches_place then true return fi
+                    done
                 done
             fi
         done
@@ -2427,7 +2583,7 @@ impl TypeChecker {
         fi
 
         while field_index parts.length 1 - > do
-            location field_index parts.get OpValue::MethodCall Op::new = getter
+            location.clone field_index parts.get OpValue::MethodCall Op::new = getter
             insert_index getter ops.insert
             1 += insert_index
             1 += field_index
@@ -2481,10 +2637,10 @@ impl TypeChecker {
                 fi
                 hint_opt.unwrap = effective_type_t
                 op Op::location function_opt effective_type_t tc.validate_type_exists
-                effective_type_t = stack_type_t
+                effective_type_t clone_type = stack_type_t
             else
                 tc.stack_peek_type = stack_type_t
-                stack_type_t = effective_type_t
+                stack_type_t clone_type = effective_type_t
             fi
             if has_annotation ! stack_type_t.has_unresolved && then
                 op Op::location f"Cannot infer element type of empty array literal assigned to `{var_name}`; add a type annotation (e.g. `= {var_name}:array[i64]`) or an explicit cast (e.g. `[] (array[i64])`)." ErrorKind::TypeMismatch tc.diagnostics.record_error
@@ -2659,6 +2815,7 @@ impl TypeChecker {
         op.value = if_value
         if if_value OpValue::IfStart is then
             IfContext::new = if_ctx
+            tc.path_continues = if_ctx.entry_continues
             op Op::location if_ctx IfContext::set_current_branch_location
             if_ctx BranchFrame::BranchIf = if_frame
             if_frame tc.branched_stacks.push
@@ -2672,9 +2829,9 @@ impl TypeChecker {
             if 0 tc.branched_stacks.length == then return fi
             tc.branched_stacks.length 1 - tc.branched_stacks.get = top_frame
             if top_frame BranchFrame::BranchIf(if_ctx) is then
+                tc.current_ownership_flow = if_ctx.flow_before
                 if if_ctx IfContext::condition_present ! then
                     true if_ctx IfContext::set_condition_present
-                    tc.moved_owners.shallow_copy = if_ctx.owners_before
                     tc.stack if_ctx IfContext::before.restore
                     tc.stack if_ctx IfContext::after.restore
                     "if" if_ctx IfContext::set_current_branch_label
@@ -2692,7 +2849,10 @@ impl TypeChecker {
             if 0 tc.branched_stacks.length == then return fi
             tc.branched_stacks.length 1 - tc.branched_stacks.get = top_frame
             if top_frame BranchFrame::BranchIf(if_ctx) is then
-                if_ctx.owners_before.shallow_copy = tc.moved_owners
+                if_ctx.flow_after tc.merge_current_ownership_flow = if_ctx.flow_after
+                if tc.path_continues then true = if_ctx.has_continuing_branch fi
+                if_ctx.flow_before tc.restore_ownership_flow
+                if_ctx.entry_continues = tc.path_continues
                 if if_value OpValue::IfElse is then
                     true if_ctx IfContext::set_default_present
                     false = tc.in_branch_condition
@@ -2726,7 +2886,18 @@ impl TypeChecker {
             tc.scope.exit
             tc.branched_stacks.pop = top_frame
             if top_frame BranchFrame::BranchIf(if_ctx) is then
-                if_ctx.owners_before.shallow_copy = tc.moved_owners
+                if_ctx.flow_after tc.merge_current_ownership_flow = if_ctx.flow_after
+                if tc.path_continues then true = if_ctx.has_continuing_branch fi
+                if if_ctx.default_present ! if_ctx.entry_continues && then
+                    if_ctx.flow_before if_ctx.flow_after.merge = if_ctx.flow_after
+                    true = if_ctx.has_continuing_branch
+                fi
+                if if_ctx.has_continuing_branch then
+                    if_ctx.flow_after tc.restore_ownership_flow
+                else
+                    if_ctx.flow_before tc.restore_ownership_flow
+                fi
+                if_ctx.has_continuing_branch = tc.path_continues
                 if_ctx IfContext::before = if_before
                 if_ctx IfContext::after = if_after
                 if if_before tc.stack.equals if_after if_before.equals && then
@@ -2770,7 +2941,8 @@ impl TypeChecker {
         op.value = while_value
         if while_value OpValue::WhileStart is then
             tc.scope.frames.length 1 + WhileContext::new = while_ctx
-            tc.moved_owners.shallow_copy = while_ctx.owners_before
+            tc.current_ownership_flow = while_ctx.flow_before
+            tc.path_continues = while_ctx.entry_continues
             tc.stack while_ctx WhileContext::before.restore
             op Op::location while_ctx WhileContext::set_current_branch_location
             while_ctx BranchFrame::BranchWhile = while_frame
@@ -2782,6 +2954,8 @@ impl TypeChecker {
             tc.branched_stacks.length 1 - tc.branched_stacks.get = top_frame
             if top_frame BranchFrame::BranchWhile(while_ctx) is then
                 true while_ctx WhileContext::set_condition_present
+                while_ctx.flow_exit tc.merge_current_ownership_flow = while_ctx.flow_exit
+                if tc.path_continues then true = while_ctx.has_exit fi
             fi
         elif
         while_value OpValue::WhileBreak is
@@ -2790,13 +2964,41 @@ impl TypeChecker {
             if 0 tc.branched_stacks.length == then return fi
             if tc.current_while_scope_depth Option::Some(scope_depth) is then
                 scope_depth tc.scope.names_from = names
+                tc.branched_stacks.length = frame_index
+                while 0 frame_index != do
+                    1 -= frame_index
+                    if frame_index tc.branched_stacks.get BranchFrame::BranchWhile(while_ctx) is then
+                        if tc.path_continues then
+                            if while_value OpValue::WhileBreak is then
+                                tc.current_ownership_flow while_ctx.flow_exit.merge = while_ctx.flow_exit
+                                true = while_ctx.has_exit
+                            else
+                                op names while_ctx.flow_before tc.report_loop_flow_difference
+                            fi
+                        fi
+                        break
+                    fi
+                done
                 false names op tc.attach_owner_cleanups
             fi
+            false = tc.path_continues
         elif while_value OpValue::WhileEnd is then
             op tc.attach_scope_cleanups
             tc.branched_stacks.pop = top_frame
             if top_frame BranchFrame::BranchWhile(while_ctx) is then
-                while_ctx.owners_before.shallow_copy = tc.moved_owners
+                while_ctx.scope_depth tc.scope.names_from = names
+                if tc.path_continues then
+                    op names while_ctx.flow_before tc.report_loop_flow_difference
+                fi
+                tc.scope.exit
+                if while_ctx.has_exit then
+                    while_ctx.flow_exit tc.restore_ownership_flow
+                else
+                    while_ctx.flow_before tc.restore_ownership_flow
+                fi
+                names tc.remove_flow_names
+                while_ctx.has_exit = tc.path_continues
+                return
             fi
             tc.scope.exit
         fi
@@ -3207,7 +3409,7 @@ impl TypeChecker {
                     existing_option fallback value tc.resolve_type_var_literals = actual
                     value.origins clone_origins value.source value.binding value.capability value.place
                     List[Op]::new value.origin
-                    actual TypedValue
+                    actual clone_type TypedValue
                     stack_index tc.stack.values.set
                 fi
                 location bindings actual type_variable tc.bind_concrete_type_variable return
@@ -3509,6 +3711,7 @@ impl TypeChecker {
             fi
             for return_value in tc.stack.values.iter do return_value tc.consume_value done
             op tc.attach_all_owner_cleanups
+            false = tc.path_continues
             if tc.has_return_types ! then
                 true = tc.has_return_types
                 tc.stack tc.return_types.restore
@@ -3517,13 +3720,13 @@ impl TypeChecker {
                 tc.branched_stacks.length 1 - tc.branched_stacks.get = top_frame
                 if top_frame BranchFrame::BranchIf(if_ctx) is then
                     if_ctx IfContext::before tc.stack.restore
-                    if_ctx.owners_before.shallow_copy = tc.moved_owners
+                    if_ctx.flow_before tc.restore_ownership_flow
                 elif top_frame BranchFrame::BranchWhile(while_ctx) is then
                     while_ctx WhileContext::before tc.stack.restore
-                    while_ctx.owners_before.shallow_copy = tc.moved_owners
+                    while_ctx.flow_before tc.restore_ownership_flow
                 elif top_frame BranchFrame::BranchMatch(match_ctx) is then
                     match_ctx MatchContext::before tc.stack.restore
-                    match_ctx.owners_before.shallow_copy = tc.moved_owners
+                    match_ctx.flow_before tc.restore_ownership_flow
                 fi
             fi
         fi
@@ -3847,7 +4050,8 @@ impl TypeChecker {
             tc.stack_pop_type = match_type
             match_type MatchContext::new = match_ctx
             match_origins = match_ctx.match_origins
-            tc.moved_owners.shallow_copy = match_ctx.owners_before
+            tc.path_continues = match_ctx.entry_continues
+            tc.current_ownership_flow = match_ctx.flow_before
             # Snapshot the entry stack state eagerly so that an OpFnReturn visiting
             # this frame before any OpMatchArm still finds a correct `before` to
             # restore from. Matches the pre-refactor make_branched_stack behavior.
@@ -3861,12 +4065,19 @@ impl TypeChecker {
         elif match_value OpValue::MatchEnd is then
             tc.branched_stacks.pop = top_frame
             if top_frame BranchFrame::BranchMatch(match_ctx) is then
-                match_ctx.owners_before.shallow_copy = tc.moved_owners
                 # Close the final arm's scope frame (only opened if an arm ran).
                 if match_ctx MatchContext::condition_present then
                     op tc.attach_scope_cleanups
                     tc.scope.exit
                 fi
+                match_ctx.flow_after tc.merge_current_ownership_flow = match_ctx.flow_after
+                if tc.path_continues then true = match_ctx.has_continuing_arm fi
+                if match_ctx.has_continuing_arm then
+                    match_ctx.flow_after tc.restore_ownership_flow
+                else
+                    match_ctx.flow_before tc.restore_ownership_flow
+                fi
+                match_ctx.has_continuing_arm = tc.path_continues
                 # Record last arm label
                 if "" match_ctx MatchContext::current_branch_label != then
                     match_ctx MatchContext::current_branch_label match_ctx MatchContext::branch_records.push

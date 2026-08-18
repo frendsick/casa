@@ -270,6 +270,105 @@ fn test_borrowed_return_cannot_escape_a_local_owner {
     assert_error_contains
 }
 
+fn test_branch_joins_require_definite_ownership {
+    "branch_joins_require_definite_ownership" test_start
+    COPY_TRAITS
+    "struct Owner { value: str } fn consume owner:Owner { }"
+    str::concat = declarations
+
+    Diagnostics::new = moved_diagnostics
+    declarations
+    " fn invalid owner:Owner flag:bool { if flag then owner consume fi owner consume }"
+    str::concat moved_diagnostics check_source
+    moved_diagnostics "move on one continuing path poisons the join"
+    "Owner `owner` was already moved" assert_error_contains
+
+    Diagnostics::new = reinit_diagnostics
+    declarations
+    " fn valid owner:Owner flag:bool { if flag then owner consume \"then\" Owner = owner else owner consume \"else\" Owner = owner fi owner consume }"
+    str::concat reinit_diagnostics check_source
+    reinit_diagnostics "every path restores ownership" assert_no_errors
+
+    Diagnostics::new = return_diagnostics
+    declarations
+    " fn valid owner:Owner flag:bool { if flag then owner consume return fi owner consume }"
+    str::concat return_diagnostics check_source
+    return_diagnostics "returning path is excluded from the join" assert_no_errors
+}
+
+fn test_match_joins_exclude_returning_arms {
+    "match_joins_exclude_returning_arms" test_start
+    COPY_TRAITS
+    "struct Owner { value: str } enum Decision { Take Keep } fn consume owner:Owner { }"
+    str::concat = declarations
+
+    Diagnostics::new = moved_diagnostics
+    declarations
+    " fn invalid owner:Owner decision:Decision { decision match Decision::Take => { owner consume } Decision::Keep => { } end owner consume }"
+    str::concat moved_diagnostics check_source
+    moved_diagnostics "match move on one arm poisons the join"
+    "Owner `owner` was already moved" assert_error_contains
+
+    Diagnostics::new = return_diagnostics
+    declarations
+    " fn valid owner:Owner decision:Decision { decision match Decision::Take => { owner consume return } Decision::Keep => { } end owner consume }"
+    str::concat return_diagnostics check_source
+    return_diagnostics "returning match arm is excluded" assert_no_errors
+}
+
+fn test_loop_back_edges_and_exits_track_ownership {
+    "loop_back_edges_and_exits_track_ownership" test_start
+    COPY_TRAITS
+    "struct Owner { value: str } fn consume owner:Owner { }"
+    str::concat = declarations
+
+    Diagnostics::new = back_edge_diagnostics
+    declarations " fn invalid owner:Owner { while true do owner consume done }"
+    str::concat back_edge_diagnostics check_source
+    back_edge_diagnostics "normal back-edge restores ownership"
+    "Loop back-edge does not restore ownership of `owner`" assert_error_contains
+
+    Diagnostics::new = continue_diagnostics
+    declarations " fn invalid owner:Owner { while true do owner consume continue done }"
+    str::concat continue_diagnostics check_source
+    continue_diagnostics "continue restores ownership"
+    "Loop back-edge does not restore ownership of `owner`" assert_error_contains
+
+    Diagnostics::new = break_diagnostics
+    declarations
+    " fn invalid owner:Owner flag:bool { while true do if flag then owner consume break fi break done owner consume }"
+    str::concat break_diagnostics check_source
+    break_diagnostics "break exits merge ownership"
+    "Owner `owner` was already moved" assert_error_contains
+
+    Diagnostics::new = reinit_diagnostics
+    declarations
+    " fn valid owner:Owner { while false do owner consume \"next\" Owner = owner done owner consume }"
+    str::concat reinit_diagnostics check_source
+    reinit_diagnostics "loop body restores its header state" assert_no_errors
+}
+
+fn test_control_flow_joins_merge_possible_loans {
+    "control_flow_joins_merge_possible_loans" test_start
+    COPY_TRAITS
+    "struct Owner { value: str } fn view owner:$Owner -> $Owner { owner } fn inspect owner:$Owner { }"
+    str::concat = declarations
+
+    Diagnostics::new = diagnostics
+    declarations
+    " fn invalid left:Owner right:Owner flag:bool { left view = alias if flag then right view = alias else left view = alias fi right drop alias inspect left drop }"
+    str::concat diagnostics check_source
+    diagnostics "join retains every possible loan"
+    "Cannot move owner `right` while it is borrowed" assert_error_contains
+
+    Diagnostics::new = guard_diagnostics
+    declarations
+    " enum Decision { Take Keep } fn consume owner:Owner { } fn invalid owner:Owner decision:Decision { decision match Decision::Take if owner consume true => { } Decision::Keep => { } _ => { } end }"
+    str::concat guard_diagnostics check_source
+    guard_diagnostics "guard move rejected" "Match guard cannot move owner `owner`"
+    assert_error_contains
+}
+
 fn test_stack_reordering_preserves_owner_identity {
     "stack_reordering_preserves_owner_identity" test_start
     Diagnostics::new = diagnostics
@@ -356,6 +455,10 @@ test_exclusive_call_loans_do_not_alias
 test_returned_borrows_keep_every_input_loaned
 test_aggregate_borrows_keep_the_origin_loaned
 test_borrowed_return_cannot_escape_a_local_owner
+test_branch_joins_require_definite_ownership
+test_match_joins_exclude_returning_arms
+test_loop_back_edges_and_exits_track_ownership
+test_control_flow_joins_merge_possible_loans
 test_stack_reordering_preserves_owner_identity
 test_copy_derivation_validates_fields
 test_explicit_copy_implementation_is_validated
