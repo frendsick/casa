@@ -93,6 +93,10 @@ person Person::clone
 See [Traits](traits.md) for generic structs, generic `impl` blocks, and trait
 implementations.
 
+A struct or enum can contain a borrow, including through a generic field. The
+aggregate keeps the borrowed owner loaned until the aggregate's last use. A
+function that returns such an aggregate preserves the same origin.
+
 ## Derive Copy
 
 A struct can derive `Copy` when every field is Copy:

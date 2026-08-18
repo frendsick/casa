@@ -32,12 +32,143 @@ struct TypedValue {
     capability: ValueCapability
     binding:    Option[str]
     source:     Option[Op]
+    origins:    Option[List[str]]
+}
+
+fn origin_is_exclusive origin:mut$str -> bool {
+    origin "!" str::starts_with
+}
+
+fn origin_place origin:mut$str -> str {
+    if origin origin_is_exclusive then
+        origin 1 origin.length 1 - str::substring return
+    fi
+    origin.clone
+}
+
+fn origin_matches_place origin:mut$str place:mut$str -> bool {
+    if origin place == then true return fi
+    f"!{place}" origin ==
+}
+
+fn add_origin origins:Option[List[str]] place:mut$str exclusive:bool -> Option[List[str]] {
+    if exclusive then f"!{place}" else place.clone fi = origin
+    if origins Option::Some(items) is then
+        if origin items string_list_contains ! then origin items.push fi
+        items Option::Some return
+    fi
+    List[str]::new = items
+    origin items.push
+    items Option::Some
+}
+
+fn merge_origins target:Option[List[str]] source:mut$Option[List[str]] -> Option[List[str]] {
+    if source Option::Some(items) is then
+        for origin in items.iter do
+            origin origin_place = place
+            origin origin_is_exclusive place target add_origin = target
+        done
+    fi
+    target
+}
+
+fn clone_origins source:mut$Option[List[str]] -> Option[List[str]] {
+    if source Option::Some(items) is then
+        List[str]::new = cloned
+        for origin in items.iter do origin.clone cloned.push done
+        cloned Option::Some return
+    fi
+    Option[List[str]]::None
+}
+
+fn count_variable_uses ops:mut$List[Op] counts:Map[str u64] -> Map[str u64] {
+    for op in ops.iter do
+        if op.value OpValue::PushVar(name) is then
+            0 (u64) = count
+            if name counts.get Option::Some(found) is then found = count fi
+            count 1 + name.clone counts.set = counts
+        fi
+        if op.value OpValue::PushArray(items) is then
+            counts items count_variable_uses = counts
+        elif op.value OpValue::ExprGroup(items) is then
+            counts items count_variable_uses = counts
+        elif op.value OpValue::MatchArm(arm) is then
+            counts arm.guard_ops count_variable_uses = counts
+        fi
+    done
+    counts
 }
 
 fn type_capability typ:mut$Type -> ValueCapability {
     if typ.is_shared_borrow then ValueCapability::Shared return fi
     if typ.is_exclusive_borrow then ValueCapability::Exclusive return fi
     ValueCapability::Owned
+}
+
+fn type_contains_borrow
+    typ:mut$Type
+    exclusive:bool
+    store:mut$SymbolStore
+    visiting:mut$List[str]
+-> bool {
+    if typ.is_borrow then
+        if exclusive then typ.is_exclusive_borrow else typ.is_shared_borrow fi return
+    fi
+    if typ Type::Generic(generic) is then
+        for parameter in generic.params.iter do
+            if visiting store exclusive parameter type_contains_borrow then true return fi
+        done
+        if generic.base visiting string_list_contains then false return fi
+        generic.base.clone visiting.push
+        Map[str Type]::new = bindings
+        if generic.base store.structs.get Option::Some(casa_struct) is then
+            for pair in generic.params.iter casa_struct.type_vars.iter.zip do
+                pair.second pair.first bindings.set = bindings
+            done
+            for member in casa_struct.members.iter do
+                bindings member.typ.substitute_t = member_type
+                if visiting store exclusive member_type type_contains_borrow then true return fi
+            done
+        elif generic.base store.enums.get Option::Some(casa_enum) is then
+            for pair in generic.params.iter casa_enum.type_vars.iter.zip do
+                pair.second pair.first bindings.set = bindings
+            done
+            for payload_types in casa_enum.variant_types.values.iter do
+                for payload_type in payload_types.iter do
+                    bindings payload_type.substitute_t = resolved
+                    if visiting store exclusive resolved type_contains_borrow then true return fi
+                done
+            done
+        fi
+    fi
+    false
+}
+
+fn type_has_shared_borrow typ:mut$Type store:mut$SymbolStore -> bool {
+    if typ.is_shared_borrow then true return fi
+    if typ Type::Generic is ! then false return fi
+    f"shared:{typ.format}" = key
+    if key store.borrow_shapes.get Option::Some(cached) is then cached return fi
+    List[str]::new = visiting
+    visiting store false typ type_contains_borrow = result
+    result key store.borrow_shapes.set drop
+    result
+}
+
+fn type_has_exclusive_borrow typ:mut$Type store:mut$SymbolStore -> bool {
+    if typ.is_exclusive_borrow then true return fi
+    if typ Type::Generic is ! then false return fi
+    f"exclusive:{typ.format}" = key
+    if key store.borrow_shapes.get Option::Some(cached) is then cached return fi
+    List[str]::new = visiting
+    visiting store true typ type_contains_borrow = result
+    result key store.borrow_shapes.set drop
+    result
+}
+
+fn type_has_borrow typ:mut$Type store:mut$SymbolStore -> bool {
+    if store typ type_has_shared_borrow then true return fi
+    store typ type_has_exclusive_borrow
 }
 
 fn method_receiver_type effect:$StackEffect -> Option[Type] {
@@ -80,11 +211,18 @@ impl TypedStack {
     }
 
     fn snapshot self:$TypedStack -> TypedStack {
-        self.values.shallow_copy TypedStack
+        self.values.shallow_copy = values
+        0 (u64) = index
+        while index values.length > do
+            index values.get = value
+            value.origins clone_origins = value.origins
+            1 += index
+        done
+        values TypedStack
     }
 
     fn restore self:mut$TypedStack source:$TypedStack {
-        source.values.shallow_copy = self.values
+        source.snapshot.values = self.values
     }
 
     fn get_types self:$TypedStack -> List[Type] {
@@ -99,7 +237,8 @@ impl TypedStack {
         0 (u64) = index
         while index self.values.length > do
             index self.values.get = value
-            value.source value.binding value.capability value.place value.literals value.origin
+            value.origins clone_origins value.source value.binding value.capability value.place
+            value.literals value.origin
             index types.get clone_type TypedValue index self.values.set
             1 += index
         done
@@ -136,10 +275,41 @@ impl TypedStack {
 # Branch contexts — one specialized struct per branch kind (if / while / match).
 # ============================================================================
 
+struct OwnershipFlow {
+    moved: List[str]
+    loans: Map[str List[str]]
+}
+
+impl OwnershipFlow {
+    fn new -> OwnershipFlow {
+        Map[str List[str]]::new List[str]::new OwnershipFlow
+    }
+
+    fn merge flow:OwnershipFlow other:$OwnershipFlow -> OwnershipFlow {
+        for name in other.moved.iter do
+            if name flow.moved string_list_contains ! then name.clone flow.moved.push fi
+        done
+        for pair in other.loans.iter do
+            List[str]::new = origins
+            if pair.first flow.loans.get Option::Some(existing) is then
+                existing.shallow_copy = origins
+            fi
+            for origin in pair.second.iter do
+                if origin origins string_list_contains ! then origin.clone origins.push fi
+            done
+            origins pair.first.clone flow.loans.set = flow.loans
+        done
+        flow
+    }
+}
+
 struct IfContext {
     before:                  TypedStack
     after:                   TypedStack
-    owners_before:           List[str]
+    flow_before:             OwnershipFlow
+    flow_after:              OwnershipFlow
+    entry_continues:         bool
+    has_continuing_branch:   bool
     condition_present:       bool
     default_present:         bool
     current_branch_label:    str
@@ -148,7 +318,10 @@ struct IfContext {
 
 struct WhileContext {
     before:                  TypedStack
-    owners_before:           List[str]
+    flow_before:             OwnershipFlow
+    flow_exit:               OwnershipFlow
+    entry_continues:         bool
+    has_exit:                bool
     condition_present:       bool
     current_branch_location: Location
     scope_depth:             u64
@@ -157,10 +330,14 @@ struct WhileContext {
 struct MatchContext {
     before:                  TypedStack
     after:                   TypedStack
-    owners_before:           List[str]
+    flow_before:             OwnershipFlow
+    flow_after:              OwnershipFlow
+    entry_continues:         bool
+    has_continuing_arm:      bool
     condition_present:       bool
     branch_records:          List[str]
     match_type:              Type
+    match_origins:           Option[List[str]]
     current_branch_label:    str
     current_branch_location: Location
 }
@@ -177,7 +354,10 @@ impl IfContext {
         ""
         false
         false
-        List[str]::new
+        false
+        false
+        OwnershipFlow::new
+        OwnershipFlow::new
         TypedStack::new
         TypedStack::new
         IfContext
@@ -189,7 +369,10 @@ impl WhileContext {
         scope_depth
         empty_location
         false
-        List[str]::new
+        false
+        false
+        OwnershipFlow::new
+        OwnershipFlow::new
         TypedStack::new
         WhileContext
     }
@@ -199,10 +382,14 @@ impl MatchContext {
     fn new match_type:Type -> MatchContext {
         empty_location
         ""
+        Option[List[str]]::None
         match_type
         List[str]::new
         false
-        List[str]::new
+        false
+        false
+        OwnershipFlow::new
+        OwnershipFlow::new
         TypedStack::new
         TypedStack::new
         MatchContext
@@ -223,6 +410,7 @@ struct TypeChecker {
     current_op_context:         str
     current_expect_ctx:         str
     in_branch_condition:        bool
+    path_continues:             bool
     store:                      SymbolStore
     param_cap:                  Option[u64]
     underflow_reported_this_op: bool
@@ -230,6 +418,8 @@ struct TypeChecker {
     moved_owners:               List[str]
     owner_events:               List[OwnerEvent]
     next_owner_generation:      u64
+    binding_origins:            Map[str List[str]]
+    remaining_uses:             Map[str u64]
     unsafe_depth:               u64
     diagnostics:                Diagnostics
 }
@@ -269,6 +459,8 @@ impl TypeChecker {
     fn new store:mut$SymbolStore -> TypeChecker {
         Diagnostics::new # diagnostics
         0 # unsafe_depth
+        Map[str u64]::new # remaining_uses
+        Map[str List[str]]::new # binding_origins
         0 # next_owner_generation
         List[OwnerEvent]::new # owner_events
         List[str]::new # moved_owners
@@ -276,6 +468,7 @@ impl TypeChecker {
         false # underflow_reported_this_op
         Option[u64]::None # param_cap
         store # store
+        true # path_continues
         false # in_branch_condition
         "" # current_expect_ctx
         "" # current_op_context
@@ -434,6 +627,101 @@ impl TypeChecker {
 # ============================================================================
 
 impl TypeChecker {
+    fn current_ownership_flow tc:mut$TypeChecker -> OwnershipFlow {
+        List[str]::new = moved
+        for name in tc.moved_owners.iter do
+            if name tc.scope.lookup.is_some then name.clone moved.push fi
+        done
+        Map[str List[str]]::new = loans
+        for pair in tc.binding_origins.iter do
+            if pair.first tc.scope.lookup.is_some then
+                pair.second.shallow_copy pair.first.clone loans.set = loans
+            fi
+        done
+        loans moved OwnershipFlow
+    }
+
+    fn restore_ownership_flow tc:mut$TypeChecker flow:$OwnershipFlow {
+        flow.moved.shallow_copy = tc.moved_owners
+        Map[str List[str]]::new = loans
+        for pair in flow.loans.iter do
+            pair.second.shallow_copy pair.first.clone loans.set = loans
+        done
+        loans = tc.binding_origins
+    }
+
+    fn remove_flow_names tc:mut$TypeChecker names:$List[str] {
+        for name in names.iter do
+            false name tc.set_owner_moved
+            if name tc.binding_origins.has then
+                name tc.binding_origins.delete = tc.binding_origins
+            fi
+        done
+    }
+
+    fn merge_current_ownership_flow tc:mut$TypeChecker flow:OwnershipFlow -> OwnershipFlow {
+        if tc.path_continues then tc.current_ownership_flow flow.merge return fi
+        flow
+    }
+
+    fn report_loop_flow_difference
+        tc:mut$TypeChecker
+        expected:$OwnershipFlow
+        local_names:$List[str]
+        op:mut$Op
+    {
+        tc.current_ownership_flow = current
+        for name in current.moved.iter do
+            if
+            name local_names string_list_contains !
+            name expected.moved string_list_contains ! &&
+            then
+                op.location f"Loop back-edge does not restore ownership of `{name}`"
+                ErrorKind::InvalidVariable tc.diagnostics.record_error
+            fi
+        done
+        for name in expected.moved.iter do
+            if
+            name local_names string_list_contains !
+            name current.moved string_list_contains ! &&
+            then
+                op.location f"Loop back-edge changes ownership of `{name}`"
+                ErrorKind::InvalidVariable tc.diagnostics.record_error
+            fi
+        done
+        for pair in current.loans.iter do
+            if pair.first local_names string_list_contains then continue fi
+            if pair.first tc.scope.lookup Option::Some(typ) is then
+                if tc.store typ type_has_borrow ! then continue fi
+            fi
+            false = same
+            if pair.first expected.loans.get Option::Some(origins) is then
+                pair.second.length origins.length == = same
+                if same then
+                    for origin in pair.second.iter do
+                        if origin origins string_list_contains ! then false = same fi
+                    done
+                fi
+            fi
+            if same ! then
+                op.location f"Loop back-edge changes loans for `{pair.first}`"
+                ErrorKind::InvalidVariable tc.diagnostics.record_error
+            fi
+        done
+        for pair in expected.loans.iter do
+            if pair.first tc.scope.lookup Option::Some(typ) is then
+                if tc.store typ type_has_borrow ! then continue fi
+            fi
+            if
+            pair.first local_names string_list_contains !
+            pair.first current.loans.has ! &&
+            then
+                op.location f"Loop back-edge does not restore loans for `{pair.first}`"
+                ErrorKind::InvalidVariable tc.diagnostics.record_error
+            fi
+        done
+    }
+
     fn owner_is_moved tc:mut$TypeChecker name:$str -> bool {
         name tc.moved_owners string_list_contains
     }
@@ -450,6 +738,80 @@ impl TypeChecker {
                 last index (u64) tc.moved_owners.set
             fi
         fi
+    }
+
+    fn use_binding tc:mut$TypeChecker name:mut$str {
+        if name tc.remaining_uses.get Option::Some(count) is then
+            if 0 count != then count 1 - name.clone tc.remaining_uses.set = tc.remaining_uses fi
+        fi
+    }
+
+    fn binding_is_live tc:mut$TypeChecker name:mut$str -> bool {
+        if name tc.remaining_uses.get Option::Some(count) is then 0 count != return fi
+        false
+    }
+
+    fn record_binding_origins tc:mut$TypeChecker name:mut$str origins:mut$Option[List[str]] {
+        if origins Option::Some(items) is then
+            items.clone name.clone tc.binding_origins.set = tc.binding_origins
+        elif name tc.binding_origins.has then
+            name tc.binding_origins.delete = tc.binding_origins
+        fi
+    }
+
+    fn record_pattern_origins tc:mut$TypeChecker names:mut$List[str] origins:mut$Option[List[str]] {
+        for name in names.iter do
+            if name tc.scope.lookup Option::Some(typ) is then
+                if
+                tc.store typ type_has_borrow
+                Option[Function]::None typ tc.type_is_copy ! ||
+                then
+                    origins name tc.record_binding_origins
+                fi
+            fi
+        done
+    }
+
+    fn owner_has_active_loan tc:mut$TypeChecker owner:mut$str stack_depth:u64 -> bool {
+        0 (u64) = index
+        while index stack_depth > do
+            index tc.stack.values.get = value
+            if value.binding Option::Some(binding_name) is then
+                if owner binding_name == then 1 += index continue fi
+            fi
+            if value.origins Option::Some(origins) is then
+                for origin in origins.iter do
+                    if owner origin origin_matches_place then true return fi
+                done
+            fi
+            1 += index
+        done
+        for binding_name in tc.binding_origins.keys.iter do
+            if
+            owner binding_name ==
+            binding_name tc.binding_is_live ! ||
+            binding_name tc.scope.lookup.is_none ||
+            then continue fi
+            if binding_name tc.binding_origins.get Option::Some(origins) is then
+                for origin in origins.iter do
+                    if owner origin origin_matches_place then true return fi
+                done
+            fi
+        done
+        for frame in tc.branched_stacks.iter do
+            if frame BranchFrame::BranchWhile(while_ctx) is then
+                for pair in while_ctx.flow_before.loans.iter do
+                    if
+                    pair.first owner ==
+                    pair.first tc.scope.lookup.is_none ||
+                    then continue fi
+                    for origin in pair.second.iter do
+                        if owner origin origin_matches_place then true return fi
+                    done
+                done
+            fi
+        done
+        false
     }
 
     fn type_is_copy tc:mut$TypeChecker typ:mut$Type function_opt:mut$Option[Function] -> bool {
@@ -527,7 +889,7 @@ impl TypeChecker {
     }
 
     fn stack_push_type tc:mut$TypeChecker type_value:mut$Type {
-        Option[Op]::None Option[str]::None type_value type_capability Option[str]::None
+        Option[List[str]]::None Option[Op]::None Option[str]::None type_value type_capability Option[str]::None
         List[Op]::new tc.current_location type_value TypedValue
         tc.stack.values.push
     }
@@ -562,7 +924,12 @@ impl TypeChecker {
             unsafe { op (ptr) (Op) Option::Some = source }
         fi
         name.clone Option::Some = place
-        source binding type_value type_capability place List[Op]::new tc.current_location stack_type
+        Option[List[str]]::None = origins
+        if name tc.binding_origins.get Option::Some(stored) is then
+            stored.clone Option::Some = origins
+        fi
+        origins source binding type_value type_capability place
+        List[Op]::new tc.current_location stack_type
         TypedValue
         tc.stack.values.push
     }
@@ -570,7 +937,8 @@ impl TypeChecker {
     fn stack_push_literal tc:mut$TypeChecker type_value:mut$Type op:mut$Op {
         List[Op]::new = literals
         unsafe { op (ptr) (Op) literals.push }
-        Option[Op]::None Option[str]::None ValueCapability::Owned Option[str]::None literals
+        Option[List[str]]::None Option[Op]::None Option[str]::None
+        ValueCapability::Owned Option[str]::None literals
         tc.current_location type_value TypedValue
         tc.stack.values.push
     }
@@ -598,6 +966,11 @@ impl TypeChecker {
         if value.binding Option::Some(name) is then
             if name tc.owner_is_moved then
                 tc.current_location f"Owner `{name}` was already moved"
+                ErrorKind::InvalidVariable tc.diagnostics.record_error
+                return
+            fi
+            if tc.stack.values.length name tc.owner_has_active_loan then
+                tc.current_location f"Cannot move owner `{name}` while it is borrowed"
                 ErrorKind::InvalidVariable tc.diagnostics.record_error
                 return
             fi
@@ -650,7 +1023,8 @@ impl TypeChecker {
         if 0 value.literals.length != then
             value.type_value resolve_numeric_literal_default = resolved
             tc.diagnostics resolved value.resolve_literals drop
-            value.source value.binding value.capability value.place List[Op]::new value.origin
+            value.origins clone_origins value.source value.binding value.capability value.place
+            List[Op]::new value.origin
             resolved clone_type TypedValue top tc.stack.values.set
             resolved return
         fi
@@ -663,11 +1037,11 @@ impl TypeChecker {
         if 0 tc.stack.values.length == then
             if tc.within_param_cap then
                 TYPE_UNKNOWN_T Parameter::new tc.parameters.push
-                Option[Op]::None Option[str]::None ValueCapability::Owned Option[str]::None
+                Option[List[str]]::None Option[Op]::None Option[str]::None ValueCapability::Owned Option[str]::None
                 List[Op]::new empty_location TYPE_UNKNOWN_T TypedValue return
             fi
             tc.stack_underflow_message tc.report_stack_underflow
-            Option[Op]::None Option[str]::None ValueCapability::Owned Option[str]::None
+            Option[List[str]]::None Option[Op]::None Option[str]::None ValueCapability::Owned Option[str]::None
             List[Op]::new empty_location TYPE_MISSING_T TypedValue return
         fi
         tc.stack.values.pop
@@ -707,7 +1081,7 @@ impl TypeChecker {
             if inferred.is_unknown_placeholder ! inferred TYPE_MISSING_T.eq ! && then
                 tc.diagnostics inferred right.resolve_literals drop
                 inferred Parameter::new tc.parameters.push
-                Option[Op]::None Option[str]::None ValueCapability::Owned Option[str]::None
+                Option[List[str]]::None Option[Op]::None Option[str]::None ValueCapability::Owned Option[str]::None
                 List[Op]::new empty_location inferred TypedValue return
             fi
         fi
@@ -997,7 +1371,7 @@ impl TypeChecker {
         return_type bindings resolve_return_type_t = resolved
         if return_type.type_var_name Option::Some(type_variable) is then
             if type_variable literal_bindings.get Option::Some(literals) is then
-                Option[Op]::None Option[str]::None resolved type_capability Option[str]::None
+                Option[List[str]]::None Option[Op]::None Option[str]::None resolved type_capability Option[str]::None
                 literals tc.current_location resolved TypedValue
                 tc.stack.values.push
                 return
@@ -1175,6 +1549,39 @@ impl TypeChecker {
 }
 
 impl TypeChecker {
+    fn stack_push_origins tc:mut$TypeChecker typ:mut$Type origins:Option[List[str]] {
+        typ tc.stack_push_type
+        tc.stack.values.length 1 - tc.stack.values.get = value
+        origins = value.origins
+    }
+
+    fn call_origins tc:mut$TypeChecker effect:mut$StackEffect exclusive:bool -> Option[List[str]] {
+        Option[List[str]]::None = origins
+        tc.stack.values.length = depth
+        0 (u64) = index
+        while index effect.parameters.length > index depth > && do
+            index effect.parameters.get.typ = parameter_type
+            depth 1 - index - tc.stack.values.get = argument
+            if argument.origins Option::Some(argument_origins) is then
+                for origin in argument_origins.iter do
+                    if exclusive ! origin origin_is_exclusive || then
+                        origin origin_place = place
+                        exclusive place origins add_origin = origins
+                    fi
+                done
+            fi
+            if parameter_type.is_borrow then
+                if argument.place Option::Some(place) is then
+                    if exclusive ! parameter_type.is_exclusive_borrow || then
+                        exclusive place origins add_origin = origins
+                    fi
+                fi
+            fi
+            1 += index
+        done
+        origins
+    }
+
     fn check_call_borrow_pair
         tc:mut$TypeChecker
         first_type:$Type
@@ -1213,6 +1620,25 @@ impl TypeChecker {
                 done
             fi
             1 += first_index
+        done
+    }
+
+    fn check_live_exclusive_borrows tc:mut$TypeChecker effect:mut$StackEffect {
+        tc.stack.values.length = depth
+        if depth effect.parameters.length > then 0 else depth effect.parameters.length - fi = before_arguments
+        0 (u64) = index
+        while index effect.parameters.length > index depth > && do
+            index effect.parameters.get.typ = parameter_type
+            if parameter_type.is_exclusive_borrow then
+                depth 1 - index - tc.stack.values.get = argument
+                if argument.place Option::Some(place) is then
+                    if before_arguments place tc.owner_has_active_loan then
+                        tc.current_location f"Cannot borrow `{place}` exclusively while it is borrowed"
+                        ErrorKind::InvalidVariable tc.diagnostics.record_error
+                    fi
+                fi
+            fi
+            1 += index
         done
     }
 
@@ -1268,7 +1694,10 @@ impl TypeChecker {
         name:mut$str
         return_hint:Option[Type]
     {
+        false effect tc.call_origins = shared_origins
+        true effect tc.call_origins = exclusive_origins
         effect tc.check_call_borrow_conflicts
+        effect tc.check_live_exclusive_borrows
         # Simple case: no type variables
         if 0 effect StackEffect::type_vars.length == then
             0 (u64) = index
@@ -1283,7 +1712,18 @@ impl TypeChecker {
             done
             "" = tc.current_expect_ctx
             for return_type in effect StackEffect::return_types.iter do
-                return_type tc.stack_push_type
+                if tc.store return_type type_has_borrow then
+                    Option[List[str]]::None = origins
+                    if tc.store return_type type_has_shared_borrow then
+                        shared_origins origins merge_origins = origins
+                    fi
+                    if tc.store return_type type_has_exclusive_borrow then
+                        exclusive_origins origins merge_origins = origins
+                    fi
+                    origins return_type tc.stack_push_origins
+                else
+                    return_type tc.stack_push_type
+                fi
             done
             return
         fi
@@ -1336,7 +1776,19 @@ impl TypeChecker {
 
         # Push resolved return types
         for return_type in effect StackEffect::return_types.iter do
+            return_type bindings resolve_return_type_t = resolved_return
             literal_bindings bindings return_type tc.push_resolved_return
+            if tc.store resolved_return type_has_borrow then
+                Option[List[str]]::None = origins
+                if tc.store resolved_return type_has_shared_borrow then
+                    shared_origins origins merge_origins = origins
+                fi
+                if tc.store resolved_return type_has_exclusive_borrow then
+                    exclusive_origins origins merge_origins = origins
+                fi
+                tc.stack.values.length 1 - tc.stack.values.get = value
+                origins = value.origins
+            fi
         done
     }
 }
@@ -1907,7 +2359,7 @@ impl TypeChecker {
         if op.value OpValue::Dup is then
             if 1 depth < then false return fi
             depth 1 - tc.stack.values.get = value
-            Option[Op]::None Option[str]::None value.capability value.place
+            value.origins clone_origins Option[Op]::None Option[str]::None value.capability value.place
             value.literals.shallow_copy value.origin value.type_value clone_type
             TypedValue tc.stack.values.push
             true return
@@ -1924,7 +2376,7 @@ impl TypeChecker {
         if op.value OpValue::Over is then
             if 2 depth < then false return fi
             depth 2 - tc.stack.values.get = value
-            Option[Op]::None Option[str]::None value.capability value.place
+            value.origins clone_origins Option[Op]::None Option[str]::None value.capability value.place
             value.literals.shallow_copy value.origin value.type_value clone_type
             TypedValue tc.stack.values.push
             true return
@@ -1962,6 +2414,37 @@ impl TypeChecker {
 # `scope` ("local" / "global") is only used in the error message.
 
 impl TypeChecker {
+    fn assignment_origins
+        tc:mut$TypeChecker
+        name:mut$str
+        typ:mut$Type
+        function_opt:mut$Option[Function]
+    -> Option[List[str]] {
+        Option[List[str]]::None = origins
+        if 0 tc.stack.values.length != then
+            tc.stack.values.length 1 - tc.stack.values.get = value
+            value.origins clone_origins = origins
+            if typ.is_borrow origins.is_none && then
+                if value.place Option::Some(place) is then
+                    typ.is_exclusive_borrow place origins add_origin = origins
+                fi
+            fi
+        fi
+        if origins.is_none function_opt.is_some && then
+            function_opt.unwrap = function
+            for parameter in function.stack_effect.parameters.iter do
+                if
+                name parameter.name ==
+                tc.store parameter.typ type_has_borrow &&
+                then
+                    tc.store parameter.typ type_has_exclusive_borrow
+                    name origins add_origin = origins
+                fi
+            done
+        fi
+        origins
+    }
+
     fn unify_variable_assignment
         self:mut$TypeChecker
         op:mut$Op
@@ -2103,7 +2586,7 @@ impl TypeChecker {
         fi
 
         while field_index parts.length 1 - > do
-            location field_index parts.get OpValue::MethodCall Op::new = getter
+            location.clone field_index parts.get OpValue::MethodCall Op::new = getter
             insert_index getter ops.insert
             1 += insert_index
             1 += field_index
@@ -2157,10 +2640,10 @@ impl TypeChecker {
                 fi
                 hint_opt.unwrap = effective_type_t
                 op Op::location function_opt effective_type_t tc.validate_type_exists
-                effective_type_t = stack_type_t
+                effective_type_t clone_type = stack_type_t
             else
                 tc.stack_peek_type = stack_type_t
-                stack_type_t = effective_type_t
+                stack_type_t clone_type = effective_type_t
             fi
             if has_annotation ! stack_type_t.has_unresolved && then
                 op Op::location f"Cannot infer element type of empty array literal assigned to `{var_name}`; add a type annotation (e.g. `= {var_name}:array[i64]`) or an explicit cast (e.g. `[] (array[i64])`)." ErrorKind::TypeMismatch tc.diagnostics.record_error
@@ -2173,7 +2656,9 @@ impl TypeChecker {
                 var_name tc.scope.lookup.unwrap = scoped_type
                 "local" effective_type_t scoped_type var_name op tc.unify_assignment_type = unified_scoped
                 unified_scoped var_name tc.scope.set_type drop
+                function_opt effective_type_t var_name tc.assignment_origins = origins
                 effective_type_t tc.expect_type_t
+                origins var_name tc.record_binding_origins
                 if is_global ! then
                     false var_name tc.set_owner_moved
                     is_global function_opt unified_scoped var_name op tc.record_owner_assignment
@@ -2195,7 +2680,9 @@ impl TypeChecker {
                     fi
                     "local" effective_type_t current_local_type var_name op tc.unify_assignment_type = unified_local
                     unified_local var_name tc.scope.set_type drop
+                    function_opt effective_type_t var_name tc.assignment_origins = origins
                     effective_type_t tc.expect_type_t
+                    origins var_name tc.record_binding_origins
                     if is_global ! then
                         false var_name tc.set_owner_moved
                         is_global function_opt unified_local var_name op tc.record_owner_assignment
@@ -2210,13 +2697,17 @@ impl TypeChecker {
             if global_opt.is_some then
                 global_opt.unwrap = global_var
                 "global" effective_type_t global_var op tc.unify_variable_assignment
+                function_opt effective_type_t var_name tc.assignment_origins = origins
                 effective_type_t tc.expect_type_t
+                origins var_name tc.record_binding_origins
                 if is_global ! then false var_name tc.set_owner_moved fi
                 var_name tc.store.variables.get.unwrap.typ = global_type
                 is_global function_opt global_type var_name op tc.record_owner_assignment
                 return
             fi
+            function_opt effective_type_t var_name tc.assignment_origins = origins
             effective_type_t tc.expect_type_t
+            origins var_name tc.record_binding_origins
             if is_global ! then false var_name tc.set_owner_moved fi
             is_global function_opt effective_type_t var_name op tc.record_owner_assignment
         fi
@@ -2267,6 +2758,7 @@ impl TypeChecker {
 impl TypeChecker {
     fn check_push_var tc:mut$TypeChecker op:mut$Op function_opt:mut$Option[Function] {
         if op.value OpValue::PushCapture(capture_name) is then
+            capture_name tc.use_binding
             if function_opt.is_some then
                 function_opt.unwrap = function
                 capture_name function Function::captures variable_list_index = capture_index
@@ -2284,6 +2776,7 @@ impl TypeChecker {
 
         # PUSH_VARIABLE
         if op.value OpValue::PushVar(var_name) is then
+            var_name tc.use_binding
             if var_name tc.scope.is_expired then
                 op Op::location f"Variable `{var_name}` is not accessible outside its block scope" ErrorKind::UndefinedName tc.diagnostics.record_error
                 TYPE_UNKNOWN_T tc.stack_push_type
@@ -2325,6 +2818,7 @@ impl TypeChecker {
         op.value = if_value
         if if_value OpValue::IfStart is then
             IfContext::new = if_ctx
+            tc.path_continues = if_ctx.entry_continues
             op Op::location if_ctx IfContext::set_current_branch_location
             if_ctx BranchFrame::BranchIf = if_frame
             if_frame tc.branched_stacks.push
@@ -2338,9 +2832,9 @@ impl TypeChecker {
             if 0 tc.branched_stacks.length == then return fi
             tc.branched_stacks.length 1 - tc.branched_stacks.get = top_frame
             if top_frame BranchFrame::BranchIf(if_ctx) is then
+                tc.current_ownership_flow = if_ctx.flow_before
                 if if_ctx IfContext::condition_present ! then
                     true if_ctx IfContext::set_condition_present
-                    tc.moved_owners.shallow_copy = if_ctx.owners_before
                     tc.stack if_ctx IfContext::before.restore
                     tc.stack if_ctx IfContext::after.restore
                     "if" if_ctx IfContext::set_current_branch_label
@@ -2358,7 +2852,10 @@ impl TypeChecker {
             if 0 tc.branched_stacks.length == then return fi
             tc.branched_stacks.length 1 - tc.branched_stacks.get = top_frame
             if top_frame BranchFrame::BranchIf(if_ctx) is then
-                if_ctx.owners_before.shallow_copy = tc.moved_owners
+                if_ctx.flow_after tc.merge_current_ownership_flow = if_ctx.flow_after
+                if tc.path_continues then true = if_ctx.has_continuing_branch fi
+                if_ctx.flow_before tc.restore_ownership_flow
+                if_ctx.entry_continues = tc.path_continues
                 if if_value OpValue::IfElse is then
                     true if_ctx IfContext::set_default_present
                     false = tc.in_branch_condition
@@ -2392,7 +2889,18 @@ impl TypeChecker {
             tc.scope.exit
             tc.branched_stacks.pop = top_frame
             if top_frame BranchFrame::BranchIf(if_ctx) is then
-                if_ctx.owners_before.shallow_copy = tc.moved_owners
+                if_ctx.flow_after tc.merge_current_ownership_flow = if_ctx.flow_after
+                if tc.path_continues then true = if_ctx.has_continuing_branch fi
+                if if_ctx.default_present ! if_ctx.entry_continues && then
+                    if_ctx.flow_before if_ctx.flow_after.merge = if_ctx.flow_after
+                    true = if_ctx.has_continuing_branch
+                fi
+                if if_ctx.has_continuing_branch then
+                    if_ctx.flow_after tc.restore_ownership_flow
+                else
+                    if_ctx.flow_before tc.restore_ownership_flow
+                fi
+                if_ctx.has_continuing_branch = tc.path_continues
                 if_ctx IfContext::before = if_before
                 if_ctx IfContext::after = if_after
                 if if_before tc.stack.equals if_after if_before.equals && then
@@ -2436,7 +2944,8 @@ impl TypeChecker {
         op.value = while_value
         if while_value OpValue::WhileStart is then
             tc.scope.frames.length 1 + WhileContext::new = while_ctx
-            tc.moved_owners.shallow_copy = while_ctx.owners_before
+            tc.current_ownership_flow = while_ctx.flow_before
+            tc.path_continues = while_ctx.entry_continues
             tc.stack while_ctx WhileContext::before.restore
             op Op::location while_ctx WhileContext::set_current_branch_location
             while_ctx BranchFrame::BranchWhile = while_frame
@@ -2448,6 +2957,8 @@ impl TypeChecker {
             tc.branched_stacks.length 1 - tc.branched_stacks.get = top_frame
             if top_frame BranchFrame::BranchWhile(while_ctx) is then
                 true while_ctx WhileContext::set_condition_present
+                while_ctx.flow_exit tc.merge_current_ownership_flow = while_ctx.flow_exit
+                if tc.path_continues then true = while_ctx.has_exit fi
             fi
         elif
         while_value OpValue::WhileBreak is
@@ -2456,13 +2967,41 @@ impl TypeChecker {
             if 0 tc.branched_stacks.length == then return fi
             if tc.current_while_scope_depth Option::Some(scope_depth) is then
                 scope_depth tc.scope.names_from = names
+                tc.branched_stacks.length = frame_index
+                while 0 frame_index != do
+                    1 -= frame_index
+                    if frame_index tc.branched_stacks.get BranchFrame::BranchWhile(while_ctx) is then
+                        if tc.path_continues then
+                            if while_value OpValue::WhileBreak is then
+                                tc.current_ownership_flow while_ctx.flow_exit.merge = while_ctx.flow_exit
+                                true = while_ctx.has_exit
+                            else
+                                op names while_ctx.flow_before tc.report_loop_flow_difference
+                            fi
+                        fi
+                        break
+                    fi
+                done
                 false names op tc.attach_owner_cleanups
             fi
+            false = tc.path_continues
         elif while_value OpValue::WhileEnd is then
             op tc.attach_scope_cleanups
             tc.branched_stacks.pop = top_frame
             if top_frame BranchFrame::BranchWhile(while_ctx) is then
-                while_ctx.owners_before.shallow_copy = tc.moved_owners
+                while_ctx.scope_depth tc.scope.names_from = names
+                if tc.path_continues then
+                    op names while_ctx.flow_before tc.report_loop_flow_difference
+                fi
+                tc.scope.exit
+                if while_ctx.has_exit then
+                    while_ctx.flow_exit tc.restore_ownership_flow
+                else
+                    while_ctx.flow_before tc.restore_ownership_flow
+                fi
+                names tc.remove_flow_names
+                while_ctx.has_exit = tc.path_continues
+                return
             fi
             tc.scope.exit
         fi
@@ -2871,8 +3410,9 @@ impl TypeChecker {
                 if 0 value.literals.length != then
                     actual resolve_numeric_literal_default = fallback
                     existing_option fallback value tc.resolve_type_var_literals = actual
-                    value.source value.binding value.capability value.place List[Op]::new value.origin
-                    actual TypedValue
+                    value.origins clone_origins value.source value.binding value.capability value.place
+                    List[Op]::new value.origin
+                    actual clone_type TypedValue
                     stack_index tc.stack.values.set
                 fi
                 location bindings actual type_variable tc.bind_concrete_type_variable return
@@ -3039,6 +3579,44 @@ impl TypeChecker {
 # ============================================================================
 
 impl TypeChecker {
+    fn return_origin_is_valid tc:mut$TypeChecker function:mut$Function origin:mut$str -> bool {
+        origin origin_is_exclusive = exclusive
+        origin origin_place = place
+        if place tc.store.variables.has then true return fi
+        for parameter in function.stack_effect.parameters.iter do
+            if place parameter.name == then
+                if exclusive then
+                    tc.store parameter.typ type_has_exclusive_borrow return
+                fi
+                tc.store parameter.typ type_has_borrow return
+            fi
+        done
+        false
+    }
+
+    fn validate_borrow_returns tc:mut$TypeChecker function:mut$Function stack:mut$TypedStack {
+        0 (u64) = index
+        while index stack.values.length > index function.stack_effect.return_types.length > && do
+            index function.stack_effect.return_types.get = return_type
+            if tc.store return_type type_has_borrow then
+                index stack.values.get = value
+                if value.origins Option::Some(origins) is then
+                    for origin in origins.iter do
+                        if origin function tc.return_origin_is_valid ! then
+                            origin origin_place = place
+                            tc.current_location f"Borrowed return escapes local owner `{place}`"
+                            ErrorKind::InvalidVariable tc.diagnostics.record_error
+                        fi
+                    done
+                else
+                    tc.current_location "Borrowed return has no live input origin"
+                    ErrorKind::InvalidVariable tc.diagnostics.record_error
+                fi
+            fi
+            1 += index
+        done
+    }
+
     fn sync_capture_types tc:mut$TypeChecker lambda:mut$Function function_opt:mut$Option[Function] {
         if function_opt.is_none then return fi
         for capture in lambda Function::captures.iter do
@@ -3089,8 +3667,14 @@ impl TypeChecker {
                     fi
                     if valid_explicit_type then
                         op.location function_opt explicit_type tc.validate_type_exists
-                        tc.stack_pop_drop
-                        explicit_type tc.stack_push_type
+                        tc.stack_pop_value = explicit_value
+                        explicit_value.origins clone_origins = explicit_origins
+                        explicit_value tc.consume_value
+                        if tc.store explicit_type type_has_borrow then
+                            explicit_origins explicit_type tc.stack_push_origins
+                        else
+                            explicit_type tc.stack_push_type
+                        fi
                     else
                         op.location f"Explicit type `{explicit_type.format}` does not match `{fn_name}`" ErrorKind::TypeMismatch tc.diagnostics.record_error
                     fi
@@ -3125,8 +3709,12 @@ impl TypeChecker {
                 List[Type]::new List[Type]::new FunctionType Type::Function tc.stack_push_type
             fi
         elif fn_value OpValue::FnReturn is then
+            if function_opt Option::Some(function) is then
+                tc.stack function tc.validate_borrow_returns
+            fi
             for return_value in tc.stack.values.iter do return_value tc.consume_value done
             op tc.attach_all_owner_cleanups
+            false = tc.path_continues
             if tc.has_return_types ! then
                 true = tc.has_return_types
                 tc.stack tc.return_types.restore
@@ -3135,13 +3723,13 @@ impl TypeChecker {
                 tc.branched_stacks.length 1 - tc.branched_stacks.get = top_frame
                 if top_frame BranchFrame::BranchIf(if_ctx) is then
                     if_ctx IfContext::before tc.stack.restore
-                    if_ctx.owners_before.shallow_copy = tc.moved_owners
+                    if_ctx.flow_before tc.restore_ownership_flow
                 elif top_frame BranchFrame::BranchWhile(while_ctx) is then
                     while_ctx WhileContext::before tc.stack.restore
-                    while_ctx.owners_before.shallow_copy = tc.moved_owners
+                    while_ctx.flow_before tc.restore_ownership_flow
                 elif top_frame BranchFrame::BranchMatch(match_ctx) is then
                     match_ctx MatchContext::before tc.stack.restore
-                    match_ctx.owners_before.shallow_copy = tc.moved_owners
+                    match_ctx.flow_before tc.restore_ownership_flow
                 fi
             fi
         fi
@@ -3309,6 +3897,7 @@ impl TypeChecker {
             fi
 
             # Data-carrying variant: pop inner values, resolve generics
+            Option[List[str]]::None = origins
             if 0 casa_enum CasaEnum::type_vars.length != then
                 # Generic enum variant (e.g. Option::Some with T)
                 # Bind type vars from inner values
@@ -3319,20 +3908,35 @@ impl TypeChecker {
                 done
                 for expected in inner_types.iter do
                     if expected.type_var_name Option::Some(tv_name) is tv_name type_vars.has && then
-                        tc.stack_pop_type = actual_t
+                        tc.stack_pop_value = actual_value
+                        actual_value.origins origins merge_origins = origins
+                        actual_value.type_value = actual_t
+                        if 0 actual_value.literals.length != then
+                            actual_t resolve_numeric_literal_default = actual_t
+                            tc.diagnostics actual_t actual_value.resolve_literals drop
+                        fi
+                        actual_value tc.consume_value
                         actual_t tv_name bindings tc.bind_type_var = bindings
                     else
+                        if 0 tc.stack.values.length != then
+                            tc.stack.values.length 1 - tc.stack.values.get.origins origins merge_origins = origins
+                        fi
                         expected tc.expect_type_t
                     fi
                 done
                 # Build resolved type name
-                bindings casa_enum CasaEnum::type_vars enum_name build_resolved_type tc.stack_push_type
+                bindings casa_enum CasaEnum::type_vars enum_name build_resolved_type = result_type
+                origins result_type tc.stack_push_origins
             else
                 # Non-generic variant: pop inner values directly
                 for inner_type in inner_types.iter do
+                    if 0 tc.stack.values.length != then
+                        tc.stack.values.length 1 - tc.stack.values.get.origins origins merge_origins = origins
+                    fi
                     inner_type tc.expect_type_t
                 done
-                enum_name GenericType::new Type::Generic tc.stack_push_type
+                enum_name GenericType::new Type::Generic = result_type
+                origins result_type tc.stack_push_origins
             fi
         fi
     }
@@ -3382,7 +3986,9 @@ impl TypeChecker {
             for binding_var in variant EnumVariant::bindings.iter do
                 op binding_var tc.record_implicit_binding
             done
+            variant.bindings.shallow_copy = binding_names
             subject_type variant function_opt tc register_enum_pattern_bindings
+            subject.origins binding_names tc.record_pattern_origins
         fi
         TYPE_BOOL_T tc.stack_push_type
     }
@@ -3428,6 +4034,7 @@ impl TypeChecker {
     fn check_match tc:mut$TypeChecker op:mut$Op function_opt:mut$Option[Function] {
         op.value = match_value
         if match_value OpValue::MatchStart is then
+            Option[List[str]]::None = match_origins
             if 0 tc.stack.values.length == then
                 tc.within_param_cap = inferring_stack_effect
                 if function_opt Option::Some(function) is then
@@ -3444,11 +4051,14 @@ impl TypeChecker {
             fi
             if 0 tc.stack.values.length != then
                 tc.stack.values.length 1 - tc.stack.values.get = match_subject
+                match_subject.origins clone_origins = match_origins
                 match_subject tc.consume_value
             fi
             tc.stack_pop_type = match_type
             match_type MatchContext::new = match_ctx
-            tc.moved_owners.shallow_copy = match_ctx.owners_before
+            match_origins = match_ctx.match_origins
+            tc.path_continues = match_ctx.entry_continues
+            tc.current_ownership_flow = match_ctx.flow_before
             # Snapshot the entry stack state eagerly so that an OpFnReturn visiting
             # this frame before any OpMatchArm still finds a correct `before` to
             # restore from. Matches the pre-refactor make_branched_stack behavior.
@@ -3462,12 +4072,19 @@ impl TypeChecker {
         elif match_value OpValue::MatchEnd is then
             tc.branched_stacks.pop = top_frame
             if top_frame BranchFrame::BranchMatch(match_ctx) is then
-                match_ctx.owners_before.shallow_copy = tc.moved_owners
                 # Close the final arm's scope frame (only opened if an arm ran).
                 if match_ctx MatchContext::condition_present then
                     op tc.attach_scope_cleanups
                     tc.scope.exit
                 fi
+                match_ctx.flow_after tc.merge_current_ownership_flow = match_ctx.flow_after
+                if tc.path_continues then true = match_ctx.has_continuing_arm fi
+                if match_ctx.has_continuing_arm then
+                    match_ctx.flow_after tc.restore_ownership_flow
+                else
+                    match_ctx.flow_before tc.restore_ownership_flow
+                fi
+                match_ctx.has_continuing_arm = tc.path_continues
                 # Record last arm label
                 if "" match_ctx MatchContext::current_branch_label != then
                     match_ctx MatchContext::current_branch_label match_ctx MatchContext::branch_records.push
@@ -3599,9 +4216,16 @@ impl TypeChecker {
             casa_struct CasaStruct::name = name
             # Build type variable bindings from actual stack values
             Map[str Type]::new = bindings
+            Option[List[str]]::None = origins
             for member in casa_struct CasaStruct::members.iter do
                 member Member::typ = expected
                 tc.stack_pop_value = value
+                value.origins origins merge_origins = origins
+                if expected.is_borrow value.origins.is_none && then
+                    if value.place Option::Some(place) is then
+                        expected.is_exclusive_borrow place origins add_origin = origins
+                    fi
+                fi
                 value tc.consume_value
                 bindings expected.substitute_t = resolved_expected
                 resolved_expected value tc.resolve_struct_member_literal = actual
@@ -3615,9 +4239,11 @@ impl TypeChecker {
             done
             # Construct the result type
             if 0 casa_struct CasaStruct::type_vars.length == then
-                name GenericType::new Type::Generic tc.stack_push_type
+                name GenericType::new Type::Generic = result_type
+                origins result_type tc.stack_push_origins
             else
-                bindings casa_struct CasaStruct::type_vars name build_resolved_type tc.stack_push_type
+                bindings casa_struct CasaStruct::type_vars name build_resolved_type = result_type
+                origins result_type tc.stack_push_origins
             fi
         fi
     }
@@ -3637,6 +4263,7 @@ impl TypeChecker {
                 return
             fi
             struct_opt.unwrap = casa_struct
+            Option[List[str]]::None = origins
             # Pop field values in reverse order
             literal StructLiteral::field_order.length = index
             while 0 index != do
@@ -3645,12 +4272,16 @@ impl TypeChecker {
                 # Find member type
                 for member in casa_struct CasaStruct::members.iter do
                     if field_name member Member::name == then
+                        if 0 tc.stack.values.length != then
+                            tc.stack.values.length 1 - tc.stack.values.get.origins origins merge_origins = origins
+                        fi
                         member Member::typ tc.expect_type_t
                         break
                     fi
                 done
             done
-            name GenericType::new Type::Generic tc.stack_push_type
+            name GenericType::new Type::Generic = result_type
+            origins result_type tc.stack_push_origins
         fi
     }
 }
@@ -4411,6 +5042,7 @@ impl TypeChecker {
             if op_value OpValue::TypeCast(cast_type) is then
                 current_op Op::location function_opt cast_type checker.validate_type_exists
                 checker.stack_pop_value = cast_value
+                cast_value.origins clone_origins = cast_origins
                 if cast_type TYPE_CHAR_T.eq then
                     current_op.location "Cast to `char` is not allowed; use `char::from_codepoint`" ErrorKind::TypeMismatch checker.diagnostics.record_error
                 elif cast_value.type_value TYPE_CHAR_T.eq then
@@ -4424,7 +5056,11 @@ impl TypeChecker {
                 else
                     cast_value checker.consume_value
                 fi
-                cast_type checker.stack_push_type
+                if checker.store cast_type type_has_borrow then
+                    cast_origins cast_type checker.stack_push_origins
+                else
+                    cast_type checker.stack_push_type
+                fi
                 continue
             fi
 
@@ -4470,7 +5106,8 @@ impl TypeChecker {
             if 0 return_value.literals.length != then
                 return_index declared_returns.get = declared_return
                 diagnostics declared_return return_value.resolve_literals drop
-                return_value.source return_value.binding return_value.capability return_value.place
+                return_value.origins clone_origins return_value.source return_value.binding
+                return_value.capability return_value.place
                 List[Op]::new return_value.origin
                 declared_return TypedValue
                 return_index checker.stack.values.set
@@ -4499,10 +5136,14 @@ fn check_ops
         fi
     fi
     budget = checker.param_cap
+    Map[str u64]::new ops count_variable_uses = checker.remaining_uses
     diagnostics.error_count = errors_before_ops
     function_opt ops checker.run_type_check_ops
 
     if function_opt Option::Some(checked_function) is then
+        if checker.has_return_types ! then
+            checker.stack checked_function checker.validate_borrow_returns
+        fi
         diagnostics checked_function checker.resolve_declared_return_literals
     fi
 
@@ -4512,7 +5153,8 @@ fn check_ops
         stack_value checker.consume_value
         stack_value.type_value resolve_numeric_literal_default = final_type
         diagnostics final_type stack_value.resolve_literals drop
-        stack_value.source stack_value.binding stack_value.capability stack_value.place List[Op]::new
+        stack_value.origins clone_origins stack_value.source stack_value.binding
+        stack_value.capability stack_value.place List[Op]::new
         stack_value.origin final_type
         TypedValue
         stack_index checker.stack.values.set
