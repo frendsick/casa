@@ -148,14 +148,29 @@ fn unify_arm_stacks tc:mut$TypeChecker match_ctx:mut$MatchContext op:mut$Op {
 fn assign_struct_binding_type
     tc:mut$TypeChecker
     matched_struct:$CasaStruct
+    match_subject_type:mut$Type
     field_name:mut$str
     bound_var:str
     function_opt:mut$Option[Function]
-    store:SymbolStore
 {
+    match_subject_type clone_type = subject_type
+    if subject_type.borrow_target Option::Some(target) is then target = subject_type fi
+    matched_struct.type_vars subject_type aggregate_type_bindings = bindings
     for member in matched_struct CasaStruct::members.iter do
         if field_name member Member::name == then
-            store function_opt member Member::typ bound_var tc set_binding_type
+            bindings member Member::typ.substitute_t = binding_type
+            if match_subject_type.is_borrow function_opt binding_type tc.type_is_copy ! && then
+                binding_type clone_type = target
+                false = shared
+                if binding_type.borrow_target Option::Some(borrowed) is then
+                    borrowed = target
+                    binding_type.is_shared_borrow = shared
+                fi
+                if match_subject_type.is_shared_borrow then true = shared fi
+                if shared then SHARED_BORROW_TYPE else EXCLUSIVE_BORROW_TYPE fi
+                target apply_borrow_type = binding_type
+            fi
+            function_opt binding_type bound_var tc set_binding_type
         fi
     done
 }
@@ -164,6 +179,7 @@ fn register_struct_pattern_bindings
     tc:mut$TypeChecker
     function_opt:mut$Option[Function]
     struct_pattern:StructPattern
+    match_subject_type:mut$Type
 {
     struct_pattern StructPattern::struct_name tc.store.structs.get = matched_struct_opt
     if matched_struct_opt.is_none then
@@ -174,7 +190,8 @@ fn register_struct_pattern_bindings
     struct_pattern StructPattern::bindings.keys = binding_keys
     for field_name in binding_keys.iter do
         if field_name struct_pattern StructPattern::bindings.get Option::Some(bound_var) is then
-            tc.store function_opt bound_var field_name matched_struct tc assign_struct_binding_type
+            function_opt bound_var field_name match_subject_type matched_struct tc
+            assign_struct_binding_type
         else
             empty_location "Expected option value while unwrapping field_name struct_pattern StructPattern::bindings.get" ErrorKind::Syntax tc.diagnostics.record_error
         fi
@@ -203,7 +220,8 @@ fn register_enum_pattern_bindings
     if base_enum_name tc.store.enums.get Option::Some(casa_enum) is then
         if variant EnumVariant::variant_name casa_enum CasaEnum::variant_types.get Option::Some(inner_types) is then
             subject_type casa_enum build_enum_type_bindings = type_bindings
-            borrow_prefix variant type_bindings inner_types function_opt tc apply_enum_bindings
+            match_subject_type borrow_prefix variant type_bindings inner_types function_opt tc
+            apply_enum_bindings
         fi
     fi
 }
@@ -231,6 +249,7 @@ fn apply_enum_bindings
     type_bindings:$Map[str Type]
     variant:$EnumVariant
     borrow_prefix:$str
+    match_subject_type:mut$Type
 {
     0 (u64) = bind_index
     while
@@ -240,12 +259,18 @@ fn apply_enum_bindings
         bind_index variant EnumVariant::bindings.get = binding_var
         bind_index inner_types.get = binding_type
         type_bindings binding_type.substitute_t = binding_type
-        if "" borrow_prefix != then
-            List[Type]::new = borrowed_parameters
-            binding_type borrowed_parameters.push
-            borrowed_parameters borrow_prefix GenericType Type::Generic = binding_type
+        if "" borrow_prefix != function_opt binding_type tc.type_is_copy ! && then
+            binding_type clone_type = target
+            SHARED_BORROW_TYPE borrow_prefix == = shared
+            if binding_type.borrow_target Option::Some(borrowed) is then
+                borrowed = target
+                if binding_type.is_shared_borrow then true = shared fi
+            fi
+            if match_subject_type.is_shared_borrow then true = shared fi
+            if shared then SHARED_BORROW_TYPE else EXCLUSIVE_BORROW_TYPE fi
+            target apply_borrow_type = binding_type
         fi
-        tc.store function_opt binding_type binding_var tc set_binding_type
+        function_opt binding_type binding_var tc set_binding_type
         1 += bind_index
     done
 }
@@ -261,7 +286,7 @@ fn register_pattern_bindings
 {
     op pattern_value_of match
         PatternValue::Struct(struct_pattern) => {
-            struct_pattern function_opt tc register_struct_pattern_bindings
+            match_subject_type struct_pattern function_opt tc register_struct_pattern_bindings
         }
         PatternValue::EnumVariant(variant) => {
             if op pattern_is_wildcard then return fi
@@ -269,6 +294,40 @@ fn register_pattern_bindings
         }
         PatternValue::Literal => { }
     end
+}
+
+fn record_match_pattern_origins
+    tc:mut$TypeChecker
+    op:mut$Op
+    match_subject_type:mut$Type
+    match_origins:mut$Option[List[str]]
+    match_place:mut$Option[str]
+    function_opt:mut$Option[Function]
+{
+    for binding_name in op pattern_bindings.iter do
+        if binding_name tc.scope.lookup Option::Some(binding_type) is then
+            if
+            tc.store binding_type type_has_borrow
+            function_opt binding_type tc.type_is_copy ! ||
+            then
+                match_origins clone_origins = origins
+                if match_subject_type.is_borrow then
+                    if match_place Option::Some(subject_place) is then
+                        subject_place.clone = binding_place
+                        if op pattern_value_of PatternValue::Struct(struct_pattern) is then
+                            for pair in struct_pattern.bindings.iter do
+                                if pair.second binding_name == then
+                                    f"{subject_place}.{pair.first}" = binding_place
+                                fi
+                            done
+                        fi
+                        binding_type.is_exclusive_borrow binding_place origins add_origin = origins
+                    fi
+                fi
+                origins binding_name tc.record_binding_origins
+            fi
+        fi
+    done
 }
 
 fn check_literal_pattern
@@ -374,7 +433,8 @@ fn typecheck_match_op tc:mut$TypeChecker function_opt:mut$Option[Function] op:mu
         done
 
         match_subject_type op function_opt tc register_pattern_bindings
-        match_ctx.match_origins op pattern_bindings tc.record_pattern_origins
+        function_opt match_ctx.match_place match_ctx.match_origins match_subject_type op tc
+        record_match_pattern_origins
         match_subject_type clone_type Option::Some op Op::set_type_hint
         for binding_var in op pattern_bindings.iter do
             if binding_var tc.scope.lookup Option::Some(binding_type) is then
