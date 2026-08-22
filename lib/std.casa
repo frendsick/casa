@@ -17,13 +17,13 @@ impl array {
         unsafe { array (ptr) 8 + load64 (u64) }
     }
 
-    fn nth [T] array:$array[T] n:u64 -> T {
+    fn nth [T] array:$array[T] n:u64 -> $T {
         if array.length n >= then
             "error: array index out of bounds\n" eprint
             unsafe { 1 60 syscall1 drop }
         fi
         # Data pointer is at offset 0 in the header
-        unsafe { array (ptr) load64 (ptr) n 8 * + load64 (T) }
+        unsafe { array (ptr) load64 (ptr) n 8 * + load64 ($T) }
     }
 }
 
@@ -52,6 +52,17 @@ impl List {
             unsafe { 1 60 syscall1 drop }
         fi
         unsafe { self.data n 8 * + load64 (T) }
+    }
+
+    # Borrowed element access. The list keeps owning the element, so this is
+    # the accessor that iteration and read-only lookups should use. `get` still
+    # returns an owned alias of the element; see issue #426.
+    fn get_ref [T] self:$List[T] n:u64 -> $T {
+        if self.size n >= 0 n < || then
+            "error: List index out of bounds\n" print
+            unsafe { 1 60 syscall1 drop }
+        fi
+        unsafe { self.data n 8 * + load64 ($T) }
     }
 
     fn set [T] self:mut$List[T] n:u64 item:T {
@@ -134,6 +145,15 @@ impl List {
             left right self.swap_at
             1 += left
             1 -= right
+        done
+    }
+
+    # Moves every element of `other` onto the end of `self`, consuming `other`.
+    fn append [T] self:mut$List[T] other:List[T] {
+        0 (u64) = index
+        while index other.size > do
+            unsafe { other.data index 8 * + load64 (T) } self.push
+            1 += index
         done
     }
 
@@ -1706,11 +1726,13 @@ impl[T: Ord] Iter[T] {
 }
 
 impl[T] array[T] {
-    fn iter self:$array[T] -> Iter[T] {
+    # Yields element borrows: the array keeps owning every element, so an
+    # owned yield would destroy values the array still references.
+    fn iter self:$array[T] -> Iter[$T] {
         unsafe { 16 alloc = st }
         unsafe { self.length st store64 }
         unsafe { 0 (u64) st 8 + store64 }
-        Option[T]::None = none
+        Option[$T]::None = none
         {
             unsafe { st 8 + load64 (u64) = idx }
             if unsafe { st load64 (u64) idx >= } then
@@ -1718,24 +1740,32 @@ impl[T] array[T] {
             fi
             unsafe { idx 1 + st 8 + store64 }
             idx self.nth Option::Some
-        } Iter
+        } Iter = iterator
+        # ADR-0112: the closure reads through `self`, but a closure capture
+        # carries no origin of its own. Re-forming the iterator from its raw
+        # address anchors the yielded borrows to this function's input.
+        unsafe { iterator (ptr) (Iter[$T]) }
     }
 }
 
 impl[T] List[T] {
-    fn iter self:$List[T] -> Iter[T] {
+    # Yields element borrows: the list keeps owning every element, so an owned
+    # yield would destroy values the list still references.
+    fn iter self:$List[T] -> Iter[$T] {
         unsafe { 16 alloc = st }
         unsafe { self.length st store64 }
         unsafe { 0 (u64) st 8 + store64 }
-        Option[T]::None = none
+        Option[$T]::None = none
         {
             unsafe { st 8 + load64 (u64) = idx }
             if unsafe { st load64 (u64) idx >= } then
                 none return
             fi
             unsafe { idx 1 + st 8 + store64 }
-            idx self.get Option::Some
-        } Iter
+            idx self.get_ref Option::Some
+        } Iter = iterator
+        # ADR-0112: see `array::iter`.
+        unsafe { iterator (ptr) (Iter[$T]) }
     }
 
     fn sort_by self:mut$List[T] f:fn[$T $T -> bool] {

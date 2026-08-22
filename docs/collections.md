@@ -18,9 +18,9 @@ import "std"
 | Method | Result or action |
 |---|---|
 | `length self:array[T] -> u64` | Number of elements |
-| `nth self:array[T] index:u64 -> T` | Element at a zero-based index |
+| `nth self:$array[T] index:u64 -> $T` | Borrow of the element at a zero-based index |
 | `clone self:array[T] -> array[T]` | Independent array when `T: Clone` |
-| `iter self:array[T] -> Iter[T]` | Iterator over the elements |
+| `iter self:$array[T] -> Iter[$T]` | Iterator over borrows of the elements |
 | `contains self:array[str] needle:str -> bool` | Whether a string array contains `needle` |
 
 Array length cannot change. Use `List[T]` when values must be added or removed.
@@ -40,6 +40,11 @@ independent array when `T: Clone`, and `array[T]` is never `Copy`, even when `T`
 is, because it owns indirect storage. Indexing past the last element terminates
 the program.
 
+`nth` and `iter` read through a borrowed array, so they hand back `$T` rather
+than an owned element. The array stays the only owner: an element type with a
+reserved `drop` method runs its hook once, when the array is destroyed. Use
+`.clone` on the result when an owned value is needed.
+
 ## Lists
 
 `List[T]` is a growable sequence:
@@ -55,7 +60,8 @@ numbers.sort
 | `List[T]::new -> List[T]` | Empty list |
 | `from_array values:array[T] -> List[T]` | List containing the array values |
 | `length self:List[T] -> u64` | Number of elements |
-| `get self:List[T] index:u64 -> T` | Element at a zero-based index |
+| `get self:$List[T] index:u64 -> T` | Element at a zero-based index |
+| `get_ref self:$List[T] index:u64 -> $T` | Borrow of the element at a zero-based index |
 | `set self:List[T] index:u64 value:T` | Replace an element |
 | `push self:List[T] value:T` | Add at the end |
 | `pop self:List[T] -> T` | Remove and return the last element |
@@ -64,13 +70,18 @@ numbers.sort
 | `to_array self:List[T] -> array[T]` | Array view of the whole list |
 | `swap_at self:List[T] first:u64 second:u64` | Exchange two elements |
 | `reverse self:List[T]` | Reverse in place |
+| `append self:mut$List[T] other:List[T]` | Move every element of `other` onto the end |
 | `clone self:List[T] -> List[T]` | Independent list when `T: Clone` |
-| `iter self:List[T] -> Iter[T]` | Iterator over the elements |
+| `iter self:$List[T] -> Iter[$T]` | Iterator over borrows of the elements |
 | `sort self:List[T]` | Sort in place when `T` implements `Ord` |
 | `sort_by self:List[T] compare:fn[T T -> bool]` | Sort in place with a callback |
 | `sort_by_range self:List[T] low:u64 high:u64 compare:fn[T T -> bool]` | Sort an inclusive index range |
 | `join self:List[str] separator:str -> str` | Join a string list |
 | `contains self:List[str] needle:str -> bool` | Whether a string list contains `needle` |
+
+`get_ref` and `iter` borrow the element in place, so the list stays its owner.
+`get` still returns an owned handle to storage the list also references; prefer
+`get_ref` for reads and use `.clone` when an owned value is needed.
 
 Out-of-range indexing, slicing, insertion, and popping an empty list terminate
 the program.
@@ -162,14 +173,18 @@ builder.build print
 
 | Source | Iterator |
 |---|---|
-| `array[T]` | `Iter[T]` |
-| `List[T]` | `Iter[T]` |
+| `array[T]` | `Iter[$T]` |
+| `List[T]` | `Iter[$T]` |
 | `str` | `Iter[char]` |
 | `Map[K V]` | `Iter[Pair[K V]]` |
 | `Set[K]` | `Iter[K]` |
 
 A `for` loop consumes the iterator. Create another iterator to traverse the
 source again.
+
+`array[T]` and `List[T]` yield borrows of their elements, because the container
+keeps owning them. A loop variable bound from one of these iterators is a `$T`;
+`.clone` it when an owned value is needed.
 
 ## Lazy iterator operations
 

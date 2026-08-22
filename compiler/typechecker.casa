@@ -141,7 +141,7 @@ fn type_contains_borrow
         Map[str Type]::new = bindings
         if generic.base store.structs.get Option::Some(casa_struct) is then
             for pair in generic.params.iter casa_struct.type_vars.iter.zip do
-                pair.second pair.first bindings.set = bindings
+                pair.second clone_type pair.first.clone bindings.set = bindings
             done
             for member in casa_struct.members.iter do
                 bindings member.typ.substitute_t = member_type
@@ -149,7 +149,7 @@ fn type_contains_borrow
             done
         elif generic.base store.enums.get Option::Some(casa_enum) is then
             for pair in generic.params.iter casa_enum.type_vars.iter.zip do
-                pair.second pair.first bindings.set = bindings
+                pair.second clone_type pair.first.clone bindings.set = bindings
             done
             for payload_types in casa_enum.variant_types.values.iter do
                 for payload_type in payload_types.iter do
@@ -216,8 +216,12 @@ fn contains_op ops:mut$List[Op] candidate:mut$Op -> bool {
 impl TypedValue {
     fn resolve_literals self:$TypedValue target:$Type diagnostics:mut$Diagnostics -> bool {
         true = valid
-        for literal in self.literals.iter do
-            if diagnostics target literal.resolve_literal ! then false = valid fi
+        0 (u64) = literal_index
+        while literal_index self.literals.length > do
+            if diagnostics target literal_index self.literals.get.resolve_literal ! then
+                false = valid
+            fi
+            1 += literal_index
         done
         valid
     }
@@ -272,10 +276,13 @@ impl TypedStack {
         while index self.values.length > do
             index self.values.get = value
             index candidate.values.get = candidate_value
-            for candidate_literal in candidate_value.literals.iter do
+            0 (u64) = literal_index
+            while literal_index candidate_value.literals.length > do
+                literal_index candidate_value.literals.get = candidate_literal
                 if candidate_literal value.literals contains_op ! then
                     candidate_literal value.literals.push
                 fi
+                1 += literal_index
             done
             1 += index
         done
@@ -560,7 +567,10 @@ impl Op {
         if "array" generic.base != 1 generic.params.length != || then false return fi
         true = valid
         0 generic.params.get = element_type
-        for item in items.iter do
+        0 (u64) = item_index
+        while item_index items.length > do
+            item_index items.get = item
+            1 += item_index
             if item.has_numeric_literal diagnostics element_type item.resolve_literal ! && then
                 false = valid
             fi
@@ -607,7 +617,10 @@ impl Op {
 }
 
 fn resolve_default_literals ops:mut$List[Op] diagnostics:mut$Diagnostics {
-    for op in ops.iter do
+    0 (u64) = default_op_index
+    while default_op_index ops.length > do
+        default_op_index ops.get = op
+        1 += default_op_index
         if op.type_hint.is_none then
             if op.value OpValue::PushInt is then
                 diagnostics TYPE_I64_T op.resolve_literal drop
@@ -929,15 +942,23 @@ impl TypeChecker {
 
     fn remove_owner_events_for_names tc:mut$TypeChecker names:mut$List[str] {
         List[OwnerEvent]::new = remaining
-        for event in tc.owner_events.iter do
-            if event.name names string_list_contains ! then event remaining.push fi
+        0 (u64) = event_index
+        while event_index tc.owner_events.length > do
+            if event_index tc.owner_events.get_ref.name names string_list_contains ! then
+                event_index tc.owner_events.get remaining.push
+            fi
+            1 += event_index
         done
         remaining = tc.owner_events
     }
 
     fn attach_owner_cleanups tc:mut$TypeChecker op:mut$Op names:mut$List[str] remove:bool {
         names tc.owner_cleanups_for_names = cleanups
-        for cleanup in cleanups.iter do cleanup op tc.store add_owner_cleanup done
+        0 (u64) = cleanup_index
+        while cleanup_index cleanups.length > do
+            cleanup_index cleanups.get op tc.store add_owner_cleanup
+            1 += cleanup_index
+        done
         if remove then names tc.remove_owner_events_for_names fi
     }
 
@@ -1386,7 +1407,7 @@ impl TypeChecker {
         literal_bindings:mut$Map[str List[Op]]
     {
         if type_variable literal_bindings.get Option::Some(bound_literals) is then
-            for literal in literals.iter do literal bound_literals.push done
+            literals.shallow_copy bound_literals.append
         else
             literals.shallow_copy type_variable.clone literal_bindings.set drop
         fi
@@ -3257,10 +3278,12 @@ fn trait_method_effects_match
     generic_declaration:bool
 -> bool {
     List[Parameter]::new = actual_parameters
-    for parameter in actual.parameters.iter do
-        if parameter.name "__trait_" str::starts_with ! then
-            parameter actual_parameters.push
+    0 (u64) = actual_index
+    while actual_index actual.parameters.length > do
+        if actual_index actual.parameters.get_ref.name "__trait_" str::starts_with ! then
+            actual_index actual.parameters.get actual_parameters.push
         fi
+        1 += actual_index
     done
     actual.return_types.shallow_copy actual_parameters StackEffect::new = visible_actual
     visible_actual expected bind_stack_effect_pattern = expected_match
@@ -3295,7 +3318,7 @@ fn type_has_trait_shape
         trait_def CasaTrait::type_params = tparams
         if trait_args.length tparams.length == then
             for sub_pair in trait_args.iter tparams.iter.zip do
-                sub_pair.second sub_pair.first trait_subs.set = trait_subs
+                sub_pair.second clone_type sub_pair.first.clone trait_subs.set = trait_subs
             done
         fi
     fi
@@ -3596,10 +3619,12 @@ impl TypeChecker {
 
         # Collect non-hidden parameters
         List[Parameter]::new = non_hidden
-        for param in effect StackEffect::parameters.iter do
-            if param Parameter::name "__trait_" str::starts_with ! then
-                param non_hidden.push
+        0 (u64) = param_index
+        while param_index effect StackEffect::parameters.length > do
+            if param_index effect StackEffect::parameters.get_ref Parameter::name "__trait_" str::starts_with ! then
+                param_index effect StackEffect::parameters.get non_hidden.push
             fi
+            1 += param_index
         done
 
         # Peek at stack to bind type variables
@@ -3740,6 +3765,30 @@ impl TypeChecker {
 # ============================================================================
 
 impl TypeChecker {
+    # ADR-0112: a typed borrow reconstructed from a raw address inside `unsafe`
+    # is anchored conservatively to every compatible borrowed input of the
+    # enclosing function. A shared borrow accepts any borrowed input; an
+    # exclusive borrow accepts only exclusive inputs (ADR-0113). A function with
+    # no compatible input yields no origin, so the borrow cannot escape.
+    fn raw_borrow_input_origins
+        self:mut$TypeChecker
+        function_opt:mut$Option[Function]
+        exclusive:bool
+    -> Option[List[str]] {
+        Option[List[str]]::None = origins
+        if function_opt Option::Some(function) is then
+            for parameter in function.stack_effect.parameters.iter do
+                if exclusive then
+                    if self.store parameter.typ type_has_exclusive_borrow ! then continue fi
+                elif self.store parameter.typ type_has_borrow ! then
+                    continue
+                fi
+                exclusive parameter.name origins add_origin = origins
+            done
+        fi
+        origins
+    }
+
     fn is_return_origin_valid self:mut$TypeChecker function:mut$Function origin:mut$str -> bool {
         origin origin_is_exclusive = exclusive
         origin origin_place = place
@@ -3943,7 +3992,11 @@ impl TypeChecker {
                 function tc.resolve_declared_return_borrow_capabilities
                 function tc.validate_borrow_returns
             fi
-            for return_value in tc.stack.values.iter do return_value tc.consume_value done
+            0 (u64) = return_index
+            while return_index tc.stack.values.length > do
+                return_index tc.stack.values.get tc.consume_value
+                1 += return_index
+            done
             op tc.attach_all_owner_cleanups
             false = tc.path_continues
             if tc.has_return_types ! then
@@ -4147,7 +4200,7 @@ impl TypeChecker {
                 Map[str Type]::new = bindings
                 Set[str]::new = type_vars
                 for type_var in casa_enum CasaEnum::type_vars.iter do
-                    type_var type_vars.add = type_vars
+                    type_var.clone type_vars.add = type_vars
                 done
                 for expected in inner_types.iter do
                     if expected.type_var_name Option::Some(tv_name) is tv_name type_vars.has && then
@@ -4374,7 +4427,7 @@ impl TypeChecker {
                     List[str]::new = missing
                     for variant_name in end_enum CasaEnum::variants.iter do
                         if variant_name covered_set.has ! then
-                            variant_name missing.push
+                            variant_name.clone missing.push
                         fi
                     done
                     if 0 missing.length != then
@@ -4615,14 +4668,14 @@ fn instantiate_default_trait_method
         if semantics.trait_type Option::Some(resolved_trait_type) is then
             if resolved_trait_type.type_params Option::Some(trait_args) is then
                 for pair in trait_args.iter type_params.iter.zip do
-                    pair.second pair.first trait_subs.set = trait_subs
+                    pair.second clone_type pair.first.clone trait_subs.set = trait_subs
                 done
             fi
         fi
         # Infer trait type params from concrete method stack effects
         Set[str]::new = type_param_set
         for type_param in type_params.iter do
-            type_param type_param_set.add = type_param_set
+            type_param.clone type_param_set.add = type_param_set
         done
         for infer_method in trait_def CasaTrait::methods.iter do
             if 0 infer_method TraitMethod::default_ops.length == then
@@ -4650,7 +4703,7 @@ fn instantiate_default_trait_method
     # Add trait type params as function type vars for generic receivers
     if fn_base_opt.is_some then
         for type_param in type_params.iter do
-            type_param resolved_stack_effect StackEffect::type_vars.add = new_tvs
+            type_param.clone resolved_stack_effect StackEffect::type_vars.add = new_tvs
             new_tvs resolved_stack_effect StackEffect::set_type_vars
         done
     fi
@@ -4659,7 +4712,7 @@ fn instantiate_default_trait_method
 
     # Add method-level type vars to stack effect
     for method_type_var in default_method TraitMethod::type_vars.iter do
-        method_type_var resolved_stack_effect StackEffect::type_vars.add = new_tvs
+        method_type_var.clone resolved_stack_effect StackEffect::type_vars.add = new_tvs
         new_tvs resolved_stack_effect StackEffect::set_type_vars
     done
 
@@ -4681,7 +4734,10 @@ fn instantiate_default_trait_method
         store receiver default_trait_type cloned_body qualify_default_method_calls
     fi
     0 (u64) = cloned_lambda_index
-    for body_op in cloned_body.iter do
+    0 (u64) = body_index
+    while body_index cloned_body.length > do
+        body_index cloned_body.get = body_op
+        1 += body_index
         if body_op.value OpValue::FnPush(lambda_name) is then
             if lambda_name "lambda__" str::starts_with ! then continue fi
             lambda_name store.functions.get = lambda_opt
@@ -4709,9 +4765,7 @@ fn instantiate_default_trait_method
             1 += cloned_lambda_index
         fi
     done
-    for body_op in cloned_body.iter do
-        body_op synth_ops.push
-    done
+    cloned_body.shallow_copy synth_ops.append
 
     # Create, register, and typecheck the function
     resolved_stack_effect empty_location synth_ops synth_fn_name Function::with_stack_effect = synth_fn
@@ -5311,6 +5365,10 @@ impl TypeChecker {
                     cast_value checker.consume_value
                 fi
                 if checker.store cast_type type_has_borrow then
+                    if cast_origins.is_none 0 checker.unsafe_depth != && then
+                        cast_type.is_exclusive_borrow function_opt
+                        checker.raw_borrow_input_origins = cast_origins
+                    fi
                     cast_origins cast_type checker.stack_push_origins
                 else
                     cast_type checker.stack_push_type
