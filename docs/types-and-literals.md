@@ -87,7 +87,7 @@ Use `\{` and `\}` for literal braces.
 | Type | Purpose |
 |---|---|
 | `ptr` | A raw memory address |
-| `array[T]` | A fixed-length array literal |
+| `array[T]` | An owned fixed-length sequence |
 | `fn[inputs -> outputs]` | A function value |
 | `Option[T]` | A value that can be absent |
 | `Result[T E]` | A success value or an error |
@@ -101,7 +101,9 @@ Array literals infer one common element type:
 [] = names:array[str]
 ```
 
-The annotation gives an empty array its element type. See
+The annotation gives an empty array its element type. Every evaluation of an
+array literal produces an independent owned array that takes ownership of its
+elements. See
 [Collections](collections.md),
 [Optional Values and Errors](optional-values-and-errors.md),
 [Functions and Lambdas](functions-and-lambdas.md), [Structs and
