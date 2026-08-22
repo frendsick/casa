@@ -71,7 +71,7 @@ The shared front-end compiler output containing exact compiler sources, collecte
 _Avoid_: CLI compile result, LSP compiler snapshot, global compiler result
 
 **Array literal**:
-A bracket-delimited list of values (`[1, 2, 3]`, `["a", "b"]`, `[[1], [2]]`, `[my_fn]`) that produces an independent owned, fixed-length `array[T]`. The runtime length is not part of the type. Elements may be primitive literals, enum variants, nested array literals, function references, lambda expressions, or struct literals; storage placement and unobservable sharing remain compiler decisions.
+A bracket-delimited list of values (`[1, 2, 3]`, `["a", "b"]`, `[[1], [2]]`, `[my_fn]`) that produces an independent owned `array[T N]`, where the element count `N` is part of the type. Elements may be primitive literals, enum variants, nested array literals, function references, lambda expressions, or struct literals; storage placement and unobservable sharing remain compiler decisions.
 _Avoid_: Static array, const array, inline array
 
 ### Type representation
@@ -248,7 +248,7 @@ _Avoid_: Release lint, tag lint
 - PartialOrd owns `partial_cmp` and the `lt`, `le`, `gt`, and `ge` operator methods; Ord extends PartialOrd and Eq, adds `cmp`, and provides the inherited `partial_cmp` default. The compiler validates the complete effective inherited shape.
 - `Clone` is an explicit, infallible trait operation that may allocate or run user code; allocation failure terminates. Stack operations and implicit reuse never invoke it.
 - `Clone` is declared in `std`, not injected by the compiler. The compiler recognizes its canonical identity for explicit `derives Clone` generation and for the fieldwise Clone fallback that standard `Copy` requires. It generates no other Clone bodies.
-- `array[T]` owns fixed-length runtime-sized storage and is never `Copy`; it implements `Clone` when `T: Clone`. `List[T]` remains the growable sequence.
+- `array[T N]` owns exactly `N` elements, stores no length word, and is never `Copy`; it implements `Clone` when `T: Clone`. A runtime-length range is a separate borrowed view, and `List[T]` remains the growable sequence.
 - Standard value owners implement `Clone` when their owned contents do; identity-bearing resources and exclusive borrows do not receive automatic implementations.
 - Structs and enums may opt into generated explicit duplication with `derives Clone`; derivation is conditional on every owned field or payload implementing `Clone` and never implies `Copy`.
 - Derived trait methods are fallbacks: one handwritten customization block may override generated methods and merge into the same trait implementation. Multiple handwritten implementations remain errors, and source order has no effect.

@@ -1,4 +1,5 @@
 # Arrays are fixed-length Clone owners
+status: superseded by ADR-0152
 
 `array[T]` is an owned fixed-length sequence. Its length is chosen when the value is constructed and cannot subsequently change, but the length is runtime metadata rather than part of the source type. Arrays of different lengths therefore share the same `array[T]` type. `List[T]` remains the growable sequence.
 
