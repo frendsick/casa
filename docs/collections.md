@@ -25,6 +25,21 @@ import "std"
 
 Array length cannot change. Use `List[T]` when values must be added or removed.
 
+Each evaluation of an array literal produces an independent owned array. The
+literal takes ownership of its elements, so an element binding cannot be used
+again afterwards:
+
+```casa
+Resource { id: 1 } = resource
+[resource] = owned:array[Resource]
+resource drop    # error: owner `resource` was already moved
+```
+
+The array destroys its elements when it goes out of scope. `clone` produces an
+independent array when `T: Clone`, and `array[T]` is never `Copy`, even when `T`
+is, because it owns indirect storage. Indexing past the last element terminates
+the program.
+
 ## Lists
 
 `List[T]` is a growable sequence:
