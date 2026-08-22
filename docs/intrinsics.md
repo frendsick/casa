@@ -87,6 +87,24 @@ unaligned addresses and use little-endian byte order.
 allocation is non-null. Double free, use after free, and freeing an interior or
 foreign pointer are undefined behavior.
 
+### Forming a borrow from a raw address
+
+Casting a loaded word to a borrow type inside `unsafe` produces a typed borrow.
+A raw address carries no lifetime, so the result is anchored conservatively to
+every compatible borrowed input of the enclosing function: a `$T` accepts any
+borrowed input, a `mut$T` only exclusive ones. A function with no compatible
+input cannot return the borrow and is rejected with `Borrowed return has no live
+input origin`.
+
+```casa
+fn nth [T] array:$array[T] n:u64 -> $T {
+    unsafe { array (ptr) load64 (ptr) n 8 * + load64 ($T) }
+}
+```
+
+The unsafe body promises that the address stays valid for as long as the
+anchored input. See ADR-0112 and ADR-0113.
+
 `unsafe fn memcpy destination:ptr source:ptr count:u64` is a `std` function,
 not an intrinsic. It becomes available after `import "std"` and copies raw
 bytes. Its call must also be inside an `unsafe` block. Prefer typed collections
