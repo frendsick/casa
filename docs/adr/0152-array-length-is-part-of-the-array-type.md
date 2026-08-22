@@ -7,10 +7,17 @@ so its size is `N * size_of[T]` and the compiler may place it inline in a struct
 field or on the stack instead of allocating it.
 
 `N` is a constant type parameter that is also usable as a value inside the
-declaration that binds it. Array length therefore stays ordinary library code:
+declaration that binds it. The binding site marks it with `const` and states
+its type, as in `[T const N:u64]`. The marker is needed because a bare name in
+the bracket list already binds a type variable. After `const`, the `:`
+introduces the constant's type rather than a trait bound, because a constant
+parameter cannot carry one. A use site writes the constant directly, as in
+`array[i64 3]`. An array length is a `u64`, so it is non-negative and
+`array[T 0]` is a legal type. Array length therefore stays ordinary library
+code:
 
 ```casa
-fn length [T N] self:$array[T N] -> u64 { N }
+fn length [T const N:u64] self:$array[T N] -> u64 { N }
 ```
 
 An index that is a compile-time constant is checked against `N` during
@@ -54,7 +61,10 @@ an array literal still produces an independent owned value.
   sized, the runtime-length view is borrowed, and `List[T]` stays growable.
   `List::slice` and `List::to_array` produce the view.
 - A function that accepts arrays of any length takes a constant length
-  parameter, such as `fn total [T N] values:$array[T N] -> T`. Under ADR-0069
-  each distinct `N` monomorphizes separately.
+  parameter, such as `fn total [T const N:u64] values:$array[T N] -> T`. Under
+  ADR-0069 each distinct `N` monomorphizes separately.
 - Converting an owned array into a list still transfers its allocation, but the
   list must record the length that the array no longer stores.
+- A constant parameter states its own type, so array length needs `u64` only.
+  Constant parameters of other types are a later extension rather than a syntax
+  change.
