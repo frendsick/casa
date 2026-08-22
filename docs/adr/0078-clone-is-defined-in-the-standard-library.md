@@ -1,4 +1,5 @@
 # Clone is defined in the standard library
+status: implicit Clone body consequence narrowed by ADR-0084 and ADR-0092
 
 `Clone` is declared as an ordinary trait in `std` rather than injected by the compiler:
 
@@ -21,5 +22,5 @@ The compiler recognizes the canonical standard-library trait identity when expan
 
 - `import "std" { Clone }` makes `[T: Clone]`, `derives Clone`, and explicit Clone implementations available.
 - Clone can evolve through its visible standard-library declaration, subject to its language-level contract.
-- The compiler owns no implicit Clone method bodies; bodies come from standard implementations, handwritten implementations, or explicit `derives Clone` generation.
+- The compiler generates Clone method bodies in two documented cases only: explicit `derives Clone`, and the fieldwise fallback that the standard `Copy: Clone` declaration requires under ADR-0084 and ADR-0092. Every other body comes from a standard or handwritten implementation, and an explicit implementation always takes precedence over a generated one.
 - Casa adds no general implicit prelude solely for Clone.

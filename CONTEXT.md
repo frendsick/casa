@@ -247,7 +247,7 @@ _Avoid_: Release lint, tag lint
 - PartialEq owns the shared `eq` and `ne` operator methods; Eq extends PartialEq as the explicit lawful-total marker. The compiler validates Eq's effective inherited shape, and `derives Eq` implements both traits.
 - PartialOrd owns `partial_cmp` and the `lt`, `le`, `gt`, and `ge` operator methods; Ord extends PartialOrd and Eq, adds `cmp`, and provides the inherited `partial_cmp` default. The compiler validates the complete effective inherited shape.
 - `Clone` is an explicit, infallible trait operation that may allocate or run user code; allocation failure terminates. Stack operations and implicit reuse never invoke it.
-- `Clone` is declared in `std`, not injected by the compiler. The compiler recognizes its canonical identity only for explicit `derives Clone` generation.
+- `Clone` is declared in `std`, not injected by the compiler. The compiler recognizes its canonical identity for explicit `derives Clone` generation and for the fieldwise Clone fallback that standard `Copy` requires. It generates no other Clone bodies.
 - `array[T]` owns fixed-length runtime-sized storage and is never `Copy`; it implements `Clone` when `T: Clone`. `List[T]` remains the growable sequence.
 - Standard value owners implement `Clone` when their owned contents do; identity-bearing resources and exclusive borrows do not receive automatic implementations.
 - Structs and enums may opt into generated explicit duplication with `derives Clone`; derivation is conditional on every owned field or payload implementing `Clone` and never implies `Copy`.

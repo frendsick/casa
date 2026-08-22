@@ -2,6 +2,8 @@
 
 Standard-library parsing accepts decimal floating-point text plus `NaN`, `inf`, and `-inf`, returning ordinary `Option[f32]` or `Option[f64]`. Formatting emits the shortest locale-independent decimal text that parses back to the same floating-point value at the same width.
 
+The round trip covers every finite value, both infinities, and both signed zeros. NaN is the one exception: it formats as the canonical `NaN`, parses back as some NaN of the same width, and keeps neither its payload nor its sign.
+
 ## Consequences
 
 - Formatting uses `.` as the decimal separator regardless of process locale.
