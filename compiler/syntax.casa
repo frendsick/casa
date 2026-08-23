@@ -11,6 +11,34 @@ import "semantics"
 import "selective_import"
 
 # ============================================================================
+# Structural layout spans (formatter facts)
+#
+# Data-only source-offset ranges over the structures whose layout `casafmt`
+# owns. `start` and `close` are the source byte offsets of the opening and
+# closing tokens. Recorded only in syntax-only mode (see `analyze_syntax`); no
+# spans are produced during normal compilation.
+# ============================================================================
+
+enum SyntaxSpanKind {
+    Definition
+    DelimitedForm
+    StructBody
+    EnumBody
+}
+
+struct SyntaxSpan {
+    kind:  SyntaxSpanKind
+    start: u64
+    close: u64
+}
+
+impl SyntaxSpan: Clone {
+    fn clone self:$SyntaxSpan -> SyntaxSpan {
+        self.close self.start self.kind SyntaxSpan
+    }
+}
+
+# ============================================================================
 # Parser struct and parse/resolve result
 #
 # `Parser` owns parse-private state. Later compiler phases receive only the
@@ -22,6 +50,8 @@ struct ParseState {
     output_usable:     List[bool]
     recovery_required: List[bool]
     store_mutated:     List[bool]
+    spans:             List[SyntaxSpan]
+    record_spans:      List[bool]
 }
 
 impl ParseState {
@@ -32,7 +62,10 @@ impl ParseState {
         false recovery_required.push
         List[bool]::new = output_usable
         true output_usable.push
-        store_mutated recovery_required output_usable diagnostics ParseState
+        List[SyntaxSpan]::new = spans
+        List[bool]::new = record_spans
+        false record_spans.push
+        record_spans spans store_mutated recovery_required output_usable diagnostics ParseState
     }
 
     fn record_error self:mut$ParseState kind:ErrorKind message:str location:mut$Location {
@@ -80,6 +113,20 @@ impl ParseState {
     fn store_was_mutated self:mut$ParseState -> bool {
         0 self.store_mutated.get
     }
+
+    fn enable_span_recording self:mut$ParseState {
+        true 0 self.record_spans.set
+    }
+
+    fn spans_enabled self:mut$ParseState -> bool {
+        0 self.record_spans.get
+    }
+
+    # Record one structural layout span. No-op unless span recording is on.
+    fn record_span self:mut$ParseState kind:SyntaxSpanKind start:u64 close:u64 {
+        if self.spans_enabled ! then return fi
+        close start kind SyntaxSpan self.spans.push
+    }
 }
 
 struct Parser {
@@ -113,6 +160,7 @@ struct SyntaxCommentFact {
 struct SyntaxFacts {
     meaningful_tokens: List[SyntaxTokenFact]
     comments:          List[SyntaxCommentFact]
+    spans:             List[SyntaxSpan]
 }
 
 struct SyntaxResult {
@@ -326,6 +374,11 @@ impl TokenCursor {
 
     fn save self:mut$TokenCursor -> u64 {
         self TokenCursor::pos
+    }
+
+    # Source byte offset of the token just consumed (at pos - 1).
+    fn previous_offset self:mut$TokenCursor -> u64 {
+        self.pos 1 - self.tokens.get Token::location Location::span Span::offset
     }
 
     fn restore self:mut$TokenCursor saved:u64 {
@@ -760,6 +813,11 @@ fn get_op_array parser:mut$Parser function_name:mut$str cursor:mut$TokenCursor -
         fi
         "," cursor expect_delimiter drop
     done
+    if parser.state.spans_enabled then
+        cursor.previous_offset
+        open_token Token::location Location::span Span::offset
+        SyntaxSpanKind::DelimitedForm parser.state.record_span
+    fi
     open_token Token::location items OpValue::PushArray Op::new
 }
 
@@ -1794,7 +1852,7 @@ fn expect_function_name cursor:mut$TokenCursor -> Token {
 }
 
 fn parse_function parser:mut$Parser cursor:mut$TokenCursor -> Function {
-    fallback_token "fn" cursor expect_token_value.unwrap_or drop
+    fallback_token "fn" cursor expect_token_value.unwrap_or = fn_token
     cursor expect_function_name = name_token
 
     # Parse optional type parameters
@@ -1862,6 +1920,12 @@ fn parse_function parser:mut$Parser cursor:mut$TokenCursor -> Function {
     name_token Token::value cursor parser parse_block_ops = body_ops
     body_ops ops.append
 
+    if parser.state.spans_enabled then
+        cursor.previous_offset
+        fn_token Token::location Location::span Span::offset
+        SyntaxSpanKind::Definition parser.state.record_span
+    fi
+
     effect name_token Token::location ops name_token Token::value Function::with_stack_effect = function
     variables function Function::set_variables
     function
@@ -1904,14 +1968,21 @@ fn parse_enum parser:mut$Parser cursor:mut$TokenCursor -> CasaEnum {
 
     cursor parse_derived_traits = derived_traits
 
-    fallback_token "{" cursor expect_token_value.unwrap_or drop
+    fallback_token "{" cursor expect_token_value.unwrap_or = enum_open_token
     List[str]::new = variants
     Map[str List[Type]]::new = variant_types
     Map[str Location]::new = variant_locations
 
     while true do
         fallback_token cursor expect_token.unwrap_or = variant_token
-        if "}" variant_token Token::value == then break fi
+        if "}" variant_token Token::value == then
+            if parser.state.spans_enabled then
+                variant_token Token::location Location::span Span::offset
+                enum_open_token Token::location Location::span Span::offset
+                SyntaxSpanKind::EnumBody parser.state.record_span
+            fi
+            break
+        fi
         if TokenKind::Identifier variant_token Token::kind != then
             variant_token Token::location "Expected variant name" ErrorKind::UnexpectedToken parser.state.record_error
         fi
@@ -2228,11 +2299,18 @@ fn parse_struct parser:mut$Parser cursor:mut$TokenCursor -> CasaStruct {
 
     List[Member]::new = members
     type_vars string_list_to_set = struct_type_vars
-    fallback_token "{" cursor expect_token_value.unwrap_or drop
+    fallback_token "{" cursor expect_token_value.unwrap_or = struct_open_token
 
     while true do
         fallback_token cursor expect_token.unwrap_or = member_token
-        if "}" member_token Token::value == then break fi
+        if "}" member_token Token::value == then
+            if parser.state.spans_enabled then
+                member_token Token::location Location::span Span::offset
+                struct_open_token Token::location Location::span Span::offset
+                SyntaxSpanKind::StructBody parser.state.record_span
+            fi
+            break
+        fi
         if TokenKind::Identifier member_token Token::kind != then
             member_token Token::location "Expected member name" ErrorKind::UnexpectedToken parser.state.record_error
         fi
@@ -2390,6 +2468,7 @@ fn parse_trait parser:mut$Parser cursor:mut$TokenCursor -> CasaTrait {
                 next Token::location "Expected method declaration in trait" ErrorKind::UnexpectedToken parser.state.record_error
                 false = parse_trait_loop
             else
+                next Token::location Location::span Span::offset = trait_fn_offset
                 cursor.pop drop # consume fn
                 cursor expect_function_name = method_name
                 if "drop" method_name Token::value == then
@@ -2418,6 +2497,11 @@ fn parse_trait parser:mut$Parser cursor:mut$TokenCursor -> CasaTrait {
                 if cursor.peek Option::Some(body_peek) is then
                     if "{" body_peek Token::value == then
                         f"{name_token Token::value}::{method_name Token::value}" cursor parser parse_block_ops = default_ops
+                        if parser.state.spans_enabled then
+                            cursor.previous_offset
+                            trait_fn_offset
+                            SyntaxSpanKind::Definition parser.state.record_span
+                        fi
                     fi
                 fi
 
@@ -4383,7 +4467,7 @@ fn logical_comment_text token:$Token -> str {
     token.value start token.value.length start - str::substring
 }
 
-fn build_syntax_facts source:$str tokens:$List[Token] -> SyntaxFacts {
+fn build_syntax_facts source:$str tokens:$List[Token] spans:List[SyntaxSpan] -> SyntaxFacts {
     List[SyntaxTokenFact]::new = meaningful_tokens
     List[SyntaxCommentFact]::new = comments
     0 (u64) = meaningful_count
@@ -4396,16 +4480,24 @@ fn build_syntax_facts source:$str tokens:$List[Token] -> SyntaxFacts {
             token logical_comment_text = text
             line_has_meaningful_token meaningful_count text SyntaxCommentFact comments.push
         elif TokenKind::Eof token.kind != then
-            token.location.span.length = length
-            token.location.span.offset = offset
-            source offset length str::substring = spelling
-            token.kind spelling SyntaxTokenFact meaningful_tokens.push
-            1 += meaningful_count
-            true = line_has_meaningful_token
+            # Commas are optional separators with no semantic content (every
+            # grammar site consumes and drops them). Exclude them so the
+            # formatter may canonicalize delimited-form commas, including the
+            # trailing comma on an expanded form, without tripping the
+            # token-equality safety net.
+            "," token.value == TokenKind::Delimiter token.kind == && = is_separator
+            if is_separator ! then
+                token.location.span.length = length
+                token.location.span.offset = offset
+                source offset length str::substring = spelling
+                token.kind spelling SyntaxTokenFact meaningful_tokens.push
+                1 += meaningful_count
+                true = line_has_meaningful_token
+            fi
         fi
     done
 
-    comments meaningful_tokens SyntaxFacts
+    spans comments meaningful_tokens SyntaxFacts
 }
 
 fn syntax_facts_match expected:$SyntaxFacts actual:$SyntaxFacts -> bool {
@@ -4446,10 +4538,11 @@ fn analyze_syntax source:$str file:$str -> SyntaxResult {
     tokens syntax_parser_tokens = parser_tokens
     sources lex_result.diagnostics symbol_store_new Parser::new = parser
     true = parser.syntax_only
+    parser.state.enable_span_recording
     parser_tokens parser parse_ops drop
 
     if parser.state.has_usable_output parser.state.diagnostics.has_errors ! && then
-        tokens source build_syntax_facts = facts
+        parser.state.spans.clone tokens source build_syntax_facts = facts
         parser.state.diagnostics facts Option::Some tokens SyntaxResult
     else
         parser.state.diagnostics Option[SyntaxFacts]::None tokens SyntaxResult

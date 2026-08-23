@@ -138,6 +138,34 @@ Trailing spaces or tabs at the end of a line are forbidden.
 [1,2,3]List::from_array = nums
 ```
 
+- A delimited form has one canonical layout regardless of how the source spaces,
+  separates, or line-breaks its items. Commas are optional separators in the
+  source; the formatter always writes them.
+- Keep the form **compact on one line** when the canonical line fits within 100
+  characters.
+- When it does not fit, **expand it**: put one item on each indented line, add a
+  **trailing comma** after the last item, align the closing `]` with the column
+  of the opener, and keep any composition suffix on the closing `]` line.
+
+```casa
+# Fits within 100 characters: compact.
+[1, 2, 3] sum
+
+# Exceeds 100 characters: expand, trailing comma, aligned `]`, suffix on `]`.
+[
+    11111111,
+    22222222,
+    33333333,
+    44444444,
+    55555555,
+    66666666,
+    77777777,
+    88888888,
+    99999999,
+    10101010,
+] values
+```
+
 ---
 
 ## Enum variant data parentheses
@@ -178,7 +206,21 @@ struct Token {
 }
 ```
 
-- One field per line. Never put multiple fields on the same line.
+- One field or variant per line, regardless of how the source groups them.
+  Never put multiple fields or variants on the same line.
+
+```casa
+# Source may group variants; the formatter splits them.
+enum Color { Red Green Blue }
+```
+
+```casa
+enum Color {
+    Red
+    Green
+    Blue
+}
+```
 
 ---
 
@@ -198,6 +240,28 @@ fn add a:i64 b:i64 -> i64 {
     a b +
 }
 ```
+
+### Inline definitions
+
+A top-level `fn`, method, or trait-default definition is joined onto **one
+line** only when all of these hold:
+
+- The complete one-line form fits within 100 characters.
+- The declaration does not wrap.
+- The body has at most one nonblank composition line, with no comment, no nested
+  block, and no delimited form.
+
+Write an empty body as `{ }`. The formatter joins an eligible definition even
+when the source splits its braces across lines:
+
+```casa
+fn add a:i64 b:i64 -> i64 { a b + }
+
+fn noop { }
+```
+
+Any definition that is not eligible uses a **multiline body**. This rule does
+not apply to lambdas or match-arm blocks.
 
 ### Wrapped form
 
