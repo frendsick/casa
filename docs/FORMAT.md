@@ -124,7 +124,11 @@ Trailing spaces or tabs at the end of a line are forbidden.
 
 ## Array and list literals
 
-- Items are comma-separated with a space after each comma.
+- Items MUST be comma-separated, with a space after each comma. A missing comma
+  between items is a syntax error (see
+  [ADR-0153](adr/0153-array-literals-require-commas-between-items.md)).
+- A single trailing comma before `]` is allowed. The compact form omits it; the
+  expanded form adds it.
 - One space before the opening `[` when it follows another token:
 
 ```casa
@@ -136,6 +140,34 @@ Trailing spaces or tabs at the end of a line are forbidden.
 # Wrong
 ["0","1","2"]
 [1,2,3]List::from_array = nums
+[1 2 3]              # missing commas: syntax error
+```
+
+- A delimited form has one canonical layout regardless of how the source
+  line-breaks its items or whether it carries a trailing comma.
+- Keep the form **compact on one line** when the canonical line fits within 100
+  characters.
+- When it does not fit, **expand it**: put one item on each indented line, add a
+  **trailing comma** after the last item, align the closing `]` with the column
+  of the opener, and keep any composition suffix on the closing `]` line.
+
+```casa
+# Fits within 100 characters: compact.
+[1, 2, 3] sum
+
+# Exceeds 100 characters: expand, trailing comma, aligned `]`, suffix on `]`.
+[
+    11111111,
+    22222222,
+    33333333,
+    44444444,
+    55555555,
+    66666666,
+    77777777,
+    88888888,
+    99999999,
+    10101010,
+] values
 ```
 
 ---
@@ -178,7 +210,21 @@ struct Token {
 }
 ```
 
-- One field per line. Never put multiple fields on the same line.
+- One field or variant per line, regardless of how the source groups them.
+  Never put multiple fields or variants on the same line.
+
+```casa
+# Source may group variants; the formatter splits them.
+enum Color { Red Green Blue }
+```
+
+```casa
+enum Color {
+    Red
+    Green
+    Blue
+}
+```
 
 ---
 
@@ -198,6 +244,28 @@ fn add a:i64 b:i64 -> i64 {
     a b +
 }
 ```
+
+### Inline definitions
+
+A top-level `fn`, method, or trait-default definition is joined onto **one
+line** only when all of these hold:
+
+- The complete one-line form fits within 100 characters.
+- The declaration does not wrap.
+- The body has at most one nonblank composition line, with no comment, no nested
+  block, and no delimited form.
+
+Write an empty body as `{ }`. The formatter joins an eligible definition even
+when the source splits its braces across lines:
+
+```casa
+fn add a:i64 b:i64 -> i64 { a b + }
+
+fn noop { }
+```
+
+Any definition that is not eligible uses a **multiline body**. This rule does
+not apply to lambdas or match-arm blocks.
 
 ### Wrapped form
 

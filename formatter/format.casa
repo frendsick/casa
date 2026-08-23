@@ -76,10 +76,12 @@ struct Formatter {
     source: str
     output: StringBuilder
     depth:  i64
+    spans:  List[SyntaxSpan]
 }
 
 impl Formatter {
-    fn new source:$str -> Formatter {
+    fn new source:$str spans:$List[SyntaxSpan] -> Formatter {
+        spans.clone
         0
         StringBuilder::new
         source.clone
@@ -273,6 +275,100 @@ fn is_field_line line:$List[Token] -> bool {
     if TokenKind::Identifier 0 line.get Token::kind != then false return fi
     if ":" 1 line.get Token::value != then false return fi
     true
+}
+
+# ============================================================================
+# Definition body shape: eligible for an inline body only when it has at most
+# one nonblank composition line and no comment or nested block. `body` holds the
+# tokens strictly between the definition braces, including newlines.
+# ============================================================================
+
+fn body_shape_inlineable body:$List[Token] -> bool {
+    0 (u64) = i
+    0 = tokens_on_line
+    0 = nonblank_lines
+    while i body.length > do
+        i body.get = t
+        if TokenKind::Newline t Token::kind == then
+            if 0 tokens_on_line != then 1 += nonblank_lines fi
+            0 = tokens_on_line
+        elif TokenKind::Comment t Token::kind == then
+            false return
+        elif t is_block_open_token then
+            false return
+        elif TokenKind::Keyword t Token::kind == "match" t Token::value == && then
+            false return
+        else
+            1 += tokens_on_line
+        fi
+        1 += i
+    done
+    if 0 tokens_on_line != then 1 += nonblank_lines fi
+    # Eligible with zero (empty body) or one nonblank composition line.
+    2 nonblank_lines <
+}
+
+# ============================================================================
+# Delimited-form helpers
+# ============================================================================
+
+# True when the logical line carries a block or control token, in which case the
+# delimited-form canonicalizer defers to the ordinary line path (it does not own
+# lambdas or control flow that ride along with a delimited form).
+fn line_has_block_or_control line:$List[Token] -> bool {
+    for t in line.iter do
+        t Token::value = v
+        if "{" v == "}" v == || then true return fi
+        if "=>" v == then true return fi
+        if t is_block_open_token then true return fi
+        if v is_block_close_value then true return fi
+        if v is_dedent_keyword then true return fi
+        if TokenKind::Keyword t Token::kind == "match" v == && then true return fi
+    done
+    false
+}
+
+# Split the tokens strictly between a delimited form's `[` and `]` into items.
+# Array items are single values; commas are optional separators. At bracket
+# depth 0 a comma ends an item, and two adjacent complete values (space
+# separated, no comma) also split, while `::`, `.`, and openers continue the
+# current value.
+# ponytail: merges adjacent nested groups like [[1][2]] into one item; repo and
+# spec inputs use single-value items, so this is sufficient.
+fn split_delimited_items inner:$List[Token] -> List[List[Token]] {
+    List[List[Token]]::new = items
+    List[Token]::new = current
+    0 = depth
+    0 (u64) = i
+    while i inner.length > do
+        i inner.get = tok
+        tok Token::value = v
+        "[" v == "(" v == || "{" v == || = is_open
+        "]" v == ")" v == || "}" v == || = is_close
+        if depth 0 == "," v == && then
+            if 0 current.length != then
+                current items.push
+                List[Token]::new = current
+            fi
+        else
+            if depth 0 == 0 current.length != && then
+                current.length 1 - current.get Token::value = prev_v
+                "::" prev_v == "." prev_v == || = prev_cont
+                "[" prev_v == "(" prev_v == || "{" prev_v == || = prev_open
+                "::" v == "." v == || is_open || = cur_cont
+                if prev_cont ! cur_cont ! && prev_open ! && then
+                    current items.push
+                    List[Token]::new = current
+                fi
+            fi
+            tok current.push
+            if is_open then 1 += depth fi
+            if is_close then 1 -= depth fi
+        fi
+        1 += i
+    done
+    if 0 current.length != then current items.push fi
+    items
 }
 
 # ============================================================================
@@ -513,114 +609,642 @@ impl Formatter {
     # Format struct/enum body with field alignment
     # ============================================================================
 
-    fn format_struct_body self:mut$Formatter tokens:$List[Token] pos:u64 -> u64 {
-        # Pass 1: scan for max field name length
-        pos = scan_pos
+    # Emit one struct field (with type alignment) or enum variant on its own line.
+    fn emit_struct_item self:mut$Formatter max_name_len:u64 is_enum:bool item:$List[Token] {
+        if is_enum ! item is_field_line && then
+            # Aligned field: name:  Type
+            self.depth make_indent self.output.append
+            0 item.get Token::value self.output.append
+            ":" self.output.append
+            0 item.get Token::value.length = cur_name_len
+            max_name_len cur_name_len - 1 + = padding
+            0 (u64) = pad_i
+            while pad_i padding > do
+                " " self.output.append
+                1 += pad_i
+            done
+            2 (u64) = type_i
+            while type_i item.length > do
+                self.source type_i item.get token_text self.output.append
+                type_i 1 + = next_type_i
+                if next_type_i item.length > then
+                    next_type_i item.get Token::value = field_next_val
+                    true = field_space
+                    if type_i item.get Token::value should_skip_space_after then
+                        false = field_space
+                    fi
+                    if field_next_val "[" == field_next_val "]" == || then
+                        false = field_space
+                    fi
+                    if field_space then " " self.output.append fi
+                fi
+                1 += type_i
+            done
+            "\n" self.output.append
+        else
+            item self.emit_line_tokens
+        fi
+    }
+
+    # Format a struct/enum body: header on one line, then every field or variant
+    # on its own indented line regardless of the input grouping, with struct-field
+    # type alignment. `line_tokens` is the header (holds the whole body when it fit
+    # on one source line). Returns the resume position.
+    fn emit_struct_body
+        self:mut$Formatter
+        line_tokens:$List[Token]
+        body_span:$SyntaxSpan
+        is_enum:bool
+        tokens:$List[Token]
+        pos:u64
+    -> u64 {
+        line_tokens.length = hn
+
+        # Locate the body-opening brace and emit the header through it.
+        hn = brace_idx
+        false = have_brace
+        0 (u64) = hi
+        while hi hn > have_brace ! && do
+            if "{" hi line_tokens.get Token::value == then
+                hi = brace_idx
+                true = have_brace
+            fi
+            1 += hi
+        done
+        List[Token]::new = header
+        0 (u64) = ci
+        while ci brace_idx 1 + > do
+            ci line_tokens.get header.push
+            1 += ci
+        done
+        header self.emit_line_tokens
+
+        # Gather body tokens (keep newlines so trailing comments can be told from
+        # standalone ones) up to the close brace.
+        List[Token]::new = body
+        false = closed
+        brace_idx 1 + = bi
+        while bi hn > closed ! && do
+            bi line_tokens.get = bt
+            if
+            "}" bt Token::value ==
+            bt Token::location Location::span Span::offset body_span.close ==
+            &&
+            then
+                true = closed
+            else
+                bt body.push
+                1 += bi
+            fi
+        done
+        pos = out_pos
+        if closed ! then
+            pos = si
+            false = mdone
+            while si tokens.length > mdone ! && do
+                si tokens.get = mt
+                1 += si
+                if mt is_eof_token then
+                    true = mdone
+                elif
+                "}" mt Token::value ==
+                mt Token::location Location::span Span::offset body_span.close ==
+                &&
+                then
+                    true = mdone
+                else
+                    mt body.push
+                fi
+            done
+            si = out_pos
+        fi
+
+        1 += self.depth
+
+        # For structs, find the longest field name for type alignment.
         0 (u64) = max_name_len
-        false = scan_done
-        while scan_pos tokens.length > scan_done ! && do
-            scan_pos tokens.get = scan_tok
-            if scan_tok is_eof_token then
-                true = scan_done
-            elif TokenKind::Newline scan_tok Token::kind == then
-                1 += scan_pos
-            elif "}" scan_tok Token::value == then
-                true = scan_done
-            elif TokenKind::Identifier scan_tok Token::kind == then
-                scan_pos 1 + = colon_check
-                if colon_check tokens.length > then
-                    if ":" colon_check tokens.get Token::value == then
-                        scan_tok Token::value.length = name_len
-                        if max_name_len name_len > then
-                            name_len = max_name_len
+        if is_enum ! then
+            0 (u64) = fdi
+            0 = fdepth
+            while fdi body.length > do
+                fdi body.get Token::value = fdv
+                if "[" fdv == "(" fdv == || then
+                    1 += fdepth
+                elif "]" fdv == ")" fdv == || then
+                    1 -= fdepth
+                elif
+                0 fdepth ==
+                TokenKind::Identifier fdi body.get Token::kind ==
+                &&
+                then
+                    fdi 1 + = fdnext
+                    if fdnext body.length > then
+                        if ":" fdnext body.get Token::value == then
+                            fdi body.get Token::value.length = nlen
+                            if max_name_len nlen > then nlen = max_name_len fi
                         fi
                     fi
                 fi
-                1 += scan_pos
-            else
-                1 += scan_pos
-            fi
-        done
+                1 += fdi
+            done
+        fi
 
-        # Pass 2: emit fields with alignment
-        false = emit_done
-        while pos tokens.length > emit_done ! && do
-            pos tokens.get = em_tok
-            if em_tok is_eof_token then
-                true = emit_done
-            elif TokenKind::Newline em_tok Token::kind == then
-                1 += pos
-            elif "}" em_tok Token::value == then
-                true = emit_done
-            else
-                # Collect one line
-                List[Token]::new = em_line
-                false = em_line_done
-                while pos tokens.length > em_line_done ! && do
-                    pos tokens.get = em_lt
-                    if em_lt is_eof_token then
-                        true = em_line_done
-                    elif TokenKind::Newline em_lt Token::kind == then
-                        true = em_line_done
-                    else
-                        em_lt em_line.push
-                        1 += pos
+        # Split body into items (and standalone comments); emit each on its line.
+        # A comment with no newline before it is a trailing comment and stays with
+        # its item; one preceded by a newline is emitted on its own line.
+        List[Token]::new = item
+        0 = depth
+        true = saw_newline
+        0 (u64) = k
+        while k body.length > do
+            k body.get = t
+            t Token::value = tv
+            if TokenKind::Newline t Token::kind == then
+                true = saw_newline
+            elif TokenKind::Comment t Token::kind == then
+                if saw_newline then
+                    if 0 item.length != then
+                        item is_enum max_name_len self.emit_struct_item
+                        List[Token]::new = item
                     fi
-                done
-
-                if em_line is_field_line then
-                    # Aligned field: name:  Type
                     self.depth make_indent self.output.append
-                    0 em_line.get Token::value self.output.append
-                    ":" self.output.append
-                    0 em_line.get Token::value.length = cur_name_len
-                    max_name_len cur_name_len - 1 + = padding
-                    0 (u64) = pad_i
-                    while pad_i padding > do
-                        " " self.output.append
-                        1 += pad_i
-                    done
-                    2 (u64) = type_i
-                    while type_i em_line.length > do
-                        self.source type_i em_line.get token_text self.output.append
-                        type_i 1 + = next_type_i
-                        if next_type_i em_line.length > then
-                            next_type_i em_line.get Token::value = field_next_val
-                            true = field_space
-                            if type_i em_line.get Token::value should_skip_space_after then
-                                false = field_space
-                            fi
-                            if field_next_val "[" == field_next_val "]" == || then
-                                false = field_space
-                            fi
-                            if field_space then " " self.output.append fi
-                        fi
-                        1 += type_i
-                    done
+                    self.source t token_text self.output.append
                     "\n" self.output.append
                 else
-                    em_line self.emit_line_tokens
+                    t item.push
                 fi
+                false = saw_newline
+            else
+                false = is_start
+                if 0 depth == TokenKind::Identifier t Token::kind == && then
+                    if is_enum then
+                        true = is_start
+                    else
+                        k 1 + = nx
+                        if nx body.length > then
+                            if ":" nx body.get Token::value == then true = is_start fi
+                        fi
+                    fi
+                fi
+                if is_start 0 item.length != && then
+                    item is_enum max_name_len self.emit_struct_item
+                    List[Token]::new = item
+                fi
+                t item.push
+                if "[" tv == "(" tv == || then
+                    1 += depth
+                elif "]" tv == ")" tv == || then
+                    1 -= depth
+                fi
+                false = saw_newline
+            fi
+            1 += k
+        done
+        if 0 item.length != then
+            item is_enum max_name_len self.emit_struct_item
+        fi
+
+        1 -= self.depth
+        self.depth make_indent self.output.append
+        "}\n" self.output.append
+        out_pos
+    }
+
+    # ============================================================================
+    # Definition span lookup: the parser records a Definition span for every
+    # top-level function, method, and trait-default definition (never lambdas),
+    # keyed by the byte offset of its `fn` keyword.
+    # ============================================================================
+
+    fn definition_span_at self:$Formatter offset:u64 -> Option[SyntaxSpan] {
+        for s in self.spans.iter do
+            if SyntaxSpanKind::Definition s.kind == offset s.start == && then
+                s.clone Option::Some return
             fi
         done
+        Option[SyntaxSpan]::None
+    }
 
-        # Emit closing brace
-        self.depth 1 - make_indent self.output.append
+    # StructBody/EnumBody span whose opening brace is at `offset`.
+    fn struct_or_enum_span_at self:$Formatter offset:u64 -> Option[SyntaxSpan] {
+        for s in self.spans.iter do
+            if
+            offset s.start ==
+            SyntaxSpanKind::StructBody s.kind == SyntaxSpanKind::EnumBody s.kind == ||
+            &&
+            then
+                s.clone Option::Some return
+            fi
+        done
+        Option[SyntaxSpan]::None
+    }
+
+    # DelimitedForm span whose opening `[` is at `offset`. Only array literals
+    # record this span, so generic-type brackets never match.
+    fn delimited_span_at self:$Formatter offset:u64 -> Option[SyntaxSpan] {
+        for s in self.spans.iter do
+            if SyntaxSpanKind::DelimitedForm s.kind == offset s.start == && then
+                s.clone Option::Some return
+            fi
+        done
+        Option[SyntaxSpan]::None
+    }
+
+    # True when a delimited form opens strictly inside the (start, close) byte
+    # range. A definition body that holds one uses a multiline body so the array
+    # routes through the delimited canonicalizer, which keeps compact and
+    # expanded source layouts converging.
+    fn range_contains_delimited self:$Formatter start:u64 close:u64 -> bool {
+        for s in self.spans.iter do
+            if
+            SyntaxSpanKind::DelimitedForm s.kind ==
+            s.start start < close s.start < &&
+            &&
+            then
+                true return
+            fi
+        done
+        false
+    }
+
+    # ============================================================================
+    # Canonicalize a delimited form (array literal) from its recorded span.
+    #
+    # `line_tokens` holds the first physical line, which contains the opening
+    # `[`. Assembles the whole logical line (gathering across newlines when the
+    # form wraps in the source), then emits it compact when the canonical form
+    # fits within 100 characters, or expanded (one item per indented line,
+    # trailing comma, closing `]` aligned with the opener, composition suffix
+    # kept with the `]`) otherwise. Returns the new token position when handled,
+    # or -1 to defer to the ordinary line path (no array literal on the line, or
+    # the line also carries a block or control token).
+    # ============================================================================
+    fn try_emit_delimited
+        self:mut$Formatter
+        line_tokens:$List[Token]
+        tokens:$List[Token]
+        pos:u64
+    -> i64 {
+        # Find the first `[` in line_tokens that opens an array literal.
+        0 (u64) = open_idx
+        Option[SyntaxSpan]::None = form_span
+        false = found_open
+        0 (u64) = oi
+        while oi line_tokens.length > found_open ! && do
+            oi line_tokens.get = ft
+            if "[" ft Token::value == then
+                ft Token::location Location::span Span::offset self.delimited_span_at = maybe
+                if maybe Option::Some(sp) is then
+                    oi = open_idx
+                    sp.clone Option::Some = form_span
+                    true = found_open
+                fi
+            fi
+            1 += oi
+        done
+        if found_open ! then -1 (i64) return fi
+        form_span.unwrap = span
+
+        # Assemble the full logical line. When the closing `]` is on a later
+        # source line, gather across newlines up to it and keep any suffix on the
+        # same source line as the `]`.
+        List[Token]::new = full_line
+        0 (u64) = ci
+        while ci line_tokens.length > do
+            ci line_tokens.get full_line.push
+            1 += ci
+        done
+        pos = out_pos
+
+        false = have_close
+        0 (u64) = hci
+        while hci line_tokens.length > have_close ! && do
+            hci line_tokens.get = ht
+            if
+            "]" ht Token::value ==
+            ht Token::location Location::span Span::offset span.close ==
+            &&
+            then
+                true = have_close
+            fi
+            1 += hci
+        done
+        if have_close ! then
+            pos = si
+            false = closed
+            false = line_done
+            while si tokens.length > line_done ! && do
+                si tokens.get = st
+                if st is_eof_token then
+                    true = line_done
+                elif TokenKind::Newline st Token::kind == then
+                    if closed then true = line_done else 1 += si fi
+                else
+                    "]" st Token::value == = st_is_close
+                    st Token::location Location::span Span::offset span.close == = st_at_close
+                    st full_line.push
+                    1 += si
+                    if st_is_close st_at_close && then
+                        true = closed
+                    fi
+                fi
+            done
+            si = out_pos
+        fi
+
+        # Defer lines that also carry a block or control token.
+        if full_line line_has_block_or_control then -1 (i64) return fi
+
+        # Locate the close index within full_line.
+        full_line.length = close_idx
+        false = fc
+        0 (u64) = fli
+        while fli full_line.length > fc ! && do
+            fli full_line.get = flt
+            if
+            "]" flt Token::value ==
+            flt Token::location Location::span Span::offset span.close ==
+            &&
+            then
+                fli = close_idx
+                true = fc
+            fi
+            1 += fli
+        done
+        if fc ! then -1 (i64) return fi
+
+        # prefix = [0, open_idx); inner = (open_idx, close_idx); suffix = (close_idx, end)
+        List[Token]::new = prefix
+        0 (u64) = pi
+        while pi open_idx > do
+            pi full_line.get prefix.push
+            1 += pi
+        done
+        List[Token]::new = inner
+        open_idx 1 + = ii
+        while ii close_idx > do
+            ii full_line.get inner.push
+            1 += ii
+        done
+        List[Token]::new = suffix
+        close_idx 1 + = xi
+        while xi full_line.length > do
+            xi full_line.get suffix.push
+            1 += xi
+        done
+
+        inner split_delimited_items = items
+
+        # Canonical compact line: prefix [ i0, i1, ... ] suffix
+        List[Token]::new = compact
+        0 (u64) = cpi
+        while cpi prefix.length > do
+            cpi prefix.get compact.push
+            1 += cpi
+        done
+        open_idx full_line.get compact.push
+        0 (u64) = iti
+        while iti items.length > do
+            iti items.get = item
+            0 (u64) = itj
+            while itj item.length > do
+                itj item.get compact.push
+                1 += itj
+            done
+            items.length iti 1 + < = not_last
+            if not_last then
+                open_idx full_line.get Token::location TokenKind::Delimiter "," Token::new compact.push
+            fi
+            1 += iti
+        done
+        close_idx full_line.get compact.push
+        0 (u64) = sfi
+        while sfi suffix.length > do
+            sfi suffix.get compact.push
+            1 += sfi
+        done
+
+        compact self.measure_line_length = width
+        if width 100 < ! then
+            compact self.emit_line_tokens
+            out_pos (i64) return
+        fi
+
+        # Expand: prefix [ then one item per indented line with a trailing comma,
+        # then ] with the suffix.
+        List[Token]::new = head
+        0 (u64) = hpi
+        while hpi prefix.length > do
+            hpi prefix.get head.push
+            1 += hpi
+        done
+        open_idx full_line.get head.push
+        head self.emit_line_tokens
+
+        1 += self.depth
+        0 (u64) = ei
+        while ei items.length > do
+            ei items.get = eitem
+            List[Token]::new = item_line
+            0 (u64) = eij
+            while eij eitem.length > do
+                eij eitem.get item_line.push
+                1 += eij
+            done
+            open_idx full_line.get Token::location TokenKind::Delimiter "," Token::new item_line.push
+            item_line self.emit_line_tokens
+            1 += ei
+        done
+        1 -= self.depth
+
+        List[Token]::new = tail
+        close_idx full_line.get tail.push
+        0 (u64) = tsi
+        while tsi suffix.length > do
+            tsi suffix.get tail.push
+            1 += tsi
+        done
+        tail self.emit_line_tokens
+
+        out_pos (i64)
+    }
+
+    # ============================================================================
+    # Canonicalize a definition from its recorded span.
+    #
+    # `line_tokens` holds the already-assembled declaration (through the body
+    # `{`, or the whole definition when it fit on one source line). Returns the
+    # new token position when handled, or -1 to defer to the ordinary multiline
+    # path (used for multiline bodies and shapes this routine does not own).
+    # ============================================================================
+
+    fn try_emit_definition
+        self:mut$Formatter
+        line_tokens:$List[Token]
+        def_span:$SyntaxSpan
+        tokens:$List[Token]
+        pos:u64
+    -> i64 {
+        line_tokens.length = n
+
+        # Locate the body-opening brace (first `{`).
+        n = brace_idx
+        false = have_brace
+        0 (u64) = i
+        while i n > have_brace ! && do
+            if "{" i line_tokens.get Token::value == then
+                i = brace_idx
+                true = have_brace
+            fi
+            1 += i
+        done
+        if have_brace ! then -1 return fi
+
+        # A body holding a delimited form uses the multiline path so the array
+        # routes through the delimited canonicalizer (compact and expanded source
+        # layouts then converge).
+        if def_span.close def_span.start self.range_contains_delimited then -1 return fi
+
+        # A single-source definition already holds its closing brace.
+        false = single_source
+        n = close_idx
+        0 (u64) = j
+        while j n > single_source ! && do
+            j line_tokens.get = jt
+            if
+            "}" jt Token::value ==
+            jt Token::location Location::span Span::offset def_span.close ==
+            &&
+            then
+                true = single_source
+                j = close_idx
+            fi
+            1 += j
+        done
+
+        # Only own clean shapes: single-source ending exactly at the close brace,
+        # or multi-source whose collected line ends at the body `{`.
+        n 1 - line_tokens.get = last_tok
+        if single_source then
+            if
+            "}" last_tok Token::value ==
+            last_tok Token::location Location::span Span::offset def_span.close ==
+            &&
+            ! then
+                -1 return
+            fi
+        else
+            if "{" last_tok Token::value == ! then -1 return fi
+        fi
+
+        # Collect the body tokens (between the braces) and remember the closing
+        # brace token. `out_pos` is where the caller resumes.
+        List[Token]::new = body_between
+        pos = out_pos
+        fallback_token = close_brace_tok
+        if single_source then
+            close_idx line_tokens.get = close_brace_tok
+            brace_idx 1 + = bi
+            while bi close_idx > do
+                bi line_tokens.get body_between.push
+                1 += bi
+            done
+        else
+            pos = scan_i
+            false = bdone
+            while scan_i tokens.length > bdone ! && do
+                scan_i tokens.get = bt
+                1 += scan_i
+                if bt is_eof_token then
+                    true = bdone
+                elif
+                "}" bt Token::value ==
+                bt Token::location Location::span Span::offset def_span.close ==
+                &&
+                then
+                    bt = close_brace_tok
+                    true = bdone
+                else
+                    bt body_between.push
+                fi
+            done
+            scan_i = out_pos
+        fi
+
+        # Meaningful body tokens for inline assembly (drop newlines/comments).
+        List[Token]::new = body_meaningful
+        0 (u64) = k
+        while k body_between.length > do
+            k body_between.get = bmt
+            if TokenKind::Newline bmt Token::kind == then
+            elif TokenKind::Comment bmt Token::kind == then
+            else bmt body_meaningful.push fi
+            1 += k
+        done
+
+        # Assemble the inline form: decl `{` body `}`.
+        List[Token]::new = inline_tokens
+        if single_source then
+            0 (u64) = di
+            while di brace_idx 1 + > do
+                di line_tokens.get inline_tokens.push
+                1 += di
+            done
+        else
+            0 (u64) = li
+            while li line_tokens.length > do
+                li line_tokens.get inline_tokens.push
+                1 += li
+            done
+        fi
+        0 (u64) = mi
+        while mi body_meaningful.length > do
+            mi body_meaningful.get inline_tokens.push
+            1 += mi
+        done
+        close_brace_tok inline_tokens.push
+
+        # Inline when the body shape allows and the whole form fits.
+        inline_tokens self.measure_line_length = inline_len
+        false = eligible
+        if
+        body_between body_shape_inlineable
+        inline_len 100 < !
+        &&
+        then
+            true = eligible
+        fi
+
+        if eligible then
+            inline_tokens self.emit_line_tokens
+            out_pos (i64) return
+        fi
+
+        # Multiline bodies that arrived across source lines are already handled by
+        # the ordinary path; defer to it.
+        if single_source ! then -1 return fi
+
+        # Single-source but ineligible: break the body onto its own line.
+        List[Token]::new = decl_line
+        0 (u64) = ci
+        while ci brace_idx 1 + > do
+            ci line_tokens.get decl_line.push
+            1 += ci
+        done
+        decl_line self.measure_line_length = decl_len
+        if decl_len 100 < then
+            decl_line self.emit_wrapped_fn_decl
+        else
+            decl_line self.emit_line_tokens
+        fi
+        1 += self.depth
+        if 0 body_meaningful.length != then
+            body_meaningful self.emit_line_tokens
+        fi
+        1 -= self.depth
+        self.depth make_indent self.output.append
         "}\n" self.output.append
-
-        # Skip past closing brace and newline
-        if pos tokens.length > then
-            if "}" pos tokens.get Token::value == then
-                1 += pos
-            fi
-        fi
-        if pos tokens.length > then
-            if TokenKind::Newline pos tokens.get Token::kind == then
-                1 += pos
-            fi
-        fi
-
-        pos
+        out_pos (i64) return
     }
 
     # ============================================================================
@@ -733,25 +1357,39 @@ impl Formatter {
             fi
             0 = consecutive_newlines
 
-            # Check if this is a struct/enum header — handle field alignment
+            # Struct/enum header: split each field/variant onto its own line.
             false = handled_struct
             if "struct" first_value == "enum" first_value == || then
-                line_tokens.length 1 - line_tokens.get = last_tok
-                if last_tok is_block_open_token then
-                    line_tokens self.emit_line_tokens
-                    1 += self.depth
-                    pos tokens self.format_struct_body = pos
-                    1 -= self.depth
-                    1 = consecutive_newlines
-                    false = prev_was_open
-                    false = prev_was_comment
-                    false = prev_was_section_comment
-                    true = prev_was_definition
-                    true = handled_struct
+                # Find the body-opening brace and its recorded body span.
+                line_tokens.length = sn
+                sn = sbrace
+                false = shave
+                0 (u64) = sfi
+                while sfi sn > shave ! && do
+                    if "{" sfi line_tokens.get Token::value == then
+                        sfi = sbrace
+                        true = shave
+                    fi
+                    1 += sfi
+                done
+                if shave then
+                    sbrace line_tokens.get Token::location Location::span Span::offset = soff
+                    soff self.struct_or_enum_span_at = maybe_body
+                    if maybe_body Option::Some(body_span) is then
+                        "enum" first_value == = is_enum_hdr
+                        pos tokens is_enum_hdr body_span line_tokens self.emit_struct_body = pos
+                        false = prev_was_open
+                        false = prev_was_comment
+                        false = prev_was_section_comment
+                        true = prev_was_definition
+                        false = prev_was_import
+                        true = handled_struct
+                    fi
                 fi
             fi
 
             if handled_struct ! then
+                false = handled_def
                 # Check if this is a fn declaration (possibly wrapped across lines)
                 false = wrapped_fn
                 if
@@ -815,14 +1453,47 @@ impl Formatter {
                         done
                     fi
 
-                    # Now line_tokens has the full declaration. Check length.
-                    line_tokens self.measure_line_length = decl_len
-                    if decl_len 100 < then
-                        line_tokens self.emit_wrapped_fn_decl
-                        true = wrapped_fn
+                    # Canonicalize real definitions from their recorded span.
+                    # Lambdas carry no Definition span, so they fall through.
+                    0 line_tokens.get Token::location Location::span Span::offset = fn_offset
+                    if "unsafe" first_value == then
+                        if 1 line_tokens.length > then
+                            if "fn" 1 line_tokens.get Token::value == then
+                                1 line_tokens.get Token::location Location::span Span::offset = fn_offset
+                            fi
+                        fi
+                    fi
+                    fn_offset self.definition_span_at = maybe_def
+                    if maybe_def Option::Some(def_span) is then
+                        pos tokens def_span line_tokens self.try_emit_definition = def_result
+                        if 0 def_result >= then
+                            def_result (u64) = pos
+                            true = handled_def
+                        fi
+                    fi
+
+                    if handled_def ! then
+                        # Now line_tokens has the full declaration. Check length.
+                        line_tokens self.measure_line_length = decl_len
+                        if decl_len 100 < then
+                            line_tokens self.emit_wrapped_fn_decl
+                            true = wrapped_fn
+                        fi
                     fi
                 fi
 
+                # Canonicalize a delimited form (array literal) on this line.
+                # Lines with a block or control token defer (return -1).
+                false = handled_delim
+                if handled_def ! wrapped_fn ! && then
+                    pos tokens line_tokens self.try_emit_delimited = delim_result
+                    if 0 delim_result >= then
+                        delim_result (u64) = pos
+                        true = handled_delim
+                    fi
+                fi
+
+                if handled_def ! handled_delim ! && then
                 if wrapped_fn ! then
                     line_tokens self.emit_line_tokens
                 fi
@@ -877,6 +1548,20 @@ impl Formatter {
                     1 += self.depth
                     true = prev_was_open
                 fi
+                else
+                    # Completed a canonicalized definition or delimited-form line.
+                    false = prev_was_open
+                    false = prev_was_comment
+                    false = prev_was_section_comment
+                    false = prev_was_import
+                    # A delimited-form line is never a top-level definition; a
+                    # canonicalized definition at depth 0 is.
+                    if 0 self.depth == handled_delim ! && then
+                        true = prev_was_definition
+                    else
+                        false = prev_was_definition
+                    fi
+                fi
             fi
         done
 
@@ -899,7 +1584,8 @@ fn main {
         return
     fi
 
-    source Formatter::new = formatter
+    input_result.facts.unwrap = input_facts
+    input_facts.spans source Formatter::new = formatter
     input_result.tokens formatter.format_tokens normalize_final_newline = formatted
     "<stdin>" formatted analyze_syntax = candidate_result
     if candidate_result.facts.is_none then
@@ -910,7 +1596,6 @@ fn main {
         return
     fi
 
-    input_result.facts.unwrap = input_facts
     candidate_result.facts.unwrap = candidate_facts
     if candidate_facts input_facts syntax_facts_match ! then
         "error: formatter changed source meaning" eprintln

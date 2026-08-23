@@ -147,9 +147,69 @@ check_formatter_case preservation_failure 1 \
     $'fn foo\n{ # note\n1\n}\n' \
     $'fn foo\n{ # note\n1\n}\n' \
     'changed source meaning'
+# Array items must be comma-separated; a space-separated literal is a syntax
+# error, so the formatter leaves the source untouched and exits 1.
+check_formatter_case delimited_requires_commas 1 \
+    $'fn f {\n    [1 2 3] use\n}\n' \
+    $'fn f {\n    [1 2 3] use\n}\n' \
+    'Expected `,` between array items'
+# Dropping the optional trailing comma when compacting must not trip the
+# token-equality safety net, since a trailing comma is non-meaningful.
+check_formatter_case delimited_trailing_comma 0 \
+    $'fn f {\n    [1, 2, 3,] use\n}\n' \
+    $'fn f {\n    [1, 2, 3] use\n}\n'
 check_formatter_case final_newline 0 $'1\n\n\n' $'1\n'
 check_formatter_case crlf 0 $'1\r\n2 +\r\n' $'1\n2 +\n'
 check_formatter_case bare_cr 0 $'1\r2 +\r' $'1\n2 +\n'
+
+# ============================================================================
+# Paired-input convergence tests (full suite only)
+#
+# Each directory under tests/formatter/paired holds structurally-equivalent
+# inputs (same tokens, different layout). All variants must format to the same
+# output and to a stable fixpoint.
+# ============================================================================
+
+printf "\nRunning paired-input tests...\n"
+paired_pass=0
+paired_fail=0
+
+for group in tests/formatter/paired/*/; do
+    [ -d "$group" ] || continue
+    group_name=$(basename "$group")
+    expected=""
+    ok=true
+    for variant in "$group"*.casa; do
+        [ -f "$variant" ] || continue
+        if ! out=$("$FORMATTER" < "$variant" 2>/dev/null); then
+            printf "${RED}[FAIL]${RESET} Formatter rejected: %s\n" "$variant"
+            ok=false
+            continue
+        fi
+        if [ -z "$expected" ]; then
+            expected=$out
+            # The canonical form must also be a fixpoint.
+            if ! stable=$(echo "$out" | "$FORMATTER" 2>/dev/null) || [ "$stable" != "$out" ]; then
+                printf "${RED}[FAIL]${RESET} Not idempotent: %s\n" "$variant"
+                ok=false
+            fi
+        elif [ "$out" != "$expected" ]; then
+            printf "${RED}[FAIL]${RESET} Divergent output: %s\n" "$variant"
+            diff <(echo "$expected") <(echo "$out") || true
+            ok=false
+        fi
+    done
+    if [ "$ok" = true ]; then
+        printf "${GREEN}[OK]${RESET} Converged: %s\n" "$group_name"
+        paired_pass=$((paired_pass + 1))
+    else
+        paired_fail=$((paired_fail + 1))
+    fi
+done
+
+printf "${GREEN}[OK]${RESET} Paired-input: %d passed, %d failed\n" "$paired_pass" "$paired_fail"
+pass=$((pass + paired_pass))
+fail=$((fail + paired_fail))
 
 fi # has_filter
 

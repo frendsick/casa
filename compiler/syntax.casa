@@ -11,6 +11,34 @@ import "semantics"
 import "selective_import"
 
 # ============================================================================
+# Structural layout spans (formatter facts)
+#
+# Data-only source-offset ranges over the structures whose layout `casafmt`
+# owns. `start` and `close` are the source byte offsets of the opening and
+# closing tokens. Recorded only in syntax-only mode (see `analyze_syntax`); no
+# spans are produced during normal compilation.
+# ============================================================================
+
+enum SyntaxSpanKind {
+    Definition
+    DelimitedForm
+    StructBody
+    EnumBody
+}
+
+struct SyntaxSpan {
+    kind:  SyntaxSpanKind
+    start: u64
+    close: u64
+}
+
+impl SyntaxSpan: Clone {
+    fn clone self:$SyntaxSpan -> SyntaxSpan {
+        self.close self.start self.kind SyntaxSpan
+    }
+}
+
+# ============================================================================
 # Parser struct and parse/resolve result
 #
 # `Parser` owns parse-private state. Later compiler phases receive only the
@@ -22,6 +50,7 @@ struct ParseState {
     output_usable:     List[bool]
     recovery_required: List[bool]
     store_mutated:     List[bool]
+    spans:             List[SyntaxSpan]
 }
 
 impl ParseState {
@@ -32,7 +61,8 @@ impl ParseState {
         false recovery_required.push
         List[bool]::new = output_usable
         true output_usable.push
-        store_mutated recovery_required output_usable diagnostics ParseState
+        List[SyntaxSpan]::new = spans
+        spans store_mutated recovery_required output_usable diagnostics ParseState
     }
 
     fn record_error self:mut$ParseState kind:ErrorKind message:str location:mut$Location {
@@ -80,6 +110,11 @@ impl ParseState {
     fn store_was_mutated self:mut$ParseState -> bool {
         0 self.store_mutated.get
     }
+
+    # Record one structural layout span.
+    fn record_span self:mut$ParseState kind:SyntaxSpanKind start:u64 close:u64 {
+        close start kind SyntaxSpan self.spans.push
+    }
 }
 
 struct Parser {
@@ -113,6 +148,7 @@ struct SyntaxCommentFact {
 struct SyntaxFacts {
     meaningful_tokens: List[SyntaxTokenFact]
     comments:          List[SyntaxCommentFact]
+    spans:             List[SyntaxSpan]
 }
 
 struct SyntaxResult {
@@ -326,6 +362,11 @@ impl TokenCursor {
 
     fn save self:mut$TokenCursor -> u64 {
         self TokenCursor::pos
+    }
+
+    # Source byte offset of the token just consumed (at pos - 1).
+    fn previous_offset self:mut$TokenCursor -> u64 {
+        self.pos 1 - self.tokens.get Token::location Location::span Span::offset
     }
 
     fn restore self:mut$TokenCursor saved:u64 {
@@ -741,42 +782,77 @@ fn parse_array_lambda
 fn get_op_array parser:mut$Parser function_name:mut$str cursor:mut$TokenCursor -> Op {
     fallback_token "[" cursor expect_token_value.unwrap_or = open_token
     List[Op]::new = items
-    while "]" cursor expect_delimiter ! do
+    while true do
+        # Close on `]` (also reached after an optional trailing comma).
+        cursor.peek = close_peek
+        if close_peek Option::Some(cp) is then
+            if "]" cp Token::value == then
+                cursor.pop drop
+                break
+            fi
+        fi
+
+        # Parse one item.
+        false = parsed_nested
         cursor.peek = next_opt
         if next_opt Option::Some(next) is then
             if "[" next Token::value == then
                 cursor function_name parser get_op_array items.push
-                "," cursor expect_delimiter drop
-                continue
+                true = parsed_nested
             fi
         fi
-        cursor.pop = value_opt
-        if value_opt.is_none then
-            open_token Token::location "Unexpected end of input in array literal" ErrorKind::UnexpectedToken parser.state.record_error
-            parser.state.mark_output_unusable
-            open_token.location items OpValue::PushArray Op::new return
-        fi
-        value_opt.unwrap = value_token
-        if "{" value_token Token::value == then
-            items value_token cursor function_name parser parse_array_lambda
-        elif TokenKind::Literal value_token Token::kind == then
-            cursor value_token get_op_literal items.push
-        elif TokenKind::Identifier value_token Token::kind == then
-            cursor.peek = struct_peek_opt
-            if struct_peek_opt Option::Some(struct_peek) is then
-                if "{" struct_peek Token::value == then
-                    items value_token cursor function_name parser parse_array_struct_literal
+        if parsed_nested ! then
+            cursor.pop = value_opt
+            if value_opt.is_none then
+                open_token Token::location "Unexpected end of input in array literal" ErrorKind::UnexpectedToken parser.state.record_error
+                parser.state.mark_output_unusable
+                open_token.location items OpValue::PushArray Op::new return
+            fi
+            value_opt.unwrap = value_token
+            if "{" value_token Token::value == then
+                items value_token cursor function_name parser parse_array_lambda
+            elif TokenKind::Literal value_token Token::kind == then
+                cursor value_token get_op_literal items.push
+            elif TokenKind::Identifier value_token Token::kind == then
+                cursor.peek = struct_peek_opt
+                if struct_peek_opt Option::Some(struct_peek) is then
+                    if "{" struct_peek Token::value == then
+                        items value_token cursor function_name parser parse_array_struct_literal
+                    else
+                        value_token Token::location value_token Token::value OpValue::Identifier Op::new items.push
+                    fi
                 else
                     value_token Token::location value_token Token::value OpValue::Identifier Op::new items.push
                 fi
             else
-                value_token Token::location value_token Token::value OpValue::Identifier Op::new items.push
+                value_token Token::location "Unexpected token in array literal" ErrorKind::UnexpectedToken parser.state.record_error
+            fi
+        fi
+
+        # Items MUST be comma-separated. A single trailing comma before `]` is
+        # allowed for developer experience; the next iteration closes on `]`.
+        cursor.peek = sep_peek
+        if sep_peek Option::Some(sp) is then
+            if "," sp Token::value == then
+                cursor.pop drop
+            else
+                if "]" sp Token::value == ! then
+                    sp Token::location "Expected `,` between array items" ErrorKind::UnexpectedToken parser.state.record_error
+                    parser.state.mark_output_unusable
+                    break
+                fi
             fi
         else
-            value_token Token::location "Unexpected token in array literal" ErrorKind::UnexpectedToken parser.state.record_error
+            open_token Token::location "Unexpected end of input in array literal" ErrorKind::UnexpectedToken parser.state.record_error
+            parser.state.mark_output_unusable
+            break
         fi
-        "," cursor expect_delimiter drop
     done
+    if parser.syntax_only then
+        cursor.previous_offset
+        open_token Token::location Location::span Span::offset
+        SyntaxSpanKind::DelimitedForm parser.state.record_span
+    fi
     open_token Token::location items OpValue::PushArray Op::new
 }
 
@@ -1919,7 +1995,7 @@ fn expect_function_name cursor:mut$TokenCursor -> Token {
 }
 
 fn parse_function parser:mut$Parser cursor:mut$TokenCursor -> Function {
-    fallback_token "fn" cursor expect_token_value.unwrap_or drop
+    fallback_token "fn" cursor expect_token_value.unwrap_or = fn_token
     cursor expect_function_name = name_token
 
     # Parse optional type parameters
@@ -2011,6 +2087,12 @@ fn parse_function parser:mut$Parser cursor:mut$TokenCursor -> Function {
     name_token Token::value cursor parser parse_block_ops = body_ops
     body_ops ops.append
 
+    if parser.syntax_only then
+        cursor.previous_offset
+        fn_token Token::location Location::span Span::offset
+        SyntaxSpanKind::Definition parser.state.record_span
+    fi
+
     effect name_token Token::location ops name_token Token::value Function::with_stack_effect = function
     variables function Function::set_variables
     function
@@ -2053,14 +2135,21 @@ fn parse_enum parser:mut$Parser cursor:mut$TokenCursor -> CasaEnum {
 
     cursor parse_derived_traits = derived_traits
 
-    fallback_token "{" cursor expect_token_value.unwrap_or drop
+    fallback_token "{" cursor expect_token_value.unwrap_or = enum_open_token
     List[str]::new = variants
     Map[str List[Type]]::new = variant_types
     Map[str Location]::new = variant_locations
 
     while true do
         fallback_token cursor expect_token.unwrap_or = variant_token
-        if "}" variant_token Token::value == then break fi
+        if "}" variant_token Token::value == then
+            if parser.syntax_only then
+                variant_token Token::location Location::span Span::offset
+                enum_open_token Token::location Location::span Span::offset
+                SyntaxSpanKind::EnumBody parser.state.record_span
+            fi
+            break
+        fi
         if TokenKind::Identifier variant_token Token::kind != then
             variant_token Token::location "Expected variant name" ErrorKind::UnexpectedToken parser.state.record_error
         fi
@@ -2377,11 +2466,18 @@ fn parse_struct parser:mut$Parser cursor:mut$TokenCursor -> CasaStruct {
 
     List[Member]::new = members
     type_vars string_list_to_set = struct_type_vars
-    fallback_token "{" cursor expect_token_value.unwrap_or drop
+    fallback_token "{" cursor expect_token_value.unwrap_or = struct_open_token
 
     while true do
         fallback_token cursor expect_token.unwrap_or = member_token
-        if "}" member_token Token::value == then break fi
+        if "}" member_token Token::value == then
+            if parser.syntax_only then
+                member_token Token::location Location::span Span::offset
+                struct_open_token Token::location Location::span Span::offset
+                SyntaxSpanKind::StructBody parser.state.record_span
+            fi
+            break
+        fi
         if TokenKind::Identifier member_token Token::kind != then
             member_token Token::location "Expected member name" ErrorKind::UnexpectedToken parser.state.record_error
         fi
@@ -2539,6 +2635,7 @@ fn parse_trait parser:mut$Parser cursor:mut$TokenCursor -> CasaTrait {
                 next Token::location "Expected method declaration in trait" ErrorKind::UnexpectedToken parser.state.record_error
                 false = parse_trait_loop
             else
+                next Token::location Location::span Span::offset = trait_fn_offset
                 cursor.pop drop # consume fn
                 cursor expect_function_name = method_name
                 if "drop" method_name Token::value == then
@@ -2567,6 +2664,11 @@ fn parse_trait parser:mut$Parser cursor:mut$TokenCursor -> CasaTrait {
                 if cursor.peek Option::Some(body_peek) is then
                     if "{" body_peek Token::value == then
                         f"{name_token Token::value}::{method_name Token::value}" cursor parser parse_block_ops = default_ops
+                        if parser.syntax_only then
+                            cursor.previous_offset
+                            trait_fn_offset
+                            SyntaxSpanKind::Definition parser.state.record_span
+                        fi
                     fi
                 fi
 
@@ -4533,7 +4635,7 @@ fn logical_comment_text token:$Token -> str {
     token.value start token.value.length start - str::substring
 }
 
-fn build_syntax_facts source:$str tokens:$List[Token] -> SyntaxFacts {
+fn build_syntax_facts source:$str tokens:$List[Token] spans:List[SyntaxSpan] -> SyntaxFacts {
     List[SyntaxTokenFact]::new = meaningful_tokens
     List[SyntaxCommentFact]::new = comments
     0 (u64) = meaningful_count
@@ -4546,16 +4648,25 @@ fn build_syntax_facts source:$str tokens:$List[Token] -> SyntaxFacts {
             token logical_comment_text = text
             line_has_meaningful_token meaningful_count text SyntaxCommentFact comments.push
         elif TokenKind::Eof token.kind != then
-            token.location.span.length = length
-            token.location.span.offset = offset
-            source offset length str::substring = spelling
-            token.kind spelling SyntaxTokenFact meaningful_tokens.push
-            1 += meaningful_count
-            true = line_has_meaningful_token
+            # Commas carry no operand content: item separators are required by
+            # the grammar (a missing one is a parse error the candidate re-parse
+            # still catches), and a trailing comma is optional decoration.
+            # Exclude them so the formatter may canonicalize delimited-form
+            # commas, including adding or dropping the optional trailing comma,
+            # without tripping the token-equality safety net.
+            "," token.value == TokenKind::Delimiter token.kind == && = is_separator
+            if is_separator ! then
+                token.location.span.length = length
+                token.location.span.offset = offset
+                source offset length str::substring = spelling
+                token.kind spelling SyntaxTokenFact meaningful_tokens.push
+                1 += meaningful_count
+                true = line_has_meaningful_token
+            fi
         fi
     done
 
-    comments meaningful_tokens SyntaxFacts
+    spans comments meaningful_tokens SyntaxFacts
 }
 
 fn syntax_facts_match expected:$SyntaxFacts actual:$SyntaxFacts -> bool {
@@ -4599,7 +4710,7 @@ fn analyze_syntax source:$str file:$str -> SyntaxResult {
     parser_tokens parser parse_ops drop
 
     if parser.state.has_usable_output parser.state.diagnostics.has_errors ! && then
-        tokens source build_syntax_facts = facts
+        parser.state.spans.clone tokens source build_syntax_facts = facts
         parser.state.diagnostics facts Option::Some tokens SyntaxResult
     else
         parser.state.diagnostics Option[SyntaxFacts]::None tokens SyntaxResult
