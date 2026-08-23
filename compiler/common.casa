@@ -563,9 +563,11 @@ struct StackEffect {
     return_types: List[Type]
     type_vars:    Set[str]
     trait_bounds: Map[str List[TraitBound]]
+    const_params: Map[str BuiltinType]
 }
 
 fn empty_stack_effect -> StackEffect {
+    Map[str BuiltinType]::new
     Map[str List[TraitBound]]::new
     Set[str]::new
     List[Type]::new
@@ -575,6 +577,7 @@ fn empty_stack_effect -> StackEffect {
 
 impl StackEffect {
     fn new params:List[Parameter] returns:List[Type] -> StackEffect {
+        Map[str BuiltinType]::new
         Map[str List[TraitBound]]::new
         Set[str]::new
         returns
@@ -1398,12 +1401,40 @@ struct FunctionType {
     return_types: List[Type]
 }
 
+# A compile-time constant that occupies a type-parameter slot (see ADR-0152).
+# Symbolic parameters carry a `name` (e.g. `N`) and an unused `value`; concrete
+# arguments carry an empty `name` and the bound `value`. `typ` is the declared
+# constant type. The value is a bit pattern reinterpreted for the type: integer
+# widths use it directly, `bool` uses 0/1, `char` uses the codepoint. Float and
+# `str` constants are rejected before a ConstType is built.
+
+struct ConstType {
+    name:  str
+    typ:   BuiltinType
+    value: i64
+}
+
+impl ConstType {
+    fn symbolic name:mut$str typ:BuiltinType -> ConstType {
+        0 typ name ConstType
+    }
+
+    fn concrete value:i64 typ:BuiltinType -> ConstType {
+        value typ "" ConstType
+    }
+
+    fn is_symbolic self:$ConstType -> bool {
+        0 self.name.length !=
+    }
+}
+
 enum Type {
     Unknown
     Builtin (BuiltinType)
     Generic (GenericType)
     Function (FunctionType)
     TypeVar (str)
+    Const (ConstType)
 }
 
 fn parse_generic_params source:$str -> List[Type] {
@@ -1485,6 +1516,9 @@ impl Type {
             Type::Unknown => { "" }
             Type::Builtin(builtin) => { builtin.format }
             Type::TypeVar(name) => { name.clone }
+            Type::Const(const_type) => {
+                if const_type.is_symbolic then const_type.name.clone else const_type.value.to_str fi
+            }
             Type::Generic(generic) => {
                 if generic.base SHARED_BORROW_TYPE == 1 generic.params.length == && then
                     f"${0 generic.params.get.format}" return
@@ -1579,6 +1613,17 @@ impl Type {
                     name.clone Type::TypeVar
                 fi
             }
+            Type::Const(const_type) => {
+                if const_type.is_symbolic then
+                    if const_type.name bindings.get Option::Some(bound) is then
+                        bound
+                    else
+                        self clone_type
+                    fi
+                else
+                    self clone_type
+                fi
+            }
             Type::Generic(generic) => {
                 generic.base = base
                 if 0 generic.params.length == then
@@ -1624,6 +1669,7 @@ impl Type {
     fn has_unresolved_type_var self:$Type -> bool {
         self match
             Type::TypeVar(_) => { true }
+            Type::Const(const_type) => { const_type.is_symbolic }
             Type::Generic(generic) => {
                 for param in generic.params.iter do
                     if param.has_unresolved_type_var then true return fi
@@ -1656,6 +1702,7 @@ impl Type {
     fn type_contains_var self:$Type type_var:mut$str -> bool {
         self match
             Type::TypeVar(name) => { name type_var == }
+            Type::Const(const_type) => { const_type.is_symbolic const_type.name type_var == && }
             Type::Generic(generic) => {
                 for param in generic.params.iter do
                     if type_var param.type_contains_var then true return fi
@@ -1788,6 +1835,16 @@ impl Type {
                     _ => { false }
                 end
             }
+            Type::Const(c_self) => {
+                other match
+                    Type::Const(c_other) => {
+                        c_other.name c_self.name ==
+                        c_other.typ c_self.typ == &&
+                        c_other.value c_self.value == &&
+                    }
+                    _ => { false }
+                end
+            }
             Type::Generic(g_self) => {
                 other match
                     Type::Generic(g_other) => {
@@ -1879,6 +1936,7 @@ fn clone_type typ:$Type -> Type {
         Type::Unknown => { Type::Unknown }
         Type::Builtin(builtin) => { builtin (BuiltinType) Type::Builtin }
         Type::TypeVar(name) => { name.clone Type::TypeVar }
+        Type::Const(const_type) => { const_type.value const_type.typ (BuiltinType) const_type.name.clone ConstType Type::Const }
         Type::Generic(generic) => {
             List[Type]::new = parameters
             for parameter in generic.params.iter do
@@ -1899,6 +1957,26 @@ fn clone_type typ:$Type -> Type {
         }
     end
 }
+# Parse a non-negative integer literal, returning its value. Used to recognize a
+# constant argument in type position (e.g. the `3` in `array[i64 3]`, ADR-0152).
+# Returns None when `source` is empty or contains a non-digit character.
+
+fn try_parse_uint_literal source:$str -> Option[i64] {
+    if 0 source.length == then Option[i64]::None return fi
+    0 (u64) = index
+    while index source.length > do
+        if index source.at.is_digit ! then Option[i64]::None return fi
+        1 += index
+    done
+    0 = value
+    0 (u64) = digit_index
+    while digit_index source.length > do
+        10 value.wrapping_mul = value
+        digit_index source.at.codepoint i64::from '0'.codepoint i64::from - value.wrapping_add = value
+        1 += digit_index
+    done
+    value Option::Some
+}
 
 fn parse_type_str source:$str -> Type {
     if "" source == then Type::Unknown return fi
@@ -1918,6 +1996,11 @@ fn parse_type_str source:$str -> Type {
     fi
     if source parse_builtin Option::Some(builtin) is then
         builtin Type::Builtin return
+    fi
+    # Constant argument in type position: an integer literal binds a concrete
+    # `const` type parameter (ADR-0152). #427 accepts `u64` only.
+    if source try_parse_uint_literal Option::Some(const_value) is then
+        BuiltinType::U64 const_value ConstType::concrete Type::Const return
     fi
     # TypeVar: single uppercase letter
     if 1 source.length == then

@@ -462,7 +462,10 @@ fn parse_type_ast cursor:mut$TokenCursor -> Type {
         "fn" = base
     else
         fallback_token cursor expect_token.unwrap_or = base_token
-        if TokenKind::Identifier base_token Token::kind != then
+        if
+        TokenKind::Identifier base_token Token::kind !=
+        base_token Token::value try_parse_uint_literal.is_none &&
+        then
             base_token Token::location "Expected type name" ErrorKind::UnexpectedToken cursor.state.record_error
         fi
         base_token Token::value = base
@@ -978,6 +981,7 @@ fn require_global_scope function_name:mut$str what:str location:mut$Location par
 struct ParsedTypeVariables {
     names:        List[str]
     trait_bounds: Map[str List[TraitBound]]
+    const_params: Map[str BuiltinType]
 }
 
 # Parse the `[arg1 arg2 ...]` type argument list that follows a generic trait
@@ -1075,22 +1079,29 @@ fn parse_type_variables parser:mut$Parser cursor:mut$TokenCursor -> ParsedTypeVa
     List[str]::new = vars
     Set[str]::new = seen
     Map[str List[TraitBound]]::new = trait_bounds
+    Map[str BuiltinType]::new = const_params
 
     while true do
         cursor.pop = token_opt
         if token_opt.is_none then
             empty_location "Expected `]` to close type parameters" ErrorKind::Syntax parser.state.record_error
             parser.state.mark_output_unusable
-            trait_bounds vars ParsedTypeVariables return
+            const_params trait_bounds vars ParsedTypeVariables return
         fi
         token_opt.unwrap = token
         if "]" token Token::value == then
             if 0 vars.length == then
                 token Token::location "Empty type parameter list `[]` is not allowed" ErrorKind::Syntax parser.state.record_error
             fi
-            trait_bounds vars ParsedTypeVariables return
+            const_params trait_bounds vars ParsedTypeVariables return
         fi
         if "," token Token::value == then continue fi
+        # Constant parameter: `const NAME:TYPE` binds a compile-time constant
+        # rather than a type variable (ADR-0152).
+        if "const" token Token::value == then
+            const_params seen vars parser cursor parse_const_type_parameter = const_params
+            continue
+        fi
         if TokenKind::Identifier token Token::kind == then
             if token Token::value parser.store.builtins.has then
                 token Token::location f"Type variable `{token Token::value}` shadows built-in type" ErrorKind::DuplicateName parser.state.record_error
@@ -1148,7 +1159,107 @@ fn parse_type_variables parser:mut$Parser cursor:mut$TokenCursor -> ParsedTypeVa
             token Token::location "Unexpected token in type parameters" ErrorKind::UnexpectedToken parser.state.record_error
         fi
     done
-    trait_bounds vars ParsedTypeVariables
+    const_params trait_bounds vars ParsedTypeVariables
+}
+# Parse a `const NAME:TYPE` constant type parameter. The `const` keyword has
+# already been consumed. Records the name in `vars`/`seen` (so it keeps its
+# position among the type parameters) and maps it to its declared type in the
+# returned const-params map. #427 accepts `u64` only; #434 widens the set.
+
+fn parse_const_type_parameter
+    cursor:mut$TokenCursor
+    parser:mut$Parser
+    vars:mut$List[str]
+    seen:mut$Set[str]
+    const_params:Map[str BuiltinType]
+-> Map[str BuiltinType] {
+    fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
+    if name_token Token::value parser.store.builtins.has then
+        name_token Token::location f"Constant parameter `{name_token Token::value}` shadows built-in type" ErrorKind::DuplicateName parser.state.record_error
+    fi
+    if name_token Token::value seen.has then
+        name_token Token::location f"Duplicate type variable `{name_token Token::value}`" ErrorKind::DuplicateName parser.state.record_error
+    fi
+    name_token Token::value vars.push
+    name_token Token::value seen.add drop
+    fallback_token ":" cursor expect_token_value.unwrap_or drop
+    fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = type_token
+    type_token Token::value parse_builtin = builtin_opt
+    if builtin_opt Option::Some(const_builtin) is then
+        if const_builtin const_type_parameter_type_allowed ! then
+            type_token Token::location f"Constant parameter `{name_token Token::value}` cannot have type `{type_token Token::value}`" ErrorKind::Syntax parser.state.record_error
+        fi
+        const_builtin name_token Token::value const_params.set return
+    fi
+    type_token Token::location f"Constant parameter `{name_token Token::value}` has unknown type `{type_token Token::value}`" ErrorKind::Syntax parser.state.record_error
+    const_params
+}
+# Which builtin types may appear as a constant parameter's declared type.
+# #427 permits `u64` only; #434 widens this to the other integer widths,
+# `bool`, and `char`, and keeps `float`/`str` rejected here.
+
+fn const_type_parameter_type_allowed builtin:$BuiltinType -> bool {
+    builtin BuiltinType::U64 ==
+}
+# Rewrite const-parameter names inside a type from type variables to symbolic
+# constants (ADR-0152). `parse_type_str` reads a single uppercase letter as a
+# `TypeVar` and a longer name as a bare `Generic`, so both forms are rewritten.
+
+fn rewrite_type_const_params typ:$Type const_params:$Map[str BuiltinType] -> Type {
+    typ match
+        Type::TypeVar(name) => {
+            if name const_params.get Option::Some(type_var_builtin) is then
+                type_var_builtin name.clone ConstType::symbolic Type::Const
+            else
+                typ clone_type
+            fi
+        }
+        Type::Generic(generic) => {
+            if 0 generic.params.length == then
+                if generic.base const_params.get Option::Some(bare_builtin) is then
+                    bare_builtin generic.base.clone ConstType::symbolic Type::Const return
+                fi
+                typ clone_type return
+            fi
+            List[Type]::new = new_params
+            for param in generic.params.iter do
+                const_params param rewrite_type_const_params new_params.push
+            done
+            new_params generic.base.clone GenericType Type::Generic
+        }
+        Type::Function(fn_type) => {
+            List[Type]::new = new_params
+            for param in fn_type.parameters.iter do
+                const_params param rewrite_type_const_params new_params.push
+            done
+            List[Type]::new = new_returns
+            for ret in fn_type.return_types.iter do
+                const_params ret rewrite_type_const_params new_returns.push
+            done
+            new_returns new_params FunctionType Type::Function
+        }
+        _ => { typ clone_type }
+    end
+}
+# Rewrite every const-parameter name in a stack effect's parameter and return
+# types from type variables to symbolic constants (ADR-0152).
+
+fn rewrite_effect_const_params
+    effect:StackEffect
+    const_params:$Map[str BuiltinType]
+-> StackEffect {
+    List[Parameter]::new = new_parameters
+    for param in effect StackEffect::parameters.iter do
+        const_params param Parameter::typ rewrite_type_const_params = rewritten_typ
+        param Parameter::name rewritten_typ Parameter new_parameters.push
+    done
+    List[Type]::new = new_returns
+    for return_type in effect StackEffect::return_types.iter do
+        const_params return_type rewrite_type_const_params new_returns.push
+    done
+    new_parameters effect StackEffect::set_parameters
+    new_returns effect StackEffect::set_return_types
+    effect
 }
 
 # ============================================================================
@@ -1800,16 +1911,32 @@ fn parse_function parser:mut$Parser cursor:mut$TokenCursor -> Function {
     # Parse optional type parameters
     List[str]::new = type_vars
     Map[str List[TraitBound]]::new = trait_bounds
+    Map[str BuiltinType]::new = const_params
     cursor.peek = tvars_opt
     if tvars_opt Option::Some(tvars) is then
         if "[" tvars Token::value == then
             cursor parser parse_type_variables = parsed_type_variables
-            parsed_type_variables.names = type_vars
             parsed_type_variables.trait_bounds = trait_bounds
+            parsed_type_variables.const_params = const_params
+            # `names` lists type variables and const parameters together; keep
+            # only the true type variables here so const names are handled as
+            # constants rather than type arguments (ADR-0152).
+            parsed_type_variables.names = all_type_param_names
+            for candidate_name in all_type_param_names.iter do
+                if candidate_name const_params.has ! then
+                    candidate_name.clone type_vars.push
+                fi
+            done
         fi
     fi
 
     cursor parse_stack_effect = effect
+
+    # Rewrite const-parameter names in the signature from type variables to
+    # symbolic constants so unification treats them as constants (ADR-0152).
+    if 0 const_params.keys.length != then
+        const_params effect rewrite_effect_const_params = effect
+    fi
 
     # Add type vars to the stack effect
     if 0 type_vars.length != then
@@ -1826,6 +1953,14 @@ fn parse_function parser:mut$Parser cursor:mut$TokenCursor -> Function {
     fi
     List[Op]::new = ops
     List[Variable]::new = variables
+
+    # Register const parameters as u64 variables so the body can read them as
+    # values (ADR-0152). #427 accepts u64 only. The runtime value comes from the
+    # concrete type at each instantiation, which array wiring supplies later.
+    for const_name in const_params.keys.iter do
+        BuiltinType::U64 Type::Builtin const_name.clone Variable variables.push
+    done
+    const_params effect StackEffect::set_const_params
 
     # Inject hidden __trait_* parameters for trait-bounded type vars
     if 0 effect StackEffect::trait_bounds.keys.length != then
@@ -2848,6 +2983,7 @@ fn copy_representation_is_eligible
         Type::Builtin(builtin) => { builtin BuiltinType::Str != }
         Type::Function(_) => { true }
         Type::Unknown => { false }
+        Type::Const(_) => { false }
         Type::TypeVar(type_variable) => {
             if type_variable trait_bounds.get Option::Some(bounds) is then
                 "Copy" GenericType::new Type::Generic = copy_type
