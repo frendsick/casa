@@ -1,0 +1,97 @@
+import "../../compiler/typechecker.casa"
+import "helpers.casa"
+
+# Typecheck a whole source: top-level ops first, then every function body.
+
+fn tc_const code:$str diagnostics:mut$Diagnostics {
+    diagnostics code parse_resolve_test_source = result
+    result ParseResolveResult::ops.unwrap = ops
+    result ParseResolveResult::store = store
+    diagnostics store Option[Function]::None ops type_check_ops_for_test drop
+    diagnostics store type_check_functions_for_test
+}
+# A const parameter is parsed, recorded on the stack effect, and left in the
+# signature as a symbolic constant rather than a type variable (ADR-0152).
+
+fn test_const_param_signature {
+    Diagnostics::new = diagnostics
+    "const_param_signature" test_start
+    diagnostics "fn length [T const N:u64] self:$array[T N] -> u64 { N }" parse_resolve_test_source = result
+    result ParseResolveResult::store = store
+    "length registered" "length" store.functions.get.is_some assert_true
+    "length" store.functions.get.unwrap = length_fn
+    length_fn Function::stack_effect = effect
+    "N recorded as const param" "N" effect StackEffect::const_params.has assert_true
+    "N is a u64 constant" "u64" "N" effect StackEffect::const_params.get.unwrap.format assert_str_eq
+    "N is not a type variable" "N" effect StackEffect::type_vars.has ! assert_true
+    "self keeps symbolic N" "$array[T N]" 0 effect StackEffect::parameters.get Parameter::typ.format assert_str_eq
+}
+# The parameter is usable as a u64 value in its body, and concrete constant
+# arguments (including 0) bind it without error.
+
+fn test_const_param_body_and_binding {
+    Diagnostics::new = diagnostics
+    "const_param_body_and_binding" test_start
+    diagnostics "fn length [T const N:u64] self:$array[T N] -> u64 { N }\nfn empty self:$array[i64 0] -> u64 { self length }\nfn three self:$array[i64 3] -> u64 { self length }" tc_const
+    diagnostics "no errors" assert_no_errors
+}
+# A type in constant position is rejected with a diagnostic that names it.
+
+fn test_const_param_rejects_non_constant {
+    Diagnostics::new = diagnostics
+    "const_param_rejects_non_constant" test_start
+    diagnostics "fn length [T const N:u64] self:$array[T N] -> u64 { N }\nfn probe self:$array[i64 count] -> u64 { self length }" tc_const
+    diagnostics "has errors" assert_has_errors
+    diagnostics "names the argument" "count" assert_error_contains
+}
+# An integer constant argument is contextual: it fits any integer width whose
+# range contains it, and a value that overflows is rejected with a diagnostic
+# that names the argument and the width (ADR-0153).
+
+fn test_const_param_integer_widths {
+    Diagnostics::new = diagnostics
+    "const_param_integer_widths" test_start
+    diagnostics "fn take_u8 [T const N:u8] self:$array[T N] -> u8 { N }\nfn fits self:$array[i64 3] -> u8 { self take_u8 }" tc_const
+    diagnostics "u8 argument that fits" assert_no_errors
+
+    Diagnostics::new = overflow
+    overflow "fn take_u8 [T const N:u8] self:$array[T N] -> u8 { N }\nfn probe self:$array[i64 300] -> u8 { self take_u8 }" tc_const
+    overflow "u8 argument out of range" assert_has_errors
+    overflow "names the argument" "300" assert_error_contains
+    overflow "names the width" "u8" assert_error_contains
+}
+# `bool` and `char` are usable constant parameter types, and distinct values are
+# distinct instantiations that do not unify (ADR-0153).
+
+fn test_const_param_bool_and_char {
+    Diagnostics::new = diagnostics
+    "const_param_bool_and_char" test_start
+    diagnostics "fn take_bool [T const B:bool] self:$array[T B] -> bool { B }\nfn as_true self:$array[i64 true] -> bool { self take_bool }\nfn take_char [T const C:char] self:$array[T C] -> char { C }\nfn as_a self:$array[i64 'a'] -> char { self take_char }" tc_const
+    diagnostics "bool and char arguments" assert_no_errors
+
+    Diagnostics::new = mismatch
+    mismatch "fn take_bool [T const B:bool] self:$array[T B] -> bool { B }\nfn wants_true self:$array[i64 true] -> bool { self take_bool }\nfn probe self:$array[i64 false] -> bool { self wants_true }" tc_const
+    mismatch "distinct bool instantiations do not unify" assert_has_errors
+}
+# Float and `str` constant parameters are rejected at the declaration with a
+# diagnostic that names the type (ADR-0153).
+
+fn test_const_param_rejects_float_and_str {
+    Diagnostics::new = diagnostics
+    "const_param_rejects_float_and_str" test_start
+    diagnostics "fn f [const X:f64] self:$array[i64 X] -> u64 { 0 }" parse_resolve_test_source drop
+    diagnostics "float const parameter" assert_has_errors
+    diagnostics "names the type" "f64" assert_error_contains
+
+    Diagnostics::new = str_diags
+    str_diags "fn g [const S:str] self:$array[i64 S] -> u64 { 0 }" parse_resolve_test_source drop
+    str_diags "str const parameter" assert_has_errors
+    str_diags "names the type" "str" assert_error_contains
+}
+test_const_param_signature
+test_const_param_body_and_binding
+test_const_param_rejects_non_constant
+test_const_param_integer_widths
+test_const_param_bool_and_char
+test_const_param_rejects_float_and_str
+test_summary

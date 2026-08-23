@@ -1225,6 +1225,13 @@ fn type_exists_recursive_t
             fi
             false
         }
+        Type::Const(const_type) => {
+            if const_type.is_symbolic ! then true return fi
+            if function_opt Option::Some(check_fn) is then
+                const_type.name check_fn Function::stack_effect StackEffect::const_params.has return
+            fi
+            false
+        }
         Type::Generic(generic) => {
             for param in generic.params.iter do
                 if store function_opt param type_exists_recursive_t ! then false return fi
@@ -1314,6 +1321,17 @@ fn resolve_return_type_t bindings:$Map[str Type] ret:$Type -> Type {
                 bound clone_type
             else
                 name.clone Type::TypeVar
+            fi
+        }
+        Type::Const(const_type) => {
+            if const_type.is_symbolic then
+                if const_type.name bindings.get Option::Some(bound) is then
+                    bound clone_type
+                else
+                    ret clone_type
+                fi
+            else
+                ret clone_type
             fi
         }
         Type::Generic(generic) => {
@@ -1523,6 +1541,7 @@ impl TypeChecker {
                             unsafe { bind_index actual_g.params.get bind_name bindings (ptr) (Map[str Type]) tc.bind_type_var drop }
                         fi
                     fi
+                    bind_index actual_g.params.get bind_index expected_params.get tc.validate_const_arguments_t
                     1 += bind_index
                 done
                 true return
@@ -1536,6 +1555,55 @@ impl TypeChecker {
             }
         end
         true
+    }
+
+    # Validate the argument for a symbolic `const` parameter (ADR-0152): it must
+    # be a compile-time constant that fits the parameter's type, else a
+    # diagnostic that names the argument.
+    fn validate_const_argument tc:mut$TypeChecker expected_const:$ConstType actual:$Type {
+        if expected_const.is_symbolic ! then return fi
+        if actual.is_unknown then return fi
+        if actual Type::Const(actual_const) is then
+            if actual_const.is_symbolic then return fi
+            if expected_const.typ actual_const.fits_parameter ! then
+                tc.current_location f"Constant argument `{actual_const.value}` does not fit type `{expected_const.typ.format}` of constant parameter `{expected_const.name}`" ErrorKind::TypeMismatch tc.diagnostics.record_error
+            fi
+            return
+        fi
+        tc.current_location f"Constant parameter `{expected_const.name}` requires a compile-time constant, got `{actual.format}`" ErrorKind::TypeMismatch tc.diagnostics.record_error
+    }
+
+    # Walk an expected type and its actual argument in parallel, validating every
+    # symbolic `const` parameter position against the supplied argument (ADR-0152).
+    fn validate_const_arguments_t tc:mut$TypeChecker expected:$Type actual:$Type {
+        expected match
+            Type::Const(expected_const) => {
+                actual expected_const tc.validate_const_argument
+            }
+            Type::Generic(expected_generic) => {
+                if actual Type::Generic(actual_generic) is then
+                    if
+                    expected_generic.base actual_generic.base ==
+                    expected_generic.params.length actual_generic.params.length == &&
+                    then
+                        for pair in actual_generic.params.iter expected_generic.params.iter.zip do
+                            pair.second pair.first tc.validate_const_arguments_t
+                        done
+                    fi
+                fi
+            }
+            Type::Function(expected_function) => {
+                if actual Type::Function(actual_function) is then
+                    for pair in actual_function.parameters.iter expected_function.parameters.iter.zip do
+                        pair.second pair.first tc.validate_const_arguments_t
+                    done
+                    for pair in actual_function.return_types.iter expected_function.return_types.iter.zip do
+                        pair.second pair.first tc.validate_const_arguments_t
+                    done
+                fi
+            }
+            _ => { }
+        end
     }
 }
 
@@ -1761,6 +1829,7 @@ impl TypeChecker {
             borrowed_target = actual_target
         fi
         unsafe { bindings (ptr) (Map[str Type]) actual_target target_opt.unwrap bind_semantic_type_arguments drop }
+        actual_target target_opt.unwrap tc.validate_const_arguments_t
         bindings target_opt.unwrap.substitute_t = resolved_target
         if tc.store actual_target resolved_target unify_type_t.is_none then
             f"Expected `{expected.typ.format}`, got `{value.type_value.format}`"

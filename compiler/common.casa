@@ -563,9 +563,11 @@ struct StackEffect {
     return_types: List[Type]
     type_vars:    Set[str]
     trait_bounds: Map[str List[TraitBound]]
+    const_params: Map[str BuiltinType]
 }
 
 fn empty_stack_effect -> StackEffect {
+    Map[str BuiltinType]::new
     Map[str List[TraitBound]]::new
     Set[str]::new
     List[Type]::new
@@ -575,6 +577,7 @@ fn empty_stack_effect -> StackEffect {
 
 impl StackEffect {
     fn new params:List[Parameter] returns:List[Type] -> StackEffect {
+        Map[str BuiltinType]::new
         Map[str List[TraitBound]]::new
         Set[str]::new
         returns
@@ -1398,12 +1401,52 @@ struct FunctionType {
     return_types: List[Type]
 }
 
+# A compile-time constant in a type-parameter slot (ADR-0152, ADR-0153).
+# Symbolic: `name` set (e.g. `N`), `value` unused. Concrete: `name` empty,
+# `value` holds the constant (integer verbatim, `bool` as 0/1, `char` as
+# codepoint). Float and `str` are rejected before a ConstType exists.
+
+struct ConstType {
+    name:  str
+    typ:   BuiltinType
+    value: i64
+}
+
+impl ConstType {
+    fn symbolic name:mut$str typ:BuiltinType -> ConstType {
+        0 typ name ConstType
+    }
+
+    fn concrete value:i64 typ:BuiltinType -> ConstType {
+        value typ "" ConstType
+    }
+
+    fn is_symbolic self:$ConstType -> bool {
+        0 self.name.length !=
+    }
+
+    # Does this concrete argument fit a `const` parameter of `expected_typ`
+    # (ADR-0153)? Integer arguments are contextual (fit any width whose range
+    # holds them); `bool` and `char` require the same kind.
+    fn fits_parameter self:$ConstType expected_typ:BuiltinType -> bool {
+        if expected_typ.is_integer then
+            if self.typ.is_integer ! then false return fi
+            self.value IntegerLiteral::from_int = literal
+            expected_typ Type::Builtin literal.fits return
+        fi
+        if expected_typ BuiltinType::Bool == then self.typ BuiltinType::Bool == return fi
+        if expected_typ BuiltinType::Char == then self.typ BuiltinType::Char == return fi
+        false
+    }
+}
+
 enum Type {
     Unknown
     Builtin (BuiltinType)
     Generic (GenericType)
     Function (FunctionType)
     TypeVar (str)
+    Const (ConstType)
 }
 
 fn parse_generic_params source:$str -> List[Type] {
@@ -1485,6 +1528,15 @@ impl Type {
             Type::Unknown => { "" }
             Type::Builtin(builtin) => { builtin.format }
             Type::TypeVar(name) => { name.clone }
+            Type::Const(const_type) => {
+                if const_type.is_symbolic then
+                    const_type.name.clone
+                elif const_type.typ BuiltinType::Bool == then
+                    if 0 const_type.value != then "true" else "false" fi
+                else
+                    const_type.value.to_str
+                fi
+            }
             Type::Generic(generic) => {
                 if generic.base SHARED_BORROW_TYPE == 1 generic.params.length == && then
                     f"${0 generic.params.get.format}" return
@@ -1579,6 +1631,17 @@ impl Type {
                     name.clone Type::TypeVar
                 fi
             }
+            Type::Const(const_type) => {
+                if const_type.is_symbolic then
+                    if const_type.name bindings.get Option::Some(bound) is then
+                        bound
+                    else
+                        self clone_type
+                    fi
+                else
+                    self clone_type
+                fi
+            }
             Type::Generic(generic) => {
                 generic.base = base
                 if 0 generic.params.length == then
@@ -1624,6 +1687,7 @@ impl Type {
     fn has_unresolved_type_var self:$Type -> bool {
         self match
             Type::TypeVar(_) => { true }
+            Type::Const(const_type) => { const_type.is_symbolic }
             Type::Generic(generic) => {
                 for param in generic.params.iter do
                     if param.has_unresolved_type_var then true return fi
@@ -1656,6 +1720,7 @@ impl Type {
     fn type_contains_var self:$Type type_var:mut$str -> bool {
         self match
             Type::TypeVar(name) => { name type_var == }
+            Type::Const(const_type) => { const_type.is_symbolic const_type.name type_var == && }
             Type::Generic(generic) => {
                 for param in generic.params.iter do
                     if type_var param.type_contains_var then true return fi
@@ -1788,6 +1853,16 @@ impl Type {
                     _ => { false }
                 end
             }
+            Type::Const(c_self) => {
+                other match
+                    Type::Const(c_other) => {
+                        c_other.name c_self.name ==
+                        c_other.typ c_self.typ == &&
+                        c_other.value c_self.value == &&
+                    }
+                    _ => { false }
+                end
+            }
             Type::Generic(g_self) => {
                 other match
                     Type::Generic(g_other) => {
@@ -1879,6 +1954,7 @@ fn clone_type typ:$Type -> Type {
         Type::Unknown => { Type::Unknown }
         Type::Builtin(builtin) => { builtin (BuiltinType) Type::Builtin }
         Type::TypeVar(name) => { name.clone Type::TypeVar }
+        Type::Const(const_type) => { const_type.value const_type.typ (BuiltinType) const_type.name.clone ConstType Type::Const }
         Type::Generic(generic) => {
             List[Type]::new = parameters
             for parameter in generic.params.iter do
@@ -1898,6 +1974,21 @@ fn clone_type typ:$Type -> Type {
             return_types parameters FunctionType Type::Function
         }
     end
+}
+# Parse a non-negative integer literal, e.g. the `3` in `array[i64 3]`
+# (ADR-0152). None if `source` is empty or has a non-digit character.
+
+fn try_parse_uint_literal source:$str -> Option[i64] {
+    if 0 source.length == then Option[i64]::None return fi
+    0 = value
+    0 (u64) = index
+    while index source.length > do
+        if index source.at.is_digit ! then Option[i64]::None return fi
+        10 value.wrapping_mul = value
+        index source.at.codepoint i64::from '0'.codepoint i64::from - value.wrapping_add = value
+        1 += index
+    done
+    value Option::Some
 }
 
 fn parse_type_str source:$str -> Type {
@@ -1919,6 +2010,15 @@ fn parse_type_str source:$str -> Type {
     if source parse_builtin Option::Some(builtin) is then
         builtin Type::Builtin return
     fi
+    # Constant argument in type position (ADR-0152, ADR-0153). An integer literal
+    # carries `u64` provisionally; its width is checked later against the declared
+    # parameter type. Char literals are handled in `parse_type_ast` (codepoint
+    # decoder in scope there).
+    if source try_parse_uint_literal Option::Some(const_value) is then
+        BuiltinType::U64 const_value ConstType::concrete Type::Const return
+    fi
+    if "true" source == then BuiltinType::Bool 1 ConstType::concrete Type::Const return fi
+    if "false" source == then BuiltinType::Bool 0 ConstType::concrete Type::Const return fi
     # TypeVar: single uppercase letter
     if 1 source.length == then
         if 0 source.at.is_upper then
