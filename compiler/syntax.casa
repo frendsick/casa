@@ -777,41 +777,71 @@ fn parse_array_lambda
 fn get_op_array parser:mut$Parser function_name:mut$str cursor:mut$TokenCursor -> Op {
     fallback_token "[" cursor expect_token_value.unwrap_or = open_token
     List[Op]::new = items
-    while "]" cursor expect_delimiter ! do
+    while true do
+        # Close on `]` (also reached after an optional trailing comma).
+        cursor.peek = close_peek
+        if close_peek Option::Some(cp) is then
+            if "]" cp Token::value == then
+                cursor.pop drop
+                break
+            fi
+        fi
+
+        # Parse one item.
+        false = parsed_nested
         cursor.peek = next_opt
         if next_opt Option::Some(next) is then
             if "[" next Token::value == then
                 cursor function_name parser get_op_array items.push
-                "," cursor expect_delimiter drop
-                continue
+                true = parsed_nested
             fi
         fi
-        cursor.pop = value_opt
-        if value_opt.is_none then
-            open_token Token::location "Unexpected end of input in array literal" ErrorKind::UnexpectedToken parser.state.record_error
-            parser.state.mark_output_unusable
-            open_token.location items OpValue::PushArray Op::new return
-        fi
-        value_opt.unwrap = value_token
-        if "{" value_token Token::value == then
-            items value_token cursor function_name parser parse_array_lambda
-        elif TokenKind::Literal value_token Token::kind == then
-            cursor value_token get_op_literal items.push
-        elif TokenKind::Identifier value_token Token::kind == then
-            cursor.peek = struct_peek_opt
-            if struct_peek_opt Option::Some(struct_peek) is then
-                if "{" struct_peek Token::value == then
-                    items value_token cursor function_name parser parse_array_struct_literal
+        if parsed_nested ! then
+            cursor.pop = value_opt
+            if value_opt.is_none then
+                open_token Token::location "Unexpected end of input in array literal" ErrorKind::UnexpectedToken parser.state.record_error
+                parser.state.mark_output_unusable
+                open_token.location items OpValue::PushArray Op::new return
+            fi
+            value_opt.unwrap = value_token
+            if "{" value_token Token::value == then
+                items value_token cursor function_name parser parse_array_lambda
+            elif TokenKind::Literal value_token Token::kind == then
+                cursor value_token get_op_literal items.push
+            elif TokenKind::Identifier value_token Token::kind == then
+                cursor.peek = struct_peek_opt
+                if struct_peek_opt Option::Some(struct_peek) is then
+                    if "{" struct_peek Token::value == then
+                        items value_token cursor function_name parser parse_array_struct_literal
+                    else
+                        value_token Token::location value_token Token::value OpValue::Identifier Op::new items.push
+                    fi
                 else
                     value_token Token::location value_token Token::value OpValue::Identifier Op::new items.push
                 fi
             else
-                value_token Token::location value_token Token::value OpValue::Identifier Op::new items.push
+                value_token Token::location "Unexpected token in array literal" ErrorKind::UnexpectedToken parser.state.record_error
+            fi
+        fi
+
+        # Items MUST be comma-separated. A single trailing comma before `]` is
+        # allowed for developer experience; the next iteration closes on `]`.
+        cursor.peek = sep_peek
+        if sep_peek Option::Some(sp) is then
+            if "," sp Token::value == then
+                cursor.pop drop
+            else
+                if "]" sp Token::value == ! then
+                    sp Token::location "Expected `,` between array items" ErrorKind::UnexpectedToken parser.state.record_error
+                    parser.state.mark_output_unusable
+                    break
+                fi
             fi
         else
-            value_token Token::location "Unexpected token in array literal" ErrorKind::UnexpectedToken parser.state.record_error
+            open_token Token::location "Unexpected end of input in array literal" ErrorKind::UnexpectedToken parser.state.record_error
+            parser.state.mark_output_unusable
+            break
         fi
-        "," cursor expect_delimiter drop
     done
     if parser.state.spans_enabled then
         cursor.previous_offset
@@ -4480,11 +4510,12 @@ fn build_syntax_facts source:$str tokens:$List[Token] spans:List[SyntaxSpan] -> 
             token logical_comment_text = text
             line_has_meaningful_token meaningful_count text SyntaxCommentFact comments.push
         elif TokenKind::Eof token.kind != then
-            # Commas are optional separators with no semantic content (every
-            # grammar site consumes and drops them). Exclude them so the
-            # formatter may canonicalize delimited-form commas, including the
-            # trailing comma on an expanded form, without tripping the
-            # token-equality safety net.
+            # Commas carry no operand content: item separators are required by
+            # the grammar (a missing one is a parse error the candidate re-parse
+            # still catches), and a trailing comma is optional decoration.
+            # Exclude them so the formatter may canonicalize delimited-form
+            # commas, including adding or dropping the optional trailing comma,
+            # without tripping the token-equality safety net.
             "," token.value == TokenKind::Delimiter token.kind == && = is_separator
             if is_separator ! then
                 token.location.span.length = length

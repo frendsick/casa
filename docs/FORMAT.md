@@ -124,7 +124,11 @@ Trailing spaces or tabs at the end of a line are forbidden.
 
 ## Array and list literals
 
-- Items are comma-separated with a space after each comma.
+- Items MUST be comma-separated, with a space after each comma. A missing comma
+  between items is a syntax error (see
+  [ADR-0153](adr/0153-array-literals-require-commas-between-items.md)).
+- A single trailing comma before `]` is allowed. The compact form omits it; the
+  expanded form adds it.
 - One space before the opening `[` when it follows another token:
 
 ```casa
@@ -136,11 +140,11 @@ Trailing spaces or tabs at the end of a line are forbidden.
 # Wrong
 ["0","1","2"]
 [1,2,3]List::from_array = nums
+[1 2 3]              # missing commas: syntax error
 ```
 
-- A delimited form has one canonical layout regardless of how the source spaces,
-  separates, or line-breaks its items. Commas are optional separators in the
-  source; the formatter always writes them.
+- A delimited form has one canonical layout regardless of how the source
+  line-breaks its items or whether it carries a trailing comma.
 - Keep the form **compact on one line** when the canonical line fits within 100
   characters.
 - When it does not fit, **expand it**: put one item on each indented line, add a

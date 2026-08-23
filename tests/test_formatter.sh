@@ -147,11 +147,16 @@ check_formatter_case preservation_failure 1 \
     $'fn foo\n{ # note\n1\n}\n' \
     $'fn foo\n{ # note\n1\n}\n' \
     'changed source meaning'
-# Normalizing delimited-form separators (space -> comma, adding a trailing
-# comma on expansion) must not trip the token-equality safety net, since commas
-# are non-semantic separators excluded from the meaningful-token comparison.
-check_formatter_case delimited_comma_normalized 0 \
+# Array items must be comma-separated; a space-separated literal is a syntax
+# error, so the formatter leaves the source untouched and exits 1.
+check_formatter_case delimited_requires_commas 1 \
     $'fn f {\n    [1 2 3] use\n}\n' \
+    $'fn f {\n    [1 2 3] use\n}\n' \
+    'Expected `,` between array items'
+# Dropping the optional trailing comma when compacting must not trip the
+# token-equality safety net, since a trailing comma is non-meaningful.
+check_formatter_case delimited_trailing_comma 0 \
+    $'fn f {\n    [1, 2, 3,] use\n}\n' \
     $'fn f {\n    [1, 2, 3] use\n}\n'
 check_formatter_case final_newline 0 $'1\n\n\n' $'1\n'
 check_formatter_case crlf 0 $'1\r\n2 +\r\n' $'1\n2 +\n'
