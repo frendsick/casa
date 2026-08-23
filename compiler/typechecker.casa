@@ -191,7 +191,7 @@ fn type_has_borrow typ:mut$Type store:mut$SymbolStore -> bool {
 
 fn method_receiver_type effect:$StackEffect -> Option[Type] {
     for parameter in effect.parameters.iter do
-        if parameter.name "__trait_" str::starts_with ! then
+        if parameter.name is_hidden_parameter_name ! then
             parameter.typ clone_type Option::Some return
         fi
     done
@@ -564,7 +564,13 @@ impl Op {
         target.as_generic = generic_option
         if generic_option.is_none then false return fi
         generic_option.unwrap = generic
-        if "array" generic.base != 1 generic.params.length != || then false return fi
+        if ARRAY_TYPE generic.base != 2 generic.params.length != || then false return fi
+        if target array_type_length Option::Some(target_length) is then
+            if items.length target_length != then
+                self.location f"Array literal with {items.length} element(s) does not fit `{target.format}`" ErrorKind::TypeMismatch diagnostics.record_error
+                false return
+            fi
+        fi
         true = valid
         0 generic.params.get = element_type
         0 (u64) = item_index
@@ -3289,6 +3295,39 @@ fn bind_generic_params_standalone
     bindings
 }
 
+# Bind every symbolic constant parameter in `expected` to the argument in the
+# matching position of `actual` (ADR-0152). The bound value is either a concrete
+# constant or the caller's own constant parameter when the call forwards it.
+
+fn bind_const_params_standalone
+    bindings:Map[str Type]
+    expected:$Type
+    actual:$Type
+-> Map[str Type] {
+    expected match
+        Type::Const(expected_const) => {
+            if expected_const.is_symbolic expected_const.name bindings.has ! && then
+                actual clone_type expected_const.name.clone bindings.set = bindings
+            fi
+            bindings
+        }
+        Type::Generic(expected_generic) => {
+            if actual Type::Generic(actual_generic) is then
+                if
+                expected_generic.base actual_generic.base ==
+                expected_generic.params.length actual_generic.params.length == &&
+                then
+                    for pair in actual_generic.params.iter expected_generic.params.iter.zip do
+                        pair.second pair.first bindings bind_const_params_standalone = bindings
+                    done
+                fi
+            fi
+            bindings
+        }
+        _ => { bindings }
+    end
+}
+
 fn matches_trait_bound
     receiver:mut$Type
     trait_type:mut$Type
@@ -3349,7 +3388,7 @@ fn trait_method_effects_match
     List[Parameter]::new = actual_parameters
     0 (u64) = actual_index
     while actual_index actual.parameters.length > do
-        if actual_index actual.parameters.get_ref.name "__trait_" str::starts_with ! then
+        if actual_index actual.parameters.get_ref.name is_hidden_parameter_name ! then
             actual_index actual.parameters.get actual_parameters.push
         fi
         1 += actual_index
@@ -3671,7 +3710,8 @@ impl TypeChecker {
                 location bindings actual type_variable tc.bind_concrete_type_variable return
             fi
         fi
-        effect.type_vars actual pattern bindings bind_generic_params_standalone
+        effect.type_vars actual pattern bindings bind_generic_params_standalone = bindings
+        actual pattern bindings bind_const_params_standalone
     }
 
     fn inject_trait_fn_ptrs
@@ -3690,7 +3730,7 @@ impl TypeChecker {
         List[Parameter]::new = non_hidden
         0 (u64) = param_index
         while param_index effect StackEffect::parameters.length > do
-            if param_index effect StackEffect::parameters.get_ref Parameter::name "__trait_" str::starts_with ! then
+            if param_index effect StackEffect::parameters.get_ref Parameter::name is_hidden_parameter_name ! then
                 param_index effect StackEffect::parameters.get non_hidden.push
             fi
             1 += param_index
@@ -3727,6 +3767,34 @@ impl TypeChecker {
         # matching the order apply_stack_effect pops parameters in.
         0 (u64) = inserted
         op_index 1 - = insert_pos
+
+        # Push the value of every constant parameter (ADR-0152). These go in
+        # before the trait pointers because the parser prepends trait pointers
+        # ahead of them, and in reverse key order for the same reason as below.
+        effect StackEffect::const_params.keys = const_keys
+        const_keys.length = const_index
+        while 0 const_index != do
+            1 -= const_index
+            const_index const_keys.get = const_name
+            const_name effect StackEffect::const_params.get.unwrap Type::Builtin = const_typ
+            const_name bindings.get = const_bound_opt
+            if const_bound_opt.is_none then
+                location f"Cannot determine the value of constant parameter `{const_name}`" ErrorKind::TypeMismatch tc.diagnostics.record_error
+                continue
+            fi
+            const_bound_opt.unwrap = const_bound_type
+            if const_bound_type Type::Const(const_bound) is then
+                location const_bound const_argument_op = const_push
+                const_typ clone_type Option::Some const_push Op::set_type_hint
+                insert_pos const_push ops.insert
+                1 += insert_pos
+                1 += inserted
+                const_typ tc.stack_push_type
+            else
+                location f"Constant parameter `{const_name}` requires a compile-time constant, got `{const_bound_type.format}`" ErrorKind::TypeMismatch tc.diagnostics.record_error
+            fi
+        done
+
         effect StackEffect::trait_bounds.keys = type_var_keys
         type_var_keys.length = type_index
         while 0 type_index != do
@@ -3995,7 +4063,7 @@ impl TypeChecker {
                 analyze_operation = semantics
                 if semantics.stack_effect Option::None is then op_index return fi
                 semantics.stack_effect.unwrap = effect
-                if 0 effect StackEffect::trait_bounds.keys.length != then
+                if effect effect_needs_hidden_arguments then
                     op.type_hint function_opt op Op::location op_index ops effect tc.inject_trait_fn_ptrs = injected
                     injected += op_index
                 fi
@@ -4113,9 +4181,7 @@ impl TypeChecker {
             fi
         elif literal_value OpValue::PushArray(items) is then
             if 0 items.length == then
-                List[Type]::new = empty_params
-                TYPE_UNKNOWN_T empty_params.push
-                empty_params "array" GenericType Type::Generic tc.stack_push_type
+                0 TYPE_UNKNOWN_T array_type_t tc.stack_push_type
             else
                 function_opt items tc.run_type_check_ops
                 TYPE_UNKNOWN_T = elem_type_t
@@ -4141,9 +4207,7 @@ impl TypeChecker {
                     fi
                     1 += items_idx
                 done
-                List[Type]::new = item_params
-                elem_type_t item_params.push
-                item_params "array" GenericType Type::Generic = array_type
+                items.length elem_type_t array_type_t = array_type
                 if op.has_numeric_literal then
                     op array_type tc.stack_push_literal
                     tc.stack.values.length 1 - tc.stack.values.get = pushed_value
@@ -5058,7 +5122,7 @@ impl TypeChecker {
                     fi
                     tc.diagnostics tc.store function ensure_typechecked
                     function Function::stack_effect = effect
-                    if 0 effect StackEffect::trait_bounds.keys.length != then
+                    if effect effect_needs_hidden_arguments then
                         Option[Type]::None function_opt op Op::location op_index ops effect
                         tc.inject_trait_fn_ptrs += op_index
                     fi
