@@ -1401,7 +1401,8 @@ struct FunctionType {
     return_types: List[Type]
 }
 
-# A compile-time constant that occupies a type-parameter slot (see ADR-0152).
+# A compile-time constant that occupies a type-parameter slot (ADR-0152,
+# ADR-0153).
 # Symbolic parameters carry a `name` (e.g. `N`) and an unused `value`; concrete
 # arguments carry an empty `name` and the bound `value`. `typ` is the declared
 # constant type. The value is a bit pattern reinterpreted for the type: integer
@@ -1425,6 +1426,21 @@ impl ConstType {
 
     fn is_symbolic self:$ConstType -> bool {
         0 self.name.length !=
+    }
+
+    # Does this concrete argument fit a `const` parameter declared as
+    # `expected_typ` (ADR-0153)? Integer arguments are contextual: any integer
+    # literal whose value fits the parameter's width is accepted. `bool` and
+    # `char` require an argument of the same kind.
+    fn fits_parameter self:$ConstType expected_typ:BuiltinType -> bool {
+        if expected_typ.is_integer then
+            if self.typ.is_integer ! then false return fi
+            self.value IntegerLiteral::from_int = literal
+            expected_typ Type::Builtin literal.fits return
+        fi
+        if expected_typ BuiltinType::Bool == then self.typ BuiltinType::Bool == return fi
+        if expected_typ BuiltinType::Char == then self.typ BuiltinType::Char == return fi
+        false
     }
 }
 
@@ -1517,7 +1533,13 @@ impl Type {
             Type::Builtin(builtin) => { builtin.format }
             Type::TypeVar(name) => { name.clone }
             Type::Const(const_type) => {
-                if const_type.is_symbolic then const_type.name.clone else const_type.value.to_str fi
+                if const_type.is_symbolic then
+                    const_type.name.clone
+                elif const_type.typ BuiltinType::Bool == then
+                    if 0 const_type.value != then "true" else "false" fi
+                else
+                    const_type.value.to_str
+                fi
             }
             Type::Generic(generic) => {
                 if generic.base SHARED_BORROW_TYPE == 1 generic.params.length == && then
@@ -1997,11 +2019,16 @@ fn parse_type_str source:$str -> Type {
     if source parse_builtin Option::Some(builtin) is then
         builtin Type::Builtin return
     fi
-    # Constant argument in type position: an integer literal binds a concrete
-    # `const` type parameter (ADR-0152). #427 accepts `u64` only.
+    # Constant argument in type position binds a concrete `const` type parameter
+    # (ADR-0152, ADR-0153). An integer literal is contextual: it carries `u64`
+    # provisionally and its width is checked against the parameter's declared
+    # type. `true`/`false` bind a `bool` constant. Char literals are handled by
+    # `parse_type_ast`, where the lexer's codepoint decoder is in scope.
     if source try_parse_uint_literal Option::Some(const_value) is then
         BuiltinType::U64 const_value ConstType::concrete Type::Const return
     fi
+    if "true" source == then BuiltinType::Bool 1 ConstType::concrete Type::Const return fi
+    if "false" source == then BuiltinType::Bool 0 ConstType::concrete Type::Const return fi
     # TypeVar: single uppercase letter
     if 1 source.length == then
         if 0 source.at.is_upper then

@@ -446,6 +446,15 @@ fn apply_borrow_type target:Type prefix:str -> Type {
     target parameters.push
     parameters prefix GenericType Type::Generic
 }
+# A leaf in type-argument position may be a constant argument rather than a type
+# name: an unsigned integer literal, `true`/`false`, or a char literal
+# (ADR-0153). The lexer emits these as `Literal` tokens.
+
+fn is_type_argument_literal value:$str -> bool {
+    if value try_parse_uint_literal.is_some then true return fi
+    if "true" value == "false" value == || then true return fi
+    value char_literal_codepoint.is_some
+}
 
 fn parse_type_ast cursor:mut$TokenCursor -> Type {
     cursor.peek = peek_opt
@@ -464,7 +473,7 @@ fn parse_type_ast cursor:mut$TokenCursor -> Type {
         fallback_token cursor expect_token.unwrap_or = base_token
         if
         TokenKind::Identifier base_token Token::kind !=
-        base_token Token::value try_parse_uint_literal.is_none &&
+        base_token Token::value is_type_argument_literal ! &&
         then
             base_token Token::location "Expected type name" ErrorKind::UnexpectedToken cursor.state.record_error
         fi
@@ -483,6 +492,13 @@ fn parse_type_ast cursor:mut$TokenCursor -> Type {
         peek.location "Nested borrow qualifiers are not supported" ErrorKind::Syntax
         cursor.state.record_error
         Type::Unknown return
+    fi
+
+    # Char literal in constant position binds a concrete `char` constant
+    # (ADR-0153). `parse_type_str` cannot decode it, so build the constant here
+    # where the lexer's codepoint decoder is in scope.
+    if base char_literal_codepoint Option::Some(char_codepoint) is then
+        BuiltinType::Char char_codepoint ConstType::concrete Type::Const return
     fi
 
     cursor.peek = next_opt
@@ -1187,19 +1203,21 @@ fn parse_const_type_parameter
     type_token Token::value parse_builtin = builtin_opt
     if builtin_opt Option::Some(const_builtin) is then
         if const_builtin const_type_parameter_type_allowed ! then
-            type_token Token::location f"Constant parameter `{name_token Token::value}` cannot have type `{type_token Token::value}`" ErrorKind::Syntax parser.state.record_error
+            type_token Token::location f"Constant parameter `{name_token Token::value}` cannot have type `{type_token Token::value}`: only integer, `bool`, and `char` constants are allowed" ErrorKind::Syntax parser.state.record_error
         fi
         const_builtin name_token Token::value const_params.set return
     fi
     type_token Token::location f"Constant parameter `{name_token Token::value}` has unknown type `{type_token Token::value}`" ErrorKind::Syntax parser.state.record_error
     const_params
 }
-# Which builtin types may appear as a constant parameter's declared type.
-# #427 permits `u64` only; #434 widens this to the other integer widths,
-# `bool`, and `char`, and keeps `float`/`str` rejected here.
+# Which builtin types may appear as a constant parameter's declared type
+# (ADR-0153). The integer widths, `bool`, and `char` are allowed. Float and
+# `str` are rejected: floats have no total equality (ADR-0012) and `str` has no
+# stated type-level identity rule, so neither can select an instantiation.
 
 fn const_type_parameter_type_allowed builtin:$BuiltinType -> bool {
-    builtin BuiltinType::U64 ==
+    if builtin.is_integer then true return fi
+    builtin BuiltinType::Bool == builtin BuiltinType::Char == ||
 }
 # Rewrite const-parameter names inside a type from type variables to symbolic
 # constants (ADR-0152). `parse_type_str` reads a single uppercase letter as a
@@ -1954,11 +1972,12 @@ fn parse_function parser:mut$Parser cursor:mut$TokenCursor -> Function {
     List[Op]::new = ops
     List[Variable]::new = variables
 
-    # Register const parameters as u64 variables so the body can read them as
-    # values (ADR-0152). #427 accepts u64 only. The runtime value comes from the
-    # concrete type at each instantiation, which array wiring supplies later.
+    # Register const parameters as variables of their declared type so the body
+    # can read them as values (ADR-0152, ADR-0153). The runtime value comes from
+    # the concrete type at each instantiation, which array wiring supplies later.
     for const_name in const_params.keys.iter do
-        BuiltinType::U64 Type::Builtin const_name.clone Variable variables.push
+        const_name const_params.get.unwrap = const_builtin
+        const_builtin Type::Builtin const_name.clone Variable variables.push
     done
     const_params effect StackEffect::set_const_params
 
