@@ -659,6 +659,18 @@ impl Formatter {
         token token_offset self.continuations add_offset_once
     }
 
+    fn break_after_token self:mut$Formatter tokens:$List[Token] index:u64 limit:u64 {
+        if limit index tokens self.next_token_index Option::Some(next_index) is then
+            next_index tokens.get self.add_break
+        fi
+    }
+
+    fn join_if_after_newline self:mut$Formatter token:$Token after_newline:bool {
+        if after_newline then
+            token self.add_join
+        fi
+    }
+
     fn measure_token_range self:mut$Formatter tokens:$List[Token] start:u64 stop:u64 -> u64 {
         self.depth 4 * (u64) = length
         false = has_previous
@@ -810,6 +822,68 @@ impl Formatter {
         line_width 100 < !
     }
 
+    fn apply_control_marker
+        self:mut$Formatter
+        tokens:$List[Token]
+        form:$SyntaxSpan
+        token:$Token
+        index:u64
+        close_index:u64
+        header_start:u64
+    -> u64 {
+        token.value = value
+        if "then" value == "do" value == || then
+            index header_start form tokens self.add_control_header_rules
+            close_index index tokens self.break_after_token
+        elif "elif" value == then
+            token self.add_break
+            index = header_start
+        elif "else" value == then
+            token self.add_break
+            close_index index tokens self.break_after_token
+        fi
+        header_start
+    }
+
+    fn build_match_arm_rules self:mut$Formatter tokens:$List[Token] arm_start:u64 arm_close:u64 {
+        false = block_arm
+        false = saw_arrow
+        false = after_newline
+        arm_start = index
+        while index arm_close 1 + > do
+            index tokens.get = token
+            if TokenKind::Newline token.kind == then
+                true = after_newline
+            else
+                token.value = value
+                if "=>" value == then
+                    true = saw_arrow
+                    after_newline token self.join_if_after_newline
+                elif
+                    "{" value ==
+                    TokenKind::Delimiter token.kind ==
+                    saw_arrow
+                    && &&
+                then
+                    after_newline token self.join_if_after_newline
+                    true = block_arm
+                    arm_close 1 + index tokens self.break_after_token
+                elif
+                    "}" value ==
+                    TokenKind::Delimiter token.kind ==
+                    block_arm
+                    && &&
+                then
+                    token self.add_break
+                elif block_arm ! after_newline && then
+                    token self.add_join
+                fi
+                false = after_newline
+            fi
+            1 += index
+        done
+    }
+
     fn build_control_rules self:mut$Formatter tokens:$List[Token] form:$SyntaxSpan {
         form.start tokens self.token_index_at = start_opt
         form.close tokens self.token_index_at = close_opt
@@ -833,21 +907,7 @@ impl Formatter {
                 token token_offset form self.inside_nested_form !
                 &&
             then
-                token.value = value
-                if "then" value == "do" value == || then
-                    index header_start form tokens self.add_control_header_rules
-                    if close_index index tokens self.next_token_index Option::Some(body_start) is then
-                        body_start tokens.get self.add_break
-                    fi
-                elif "elif" value == then
-                    token self.add_break
-                    index = header_start
-                elif "else" value == then
-                    token self.add_break
-                    if close_index index tokens self.next_token_index Option::Some(body_start) is then
-                        body_start tokens.get self.add_break
-                    fi
-                fi
+                header_start close_index index token form tokens self.apply_control_marker = header_start
             fi
             1 += index
         done
@@ -885,49 +945,7 @@ impl Formatter {
             arm_start_opt.unwrap = arm_start
             arm_close_opt.unwrap = arm_close
             arm_start tokens.get self.add_break
-
-            false = block_arm
-            false = saw_arrow
-            false = after_newline
-            arm_start = index
-            while index arm_close 1 + > do
-                index tokens.get = token
-                if TokenKind::Newline token.kind == then
-                    true = after_newline
-                else
-                    token.value = value
-                    if "=>" value == then
-                        true = saw_arrow
-                        if after_newline then
-                            token self.add_join
-                        fi
-                    elif
-                        "{" value ==
-                        TokenKind::Delimiter token.kind ==
-                        saw_arrow
-                        && &&
-                    then
-                        if after_newline then
-                            token self.add_join
-                        fi
-                        true = block_arm
-                        if arm_close 1 + index tokens self.next_token_index Option::Some(body_start) is then
-                            body_start tokens.get self.add_break
-                        fi
-                    elif
-                        "}" value ==
-                        TokenKind::Delimiter token.kind ==
-                        block_arm
-                        && &&
-                    then
-                        token self.add_break
-                    elif block_arm ! after_newline && then
-                        token self.add_join
-                    fi
-                    false = after_newline
-                fi
-                1 += index
-            done
+            arm_close arm_start tokens self.build_match_arm_rules
         done
     }
 
@@ -1020,6 +1038,91 @@ impl Formatter {
         close_index tokens.get self.add_break
     }
 
+    fn record_struct_field_name
+        self:$Formatter
+        tokens:$List[Token]
+        field_index:u64
+        close_index:u64
+        field_names:mut$List[str]
+    {
+        if close_index field_index tokens self.next_token_index Option::Some(colon_index) is then
+            if ":" colon_index tokens.get Token::value == then
+                field_index tokens.get Token::value.clone field_names.push
+            fi
+        fi
+    }
+
+    fn collect_struct_field_names
+        self:$Formatter
+        span:$SyntaxSpan
+        tokens:$List[Token]
+        field_names:mut$List[str]
+    {
+        span.start tokens self.token_index_at = open_opt
+        span.close tokens self.token_index_at = close_opt
+        if open_opt Option::Some(open_index) is close_opt Option::Some(close_index) is && then
+            open_index 1 + = field_index
+            0 = field_depth
+            while field_index close_index > do
+                field_index tokens.get = field_token
+                field_token.value = field_value
+                if "[" field_value == "(" field_value == || then
+                    1 += field_depth
+                elif "]" field_value == ")" field_value == || then
+                    1 -= field_depth
+                elif
+                    0 field_depth ==
+                    TokenKind::Identifier field_token.kind ==
+                    &&
+                then
+                    field_names close_index field_index tokens self.record_struct_field_name
+                fi
+                1 += field_index
+            done
+        fi
+    }
+
+    fn accessor_has_known_field
+        self:$Formatter
+        tokens:$List[Token]
+        token_index:u64
+        close_index:u64
+        field_names:$List[str]
+    -> bool {
+        if close_index token_index tokens self.next_token_index Option::Some(name_index) is then
+            name_index tokens.get Token::value = accessor_name
+            accessor_name field_names string_list_contains return
+        fi
+        false
+    }
+
+    fn collect_accessor_offsets
+        self:$Formatter
+        tokens:$List[Token]
+        start_index:u64
+        close_index:u64
+        field_names:$List[str]
+        dot_offsets:mut$List[u64]
+    -> bool {
+        false = has_known_field
+        start_index = token_index
+        while token_index close_index 1 + > do
+            token_index tokens.get = accessor_token
+            if
+                TokenKind::Delimiter accessor_token.kind ==
+                "." accessor_token.value ==
+                &&
+            then
+                accessor_token token_offset dot_offsets.push
+                if field_names close_index token_index tokens self.accessor_has_known_field then
+                    true = has_known_field
+                fi
+            fi
+            1 += token_index
+        done
+        has_known_field
+    }
+
     # Syntax-only parsing cannot resolve an imported accessor as a field getter
     # or a method. An assignment makes the result-feeding relationship explicit,
     # and locally declared fields identify getter chains without resolution.
@@ -1029,32 +1132,7 @@ impl Formatter {
         while span_index self.spans.length > do
             span_index self.spans.get = span
             if SyntaxSpanKind::StructBody span.kind == then
-                span.start tokens self.token_index_at = open_opt
-                span.close tokens self.token_index_at = close_opt
-                if open_opt Option::Some(open_index) is close_opt Option::Some(close_index) is && then
-                    open_index 1 + = field_index
-                    0 = field_depth
-                    while field_index close_index > do
-                        field_index tokens.get = field_token
-                        field_token.value = field_value
-                        if "[" field_value == "(" field_value == || then
-                            1 += field_depth
-                        elif "]" field_value == ")" field_value == || then
-                            1 -= field_depth
-                        elif
-                            0 field_depth ==
-                            TokenKind::Identifier field_token.kind ==
-                            &&
-                        then
-                            if close_index field_index tokens self.next_token_index Option::Some(colon_index) is then
-                                if ":" colon_index tokens.get Token::value == then
-                                    field_value.clone field_names.push
-                                fi
-                            fi
-                        fi
-                        1 += field_index
-                    done
-                fi
+                field_names tokens span self.collect_struct_field_names
             fi
             1 += span_index
         done
@@ -1074,25 +1152,7 @@ impl Formatter {
             start_opt.unwrap = start_index
             close_opt.unwrap = close_index
             List[u64]::new = dot_offsets
-            false = has_known_field
-            start_index = token_index
-            while token_index close_index 1 + > do
-                token_index tokens.get = accessor_token
-                if
-                    TokenKind::Delimiter accessor_token.kind ==
-                    "." accessor_token.value ==
-                    &&
-                then
-                    accessor_token token_offset dot_offsets.push
-                    if close_index token_index tokens self.next_token_index Option::Some(name_index) is then
-                        name_index tokens.get Token::value = accessor_name
-                        if accessor_name field_names string_list_contains then
-                            true = has_known_field
-                        fi
-                    fi
-                fi
-                1 += token_index
-            done
+            dot_offsets field_names close_index start_index tokens self.collect_accessor_offsets = has_known_field
             false = assigned
             if tokens.length close_index tokens self.next_token_index Option::Some(suffix) is then
                 if "=" suffix tokens.get Token::value == then
