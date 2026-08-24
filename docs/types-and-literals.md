@@ -87,18 +87,19 @@ Use `\{` and `\}` for literal braces.
 | Type | Purpose |
 |---|---|
 | `ptr` | A raw memory address |
-| `array[T]` | An owned fixed-length sequence |
+| `array[T N]` | An owned sequence of exactly `N` elements |
 | `fn[inputs -> outputs]` | A function value |
 | `Option[T]` | A value that can be absent |
 | `Result[T E]` | A success value or an error |
 | Struct name | A user-defined product type |
 | Enum name | A user-defined variant type |
 
-Array literals infer one common element type:
+Array literals infer one common element type, and their length is part of the
+type:
 
 ```casa
-[1, 2, 3] = numbers:array[i64]
-[] = names:array[str]
+[1, 2, 3] = numbers:array[i64 3]
+[] = names:array[str 0]
 ```
 
 The annotation gives an empty array its element type. Every evaluation of an

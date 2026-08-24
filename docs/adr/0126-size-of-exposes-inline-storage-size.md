@@ -17,7 +17,7 @@ index size_of[T] * data + = element_address
 
 ## Consequences
 
-- `List[T]`, `array[T]`, and user-defined unsafe containers can store multiword Copy aggregates inline without compiler-known collection types or one allocation per element.
+- `List[T]`, `array[T N]`, and user-defined unsafe containers can store multiword Copy aggregates inline without compiler-known collection types or one allocation per element.
 - `ptr::read[T]` and `ptr::write[T]` use the same compiler layout when moving values through calculated addresses.
 - Checked multiplication detects capacity-byte overflow before allocation.
 - `size_of[T]` does not promise a stable foreign or persistent ABI. Layout may change between compiler versions unless a separate ABI feature says otherwise.

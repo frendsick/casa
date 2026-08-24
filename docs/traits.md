@@ -155,7 +155,7 @@ impl Document: Clone {
 }
 ```
 
-`str`, `array[T]`, `List[T]`, `Option[T]`, `Result[T E]`, `Map[K V]`, and
+`str`, `array[T N]`, `List[T]`, `Option[T]`, `Result[T E]`, `Map[K V]`, and
 `Set[T]` implement Clone when their owned contents implement Clone.
 
 ## Advanced trait implementations

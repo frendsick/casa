@@ -17,9 +17,7 @@ struct BytecodeFailure {
 }
 
 impl BytecodeFailure {
-    fn new message:str -> BytecodeFailure {
-        message BytecodeFailure
-    }
+    fn new message:str -> BytecodeFailure { message BytecodeFailure }
 }
 
 struct BytecodeCompiler {
@@ -79,9 +77,7 @@ impl BytecodeCompiler {
         fi
     }
 
-    fn has_failed self:mut$BytecodeCompiler -> bool {
-        self.failure.is_some
-    }
+    fn has_failed self:mut$BytecodeCompiler -> bool { self.failure.is_some }
 }
 
 # ============================================================================
@@ -171,9 +167,12 @@ impl BytecodeCompiler {
         fi
     }
 
+    # Destroy every element of an `array[T N]` value. The array stores nothing
+    # but its elements, so the element count comes from the type (ADR-0152).
     fn compile_array_destruction
         compiler:mut$BytecodeCompiler
         element_type:mut$Type
+        length:$ConstType
         op:mut$Op
         bytecode:mut$List[InstValue]
     {
@@ -182,10 +181,12 @@ impl BytecodeCompiler {
         compiler.locals_count = index_local
         1 += compiler.locals_count
         array_local InstValue::LocalSet bytecode.push
-        array_local InstValue::LocalGet bytecode.push
-        WORD_SIZE InstValue::Push bytecode.push
-        InstValue::Add bytecode.push
-        InstValue::Load64 bytecode.push
+        if length.is_symbolic then
+            length.name compiler.resolve_variable = resolved_length
+            bytecode resolved_length.emit_get
+        else
+            length.value InstValue::Push bytecode.push
+        fi
         index_local InstValue::LocalSet bytecode.push
 
         compiler.new_label = start_label
@@ -203,7 +204,6 @@ impl BytecodeCompiler {
         InstValue::Sub bytecode.push
         index_local InstValue::LocalSet bytecode.push
         array_local InstValue::LocalGet bytecode.push
-        InstValue::Load64 bytecode.push
         index_local InstValue::LocalGet bytecode.push
         WORD_SIZE InstValue::Push bytecode.push
         InstValue::Mul bytecode.push
@@ -305,9 +305,12 @@ impl BytecodeCompiler {
         bytecode op typ compiler.compile_drop_hook
         typ clone_type = destruction_type
         if destruction_type Type::Generic(generic) is then
-            if "array" generic.base == then
-                if 0 generic.params.length == then InstValue::Drop bytecode.push return fi
-                bytecode op 0 generic.params.get compiler.compile_array_destruction
+            if ARRAY_TYPE generic.base == then
+                if destruction_type get_array_length_parameter Option::Some(array_length) is then
+                    bytecode op array_length 0 generic.params.get compiler.compile_array_destruction
+                else
+                    InstValue::Drop bytecode.push
+                fi
                 return
             fi
             if generic.base compiler.store.structs.get Option::Some(casa_struct) is then
@@ -369,6 +372,12 @@ impl BytecodeCompiler {
         if typ compiler.destruction_needs_function ! then
             InstValue::Drop bytecode.push
             return
+        fi
+        if typ get_array_length_parameter Option::Some(array_length) is then
+            if array_length.is_symbolic then
+                bytecode op typ compiler.compile_destruction_body
+                return
+            fi
         fi
         op typ compiler.ensure_destruction_function = function_name
         function_name InstValue::FnCall bytecode.push
@@ -1427,7 +1436,7 @@ impl BytecodeCompiler {
         if op.value OpValue::PushArray(items) is then
             items.length = length
 
-            if compiler.store items op_is_static_array_with_store then
+            if 0 length != compiler.store items op_is_static_array_with_store && then
                 bytecode items compiler.compile_static_array
                 return
             fi
@@ -1440,31 +1449,18 @@ impl BytecodeCompiler {
                 bytecode reverse_index item compiler.compile_op
             done
 
-            # Allocate memory: header (data_ptr + length) + elements
+            # An array stores only its elements (ADR-0152), so the allocation
+            # is exactly the element storage.
             compiler.locals_count = list_local
             1 += compiler.locals_count
-            length 2 + WORD_SIZE * (i64) InstValue::Push bytecode.push
+            length get_array_storage_size i64::try_from.unwrap InstValue::Push bytecode.push
             InstValue::HeapAlloc bytecode.push
             list_local InstValue::LocalSet bytecode.push
 
-            # Store data_ptr (allocation + 16) at offset 0
-            list_local InstValue::LocalGet bytecode.push
-            16 InstValue::Push bytecode.push
-            InstValue::Add bytecode.push
-            list_local InstValue::LocalGet bytecode.push
-            InstValue::Store64 bytecode.push
-
-            # Store length at offset WORD_SIZE
-            length (i64) InstValue::Push bytecode.push
-            list_local InstValue::LocalGet bytecode.push
-            WORD_SIZE InstValue::Push bytecode.push
-            InstValue::Add bytecode.push
-            InstValue::Store64 bytecode.push
-
-            # Store elements starting at offset 16
+            # Store elements starting at offset 0
             compiler.locals_count = index_local
             1 += compiler.locals_count
-            16 InstValue::Push bytecode.push
+            0 InstValue::Push bytecode.push
             index_local InstValue::LocalSet bytecode.push
 
             compiler.new_label = start_label
@@ -1473,7 +1469,7 @@ impl BytecodeCompiler {
             # while index limit > do
             start_label InstValue::Label bytecode.push
             index_local InstValue::LocalGet bytecode.push
-            length 2 + WORD_SIZE * (i64) InstValue::Push bytecode.push
+            length WORD_SIZE * i64::try_from.unwrap InstValue::Push bytecode.push
             InstValue::Gt bytecode.push
             end_label InstValue::JumpNe bytecode.push
 

@@ -25,19 +25,18 @@ enum ValueCapability {
 }
 
 struct TypedValue {
-    type_value: Type
-    origin:     Location
-    literals:   List[Op]
-    place:      Option[str]
-    capability: ValueCapability
-    binding:    Option[str]
-    source:     Option[Op]
-    origins:    Option[List[str]]
+    type_value:          Type
+    origin:              Location
+    literals:            List[Op]
+    place:               Option[str]
+    capability:          ValueCapability
+    binding:             Option[str]
+    source:              Option[Op]
+    origins:             Option[List[str]]
+    is_literal_constant: bool
 }
 
-fn origin_is_exclusive origin:mut$str -> bool {
-    origin "!" str::starts_with
-}
+fn origin_is_exclusive origin:mut$str -> bool { origin "!" str::starts_with }
 
 fn origin_place origin:mut$str -> str {
     if origin origin_is_exclusive then
@@ -191,7 +190,7 @@ fn type_has_borrow typ:mut$Type store:mut$SymbolStore -> bool {
 
 fn method_receiver_type effect:$StackEffect -> Option[Type] {
     for parameter in effect.parameters.iter do
-        if parameter.name "__trait_" str::starts_with ! then
+        if parameter.name is_hidden_parameter_name ! then
             parameter.typ clone_type Option::Some return
         fi
     done
@@ -228,9 +227,7 @@ impl TypedValue {
 }
 
 impl TypedStack {
-    fn new -> TypedStack {
-        List[TypedValue]::new TypedStack
-    }
+    fn new -> TypedStack { List[TypedValue]::new TypedStack }
 
     fn snapshot self:$TypedStack -> TypedStack {
         self.values.shallow_copy = values
@@ -243,9 +240,7 @@ impl TypedStack {
         values TypedStack
     }
 
-    fn restore self:mut$TypedStack source:$TypedStack {
-        source.snapshot.values = self.values
-    }
+    fn restore self:mut$TypedStack source:$TypedStack { source.snapshot.values = self.values }
 
     fn get_types self:$TypedStack -> List[Type] {
         List[Type]::new = types
@@ -259,7 +254,8 @@ impl TypedStack {
         0 (u64) = index
         while index self.values.length > do
             index self.values.get = value
-            value.origins clone_origins value.source value.binding value.capability value.place
+            value.is_literal_constant value.origins clone_origins
+            value.source value.binding value.capability value.place
             value.literals value.origin
             index types.get clone_type TypedValue index self.values.set
             1 += index
@@ -288,6 +284,15 @@ impl TypedStack {
         done
     }
 
+    fn mark_literals_runtime self:mut$TypedStack {
+        0 (u64) = index
+        while index self.values.length > do
+            index self.values.get = value
+            if 0 value.literals.length != then false = value.is_literal_constant fi
+            1 += index
+        done
+    }
+
     # Produce unified types and retain literal origins from both stacks.
     fn unify_types self:mut$TypedStack candidate:$TypedStack store:mut$SymbolStore -> List[Type] {
         store self.get_types candidate.get_types stacks_compatible = unified
@@ -306,9 +311,7 @@ struct OwnershipFlow {
 }
 
 impl OwnershipFlow {
-    fn new -> OwnershipFlow {
-        Map[str List[str]]::new List[str]::new OwnershipFlow
-    }
+    fn new -> OwnershipFlow { Map[str List[str]]::new List[str]::new OwnershipFlow }
 
     fn merge self:mut$OwnershipFlow other:$OwnershipFlow {
         for name in other.moved.iter do
@@ -564,7 +567,19 @@ impl Op {
         target.as_generic = generic_option
         if generic_option.is_none then false return fi
         generic_option.unwrap = generic
-        if "array" generic.base != 1 generic.params.length != || then false return fi
+        if ARRAY_TYPE generic.base != 2 generic.params.length != || then false return fi
+        if target get_array_length_parameter Option::Some(target_length) is then
+            if target_length.is_symbolic then
+                self.location
+                f"Array literal length {items.length} cannot satisfy constant parameter `{target_length.name}`"
+                ErrorKind::TypeMismatch diagnostics.record_error
+                false return
+            fi
+            if items.length i64::try_from.unwrap target_length.value != then
+                self.location f"Array literal with {items.length} element(s) does not fit `{target.format}`" ErrorKind::TypeMismatch diagnostics.record_error
+                false return
+            fi
+        fi
         true = valid
         0 generic.params.get = element_type
         0 (u64) = item_index
@@ -976,7 +991,8 @@ impl TypeChecker {
     }
 
     fn stack_push_type tc:mut$TypeChecker type_value:mut$Type {
-        Option[List[str]]::None Option[Op]::None Option[str]::None type_value type_capability Option[str]::None
+        false Option[List[str]]::None Option[Op]::None Option[str]::None
+        type_value type_capability Option[str]::None
         List[Op]::new tc.current_location type_value TypedValue
         tc.stack.values.push
     }
@@ -1012,7 +1028,7 @@ impl TypeChecker {
         if name tc.binding_origins.get Option::Some(stored) is then
             stored.clone Option::Some = origins
         fi
-        origins source binding type_value type_capability place
+        false origins source binding type_value type_capability place
         List[Op]::new tc.current_location stack_type
         TypedValue
         tc.stack.values.push
@@ -1021,7 +1037,7 @@ impl TypeChecker {
     fn stack_push_literal tc:mut$TypeChecker type_value:mut$Type op:mut$Op {
         List[Op]::new = literals
         unsafe { op (ptr) (Op) literals.push }
-        Option[List[str]]::None Option[Op]::None Option[str]::None
+        true Option[List[str]]::None Option[Op]::None Option[str]::None
         ValueCapability::Owned Option[str]::None literals
         tc.current_location type_value TypedValue
         tc.stack.values.push
@@ -1107,7 +1123,7 @@ impl TypeChecker {
         if 0 value.literals.length != then
             value.type_value resolve_numeric_literal_default = resolved
             tc.diagnostics resolved value.resolve_literals drop
-            value.origins clone_origins value.source value.binding value.capability value.place
+            false value.origins clone_origins value.source value.binding value.capability value.place
             List[Op]::new value.origin
             resolved clone_type TypedValue top tc.stack.values.set
             resolved return
@@ -1121,11 +1137,13 @@ impl TypeChecker {
         if 0 tc.stack.values.length == then
             if tc.within_param_cap then
                 TYPE_UNKNOWN_T Parameter::new tc.parameters.push
-                Option[List[str]]::None Option[Op]::None Option[str]::None ValueCapability::Owned Option[str]::None
+                false Option[List[str]]::None Option[Op]::None Option[str]::None
+                ValueCapability::Owned Option[str]::None
                 List[Op]::new empty_location TYPE_UNKNOWN_T TypedValue return
             fi
             tc.stack_underflow_message tc.report_stack_underflow
-            Option[List[str]]::None Option[Op]::None Option[str]::None ValueCapability::Owned Option[str]::None
+            false Option[List[str]]::None Option[Op]::None Option[str]::None
+            ValueCapability::Owned Option[str]::None
             List[Op]::new empty_location TYPE_MISSING_T TypedValue return
         fi
         tc.stack.values.pop
@@ -1165,7 +1183,8 @@ impl TypeChecker {
             if inferred.is_unknown_placeholder ! inferred TYPE_MISSING_T.eq ! && then
                 tc.diagnostics inferred right.resolve_literals drop
                 inferred Parameter::new tc.parameters.push
-                Option[List[str]]::None Option[Op]::None Option[str]::None ValueCapability::Owned Option[str]::None
+                false Option[List[str]]::None Option[Op]::None Option[str]::None
+                ValueCapability::Owned Option[str]::None
                 List[Op]::new empty_location inferred TypedValue return
             fi
         fi
@@ -1473,7 +1492,8 @@ impl TypeChecker {
         return_type bindings resolve_return_type_t = resolved
         if return_type.type_var_name Option::Some(type_variable) is then
             if type_variable literal_bindings.get Option::Some(literals) is then
-                Option[List[str]]::None Option[Op]::None Option[str]::None resolved type_capability Option[str]::None
+                false Option[List[str]]::None Option[Op]::None Option[str]::None
+                resolved type_capability Option[str]::None
                 literals tc.current_location resolved TypedValue
                 tc.stack.values.push
                 return
@@ -1848,10 +1868,16 @@ impl TypeChecker {
         while index effect.parameters.length > index depth > && do
             depth 1 - index - = stack_index
             stack_index tc.stack.values.get = value
+            index effect.parameters.get = parameter
             if 0 value.literals.length == then
-                index effect.parameters.get = parameter
                 tc.current_location.clone = binding_location
                 binding_location bindings effect stack_index parameter tc.bind_stack_parameter = bindings
+            else
+                value.type_value = actual
+                if actual.borrow_target Option::Some(actual_target) is then actual_target = actual fi
+                parameter.typ = expected
+                if expected.borrow_target Option::Some(expected_target) is then expected_target = expected fi
+                actual expected bindings bind_standalone_constant_parameters = bindings
             fi
             1 += index
         done
@@ -1916,6 +1942,50 @@ impl TypeChecker {
         fi = value.capability
     }
 
+    # Reject an out-of-range constant index before the program runs (ADR-0152).
+    # A runtime index keeps the terminating bounds check in `array::nth`.
+    fn check_constant_array_index
+        self:mut$TypeChecker
+        stack_effect:mut$StackEffect
+        function_name:$str
+    {
+        if ARRAY_NTH_FUNCTION function_name != then return fi
+        List[u64]::new = source_parameter_positions
+        0 (u64) = parameter_index
+        while parameter_index stack_effect.parameters.length > do
+            if
+            parameter_index stack_effect.parameters.get_ref.name
+            is_hidden_parameter_name !
+            then
+                parameter_index source_parameter_positions.push
+            fi
+            1 += parameter_index
+        done
+        if 2 source_parameter_positions.length != then return fi
+        self.stack.values.length = stack_depth
+        1 source_parameter_positions.get = index_position
+        if stack_depth index_position >= then return fi
+        stack_depth 1 - 0 source_parameter_positions.get - self.stack.values.get = array_value
+        stack_depth 1 - index_position - self.stack.values.get = index_value
+
+        array_value.type_value = array_type
+        if array_type.borrow_target Option::Some(borrowed) is then borrowed = array_type fi
+        array_type get_concrete_array_length = array_length_option
+        if array_length_option.is_none then return fi
+        array_length_option.unwrap = array_length
+
+        if index_value.is_literal_constant ! then return fi
+        if 1 index_value.literals.length != then return fi
+        0 index_value.literals.get = literal_operation
+        if literal_operation.value OpValue::PushInt(index_literal) is then
+            index_literal.value = index_constant
+            if array_length i64::try_from.unwrap index_constant >= then
+                self.current_location f"Array index {index_constant} is out of bounds for `{array_type.format}`"
+                ErrorKind::TypeMismatch self.diagnostics.record_error
+            fi
+        fi
+    }
+
     fn apply_stack_effect
         tc:mut$TypeChecker
         effect:mut$StackEffect
@@ -1923,6 +1993,7 @@ impl TypeChecker {
         return_hint:Option[Type]
         function_opt:mut$Option[Function]
     {
+        name effect tc.check_constant_array_index
         Option[str]::None = field
         Option[str]::None = projected_place
         ValueCapability::Shared = receiver_capability
@@ -1942,8 +2013,11 @@ impl TypeChecker {
         true effect tc.call_origins = exclusive_origins
         effect tc.check_call_borrow_conflicts
         effect tc.check_live_borrow_conflicts
-        # Simple case: no type variables
-        if 0 effect StackEffect::type_vars.length == then
+        # Simple case: no type or constant parameters
+        if
+        0 effect.type_vars.length ==
+        0 effect.const_params.keys.length == &&
+        then
             0 (u64) = index
             while index effect StackEffect::parameters.length > do
                 if "" name != then
@@ -1980,42 +2054,43 @@ impl TypeChecker {
         if return_hint Option::Some(hint) is then
             for return_type in effect StackEffect::return_types.iter do
                 effect.type_vars hint return_type bindings bind_generic_params_standalone = bindings
+                hint return_type bindings bind_standalone_constant_parameters = bindings
             done
         fi
         bindings effect tc.bind_concrete_stack_constraints = bindings
         0 (u64) = index
-        while index effect StackEffect::parameters.length > do
-            index effect StackEffect::parameters.get = param
+        while index effect.parameters.length > do
+            index effect.parameters.get = parameter
 
             if "" name != then
                 f"parameter {index 1 +} of `{name}`" = tc.current_expect_ctx
-            elif "" param Parameter::name != then
-                param Parameter::name = tc.current_expect_ctx
+            elif "" parameter.name != then
+                parameter.name = tc.current_expect_ctx
             fi
 
-            if bindings param tc.bind_borrow_parameter then
+            if bindings parameter tc.bind_borrow_parameter then
                 1 += index
                 continue
             fi
 
-            if literal_bindings bindings effect param tc.bind_direct_type_variable_parameter then
+            if literal_bindings bindings effect parameter tc.bind_direct_type_variable_parameter then
                 1 += index
                 continue
             fi
 
             # Parameterized type with type vars (e.g. Option[T], Map[K V])
-            if effect param bindings tc.bind_generic_param then
+            if effect parameter bindings tc.bind_generic_param then
                 1 += index
                 continue
             fi
 
             # Function type with type vars (e.g. fn[T -> T])
-            if effect param bindings tc.bind_fn_param then
+            if effect parameter bindings tc.bind_fn_param then
                 1 += index
                 continue
             fi
 
-            param Parameter::typ tc.expect_type_t
+            bindings parameter.typ.substitute_t tc.expect_type_t
             1 += index
         done
         "" = tc.current_expect_ctx
@@ -2607,7 +2682,8 @@ impl TypeChecker {
         if op.value OpValue::Dup is then
             if 1 depth < then false return fi
             depth 1 - tc.stack.values.get = value
-            value.origins clone_origins Option[Op]::None Option[str]::None value.capability value.place
+            value.is_literal_constant value.origins clone_origins
+            Option[Op]::None Option[str]::None value.capability value.place
             value.literals.shallow_copy value.origin value.type_value clone_type
             TypedValue tc.stack.values.push
             true return
@@ -2624,7 +2700,8 @@ impl TypeChecker {
         if op.value OpValue::Over is then
             if 2 depth < then false return fi
             depth 2 - tc.stack.values.get = value
-            value.origins clone_origins Option[Op]::None Option[str]::None value.capability value.place
+            value.is_literal_constant value.origins clone_origins
+            Option[Op]::None Option[str]::None value.capability value.place
             value.literals.shallow_copy value.origin value.type_value clone_type
             TypedValue tc.stack.values.push
             true return
@@ -2894,7 +2971,7 @@ impl TypeChecker {
                 stack_type_t clone_type = effective_type_t
             fi
             if has_annotation ! stack_type_t.has_unresolved && then
-                op Op::location f"Cannot infer element type of empty array literal assigned to `{var_name}`; add a type annotation (e.g. `= {var_name}:array[i64]`) or an explicit cast (e.g. `[] (array[i64])`)." ErrorKind::TypeMismatch tc.diagnostics.record_error
+                op.location f"Cannot infer element type of empty array literal assigned to `{var_name}`; add a type annotation (e.g. `= {var_name}:array[i64 0]`) or an explicit cast (e.g. `[] (array[i64 0])`)." ErrorKind::TypeMismatch tc.diagnostics.record_error
             fi
 
             function_opt var_name tc.is_global_assignment = is_global
@@ -3118,6 +3195,7 @@ impl TypeChecker {
                 fi
                 tc.store if_after tc.stack.unify_types = unified
                 if 0 unified.length != if_after if_before.equals ! && then
+                    if_after.mark_literals_runtime
                     unified if_after.set_types
                     if_before tc.stack.restore
                     op Op::location if_ctx IfContext::set_current_branch_location
@@ -3156,6 +3234,7 @@ impl TypeChecker {
                 fi
                 tc.store if_after tc.stack.unify_types = unified
                 if 0 unified.length != if_ctx IfContext::default_present && then
+                    if_after.mark_literals_runtime
                     if_after tc.stack.restore
                     unified tc.stack.set_types
                     return
@@ -3288,6 +3367,41 @@ fn bind_generic_params_standalone
     done
     bindings
 }
+# Bind every symbolic constant parameter in `expected` to the argument in the
+# matching position of `actual` (ADR-0152). The bound value is either a concrete
+# constant or the caller's own constant parameter when the call forwards it.
+
+fn bind_standalone_constant_parameters
+    bindings:Map[str Type]
+    expected:$Type
+    actual:$Type
+-> Map[str Type] {
+    if expected Type::Const(expected_constant) is then
+        if expected_constant.is_symbolic expected_constant.name bindings.has ! && then
+            actual clone_type expected_constant.name.clone bindings.set = bindings
+        fi
+        bindings return
+    fi
+    if expected Type::Generic(expected_generic) is then
+        actual expected_generic bindings bind_matching_generic_constant_parameters return
+    fi
+    bindings
+}
+
+fn bind_matching_generic_constant_parameters
+    bindings:Map[str Type]
+    expected:$GenericType
+    actual:$Type
+-> Map[str Type] {
+    if actual Type::Generic(actual_generic) is then
+        if expected.base actual_generic.base != then bindings return fi
+        if expected.params.length actual_generic.params.length != then bindings return fi
+        for pair in actual_generic.params.iter expected.params.iter.zip do
+            pair.second pair.first bindings bind_standalone_constant_parameters = bindings
+        done
+    fi
+    bindings
+}
 
 fn matches_trait_bound
     receiver:mut$Type
@@ -3349,7 +3463,7 @@ fn trait_method_effects_match
     List[Parameter]::new = actual_parameters
     0 (u64) = actual_index
     while actual_index actual.parameters.length > do
-        if actual_index actual.parameters.get_ref.name "__trait_" str::starts_with ! then
+        if actual_index actual.parameters.get_ref.name is_hidden_parameter_name ! then
             actual_index actual.parameters.get actual_parameters.push
         fi
         1 += actual_index
@@ -3663,7 +3777,7 @@ impl TypeChecker {
                 if 0 value.literals.length != then
                     actual resolve_numeric_literal_default = fallback
                     existing_option fallback value tc.resolve_type_var_literals = actual
-                    value.origins clone_origins value.source value.binding value.capability value.place
+                    false value.origins clone_origins value.source value.binding value.capability value.place
                     List[Op]::new value.origin
                     actual clone_type TypedValue
                     stack_index tc.stack.values.set
@@ -3671,7 +3785,8 @@ impl TypeChecker {
                 location bindings actual type_variable tc.bind_concrete_type_variable return
             fi
         fi
-        effect.type_vars actual pattern bindings bind_generic_params_standalone
+        effect.type_vars actual pattern bindings bind_generic_params_standalone = bindings
+        actual pattern bindings bind_standalone_constant_parameters
     }
 
     fn inject_trait_fn_ptrs
@@ -3690,7 +3805,7 @@ impl TypeChecker {
         List[Parameter]::new = non_hidden
         0 (u64) = param_index
         while param_index effect StackEffect::parameters.length > do
-            if param_index effect StackEffect::parameters.get_ref Parameter::name "__trait_" str::starts_with ! then
+            if param_index effect.parameters.get_ref.name is_hidden_parameter_name ! then
                 param_index effect StackEffect::parameters.get non_hidden.push
             fi
             1 += param_index
@@ -3727,6 +3842,34 @@ impl TypeChecker {
         # matching the order apply_stack_effect pops parameters in.
         0 (u64) = inserted
         op_index 1 - = insert_pos
+
+        # Push the value of every constant parameter (ADR-0152). These go in
+        # before the trait pointers because the parser prepends trait pointers
+        # ahead of them, and in reverse key order for the same reason as below.
+        effect.const_params.keys = constant_keys
+        constant_keys.length = constant_index
+        while 0 constant_index != do
+            1 -= constant_index
+            constant_index constant_keys.get = constant_name
+            constant_name effect.const_params.get.unwrap Type::Builtin = constant_type
+            constant_name bindings.get = constant_bound_option
+            if constant_bound_option.is_none then
+                location f"Cannot determine the value of constant parameter `{constant_name}`" ErrorKind::TypeMismatch tc.diagnostics.record_error
+                continue
+            fi
+            constant_bound_option.unwrap = constant_bound_type
+            if constant_bound_type Type::Const(constant_bound) is then
+                location function_opt constant_bound make_const_argument_operation = constant_push_operation
+                constant_type clone_type Option::Some constant_push_operation Op::set_type_hint
+                insert_pos constant_push_operation ops.insert
+                1 += insert_pos
+                1 += inserted
+                constant_type tc.stack_push_type
+            else
+                location f"Constant parameter `{constant_name}` requires a compile-time constant, got `{constant_bound_type.format}`" ErrorKind::TypeMismatch tc.diagnostics.record_error
+            fi
+        done
+
         effect StackEffect::trait_bounds.keys = type_var_keys
         type_var_keys.length = type_index
         while 0 type_index != do
@@ -3995,7 +4138,7 @@ impl TypeChecker {
                 analyze_operation = semantics
                 if semantics.stack_effect Option::None is then op_index return fi
                 semantics.stack_effect.unwrap = effect
-                if 0 effect StackEffect::trait_bounds.keys.length != then
+                if effect needs_hidden_arguments then
                     op.type_hint function_opt op Op::location op_index ops effect tc.inject_trait_fn_ptrs = injected
                     injected += op_index
                 fi
@@ -4113,9 +4256,7 @@ impl TypeChecker {
             fi
         elif literal_value OpValue::PushArray(items) is then
             if 0 items.length == then
-                List[Type]::new = empty_params
-                TYPE_UNKNOWN_T empty_params.push
-                empty_params "array" GenericType Type::Generic tc.stack_push_type
+                0 TYPE_UNKNOWN_T make_array_type tc.stack_push_type
             else
                 function_opt items tc.run_type_check_ops
                 TYPE_UNKNOWN_T = elem_type_t
@@ -4141,9 +4282,7 @@ impl TypeChecker {
                     fi
                     1 += items_idx
                 done
-                List[Type]::new = item_params
-                elem_type_t item_params.push
-                item_params "array" GenericType Type::Generic = array_type
+                items.length elem_type_t make_array_type = array_type
                 if op.has_numeric_literal then
                     op array_type tc.stack_push_literal
                     tc.stack.values.length 1 - tc.stack.values.get = pushed_value
@@ -4468,6 +4607,7 @@ impl TypeChecker {
                     then
                         tc.store match_after tc.stack.unify_types = last_unified
                         if 0 last_unified.length != match_after match_before.equals ! && then
+                            match_after.mark_literals_runtime
                             last_unified match_after.set_types
                         elif match_after match_before.equals then
                             tc.stack match_after.restore
@@ -4549,6 +4689,7 @@ impl TypeChecker {
                 fi
                 tc.store final_after tc.stack.unify_types = unified
                 if 0 unified.length != then
+                    final_after.mark_literals_runtime
                     final_after tc.stack.restore
                     unified tc.stack.set_types
                     return
@@ -5058,7 +5199,7 @@ impl TypeChecker {
                     fi
                     tc.diagnostics tc.store function ensure_typechecked
                     function Function::stack_effect = effect
-                    if 0 effect StackEffect::trait_bounds.keys.length != then
+                    if effect needs_hidden_arguments then
                         Option[Type]::None function_opt op Op::location op_index ops effect
                         tc.inject_trait_fn_ptrs += op_index
                     fi
@@ -5521,7 +5662,7 @@ impl TypeChecker {
             if 0 return_value.literals.length != then
                 return_index declared_returns.get = declared_return
                 diagnostics declared_return return_value.resolve_literals drop
-                return_value.origins clone_origins return_value.source return_value.binding
+                false return_value.origins clone_origins return_value.source return_value.binding
                 return_value.capability return_value.place
                 List[Op]::new return_value.origin
                 declared_return TypedValue
@@ -5569,7 +5710,7 @@ fn check_ops
         stack_value checker.consume_value
         stack_value.type_value resolve_numeric_literal_default = final_type
         diagnostics final_type stack_value.resolve_literals drop
-        stack_value.origins clone_origins stack_value.source stack_value.binding
+        false stack_value.origins clone_origins stack_value.source stack_value.binding
         stack_value.capability stack_value.place List[Op]::new
         stack_value.origin final_type
         TypedValue

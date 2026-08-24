@@ -54,12 +54,13 @@ an array literal still produces an independent owned value.
 - `.length` resolves to a constant. No array operation loads a stored length.
 - Indexing an `array[T N]` with an out-of-range constant is a compile-time
   error. Indexing with a runtime value still terminates the program.
-- `[]` is `array[T 0]` and has size zero. ADR-0132's one-byte minimum describes
-  inhabited types, so a zero-length array needs an explicit rule rather than an
-  implicit exception.
+- `[]` is `array[T 0]`. ADR-0154 settles its size: a zero-length array is
+  inhabited and keeps ADR-0132's one-byte minimum, so `N * size_of[T]`
+  describes its element storage rather than the whole value.
 - Casa gains a third sequence concept. `array[T N]` is fixed and statically
   sized, the runtime-length view is borrowed, and `List[T]` stays growable.
-  `List::slice` and `List::to_array` produce the view.
+  Issue #429 will add the borrowed view. The removed `List::slice` and
+  `List::to_array` methods do not return an array under this model.
 - A function that accepts arrays of any length takes a constant length
   parameter, such as `fn total [T const N:u64] values:$array[T N] -> T`. Under
   ADR-0069 each distinct `N` monomorphizes separately.
