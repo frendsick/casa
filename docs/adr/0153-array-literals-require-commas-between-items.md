@@ -10,8 +10,8 @@ was tolerated decoration. That left two spellings for the same array (`[1 2 3]`
 and `[1, 2, 3]`), which is exactly the optional syntax this decision removes.
 
 ```casa
-[1, 2, 3] = numbers:array[i64]   # required commas
-[1, 2, 3,] = trailing:array[i64] # optional trailing comma allowed
+[1, 2, 3] = numbers:array[i64 3]   # required commas
+[1, 2, 3,] = trailing:array[i64 3] # optional trailing comma allowed
 [1 2 3]                          # syntax error: missing commas
 ```
 

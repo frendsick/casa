@@ -55,9 +55,9 @@ resource drop    # error: owner `resource` was already moved
 
 The array destroys its elements when it goes out of scope. `clone` produces an
 independent array when `T: Clone`, and `array[T N]` is never `Copy`, even when
-`T` is, because it owns indirect storage. Indexing with a constant past the last
-element is a compile-time error; indexing past it with a runtime value
-terminates the program.
+`T` is. Copying an owning value would create two owners of the same storage.
+Indexing with a constant past the last element is a compile-time error. Indexing
+past it with a runtime value terminates the program.
 
 `nth` and `iter` read through a borrowed array, so they hand back `$T` rather
 than an owned element. The array stays the only owner: an element type with a
