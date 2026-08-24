@@ -116,6 +116,8 @@ value List[T]::from_array
 ## Comments
 
 - Always write one space between `#` and the comment text: `# text` not `#text`.
+- Put a `# SAFETY:` comment immediately before the `unsafe` block or `unsafe fn`
+  that it justifies.
 - Section separator comments may use either `=` or `-` repeated characters.
   Choose one style and do not mix styles within a file.
 
