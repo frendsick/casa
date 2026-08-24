@@ -97,8 +97,8 @@ input cannot return the borrow and is rejected with `Borrowed return has no live
 input origin`.
 
 ```casa
-fn nth [T] array:$array[T] n:u64 -> $T {
-    unsafe { array (ptr) load64 (ptr) n 8 * + load64 ($T) }
+fn nth [T const N:u64] array:$array[T N] n:u64 -> $T {
+    unsafe { array (ptr) n 8 * + load64 ($T) }
 }
 ```
 

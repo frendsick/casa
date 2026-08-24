@@ -8,22 +8,40 @@ import "std"
 
 ## Arrays
 
-`array[T]` is a fixed-length sequence created with bracket syntax:
+`array[T N]` is a sequence of exactly `N` elements, created with bracket syntax.
+The length is part of the type, so `[10, 20, 30]` has type `array[i64 3]` and
+arrays of different lengths are different types:
 
 ```casa
-[10, 20, 30] = numbers:array[i64]
+[10, 20, 30] = numbers:array[i64 3]
 1 numbers.nth print    # 20
 ```
 
 | Method | Result or action |
 |---|---|
-| `length self:array[T] -> u64` | Number of elements |
-| `nth self:$array[T] index:u64 -> $T` | Borrow of the element at a zero-based index |
-| `clone self:array[T] -> array[T]` | Independent array when `T: Clone` |
-| `iter self:$array[T] -> Iter[$T]` | Iterator over borrows of the elements |
-| `contains self:array[str] needle:str -> bool` | Whether a string array contains `needle` |
+| `length self:$array[T N] -> u64` | Number of elements, which is `N` |
+| `nth self:$array[T N] index:u64 -> $T` | Borrow of the element at a zero-based index |
+| `clone self:$array[T N] -> array[T N]` | Independent array when `T: Clone` |
+| `iter self:$array[T N] -> Iter[$T]` | Iterator over borrows of the elements |
+| `contains self:$array[str N] needle:$str -> bool` | Whether a string array contains `needle` |
 
-Array length cannot change. Use `List[T]` when values must be added or removed.
+An array value is its element storage: it carries no length word, and `.length`
+resolves to the constant in its type. A range of a `List[T]` whose length is
+known only at runtime has no array type, so list slicing waits for the borrowed
+runtime-length view. Array length cannot change. Use `List[T]` when values must
+be added or removed.
+
+A function that accepts arrays of any length takes a constant length parameter:
+
+```casa
+fn total [const N:u64] values:$array[i64 N] -> i64 {
+    0 (i64) = sum
+    for value in values.iter do
+        value += sum
+    done
+    sum
+}
+```
 
 Each evaluation of an array literal produces an independent owned array. The
 literal takes ownership of its elements, so an element binding cannot be used
@@ -31,14 +49,15 @@ again afterwards:
 
 ```casa
 Resource { id: 1 } = resource
-[resource] = owned:array[Resource]
+[resource] = owned:array[Resource 1]
 resource drop    # error: owner `resource` was already moved
 ```
 
 The array destroys its elements when it goes out of scope. `clone` produces an
-independent array when `T: Clone`, and `array[T]` is never `Copy`, even when `T`
-is, because it owns indirect storage. Indexing past the last element terminates
-the program.
+independent array when `T: Clone`, and `array[T N]` is never `Copy`, even when
+`T` is, because it owns indirect storage. Indexing with a constant past the last
+element is a compile-time error; indexing past it with a runtime value
+terminates the program.
 
 `nth` and `iter` read through a borrowed array, so they hand back `$T` rather
 than an owned element. The array stays the only owner: an element type with a
@@ -58,7 +77,7 @@ numbers.sort
 | Method | Result or action |
 |---|---|
 | `List[T]::new -> List[T]` | Empty list |
-| `from_array values:array[T] -> List[T]` | List containing the array values |
+| `from_array values:array[T N] -> List[T]` | List containing the array values |
 | `length self:List[T] -> u64` | Number of elements |
 | `get self:$List[T] index:u64 -> T` | Element at a zero-based index |
 | `get_ref self:$List[T] index:u64 -> $T` | Borrow of the element at a zero-based index |
@@ -66,8 +85,6 @@ numbers.sort
 | `push self:List[T] value:T` | Add at the end |
 | `pop self:List[T] -> T` | Remove and return the last element |
 | `insert self:List[T] value:T index:u64` | Insert before `index` |
-| `slice self:List[T] start:u64 stop:u64 -> array[T]` | Array view of `[start, stop)` |
-| `to_array self:List[T] -> array[T]` | Array view of the whole list |
 | `swap_at self:List[T] first:u64 second:u64` | Exchange two elements |
 | `reverse self:List[T]` | Reverse in place |
 | `append self:mut$List[T] other:List[T]` | Move every element of `other` onto the end |
@@ -173,7 +190,7 @@ builder.build print
 
 | Source | Iterator |
 |---|---|
-| `array[T]` | `Iter[$T]` |
+| `array[T N]` | `Iter[$T]` |
 | `List[T]` | `Iter[$T]` |
 | `str` | `Iter[char]` |
 | `Map[K V]` | `Iter[Pair[K V]]` |
@@ -182,7 +199,7 @@ builder.build print
 A `for` loop consumes the iterator. Create another iterator to traverse the
 source again.
 
-`array[T]` and `List[T]` yield borrows of their elements, because the container
+`array[T N]` and `List[T]` yield borrows of their elements, because the container
 keeps owning them. A loop variable bound from one of these iterators is a `$T`;
 `.clone` it when an owned value is needed.
 
@@ -231,7 +248,7 @@ This pipeline skips two values, takes four, keeps even values, and doubles
 them. Only `collect` runs the pipeline:
 
 ```casa
-2 [1, 2, 3, 4, 5, 6, 7] (array[i64]).iter.skip = rest
+2 [1, 2, 3, 4, 5, 6, 7] (array[i64 7]).iter.skip = rest
 4 rest.take = window
 { 2 % 0 == } window.filter = even
 { 2 * } even.map.collect = doubled
