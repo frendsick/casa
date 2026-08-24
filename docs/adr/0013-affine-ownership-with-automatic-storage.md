@@ -19,7 +19,7 @@ Higher-order function contracts reuse the same qualifiers instead of introducing
 
 - Owned values move. `dup` and the copied operand of `over` require `Copy`; `swap` and `rot` only reorder ownership. Scalars, shared borrows, and named function references are automatically `Copy`; eligible user-defined aggregates opt in with `derives Copy` or a validated empty Copy implementation. Mutable borrows, heap owners, owned resources, and types with custom cleanup are not `Copy`.
 - An escaping closure that borrows a local is rejected with a diagnostic suggesting `move { ... }`; captures are never silently moved or duplicated.
-- Issue #429 will add a runtime-length view tied to the borrowed list. The list cannot be mutated in a way that could invalidate the view before its last use.
+- `Slice[T]` is a runtime-length view tied to a borrowed list. The list cannot be mutated in a way that could invalidate the view before its last use.
 - Collection observation preserves ownership: `get` returns `Option[$T]`, `get_mut` returns `Option[mut$T]`, and `remove` returns `Option[T]`. Generic wrappers such as `Option` may temporarily carry an inferred borrow without introducing named lifetime syntax.
 - Collection iteration has three explicit modes: `iter` borrows and yields `$T`, `iter_mut` exclusively borrows and yields `mut$T`, and `into_iter` consumes and yields `T`. No mode implicitly duplicates elements.
 - The stateful cursor trait is named `Iterator[T]`, not `Iterable[T]`; its required `next` method takes `mut$self` and returns `Option[T]`. A separate collection-to-iterator trait remains deferred.
