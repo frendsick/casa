@@ -327,15 +327,22 @@ unsafe fn read_word address:ptr -> u64 {
 
 - Write getters directly against their receiver with **no space**: `struct.field`,
   `list.length`, `token.location.file`.
-- Getter chains always stay on **one line**, regardless of depth:
+- Keep one or two accessor calls on one line:
 
 ```casa
-error.location.span.length
-token.location.file
+analysis.result.document
 ```
 
-- When chaining **three or more method calls** whose results feed into each other,
-  put each method on its own line, indented 4 spaces from the receiver:
+- Put every accessor call in a chain of three or more on its own continuation
+  line. This syntax-only rule applies equally to field getters and method calls,
+  regardless of the chain's consumer:
+
+```casa
+analysis
+    .result
+    .document
+    .location
+```
 
 ```casa
 value

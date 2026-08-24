@@ -138,11 +138,16 @@ without a type-name prefix is acceptable.
   available.
 - **MUST NOT** put a space between the receiver and the accessor: `person.age` not
   `person .age`.
-- Getter chains always stay on one line, regardless of depth:
+- Keep one or two accessor calls on one line. Use continuation lines for three
+  or more calls:
 
   ```casa
   person.age print                  # MUST: shorthand getter, no space
-  error.location.span.length        # MUST: getter chain stays on one line
+  analysis.result.document print
+  analysis
+      .result
+      .document
+      .location print
   42 = person.age                   # MUST: field assignment, no space
   ```
 
