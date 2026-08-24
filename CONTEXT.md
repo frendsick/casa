@@ -149,6 +149,12 @@ The rules that control where a trait implementation may be declared and reject d
 **Borrowed value**:
 The live `T` accessed through a shared `$T` or exclusive `mut$T` borrow.
 
+**Safety comment**:
+A `# SAFETY:` comment immediately before an `unsafe` block or `unsafe fn`. A
+block comment states the concrete invariants that make its unchecked operations
+valid. A function comment states the caller contract.
+_Avoid_: Operation description, generic unsafe warning
+
 **Compiler-called cleanup method**:
 The reserved inherent `drop` method that the compiler calls during destruction and source code cannot call directly.
 
