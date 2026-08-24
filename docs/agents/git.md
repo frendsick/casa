@@ -28,6 +28,11 @@ Rules for commits, branches, and pull requests in this repo.
 
 - Always set `frendsick` as assignee
 - Always set relevant labels for the PR
+- The PR body MUST have a `Validation` section that lists each exact local
+  command that ran.
+- A pull request is complete only after all required CI checks pass.
+- Retry a failed CI job only when its log identifies an infrastructure or
+  transient failure.
 
 ## Releases
 
@@ -41,4 +46,5 @@ Rules for commits, branches, and pull requests in this repo.
 ## Workflow
 
 - MUST make a commit once a planned change is finished.
-- MUST open a pull request once code review finds no more issues to fix. See [review.md](./review.md) for the review loop.
+- MUST open a pull request after the review loop has resolved all findings that
+  can be completed in the current work. See [review.md](./review.md).

@@ -2,18 +2,35 @@
 
 Rules for the pre-PR review loop.
 
+## Finding classes
+
+Assign each finding one class:
+
+- **Must fix**: A defect within the requested scope.
+- **Prerequisite**: Work required by the requested behavior, specification, or
+  required checks.
+- **Non-blocking**: Any other improvement.
+
 ## Review loop
 
 Before opening a pull request:
 
-1. Run the `ponytail-review` skill on the diff and apply its findings.
-2. Review the changes
-3. **MUST** fix every issue the reviewer reports without pausing, asking, or surfacing the review output to the user as a stopping point.
-4. Re-run the reviewer on the fixed diff.
-5. Loop steps 3–4 until the reviewer reports no further issues.
-6. Only then open the PR. See [git.md](./git.md).
+1. Run the `ponytail-review` skill on the diff.
+2. Review the Standards and Spec axes.
+3. Classify each finding.
+4. **MUST** fix every Must fix finding without pausing. Run focused tests and
+   review only the affected axis again.
+5. Implement an untracked Prerequisite in the current work. For a tracked
+   Prerequisite, keep the pull request in draft and add a native GitHub blocker
+   relationship to the originating issue. If there is no originating issue, add
+   the relationship to the pull request instead. See
+   [issue-tracker.md](./issue-tracker.md#blocker-relationships).
+6. Report Non-blocking findings to the user and in the pull request. Do not
+   implement them.
+7. Repeat until no Must fix or untracked Prerequisite findings remain, then open
+   or update the pull request. See [git.md](./git.md).
 
 ## Why no pausing
 
-Stopping mid-loop wastes a round-trip and frustrates the user. The review is the work
-of finishing the change; treat it as part of the change, not a separate sign-off.
+Stopping mid-loop wastes a round-trip and frustrates the user. The review is part
+of finishing the change, not a separate sign-off.

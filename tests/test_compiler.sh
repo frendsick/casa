@@ -20,6 +20,7 @@ RESET='\033[0m'
 
 pass=0
 fail=0
+matched=false
 
 for f in "$TESTS_DIR"/test_*.casa; do
     base=$(basename "$f" .casa)
@@ -27,6 +28,7 @@ for f in "$TESTS_DIR"/test_*.casa; do
     if ! matches_filter "$base" "$@"; then
         continue
     fi
+    matched=true
 
     binary="/tmp/casa_${base}"
 
@@ -62,6 +64,7 @@ for f in "$TESTS_DIR"/errors/*.casa; do
     if ! matches_filter "$base" "$@"; then
         continue
     fi
+    matched=true
 
     expected_tag=$(head -1 "$f" | sed 's/^# expect: //')
 
@@ -89,6 +92,7 @@ for f in "$TESTS_DIR"/runtime_errors/*.casa; do
     if ! matches_filter "$base" "$@"; then
         continue
     fi
+    matched=true
 
     expected_message=$(head -1 "$f" | sed 's/^# expect: //')
     binary="/tmp/casa_runtime_${base}"
@@ -113,6 +117,7 @@ for f in "$TESTS_DIR"/runtime_errors/*.casa; do
     rm -f "$binary"
 done
 
+report_no_matches "$matched" "$@"
 echo
 echo "Summary: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
