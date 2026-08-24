@@ -44,6 +44,7 @@ enum IntrinsicKind {
     Store32
     Store64
     Print
+    SizeOf
     Typeof
     Exec
     Syscall0
@@ -832,6 +833,7 @@ enum OpValue {
     PrintCstr
     PrintInt
     PrintStr
+    SizeOf
     Typeof
     # Memory
     HeapAlloc
@@ -2445,6 +2447,7 @@ impl IntrinsicKind {
             IntrinsicKind::Store32 => "store32"
             IntrinsicKind::Store64 => "store64"
             IntrinsicKind::Print => "print"
+            IntrinsicKind::SizeOf => "size_of"
             IntrinsicKind::Typeof => "typeof"
             IntrinsicKind::Exec => "exec"
             IntrinsicKind::Syscall0 => "syscall0"
@@ -2558,6 +2561,7 @@ fn intrinsic_to_op_value intrinsic_kind:IntrinsicKind -> Option[OpValue] {
         IntrinsicKind::Load64 => OpValue::Load64 Option::Some
         IntrinsicKind::Over => OpValue::Over Option::Some
         IntrinsicKind::Print => OpValue::Print Option::Some
+        IntrinsicKind::SizeOf => OpValue::SizeOf Option::Some
         IntrinsicKind::Rot => OpValue::Rot Option::Some
         IntrinsicKind::Store8 => OpValue::Store8 Option::Some
         IntrinsicKind::Store16 => OpValue::Store16 Option::Some
@@ -2731,6 +2735,115 @@ fn symbol_store_new -> SymbolStore {
     Map[str Variable]::new
     Map[str Function]::new
     SymbolStore
+}
+
+struct TypeLayout {
+    size:  u64
+    align: u64
+}
+
+fn align_up value:u64 alignment:u64 -> u64 { value alignment 1 - + alignment / alignment * }
+
+fn get_type_layout_inner
+    typ:mut$Type
+    store:mut$SymbolStore
+    visiting:mut$Set[str]
+-> Option[TypeLayout] {
+    typ clone_type = inspected
+    if inspected.is_borrow then 8 8 TypeLayout Option::Some return fi
+    if inspected Type::Builtin(builtin) is then
+        builtin match
+            BuiltinType::I8 => { 1 1 TypeLayout Option::Some }
+            BuiltinType::U8 => { 1 1 TypeLayout Option::Some }
+            BuiltinType::Bool => { 1 1 TypeLayout Option::Some }
+            BuiltinType::I16 => { 2 2 TypeLayout Option::Some }
+            BuiltinType::U16 => { 2 2 TypeLayout Option::Some }
+            BuiltinType::I32 => { 4 4 TypeLayout Option::Some }
+            BuiltinType::U32 => { 4 4 TypeLayout Option::Some }
+            BuiltinType::F32 => { 4 4 TypeLayout Option::Some }
+            BuiltinType::Char => { 4 4 TypeLayout Option::Some }
+            _ => { 8 8 TypeLayout Option::Some }
+        end
+        return
+    fi
+    if inspected Type::Function(_) is then 8 8 TypeLayout Option::Some return fi
+    List[Type]::new "" GenericType = generic
+    if inspected Type::Generic(found_generic) is then
+        found_generic.params.shallow_copy found_generic.base.clone GenericType = generic
+    else
+        Option[TypeLayout]::None return
+    fi
+
+    if ARRAY_TYPE generic.base == then
+        inspected get_array_length_parameter = length_option
+        if length_option.is_none then Option[TypeLayout]::None return fi
+        length_option.unwrap = length
+        if length.is_symbolic then Option[TypeLayout]::None return fi
+        if 0 length.value == then 1 1 TypeLayout Option::Some return fi
+        visiting store 0 generic.params.get get_type_layout_inner = element_option
+        if element_option.is_none then Option[TypeLayout]::None return fi
+        element_option.unwrap = element
+        element.align length.value u64::try_from.unwrap element.size * TypeLayout Option::Some return
+    fi
+
+    inspected.format = type_name
+    if type_name visiting.has then 8 8 TypeLayout Option::Some return fi
+    type_name.clone visiting.add drop
+    if generic.base store.structs.get Option::Some(casa_struct) is then
+        casa_struct.type_vars inspected aggregate_type_bindings = substitutions
+        0 (u64) = size
+        1 (u64) = alignment
+        for member in casa_struct.members.iter do
+            substitutions member.typ.substitute_t = member_type
+            visiting store member_type get_type_layout_inner = field_option
+            if field_option.is_none then
+                type_name visiting.remove drop
+                Option[TypeLayout]::None return
+            fi
+            field_option.unwrap = field
+            if field.align alignment < then field.align = alignment fi
+            field.align size align_up field.size + = size
+        done
+        type_name visiting.remove drop
+        if 0 size == then 1 (u64) = size fi
+        alignment size align_up = padded_size
+        alignment padded_size TypeLayout Option::Some return
+    fi
+    if generic.base store.enums.get Option::Some(casa_enum) is then
+        casa_enum.type_vars inspected aggregate_type_bindings = substitutions
+        0 (u64) = largest_payload
+        1 (u64) = payload_alignment
+        for payload_types in casa_enum.variant_types.values.iter do
+            0 (u64) = payload_size
+            1 (u64) = variant_alignment
+            for payload_type in payload_types.iter do
+                substitutions payload_type.substitute_t = resolved_payload
+                visiting store resolved_payload get_type_layout_inner = field_option
+                if field_option.is_none then
+                    type_name visiting.remove drop
+                    Option[TypeLayout]::None return
+                fi
+                field_option.unwrap = field
+                if field.align variant_alignment < then field.align = variant_alignment fi
+                field.align payload_size align_up field.size + = payload_size
+            done
+            variant_alignment payload_size align_up = padded_payload
+            if padded_payload largest_payload < then padded_payload = largest_payload fi
+            if variant_alignment payload_alignment < then variant_alignment = payload_alignment fi
+        done
+        type_name visiting.remove drop
+        8 (u64) = alignment
+        if payload_alignment alignment < then payload_alignment = alignment fi
+        payload_alignment 8 align_up largest_payload + alignment align_up = size
+        alignment size TypeLayout Option::Some return
+    fi
+    type_name visiting.remove drop
+    Option[TypeLayout]::None
+}
+
+fn get_type_layout typ:mut$Type store:mut$SymbolStore -> Option[TypeLayout] {
+    Set[str]::new = visiting
+    visiting store typ get_type_layout_inner
 }
 
 fn aggregate_type_bindings typ:$Type type_vars:$List[str] -> Map[str Type] {
