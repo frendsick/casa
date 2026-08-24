@@ -73,7 +73,7 @@ terminate with exit code `2`.
 | `add_flag self name short long help_text` | Boolean flag |
 | `add_option self name short long help_text` | Option with one string value |
 | `add_multi_option self name short long help_text` | Repeatable string option |
-| `parse_args self -> ParsedArgs` | Parse process arguments |
+| `parse_args self:$ArgParser -> ParsedArgs` | Parse process arguments without changing definitions |
 | `get self:ParsedArgs name:str -> Option[str]` | Positional or option value |
 | `get_flag self:ParsedArgs name:str -> bool` | Flag state |
 | `get_multi self:ParsedArgs name:str -> Option[List[str]]` | Repeatable values |

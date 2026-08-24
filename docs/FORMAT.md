@@ -121,6 +121,8 @@ value List[T]::from_array
 - Keep a trailing comment on the line of the structural unit it follows.
 - Keep a standalone comment on its own line at the indentation of the unit it
   describes.
+- Put a `# SAFETY:` comment immediately before the `unsafe` block or `unsafe fn`
+  that it justifies.
 - Section separator comments may use either `=` or `-` repeated characters.
   Choose one style and do not mix styles within a file.
 
