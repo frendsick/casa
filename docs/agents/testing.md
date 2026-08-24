@@ -4,7 +4,9 @@ Rules for running and updating tests.
 
 ## During development
 
-Use selective filters to run only relevant tests while iterating:
+Trace the affected code paths and add or update one focused regression test for
+changed behavior. Run the matching compiler, example, or formatter filters while
+iterating:
 
 ```
 tests/test_compiler.sh array_methods       # just the test you're working on
@@ -20,20 +22,24 @@ CASA_COMPILER=./casac_new tests/test_compiler.sh array_methods
 
 ## Before opening a PR
 
-Run the full suite — no filters:
+After the implementation is stable:
 
-- **MUST** autoformat every changed `.casa` file with `./casafmt`:
+- **MUST** autoformat each changed `.casa` file once with `./casafmt`:
 
   ```
   ./casafmt < file.casa > tmp && mv tmp file.casa
   ```
 
-- **MUST** run all test scripts:
+- **MUST** run focused filters for the changed behavior. Run `test_bootstrap.sh`
+  only when the affected path requires bootstrap validation.
+- Full local suites are not required before a pull request. **MUST NOT** run them
+  only to duplicate pull request CI. CI runs:
 
   ```
   tests/test_compiler.sh
   tests/test_examples.sh
   tests/test_bootstrap.sh
+  tests/test_formatter.sh
   ```
 
 - All scripts default to `./casac` (or `./casafmt` for formatter tests). Rebuild
@@ -63,6 +69,9 @@ tests/test_formatter.sh indent            # only golden file tests matching "ind
 
 When `test_formatter.sh` has filters, idempotency and safety tests
 are skipped (they only run in the full suite).
+
+A filtered compiler, example, or formatter run that selects no tests prints the
+supplied filters in an explicit notice and exits successfully.
 
 `test_bootstrap.sh` has no filters — it always runs both self-compilation and
 fixed-point tests.

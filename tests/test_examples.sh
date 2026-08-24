@@ -23,6 +23,7 @@ RESET='\033[0m'
 
 pass=0
 fail=0
+matched=false
 
 for f in "$EXAMPLES_DIR"/*.casa; do
     base=$(basename "$f" .casa)
@@ -30,6 +31,7 @@ for f in "$EXAMPLES_DIR"/*.casa; do
     if ! matches_filter "$base" "$@"; then
         continue
     fi
+    matched=true
 
     out_file="$EXAMPLES_DIR/outputs/$base.out"
     err_file="$EXAMPLES_DIR/outputs/$base.err"
@@ -75,6 +77,7 @@ for f in "$EXAMPLES_DIR"/*.casa; do
     fi
 done
 
+report_no_matches "$matched" "$@"
 echo
 echo "Summary: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
