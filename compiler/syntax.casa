@@ -24,6 +24,10 @@ enum SyntaxSpanKind {
     DelimitedForm
     StructBody
     EnumBody
+    ControlForm
+    MatchForm
+    MatchArm
+    AccessorChain
 }
 
 struct SyntaxSpan {
@@ -49,6 +53,11 @@ struct ParseState {
     recovery_required: List[bool]
     store_mutated:     List[bool]
     spans:             List[SyntaxSpan]
+    if_starts:         List[u64]
+    while_starts:      List[u64]
+    accessor_start:    Option[u64]
+    accessor_close:    u64
+    accessor_count:    u64
 }
 
 impl ParseState {
@@ -60,7 +69,12 @@ impl ParseState {
         List[bool]::new = output_usable
         true output_usable.push
         List[SyntaxSpan]::new = spans
-        spans store_mutated recovery_required output_usable diagnostics ParseState
+        List[u64]::new = if_starts
+        List[u64]::new = while_starts
+        0 (u64)
+        0 (u64)
+        Option[u64]::None
+        while_starts if_starts spans store_mutated recovery_required output_usable diagnostics ParseState
     }
 
     fn record_error self:mut$ParseState kind:ErrorKind message:str location:mut$Location {
@@ -100,6 +114,37 @@ impl ParseState {
     # Record one structural layout span.
     fn record_span self:mut$ParseState kind:SyntaxSpanKind start:u64 close:u64 {
         close start kind SyntaxSpan self.spans.push
+    }
+
+    # Record simple control forms while the parser consumes their keywords.
+    fn record_control_op self:mut$ParseState value:$OpValue offset:u64 {
+        if value OpValue::IfStart is then
+            offset self.if_starts.push
+        elif value OpValue::IfEnd is self.if_starts.is_empty ! && then
+            self.if_starts.pop = start
+            offset start SyntaxSpanKind::ControlForm self.record_span
+        elif value OpValue::WhileStart is then
+            offset self.while_starts.push
+        elif value OpValue::WhileEnd is self.while_starts.is_empty ! && then
+            self.while_starts.pop = start
+            offset start SyntaxSpanKind::ControlForm self.record_span
+        fi
+    }
+
+    fn record_accessor self:mut$ParseState start:u64 close:u64 {
+        if 0 self.accessor_count == then start Option::Some = self.accessor_start fi
+        close = self.accessor_close
+        1 += self.accessor_count
+    }
+
+    fn flush_accessor_chain self:mut$ParseState {
+        self.accessor_count 3 < self.accessor_count 3 == || = three_or_more
+        if three_or_more self.accessor_start Option::Some(start) is && then
+            self.accessor_close start SyntaxSpanKind::AccessorChain self.record_span
+        fi
+        Option[u64]::None = self.accessor_start
+        0 = self.accessor_close
+        0 = self.accessor_count
     }
 }
 
@@ -934,6 +979,11 @@ fn get_op_delimiter
     # Dot . method
     if "." value == then
         cursor expect_function_name = method_token
+        if parser.syntax_only then
+            method_token Token::location Location::span Span::offset
+            token Token::location Location::span Span::offset
+            parser.state.record_accessor
+        fi
         method_token Token::location method_token Token::value OpValue::MethodCall Op::new ops.push
         return
     fi
@@ -3819,10 +3869,20 @@ fn parse_match_block
         fallback_token cursor expect_token.unwrap_or = arm_token
         if "end" arm_token Token::value == then
             arm_token Token::location OpValue::MatchEnd Op::new ops.push
+            if parser.syntax_only then
+                arm_token Token::location Location::span Span::offset
+                token Token::location Location::span Span::offset
+                SyntaxSpanKind::MatchForm parser.state.record_span
+            fi
             break
         fi
         ops function_name cursor arm_token parser parse_match_arm_pattern
         ops function_name cursor parser parse_match_arm_body
+        if parser.syntax_only then
+            cursor.previous_offset
+            arm_token Token::location Location::span Span::offset
+            SyntaxSpanKind::MatchArm parser.state.record_span
+        fi
     done
     ops
 }
@@ -4133,6 +4193,11 @@ fn handle_keyword_for
         if "done" body_token Token::value == 0 body_nesting_depth == && then
             cursor.pop drop
             body_token Token::location OpValue::WhileEnd Op::new ops.push
+            if parser.syntax_only then
+                body_token Token::location Location::span Span::offset
+                token Token::location Location::span Span::offset
+                SyntaxSpanKind::ControlForm parser.state.record_span
+            fi
             return
         fi
         if "while" body_token Token::value == then
@@ -4197,6 +4262,10 @@ fn get_op_keyword
     # Simple keyword -> OpValue lookup
     keyword keyword_to_op_value = simple_opt
     if simple_opt Option::Some(simple) is then
+        if parser.syntax_only then
+            token Token::location Location::span Span::offset
+            simple parser.state.record_control_op
+        fi
         token Token::location simple Op::new ops.push
         return
     fi
@@ -4569,9 +4638,16 @@ fn token_to_op
 {
     token Token::kind = kind
 
+    # Source newlines do not interrupt an accessor chain.
+    if TokenKind::Newline kind == then return fi
+
+    if parser.syntax_only then
+        TokenKind::Delimiter kind == "." token Token::value == && = is_accessor
+        if is_accessor ! then parser.state.flush_accessor_chain fi
+    fi
+
     if TokenKind::Eof kind == then return fi
     if TokenKind::Comment kind == then return fi
-    if TokenKind::Newline kind == then return fi
 
     if TokenKind::Delimiter kind == then
         ops function_name cursor token parser get_op_delimiter
@@ -4668,6 +4744,7 @@ fn parse_ops parser:mut$Parser tokens:List[Token] -> List[Op] {
             if cursor.recover_at_structure ! then parser.state.mark_output_unusable break fi
         fi
     done
+    if parser.syntax_only then parser.state.flush_accessor_chain fi
     ops
 }
 
