@@ -28,7 +28,6 @@ cleanup and recursive field destruction as a scope exit.
 | Intrinsic | Stack effect | Action |
 |---|---|---|
 | `print` | `[T: Display] T -> None` | Write a value to standard output |
-| `size_of[T]` | `None -> u64` | Return the inline storage size of `T` |
 | `typeof` | `T -> str` | Return the compile-time type name |
 | `exec` | `fn[...] -> ...` | Call a function value on the top of the stack |
 
