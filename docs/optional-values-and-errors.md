@@ -48,6 +48,7 @@ end
 | `is_none self:Option[T] -> bool` | Whether no value is present |
 | `is_ok self:Option[T] -> bool` | Alias used by `?` |
 | `unwrap self:Option[T] -> T` | Present value, or terminate on `None` |
+| `propagate self:Option[T] -> Option[U]` | Convert `None` for an enclosing `?` return |
 | `unwrap_or self:Option[T] default:T -> T` | Present value or `default` |
 | `map self:Option[T] transform:fn[T -> U] -> Option[U]` | Transform a present value |
 | `and_then self:Option[T] transform:fn[T -> Option[U]] -> Option[U]` | Chain an optional operation |
@@ -85,6 +86,7 @@ end
 | `is_error self:Result[T E] -> bool` | Whether the result is an error |
 | `unwrap self:Result[T E] -> T` | Success value, or terminate on `Error` |
 | `unwrap_error self:Result[T E] -> E` | Error value, or terminate on `Ok` |
+| `propagate self:Result[T E] -> Result[U E]` | Preserve `Error` for an enclosing `?` return |
 | `unwrap_or self:Result[T E] default:T -> T` | Success value or `default` |
 | `map self:Result[T E] transform:fn[T -> U] -> Result[U E]` | Transform a success value |
 | `map_error self:Result[T E] transform:fn[E -> F] -> Result[T F]` | Transform an error value |
@@ -114,5 +116,11 @@ An `Option[T]` can propagate into another `Option`. A `Result[T E]` can
 propagate into another `Result` with the same error type. Use `map_error` first
 when the error type must change.
 
+`?` uses three ordinary methods and does not recognize enum names. `is_ok`
+borrows the source and returns `bool`. On success, `unwrap` produces the value.
+On failure, `propagate` produces the enclosing function's one declared return
+value. The source is consumed on either path. Any enum with compatible methods
+uses the same behavior.
+
 See [`examples/propagate_result.casa`](../examples/propagate_result.casa) for a
-runnable file operation that uses `?`.
+runnable file operation and a custom enum that use `?`.
