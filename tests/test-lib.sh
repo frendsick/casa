@@ -30,3 +30,13 @@ matches_filter() {
     done
     return 1
 }
+
+report_no_matches() {
+    matched=$1
+    shift
+    if [ "$matched" = false ] && [ "$#" -gt 0 ]; then
+        printf 'Notice: no tests matched filters:'
+        printf ' %s' "$@"
+        printf '\n'
+    fi
+}

@@ -20,6 +20,7 @@ RESET='\033[0m'
 
 pass=0
 fail=0
+matched=false
 has_filter=false
 if [ $# -gt 0 ]; then
     has_filter=true
@@ -36,6 +37,7 @@ for input_file in "$TESTS_DIR"/*.input.casa; do
     if ! matches_filter "$base" "$@"; then
         continue
     fi
+    matched=true
 
     expected_file="$TESTS_DIR/$base.expected.casa"
 
@@ -57,6 +59,35 @@ for input_file in "$TESTS_DIR"/*.input.casa; do
         fail=$((fail + 1))
     fi
 done
+
+# Filtered runners must identify an empty selection without treating it as a
+# failure. Keep this in the existing formatter runner instead of adding a test
+# wrapper for the shell scripts.
+if matches_filter "filter_notice" "$@"; then
+    matched=true
+    filter_one="no-such-test"
+    filter_two="filter-two"
+    expected_notice="Notice: no tests matched filters: $filter_one $filter_two"
+    filter_notice_ok=true
+
+    for runner in tests/test_compiler.sh tests/test_examples.sh tests/test_formatter.sh; do
+        if ! output=$(CASA_COMPILER=/bin/true CASA_FORMATTER=/bin/true \
+            "$runner" "$filter_one" "$filter_two") || \
+            ! printf '%s\n' "$output" | grep -Fx "$expected_notice" >/dev/null
+        then
+            printf "${RED}[FAIL]${RESET} Failed: filter_notice (%s)\n" "$runner"
+            printf '%s\n' "$output"
+            filter_notice_ok=false
+        fi
+    done
+
+    if [ "$filter_notice_ok" = true ]; then
+        printf "${GREEN}[OK]${RESET} Passed: filter_notice\n"
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1))
+    fi
+fi
 
 if [ "$has_filter" = false ]; then
 
@@ -217,6 +248,7 @@ fi # has_filter
 # Summary
 # ============================================================================
 
+report_no_matches "$matched" "$@"
 printf "\nSummary: %d passed, %d failed\n" "$pass" "$fail"
 
 if [ "$fail" -ne 0 ]; then
