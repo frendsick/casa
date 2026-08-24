@@ -26,10 +26,8 @@ arrays of different lengths are different types:
 | `contains self:$array[str N] needle:$str -> bool` | Whether a string array contains `needle` |
 
 An array value is its element storage: it carries no length word, and `.length`
-resolves to the constant in its type. A range of a `List[T]` whose length is
-known only at runtime has no array type, so list slicing waits for the borrowed
-runtime-length view. Array length cannot change. Use `List[T]` when values must
-be added or removed.
+resolves to the constant in its type. Array length cannot change. Use `List[T]`
+when values must be added or removed.
 
 A function that accepts arrays of any length takes a constant length parameter:
 
@@ -64,6 +62,26 @@ than an owned element. The array stays the only owner: an element type with a
 reserved `drop` method runs its hook once, when the array is destroyed. Use
 `.clone` on the result when an owned value is needed.
 
+## Slices
+
+`Slice[T]` is a borrowed runtime-length range over a `List[T]`:
+
+```casa
+[10, 20, 30, 40] List::from_array = numbers
+4 1 numbers.slice = middle
+0 middle.nth print    # 20
+```
+
+| Method | Result or action |
+|---|---|
+| `length self:$Slice[T] -> u64` | Number of elements in the view |
+| `nth self:$Slice[T] index:u64 -> $T` | Borrow of the element at a zero-based index |
+| `iter self:$Slice[T] -> Iter[$T]` | Iterator over borrows of the elements |
+
+A slice contains a borrow of its source list. It does not own or destroy the
+elements. The list stays loaned until the slice's last use. `List::to_array`
+returns a slice over the complete list for compatibility with existing code.
+
 ## Lists
 
 `List[T]` is a growable sequence:
@@ -81,6 +99,8 @@ numbers.sort
 | `length self:List[T] -> u64` | Number of elements |
 | `get self:$List[T] index:u64 -> T` | Element at a zero-based index |
 | `get_ref self:$List[T] index:u64 -> $T` | Borrow of the element at a zero-based index |
+| `slice self:$List[T] start:u64 stop:u64 -> Slice[T]` | Borrowed half-open range `[start, stop)` |
+| `to_array self:$List[T] -> Slice[T]` | Borrowed view of the complete list |
 | `set self:List[T] index:u64 value:T` | Replace an element |
 | `push self:List[T] value:T` | Add at the end |
 | `pop self:List[T] -> T` | Remove and return the last element |
@@ -192,6 +212,7 @@ builder.build print
 |---|---|
 | `array[T N]` | `Iter[$T]` |
 | `List[T]` | `Iter[$T]` |
+| `Slice[T]` | `Iter[$T]` |
 | `str` | `Iter[char]` |
 | `Map[K V]` | `Iter[Pair[K V]]` |
 | `Set[K]` | `Iter[K]` |
@@ -199,9 +220,9 @@ builder.build print
 A `for` loop consumes the iterator. Create another iterator to traverse the
 source again.
 
-`array[T N]` and `List[T]` yield borrows of their elements, because the container
-keeps owning them. A loop variable bound from one of these iterators is a `$T`;
-`.clone` it when an owned value is needed.
+`array[T N]`, `List[T]`, and `Slice[T]` yield borrows of their elements, because
+the source keeps owning them. A loop variable bound from one of these iterators
+is a `$T`; `.clone` it when an owned value is needed.
 
 ## Lazy iterator operations
 

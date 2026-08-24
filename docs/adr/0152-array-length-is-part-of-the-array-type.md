@@ -58,9 +58,8 @@ an array literal still produces an independent owned value.
   inhabited and keeps ADR-0132's one-byte minimum, so `N * size_of[T]`
   describes its element storage rather than the whole value.
 - Casa gains a third sequence concept. `array[T N]` is fixed and statically
-  sized, the runtime-length view is borrowed, and `List[T]` stays growable.
-  Issue #429 will add the borrowed view. The removed `List::slice` and
-  `List::to_array` methods do not return an array under this model.
+  sized, `Slice[T]` is borrowed and has a runtime length, and `List[T]` stays
+  growable. `List::slice` and `List::to_array` return `Slice[T]`.
 - A function that accepts arrays of any length takes a constant length
   parameter, such as `fn total [T const N:u64] values:$array[T N] -> T`. Under
   ADR-0069 each distinct `N` monomorphizes separately.
