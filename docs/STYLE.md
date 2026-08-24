@@ -21,6 +21,8 @@ see [FORMAT.md](./FORMAT.md).
 ### Constructors
 
 - **MUST** use `Type::new` as the canonical constructor for types with an `impl` block:
+- **MUST** write qualified calls without whitespace around `::`, including generic
+  receivers such as `List[T]::new`.
 
   ```casa
   impl Timer {

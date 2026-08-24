@@ -102,6 +102,15 @@ fn bar {
 
 Trailing spaces or tabs at the end of a line are forbidden.
 
+## Qualified calls
+
+Do not put whitespace around `::` in qualified calls or references:
+
+```casa
+List[T]::new = values
+value List[T]::from_array
+```
+
 ---
 
 ## Comments
