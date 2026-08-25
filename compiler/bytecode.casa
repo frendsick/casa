@@ -278,7 +278,13 @@ impl BytecodeCompiler {
         if variable_name compiler.global_slots.get Option::Some(global_index) is then
             global_index ResolvedVariable::Global return
         fi
-        f"Variable `{variable_name}` is missing during bytecode compilation" compiler.record_failure
+        if compiler.function Option::Some(function) is then
+            f"Variable `{variable_name}` is missing while compiling `{function.name}`"
+            compiler.record_failure
+        else
+            f"Variable `{variable_name}` is missing during bytecode compilation"
+            compiler.record_failure
+        fi
         0 ResolvedVariable::Local
     }
 }
@@ -288,6 +294,73 @@ impl BytecodeCompiler {
 # ============================================================================
 
 impl BytecodeCompiler {
+    fn destruction_type_bindings compiler:mut$BytecodeCompiler typ:$Type -> Map[str Type] {
+        Map[str Type]::new = bindings
+        if typ Type::Generic(generic) is then
+            if generic.base compiler.store.clone_struct Option::Some(casa_struct) is then
+                casa_struct.type_vars typ aggregate_type_bindings = bindings
+            elif generic.base compiler.store.clone_enum Option::Some(casa_enum) is then
+                casa_enum.type_vars typ aggregate_type_bindings = bindings
+            fi
+        fi
+        bindings
+    }
+
+    fn compile_drop_hook_layout_arguments
+        compiler:mut$BytecodeCompiler
+        typ:$Type
+        function:$Function
+        op:mut$Op
+        bytecode:mut$List[InstValue]
+    {
+        typ compiler.destruction_type_bindings = bindings
+        function
+            .stack_effect
+            .parameters
+            .length = parameter_index
+        while 0 parameter_index != do
+            1 -= parameter_index
+            parameter_index function
+                .stack_effect
+                .parameters
+                .get = parameter
+            parameter.name HIDDEN_SIZE_PREFIX str::starts_with = is_size
+            parameter.name HIDDEN_REPR_PREFIX str::starts_with = is_repr
+            parameter.name HIDDEN_DROP_PREFIX str::starts_with = is_drop
+            if is_size is_repr || is_drop || ! then
+                continue
+            fi
+            if is_size then
+                HIDDEN_SIZE_PREFIX parameter.name hidden_layout_parameter_type
+            elif is_repr then
+                HIDDEN_REPR_PREFIX parameter.name hidden_layout_parameter_type
+            else
+                HIDDEN_DROP_PREFIX parameter.name hidden_layout_parameter_type
+            fi = queried_type
+            bindings queried_type.substitute_t = resolved_type
+            if is_size then
+                if compiler.store resolved_type type_inline_size Option::Some(size) is then
+                    size i64::try_from.unwrap InstValue::Push bytecode.push
+                else
+                    f"Cannot determine drop layout of `{resolved_type.format}`" compiler.record_failure
+                fi
+            elif
+                is_repr compiler.store resolved_type type_value_representation Option::Some(representation) is &&
+            then
+                representation i64::try_from.unwrap InstValue::Push bytecode.push
+            elif is_drop then
+                if resolved_type compiler.destruction_needs_function then
+                    op resolved_type compiler.ensure_destruction_function = drop_name
+                    drop_name InstValue::DropFn bytecode.push
+                else
+                    0 InstValue::Push bytecode.push
+                fi
+            else
+                f"Cannot determine drop representation of `{resolved_type.format}`" compiler.record_failure
+            fi
+        done
+    }
+
     fn compile_drop_hook
         compiler:mut$BytecodeCompiler
         typ:mut$Type
@@ -301,8 +374,10 @@ impl BytecodeCompiler {
                 .functions
                 .get Option::Some(function) is
         then
+            function.clone = drop_function
             InstValue::Dup bytecode.push
-            op function compiler.compile_function
+            bytecode op drop_function typ compiler.compile_drop_hook_layout_arguments
+            op drop_function compiler.compile_function
             function_name InstValue::FnCall bytecode.push
         fi
     }
@@ -472,6 +547,17 @@ impl BytecodeCompiler {
                 return
             fi
         fi
+        if destruction_type.has_unresolved_type_var then
+            destruction_type make_hidden_drop_parameter_name = drop_name
+            if drop_name compiler.capture_slots.get Option::Some(capture_index) is then
+                capture_index InstValue::CaptureLoad bytecode.push
+            else
+                drop_name compiler.resolve_variable = drop_variable
+                bytecode drop_variable.emit_get
+            fi
+            InstValue::DynamicDrop bytecode.push
+            return
+        fi
         InstValue::Drop bytecode.push
     }
 
@@ -518,6 +604,10 @@ impl BytecodeCompiler {
     {
         if typ compiler.destruction_needs_function ! then
             InstValue::Drop bytecode.push
+            return
+        fi
+        if typ.has_unresolved_type_var then
+            bytecode op typ compiler.compile_destruction_body
             return
         fi
         if typ get_array_length_parameter Option::Some(array_length) is then
@@ -2201,6 +2291,13 @@ impl BytecodeCompiler {
         elif op_value OpValue::FstringToStr is then
             # Identity no-op: str expression already left on stack by the preceding lambda.
             # Non-str cases are rewritten to OpMethodCall during type checking.
+        elif op_value OpValue::DestructionFn(target) is then
+            if target compiler.destruction_needs_function then
+                op target compiler.ensure_destruction_function = drop_name
+                drop_name InstValue::DropFn bytecode.push
+            else
+                0 InstValue::Push bytecode.push
+            fi
         elif op_value OpValue::FnCall is op_value OpValue::FnPush is || then
             if op_value OpValue::FnPush(fn_push_name) is then
                 fn_push_name compiler

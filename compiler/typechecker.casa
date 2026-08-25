@@ -5159,31 +5159,47 @@ impl TypeChecker {
             layout_parameter_index effect.parameters.get = layout_parameter
             layout_parameter.name HIDDEN_SIZE_PREFIX str::starts_with = is_size
             layout_parameter.name HIDDEN_REPR_PREFIX str::starts_with = is_repr
-            if is_size is_repr || ! then
+            layout_parameter.name HIDDEN_DROP_PREFIX str::starts_with = is_drop
+            if is_size is_repr || is_drop || ! then
                 continue
             fi
             if is_size then
                 HIDDEN_SIZE_PREFIX layout_parameter.name hidden_layout_parameter_type
-            else
+            elif is_repr then
                 HIDDEN_REPR_PREFIX layout_parameter.name hidden_layout_parameter_type
+            else
+                HIDDEN_DROP_PREFIX layout_parameter.name hidden_layout_parameter_type
             fi
             = queried_type
             bindings queried_type.substitute_t resolve_numeric_literal_default = resolved_type
             Option[Op]::None = layout_operation
-            if resolved_type.has_unresolved_type_var then
+            if is_drop tc.store resolved_type type_needs_destruction_in_store ! && then
+                location.clone resolved_type OpValue::DestructionFn Op::new Option::Some
+                = layout_operation
+            elif resolved_type.has_unresolved_type_var then
                 if is_size then
                     resolved_type make_hidden_size_parameter_name
-                else
+                elif is_repr then
                     resolved_type make_hidden_repr_parameter_name
+                else
+                    resolved_type make_hidden_drop_parameter_name
                 fi
                 = forwarded_name
                 forwarded_name function_opt find_forwarded_layout_argument = forward_value
                 if forward_value Option::Some(value) is then
                     location.clone value Op::new Option::Some = layout_operation
                 else
-                    location f"Cannot determine layout of `{resolved_type.format}` in this generic call"
+                    if is_drop then
+                        f"Cannot determine destructor for `{resolved_type.format}` in this generic call"
+                    else
+                        f"Cannot determine layout of `{resolved_type.format}` in this generic call"
+                    fi = message
+                    location message
                     ErrorKind::TypeMismatch tc.diagnostics.record_error
                 fi
+            elif is_drop then
+                location.clone resolved_type OpValue::DestructionFn Op::new Option::Some
+                = layout_operation
             else
                 if is_size then
                     tc.store resolved_type type_inline_size
@@ -6804,6 +6820,31 @@ fn add_hidden_layout_parameter
     assignment assignments.push
 }
 
+fn add_hidden_drop_parameters
+    typ:mut$Type
+    hidden_parameters:mut$List[Parameter]
+    variables:mut$List[Variable]
+    assignments:mut$List[Op]
+    seen:mut$Set[str]
+    location:mut$Location
+{
+    typ match
+        Type::TypeVar(_) => {
+            typ make_hidden_drop_parameter_name = hidden_drop
+            location seen assignments variables hidden_parameters hidden_drop
+            add_hidden_layout_parameter
+        }
+        Type::Generic(generic) => {
+            for parameter in generic.params.iter do
+                location seen assignments variables hidden_parameters parameter
+                add_hidden_drop_parameters
+            done
+        }
+        _ => {
+        }
+    end
+}
+
 fn rewrite_generic_size_queries
     ops:mut$List[Op]
     hidden_parameters:mut$List[Parameter]
@@ -6879,7 +6920,8 @@ fn prepare_generic_size_queries function:mut$Function {
     do
         existing_parameter.name HIDDEN_SIZE_PREFIX str::starts_with = is_size
         existing_parameter.name HIDDEN_REPR_PREFIX str::starts_with = is_repr
-        if is_size is_repr || then
+        existing_parameter.name HIDDEN_DROP_PREFIX str::starts_with = is_drop
+        if is_size is_repr || is_drop || then
             existing_parameter.name.clone seen.add
         fi
     done
@@ -6892,6 +6934,12 @@ fn prepare_generic_size_queries function:mut$Function {
             .parameters
             .iter
     do
+        parameter.typ clone_type = destruction_parameter_type
+        if destruction_parameter_type.borrow_target Option::Some(target) is then
+            target = destruction_parameter_type
+        fi
+        function.location seen assignments function.variables hidden_parameters
+        destruction_parameter_type add_hidden_drop_parameters
         parameter.typ clone_type signature_types.push
     done
     for
