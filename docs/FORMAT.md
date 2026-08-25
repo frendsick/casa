@@ -64,7 +64,8 @@ fn fizzbuzz number:i64 {
   are grouped **without** blank lines.
 - Consecutive `import` statements are grouped **without** blank lines.
 - **1 blank line** immediately before a section separator comment.
-- Inside a function body, no more than **1 consecutive blank line** (SHOULD).
+- Inside a freeform composition, preserve at most **1 author-supplied blank
+  line**.
 
 ```casa
 import "std"
@@ -116,6 +117,10 @@ value List[T]::from_array
 ## Comments
 
 - Always write one space between `#` and the comment text: `# text` not `#text`.
+- Preserve comment text and attachment.
+- Keep a trailing comment on the line of the structural unit it follows.
+- Keep a standalone comment on its own line at the indentation of the unit it
+  describes.
 - Put a `# SAFETY:` comment immediately before the `unsafe` block or `unsafe fn`
   that it justifies. Do not add `# SAFETY:` comments in test files.
 - Section separator comments may use either `=` or `-` repeated characters.
@@ -324,15 +329,22 @@ unsafe fn read_word address:ptr -> u64 {
 
 - Write getters directly against their receiver with **no space**: `struct.field`,
   `list.length`, `token.location.file`.
-- Getter chains always stay on **one line**, regardless of depth:
+- Keep one or two accessor calls on one line:
 
 ```casa
-error.location.span.length
-token.location.file
+analysis.result.document
 ```
 
-- When chaining **three or more method calls** whose results feed into each other,
-  put each method on its own line, indented 4 spaces from the receiver:
+- Put every accessor call in a chain of three or more on its own continuation
+  line. This syntax-only rule applies equally to field getters and method calls,
+  regardless of the chain's consumer:
+
+```casa
+analysis
+    .result
+    .document
+    .location
+```
 
 ```casa
 value
@@ -343,10 +355,23 @@ value
 
 ---
 
+## Freeform compositions
+
+The formatter preserves each author-supplied nonblank line boundary outside a
+syntax-directed structure. It does not join or wrap arbitrary operation
+sequences to meet the 100-character target. It preserves at most one supplied
+blank line between those composition lines.
+
+Structural rules can add or remove line boundaries for definitions,
+declarations, delimiters, fields, control forms, match arms, getter chains, and
+method pipelines.
+
+---
+
 ## `if` / `elif` / `else` / `fi`
 
-**Statements:** always split across lines. `if`, `then`, body, and `fi` each on their
-own lines:
+Statement forms use multiline bodies. Keep a short condition with `then` on the
+opening line:
 
 ```casa
 if fizz then
@@ -358,15 +383,15 @@ else
 fi
 ```
 
-**Value expressions:** single-line form is allowed when the entire `if` is used as an
-inline value (e.g. assigned to a variable or returned):
+A value-producing form stays inline only when it is part of a larger preserved
+source line and the complete normalized line fits within 100 characters:
 
 ```casa
 if b then "true" else "false" fi = result
 ```
 
-**Multiple conditions:** each condition on its own line, with the boolean operator
-at the end of the condition line it connects to:
+A condition that already has multiple nonblank composition lines keeps those
+lines. Put `if` and `then` on separate lines, and indent each condition line:
 
 ```casa
 if
@@ -382,7 +407,7 @@ fi
 
 ## `while` / `do` / `done`
 
-Always split across lines:
+Use a multiline body. Keep a short condition with `do` on the opening line:
 
 ```casa
 while index size > do
@@ -391,12 +416,28 @@ while index size > do
 done
 ```
 
+A condition with multiple preserved composition lines uses the same layout as
+the multiline `if` condition. Put `while` and `do` on separate lines.
+
+---
+
+## `for` / `in` / `do` / `done`
+
+Use a multiline body and keep the iterator expression with `do` when it fits:
+
+```casa
+for value in values.iter do
+    value print
+done
+```
+
 ---
 
 ## `match` / `end` arms
 
-- Single statement or expression: **single-line arm**
-- Two or more statements: **block arm** with `{ }`
+- Put `match` arms on indented lines and align `end` with the matched value.
+- Keep a single operation or expression on the arm line.
+- Expand a block arm with its braces and body on separate lines.
 
 ```casa
 color match

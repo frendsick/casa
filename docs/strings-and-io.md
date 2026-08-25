@@ -16,6 +16,7 @@ scalar value.
 | Method | Result or action |
 |---|---|
 | `length self:str -> u64` | Length in bytes |
+| `is_empty self:$str -> bool` | Whether the string has no bytes |
 | `at self:str index:u64 -> char` | Character at a byte index |
 | `eq self:str other:str -> bool` | Content equality. `==` is the usual form |
 | `substring length:u64 start:u64 self:str -> str` | Copy a byte range |

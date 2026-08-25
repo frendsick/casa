@@ -20,6 +20,7 @@ arrays of different lengths are different types:
 | Method | Result or action |
 |---|---|
 | `length self:$array[T N] -> u64` | Number of elements, which is `N` |
+| `is_empty self:$array[T N] -> bool` | Whether `N` is zero |
 | `nth self:$array[T N] index:u64 -> $T` | Borrow of the element at a zero-based index |
 | `clone self:$array[T N] -> array[T N]` | Independent array when `T: Clone` |
 | `iter self:$array[T N] -> Iter[$T]` | Iterator over borrows of the elements |
@@ -75,6 +76,7 @@ reserved `drop` method runs its hook once, when the array is destroyed. Use
 | Method | Result or action |
 |---|---|
 | `length self:$Slice[T] -> u64` | Number of elements in the view |
+| `is_empty self:$Slice[T] -> bool` | Whether the view has no elements |
 | `nth self:$Slice[T] index:u64 -> $T` | Borrow of the element at a zero-based index |
 | `iter self:$Slice[T] -> Iter[$T]` | Iterator over borrows of the elements |
 
@@ -97,6 +99,7 @@ numbers.sort
 | `List[T]::new -> List[T]` | Empty list |
 | `from_array values:array[T N] -> List[T]` | List containing the array values |
 | `length self:List[T] -> u64` | Number of elements |
+| `is_empty self:$List[T] -> bool` | Whether the list has no elements |
 | `get self:$List[T] index:u64 -> T` | Element at a zero-based index |
 | `get_ref self:$List[T] index:u64 -> $T` | Borrow of the element at a zero-based index |
 | `slice self:$List[T] start:u64 stop:u64 -> Slice[T]` | Borrowed half-open range `[start, stop)` |
@@ -144,6 +147,7 @@ end
 |---|---|
 | `Map[K V]::new -> Map[K V]` | Empty map |
 | `length self:Map[K V] -> u64` | Number of entries |
+| `is_empty self:$Map[K V] -> bool` | Whether the map has no entries |
 | `get self:Map[K V] key:K -> Option[V]` | Value for a key, if present |
 | `has self:Map[K V] key:K -> bool` | Whether a key exists |
 | `set self:Map[K V] key:K value:V -> Map[K V]` | Insert or replace an entry |
@@ -174,6 +178,7 @@ Set[str]::new = names
 |---|---|
 | `Set[K]::new -> Set[K]` | Empty set |
 | `length self:Set[K] -> u64` | Number of values |
+| `is_empty self:$Set[K] -> bool` | Whether the set has no values |
 | `has self:Set[K] key:K -> bool` | Whether a value exists |
 | `add self:Set[K] key:K -> Set[K]` | Add a value |
 | `remove self:Set[K] key:K -> Set[K]` | Remove a value if present |
