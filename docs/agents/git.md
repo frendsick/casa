@@ -39,6 +39,8 @@ Rules for commits, branches, and pull requests in this repo.
 - The release asset **MUST** be named `casac` (no version suffix, no other name).
   CI downloads `https://github.com/.../releases/download/${TAG}/casac` — any other
   asset name causes a 404 and breaks the bootstrap step.
+- Release descriptions must summarize changes without mentioning the compiler's
+  bootstrap role.
 - When using `gh release create`, pass the binary as `/path/to/casac` (not
   `/path/to/casac_v1.13.0_stage2#casac` — the `#label` syntax sets the display
   label, not the download filename).

@@ -160,8 +160,12 @@ The reserved inherent `drop` method that the compiler calls during destruction a
 
 ### Bootstrap
 
+**Stable Casa release**:
+An official, non-prerelease Casa version that distributes the `casac` compiler for general use.
+_Avoid_: Bootstrap release, Stable bootstrap compiler (as a release identity)
+
 **Bootstrap compiler**:
-The latest stable released `casac` binary used to compile the compiler source on a branch.
+The `casac` binary used to compile the compiler source on a branch. This is a CI role, normally filled by a **Stable Casa release**.
 _Avoid_: Temporary compiler, release compiler
 
 **Branch compiler**:
@@ -336,6 +340,7 @@ _Avoid_: Release lint, tag lint
 - A **Default method definition** belongs to the trait and is available to types that implement trait while omitting their own **Method definition**.
 - A type implements a user-defined trait only through `impl Type: Trait`; matching methods alone do not declare an implementation.
 - A **Function declaration** describes written source only, not compiler-injected hidden parameters.
+- A **Stable Casa release** may provide the `casac` binary that serves as the **Bootstrap compiler**; the role does not define the release.
 - A **Bootstrap compiler** builds exactly one **Branch compiler** at the start of CI.
 - A **Branch compiler** must self-compile and reach a **Fixed point** before the branch is considered releasable.
 - A **Temporary compiler release** must not replace the **Bootstrap compiler** as the normal PR CI input.
@@ -372,5 +377,5 @@ _Avoid_: Release lint, tag lint
 - "`fn foo a:i64 b:str -> bool`" was called a signature. Resolved: call it a **Function declaration** when bodyless, and a **Function definition** when paired with a body.
 - "top on right" was used to explain **Stack effect** notation. Resolved: inputs are topmost-first and outputs are push-order.
 - "`None`" in **Stack effect** notation can be confused with `Option::None`. Resolved: `None` means no stack values in notation only.
-- "release compiler" was used to mean both the stable compiler downloaded by CI and an ad hoc temporary compiler. Resolved: use **Bootstrap compiler** for the stable CI input; temporary releases are exceptional escape hatches.
+- "release compiler" was used to mean both the stable compiler downloaded by CI and an ad hoc temporary compiler. Resolved: use **Bootstrap compiler** for the CI role and **Stable Casa release** for the public release; temporary releases are exceptional escape hatches.
 - "temporary release" was considered as a normal CI mechanism. Resolved: use **Temporary compiler release** only as an exception, not as the default bootstrap path.
