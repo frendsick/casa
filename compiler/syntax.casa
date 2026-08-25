@@ -146,13 +146,22 @@ impl ParseState {
     }
 }
 
+struct ImportedModule {
+    store:             SymbolStore
+    ops:               List[Op]
+    included_files:    Set[str]
+    inherited_symbols: Set[str]
+    inherited_impls:   Set[str]
+}
+
 struct Parser {
-    store:          SymbolStore
-    included_files: Set[str]
-    search_paths:   List[str]
-    sources:        SourceStore
-    state:          ParseState
-    syntax_only:    bool
+    store:                  SymbolStore
+    included_files:         Set[str]
+    selective_import_cache: Map[str ImportedModule]
+    search_paths:           List[str]
+    sources:                SourceStore
+    state:                  ParseState
+    syntax_only:            bool
 }
 
 struct ParseResolveResult {
@@ -192,6 +201,7 @@ impl Parser {
         diagnostics ParseState::new
         sources
         List[str]::new
+        Map[str ImportedModule]::new
         Set[str]::new
         store
         Parser
@@ -248,6 +258,51 @@ impl Parser {
 }
 
 impl SymbolStore {
+    fn declaration_names self:$SymbolStore -> Set[str] {
+        Set[str]::new = names
+        for
+            name in self
+                .functions
+                .keys
+                .iter
+        do
+            name.clone names.add
+        done
+        for
+            name in self
+                .constants
+                .keys
+                .iter
+        do
+            name.clone names.add
+        done
+        for
+            name in self
+                .structs
+                .keys
+                .iter
+        do
+            name.clone names.add
+        done
+        for
+            name in self
+                .enums
+                .keys
+                .iter
+        do
+            name.clone names.add
+        done
+        for
+            name in self
+                .traits
+                .keys
+                .iter
+        do
+            name.clone names.add
+        done
+        names
+    }
+
     fn clone_function self:$SymbolStore name:$str -> Option[Function] {
         if name self.functions.get Option::Some(value) is then
             value.clone_for_import Option::Some
@@ -407,6 +462,24 @@ impl SymbolStore {
                 .get
                 .unwrap
                 .clone_declaration name.clone cloned.functions.set
+        done
+        self cloned.merge_import_metadata
+        cloned
+    }
+
+    fn clone_for_selective_import self:$SymbolStore -> SymbolStore {
+        symbol_store_new = cloned
+        for
+            name in self
+                .functions
+                .keys
+                .iter
+        do
+            name self
+                .functions
+                .get
+                .unwrap
+                .clone_for_import name.clone cloned.functions.set
         done
         self cloned.merge_import_metadata
         cloned
@@ -3744,9 +3817,7 @@ fn validate_trait_visit
             continue
         fi
         supertrait_opt.unwrap = supertrait_definition
-        if
-            supertrait.type_args.length supertrait_definition.type_params.length !=
-        then
+        if supertrait.type_args.length supertrait_definition.type_params.length != then
             casa_trait.location f"Supertrait `{supertrait.name}` expects {supertrait_definition.type_params.length} type argument(s), got {supertrait.type_args.length}" ErrorKind::Syntax parser.state.record_error
             false 0 valid.set
             continue
@@ -4844,10 +4915,97 @@ fn handle_selective_import parser:mut$Parser selective:SelectiveImport location:
     if 0 import_path.length == then
         return
     fi
+    if import_path parser.included_files.has then
+        return
+    fi
 
-    Set[str]::new = included_files
-    import_path.clone included_files.add
-    symbol_store_new included_files import_path.clone parser.analyze_import = import_result
+    symbol_store_new = imported_store
+    Set[str]::new = inherited_symbols
+    Set[str]::new = inherited_impls
+    if import_path parser.selective_import_cache.get Option::Some(cached_import) is then
+        cached_import.store.clone_for_selective_import = imported_store
+        cached_import.inherited_symbols.clone = inherited_symbols
+        cached_import.inherited_impls.clone = inherited_impls
+    else
+        Set[str]::new = included_files
+        for included_file in parser.included_files.iter do
+            included_file.clone included_files.add
+        done
+        import_path.clone included_files.add
+        parser.store.clone = base_store
+        parser.store.declaration_names = inherited_symbols
+        parser
+            .store
+            .trait_impls
+            .keys string_list_to_set = inherited_impls
+        base_store included_files import_path.clone parser.analyze_import = import_result
+        if import_result Result::Error(read_error) is then
+            location f"Cannot read import `{import_path}`: {read_error.to_str}" ErrorKind::Syntax parser
+                .state
+                .diagnostics
+                .record_error_at_encounter
+            parser.state.mark_output_unusable
+            return
+        fi
+        import_result.unwrap = imported_result
+        location imported_result.diagnostics parser
+            .state
+            .diagnostics
+            .merge_at_encounter
+        if imported_result.ops Option::Some(imported_ops) is then
+            inherited_impls.clone inherited_symbols.clone included_files imported_ops imported_result.store
+            ImportedModule = imported_module
+            imported_module.store.clone_for_selective_import = imported_store
+            imported_module import_path.clone parser.selective_import_cache.set
+        else
+            parser.state.mark_output_unusable
+            return
+        fi
+    fi
+
+    inherited_impls
+    inherited_symbols
+    location
+    selective.symbols
+    parser.store
+    imported_store
+    merge_selective_import_closure_with_inherited = merge_result
+    if merge_result Result::Error(merge_diagnostics) is then
+        location merge_diagnostics parser
+            .state
+            .diagnostics
+            .merge_at_encounter
+        parser.state.mark_output_unusable
+        return
+    fi
+}
+
+fn handle_full_import
+    parser:mut$Parser
+    import_path:str
+    location:mut$Location
+    expanded:mut$List[Op]
+{
+    if 0 import_path.length == import_path parser.included_files.has || then
+        return
+    fi
+    import_path.clone parser.included_files.add
+    if import_path parser.selective_import_cache.remove Option::Some(cached_import) is then
+        for included_file in cached_import.included_files.iter do
+            included_file.clone parser.included_files.add
+        done
+        cached_import.store parser.store.merge_import
+        cached_import.ops expanded.append
+        return
+    fi
+
+    parser.store = import_store
+    parser.included_files = imported_files
+    symbol_store_new = parser.store
+    Set[str]::new = parser.included_files
+    import_store imported_files import_path.clone parser.analyze_import = import_result
+    import_store = parser.store
+    imported_files = parser.included_files
     if import_result Result::Error(read_error) is then
         location f"Cannot read import `{import_path}`: {read_error.to_str}" ErrorKind::Syntax parser
             .state
@@ -4861,23 +5019,11 @@ fn handle_selective_import parser:mut$Parser selective:SelectiveImport location:
         .state
         .diagnostics
         .merge_at_encounter
-    if imported_result.ops Option::Some(_) is ! then
+    if imported_result.ops Option::Some(import_ops) is then
+        imported_result.store parser.store.merge_import
+        import_ops expanded.append
+    else
         parser.state.mark_output_unusable
-        return
-    fi
-
-    location
-    selective.symbols
-    parser.store
-    imported_result.store
-    merge_selective_import_closure = merge_result
-    if merge_result Result::Error(merge_diagnostics) is then
-        location merge_diagnostics parser
-            .state
-            .diagnostics
-            .merge_at_encounter
-        parser.state.mark_output_unusable
-        return
     fi
 }
 
@@ -6152,38 +6298,9 @@ fn expand_imports parser:mut$Parser ops:List[Op] -> List[Op] {
         fi
 
         if current_op.value OpValue::ImportFile(import_path) is then
-            if 0 import_path.length == then
-                continue
-            fi
-            if import_path parser.included_files.has ! then
-                import_path.clone parser.included_files.add
-                parser.store = import_store
-                parser.included_files = imported_files
-                symbol_store_new = parser.store
-                Set[str]::new = parser.included_files
-                import_store imported_files import_path.clone parser.analyze_import = import_result
-                import_store = parser.store
-                imported_files = parser.included_files
-                if import_result Result::Error(read_error) is then
-                    current_op.location f"Cannot read import `{import_path}`: {read_error.to_str}" ErrorKind::Syntax parser
-                        .state
-                        .diagnostics
-                        .record_error_at_encounter
-                    parser.state.mark_output_unusable
-                    expanded return
-                fi
-                import_result.unwrap = imported_result
-                current_op.location imported_result.diagnostics parser
-                    .state
-                    .diagnostics
-                    .merge_at_encounter
-                if imported_result.ops Option::Some(import_ops) is then
-                    imported_result.store parser.store.merge_import
-                    import_ops expanded.append
-                else
-                    parser.state.mark_output_unusable
-                    expanded return
-                fi
+            expanded current_op.location import_path parser handle_full_import
+            if parser.state.has_usable_output ! then
+                expanded return
             fi
             continue
         fi
@@ -6216,10 +6333,13 @@ fn resolve_identifiers_global parser:mut$Parser ops:List[Op] -> List[Op] {
 
 fn replace_op ops:mut$List[Op] index:u64 replacement:Op -> Op {
     size_of[Op] = stride
-    unsafe { ops.data index stride * + = address }
-    unsafe { address ptr::read[Op] = previous }
-    unsafe { replacement address ptr::write[Op] }
-    previous
+    # SAFETY: The caller supplies an in-bounds operation index in initialized List storage.
+    unsafe {
+        ops.data index stride * + = address
+        address ptr::read[Op] = previous
+        replacement address ptr::write[Op]
+        previous
+    }
 }
 
 fn resolve_identifiers
