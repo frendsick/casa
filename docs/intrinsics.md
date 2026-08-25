@@ -71,6 +71,8 @@ an `unsafe` block.
 | `load16` | `ptr -> u16` | Load an unsigned 16-bit value |
 | `load32` | `ptr -> u32` | Load an unsigned 32-bit value |
 | `load64` | `ptr -> u64` | Load an unsigned 64-bit value |
+| `ptr::as_ref[T]` | `ptr -> $T` | Form a shared borrow of typed storage |
+| `ptr::as_mut[T]` | `ptr -> mut$T` | Form an exclusive borrow of typed storage |
 | `ptr::read[T]` | `ptr -> T` | Move an initialized `T` out of typed storage |
 | `store8` | `ptr u8 -> None` | Store an 8-bit value |
 | `store16` | `ptr u16 -> None` | Store a 16-bit value |
@@ -92,10 +94,11 @@ unsafe {
 Pointer `+` and `-` take `u64` byte offsets. Multibyte loads and stores permit
 unaligned addresses and use little-endian byte order.
 
-`ptr::read[T]` and `ptr::write[T]` require natural alignment. A typed read
-leaves its source uninitialized. A typed write requires uninitialized
-destination storage. The caller must also provide a valid `T` representation
-and track each moved owner exactly once.
+Typed pointer operations require natural alignment and a valid `T`
+representation. `ptr::as_ref[T]` and `ptr::as_mut[T]` borrow live storage. A
+typed read leaves its source uninitialized. A typed write requires
+uninitialized destination storage. The caller must track each moved owner
+exactly once.
 
 `0 alloc` returns null, and `free` does nothing when given null. A positive
 allocation is non-null. Double free, use after free, and freeing an interior or
@@ -103,18 +106,16 @@ foreign pointer are undefined behavior.
 
 ### Forming a borrow from a raw address
 
-Casting a loaded word to a borrow type inside `unsafe` produces a typed borrow.
-A raw address carries no lifetime, so the result is anchored conservatively to
-every compatible borrowed input of the enclosing function: a `$T` accepts any
-borrowed input, a `mut$T` only exclusive ones. A function with no compatible
-input cannot return the borrow and is rejected with `Borrowed return has no live
-input origin`.
+`ptr::as_ref[T]` and `ptr::as_mut[T]` form a typed borrow inside `unsafe`. A raw
+address carries no lifetime, so the result is anchored conservatively to every
+compatible borrowed input of the enclosing function. A `$T` accepts any
+borrowed input. A `mut$T` only accepts exclusive ones. A function with no
+compatible input cannot return the borrow and is rejected with `Borrowed return
+has no live input origin`.
 
 ```casa
-const ARRAY_ELEMENT_WORD_SIZE 8
-
 fn nth [T const N:u64] array:$array[T N] index:u64 -> $T {
-    unsafe { array (ptr) index ARRAY_ELEMENT_WORD_SIZE * + load64 ($T) }
+    unsafe { array (ptr) index size_of[T] * + ptr::as_ref[T] }
 }
 ```
 

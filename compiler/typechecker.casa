@@ -541,6 +541,8 @@ fn unsafe_operation_name operation:mut$OpValue -> str {
         OpValue::Load16 => "load16"
         OpValue::Load32 => "load32"
         OpValue::Load64 => "load64"
+        OpValue::PtrAsRef => "ptr::as_ref"
+        OpValue::PtrAsMut => "ptr::as_mut"
         OpValue::PtrRead => "ptr::read"
         OpValue::Store8 => "store8"
         OpValue::Store16 => "store16"
@@ -3209,6 +3211,10 @@ impl TypeChecker {
                 op.location f"Cannot determine representation of `{target_type.format}`"
                 ErrorKind::TypeMismatch tc.diagnostics.record_error
             fi
+        elif op.value OpValue::PtrAsRef(target_type) is then
+            op.location function_opt target_type tc.validate_type_exists
+        elif op.value OpValue::PtrAsMut(target_type) is then
+            op.location function_opt target_type tc.validate_type_exists
         fi
         tc.store function_opt Option[Type]::None op.value
         analyze_operation = semantics
@@ -3254,7 +3260,15 @@ impl TypeChecker {
             1 += index
         done
         for return_type in effect.return_types.iter do
-            return_type tc.stack_push_type
+            if op.value OpValue::PtrAsRef is then
+                false function_opt tc.raw_borrow_input_origins = origins
+                origins return_type tc.stack_push_origins
+            elif op.value OpValue::PtrAsMut is then
+                true function_opt tc.raw_borrow_input_origins = origins
+                origins return_type tc.stack_push_origins
+            else
+                return_type tc.stack_push_type
+            fi
         done
     }
 }
@@ -4714,6 +4728,10 @@ impl TypeChecker {
                 continue
             fi
             constant_bound_option.unwrap = constant_bound_type
+            if function_opt Option::Some(caller) is then
+                caller.stack_effect.const_params constant_bound_type rewrite_type_const_params
+                = constant_bound_type
+            fi
             if constant_bound_type Type::Const(constant_bound) is then
                 location function_opt constant_bound make_const_argument_operation = constant_push_operation
                 constant_type clone_type Option::Some constant_push_operation Op::set_type_hint
@@ -4851,7 +4869,7 @@ impl TypeChecker {
                 HIDDEN_REPR_PREFIX layout_parameter.name hidden_layout_parameter_type
             fi
             = queried_type
-            bindings queried_type.substitute_t = resolved_type
+            bindings queried_type.substitute_t resolve_numeric_literal_default = resolved_type
             Option[Op]::None = layout_operation
             if resolved_type.has_unresolved_type_var then
                 if is_size then
@@ -4860,7 +4878,7 @@ impl TypeChecker {
                     resolved_type make_hidden_repr_parameter_name
                 fi
                 = forwarded_name
-                false = can_forward
+                Option[OpValue]::None = forward_value
                 if function_opt Option::Some(caller) is then
                     for
                         caller_parameter in caller
@@ -4869,14 +4887,19 @@ impl TypeChecker {
                             .iter
                     do
                         if forwarded_name caller_parameter.name == then
-                            true = can_forward
+                            forwarded_name.clone OpValue::PushVar Option::Some = forward_value
                             break
                         fi
                     done
+                    if
+                        forward_value.is_none
+                        forwarded_name caller.captures variable_list_contains &&
+                    then
+                        forwarded_name.clone OpValue::PushCapture Option::Some = forward_value
+                    fi
                 fi
-                if can_forward then
-                    location.clone forwarded_name OpValue::PushVar Op::new Option::Some
-                    = layout_operation
+                if forward_value Option::Some(value) is then
+                    location.clone value Op::new Option::Some = layout_operation
                 else
                     location f"Cannot determine layout of `{resolved_type.format}` in this generic call"
                     ErrorKind::TypeMismatch tc.diagnostics.record_error
@@ -5353,7 +5376,8 @@ impl TypeChecker {
             fi
         elif literal_value OpValue::PushArray(items) is then
             if 0 items.length == then
-                0 TYPE_UNKNOWN_T make_array_type tc.stack_push_type
+                0 TYPE_UNKNOWN_T make_array_type = empty_array_type
+                op empty_array_type tc.stack_push_literal
             else
                 function_opt items tc.run_type_check_ops
                 TYPE_UNKNOWN_T = elem_type_t
@@ -5380,6 +5404,7 @@ impl TypeChecker {
                     1 += items_idx
                 done
                 items.length elem_type_t make_array_type = array_type
+                array_type clone_type Option::Some op Op::set_type_hint
                 if op.has_numeric_literal then
                     op array_type tc.stack_push_literal
                     tc
@@ -6578,6 +6603,24 @@ fn rewrite_generic_size_queries
                 location seen assignments variables hidden_parameters hidden_repr
                 add_hidden_layout_parameter
             fi
+        elif op.value OpValue::PtrAsRef(target) is then
+            if target.has_unresolved_type_var then
+                target make_hidden_size_parameter_name = hidden_size
+                location seen assignments variables hidden_parameters hidden_size
+                add_hidden_layout_parameter
+                target make_hidden_repr_parameter_name = hidden_repr
+                location seen assignments variables hidden_parameters hidden_repr
+                add_hidden_layout_parameter
+            fi
+        elif op.value OpValue::PtrAsMut(target) is then
+            if target.has_unresolved_type_var then
+                target make_hidden_size_parameter_name = hidden_size
+                location seen assignments variables hidden_parameters hidden_size
+                add_hidden_layout_parameter
+                target make_hidden_repr_parameter_name = hidden_repr
+                location seen assignments variables hidden_parameters hidden_repr
+                add_hidden_layout_parameter
+            fi
         elif op.value OpValue::PushArray(items) is then
             location seen assignments variables hidden_parameters items rewrite_generic_size_queries
         elif op.value OpValue::ExprGroup(items) is then
@@ -6593,8 +6636,41 @@ fn prepare_generic_size_queries function:mut$Function {
     List[Parameter]::new = hidden_parameters
     List[Op]::new = assignments
     Set[str]::new = seen
+    for
+        existing_parameter in function
+            .stack_effect
+            .parameters
+            .iter
+    do
+        existing_parameter.name HIDDEN_SIZE_PREFIX str::starts_with = is_size
+        existing_parameter.name HIDDEN_REPR_PREFIX str::starts_with = is_repr
+        if is_size is_repr || then
+            existing_parameter.name.clone seen.add drop
+        fi
+    done
     function.location seen assignments function.variables hidden_parameters function.ops
     rewrite_generic_size_queries
+    for
+        parameter in function
+            .stack_effect
+            .parameters
+            .iter
+    do
+        parameter.typ = parameter_type
+        if parameter_type.borrow_target Option::Some(target) is then
+            target = parameter_type
+        fi
+        if parameter_type.array_element_type Option::Some(element_type) is then
+            if element_type.has_unresolved_type_var then
+                element_type make_hidden_size_parameter_name = hidden_size
+                function.location seen assignments function.variables hidden_parameters hidden_size
+                add_hidden_layout_parameter
+                element_type make_hidden_repr_parameter_name = hidden_repr
+                function.location seen assignments function.variables hidden_parameters hidden_repr
+                add_hidden_layout_parameter
+            fi
+        fi
+    done
     if 0 hidden_parameters.length == then
         return
     fi
@@ -6927,6 +7003,12 @@ impl TypeChecker {
             if op_value OpValue::TypeCast(cast_type) is then
                 current_op Op::location function_opt cast_type checker.validate_type_exists
                 checker.stack_pop_value = cast_value
+                if
+                    0 cast_value.literals.length !=
+                    ARRAY_TYPE cast_type.match_base == &&
+                then
+                    checker.diagnostics cast_type cast_value.resolve_literals drop
+                fi
                 cast_value.origins clone_origins = cast_origins
                 if cast_type TYPE_CHAR_T.eq then
                     current_op.location "Cast to `char` is not allowed; use `char::from_codepoint`" ErrorKind::TypeMismatch checker.diagnostics.record_error
@@ -7174,6 +7256,14 @@ fn check_ops
 # ============================================================================
 
 fn check_functions store:mut$SymbolStore diagnostics:mut$Diagnostics {
+    # Prepare callees before any caller is checked so their hidden layout
+    # arguments are visible regardless of map iteration order.
+    for pair in store.functions.iter do
+        pair.second = function
+        if function.name "lambda__" str::starts_with ! function.is_typechecked ! && then
+            function prepare_generic_size_queries
+        fi
+    done
     for pair in store.functions.iter do
         pair.first = func_name
         pair.second = current_fn

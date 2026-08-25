@@ -550,6 +550,10 @@ fn substitute_ops_types ops:mut$List[Op] subs:mut$Map[str Type] {
             subs target.substitute_t OpValue::PtrRead sub_op Op::set_value
         elif sub_op.value OpValue::PtrWrite(target) is then
             subs target.substitute_t OpValue::PtrWrite sub_op Op::set_value
+        elif sub_op.value OpValue::PtrAsRef(target) is then
+            subs target.substitute_t OpValue::PtrAsRef sub_op Op::set_value
+        elif sub_op.value OpValue::PtrAsMut(target) is then
+            subs target.substitute_t OpValue::PtrAsMut sub_op Op::set_value
         elif sub_op.value OpValue::PushArray(items) is then
             subs items substitute_ops_types
         elif sub_op.value OpValue::ExprGroup(items) is then
@@ -914,6 +918,8 @@ enum OpValue {
     Load16
     Load32
     Load64
+    PtrAsRef (Type)
+    PtrAsMut (Type)
     PtrRead (Type)
     Store8
     Store16
@@ -1688,15 +1694,14 @@ fn make_array_type element:Type length:u64 -> Type {
     BuiltinType::U64 length i64::try_from.unwrap ConstType::concrete Type::Const parameters.push
     parameters ARRAY_TYPE GenericType Type::Generic
 }
-# Bytes an `array[T N]` value occupies. Every element is one word today. A
-# zero-length array keeps the one-byte minimum every inhabited type has
-# (ADR-0132, ADR-0154), rounded up to a word because storage is word-granular.
+# Bytes an `array[T N]` value occupies. A zero-length array keeps the one-byte
+# minimum every inhabited type has (ADR-0132, ADR-0154).
 
-fn get_array_storage_size length:u64 -> u64 {
+fn get_array_storage_size length:u64 element_size:u64 -> u64 {
     if 0 length == then
-        WORD_SIZE return
+        1 return
     fi
-    length WORD_SIZE *
+    length element_size *
 }
 
 fn get_array_length_parameter array_type:$Type -> Option[ConstType] {
@@ -1730,7 +1735,25 @@ fn parse_generic_params source:$str -> List[Type] {
     params
 }
 
+fn apply_borrow_type target:Type prefix:str -> Type {
+    if "" prefix == then
+        target return
+    fi
+    List[Type]::new = parameters
+    target parameters.push
+    parameters prefix GenericType Type::Generic
+}
+
 impl Type {
+    fn array_element_type self:$Type -> Option[Type] {
+        if self Type::Generic(generic) is then
+            if ARRAY_TYPE generic.base == 2 generic.params.length == && then
+                0 generic.params.get clone_type Option::Some return
+            fi
+        fi
+        Option[Type]::None
+    }
+
     fn borrow_target self:$Type -> Option[Type] {
         if self Type::Generic(generic) is then
             if
@@ -2787,9 +2810,6 @@ fn stack_effect_matches effect_a:$StackEffect effect_b:$StackEffect -> bool {
 }
 
 fn apply_type_subs_to_stack_effect effect:$StackEffect subs:mut$Map[str Type] -> StackEffect {
-    if 0 subs.length == then
-        effect.return_types.shallow_copy effect.parameters.shallow_copy StackEffect::new return
-    fi
     List[Parameter]::new = params
     for param in effect StackEffect::parameters.iter do
         subs param Parameter::typ.substitute_t = new_typ
@@ -2799,7 +2819,11 @@ fn apply_type_subs_to_stack_effect effect:$StackEffect subs:mut$Map[str Type] ->
     for return_type in effect StackEffect::return_types.iter do
         subs return_type.substitute_t returns.push
     done
-    returns params StackEffect::new
+    returns params StackEffect::new = resolved
+    effect.type_vars resolved StackEffect::set_type_vars
+    effect.trait_bounds resolved StackEffect::set_trait_bounds
+    effect.const_params resolved StackEffect::set_const_params
+    resolved
 }
 
 fn resolve_trait_stack_effect effect:$StackEffect self_type:$Type -> StackEffect {

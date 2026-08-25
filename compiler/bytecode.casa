@@ -246,10 +246,10 @@ impl BytecodeCompiler {
         index_local InstValue::LocalSet bytecode.push
         array_local InstValue::LocalGet bytecode.push
         index_local InstValue::LocalGet bytecode.push
-        WORD_SIZE InstValue::Push bytecode.push
+        bytecode element_type compiler.emit_inline_size
         InstValue::Mul bytecode.push
         InstValue::Add bytecode.push
-        InstValue::Load64 bytecode.push
+        bytecode element_type compiler.emit_typed_load
         bytecode op element_type compiler.compile_destruction
         start_label InstValue::Jump bytecode.push
         end_label InstValue::Label bytecode.push
@@ -1597,9 +1597,43 @@ impl BytecodeCompiler {
         if op.value OpValue::PushArray(items) is then
             items.length = length
 
+            false = can_emit_static
             if 0 length != compiler.store items op_is_static_array_with_store && then
-                bytecode items compiler.compile_static_array
-                return
+                if op.type_hint Option::Some(array_type) is then
+                    if array_type.array_element_type Option::Some(static_element_type) is then
+                        static_element_type resolve_numeric_literal_default = resolved_static_type
+                        if compiler.store resolved_static_type type_inline_size Option::Some(static_size) is then
+                            if compiler.store resolved_static_type type_value_representation Option::Some(static_repr) is then
+                                if
+                                    8 static_size ==
+                                    VALUE_REPR_RAW static_repr ==
+                                    VALUE_REPR_SIGNED static_repr == || &&
+                                then
+                                    true = can_emit_static
+                                fi
+                            fi
+                        fi
+                    fi
+                else
+                    # Compiler unit tests may build an already-word-sized static
+                    # array op directly without running the typechecker.
+                    true = can_emit_static
+                fi
+            fi
+            if can_emit_static then
+                bytecode items compiler.compile_static_array return
+            fi
+
+            TYPE_UNKNOWN_T = element_type
+            if op.type_hint Option::Some(array_type) is then
+                if array_type.array_element_type Option::Some(found_element_type) is then
+                    found_element_type resolve_numeric_literal_default = element_type
+                else
+                    "Array literal has no element type during bytecode compilation"
+                    compiler.record_failure return
+                fi
+            else
+                "Array literal has no type during bytecode compilation" compiler.record_failure return
             fi
 
             # Compile items in reverse order
@@ -1614,7 +1648,8 @@ impl BytecodeCompiler {
             # is exactly the element storage.
             compiler.locals_count = list_local
             1 += compiler.locals_count
-            length get_array_storage_size i64::try_from.unwrap InstValue::Push bytecode.push
+            compiler.store element_type type_inline_size.unwrap = element_size
+            element_size length get_array_storage_size i64::try_from.unwrap InstValue::Push bytecode.push
             InstValue::HeapAlloc bytecode.push
             list_local InstValue::LocalSet bytecode.push
 
@@ -1630,19 +1665,19 @@ impl BytecodeCompiler {
             # while index limit > do
             start_label InstValue::Label bytecode.push
             index_local InstValue::LocalGet bytecode.push
-            length WORD_SIZE * i64::try_from.unwrap InstValue::Push bytecode.push
+            length element_size * i64::try_from.unwrap InstValue::Push bytecode.push
             InstValue::Gt bytecode.push
             end_label InstValue::JumpNe bytecode.push
 
-            # list index + store64
+            # list index + typed store
             list_local InstValue::LocalGet bytecode.push
             index_local InstValue::LocalGet bytecode.push
             InstValue::Add bytecode.push
-            InstValue::Store64 bytecode.push
+            bytecode element_type compiler.emit_typed_store
 
-            # WORD_SIZE += index
+            # element_size += index
             index_local InstValue::LocalGet bytecode.push
-            WORD_SIZE InstValue::Push bytecode.push
+            element_size i64::try_from.unwrap InstValue::Push bytecode.push
             InstValue::Add bytecode.push
             index_local InstValue::LocalSet bytecode.push
 
@@ -1783,6 +1818,17 @@ impl BytecodeCompiler {
 # ============================================================================
 
 impl BytecodeCompiler {
+    fn emit_inline_size compiler:mut$BytecodeCompiler target:$Type bytecode:mut$List[InstValue] {
+        if target.has_unresolved_type_var then
+            target make_hidden_size_parameter_name compiler.resolve_variable = size_variable
+            bytecode size_variable.emit_get
+        elif compiler.store target type_inline_size Option::Some(size) is then
+            size i64::try_from.unwrap InstValue::Push bytecode.push
+        else
+            f"Cannot determine inline size of `{target.format}`" compiler.record_failure
+        fi
+    }
+
     fn emit_typed_load compiler:mut$BytecodeCompiler target:$Type bytecode:mut$List[InstValue] {
         if target.has_unresolved_type_var then
             target make_hidden_size_parameter_name compiler.resolve_variable = size_variable
@@ -2127,6 +2173,10 @@ impl BytecodeCompiler {
             bytecode target_type compiler.emit_typed_load
         elif op_value OpValue::PtrWrite(target_type) is then
             bytecode target_type compiler.emit_typed_store
+        elif op_value OpValue::PtrAsRef(target_type) is then
+            bytecode target_type compiler.emit_typed_load
+        elif op_value OpValue::PtrAsMut(target_type) is then
+            bytecode target_type compiler.emit_typed_load
         elif op_value OpValue::PushArray is then
             bytecode op compiler.compile_push_array
         elif op_value OpValue::ExprGroup(group_ops) is then
