@@ -4814,6 +4814,60 @@ impl TypeChecker {
                 done
             done
         done
+
+        effect.parameters.length = size_parameter_index
+        while 0 size_parameter_index != do
+            1 -= size_parameter_index
+            size_parameter_index effect.parameters.get = size_parameter
+            if size_parameter.name HIDDEN_SIZE_PREFIX str::starts_with ! then
+                continue
+            fi
+            size_parameter.name hidden_size_parameter_type = queried_type
+            bindings queried_type.substitute_t = resolved_type
+            Option[Op]::None = size_operation
+            if resolved_type.has_unresolved_type_var then
+                resolved_type make_hidden_size_parameter_name = forwarded_name
+                false = can_forward
+                if function_opt Option::Some(caller) is then
+                    for
+                        caller_parameter in caller
+                            .stack_effect
+                            .parameters
+                            .iter
+                    do
+                        if forwarded_name caller_parameter.name == then
+                            true = can_forward
+                            break
+                        fi
+                    done
+                fi
+                if can_forward then
+                    location.clone forwarded_name OpValue::PushVar Op::new Option::Some
+                    = size_operation
+                else
+                    location f"Cannot determine `size_of[{resolved_type.format}]` in this generic call"
+                    ErrorKind::TypeMismatch tc.diagnostics.record_error
+                fi
+            elif tc.store resolved_type type_inline_size Option::Some(size) is then
+                if size i64::try_from Option::Some(signed_size) is then
+                    location.clone signed_size make_integer_op_value Op::new Option::Some
+                    = size_operation
+                else
+                    location f"Inline size of `{resolved_type.format}` exceeds the supported constant range"
+                    ErrorKind::TypeMismatch tc.diagnostics.record_error
+                fi
+            else
+                location f"Cannot determine inline size of `{resolved_type.format}`"
+                ErrorKind::TypeMismatch tc.diagnostics.record_error
+            fi
+            if size_operation Option::Some(push_size) is then
+                TYPE_U64_T Option::Some push_size Op::set_type_hint
+                insert_pos push_size ops.insert
+                1 += insert_pos
+                1 += inserted
+                TYPE_U64_T tc.stack_push_type
+            fi
+        done
         inserted
     }
 }
@@ -6430,11 +6484,68 @@ impl TypeChecker {
 # Ensure a function is typechecked
 # ============================================================================
 
+fn rewrite_generic_size_queries
+    ops:mut$List[Op]
+    hidden_parameters:mut$List[Parameter]
+    variables:mut$List[Variable]
+    assignments:mut$List[Op]
+    seen:mut$Set[str]
+    location:mut$Location
+{
+    for op in ops.iter do
+        if op.value OpValue::SizeOf(target) is then
+            if target.has_unresolved_type_var then
+                target make_hidden_size_parameter_name = hidden_name
+                if hidden_name seen.has ! then
+                    hidden_name.clone seen.add drop
+                    hidden_name.clone TYPE_U64_T Parameter::named hidden_parameters.push
+                    TYPE_U64_T hidden_name.clone Variable variables.push
+                    location.clone hidden_name.clone OpValue::AssignVar Op::new = assignment
+                    TYPE_U64_T Option::Some assignment Op::set_type_hint
+                    assignment assignments.push
+                fi
+                hidden_name OpValue::PushVar op Op::set_value
+            fi
+        elif op.value OpValue::PushArray(items) is then
+            location seen assignments variables hidden_parameters items rewrite_generic_size_queries
+        elif op.value OpValue::ExprGroup(items) is then
+            location seen assignments variables hidden_parameters items rewrite_generic_size_queries
+        elif op.value OpValue::MatchArm(arm) is then
+            location seen assignments variables hidden_parameters arm.guard_ops
+            rewrite_generic_size_queries
+        fi
+    done
+}
+
+fn prepare_generic_size_queries function:mut$Function {
+    List[Parameter]::new = hidden_parameters
+    List[Op]::new = assignments
+    Set[str]::new = seen
+    function.location seen assignments function.variables hidden_parameters function.ops
+    rewrite_generic_size_queries
+    if 0 hidden_parameters.length == then
+        return
+    fi
+    for
+        parameter in function
+            .stack_effect
+            .parameters
+            .iter
+    do
+        parameter.name.clone parameter.typ clone_type Parameter hidden_parameters.push
+    done
+    hidden_parameters function.stack_effect StackEffect::set_parameters
+    function.ops.shallow_copy = body
+    body assignments.append
+    assignments function Function::set_ops
+}
+
 fn ensure_typechecked function:mut$Function store:mut$SymbolStore diagnostics:mut$Diagnostics {
     if function Function::is_typechecked then
         return
     fi
     true function Function::set_is_typechecked
+    function prepare_generic_size_queries
     function Function::ops clone_ops = function_ops
     diagnostics function function_ops store resolve_identifiers = resolved_ops
     diagnostics store function Option::Some resolved_ops check_ops = inferred_stack_effect
@@ -6641,6 +6752,19 @@ impl TypeChecker {
             # Typeof
             if op_value OpValue::Typeof is then
                 current_op checker.check_typeof
+                continue
+            fi
+
+            if op_value OpValue::SizeOf(target_type) is then
+                current_op.location function_opt target_type checker.validate_type_exists
+                if
+                    target_type.has_unresolved_type_var !
+                    checker.store target_type type_inline_size.is_none &&
+                then
+                    current_op.location f"Cannot determine inline size of `{target_type.format}`"
+                    ErrorKind::TypeMismatch checker.diagnostics.record_error
+                fi
+                TYPE_U64_T checker.stack_push_type
                 continue
             fi
 

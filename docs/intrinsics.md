@@ -29,6 +29,7 @@ cleanup and recursive field destruction as a scope exit.
 |---|---|---|
 | `print` | `[T: Display] T -> None` | Write a value to standard output |
 | `typeof` | `T -> str` | Return the compile-time type name |
+| `size_of[T]` | `None -> u64` | Return the current compiler's inline size for `T` |
 | `exec` | `fn[...] -> ...` | Call a function value on the top of the stack |
 
 ```casa
@@ -39,6 +40,12 @@ cleanup and recursive field destruction as a scope exit.
 Primitive display types print directly. User-defined types must implement
 [`Display`](traits.md#built-in-traits). See
 [Functions and Lambdas](functions-and-lambdas.md#function-values) for `exec`.
+
+`size_of[T]` includes aggregate padding and the tail padding needed to place
+values consecutively. Every inhabited type occupies at least one byte. An
+empty struct and `array[T 0]` therefore each have size 1. The result describes
+only the current compiler's x86-64 layout. It is not a stable file or foreign
+ABI format.
 
 ## Process values
 

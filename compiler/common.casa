@@ -45,6 +45,7 @@ enum IntrinsicKind {
     Store64
     Print
     Typeof
+    SizeOf
     Exec
     Syscall0
     Syscall1
@@ -540,6 +541,13 @@ fn substitute_ops_types ops:mut$List[Op] subs:mut$Map[str Type] {
         if sub_op Op::deferred_return_hint Option::Some(deferred_hint) is then
             subs deferred_hint.substitute_t Option::Some sub_op Op::set_deferred_return_hint
         fi
+        if sub_op.value OpValue::SizeOf(target) is then
+            subs target.substitute_t OpValue::SizeOf sub_op Op::set_value
+        elif sub_op.value OpValue::PushArray(items) is then
+            subs items substitute_ops_types
+        elif sub_op.value OpValue::ExprGroup(items) is then
+            subs items substitute_ops_types
+        fi
     done
 }
 
@@ -778,11 +786,17 @@ impl IntegerLiteral {
 fn is_hidden_parameter_name name:$str -> bool {
     name HIDDEN_TRAIT_PREFIX str::starts_with
     name HIDDEN_CONST_PREFIX str::starts_with ||
+    name HIDDEN_SIZE_PREFIX str::starts_with ||
 }
 # Does a call to this stack effect need compiler-injected arguments, i.e. trait
 # method pointers or constant type-parameter values?
 
 fn needs_hidden_arguments effect:$StackEffect -> bool {
+    for parameter in effect.parameters.iter do
+        if parameter.name HIDDEN_SIZE_PREFIX str::starts_with then
+            true return
+        fi
+    done
     0 effect
         .trait_bounds
         .keys
@@ -795,6 +809,13 @@ fn needs_hidden_arguments effect:$StackEffect -> bool {
 # The hidden parameter that carries the value of constant parameter `name`.
 
 fn make_hidden_const_parameter_name name:$str -> str { f"{HIDDEN_CONST_PREFIX}{name}" }
+
+fn make_hidden_size_parameter_name typ:$Type -> str { f"{HIDDEN_SIZE_PREFIX}{typ.format}" }
+
+fn hidden_size_parameter_type name:$str -> Type {
+    name HIDDEN_SIZE_PREFIX.length name.length HIDDEN_SIZE_PREFIX.length - str::substring
+    parse_type_str
+}
 
 fn make_integer_op_value value:i64 -> OpValue { value IntegerLiteral::from_int OpValue::PushInt }
 
@@ -872,6 +893,7 @@ enum OpValue {
     PrintInt
     PrintStr
     Typeof
+    SizeOf (Type)
     # Memory
     HeapAlloc
     HeapFree
@@ -1393,6 +1415,7 @@ const ARRAY_TYPE "array"
 const ARRAY_NTH_FUNCTION "array::nth"
 const HIDDEN_TRAIT_PREFIX "__trait_"
 const HIDDEN_CONST_PREFIX "__const_"
+const HIDDEN_SIZE_PREFIX "__size_of_"
 const WORD_SIZE 8
 BuiltinType::I8 Type::Builtin = TYPE_I8_T
 BuiltinType::I16 Type::Builtin = TYPE_I16_T
@@ -2838,6 +2861,7 @@ impl IntrinsicKind {
             IntrinsicKind::Store64 => "store64"
             IntrinsicKind::Print => "print"
             IntrinsicKind::Typeof => "typeof"
+            IntrinsicKind::SizeOf => "size_of"
             IntrinsicKind::Exec => "exec"
             IntrinsicKind::Syscall0 => "syscall0"
             IntrinsicKind::Syscall1 => "syscall1"
@@ -2968,6 +2992,7 @@ fn intrinsic_to_op_value intrinsic_kind:IntrinsicKind -> Option[OpValue] {
         IntrinsicKind::Store64 => OpValue::Store64 Option::Some
         IntrinsicKind::Swap => OpValue::Swap Option::Some
         IntrinsicKind::Typeof => OpValue::Typeof Option::Some
+        IntrinsicKind::SizeOf => Option[OpValue]::None
         IntrinsicKind::Syscall0 => OpValue::Syscall0 Option::Some
         IntrinsicKind::Syscall1 => OpValue::Syscall1 Option::Some
         IntrinsicKind::Syscall2 => OpValue::Syscall2 Option::Some
@@ -3133,6 +3158,152 @@ fn symbol_store_new -> SymbolStore {
     Map[str Variable]::new
     Map[str Function]::new
     SymbolStore
+}
+
+struct TypeLayout {
+    size:      u64
+    alignment: u64
+}
+
+fn align_up value:u64 alignment:u64 -> u64 { value alignment 1 - + alignment / alignment * }
+
+fn builtin_type_layout builtin:$BuiltinType -> TypeLayout {
+    builtin match
+        BuiltinType::I8 => 1 1 TypeLayout
+        BuiltinType::U8 => 1 1 TypeLayout
+        BuiltinType::Bool => 1 1 TypeLayout
+        BuiltinType::I16 => 2 2 TypeLayout
+        BuiltinType::U16 => 2 2 TypeLayout
+        BuiltinType::I32 => 4 4 TypeLayout
+        BuiltinType::U32 => 4 4 TypeLayout
+        BuiltinType::F32 => 4 4 TypeLayout
+        BuiltinType::Char => 4 4 TypeLayout
+        _ => 8 8 TypeLayout
+    end
+}
+
+fn struct_type_layout
+    typ:$Type
+    casa_struct:$CasaStruct
+    store:$SymbolStore
+    visiting:mut$Set[str]
+-> Option[TypeLayout] {
+    casa_struct.type_vars typ aggregate_type_bindings = substitutions
+    0 (u64) = size
+    1 (u64) = alignment
+    for member in casa_struct.members.iter do
+        substitutions member.typ.substitute_t = member_type
+        if visiting store member_type type_layout Option::Some(member_layout) is then
+            member_layout.alignment size align_up = size
+            member_layout.size += size
+            if alignment member_layout.alignment > then
+                member_layout.alignment = alignment
+            fi
+        else
+            Option[TypeLayout]::None return
+        fi
+    done
+    if 0 size == then
+        1 (u64) = size
+    fi
+    alignment size align_up = size
+    alignment size TypeLayout Option::Some
+}
+
+fn enum_type_layout
+    typ:$Type
+    casa_enum:$CasaEnum
+    store:$SymbolStore
+    visiting:mut$Set[str]
+-> Option[TypeLayout] {
+    casa_enum.type_vars typ aggregate_type_bindings = substitutions
+    8 (u64) = size
+    8 (u64) = alignment
+    for
+        payload_types in casa_enum
+            .variant_types
+            .values
+            .iter
+    do
+        8 (u64) = variant_size
+        for payload_type in payload_types.iter do
+            substitutions payload_type.substitute_t = resolved_payload
+            if visiting store resolved_payload type_layout Option::Some(payload_layout) is then
+                payload_layout.alignment variant_size align_up = variant_size
+                payload_layout.size += variant_size
+                if alignment payload_layout.alignment > then
+                    payload_layout.alignment = alignment
+                fi
+            else
+                Option[TypeLayout]::None return
+            fi
+        done
+        if size variant_size > then
+            variant_size = size
+        fi
+    done
+    alignment size align_up = size
+    alignment size TypeLayout Option::Some
+}
+
+fn type_layout typ:$Type store:$SymbolStore visiting:mut$Set[str] -> Option[TypeLayout] {
+    if typ.is_borrow then
+        8 8 TypeLayout Option::Some return
+    fi
+    typ match
+        Type::Builtin(builtin) => {
+            builtin builtin_type_layout Option::Some
+        }
+        Type::Function => {
+            8 8 TypeLayout Option::Some
+        }
+        Type::Generic(generic) => {
+            if ARRAY_TYPE generic.base == then
+                if 2 generic.params.length != then
+                    Option[TypeLayout]::None return
+                fi
+                if typ get_concrete_array_length Option::Some(length) is then
+                    if visiting store 0 generic.params.get type_layout Option::Some(element) is then
+                        if 0 length == then
+                            1 1 TypeLayout Option::Some
+                        else
+                            element.alignment length element.size * TypeLayout Option::Some
+                        fi
+                    else
+                        Option[TypeLayout]::None
+                    fi
+                else
+                    Option[TypeLayout]::None
+                fi
+                return
+            fi
+            typ.format = type_name
+            if type_name visiting.has then
+                8 8 TypeLayout Option::Some return
+            fi
+            type_name.clone visiting.add drop
+            Option[TypeLayout]::None = result
+            if generic.base store.structs.get Option::Some(casa_struct) is then
+                visiting store casa_struct typ struct_type_layout = result
+            elif generic.base store.enums.get Option::Some(casa_enum) is then
+                visiting store casa_enum typ enum_type_layout = result
+            fi
+            type_name visiting.remove drop
+            result
+        }
+        _ => {
+            Option[TypeLayout]::None
+        }
+    end
+}
+
+fn type_inline_size typ:$Type store:$SymbolStore -> Option[u64] {
+    Set[str]::new = visiting
+    if visiting store typ type_layout Option::Some(layout) is then
+        layout.size Option::Some
+    else
+        Option[u64]::None
+    fi
 }
 
 fn aggregate_type_bindings typ:$Type type_vars:$List[str] -> Map[str Type] {
