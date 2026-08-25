@@ -222,10 +222,13 @@ enum InstValue {
     Load16
     Load32
     Load64
+    ReadTyped
     Store8
     Store16
     Store32
     Store64
+    WriteTyped
+    MoveBytes (u64)
     # Arithmetic
     Add
     CheckedAdd (BuiltinType)
@@ -543,6 +546,10 @@ fn substitute_ops_types ops:mut$List[Op] subs:mut$Map[str Type] {
         fi
         if sub_op.value OpValue::SizeOf(target) is then
             subs target.substitute_t OpValue::SizeOf sub_op Op::set_value
+        elif sub_op.value OpValue::PtrRead(target) is then
+            subs target.substitute_t OpValue::PtrRead sub_op Op::set_value
+        elif sub_op.value OpValue::PtrWrite(target) is then
+            subs target.substitute_t OpValue::PtrWrite sub_op Op::set_value
         elif sub_op.value OpValue::PushArray(items) is then
             subs items substitute_ops_types
         elif sub_op.value OpValue::ExprGroup(items) is then
@@ -787,6 +794,7 @@ fn is_hidden_parameter_name name:$str -> bool {
     name HIDDEN_TRAIT_PREFIX str::starts_with
     name HIDDEN_CONST_PREFIX str::starts_with ||
     name HIDDEN_SIZE_PREFIX str::starts_with ||
+    name HIDDEN_REPR_PREFIX str::starts_with ||
 }
 # Does a call to this stack effect need compiler-injected arguments, i.e. trait
 # method pointers or constant type-parameter values?
@@ -794,6 +802,9 @@ fn is_hidden_parameter_name name:$str -> bool {
 fn needs_hidden_arguments effect:$StackEffect -> bool {
     for parameter in effect.parameters.iter do
         if parameter.name HIDDEN_SIZE_PREFIX str::starts_with then
+            true return
+        fi
+        if parameter.name HIDDEN_REPR_PREFIX str::starts_with then
             true return
         fi
     done
@@ -812,8 +823,10 @@ fn make_hidden_const_parameter_name name:$str -> str { f"{HIDDEN_CONST_PREFIX}{n
 
 fn make_hidden_size_parameter_name typ:$Type -> str { f"{HIDDEN_SIZE_PREFIX}{typ.format}" }
 
-fn hidden_size_parameter_type name:$str -> Type {
-    name HIDDEN_SIZE_PREFIX.length name.length HIDDEN_SIZE_PREFIX.length - str::substring
+fn make_hidden_repr_parameter_name typ:$Type -> str { f"{HIDDEN_REPR_PREFIX}{typ.format}" }
+
+fn hidden_layout_parameter_type name:$str prefix:$str -> Type {
+    name prefix.length name.length prefix.length - str::substring
     parse_type_str
 }
 
@@ -901,10 +914,12 @@ enum OpValue {
     Load16
     Load32
     Load64
+    PtrRead (Type)
     Store8
     Store16
     Store32
     Store64
+    PtrWrite (Type)
     # Syscalls
     Syscall0
     Syscall1
@@ -1416,7 +1431,11 @@ const ARRAY_NTH_FUNCTION "array::nth"
 const HIDDEN_TRAIT_PREFIX "__trait_"
 const HIDDEN_CONST_PREFIX "__const_"
 const HIDDEN_SIZE_PREFIX "__size_of_"
+const HIDDEN_REPR_PREFIX "__repr_of_"
 const WORD_SIZE 8
+const VALUE_REPR_INDIRECT 0
+const VALUE_REPR_RAW 1
+const VALUE_REPR_SIGNED 2
 BuiltinType::I8 Type::Builtin = TYPE_I8_T
 BuiltinType::I16 Type::Builtin = TYPE_I16_T
 BuiltinType::I32 Type::Builtin = TYPE_I32_T
@@ -3304,6 +3323,40 @@ fn type_inline_size typ:$Type store:$SymbolStore -> Option[u64] {
     else
         Option[u64]::None
     fi
+}
+
+fn type_value_representation typ:$Type store:$SymbolStore -> Option[u64] {
+    if typ.is_borrow then
+        VALUE_REPR_RAW (u64) Option::Some return
+    fi
+    typ match
+        Type::Builtin(builtin) => {
+            if builtin.is_integer builtin.is_unsigned ! && then
+                VALUE_REPR_SIGNED (u64) Option::Some
+            else
+                VALUE_REPR_RAW (u64) Option::Some
+            fi
+        }
+        Type::Function => {
+            VALUE_REPR_RAW (u64) Option::Some
+        }
+        Type::Generic(generic) => {
+            if ARRAY_TYPE generic.base == generic.base store.structs.has || then
+                VALUE_REPR_INDIRECT (u64) Option::Some
+            elif generic.base store.enums.get Option::Some(casa_enum) is then
+                if casa_enum has_inner_values then
+                    VALUE_REPR_INDIRECT (u64) Option::Some
+                else
+                    VALUE_REPR_RAW (u64) Option::Some
+                fi
+            else
+                Option[u64]::None
+            fi
+        }
+        _ => {
+            Option[u64]::None
+        }
+    end
 }
 
 fn aggregate_type_bindings typ:$Type type_vars:$List[str] -> Map[str Type] {
