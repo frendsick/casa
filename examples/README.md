@@ -22,7 +22,7 @@ The examples are ordered from introductory programs to low-level system code.
 | 10 | [`iterator_combinators.casa`](iterator_combinators.casa) | A lazy filter and map pipeline with terminal operations |
 | 11 | [`hash_map.casa`](hash_map.casa) | Counting values with `Map` |
 | 12 | [`sorting.casa`](sorting.casa) | List sorting with default and custom order |
-| 13 | [`propagate_result.casa`](propagate_result.casa) | File errors and `?` propagation |
+| 13 | [`propagate_result.casa`](propagate_result.casa) | Structural `?` propagation for `Result` and a custom enum |
 | 14 | [`argparse.casa`](argparse.casa) | A command-line interface with options and help |
 | 15 | [`parser.casa`](parser.casa) | A complete parser built from `Cursor` operations |
 | 16 | [`os_interaction.casa`](os_interaction.casa) | Files, directories, paths, environment, and processes |

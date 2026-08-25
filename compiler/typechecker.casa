@@ -5048,6 +5048,62 @@ impl TypeChecker {
         done
     }
 
+    # Resolve `?` only after the input and enclosing return types are known.
+    # The hidden local owns the value until exactly one branch consumes it.
+    fn lower_question_operator
+        checker:mut$TypeChecker
+        op:mut$Op
+        ops:mut$List[Op]
+        op_index:u64
+        function_opt:mut$Option[Function]
+    {
+        if op.value OpValue::Question(hidden_name) is then
+            TYPE_UNKNOWN_T = return_type
+            if function_opt Option::Some(function) is then
+                function.stack_effect.return_types = return_types
+                if 1 return_types.length != then
+                    op.location "`?` requires exactly one declared return value"
+                    ErrorKind::InvalidScope checker.diagnostics.record_error
+                    return
+                fi
+                0 return_types.get clone_type = return_type
+                if hidden_name function.variables variable_list_contains ! then
+                    hidden_name Variable::new function.variables.push
+                fi
+            else
+                op.location "`?` is only allowed in a function with one declared return value"
+                ErrorKind::InvalidScope checker.diagnostics.record_error
+                return
+            fi
+            hidden_name.clone OpValue::AssignVar op Op::set_value
+            function_opt op_index ops op checker.check_assignment
+            hidden_name.clone OpValue::Question op Op::set_value
+
+            return_type hidden_name op.location op_index ops lower_question_operations
+        fi
+    }
+
+    fn consume_question_owner checker:mut$TypeChecker op:mut$Op {
+        if op.value OpValue::QuestionMove(hidden_name) is then
+            if hidden_name checker.owner_is_moved then
+                op.location f"Owner `{hidden_name}` was already moved"
+                ErrorKind::InvalidVariable checker.diagnostics.record_error
+                return
+            fi
+            if
+                checker
+                    .stack
+                    .values
+                    .length hidden_name checker.has_active_owner_loan
+            then
+                op.location "Question-mark payload cannot borrow from its consumed source"
+                ErrorKind::InvalidVariable checker.diagnostics.record_error
+                return
+            fi
+            true hidden_name checker.set_owner_moved
+        fi
+    }
+
     fn check_function_ops
         tc:mut$TypeChecker
         op:mut$Op
@@ -6296,7 +6352,7 @@ impl TypeChecker {
                         Option[Type]::None function_opt op Op::location op_index ops effect
                         tc.inject_trait_fn_ptrs += op_index
                     fi
-                    function_opt Option[Type]::None fn_name effect tc.apply_stack_effect
+                    function_opt op.type_hint fn_name effect tc.apply_stack_effect
                     fn_name OpValue::FnCall op Op::set_value
                     op_index return
                 fi
@@ -6457,6 +6513,14 @@ impl TypeChecker {
                 if 0 checker.unsafe_depth != then
                     1 -= checker.unsafe_depth
                 fi
+                continue
+            fi
+            if op_value OpValue::Question is then
+                function_opt op_index ops current_op checker.lower_question_operator
+                continue
+            fi
+            if op_value OpValue::QuestionMove is then
+                current_op checker.consume_question_owner
                 continue
             fi
             if
