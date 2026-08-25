@@ -26,7 +26,7 @@ enum TokenKind {
 # Intrinsic enum
 # ============================================================================
 
-enum IntrinsicKind {
+enum IntrinsicKind derives Copy {
     Drop
     Dup
     Copy
@@ -45,6 +45,7 @@ enum IntrinsicKind {
     Store64
     Print
     Typeof
+    SizeOf
     Exec
     Syscall0
     Syscall1
@@ -62,7 +63,7 @@ enum IntrinsicKind {
 # Keywords
 # ============================================================================
 
-enum KeywordKind {
+enum KeywordKind derives Copy {
     Unsafe
     Fn
     Impl
@@ -94,7 +95,7 @@ enum KeywordKind {
 # Delimiters
 # ============================================================================
 
-enum DelimiterKind {
+enum DelimiterKind derives Copy {
     Arrow
     Comma
     FatArrow
@@ -113,7 +114,7 @@ enum DelimiterKind {
 # Operators
 # ============================================================================
 
-enum OperatorKind {
+enum OperatorKind derives Copy {
     Plus
     Minus
     Mul
@@ -221,10 +222,15 @@ enum InstValue {
     Load16
     Load32
     Load64
+    BorrowTyped
+    CopyTyped
+    ReadTyped
     Store8
     Store16
     Store32
     Store64
+    WriteTyped
+    MoveBytes (u64)
     # Arithmetic
     Add
     CheckedAdd (BuiltinType)
@@ -409,7 +415,11 @@ struct Token {
 }
 
 impl Token {
-    fn new value:str kind:TokenKind location:Location -> Token { location kind value Token }
+    fn new value:str kind:TokenKind location:$Location -> Token { location.clone kind value Token }
+}
+
+impl Token: Clone {
+    fn clone self:$Token -> Token { self.location.clone self.kind self.value.clone Token }
 }
 
 # ============================================================================
@@ -421,6 +431,7 @@ impl Token {
 # ============================================================================
 
 struct Op {
+    id:                   i64
     location:             Location
     type_hint:            Option[Type]
     deferred_return_hint: Option[Type]
@@ -436,7 +447,7 @@ struct OwnerEvent {
 impl OwnerEvent {
     fn new name:mut$str typ:mut$Type generation:u64 -> OwnerEvent { generation typ name OwnerEvent }
 
-    fn clone self:mut$OwnerEvent -> OwnerEvent {
+    fn clone self:$OwnerEvent -> OwnerEvent {
         self.generation self.typ clone_type self.name.clone OwnerEvent
     }
 }
@@ -451,35 +462,51 @@ impl OpOwnership {
     fn new -> OpOwnership { false List[OwnerEvent]::new List[OwnerEvent]::new OpOwnership }
 }
 
+impl OpOwnership: Clone {
+    fn clone self:$OpOwnership -> OpOwnership {
+        List[OwnerEvent]::new = assignments
+        for event in self.assignments.iter do
+            event.clone assignments.push
+        done
+        List[OwnerEvent]::new = cleanups
+        for event in self.cleanups.iter do
+            event.clone cleanups.push
+        done
+        self.moves_owner cleanups assignments OpOwnership
+    }
+}
+
 struct QualifiedMethod {
     type_qualified: bool
     qualifier_type: Type
     method_name:    str
 }
 
-# Op identity is its heap address: two Op values compare equal iff the same
-# allocation. Required so labels map by Op identity (Map[Op u64]), not by an
-# i64 reinterpretation of an Op pointer at every read site.
+# Type checking assigns each operation a stable ID. Dense operation lists can
+# relocate their elements, so metadata must not use element addresses.
 
-impl Op: Hashable {
-    fn new value:OpValue location:Location -> Op {
-        value Option[Type]::None Option[Type]::None location Op
+impl Op {
+    fn new value:OpValue location:$Location -> Op {
+        value Option[Type]::None Option[Type]::None location.clone 0 Op
     }
-
-    fn hash self:$Op -> i64 { self (i64) int_hash }
-    fn eq self:$Op other:$Op -> bool { self (i64) other (i64) == }
 }
 
-fn ensure_op_ownership store:mut$SymbolStore op:mut$Op -> OpOwnership {
-    if op store.op_ownership.get Option::Some(ownership) is then
+fn op_identity op:$Op -> i64 { op.id }
+
+fn ensure_op_ownership_address store:mut$SymbolStore op_id:i64 -> mut$OpOwnership {
+    if op_id store.op_ownership.get_mut Option::Some(ownership) is then
         ownership return
     fi
     OpOwnership::new = ownership
-    ownership op store.op_ownership.set drop
-    op store
+    ownership op_id store.op_ownership.set
+    op_id store
         .op_ownership
-        .get
+        .get_mut
         .unwrap
+}
+
+fn ensure_op_ownership store:mut$SymbolStore op:mut$Op -> mut$OpOwnership {
+    op op_identity store ensure_op_ownership_address
 }
 
 fn add_owner_assignment store:mut$SymbolStore op:mut$Op event:OwnerEvent {
@@ -492,35 +519,172 @@ fn add_owner_cleanup store:mut$SymbolStore op:mut$Op event:OwnerEvent {
     event ownership.cleanups.push
 }
 
-fn set_moves_owner store:mut$SymbolStore op:mut$Op {
-    op store ensure_op_ownership = ownership
+fn set_moves_owner store:mut$SymbolStore op_id:i64 {
+    op_id store ensure_op_ownership_address = ownership
     true = ownership.moves_owner
+}
+
+fn clone_qualified_method method:$QualifiedMethod -> QualifiedMethod {
+    method.method_name.clone method.qualifier_type clone_type method.type_qualified QualifiedMethod
+}
+
+fn clone_struct_literal literal:$StructLiteral -> StructLiteral {
+    literal.field_order.clone literal.struct_name.clone StructLiteral
+}
+
+fn clone_selective_import import_value:$SelectiveImport -> SelectiveImport {
+    import_value.symbols.clone import_value.path.clone SelectiveImport
+}
+
+fn clone_op_value value:$OpValue -> OpValue {
+    value match
+        OpValue::SizeOf(typ) => typ clone_type OpValue::SizeOf
+        OpValue::PtrAsRef(typ) => typ clone_type OpValue::PtrAsRef
+        OpValue::PtrAsMut(typ) => typ clone_type OpValue::PtrAsMut
+        OpValue::PtrRead(typ) => typ clone_type OpValue::PtrRead
+        OpValue::PtrWrite(typ) => typ clone_type OpValue::PtrWrite
+        OpValue::PushArray(items) => items clone_ops OpValue::PushArray
+        OpValue::PushBool(boolean_value) => boolean_value OpValue::PushBool
+        OpValue::PushChar(character_value) => character_value OpValue::PushChar
+        OpValue::PushInt(literal) => literal.value literal.raw.clone IntegerLiteral::new OpValue::PushInt
+        OpValue::PushFloat(text) => text.clone OpValue::PushFloat
+        OpValue::PushStr(text) => text.clone OpValue::PushStr
+        OpValue::FnCall(name) => name.clone OpValue::FnCall
+        OpValue::FnPush(name) => name.clone OpValue::FnPush
+        OpValue::Question(name) => name.clone OpValue::Question
+        OpValue::QuestionMove(name) => name.clone OpValue::QuestionMove
+        OpValue::MethodCall(name) => name.clone OpValue::MethodCall
+        OpValue::QualifiedMethodCall(method) => method clone_qualified_method OpValue::QualifiedMethodCall
+        OpValue::TraitMethodCall(name) => name.clone OpValue::TraitMethodCall
+        OpValue::AssignDec(name) => name.clone OpValue::AssignDec
+        OpValue::AssignInc(name) => name.clone OpValue::AssignInc
+        OpValue::AssignVar(name) => name.clone OpValue::AssignVar
+        OpValue::DeclareGlobal(name) => name.clone OpValue::DeclareGlobal
+        OpValue::PushCapture(name) => name.clone OpValue::PushCapture
+        OpValue::PushVar(name) => name.clone OpValue::PushVar
+        OpValue::PushEnumVariant(variant) => variant.clone OpValue::PushEnumVariant
+        OpValue::IsCheck(variant) => variant.clone OpValue::IsCheck
+        OpValue::MatchArm(arm) => arm.clone OpValue::MatchArm
+        OpValue::StructNew(casa_struct) => casa_struct.clone OpValue::StructNew
+        OpValue::StructLiteral(literal) => literal clone_struct_literal OpValue::StructLiteral
+        OpValue::NumericCall(call) => call.target call.method.clone NumericCall OpValue::NumericCall
+        OpValue::NumericConvert(conversion) => {
+            conversion.target conversion.source conversion.kind NumericConversion OpValue::NumericConvert
+        }
+        OpValue::NumericTry(numeric_try) => {
+            numeric_try.target numeric_try.source clone_type NumericTry OpValue::NumericTry
+        }
+        OpValue::IntegerTry(integer_try) => {
+            integer_try.target integer_try.kind IntegerTry OpValue::IntegerTry
+        }
+        OpValue::FloatRound(rounding) => {
+            rounding.target rounding.method.clone FloatRound OpValue::FloatRound
+        }
+        OpValue::TypeCast(typ) => typ clone_type OpValue::TypeCast
+        OpValue::ImportFile(path) => path.clone OpValue::ImportFile
+        OpValue::ImportFileSelective(import_value) => {
+            import_value clone_selective_import OpValue::ImportFileSelective
+        }
+        OpValue::FstringConcat(count) => count OpValue::FstringConcat
+        OpValue::PrimitiveToStr(builtin) => builtin OpValue::PrimitiveToStr
+        OpValue::ExprGroup(items) => items clone_ops OpValue::ExprGroup
+        OpValue::Identifier(name) => name.clone OpValue::Identifier
+        OpValue::Drop => OpValue::Drop
+        OpValue::Dup => OpValue::Dup
+        OpValue::Copy => OpValue::Copy
+        OpValue::Over => OpValue::Over
+        OpValue::Rot => OpValue::Rot
+        OpValue::Swap => OpValue::Swap
+        OpValue::Print => OpValue::Print
+        OpValue::PrintBool => OpValue::PrintBool
+        OpValue::PrintChar => OpValue::PrintChar
+        OpValue::PrintCstr => OpValue::PrintCstr
+        OpValue::PrintInt => OpValue::PrintInt
+        OpValue::PrintStr => OpValue::PrintStr
+        OpValue::Typeof => OpValue::Typeof
+        OpValue::HeapAlloc => OpValue::HeapAlloc
+        OpValue::HeapFree => OpValue::HeapFree
+        OpValue::Load8 => OpValue::Load8
+        OpValue::Load16 => OpValue::Load16
+        OpValue::Load32 => OpValue::Load32
+        OpValue::Load64 => OpValue::Load64
+        OpValue::Store8 => OpValue::Store8
+        OpValue::Store16 => OpValue::Store16
+        OpValue::Store32 => OpValue::Store32
+        OpValue::Store64 => OpValue::Store64
+        OpValue::Syscall0 => OpValue::Syscall0
+        OpValue::Syscall1 => OpValue::Syscall1
+        OpValue::Syscall2 => OpValue::Syscall2
+        OpValue::Syscall3 => OpValue::Syscall3
+        OpValue::Syscall4 => OpValue::Syscall4
+        OpValue::Syscall5 => OpValue::Syscall5
+        OpValue::Syscall6 => OpValue::Syscall6
+        OpValue::Add => OpValue::Add
+        OpValue::Sub => OpValue::Sub
+        OpValue::Mul => OpValue::Mul
+        OpValue::Div => OpValue::Div
+        OpValue::Mod => OpValue::Mod
+        OpValue::WrappingAdd => OpValue::WrappingAdd
+        OpValue::WrappingMul => OpValue::WrappingMul
+        OpValue::WrappingSub => OpValue::WrappingSub
+        OpValue::Shl => OpValue::Shl
+        OpValue::Shr => OpValue::Shr
+        OpValue::BitAnd => OpValue::BitAnd
+        OpValue::BitOr => OpValue::BitOr
+        OpValue::BitXor => OpValue::BitXor
+        OpValue::BitNot => OpValue::BitNot
+        OpValue::And => OpValue::And
+        OpValue::Or => OpValue::Or
+        OpValue::Not => OpValue::Not
+        OpValue::Eq => OpValue::Eq
+        OpValue::Ge => OpValue::Ge
+        OpValue::Gt => OpValue::Gt
+        OpValue::Le => OpValue::Le
+        OpValue::Lt => OpValue::Lt
+        OpValue::Ne => OpValue::Ne
+        OpValue::FnExec => OpValue::FnExec
+        OpValue::FnReturn => OpValue::FnReturn
+        OpValue::UnsafeStart => OpValue::UnsafeStart
+        OpValue::UnsafeEnd => OpValue::UnsafeEnd
+        OpValue::OwnerCleanup => OpValue::OwnerCleanup
+        OpValue::WhileStart => OpValue::WhileStart
+        OpValue::WhileCondition => OpValue::WhileCondition
+        OpValue::WhileBreak => OpValue::WhileBreak
+        OpValue::WhileContinue => OpValue::WhileContinue
+        OpValue::WhileEnd => OpValue::WhileEnd
+        OpValue::IfStart => OpValue::IfStart
+        OpValue::IfCondition => OpValue::IfCondition
+        OpValue::IfElif => OpValue::IfElif
+        OpValue::IfElse => OpValue::IfElse
+        OpValue::IfEnd => OpValue::IfEnd
+        OpValue::MatchStart => OpValue::MatchStart
+        OpValue::MatchEnd => OpValue::MatchEnd
+        OpValue::FloatFromDecimal => OpValue::FloatFromDecimal
+        OpValue::FloatSignificand => OpValue::FloatSignificand
+        OpValue::FstringToStr => OpValue::FstringToStr
+        OpValue::Argc => OpValue::Argc
+        OpValue::Argv => OpValue::Argv
+        OpValue::Envp => OpValue::Envp
+    end
+}
+
+fn clone_op source_op:$Op -> Op {
+    source_op.value clone_op_value
+    source_op.deferred_return_hint.clone
+    source_op.type_hint.clone
+    source_op.location.clone
+    source_op.id
+    Op
+}
+
+impl Op: Clone {
+    fn clone self:$Op -> Op { self clone_op }
 }
 
 fn clone_ops ops:$List[Op] -> List[Op] {
     List[Op]::new = result
     for source_op in ops.iter do
-        source_op.value source_op.deferred_return_hint source_op.type_hint source_op.location Op = cloned_op
-        source_op.value match
-            OpValue::PushArray(items) => {
-                items clone_ops OpValue::PushArray = cloned_op.value
-            }
-            OpValue::ExprGroup(items) => {
-                items clone_ops OpValue::ExprGroup = cloned_op.value
-            }
-            OpValue::PushEnumVariant(variant) => {
-                variant.clone OpValue::PushEnumVariant = cloned_op.value
-            }
-            OpValue::IsCheck(variant) => {
-                variant.clone OpValue::IsCheck = cloned_op.value
-            }
-            OpValue::MatchArm(arm) => {
-                arm.clone OpValue::MatchArm = cloned_op.value
-            }
-            _ => {
-            }
-        end
-        cloned_op result.push
+        source_op clone_op result.push
     done
     result
 }
@@ -535,10 +699,26 @@ fn substitute_ops_types ops:mut$List[Op] subs:mut$Map[str Type] {
             OpValue::NumericTry sub_op Op::set_value
         fi
         if sub_op Op::type_hint Option::Some(hint) is then
-            subs hint.substitute_t Option::Some sub_op Op::set_type_hint
+            subs hint.substitute_t = substituted_hint
+            substituted_hint Option::Some sub_op Op::set_type_hint
         fi
         if sub_op Op::deferred_return_hint Option::Some(deferred_hint) is then
             subs deferred_hint.substitute_t Option::Some sub_op Op::set_deferred_return_hint
+        fi
+        if sub_op.value OpValue::SizeOf(target) is then
+            subs target.substitute_t OpValue::SizeOf sub_op Op::set_value
+        elif sub_op.value OpValue::PtrRead(target) is then
+            subs target.substitute_t OpValue::PtrRead sub_op Op::set_value
+        elif sub_op.value OpValue::PtrWrite(target) is then
+            subs target.substitute_t OpValue::PtrWrite sub_op Op::set_value
+        elif sub_op.value OpValue::PtrAsRef(target) is then
+            subs target.substitute_t OpValue::PtrAsRef sub_op Op::set_value
+        elif sub_op.value OpValue::PtrAsMut(target) is then
+            subs target.substitute_t OpValue::PtrAsMut sub_op Op::set_value
+        elif sub_op.value OpValue::PushArray(items) is then
+            subs items substitute_ops_types
+        elif sub_op.value OpValue::ExprGroup(items) is then
+            subs items substitute_ops_types
         fi
     done
 }
@@ -553,9 +733,9 @@ struct Parameter {
 }
 
 impl Parameter {
-    fn new typ:mut$Type -> Parameter { "" typ Parameter }
+    fn new typ:$Type -> Parameter { "" typ clone_type Parameter }
 
-    fn named typ:mut$Type name:mut$str -> Parameter { name typ Parameter }
+    fn named typ:$Type name:$str -> Parameter { name.clone typ clone_type Parameter }
 }
 
 struct StackEffect {
@@ -598,9 +778,32 @@ enum ConstantValue {
     Char (i64)
 }
 
+fn clone_constant_value value:$ConstantValue -> ConstantValue {
+    value match
+        ConstantValue::Int(literal) => literal.value literal.raw.clone IntegerLiteral::new ConstantValue::Int
+        ConstantValue::Float(text) => text.clone ConstantValue::Float
+        ConstantValue::Str(text) => text.clone ConstantValue::Str
+        ConstantValue::Bool(boolean) => boolean ConstantValue::Bool
+        ConstantValue::Char(character) => character ConstantValue::Char
+    end
+}
+
+impl ConstantValue: Clone {
+    fn clone self:$ConstantValue -> ConstantValue { self clone_constant_value }
+}
+
 enum StaticArrayElement {
     Imm (i64)
     Label (str)
+}
+
+impl StaticArrayElement: Clone {
+    fn clone self:$StaticArrayElement -> StaticArrayElement {
+        self match
+            StaticArrayElement::Imm(value) => value StaticArrayElement::Imm
+            StaticArrayElement::Label(label) => label.clone StaticArrayElement::Label
+        end
+    }
 }
 
 struct StaticArray {
@@ -611,10 +814,36 @@ struct StaticStruct {
     fields: List[StaticArrayElement]
 }
 
+impl StaticArray: Clone {
+    fn clone self:$StaticArray -> StaticArray {
+        List[StaticArrayElement]::new = elements
+        for element in self.elements.iter do
+            element.clone elements.push
+        done
+        elements StaticArray
+    }
+}
+
+impl StaticStruct: Clone {
+    fn clone self:$StaticStruct -> StaticStruct {
+        List[StaticArrayElement]::new = fields
+        for field in self.fields.iter do
+            field.clone fields.push
+        done
+        fields StaticStruct
+    }
+}
+
 struct Constant {
     name:     str
     value:    ConstantValue
     location: Location
+}
+
+impl Constant: Clone {
+    fn clone self:$Constant -> Constant {
+        self.location.clone self.value clone_constant_value self.name.clone Constant
+    }
 }
 
 struct Variable {
@@ -624,6 +853,14 @@ struct Variable {
 
 impl Variable {
     fn new name:mut$str -> Variable { Type::Unknown name Variable }
+}
+
+fn clone_variable variable:$Variable -> Variable {
+    variable.typ clone_type variable.name.clone Variable
+}
+
+impl Variable: Clone {
+    fn clone self:$Variable -> Variable { self clone_variable }
 }
 
 enum ResolvedVariable {
@@ -660,6 +897,10 @@ struct Member {
     typ:  Type
 }
 
+impl Member: Clone {
+    fn clone self:$Member -> Member { self.typ clone_type self.name.clone Member }
+}
+
 # ============================================================================
 # Enum-related types
 # ============================================================================
@@ -676,8 +917,12 @@ impl EnumVariant {
         List[str]::new ordinal variant_name enum_name EnumVariant
     }
 
-    fn clone self:mut$EnumVariant -> EnumVariant {
-        self.bindings self.ordinal self.variant_name self.enum_name EnumVariant
+    fn clone self:$EnumVariant -> EnumVariant {
+        List[str]::new = bindings
+        for binding in self.bindings.iter do
+            binding.clone bindings.push
+        done
+        bindings self.ordinal self.variant_name.clone self.enum_name.clone EnumVariant
     }
 }
 
@@ -778,11 +1023,21 @@ impl IntegerLiteral {
 fn is_hidden_parameter_name name:$str -> bool {
     name HIDDEN_TRAIT_PREFIX str::starts_with
     name HIDDEN_CONST_PREFIX str::starts_with ||
+    name HIDDEN_SIZE_PREFIX str::starts_with ||
+    name HIDDEN_REPR_PREFIX str::starts_with ||
 }
 # Does a call to this stack effect need compiler-injected arguments, i.e. trait
 # method pointers or constant type-parameter values?
 
 fn needs_hidden_arguments effect:$StackEffect -> bool {
+    for parameter in effect.parameters.iter do
+        if parameter.name HIDDEN_SIZE_PREFIX str::starts_with then
+            true return
+        fi
+        if parameter.name HIDDEN_REPR_PREFIX str::starts_with then
+            true return
+        fi
+    done
     0 effect
         .trait_bounds
         .keys
@@ -795,6 +1050,15 @@ fn needs_hidden_arguments effect:$StackEffect -> bool {
 # The hidden parameter that carries the value of constant parameter `name`.
 
 fn make_hidden_const_parameter_name name:$str -> str { f"{HIDDEN_CONST_PREFIX}{name}" }
+
+fn make_hidden_size_parameter_name typ:$Type -> str { f"{HIDDEN_SIZE_PREFIX}{typ.format}" }
+
+fn make_hidden_repr_parameter_name typ:$Type -> str { f"{HIDDEN_REPR_PREFIX}{typ.format}" }
+
+fn hidden_layout_parameter_type name:$str prefix:$str -> Type {
+    name prefix.length name.length prefix.length - str::substring
+    parse_type_str
+}
 
 fn make_integer_op_value value:i64 -> OpValue { value IntegerLiteral::from_int OpValue::PushInt }
 
@@ -837,6 +1101,26 @@ struct LiteralPattern {
     raw:   str
 }
 
+fn clone_literal_value value:$LiteralValue -> LiteralValue {
+    value match
+        LiteralValue::Int(literal) => literal.value literal.raw.clone IntegerLiteral::new LiteralValue::Int
+        LiteralValue::Str(text) => text.clone LiteralValue::Str
+        LiteralValue::Bool(boolean) => boolean LiteralValue::Bool
+        LiteralValue::Char(character) => character LiteralValue::Char
+    end
+}
+
+fn clone_pattern_value value:$PatternValue -> PatternValue {
+    value match
+        PatternValue::Struct(pattern) => {
+            pattern.bindings.clone pattern.struct_name.clone StructPattern PatternValue::Struct
+        }
+        PatternValue::EnumVariant(variant) => variant.clone PatternValue::EnumVariant
+        PatternValue::Literal(pattern) => {
+            pattern.raw.clone pattern.value clone_literal_value LiteralPattern PatternValue::Literal
+        }
+    end
+}
 # PatternValue — tagged-union payload carried by OpMatchArm. Each match arm
 # stores one of these in MatchArm::pattern_value; the variant tag both
 # discriminates pattern shape and provides a typed payload.
@@ -872,6 +1156,7 @@ enum OpValue {
     PrintInt
     PrintStr
     Typeof
+    SizeOf (Type)
     # Memory
     HeapAlloc
     HeapFree
@@ -879,10 +1164,14 @@ enum OpValue {
     Load16
     Load32
     Load64
+    PtrAsRef (Type)
+    PtrAsMut (Type)
+    PtrRead (Type)
     Store8
     Store16
     Store32
     Store64
+    PtrWrite (Type)
     # Syscalls
     Syscall0
     Syscall1
@@ -1043,7 +1332,7 @@ fn op_str_value op:$Op -> str {
     ""
 }
 
-fn op_int_value op:Op -> i64 {
+fn op_int_value op:$Op -> i64 {
     if op.value OpValue::PushBool(value) is then
         value return
     fi
@@ -1170,12 +1459,8 @@ impl MatchArm {
         guard_ops pattern_value MatchArm
     }
 
-    fn clone self:mut$MatchArm -> MatchArm {
-        self.pattern_value = cloned_pattern
-        if self.pattern_value PatternValue::EnumVariant(variant) is then
-            variant.clone PatternValue::EnumVariant = cloned_pattern
-        fi
-        self.guard_ops clone_ops cloned_pattern MatchArm::new
+    fn clone self:$MatchArm -> MatchArm {
+        self.guard_ops clone_ops self.pattern_value clone_pattern_value MatchArm::new
     }
 }
 
@@ -1211,9 +1496,30 @@ struct CasaEnum {
     variant_locations: Map[str Location]
 }
 
+impl CasaEnum: Clone {
+    fn clone self:$CasaEnum -> CasaEnum {
+        Map[str List[Type]]::new = variant_types
+        for pair in self.variant_types.iter do
+            List[Type]::new = payload_types
+            for payload_type in pair.second.iter do
+                payload_type clone_type payload_types.push
+            done
+            payload_types pair.first.clone variant_types.set
+        done
+        self.variant_locations.clone
+        self.derived_traits.clone
+        self.type_vars.clone
+        variant_types
+        self.location.clone
+        self.variants.clone
+        self.name.clone
+        CasaEnum
+    }
+}
+
 fn has_inner_values casa_enum:$CasaEnum -> bool {
-    for inner_types in casa_enum CasaEnum::variant_types.values.iter do
-        if 0 inner_types.length != then
+    for pair in casa_enum CasaEnum::variant_types.iter do
+        if 0 pair.second.length != then
             true return
         fi
     done
@@ -1230,6 +1536,13 @@ struct CasaStruct {
     location:       Location
     type_vars:      List[str]
     derived_traits: List[str]
+}
+
+impl CasaStruct: Clone {
+    fn clone self:$CasaStruct -> CasaStruct {
+        self.derived_traits.clone self.type_vars.clone self.location.clone
+        self.members.clone self.name.clone CasaStruct
+    }
 }
 
 # ============================================================================
@@ -1251,6 +1564,94 @@ struct CasaTrait {
     location:    Location
 }
 
+fn clone_casa_trait casa_trait:$CasaTrait -> CasaTrait {
+    List[str]::new = type_parameters
+    for type_parameter in casa_trait.type_params.iter do
+        type_parameter.clone type_parameters.push
+    done
+    List[TraitMethod]::new = methods
+    for method in casa_trait.methods.iter do
+        method clone_trait_method methods.push
+    done
+    List[TraitBound]::new = supertraits
+    for supertrait in casa_trait.supertraits.iter do
+        supertrait clone_trait_bound supertraits.push
+    done
+    casa_trait.location.clone supertraits methods type_parameters casa_trait.name.clone CasaTrait
+}
+
+impl CasaTrait: Clone {
+    fn clone self:$CasaTrait -> CasaTrait { self clone_casa_trait }
+}
+
+fn clone_parameter parameter:$Parameter -> Parameter {
+    parameter.name.clone parameter.typ clone_type Parameter
+}
+
+fn clone_trait_bound bound:$TraitBound -> TraitBound {
+    List[Type]::new = type_arguments
+    for argument in bound.type_args.iter do
+        argument clone_type type_arguments.push
+    done
+    type_arguments bound.name.clone TraitBound
+}
+
+fn clone_stack_effect effect:$StackEffect -> StackEffect {
+    List[Parameter]::new = parameters
+    for parameter in effect.parameters.iter do
+        parameter clone_parameter parameters.push
+    done
+    List[Type]::new = return_types
+    for return_type in effect.return_types.iter do
+        return_type clone_type return_types.push
+    done
+    return_types parameters StackEffect::new = cloned
+    Set[str]::new = type_variables
+    for type_variable in effect.type_vars.iter do
+        type_variable.clone type_variables.add
+    done
+    type_variables cloned StackEffect::set_type_vars
+    Map[str List[TraitBound]]::new = trait_bounds
+    for pair in effect.trait_bounds.iter do
+        List[TraitBound]::new = bounds
+        for bound in pair.second.iter do
+            bound clone_trait_bound bounds.push
+        done
+        bounds pair.first.clone trait_bounds.set
+    done
+    trait_bounds cloned StackEffect::set_trait_bounds
+    Map[str BuiltinType]::new = constant_parameters
+    for pair in effect.const_params.iter do
+        pair.second.clone pair.first.clone constant_parameters.set
+    done
+    constant_parameters cloned StackEffect::set_const_params
+    cloned
+}
+
+fn clone_trait_method method:$TraitMethod -> TraitMethod {
+    List[str]::new = type_variables
+    for type_variable in method.type_vars.iter do
+        type_variable.clone type_variables.push
+    done
+    type_variables method.default_ops clone_ops method.stack_effect clone_stack_effect
+    method.name.clone TraitMethod
+}
+
+impl Parameter: Clone {
+    fn clone self:$Parameter -> Parameter { self clone_parameter }
+}
+
+impl StackEffect: Clone {
+    fn clone self:$StackEffect -> StackEffect { self clone_stack_effect }
+}
+
+impl TraitBound: Clone {
+    fn clone self:$TraitBound -> TraitBound { self clone_trait_bound }
+}
+
+impl TraitMethod: Clone {
+    fn clone self:$TraitMethod -> TraitMethod { self clone_trait_method }
+}
 # Per-method hidden-parameter info produced by build_hidden_trait_methods.
 # Both parse_function and inject_implementation_parameters consume this list to
 # prepend `__trait_{type_var}_{method}` function-pointer parameters.
@@ -1277,6 +1678,36 @@ struct TraitImpl {
     trait_bounds: Map[str List[TraitBound]]
     methods:      Map[str str]
     location:     Location
+}
+
+fn clone_trait_impl trait_impl:$TraitImpl -> TraitImpl {
+    List[str]::new = type_variables
+    for type_variable in trait_impl.type_vars.iter do
+        type_variable.clone type_variables.push
+    done
+    Map[str List[TraitBound]]::new = trait_bounds
+    for pair in trait_impl.trait_bounds.iter do
+        List[TraitBound]::new = bounds
+        for bound in pair.second.iter do
+            bound clone_trait_bound bounds.push
+        done
+        bounds pair.first.clone trait_bounds.set
+    done
+    Map[str str]::new = methods
+    for pair in trait_impl.methods.iter do
+        pair.second.clone pair.first.clone methods.set
+    done
+    trait_impl.location.clone
+    methods
+    trait_bounds
+    type_variables
+    trait_impl.trait_bound clone_trait_bound
+    trait_impl.receiver clone_type
+    TraitImpl
+}
+
+impl TraitImpl: Clone {
+    fn clone self:$TraitImpl -> TraitImpl { self clone_trait_impl }
 }
 
 fn trait_bound_to_str bound:$TraitBound -> str {
@@ -1330,6 +1761,7 @@ struct Function {
     is_typechecked:       bool
     variables:            List[Variable]
     captures:             List[Variable]
+    global_captures:      List[str]
     has_deferred_methods: bool
     is_const_fn:          bool
     is_unsafe:            bool
@@ -1337,7 +1769,7 @@ struct Function {
 
 impl Function {
     fn new name:mut$str ops:List[Op] location:Location -> Function {
-        false false false List[Variable]::new List[Variable]::new false false empty_stack_effect location ops name Function
+        false false false List[str]::new List[Variable]::new List[Variable]::new false false empty_stack_effect location ops name Function
     }
 
     fn with_stack_effect
@@ -1346,23 +1778,52 @@ impl Function {
         location:Location
         effect:StackEffect
     -> Function {
-        false false false List[Variable]::new List[Variable]::new false false effect location ops name Function
+        false false false List[str]::new List[Variable]::new List[Variable]::new false false effect location ops name Function
     }
 
-    fn clone_for_import self:mut$Function -> Function {
+    fn clone_for_import self:$Function -> Function {
         self.is_unsafe
         self.is_const_fn
         self.has_deferred_methods
-        self.captures.shallow_copy
-        self.variables.shallow_copy
+        self.global_captures.clone
+        self.captures.clone
+        self.variables.clone
         self.is_typechecked
         self.is_used
-        self.stack_effect
-        self.location
+        self.stack_effect.clone
+        self.location.clone
         self.ops clone_ops
-        self.name
+        self.name.clone
         Function
     }
+
+    # Preserve callable metadata while an owned function body is updated or compiled.
+    fn clone_declaration self:$Function -> Function {
+        self.is_unsafe
+        self.is_const_fn
+        self.has_deferred_methods
+        self.global_captures.clone
+        self.captures.clone
+        self.variables.clone
+        self.is_typechecked
+        self.is_used
+        self.stack_effect.clone
+        self.location.clone
+        List[Op]::new
+        self.name.clone
+        Function
+    }
+
+    # Replace the stored body with an empty list and return its sole owner.
+    fn take_ops self:mut$Function -> List[Op] {
+        self.ops = ops
+        List[Op]::new self.set_ops
+        ops
+    }
+}
+
+impl Function: Clone {
+    fn clone self:$Function -> Function { self.clone_for_import }
 }
 
 # ============================================================================
@@ -1393,7 +1854,12 @@ const ARRAY_TYPE "array"
 const ARRAY_NTH_FUNCTION "array::nth"
 const HIDDEN_TRAIT_PREFIX "__trait_"
 const HIDDEN_CONST_PREFIX "__const_"
+const HIDDEN_SIZE_PREFIX "__size_of_"
+const HIDDEN_REPR_PREFIX "__repr_of_"
 const WORD_SIZE 8
+const VALUE_REPR_INDIRECT 0
+const VALUE_REPR_RAW 1
+const VALUE_REPR_SIGNED 2
 BuiltinType::I8 Type::Builtin = TYPE_I8_T
 BuiltinType::I16 Type::Builtin = TYPE_I16_T
 BuiltinType::I32 Type::Builtin = TYPE_I32_T
@@ -1418,7 +1884,7 @@ List[Type]::new "<float literal>" GenericType Type::Generic = TYPE_FLOAT_LITERAL
 # Type AST
 # ============================================================================
 
-enum BuiltinType {
+enum BuiltinType derives Copy {
     I8
     I16
     I32
@@ -1646,15 +2112,14 @@ fn make_array_type element:Type length:u64 -> Type {
     BuiltinType::U64 length i64::try_from.unwrap ConstType::concrete Type::Const parameters.push
     parameters ARRAY_TYPE GenericType Type::Generic
 }
-# Bytes an `array[T N]` value occupies. Every element is one word today. A
-# zero-length array keeps the one-byte minimum every inhabited type has
-# (ADR-0132, ADR-0154), rounded up to a word because storage is word-granular.
+# Bytes an `array[T N]` value occupies. A zero-length array keeps the one-byte
+# minimum every inhabited type has (ADR-0132, ADR-0154).
 
-fn get_array_storage_size length:u64 -> u64 {
+fn get_array_storage_size length:u64 element_size:u64 -> u64 {
     if 0 length == then
-        WORD_SIZE return
+        1 return
     fi
-    length WORD_SIZE *
+    length element_size *
 }
 
 fn get_array_length_parameter array_type:$Type -> Option[ConstType] {
@@ -1688,7 +2153,25 @@ fn parse_generic_params source:$str -> List[Type] {
     params
 }
 
+fn apply_borrow_type target:Type prefix:str -> Type {
+    if "" prefix == then
+        target return
+    fi
+    List[Type]::new = parameters
+    target parameters.push
+    parameters prefix GenericType Type::Generic
+}
+
 impl Type {
+    fn array_element_type self:$Type -> Option[Type] {
+        if self Type::Generic(generic) is then
+            if ARRAY_TYPE generic.base == 2 generic.params.length == && then
+                0 generic.params.get clone_type Option::Some return
+            fi
+        fi
+        Option[Type]::None
+    }
+
     fn borrow_target self:$Type -> Option[Type] {
         if self Type::Generic(generic) is then
             if
@@ -1696,7 +2179,7 @@ impl Type {
                 generic.base EXCLUSIVE_BORROW_TYPE == ||
                 generic.params.length 1 == &&
             then
-                0 generic.params.get Option::Some return
+                0 generic.params.get clone_type Option::Some return
             fi
         fi
         Option[Type]::None
@@ -1883,7 +2366,7 @@ impl Type {
             }
             Type::TypeVar(name) => {
                 if name bindings.get Option::Some(bound) is then
-                    bound
+                    bound clone_type
                 else
                     name.clone Type::TypeVar
                 fi
@@ -1891,7 +2374,7 @@ impl Type {
             Type::Const(const_type) => {
                 if const_type.is_symbolic then
                     if const_type.name bindings.get Option::Some(bound) is then
-                        bound
+                        bound clone_type
                     else
                         self clone_type
                     fi
@@ -1903,7 +2386,7 @@ impl Type {
                 generic.base = base
                 if 0 generic.params.length == then
                     if base bindings.get Option::Some(bound) is then
-                        bound return
+                        bound clone_type return
                     fi
                     generic.params.shallow_copy base.clone GenericType Type::Generic return
                 fi
@@ -2269,7 +2752,7 @@ impl Type {
 fn string_list_to_set items:$List[str] -> Set[str] {
     Set[str]::new = result
     for item in items.iter do
-        item.clone result.add = result
+        item.clone result.add
     done
     result
 }
@@ -2356,6 +2839,10 @@ fn clone_type typ:$Type -> Type {
             return_types parameters FunctionType Type::Function
         }
     end
+}
+
+impl Type: Clone {
+    fn clone self:$Type -> Type { self clone_type }
 }
 # Parse a non-negative integer literal, e.g. the `3` in `array[i64 3]`
 # (ADR-0152). None if `source` is empty or has a non-digit character.
@@ -2521,7 +3008,7 @@ fn build_resolved_type base:$str type_vars:$List[str] bindings:$Map[str Type] ->
     List[Type]::new = params
     for type_var in type_vars.iter do
         if type_var bindings.get Option::Some(bound) is then
-            bound params.push
+            bound clone_type params.push
         else
             type_var.clone Type::TypeVar params.push
         fi
@@ -2606,7 +3093,7 @@ fn stack_effect_type_param_matches
 
 fn collect_stack_effect_type_vars typ:$Type type_vars:mut$Set[str] {
     if typ.type_var_name Option::Some(type_var_name) is then
-        type_var_name type_vars.add drop
+        type_var_name type_vars.add
         return
     fi
     typ match
@@ -2745,9 +3232,6 @@ fn stack_effect_matches effect_a:$StackEffect effect_b:$StackEffect -> bool {
 }
 
 fn apply_type_subs_to_stack_effect effect:$StackEffect subs:mut$Map[str Type] -> StackEffect {
-    if 0 subs.length == then
-        effect.return_types.shallow_copy effect.parameters.shallow_copy StackEffect::new return
-    fi
     List[Parameter]::new = params
     for param in effect StackEffect::parameters.iter do
         subs param Parameter::typ.substitute_t = new_typ
@@ -2757,12 +3241,16 @@ fn apply_type_subs_to_stack_effect effect:$StackEffect subs:mut$Map[str Type] ->
     for return_type in effect StackEffect::return_types.iter do
         subs return_type.substitute_t returns.push
     done
-    returns params StackEffect::new
+    returns params StackEffect::new = resolved
+    effect.type_vars resolved StackEffect::set_type_vars
+    effect.trait_bounds resolved StackEffect::set_trait_bounds
+    effect.const_params resolved StackEffect::set_const_params
+    resolved
 }
 
 fn resolve_trait_stack_effect effect:$StackEffect self_type:$Type -> StackEffect {
     Map[str Type]::new = substitutions
-    self_type clone_type TRAIT_SELF_TYPE substitutions.set = substitutions
+    self_type clone_type TRAIT_SELF_TYPE substitutions.set
     substitutions effect apply_type_subs_to_stack_effect
 }
 
@@ -2808,14 +3296,14 @@ fn build_keyword_lookup -> Map[str KeywordKind] {
     while keyword_index KeywordKind > do
         keyword_index (KeywordKind) = keyword
         keyword.format_source = source
-        keyword source lookup.set = lookup
+        keyword source lookup.set
         1 += keyword_index
     done
     lookup
 }
 build_keyword_lookup = KEYWORD_MAP
 
-fn keyword_from_str value:$str -> Option[KeywordKind] { value KEYWORD_MAP.get }
+fn keyword_from_str value:$str -> Option[KeywordKind] { value KEYWORD_MAP.get_copy }
 
 impl IntrinsicKind {
     fn format_source self:$IntrinsicKind -> str {
@@ -2838,6 +3326,7 @@ impl IntrinsicKind {
             IntrinsicKind::Store64 => "store64"
             IntrinsicKind::Print => "print"
             IntrinsicKind::Typeof => "typeof"
+            IntrinsicKind::SizeOf => "size_of"
             IntrinsicKind::Exec => "exec"
             IntrinsicKind::Syscall0 => "syscall0"
             IntrinsicKind::Syscall1 => "syscall1"
@@ -2859,63 +3348,63 @@ fn build_intrinsic_lookup -> Map[str IntrinsicKind] {
     while intrinsic_index IntrinsicKind > do
         intrinsic_index (IntrinsicKind) = intrinsic
         intrinsic.format_source = source
-        intrinsic source lookup.set = lookup
+        intrinsic source lookup.set
         1 += intrinsic_index
     done
-    IntrinsicKind::Print "print_int" lookup.set = lookup
-    IntrinsicKind::Print "print_str" lookup.set = lookup
-    IntrinsicKind::Print "print_bool" lookup.set = lookup
-    IntrinsicKind::Print "print_char" lookup.set = lookup
-    IntrinsicKind::Print "print_cstr" lookup.set = lookup
+    IntrinsicKind::Print "print_int" lookup.set
+    IntrinsicKind::Print "print_str" lookup.set
+    IntrinsicKind::Print "print_bool" lookup.set
+    IntrinsicKind::Print "print_char" lookup.set
+    IntrinsicKind::Print "print_cstr" lookup.set
     lookup
 }
 build_intrinsic_lookup = INTRINSIC_MAP
 
-fn intrinsic_from_str value:$str -> Option[IntrinsicKind] { value INTRINSIC_MAP.get }
+fn intrinsic_from_str value:$str -> Option[IntrinsicKind] { value INTRINSIC_MAP.get_copy }
 
 Map[str OperatorKind]::new = OPERATOR_MAP
-OperatorKind::Plus "+" OPERATOR_MAP.set = OPERATOR_MAP
-OperatorKind::Minus "-" OPERATOR_MAP.set = OPERATOR_MAP
-OperatorKind::Mul "*" OPERATOR_MAP.set = OPERATOR_MAP
-OperatorKind::Div "/" OPERATOR_MAP.set = OPERATOR_MAP
-OperatorKind::Mod "%" OPERATOR_MAP.set = OPERATOR_MAP
-OperatorKind::Shl "<<" OPERATOR_MAP.set = OPERATOR_MAP
-OperatorKind::Shr ">>" OPERATOR_MAP.set = OPERATOR_MAP
-OperatorKind::BitAnd "&" OPERATOR_MAP.set = OPERATOR_MAP
-OperatorKind::BitOr "|" OPERATOR_MAP.set = OPERATOR_MAP
-OperatorKind::BitXor "^" OPERATOR_MAP.set = OPERATOR_MAP
-OperatorKind::BitNot "~" OPERATOR_MAP.set = OPERATOR_MAP
-OperatorKind::And "&&" OPERATOR_MAP.set = OPERATOR_MAP
-OperatorKind::Or "||" OPERATOR_MAP.set = OPERATOR_MAP
-OperatorKind::Not "!" OPERATOR_MAP.set = OPERATOR_MAP
-OperatorKind::Eq "==" OPERATOR_MAP.set = OPERATOR_MAP
-OperatorKind::Ge ">=" OPERATOR_MAP.set = OPERATOR_MAP
-OperatorKind::Gt ">" OPERATOR_MAP.set = OPERATOR_MAP
-OperatorKind::Le "<=" OPERATOR_MAP.set = OPERATOR_MAP
-OperatorKind::Lt "<" OPERATOR_MAP.set = OPERATOR_MAP
-OperatorKind::Ne "!=" OPERATOR_MAP.set = OPERATOR_MAP
-OperatorKind::Assign "=" OPERATOR_MAP.set = OPERATOR_MAP
-OperatorKind::AssignDec "-=" OPERATOR_MAP.set = OPERATOR_MAP
-OperatorKind::AssignInc "+=" OPERATOR_MAP.set = OPERATOR_MAP
-OperatorKind::Question "?" OPERATOR_MAP.set = OPERATOR_MAP
+OperatorKind::Plus "+" OPERATOR_MAP.set
+OperatorKind::Minus "-" OPERATOR_MAP.set
+OperatorKind::Mul "*" OPERATOR_MAP.set
+OperatorKind::Div "/" OPERATOR_MAP.set
+OperatorKind::Mod "%" OPERATOR_MAP.set
+OperatorKind::Shl "<<" OPERATOR_MAP.set
+OperatorKind::Shr ">>" OPERATOR_MAP.set
+OperatorKind::BitAnd "&" OPERATOR_MAP.set
+OperatorKind::BitOr "|" OPERATOR_MAP.set
+OperatorKind::BitXor "^" OPERATOR_MAP.set
+OperatorKind::BitNot "~" OPERATOR_MAP.set
+OperatorKind::And "&&" OPERATOR_MAP.set
+OperatorKind::Or "||" OPERATOR_MAP.set
+OperatorKind::Not "!" OPERATOR_MAP.set
+OperatorKind::Eq "==" OPERATOR_MAP.set
+OperatorKind::Ge ">=" OPERATOR_MAP.set
+OperatorKind::Gt ">" OPERATOR_MAP.set
+OperatorKind::Le "<=" OPERATOR_MAP.set
+OperatorKind::Lt "<" OPERATOR_MAP.set
+OperatorKind::Ne "!=" OPERATOR_MAP.set
+OperatorKind::Assign "=" OPERATOR_MAP.set
+OperatorKind::AssignDec "-=" OPERATOR_MAP.set
+OperatorKind::AssignInc "+=" OPERATOR_MAP.set
+OperatorKind::Question "?" OPERATOR_MAP.set
 
-fn operator_from_str value:$str -> Option[OperatorKind] { value OPERATOR_MAP.get }
+fn operator_from_str value:$str -> Option[OperatorKind] { value OPERATOR_MAP.get_copy }
 
 Map[str DelimiterKind]::new = DELIMITER_MAP
-DelimiterKind::Arrow "->" DELIMITER_MAP.set = DELIMITER_MAP
-DelimiterKind::Comma "," DELIMITER_MAP.set = DELIMITER_MAP
-DelimiterKind::FatArrow "=>" DELIMITER_MAP.set = DELIMITER_MAP
-DelimiterKind::Colon ":" DELIMITER_MAP.set = DELIMITER_MAP
-DelimiterKind::Dot "." DELIMITER_MAP.set = DELIMITER_MAP
-DelimiterKind::Hashtag "#" DELIMITER_MAP.set = DELIMITER_MAP
-DelimiterKind::OpenBrace "{" DELIMITER_MAP.set = DELIMITER_MAP
-DelimiterKind::CloseBrace "}" DELIMITER_MAP.set = DELIMITER_MAP
-DelimiterKind::OpenBracket "[" DELIMITER_MAP.set = DELIMITER_MAP
-DelimiterKind::CloseBracket "]" DELIMITER_MAP.set = DELIMITER_MAP
-DelimiterKind::OpenParen "(" DELIMITER_MAP.set = DELIMITER_MAP
-DelimiterKind::CloseParen ")" DELIMITER_MAP.set = DELIMITER_MAP
+DelimiterKind::Arrow "->" DELIMITER_MAP.set
+DelimiterKind::Comma "," DELIMITER_MAP.set
+DelimiterKind::FatArrow "=>" DELIMITER_MAP.set
+DelimiterKind::Colon ":" DELIMITER_MAP.set
+DelimiterKind::Dot "." DELIMITER_MAP.set
+DelimiterKind::Hashtag "#" DELIMITER_MAP.set
+DelimiterKind::OpenBrace "{" DELIMITER_MAP.set
+DelimiterKind::CloseBrace "}" DELIMITER_MAP.set
+DelimiterKind::OpenBracket "[" DELIMITER_MAP.set
+DelimiterKind::CloseBracket "]" DELIMITER_MAP.set
+DelimiterKind::OpenParen "(" DELIMITER_MAP.set
+DelimiterKind::CloseParen ")" DELIMITER_MAP.set
 
-fn delimiter_from_str value:$str -> Option[DelimiterKind] { value DELIMITER_MAP.get }
+fn delimiter_from_str value:$str -> Option[DelimiterKind] { value DELIMITER_MAP.get_copy }
 
 fn delimiter_from_char c:char -> Option[DelimiterKind] {
     if ',' c == then
@@ -2968,6 +3457,7 @@ fn intrinsic_to_op_value intrinsic_kind:IntrinsicKind -> Option[OpValue] {
         IntrinsicKind::Store64 => OpValue::Store64 Option::Some
         IntrinsicKind::Swap => OpValue::Swap Option::Some
         IntrinsicKind::Typeof => OpValue::Typeof Option::Some
+        IntrinsicKind::SizeOf => Option[OpValue]::None
         IntrinsicKind::Syscall0 => OpValue::Syscall0 Option::Some
         IntrinsicKind::Syscall1 => OpValue::Syscall1 Option::Some
         IntrinsicKind::Syscall2 => OpValue::Syscall2 Option::Some
@@ -3089,6 +3579,7 @@ fn string_list_contains items:$List[str] value:$str -> bool { 0 value items stri
 # ============================================================================
 
 struct SymbolStore {
+    next_op_id:    i64
     functions:     Map[str Function]
     variables:     Map[str Variable]
     constants:     Map[str Constant]
@@ -3099,29 +3590,29 @@ struct SymbolStore {
     builtins:      Set[str]
     copy_types:    Map[str bool]
     borrow_shapes: Map[str bool]
-    op_ownership:  Map[Op OpOwnership]
+    op_ownership:  Map[i64 OpOwnership]
 }
 
 fn symbol_store_new -> SymbolStore {
     Set[str]::new = builtins
-    "i8" builtins.add = builtins
-    "i16" builtins.add = builtins
-    "i32" builtins.add = builtins
-    "i64" builtins.add = builtins
-    "u8" builtins.add = builtins
-    "u16" builtins.add = builtins
-    "u32" builtins.add = builtins
-    "u64" builtins.add = builtins
-    "f32" builtins.add = builtins
-    "f64" builtins.add = builtins
-    "bool" builtins.add = builtins
-    "str" builtins.add = builtins
-    "char" builtins.add = builtins
-    "cstr" builtins.add = builtins
-    "ptr" builtins.add = builtins
-    "array" builtins.add = builtins
+    "i8" builtins.add
+    "i16" builtins.add
+    "i32" builtins.add
+    "i64" builtins.add
+    "u8" builtins.add
+    "u16" builtins.add
+    "u32" builtins.add
+    "u64" builtins.add
+    "f32" builtins.add
+    "f64" builtins.add
+    "bool" builtins.add
+    "str" builtins.add
+    "char" builtins.add
+    "cstr" builtins.add
+    "ptr" builtins.add
+    "array" builtins.add
 
-    Map[Op OpOwnership]::new
+    Map[i64 OpOwnership]::new
     Map[str bool]::new
     Map[str bool]::new
     builtins
@@ -3132,20 +3623,286 @@ fn symbol_store_new -> SymbolStore {
     Map[str Constant]::new
     Map[str Variable]::new
     Map[str Function]::new
+    1
     SymbolStore
+}
+
+struct TypeLayout {
+    size:      u64
+    alignment: u64
+}
+
+fn align_up value:u64 alignment:u64 -> u64 { value alignment 1 - + alignment / alignment * }
+
+fn builtin_type_layout builtin:$BuiltinType -> TypeLayout {
+    builtin match
+        BuiltinType::I8 => 1 1 TypeLayout
+        BuiltinType::U8 => 1 1 TypeLayout
+        BuiltinType::Bool => 1 1 TypeLayout
+        BuiltinType::I16 => 2 2 TypeLayout
+        BuiltinType::U16 => 2 2 TypeLayout
+        BuiltinType::I32 => 4 4 TypeLayout
+        BuiltinType::U32 => 4 4 TypeLayout
+        BuiltinType::F32 => 4 4 TypeLayout
+        BuiltinType::Char => 4 4 TypeLayout
+        _ => WORD_SIZE WORD_SIZE TypeLayout
+    end
+}
+# Aggregate fields keep the language's one-word indirect representation for
+# nested aggregates. Generic fields also use one word because generic functions
+# are shared across all instantiations.
+
+fn aggregate_field_layout typ:$Type store:$SymbolStore visiting:mut$Set[str] -> Option[TypeLayout] {
+    if typ.has_unresolved_type_var then
+        WORD_SIZE WORD_SIZE TypeLayout Option::Some return
+    fi
+    if store typ type_value_representation Option::Some(representation) is then
+        if VALUE_REPR_INDIRECT representation == then
+            WORD_SIZE WORD_SIZE TypeLayout Option::Some return
+        fi
+    fi
+    visiting store typ type_layout
+}
+
+fn struct_type_layout
+    typ:$Type
+    casa_struct:$CasaStruct
+    store:$SymbolStore
+    visiting:mut$Set[str]
+-> Option[TypeLayout] {
+    0 (u64) = size
+    1 (u64) = alignment
+    for member in casa_struct.members.iter do
+        if visiting store member.typ aggregate_field_layout Option::Some(member_layout) is then
+            member_layout.alignment size align_up = size
+            member_layout.size += size
+            if alignment member_layout.alignment > then
+                member_layout.alignment = alignment
+            fi
+        else
+            Option[TypeLayout]::None return
+        fi
+    done
+    if 0 size == then
+        1 (u64) = size
+    fi
+    alignment size align_up = size
+    alignment size TypeLayout Option::Some
+}
+
+fn enum_type_layout
+    typ:$Type
+    casa_enum:$CasaEnum
+    store:$SymbolStore
+    visiting:mut$Set[str]
+-> Option[TypeLayout] {
+    WORD_SIZE (u64) = size
+    WORD_SIZE (u64) = alignment
+    for pair in casa_enum.variant_types.iter do
+        WORD_SIZE (u64) = variant_size
+        for payload_type in pair.second.iter do
+            if visiting store payload_type aggregate_field_layout Option::Some(payload_layout) is then
+                payload_layout.alignment variant_size align_up = variant_size
+                payload_layout.size += variant_size
+                if alignment payload_layout.alignment > then
+                    payload_layout.alignment = alignment
+                fi
+            else
+                Option[TypeLayout]::None return
+            fi
+        done
+        if size variant_size > then
+            variant_size = size
+        fi
+    done
+    alignment size align_up = size
+    alignment size TypeLayout Option::Some
+}
+
+fn struct_member_offset casa_struct:$CasaStruct member_index:u64 store:$SymbolStore -> Option[u64] {
+    Set[str]::new = visiting
+    0 (u64) = offset
+    0 (u64) = index
+    while index casa_struct.members.length > do
+        index casa_struct.members.get = member
+        if visiting store member.typ aggregate_field_layout Option::Some(layout) is then
+            layout.alignment offset align_up = offset
+            if index member_index == then
+                offset Option::Some return
+            fi
+            layout.size += offset
+        else
+            Option[u64]::None return
+        fi
+        1 += index
+    done
+    Option[u64]::None
+}
+
+fn next_struct_member_offset
+    prior_members:$List[Member]
+    member_type:$Type
+    store:$SymbolStore
+-> Option[u64] {
+    Set[str]::new = visiting
+    0 (u64) = offset
+    for member in prior_members.iter do
+        WORD_SIZE WORD_SIZE TypeLayout = layout
+        if visiting store member.typ aggregate_field_layout Option::Some(found_layout) is then
+            found_layout = layout
+        fi
+        layout.alignment offset align_up layout.size + = offset
+    done
+    # An imported or forward aggregate can be absent while its accessors are
+    # parsed. Aggregate fields always use one indirect word in that case.
+    WORD_SIZE WORD_SIZE TypeLayout = member_layout
+    if visiting store member_type aggregate_field_layout Option::Some(found_member_layout) is then
+        found_member_layout = member_layout
+    fi
+    member_layout.alignment offset align_up Option::Some
+}
+
+fn enum_payload_offset
+    casa_enum:$CasaEnum
+    variant_name:$str
+    payload_index:u64
+    store:$SymbolStore
+-> Option[u64] {
+    variant_name casa_enum.variant_types.get = payload_types_opt
+    if payload_types_opt.is_none then
+        Option[u64]::None return
+    fi
+    payload_types_opt.unwrap = payload_types
+    Set[str]::new = visiting
+    WORD_SIZE (u64) = offset
+    0 (u64) = index
+    while index payload_types.length > do
+        index payload_types.get = payload_type
+        if visiting store payload_type aggregate_field_layout Option::Some(layout) is then
+            layout.alignment offset align_up = offset
+            if index payload_index == then
+                offset Option::Some return
+            fi
+            layout.size += offset
+        else
+            Option[u64]::None return
+        fi
+        1 += index
+    done
+    Option[u64]::None
+}
+
+fn array_type_layout
+    typ:$Type
+    generic:$GenericType
+    store:$SymbolStore
+    visiting:mut$Set[str]
+-> Option[TypeLayout] {
+    if 2 generic.params.length != then
+        Option[TypeLayout]::None return
+    fi
+    if typ get_concrete_array_length Option::Some(length) is then
+        if visiting store 0 generic.params.get type_layout Option::Some(element) is then
+            if 0 length == then
+                1 1 TypeLayout Option::Some
+            else
+                element.alignment length element.size * TypeLayout Option::Some
+            fi
+            return
+        fi
+    fi
+    Option[TypeLayout]::None
+}
+
+fn type_layout typ:$Type store:$SymbolStore visiting:mut$Set[str] -> Option[TypeLayout] {
+    if typ.is_borrow then
+        WORD_SIZE WORD_SIZE TypeLayout Option::Some return
+    fi
+    typ match
+        Type::Builtin(builtin) => {
+            builtin builtin_type_layout Option::Some
+        }
+        Type::Function => {
+            WORD_SIZE WORD_SIZE TypeLayout Option::Some
+        }
+        Type::Generic(generic) => {
+            if ARRAY_TYPE generic.base == then
+                visiting store generic typ array_type_layout return
+            fi
+            typ.format = type_name
+            if type_name visiting.has then
+                WORD_SIZE WORD_SIZE TypeLayout Option::Some return
+            fi
+            type_name.clone visiting.add
+            Option[TypeLayout]::None = result
+            if generic.base store.structs.get Option::Some(casa_struct) is then
+                visiting store casa_struct typ struct_type_layout = result
+            elif generic.base store.enums.get Option::Some(casa_enum) is then
+                visiting store casa_enum typ enum_type_layout = result
+            fi
+            type_name visiting.remove
+            result
+        }
+        _ => {
+            Option[TypeLayout]::None
+        }
+    end
+}
+
+fn type_inline_size typ:$Type store:$SymbolStore -> Option[u64] {
+    Set[str]::new = visiting
+    if visiting store typ type_layout Option::Some(layout) is then
+        layout.size Option::Some
+    else
+        Option[u64]::None
+    fi
+}
+
+fn type_value_representation typ:$Type store:$SymbolStore -> Option[u64] {
+    if typ.is_borrow then
+        VALUE_REPR_RAW (u64) Option::Some return
+    fi
+    typ match
+        Type::Builtin(builtin) => {
+            if builtin.is_integer builtin.is_unsigned ! && then
+                VALUE_REPR_SIGNED (u64) Option::Some
+            else
+                VALUE_REPR_RAW (u64) Option::Some
+            fi
+        }
+        Type::Function => {
+            VALUE_REPR_RAW (u64) Option::Some
+        }
+        Type::Generic(generic) => {
+            if ARRAY_TYPE generic.base == generic.base store.structs.has || then
+                VALUE_REPR_INDIRECT (u64) Option::Some
+            elif generic.base store.enums.get Option::Some(casa_enum) is then
+                if casa_enum has_inner_values then
+                    VALUE_REPR_INDIRECT (u64) Option::Some
+                else
+                    VALUE_REPR_RAW (u64) Option::Some
+                fi
+            else
+                Option[u64]::None
+            fi
+        }
+        _ => {
+            Option[u64]::None
+        }
+    end
 }
 
 fn aggregate_type_bindings typ:$Type type_vars:$List[str] -> Map[str Type] {
     Map[str Type]::new = bindings
     if typ.type_params Option::Some(type_params) is then
         for pair in type_params.iter type_vars.iter.zip do
-            pair.second clone_type pair.first.clone bindings.set = bindings
+            pair.second clone_type pair.first.clone bindings.set
         done
     fi
     bindings
 }
 
-fn type_needs_destruction typ:mut$Type store:mut$SymbolStore visiting:mut$Set[str] -> bool {
+fn type_needs_destruction typ:mut$Type store:$SymbolStore visiting:mut$Set[str] -> bool {
     if typ.is_borrow then
         false return
     fi
@@ -3158,11 +3915,11 @@ fn type_needs_destruction typ:mut$Type store:mut$SymbolStore visiting:mut$Set[st
         if type_name visiting.has then
             false return
         fi
-        type_name.clone visiting.add drop
+        type_name.clone visiting.add
         if "array" generic.base == then
             if 0 generic.params.length != then
                 visiting store 0 generic.params.get type_needs_destruction = needed
-                type_name visiting.remove drop
+                type_name visiting.remove
                 needed return
             fi
         elif generic.base store.structs.get Option::Some(casa_struct) is then
@@ -3170,33 +3927,28 @@ fn type_needs_destruction typ:mut$Type store:mut$SymbolStore visiting:mut$Set[st
             for member in casa_struct.members.iter do
                 substitutions member.typ.substitute_t = member_type
                 if visiting store member_type type_needs_destruction then
-                    type_name visiting.remove drop
+                    type_name visiting.remove
                     true return
                 fi
             done
         elif generic.base store.enums.get Option::Some(casa_enum) is then
             casa_enum.type_vars typ aggregate_type_bindings = substitutions
-            for
-                payload_types in casa_enum
-                    .variant_types
-                    .values
-                    .iter
-            do
-                for payload_type in payload_types.iter do
+            for pair in casa_enum.variant_types.iter do
+                for payload_type in pair.second.iter do
                     substitutions payload_type.substitute_t = resolved_payload
                     if visiting store resolved_payload type_needs_destruction then
-                        type_name visiting.remove drop
+                        type_name visiting.remove
                         true return
                     fi
                 done
             done
         fi
-        type_name visiting.remove drop
+        type_name visiting.remove
     fi
     false
 }
 
-fn type_needs_destruction_in_store typ:mut$Type store:mut$SymbolStore -> bool {
+fn type_needs_destruction_in_store typ:mut$Type store:$SymbolStore -> bool {
     Set[str]::new = visiting
     visiting store typ type_needs_destruction
 }

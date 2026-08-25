@@ -7,9 +7,9 @@ import "common"
 # ============================================================================
 const INT32_MAX 2147483647
 const INT32_MIN -2147483648
-const RETURN_STACK_SIZE 65536
+const RETURN_STACK_SIZE 1048576
 # Keep enough headroom for the compiler and its largest test programs.
-const HEAP_SIZE 3221225472
+const HEAP_SIZE 6442450944
 
 # ============================================================================
 # Emitter state
@@ -81,7 +81,7 @@ fn nibble_to_hex value:i64 -> char {
     fi
 }
 
-fn escape_string s:str -> str {
+fn escape_string s:$str -> str {
     StringBuilder::new = builder
     for ch in s.iter do
         if '\\' ch == then
@@ -154,7 +154,8 @@ impl Emitter {
             index self
                 .program
                 .strings
-                .get = value
+                .get
+                .clone = value
             value escape_string = escaped
             ".align 8" self.line
             f"str_{index}:" self.line
@@ -195,7 +196,8 @@ impl Emitter {
             sa_index self
                 .program
                 .static_arrays
-                .get = sa
+                .get
+                .clone = sa
             sa StaticArray::elements = elems
             ".align 8" self.line
             f"static_array_{sa_index}:" self.line
@@ -228,7 +230,8 @@ impl Emitter {
             ss_index self
                 .program
                 .static_structs
-                .get = ss
+                .get
+                .clone = ss
             ss StaticStruct::fields = fields
             ".align 8" self.line
             f"static_struct_{ss_index}:" self.line
@@ -645,14 +648,16 @@ impl Emitter {
     # ============================================================================
 
     fn emit_functions self:mut$Emitter {
-        for
-            pair in self
+        self
+            .program
+            .functions
+            .keys = function_names
+        for name in function_names.iter do
+            name self
                 .program
                 .functions
-                .iter
-        do
-            pair.first = name
-            pair.second = bytecode
+                .remove
+                .unwrap = bytecode
             name sanitize_name = label
             f"fn_{label}:" self.line
             false bytecode self.emit_bytecode
@@ -750,6 +755,163 @@ impl Emitter {
         "popq %rax" self.indent
         "popq %rbx" self.indent
         f"{mov_op} {src_reg}, (%rax)" self.indent
+    }
+
+    fn emit_move_bytes self:mut$Emitter size:u64 {
+        "popq %rdi" self.indent
+        "popq %rsi" self.indent
+        f"movq ${size}, %rcx" self.indent
+        "rep movsb" self.indent
+    }
+
+    fn emit_typed_read self:mut$Emitter {
+        self.emit_uid = uid
+        "popq %r8" self.indent
+        "popq %rdx" self.indent
+        "popq %rax" self.indent
+        f"cmpq ${VALUE_REPR_INDIRECT}, %r8" self.indent
+        f"je .Ltyped_read_indirect_{uid}" self.indent
+        "cmpq $1, %rdx" self.indent
+        f"je .Ltyped_read_1_{uid}" self.indent
+        "cmpq $2, %rdx" self.indent
+        f"je .Ltyped_read_2_{uid}" self.indent
+        "cmpq $4, %rdx" self.indent
+        f"je .Ltyped_read_4_{uid}" self.indent
+        "movq (%rax), %rax" self.indent
+        f"jmp .Ltyped_read_done_{uid}" self.indent
+        f".Ltyped_read_1_{uid}:" self.line
+        f"cmpq ${VALUE_REPR_SIGNED}, %r8" self.indent
+        f"je .Ltyped_read_signed_1_{uid}" self.indent
+        "movzbq (%rax), %rax" self.indent
+        f"jmp .Ltyped_read_done_{uid}" self.indent
+        f".Ltyped_read_signed_1_{uid}:" self.line
+        "movsbq (%rax), %rax" self.indent
+        f"jmp .Ltyped_read_done_{uid}" self.indent
+        f".Ltyped_read_2_{uid}:" self.line
+        f"cmpq ${VALUE_REPR_SIGNED}, %r8" self.indent
+        f"je .Ltyped_read_signed_2_{uid}" self.indent
+        "movzwq (%rax), %rax" self.indent
+        f"jmp .Ltyped_read_done_{uid}" self.indent
+        f".Ltyped_read_signed_2_{uid}:" self.line
+        "movswq (%rax), %rax" self.indent
+        f"jmp .Ltyped_read_done_{uid}" self.indent
+        f".Ltyped_read_4_{uid}:" self.line
+        f"cmpq ${VALUE_REPR_SIGNED}, %r8" self.indent
+        f"je .Ltyped_read_signed_4_{uid}" self.indent
+        "movl (%rax), %eax" self.indent
+        f"jmp .Ltyped_read_done_{uid}" self.indent
+        f".Ltyped_read_signed_4_{uid}:" self.line
+        "movslq (%rax), %rax" self.indent
+        f"jmp .Ltyped_read_done_{uid}" self.indent
+        f".Ltyped_read_indirect_{uid}:" self.line
+        "pushq %rax" self.indent
+        "pushq %rdx" self.indent
+        "movq %rdx, %rdi" self.indent
+        "typed_read_alloc_done" "heap_alloc" self.emit_call_via_return_stack
+        "popq %r10" self.indent
+        "popq %rcx" self.indent
+        "popq %rsi" self.indent
+        "movq %r10, %rdi" self.indent
+        "rep movsb" self.indent
+        "movq %r10, %rax" self.indent
+        f".Ltyped_read_done_{uid}:" self.line
+        "pushq %rax" self.indent
+    }
+
+    fn emit_typed_borrow self:mut$Emitter {
+        self.emit_uid = uid
+        "popq %r8" self.indent
+        "popq %rdx" self.indent
+        "popq %rax" self.indent
+        f"cmpq ${VALUE_REPR_INDIRECT}, %r8" self.indent
+        f"je .Ltyped_borrow_done_{uid}" self.indent
+        "cmpq $1, %rdx" self.indent
+        f"je .Ltyped_borrow_1_{uid}" self.indent
+        "cmpq $2, %rdx" self.indent
+        f"je .Ltyped_borrow_2_{uid}" self.indent
+        "cmpq $4, %rdx" self.indent
+        f"je .Ltyped_borrow_4_{uid}" self.indent
+        "movq (%rax), %rax" self.indent
+        f"jmp .Ltyped_borrow_done_{uid}" self.indent
+        f".Ltyped_borrow_1_{uid}:" self.line
+        f"cmpq ${VALUE_REPR_SIGNED}, %r8" self.indent
+        f"je .Ltyped_borrow_signed_1_{uid}" self.indent
+        "movzbq (%rax), %rax" self.indent
+        f"jmp .Ltyped_borrow_done_{uid}" self.indent
+        f".Ltyped_borrow_signed_1_{uid}:" self.line
+        "movsbq (%rax), %rax" self.indent
+        f"jmp .Ltyped_borrow_done_{uid}" self.indent
+        f".Ltyped_borrow_2_{uid}:" self.line
+        f"cmpq ${VALUE_REPR_SIGNED}, %r8" self.indent
+        f"je .Ltyped_borrow_signed_2_{uid}" self.indent
+        "movzwq (%rax), %rax" self.indent
+        f"jmp .Ltyped_borrow_done_{uid}" self.indent
+        f".Ltyped_borrow_signed_2_{uid}:" self.line
+        "movswq (%rax), %rax" self.indent
+        f"jmp .Ltyped_borrow_done_{uid}" self.indent
+        f".Ltyped_borrow_4_{uid}:" self.line
+        f"cmpq ${VALUE_REPR_SIGNED}, %r8" self.indent
+        f"je .Ltyped_borrow_signed_4_{uid}" self.indent
+        "movl (%rax), %eax" self.indent
+        f"jmp .Ltyped_borrow_done_{uid}" self.indent
+        f".Ltyped_borrow_signed_4_{uid}:" self.line
+        "movslq (%rax), %rax" self.indent
+        f".Ltyped_borrow_done_{uid}:" self.line
+        "pushq %rax" self.indent
+    }
+
+    fn emit_typed_copy self:mut$Emitter {
+        self.emit_uid = uid
+        "popq %r8" self.indent
+        "popq %rdx" self.indent
+        "popq %rax" self.indent
+        f"cmpq ${VALUE_REPR_INDIRECT}, %r8" self.indent
+        f"jne .Ltyped_copy_done_{uid}" self.indent
+        "pushq %rax" self.indent
+        "pushq %rdx" self.indent
+        "movq %rdx, %rdi" self.indent
+        "typed_copy_alloc_done" "heap_alloc" self.emit_call_via_return_stack
+        "popq %r10" self.indent
+        "popq %rcx" self.indent
+        "popq %rsi" self.indent
+        "movq %r10, %rdi" self.indent
+        "rep movsb" self.indent
+        "movq %r10, %rax" self.indent
+        f".Ltyped_copy_done_{uid}:" self.line
+        "pushq %rax" self.indent
+    }
+
+    fn emit_typed_write self:mut$Emitter {
+        self.emit_uid = uid
+        "popq %r8" self.indent
+        "popq %rcx" self.indent
+        "popq %rdi" self.indent
+        "popq %rsi" self.indent
+        f"cmpq ${VALUE_REPR_INDIRECT}, %r8" self.indent
+        f"je .Ltyped_write_copy_{uid}" self.indent
+        "cmpq $1, %rcx" self.indent
+        f"je .Ltyped_write_1_{uid}" self.indent
+        "cmpq $2, %rcx" self.indent
+        f"je .Ltyped_write_2_{uid}" self.indent
+        "cmpq $4, %rcx" self.indent
+        f"je .Ltyped_write_4_{uid}" self.indent
+        "movq %rsi, (%rdi)" self.indent
+        f"jmp .Ltyped_write_done_{uid}" self.indent
+        f".Ltyped_write_1_{uid}:" self.line
+        "movb %sil, (%rdi)" self.indent
+        f"jmp .Ltyped_write_done_{uid}" self.indent
+        f".Ltyped_write_2_{uid}:" self.line
+        "movw %si, (%rdi)" self.indent
+        f"jmp .Ltyped_write_done_{uid}" self.indent
+        f".Ltyped_write_4_{uid}:" self.line
+        "movl %esi, (%rdi)" self.indent
+        f"jmp .Ltyped_write_done_{uid}" self.indent
+        f".Ltyped_write_copy_{uid}:" self.line
+        "movq %rsi, %rdx" self.indent
+        "rep movsb" self.indent
+        "movq %rdx, %rdi" self.indent
+        "typed_write_free_done" "heap_free" self.emit_call_via_return_stack
+        f".Ltyped_write_done_{uid}:" self.line
     }
 
     # ============================================================================
@@ -1672,10 +1834,15 @@ impl Emitter {
             InstValue::Load16 => "%eax" "movzwl" self.emit_load
             InstValue::Load32 => "%eax" "movl" self.emit_load
             InstValue::Load64 => "%rax" "movq" self.emit_load
+            InstValue::BorrowTyped => self.emit_typed_borrow
+            InstValue::CopyTyped => self.emit_typed_copy
+            InstValue::ReadTyped => self.emit_typed_read
             InstValue::Store8 => "%bl" "movb" self.emit_store
             InstValue::Store16 => "%bx" "movw" self.emit_store
             InstValue::Store32 => "%ebx" "movl" self.emit_store
             InstValue::Store64 => "%rbx" "movq" self.emit_store
+            InstValue::WriteTyped => self.emit_typed_write
+            InstValue::MoveBytes(size) => size self.emit_move_bytes
             _ => {
                 "Internal error: emit_memory called with non-memory InstValue\n" eprint
                 1 exit
@@ -1899,10 +2066,15 @@ impl Emitter {
             InstValue::Load16 => inst self.emit_memory
             InstValue::Load32 => inst self.emit_memory
             InstValue::Load64 => inst self.emit_memory
+            InstValue::BorrowTyped => inst self.emit_memory
+            InstValue::CopyTyped => inst self.emit_memory
+            InstValue::ReadTyped => inst self.emit_memory
             InstValue::Store8 => inst self.emit_memory
             InstValue::Store16 => inst self.emit_memory
             InstValue::Store32 => inst self.emit_memory
             InstValue::Store64 => inst self.emit_memory
+            InstValue::WriteTyped => inst self.emit_memory
+            InstValue::MoveBytes => inst self.emit_memory
 
             # IO operations
             InstValue::PrintInt => inst self.emit_io_ops

@@ -29,6 +29,7 @@ cleanup and recursive field destruction as a scope exit.
 |---|---|---|
 | `print` | `[T: Display] T -> None` | Write a value to standard output |
 | `typeof` | `T -> str` | Return the compile-time type name |
+| `size_of[T]` | `None -> u64` | Return the current compiler's inline size for `T` |
 | `exec` | `fn[...] -> ...` | Call a function value on the top of the stack |
 
 ```casa
@@ -39,6 +40,12 @@ cleanup and recursive field destruction as a scope exit.
 Primitive display types print directly. User-defined types must implement
 [`Display`](traits.md#built-in-traits). See
 [Functions and Lambdas](functions-and-lambdas.md#function-values) for `exec`.
+
+`size_of[T]` includes aggregate padding and the tail padding needed to place
+values consecutively. Every inhabited type occupies at least one byte. An
+empty struct and `array[T 0]` therefore each have size 1. The result describes
+only the current compiler's x86-64 layout. It is not a stable file or foreign
+ABI format.
 
 ## Process values
 
@@ -64,10 +71,14 @@ an `unsafe` block.
 | `load16` | `ptr -> u16` | Load an unsigned 16-bit value |
 | `load32` | `ptr -> u32` | Load an unsigned 32-bit value |
 | `load64` | `ptr -> u64` | Load an unsigned 64-bit value |
+| `ptr::as_ref[T]` | `ptr -> $T` | Form a shared borrow of typed storage |
+| `ptr::as_mut[T]` | `ptr -> mut$T` | Form an exclusive borrow of typed storage |
+| `ptr::read[T]` | `ptr -> T` | Move an initialized `T` out of typed storage |
 | `store8` | `ptr u8 -> None` | Store an 8-bit value |
 | `store16` | `ptr u16 -> None` | Store a 16-bit value |
 | `store32` | `ptr u32 -> None` | Store a 32-bit value |
 | `store64` | `ptr u64 -> None` | Store a 64-bit value |
+| `ptr::write[T]` | `ptr T -> None` | Move a `T` into uninitialized typed storage |
 
 Inputs in a stack effect are listed from the top downward. The value is pushed
 before the destination pointer at a store call:
@@ -83,24 +94,28 @@ unsafe {
 Pointer `+` and `-` take `u64` byte offsets. Multibyte loads and stores permit
 unaligned addresses and use little-endian byte order.
 
+Typed pointer operations require natural alignment and a valid `T`
+representation. `ptr::as_ref[T]` and `ptr::as_mut[T]` borrow live storage. A
+typed read leaves its source uninitialized. A typed write requires
+uninitialized destination storage. The caller must track each moved owner
+exactly once.
+
 `0 alloc` returns null, and `free` does nothing when given null. A positive
 allocation is non-null. Double free, use after free, and freeing an interior or
 foreign pointer are undefined behavior.
 
 ### Forming a borrow from a raw address
 
-Casting a loaded word to a borrow type inside `unsafe` produces a typed borrow.
-A raw address carries no lifetime, so the result is anchored conservatively to
-every compatible borrowed input of the enclosing function: a `$T` accepts any
-borrowed input, a `mut$T` only exclusive ones. A function with no compatible
-input cannot return the borrow and is rejected with `Borrowed return has no live
-input origin`.
+`ptr::as_ref[T]` and `ptr::as_mut[T]` form a typed borrow inside `unsafe`. A raw
+address carries no lifetime, so the result is anchored conservatively to every
+compatible borrowed input of the enclosing function. A `$T` accepts any
+borrowed input. A `mut$T` only accepts exclusive ones. A function with no
+compatible input cannot return the borrow and is rejected with `Borrowed return
+has no live input origin`.
 
 ```casa
-const ARRAY_ELEMENT_WORD_SIZE 8
-
 fn nth [T const N:u64] array:$array[T N] index:u64 -> $T {
-    unsafe { array (ptr) index ARRAY_ELEMENT_WORD_SIZE * + load64 ($T) }
+    unsafe { array (ptr) index size_of[T] * + ptr::as_ref[T] }
 }
 ```
 

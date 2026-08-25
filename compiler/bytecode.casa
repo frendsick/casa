@@ -34,7 +34,7 @@ struct BytecodeCompiler {
     static_structs:    List[StaticStruct]
     store:             SymbolStore
     label_counter:     u64
-    op_label_map:      Map[Op u64]
+    op_label_map:      Map[i64 u64]
     function_bytecode: Map[str List[InstValue]]
     owner_flags:       Map[str u64]
     failure:           Option[BytecodeFailure]
@@ -45,7 +45,7 @@ impl BytecodeCompiler {
         Option[BytecodeFailure]::None
         Map[str u64]::new
         Map[str List[InstValue]]::new
-        Map[Op u64]::new
+        Map[i64 u64]::new
         0
         store
         List[StaticStruct]::new
@@ -90,6 +90,104 @@ impl BytecodeCompiler {
     }
 
     fn has_failed self:mut$BytecodeCompiler -> bool { self.failure.is_some }
+
+    fn absorb_child self:mut$BytecodeCompiler child:mut$BytecodeCompiler {
+        child.failure = self.failure
+        child.global_slots = self.global_slots
+        child.string_table = self.string_table
+        child.string_indices = self.string_indices
+        child.constants_table = self.constants_table
+        child.static_arrays = self.static_arrays
+        child.static_structs = self.static_structs
+        child.store = self.store
+        child.label_counter = self.label_counter
+        child.op_label_map = self.op_label_map
+        child.function_bytecode = self.function_bytecode
+    }
+
+    fn aggregate_field_load
+        compiler:mut$BytecodeCompiler
+        declared_type:$Type
+        bytecode:mut$List[InstValue]
+    {
+        if declared_type.has_unresolved_type_var then
+            InstValue::Load64 bytecode.push
+            return
+        fi
+        if compiler.store declared_type type_value_representation Option::Some(representation) is then
+            if VALUE_REPR_INDIRECT representation == then
+                InstValue::Load64 bytecode.push
+            else
+                bytecode declared_type compiler.emit_typed_load
+            fi
+        else
+            f"Cannot determine field representation of `{declared_type.format}`" compiler.record_failure
+        fi
+    }
+
+    fn aggregate_field_store
+        compiler:mut$BytecodeCompiler
+        declared_type:$Type
+        bytecode:mut$List[InstValue]
+    {
+        if declared_type.has_unresolved_type_var then
+            InstValue::Store64 bytecode.push
+            return
+        fi
+        if compiler.store declared_type type_value_representation Option::Some(representation) is then
+            if VALUE_REPR_INDIRECT representation == then
+                InstValue::Store64 bytecode.push
+            else
+                bytecode declared_type compiler.emit_typed_store
+            fi
+        else
+            f"Cannot determine field representation of `{declared_type.format}`" compiler.record_failure
+        fi
+    }
+
+    fn struct_size compiler:mut$BytecodeCompiler casa_struct:$CasaStruct -> u64 {
+        casa_struct.name GenericType::new Type::Generic = struct_type
+        if compiler.store struct_type type_inline_size Option::Some(size) is then
+            size return
+        fi
+        f"Cannot determine layout of struct `{casa_struct.name}`" compiler.record_failure
+        0
+    }
+
+    fn struct_offset compiler:mut$BytecodeCompiler casa_struct:$CasaStruct member_index:u64 -> u64 {
+        if compiler.store member_index casa_struct struct_member_offset Option::Some(offset) is then
+            offset return
+        fi
+        f"Cannot determine member {member_index} layout of struct `{casa_struct.name}`"
+        compiler.record_failure
+        0
+    }
+
+    fn enum_size compiler:mut$BytecodeCompiler casa_enum:$CasaEnum -> u64 {
+        casa_enum.name GenericType::new Type::Generic = enum_type
+        if compiler.store enum_type type_inline_size Option::Some(size) is then
+            size return
+        fi
+        f"Cannot determine layout of enum `{casa_enum.name}`" compiler.record_failure
+        0
+    }
+
+    fn enum_offset
+        compiler:mut$BytecodeCompiler
+        casa_enum:$CasaEnum
+        variant_name:$str
+        payload_index:u64
+    -> u64 {
+        if
+            compiler.store payload_index variant_name casa_enum
+            enum_payload_offset Option::Some(offset) is
+        then
+            offset return
+        fi
+        f"Cannot determine payload {payload_index} layout of `{casa_enum.name}::{variant_name}`"
+        compiler.record_failure
+        0
+    }
 }
 
 # ============================================================================
@@ -106,11 +204,12 @@ impl BytecodeCompiler {
 
 impl BytecodeCompiler {
     fn op_to_label compiler:mut$BytecodeCompiler op:mut$Op -> u64 {
-        if op compiler.op_label_map.get Option::Some(existing) is then
+        op op_identity = address
+        if address compiler.op_label_map.get_copy Option::Some(existing) is then
             existing
         else
             compiler.new_label = label
-            label op compiler.op_label_map.set drop
+            label address compiler.op_label_map.set
             label
         fi
     }
@@ -137,7 +236,7 @@ impl BytecodeCompiler {
             index
         else
             compiler.string_table.length = index
-            index value.clone compiler.string_indices.set drop
+            index value.clone compiler.string_indices.set
             value.clone compiler.string_table.push
             index
         fi
@@ -153,7 +252,7 @@ fn index_variable_list variables:$List[Variable] -> Map[str u64] {
     0 (u64) = index
     for variable in variables.iter do
         if variable.name slots.has ! then
-            index variable.name.clone slots.set drop
+            index variable.name.clone slots.set
         fi
         1 += index
     done
@@ -165,7 +264,7 @@ fn index_variable_map variables:$Map[str Variable] -> Map[str u64] {
     variables.keys = names
     0 (u64) = index
     for name in names.iter do
-        index name.clone slots.set drop
+        index name.clone slots.set
         1 += index
     done
     slots
@@ -246,10 +345,10 @@ impl BytecodeCompiler {
         index_local InstValue::LocalSet bytecode.push
         array_local InstValue::LocalGet bytecode.push
         index_local InstValue::LocalGet bytecode.push
-        WORD_SIZE InstValue::Push bytecode.push
+        bytecode element_type compiler.emit_inline_size
         InstValue::Mul bytecode.push
         InstValue::Add bytecode.push
-        InstValue::Load64 bytecode.push
+        bytecode element_type compiler.emit_typed_load
         bytecode op element_type compiler.compile_destruction
         start_label InstValue::Jump bytecode.push
         end_label InstValue::Label bytecode.push
@@ -273,12 +372,12 @@ impl BytecodeCompiler {
             fi
             substitutions member.typ.substitute_t = member_type
             InstValue::Dup bytecode.push
-            member_index WORD_SIZE * = offset
+            member_index casa_struct compiler.struct_offset = offset
             if 0 offset != then
                 offset (i64) InstValue::Push bytecode.push
                 InstValue::Add bytecode.push
             fi
-            InstValue::Load64 bytecode.push
+            bytecode member.typ compiler.aggregate_field_load
             bytecode op member_type compiler.compile_destruction
         done
         InstValue::Drop bytecode.push
@@ -300,9 +399,10 @@ impl BytecodeCompiler {
                 1 -= payload_index
                 substitutions payload_index payload_types.get.substitute_t = payload_type
                 InstValue::Dup bytecode.push
-                payload_index 1 + WORD_SIZE * (i64) InstValue::Push bytecode.push
+                payload_index variant_name casa_enum compiler.enum_offset i64::try_from.unwrap
+                InstValue::Push bytecode.push
                 InstValue::Add bytecode.push
-                InstValue::Load64 bytecode.push
+                bytecode payload_index payload_types.get compiler.aggregate_field_load
                 bytecode op payload_type compiler.compile_destruction
             done
         fi
@@ -358,24 +458,14 @@ impl BytecodeCompiler {
                 fi
                 return
             fi
-            if
-                generic.base compiler
-                    .store
-                    .structs
-                    .get Option::Some(casa_struct) is
-            then
+            if generic.base compiler.store.clone_struct Option::Some(owned_struct) is then
                 List[str]::new = skipped
-                bytecode op skipped casa_struct typ compiler.compile_struct_fields
+                bytecode op skipped owned_struct typ compiler.compile_struct_fields
                 return
             fi
-            if
-                generic.base compiler
-                    .store
-                    .enums
-                    .get Option::Some(casa_enum) is
-            then
-                if casa_enum has_inner_values then
-                    bytecode op casa_enum typ compiler.compile_enum_fields
+            if generic.base compiler.store.clone_enum Option::Some(owned_enum) is then
+                if owned_enum has_inner_values then
+                    bytecode op owned_enum typ compiler.compile_enum_fields
                 else
                     InstValue::Drop bytecode.push
                 fi
@@ -394,7 +484,7 @@ impl BytecodeCompiler {
         if function_name compiler.function_bytecode.has then
             function_name return
         fi
-        List[InstValue]::new function_name.clone compiler.function_bytecode.set drop
+        List[InstValue]::new function_name.clone compiler.function_bytecode.set
 
         List[Op]::new = empty_ops
         empty_location empty_ops function_name.clone Function::new = function
@@ -402,9 +492,7 @@ impl BytecodeCompiler {
         destructor_ops function compiler.child = destructor
         List[InstValue]::new = body
         body op typ destructor.compile_destruction_body
-        destructor.failure = compiler.failure
-        destructor.label_counter = compiler.label_counter
-        destructor.function_bytecode = compiler.function_bytecode
+        destructor compiler.absorb_child
         if compiler.has_failed then
             function_name return
         fi
@@ -418,7 +506,7 @@ impl BytecodeCompiler {
             destructor.locals_count InstValue::LocalsUninit function_bytecode.push
         fi
         InstValue::FnReturn function_bytecode.push
-        function_bytecode function_name.clone compiler.function_bytecode.set drop
+        function_bytecode function_name.clone compiler.function_bytecode.set
         function_name
     }
 
@@ -457,34 +545,24 @@ impl BytecodeCompiler {
         fi
         bytecode op typ compiler.compile_drop_hook
         if typ Type::Generic(generic) is then
-            if
-                generic.base compiler
-                    .store
-                    .structs
-                    .get Option::Some(casa_struct) is
-            then
+            if generic.base compiler.store.clone_struct Option::Some(owned_struct) is then
                 List[str]::new = skipped
                 if op pattern_value_of PatternValue::Struct(struct_pattern) is then
                     struct_pattern.bindings.keys = skipped
                 fi
-                bytecode op skipped casa_struct typ compiler.compile_struct_fields
+                bytecode op skipped owned_struct typ compiler.compile_struct_fields
                 return
             fi
-            if
-                generic.base compiler
-                    .store
-                    .enums
-                    .get Option::Some(casa_enum) is
-            then
-                if casa_enum has_inner_values ! then
+            if generic.base compiler.store.clone_enum Option::Some(owned_enum) is then
+                if owned_enum has_inner_values ! then
                     InstValue::Drop bytecode.push return
                 fi
                 if op pattern_value_of PatternValue::EnumVariant(variant) is then
                     if op pattern_is_wildcard then
-                        bytecode op casa_enum typ compiler.compile_enum_fields
+                        bytecode op owned_enum typ compiler.compile_enum_fields
                     else
                         variant.bindings.length = skipped_count
-                        bytecode op skipped_count variant.variant_name casa_enum typ
+                        bytecode op skipped_count variant.variant_name owned_enum typ
                         compiler.compile_enum_variant_fields
                     fi
                     return
@@ -500,7 +578,7 @@ impl BytecodeCompiler {
         fi
         compiler.locals_count = flag
         1 += compiler.locals_count
-        flag name.clone compiler.owner_flags.set = compiler.owner_flags
+        flag name.clone compiler.owner_flags.set
         flag
     }
 
@@ -557,14 +635,10 @@ impl BytecodeCompiler {
     }
 
     fn compile_owner_cleanups compiler:mut$BytecodeCompiler op:mut$Op bytecode:mut$List[InstValue] {
-        if
-            op compiler
-                .store
-                .op_ownership
-                .get Option::Some(ownership) is
-        then
-            for event in ownership.cleanups.iter do
-                bytecode op event compiler.compile_owner_cleanup
+        if op op_identity compiler.store.clone_ownership Option::Some(owned_ownership) is then
+            for event in owned_ownership.cleanups.iter do
+                event.clone = owned_event
+                bytecode op owned_event compiler.compile_owner_cleanup
             done
         fi
     }
@@ -987,10 +1061,7 @@ impl BytecodeCompiler {
         struct_pattern:StructPattern
         bytecode:mut$List[InstValue]
     {
-        struct_pattern StructPattern::struct_name compiler
-            .store
-            .structs
-            .get = casa_struct_opt
+        struct_pattern StructPattern::struct_name compiler.store.clone_struct = casa_struct_opt
         if casa_struct_opt.is_none then
             f"Struct `{struct_pattern.struct_name}` is missing during bytecode compilation" compiler.record_failure
             return
@@ -998,15 +1069,16 @@ impl BytecodeCompiler {
         casa_struct_opt.unwrap = casa_struct
         0 (u64) = index
         while index casa_struct CasaStruct::members.length > do
-            index casa_struct CasaStruct::members.get Member::name = field_name
-            index WORD_SIZE * = offset
+            index casa_struct CasaStruct::members.get = member
+            member Member::name = field_name
+            index casa_struct compiler.struct_offset = offset
             if field_name struct_pattern StructPattern::bindings.get Option::Some(var_name) is then
                 InstValue::Dup bytecode.push
                 if 0 offset > then
                     offset (i64) InstValue::Push bytecode.push
                     InstValue::Add bytecode.push
                 fi
-                InstValue::Load64 bytecode.push
+                bytecode member.typ compiler.aggregate_field_load
                 var_name compiler.resolve_variable = resolved
                 bytecode resolved.emit_set
             fi
@@ -1087,7 +1159,8 @@ impl BytecodeCompiler {
                 .store
                 .enums
                 .get
-                .unwrap = casa_enum
+                .unwrap
+                .clone = casa_enum
             if casa_enum has_inner_values then
                 if is_last ! then
                     InstValue::Dup bytecode.push
@@ -1100,7 +1173,7 @@ impl BytecodeCompiler {
                         "Match arm has no following label during bytecode compilation" compiler.record_failure
                     fi
                 fi
-                variant bytecode compiler.emit_enum_arm_bindings
+                casa_enum variant bytecode compiler.emit_enum_arm_bindings
                 return
             fi
         fi
@@ -1124,14 +1197,19 @@ impl BytecodeCompiler {
         compiler:mut$BytecodeCompiler
         bytecode:mut$List[InstValue]
         variant:mut$EnumVariant
+        casa_enum:mut$CasaEnum
     {
+        variant.variant_name casa_enum
+            .variant_types
+            .get
+            .unwrap = payload_types
         0 (u64) = index
         while index variant EnumVariant::bindings.length > do
-            index 1 + WORD_SIZE * = offset
+            index variant.variant_name casa_enum compiler.enum_offset = offset
             InstValue::Dup bytecode.push
             offset (i64) InstValue::Push bytecode.push
             InstValue::Add bytecode.push
-            InstValue::Load64 bytecode.push
+            bytecode index payload_types.get compiler.aggregate_field_load
             index variant EnumVariant::bindings.get = var_name
             var_name compiler.resolve_variable = resolved
             bytecode resolved.emit_set
@@ -1175,14 +1253,9 @@ impl BytecodeCompiler {
                     "Guarded match arm has no following label during bytecode compilation" compiler.record_failure
                 fi
             fi
-            if
-                op compiler
-                    .store
-                    .op_ownership
-                    .get Option::Some(ownership) is
-            then
-                for event in ownership.assignments.iter do
-                    bytecode event.generation event.name compiler.set_owner_flag
+            if op op_identity compiler.store.clone_ownership Option::Some(owned_ownership) is then
+                for event in owned_ownership.assignments.iter do
+                    bytecode event.generation event.name.clone compiler.set_owner_flag
                 done
             fi
             bytecode op compiler.compile_match_destruction
@@ -1206,7 +1279,7 @@ impl BytecodeCompiler {
 
             false "`match` arm without matching `end`" end_targets OpValue::MatchEnd op_index ops compiler.require_matching = end_label
 
-            op_index ops.get compiler.op_label_map.get = existing
+            op_index ops.get op_identity compiler.op_label_map.get_copy = existing
             existing.is_some ! = is_first
 
             if is_first ! then
@@ -1241,17 +1314,19 @@ impl BytecodeCompiler {
     fn compile_struct_new compiler:mut$BytecodeCompiler op:mut$Op bytecode:mut$List[InstValue] {
         if op.value OpValue::StructNew(casa_struct) is then
             casa_struct CasaStruct::members.length = count
-            count WORD_SIZE * (i64) InstValue::Push bytecode.push
+            casa_struct compiler.struct_size i64::try_from.unwrap InstValue::Push bytecode.push
             InstValue::HeapAlloc bytecode.push
             0 (u64) = index
             while index count > do
                 InstValue::Swap bytecode.push
                 InstValue::Over bytecode.push
-                if 0 index > then
-                    index WORD_SIZE * (i64) InstValue::Push bytecode.push
+                index casa_struct compiler.struct_offset = offset
+                if 0 offset > then
+                    offset i64::try_from.unwrap InstValue::Push bytecode.push
                     InstValue::Add bytecode.push
                 fi
-                InstValue::Store64 bytecode.push
+                index casa_struct.members.get = member
+                bytecode member.typ compiler.aggregate_field_store
                 1 += index
             done
         fi
@@ -1271,12 +1346,14 @@ impl BytecodeCompiler {
     {
         variant.variant_name = variant_name
         variant_name casa_enum CasaEnum::variant_types.get = types_opt
+        List[Type]::new = types
         0 (u64) = inner_count
-        if types_opt Option::Some(types) is then
+        if types_opt Option::Some(found_types) is then
+            for found_type in found_types.iter do
+                found_type clone_type types.push
+            done
             types.length = inner_count
         fi
-        inner_count 1 + = slot_count
-
         # Store inner values from stack into temp locals
         List[u64]::new = temps
         0 (u64) = index
@@ -1291,7 +1368,7 @@ impl BytecodeCompiler {
         # Allocate heap
         compiler.locals_count = ptr_local
         1 += compiler.locals_count
-        slot_count WORD_SIZE * (i64) InstValue::Push bytecode.push
+        casa_enum compiler.enum_size i64::try_from.unwrap InstValue::Push bytecode.push
         InstValue::HeapAlloc bytecode.push
         ptr_local InstValue::LocalSet bytecode.push
 
@@ -1300,19 +1377,19 @@ impl BytecodeCompiler {
         ptr_local InstValue::LocalGet bytecode.push
         InstValue::Store64 bytecode.push
 
-        # Store inner values at offsets 8, 16, ...
+        # Store inner values at their padded payload offsets.
         # Reversed temp_locals
         0 (u64) = inner_index
         while inner_index inner_count > do
             inner_count 1 - inner_index - = reverse_index
-            inner_index 1 + WORD_SIZE * = offset
+            inner_index variant_name casa_enum compiler.enum_offset = offset
             ptr_local InstValue::LocalGet bytecode.push
             offset (i64) InstValue::Push bytecode.push
             InstValue::Add bytecode.push
             reverse_index temps.get = temp_local
             temp_local InstValue::LocalGet bytecode.push
             InstValue::Swap bytecode.push
-            InstValue::Store64 bytecode.push
+            bytecode inner_index types.get compiler.aggregate_field_store
             1 += inner_index
         done
 
@@ -1328,11 +1405,8 @@ impl BytecodeCompiler {
 impl BytecodeCompiler {
     fn compile_is_check compiler:mut$BytecodeCompiler op:mut$Op bytecode:mut$List[InstValue] {
         if op.value OpValue::IsCheck(variant) is then
-            variant.enum_name = enum_name
-            enum_name compiler
-                .store
-                .enums
-                .get = casa_enum_opt
+            variant.enum_name.clone = enum_name
+            enum_name compiler.store.clone_enum = casa_enum_opt
             if casa_enum_opt.is_none then
                 f"Enum `{enum_name}` is missing during bytecode compilation" compiler.record_failure
                 return
@@ -1374,13 +1448,17 @@ impl BytecodeCompiler {
             skip_bindings InstValue::JumpNe bytecode.push
 
             # Extract bindings
+            variant.variant_name casa_enum
+                .variant_types
+                .get
+                .unwrap = payload_types
             0 (u64) = index
             while index variant EnumVariant::bindings.length > do
-                index 1 + WORD_SIZE * = offset
+                index variant.variant_name casa_enum compiler.enum_offset = offset
                 temp_ptr InstValue::LocalGet bytecode.push
                 offset (i64) InstValue::Push bytecode.push
                 InstValue::Add bytecode.push
-                InstValue::Load64 bytecode.push
+                bytecode index payload_types.get compiler.aggregate_field_load
                 index variant EnumVariant::bindings.get = var_name
                 var_name compiler.resolve_variable = resolved
                 bytecode resolved.emit_set
@@ -1399,10 +1477,7 @@ impl BytecodeCompiler {
 impl BytecodeCompiler {
     fn compile_struct_literal compiler:mut$BytecodeCompiler op:mut$Op bytecode:mut$List[InstValue] {
         if op.value OpValue::StructLiteral(literal) is then
-            literal.struct_name compiler
-                .store
-                .structs
-                .get = casa_struct_opt
+            literal.struct_name compiler.store.clone_struct = casa_struct_opt
             if casa_struct_opt.is_none then
                 f"Struct `{literal.struct_name}` is missing during bytecode compilation" compiler.record_failure
                 return
@@ -1419,32 +1494,33 @@ impl BytecodeCompiler {
                 compiler.locals_count = local_index
                 1 += compiler.locals_count
                 field_index literal StructLiteral::field_order.get = field_name
-                local_index field_name temp_locals.set = temp_locals
+                local_index field_name.clone temp_locals.set
                 local_index InstValue::LocalSet bytecode.push
             done
 
             # Allocate struct on heap
-            count WORD_SIZE * (i64) InstValue::Push bytecode.push
+            casa_struct compiler.struct_size i64::try_from.unwrap InstValue::Push bytecode.push
             InstValue::HeapAlloc bytecode.push
 
             # Store each field at its correct offset
             0 (u64) = member_index
             while member_index casa_struct CasaStruct::members.length > do
-                member_index casa_struct CasaStruct::members.get Member::name = member_name
-                member_index WORD_SIZE * = member_offset
+                member_index casa_struct CasaStruct::members.get = member
+                member Member::name = member_name
+                member_index casa_struct compiler.struct_offset = member_offset
                 InstValue::Dup bytecode.push
                 if 0 member_offset > then
                     member_offset (i64) InstValue::Push bytecode.push
                     InstValue::Add bytecode.push
                 fi
                 if member_name temp_locals.get Option::Some(temp_local) is then
-                    temp_local InstValue::LocalGet bytecode.push
+                    temp_local copy InstValue::LocalGet bytecode.push
                 else
                     f"Struct literal field `{member_name}` has no temporary local during bytecode compilation" compiler.record_failure
                     return
                 fi
                 InstValue::Swap bytecode.push
-                InstValue::Store64 bytecode.push
+                bytecode member.typ compiler.aggregate_field_store
                 1 += member_index
             done
         fi
@@ -1518,12 +1594,9 @@ impl BytecodeCompiler {
         group_ops.length 1 - group_ops.get Op::value = last_val
         "" = static_struct_label
         if last_val OpValue::StructLiteral(literal) is then
-            literal.struct_name = struct_name
+            literal.struct_name.clone = struct_name
             literal StructLiteral::field_order = field_order
-            struct_name compiler
-                .store
-                .structs
-                .get = casa_struct_opt
+            struct_name compiler.store.clone_struct = casa_struct_opt
             if casa_struct_opt.is_none then
                 f"Struct `{struct_name}` is missing during bytecode compilation" compiler.record_failure
                 "" return
@@ -1547,7 +1620,7 @@ impl BytecodeCompiler {
                     f"Static struct field `{member_name}` is missing during bytecode compilation" compiler.record_failure
                     "" return
                 fi
-                fo_idx (u64) ordered_elems.get fields.push
+                fo_idx (u64) ordered_elems.get.clone fields.push
                 1 += mi
             done
 
@@ -1593,13 +1666,53 @@ impl BytecodeCompiler {
 }
 
 impl BytecodeCompiler {
+    fn static_array_element_is_word self:$BytecodeCompiler element_type:$Type -> bool {
+        if self.store element_type type_inline_size Option::Some(element_size) is then
+            if self.store element_type type_value_representation Option::Some(representation) is then
+                WORD_SIZE element_size ==
+                VALUE_REPR_RAW representation ==
+                VALUE_REPR_SIGNED representation == || &&
+                return
+            fi
+        fi
+        false
+    }
+
+    fn can_emit_static_array self:$BytecodeCompiler op:$Op items:$List[Op] -> bool {
+        if items.is_empty self.store items op_is_static_array_with_store ! || then
+            false return
+        fi
+        if op.type_hint Option::Some(array_type) is then
+            if array_type.array_element_type Option::Some(element_type) is then
+                element_type resolve_numeric_literal_default = resolved_type
+                resolved_type self.static_array_element_is_word return
+            fi
+            false return
+        fi
+        # Compiler unit tests may build an already-word-sized static array op
+        # directly without running the typechecker.
+        true
+    }
+
     fn compile_push_array compiler:mut$BytecodeCompiler op:mut$Op bytecode:mut$List[InstValue] {
         if op.value OpValue::PushArray(items) is then
             items.length = length
 
-            if 0 length != compiler.store items op_is_static_array_with_store && then
-                bytecode items compiler.compile_static_array
-                return
+            items op compiler.can_emit_static_array = can_emit_static
+            if can_emit_static then
+                bytecode items compiler.compile_static_array return
+            fi
+
+            TYPE_UNKNOWN_T = element_type
+            if op.type_hint Option::Some(array_type) is then
+                if array_type.array_element_type Option::Some(found_element_type) is then
+                    found_element_type resolve_numeric_literal_default = element_type
+                else
+                    "Array literal has no element type during bytecode compilation"
+                    compiler.record_failure return
+                fi
+            else
+                "Array literal has no type during bytecode compilation" compiler.record_failure return
             fi
 
             # Compile items in reverse order
@@ -1614,7 +1727,8 @@ impl BytecodeCompiler {
             # is exactly the element storage.
             compiler.locals_count = list_local
             1 += compiler.locals_count
-            length get_array_storage_size i64::try_from.unwrap InstValue::Push bytecode.push
+            compiler.store element_type type_inline_size.unwrap = element_size
+            element_size length get_array_storage_size i64::try_from.unwrap InstValue::Push bytecode.push
             InstValue::HeapAlloc bytecode.push
             list_local InstValue::LocalSet bytecode.push
 
@@ -1630,19 +1744,19 @@ impl BytecodeCompiler {
             # while index limit > do
             start_label InstValue::Label bytecode.push
             index_local InstValue::LocalGet bytecode.push
-            length WORD_SIZE * i64::try_from.unwrap InstValue::Push bytecode.push
+            length element_size * i64::try_from.unwrap InstValue::Push bytecode.push
             InstValue::Gt bytecode.push
             end_label InstValue::JumpNe bytecode.push
 
-            # list index + store64
+            # list index + typed store
             list_local InstValue::LocalGet bytecode.push
             index_local InstValue::LocalGet bytecode.push
             InstValue::Add bytecode.push
-            InstValue::Store64 bytecode.push
+            bytecode element_type compiler.emit_typed_store
 
-            # WORD_SIZE += index
+            # element_size += index
             index_local InstValue::LocalGet bytecode.push
-            WORD_SIZE InstValue::Push bytecode.push
+            element_size i64::try_from.unwrap InstValue::Push bytecode.push
             InstValue::Add bytecode.push
             index_local InstValue::LocalSet bytecode.push
 
@@ -1661,24 +1775,48 @@ impl BytecodeCompiler {
 # ============================================================================
 
 impl BytecodeCompiler {
+    fn compile_named_function compiler:mut$BytecodeCompiler name:mut$str op:mut$Op -> bool {
+        if name compiler.function_bytecode.has then
+            true return
+        fi
+        name compiler
+            .store
+            .functions
+            .remove = function_opt
+        if function_opt.is_none then
+            f"Function `{name}` is missing during bytecode compilation" compiler.record_failure
+            false return
+        fi
+        function_opt.unwrap = function
+        function.clone_declaration name.clone compiler
+            .store
+            .functions
+            .set
+        op function compiler.compile_function
+        function name.clone compiler
+            .store
+            .functions
+            .set
+        compiler.has_failed !
+    }
+
     fn compile_function compiler:mut$BytecodeCompiler function:mut$Function op:mut$Op {
         # Compile a function if not already compiled.
         if function Function::name compiler.function_bytecode.has then
             return
         fi
-        function Function::ops = ops
+        function.take_ops = ops
 
         # Mark as being compiled to prevent infinite recursion on recursive calls
         List[InstValue]::new = function_bytecode
-        List[InstValue]::new function Function::name compiler.function_bytecode.set drop
+        List[InstValue]::new function Function::name compiler.function_bytecode.set
         ops function compiler.child = function_compiler
         function_bytecode function_compiler.compile_ops
-        function_compiler.failure = compiler.failure
+        function_compiler compiler.absorb_child
+        ops function Function::set_ops
         if compiler.has_failed then
             return
         fi
-        function_compiler.label_counter = compiler.label_counter
-        function_compiler.function_bytecode = compiler.function_bytecode
 
         # Handle locals
         function_compiler.locals_count = locals_count
@@ -1687,13 +1825,13 @@ impl BytecodeCompiler {
             List[InstValue]::new = final_bytecode
             locals_count InstValue::LocalsInit final_bytecode.push
 
-            0 (u64) = inst_index
-            while inst_index function_bytecode.length > do
-                if inst_index function_bytecode.get_ref InstValue::FnReturn is then
+            function_bytecode.reverse
+            while function_bytecode.is_empty ! do
+                function_bytecode.pop = instruction
+                if instruction InstValue::FnReturn is then
                     locals_count InstValue::LocalsUninit final_bytecode.push
                 fi
-                inst_index function_bytecode.get final_bytecode.push
-                1 += inst_index
+                instruction final_bytecode.push
             done
             locals_count InstValue::LocalsUninit final_bytecode.push
             InstValue::FnReturn final_bytecode.push
@@ -1702,7 +1840,7 @@ impl BytecodeCompiler {
             InstValue::FnReturn function_bytecode.push
         fi
 
-        function_bytecode function Function::name compiler.function_bytecode.set drop
+        function_bytecode function Function::name compiler.function_bytecode.set
     }
 }
 
@@ -1712,43 +1850,40 @@ impl BytecodeCompiler {
 
         op.value match
             OpValue::FnCall => {
-                if
-                    name compiler
-                        .store
-                        .functions
-                        .get Option::Some(function) is
-                then
-                    op function compiler.compile_function
+                if op name compiler.compile_named_function then
                     name InstValue::FnCall bytecode.push
-                else
-                    f"Function `{name}` is missing during bytecode compilation" compiler.record_failure
                 fi
             }
             OpValue::FnPush => {
+                if op name compiler.compile_named_function ! then
+                    return
+                fi
                 name compiler
                     .store
                     .functions
-                    .get = function_opt
-                if function_opt.is_none then
-                    f"Function `{name}` is missing during bytecode compilation" compiler.record_failure
-                    return
-                fi
-                function_opt.unwrap = lambda
-                op lambda compiler.compile_function
+                    .get
+                    .unwrap
+                    .captures
+                    .clone = captures
 
                 # Zero-capture closures share a single static record so trait
                 # dispatch and named-function pushes do not allocate per call.
-                if 0 lambda Function::captures.length == then
+                if 0 captures.length == then
                     name InstValue::FnPushStatic bytecode.push
                 else
                     # Captures are pushed before the function pointer so InstClosureRecord
                     # pops fn_ptr first into record[0] and then captures into record[1..].
-                    for capture in lambda Function::captures.iter do
-                        capture Variable::name compiler.resolve_variable = capture_resolved
-                        bytecode capture_resolved.emit_get
+                    for capture in captures.iter do
+                        capture Variable::name = capture_name
+                        if capture_name compiler.capture_slots.get Option::Some(capture_index) is then
+                            capture_index InstValue::CaptureLoad bytecode.push
+                        else
+                            capture_name compiler.resolve_variable = capture_resolved
+                            bytecode capture_resolved.emit_get
+                        fi
                     done
                     name InstValue::FnPush bytecode.push
-                    lambda Function::captures.length InstValue::ClosureRecord bytecode.push
+                    captures.length InstValue::ClosureRecord bytecode.push
                 fi
             }
             _ => {
@@ -1781,6 +1916,134 @@ impl BytecodeCompiler {
 # ============================================================================
 # Compile single op
 # ============================================================================
+
+impl BytecodeCompiler {
+    fn emit_inline_size compiler:mut$BytecodeCompiler target:$Type bytecode:mut$List[InstValue] {
+        if target.has_unresolved_type_var then
+            target make_hidden_size_parameter_name compiler.resolve_variable = size_variable
+            bytecode size_variable.emit_get
+        elif compiler.store target type_inline_size Option::Some(size) is then
+            size i64::try_from.unwrap InstValue::Push bytecode.push
+        else
+            f"Cannot determine inline size of `{target.format}`" compiler.record_failure
+        fi
+    }
+
+    fn emit_typed_load compiler:mut$BytecodeCompiler target:$Type bytecode:mut$List[InstValue] {
+        if target.has_unresolved_type_var then
+            target make_hidden_size_parameter_name compiler.resolve_variable = size_variable
+            bytecode size_variable.emit_get
+            target make_hidden_repr_parameter_name compiler.resolve_variable = repr_variable
+            bytecode repr_variable.emit_get
+            InstValue::ReadTyped bytecode.push
+            return
+        fi
+        if compiler.store target type_value_representation Option::Some(representation) is then
+            if VALUE_REPR_INDIRECT representation == then
+                compiler.store target type_inline_size.unwrap i64::try_from.unwrap
+                InstValue::Push bytecode.push
+                representation i64::try_from.unwrap InstValue::Push bytecode.push
+                InstValue::ReadTyped bytecode.push
+                return
+            fi
+            if compiler.store target type_inline_size Option::Some(size) is then
+                if 1 size == then
+                    InstValue::Load8 bytecode.push
+                elif 2 size == then
+                    InstValue::Load16 bytecode.push
+                elif 4 size == then
+                    InstValue::Load32 bytecode.push
+                elif 8 size == then
+                    InstValue::Load64 bytecode.push
+                else
+                    f"Direct value `{target.format}` has unsupported size {size}"
+                    compiler.record_failure
+                    return
+                fi
+                if VALUE_REPR_SIGNED representation == then
+                    if target Type::Builtin(builtin) is then
+                        builtin InstValue::NormalizeInt bytecode.push
+                    fi
+                fi
+            else
+                f"Cannot determine inline size of `{target.format}`" compiler.record_failure
+            fi
+        else
+            f"Cannot determine representation of `{target.format}`" compiler.record_failure
+        fi
+    }
+
+    fn emit_typed_borrow compiler:mut$BytecodeCompiler target:$Type bytecode:mut$List[InstValue] {
+        if target.has_unresolved_type_var then
+            target make_hidden_size_parameter_name compiler.resolve_variable = size_variable
+            bytecode size_variable.emit_get
+            target make_hidden_repr_parameter_name compiler.resolve_variable = repr_variable
+            bytecode repr_variable.emit_get
+            InstValue::BorrowTyped bytecode.push
+            return
+        fi
+        if compiler.store target type_value_representation Option::Some(representation) is then
+            if VALUE_REPR_INDIRECT representation != then
+                bytecode target compiler.emit_typed_load
+            fi
+        else
+            f"Cannot determine representation of `{target.format}`" compiler.record_failure
+        fi
+    }
+
+    fn emit_typed_copy compiler:mut$BytecodeCompiler target:$Type bytecode:mut$List[InstValue] {
+        if target.has_unresolved_type_var then
+            target make_hidden_size_parameter_name compiler.resolve_variable = size_variable
+            bytecode size_variable.emit_get
+            target make_hidden_repr_parameter_name compiler.resolve_variable = repr_variable
+            bytecode repr_variable.emit_get
+            InstValue::CopyTyped bytecode.push
+            return
+        fi
+        if compiler.store target type_value_representation Option::Some(representation) is then
+            if VALUE_REPR_INDIRECT representation == then
+                bytecode target compiler.emit_typed_load
+            fi
+        else
+            f"Cannot determine representation of `{target.format}`" compiler.record_failure
+        fi
+    }
+
+    fn emit_typed_store compiler:mut$BytecodeCompiler target:$Type bytecode:mut$List[InstValue] {
+        if target.has_unresolved_type_var then
+            target make_hidden_size_parameter_name compiler.resolve_variable = size_variable
+            bytecode size_variable.emit_get
+            target make_hidden_repr_parameter_name compiler.resolve_variable = repr_variable
+            bytecode repr_variable.emit_get
+            InstValue::WriteTyped bytecode.push
+            return
+        fi
+        if compiler.store target type_value_representation Option::Some(representation) is then
+            if compiler.store target type_inline_size Option::Some(size) is then
+                if VALUE_REPR_INDIRECT representation == then
+                    size i64::try_from.unwrap InstValue::Push bytecode.push
+                    representation i64::try_from.unwrap InstValue::Push bytecode.push
+                    InstValue::WriteTyped bytecode.push
+                elif 1 size == then
+                    InstValue::Store8 bytecode.push
+                elif 2 size == then
+                    InstValue::Store16 bytecode.push
+                elif 4 size == then
+                    InstValue::Store32 bytecode.push
+                elif 8 size == then
+                    InstValue::Store64 bytecode.push
+                else
+                    f"Direct value `{target.format}` has unsupported size {size}"
+                    compiler.record_failure
+                fi
+            else
+                f"Cannot determine inline size of `{target.format}`" compiler.record_failure
+            fi
+        else
+            f"Cannot determine representation of `{target.format}`" compiler.record_failure
+        fi
+    }
+}
 
 impl BytecodeCompiler {
     fn compile_op
@@ -1889,16 +2152,8 @@ impl BytecodeCompiler {
             if numeric_try.source Type::Builtin is then
                 numeric_try InstValue::NumericTry bytecode.push
                 f"__numeric_try_{numeric_try.target.format}" = wrapper_name
-                if
-                    wrapper_name compiler
-                        .store
-                        .functions
-                        .get Option::Some(wrapper) is
-                then
-                    op wrapper compiler.compile_function
+                if op wrapper_name compiler.compile_named_function then
                     wrapper_name InstValue::FnCall bytecode.push
-                else
-                    f"Numeric conversion wrapper `{wrapper_name}` is missing" compiler.record_failure
                 fi
             else
                 f"Numeric conversion source `{numeric_try.source.format}` was not specialized" compiler.record_failure
@@ -1907,16 +2162,8 @@ impl BytecodeCompiler {
             InstValue::Swap bytecode.push
             integer_try InstValue::IntegerTry bytecode.push
             f"__numeric_try_{integer_try.target.format}" = wrapper_name
-            if
-                wrapper_name compiler
-                    .store
-                    .functions
-                    .get Option::Some(wrapper) is
-            then
-                op wrapper compiler.compile_function
+            if op wrapper_name compiler.compile_named_function then
                 wrapper_name InstValue::FnCall bytecode.push
-            else
-                f"Integer arithmetic wrapper `{wrapper_name}` is missing" compiler.record_failure
             fi
         elif op_value OpValue::FloatRound(rounding) is then
             rounding InstValue::FloatRound bytecode.push
@@ -1930,25 +2177,16 @@ impl BytecodeCompiler {
             op_value OpValue::AssignVar is ||
             op_value OpValue::Question is ||
         then
-            if
-                op compiler
-                    .store
-                    .op_ownership
-                    .get Option::Some(ownership) is
-            then
-                for event in ownership.assignments.iter do
-                    bytecode op event compiler.compile_active_owner_cleanup
+            if op op_identity compiler.store.clone_ownership Option::Some(owned_ownership) is then
+                for event in owned_ownership.assignments.iter do
+                    event.clone = owned_event
+                    bytecode op owned_event compiler.compile_active_owner_cleanup
                 done
             fi
             bytecode op compiler.compile_assignment
-            if
-                op compiler
-                    .store
-                    .op_ownership
-                    .get Option::Some(ownership) is
-            then
-                for event in ownership.assignments.iter do
-                    bytecode event.generation event.name compiler.set_owner_flag
+            if op op_identity compiler.store.clone_ownership Option::Some(owned_ownership) is then
+                for event in owned_ownership.assignments.iter do
+                    bytecode event.generation event.name.clone compiler.set_owner_flag
                 done
             fi
         elif op_value OpValue::QuestionMove(hidden_name) is then
@@ -1988,23 +2226,21 @@ impl BytecodeCompiler {
             op_value OpValue::IfStart is ||
         then
             bytecode op_index op compiler.compile_if_block
+        elif op_value OpValue::Copy is then
+            if op.type_hint Option::Some(copied_type) is then
+                bytecode copied_type compiler.emit_typed_copy
+            fi
         elif
             op_value OpValue::ImportFile is
             op_value OpValue::ImportFileSelective is ||
             op_value OpValue::TypeCast is ||
-            op_value OpValue::Copy is ||
             op_value OpValue::DeclareGlobal is ||
         then
             # No instruction emitted
         elif op_value OpValue::PushEnumVariant(variant) is then
-            if
-                variant.enum_name compiler
-                    .store
-                    .enums
-                    .get Option::Some(casa_enum) is
-            then
-                if casa_enum has_inner_values then
-                    bytecode casa_enum variant compiler.compile_enum_variant
+            if variant.enum_name compiler.store.clone_enum Option::Some(owned_enum) is then
+                if owned_enum has_inner_values then
+                    bytecode owned_enum variant compiler.compile_enum_variant
                 else
                     compiler variant require_variant_ordinal InstValue::Push bytecode.push
                 fi
@@ -2036,6 +2272,26 @@ impl BytecodeCompiler {
             InstValue::Drop bytecode.push
             typeof_index InstValue::PushStr bytecode.push
             InstValue::PrintStr bytecode.push
+        elif op_value OpValue::SizeOf(target_type) is then
+            if compiler.store target_type type_inline_size Option::Some(size) is then
+                if size i64::try_from Option::Some(signed_size) is then
+                    signed_size InstValue::Push bytecode.push
+                else
+                    f"Inline size of `{target_type.format}` exceeds the supported constant range"
+                    compiler.record_failure
+                fi
+            else
+                f"Cannot determine inline size of `{target_type.format}`"
+                compiler.record_failure
+            fi
+        elif op_value OpValue::PtrRead(target_type) is then
+            bytecode target_type compiler.emit_typed_load
+        elif op_value OpValue::PtrWrite(target_type) is then
+            bytecode target_type compiler.emit_typed_store
+        elif op_value OpValue::PtrAsRef(target_type) is then
+            bytecode target_type compiler.emit_typed_borrow
+        elif op_value OpValue::PtrAsMut(target_type) is then
+            bytecode target_type compiler.emit_typed_borrow
         elif op_value OpValue::PushArray is then
             bytecode op compiler.compile_push_array
         elif op_value OpValue::ExprGroup(group_ops) is then
@@ -2070,13 +2326,8 @@ impl BytecodeCompiler {
         elif op_value OpValue::PushVar(var_name) is then
             var_name compiler.resolve_variable = var_resolved
             bytecode var_resolved.emit_get
-            if
-                op compiler
-                    .store
-                    .op_ownership
-                    .get Option::Some(ownership) is
-            then
-                if ownership.moves_owner then
+            if op op_identity compiler.store.clone_ownership Option::Some(owned_ownership) is then
+                if owned_ownership.moves_owner then
                     if var_name compiler.owner_flags.get Option::Some(flag) is then
                         0 InstValue::Push bytecode.push
                         flag InstValue::LocalSet bytecode.push

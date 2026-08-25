@@ -10,7 +10,6 @@ unsafe fn memcpy dst:ptr src:ptr n:u64 {
         1 += i
     done
 }
-const ARRAY_ELEMENT_WORD_SIZE 8
 
 impl array {
     # The length is part of the type, so it costs nothing at runtime (ADR-0152).
@@ -21,10 +20,12 @@ impl array {
     fn nth [T const N:u64] self:$array[T N] index:u64 -> $T {
         if N index >= then
             "error: array index out of bounds\n" eprint
+            # SAFETY: The process exits without returning to the caller.
             unsafe { 1 60 syscall1 drop }
         fi
         # An array value is its element storage.
-        unsafe { self (ptr) index ARRAY_ELEMENT_WORD_SIZE * + load64 ($T) }
+        # SAFETY: The bounds check keeps the computed address inside initialized array storage.
+        unsafe { self (ptr) index size_of[T] * + ptr::as_ref[T] }
     }
 }
 
@@ -55,8 +56,13 @@ impl[T] Slice[T] {
 }
 
 impl List {
-    fn new -> List {
-        unsafe { 8 0 64 alloc List }
+    fn new [T] -> List[T] {
+        size_of[T] = stride
+        if 0 stride == then
+            1 (u64) = stride
+        fi
+        # SAFETY: The allocation creates eight valid element slots with no initialized values.
+        unsafe { 8 0 stride 8 * alloc List }
     }
 
     # The array no longer stores its length, so the list records it (ADR-0152).
@@ -72,74 +78,172 @@ impl List {
 
     fn is_empty self:$List -> bool { 0 self.size == }
 
-    fn get [T] self:$List[T] n:u64 -> T {
+    fn get [T] self:$List[T] n:u64 -> $T {
         if self.size n >= 0 n < || then
             "error: List index out of bounds\n" print
+            # SAFETY: The process exits without returning to the caller.
             unsafe { 1 60 syscall1 drop }
         fi
-        unsafe { self.data n 8 * + load64 (T) }
+        size_of[T] = stride
+        if 0 stride == then
+            1 (u64) = stride
+        fi
+        # SAFETY: The bounds check identifies one initialized element in the allocation.
+        unsafe { self.data n stride * + ptr::as_ref[T] }
     }
 
-    # Borrowed element access. The list keeps owning the element, so this is
-    # the accessor that iteration and read-only lookups should use. `get` still
-    # returns an owned alias of the element; see issue #426.
-    fn get_ref [T] self:$List[T] n:u64 -> $T {
+    fn get_ref [T] self:$List[T] n:u64 -> $T { n self.get }
+
+    fn get_mut [T] self:mut$List[T] n:u64 -> mut$T {
         if self.size n >= 0 n < || then
             "error: List index out of bounds\n" print
+            # SAFETY: The process exits without returning to the caller.
             unsafe { 1 60 syscall1 drop }
         fi
-        unsafe { self.data n 8 * + load64 ($T) }
+        size_of[T] = stride
+        if 0 stride == then
+            1 (u64) = stride
+        fi
+        # SAFETY: The exclusive List borrow and bounds check identify one initialized element.
+        unsafe { self.data n stride * + ptr::as_mut[T] }
     }
 
     fn set [T] self:mut$List[T] n:u64 item:T {
         if self.size n >= 0 n < || then
             "error: List index out of bounds\n" print
+            # SAFETY: The process exits without returning to the caller.
             unsafe { 1 60 syscall1 drop }
         fi
-        unsafe { item (u64) self.data n 8 * + store64 }
+        size_of[T] = stride
+        if 0 stride == then
+            1 (u64) = stride
+        fi
+        # SAFETY: The bounds check identifies initialized T storage owned exclusively by the List.
+        unsafe {
+            self.data n stride * + = address
+            address ptr::read[T] drop
+            item address ptr::write[T]
+        }
+    }
+
+    fn replace [T] self:mut$List[T] n:u64 item:T -> T {
+        if self.size n >= 0 n < || then
+            "error: List index out of bounds\n" print
+            # SAFETY: The process exits without returning to the caller.
+            unsafe { 1 60 syscall1 drop }
+        fi
+        size_of[T] = stride
+        if 0 stride == then
+            1 (u64) = stride
+        fi
+        # SAFETY: The bounds check identifies initialized T storage owned exclusively by the List.
+        unsafe {
+            self.data n stride * + = address
+            address ptr::read[T] = previous
+            item address ptr::write[T]
+            previous
+        }
     }
 
     fn push [T] self:mut$List[T] item:T {
-        if self.capacity self.size >= then
-            self.capacity 2 * = self.capacity
-            unsafe { self.capacity 8 * alloc = new_data }
-            unsafe { self.size 8 * self.data new_data memcpy }
-            new_data = self.data
+        size_of[T] = stride
+        if 0 stride == then
+            1 (u64) = stride
         fi
-        unsafe { item (u64) self.data self.size 8 * + store64 }
-        1 += self.size
+        # SAFETY: Capacity tracks the allocation size, and each initialized element moves once.
+        unsafe {
+            if self.capacity self.size >= then
+                self.capacity 2 * = self.capacity
+                self.capacity stride * alloc = new_data
+                self.data = old_data
+                0 (u64) = index
+                while index self.size > do
+                    old_data index stride * + ptr::read[T] = existing
+                    existing new_data index stride * + ptr::write[T]
+                    1 += index
+                done
+                old_data free
+                new_data = self.data
+            fi
+            item self.data self.size stride * + ptr::write[T]
+            1 += self.size
+        }
     }
 
     fn pop [T] self:mut$List[T] -> T {
         if 0 self.size <= then
             "error: pop from empty List\n" print
+            # SAFETY: The process exits without returning to the caller.
             unsafe { 1 60 syscall1 drop }
         fi
         1 -= self.size
-        unsafe { self.data self.size 8 * + load64 (T) }
+        size_of[T] = stride
+        if 0 stride == then
+            1 (u64) = stride
+        fi
+        # SAFETY: The decremented size identifies the last initialized element.
+        unsafe { self.data self.size stride * + ptr::read[T] }
     }
 
     fn insert [T] self:mut$List[T] item:T index:u64 {
+        size_of[T] = stride
+        if 0 stride == then
+            1 (u64) = stride
+        fi
         if 0 index < self.size index > || then
             "error: List insert index out of bounds\n" print
+            # SAFETY: The process exits without returning to the caller.
             unsafe { 1 60 syscall1 drop }
         fi
-        # Ensure capacity
-        if self.capacity self.size >= then
-            self.capacity 2 * = self.capacity
-            unsafe { self.capacity 8 * alloc = new_data }
-            unsafe { self.size 8 * self.data new_data memcpy }
-            new_data = self.data
+        # SAFETY: Capacity and bounds checks keep all moves inside allocated T storage.
+        unsafe {
+            # Ensure capacity
+            if self.capacity self.size >= then
+                self.capacity 2 * = self.capacity
+                self.capacity stride * alloc = new_data
+                self.data = old_data
+                0 (u64) = move_index
+                while move_index self.size > do
+                    old_data move_index stride * + ptr::read[T] = existing
+                    existing new_data move_index stride * + ptr::write[T]
+                    1 += move_index
+                done
+                old_data free
+                new_data = self.data
+            fi
+            # Shift elements right from end to index
+            self.size = i
+            while i index < do
+                self.data i 1 - stride * + ptr::read[T] = shifted
+                shifted self.data i stride * + ptr::write[T]
+                i 1 - = i
+            done
+            # Store item at index
+            item self.data index stride * + ptr::write[T]
+            1 += self.size
+        }
+    }
+
+    fn remove [T] self:mut$List[T] index:u64 -> Option[T] {
+        if self.size index >= then
+            Option[T]::None return
         fi
-        # Shift elements right from end to index
-        self.size = i
-        while i index < do
-            unsafe { self.data i 1 - 8 * + load64 self.data i 8 * + store64 }
-            i 1 - = i
-        done
-        # Store item at index
-        unsafe { item (u64) self.data index 8 * + store64 }
-        1 += self.size
+        size_of[T] = stride
+        if 0 stride == then
+            1 (u64) = stride
+        fi
+        # SAFETY: The bounds check and size keep every move inside initialized T storage.
+        unsafe {
+            self.data index stride * + ptr::read[T] = removed
+            index = move_index
+            while self.size move_index 1 + < do
+                self.data move_index 1 + stride * + ptr::read[T] = shifted
+                shifted self.data move_index stride * + ptr::write[T]
+                1 += move_index
+            done
+            1 -= self.size
+            removed Option::Some
+        }
     }
 
     fn slice [T] self:$List[T] start:u64 stop:u64 -> Slice[T] {
@@ -153,9 +257,29 @@ impl List {
     fn to_array[T] self:$List[T] -> Slice[T] { self.size 0 self.slice }
 
     fn swap_at [T] self:mut$List[T] i:u64 j:u64 {
-        i self.get = temp
-        j self.get i self.set
-        temp j self.set
+        if i j == then
+            return
+        fi
+        if self.size i >= self.size j >= || then
+            "error: List index out of bounds\n" print
+            # SAFETY: The process exits without returning to the caller.
+            unsafe { 1 60 syscall1 drop }
+        fi
+        size_of[T] = stride
+        if 0 stride == then
+            1 (u64) = stride
+        fi
+        # SAFETY: Both bounds checks keep each byte swap inside initialized elements.
+        unsafe {
+            0 (u64) = offset
+            while offset stride > do
+                self.data i stride * + offset + load8 = first
+                self.data j stride * + offset + load8 = second
+                second self.data i stride * + offset + store8
+                first self.data j stride * + offset + store8
+                1 += offset
+            done
+        }
     }
 
     fn reverse [T] self:mut$List[T] {
@@ -173,23 +297,39 @@ impl List {
 
     # Moves every element of `other` onto the end of `self`, consuming `other`.
     fn append [T] self:mut$List[T] other:List[T] {
-        0 (u64) = index
-        while index other.size > do
-            unsafe { other.data index 8 * + load64 (T) } self.push
-            1 += index
-        done
-    }
-
-    # Internal representation copy used while the compiler migrates to affine
-    # ownership. User-visible duplication is the bounded Clone implementation.
-    fn shallow_copy [T] self:$List[T] -> List[T] {
-        List[T]::new = result
-        0 (u64) = i
-        while i self.length > do
-            i self.get result.push
-            1 += i
-        done
-        result
+        size_of[T] = stride
+        if 0 stride == then
+            1 (u64) = stride
+        fi
+        self.size other.size + = combined_size
+        # SAFETY: Both Lists own valid allocations, and every initialized element moves once.
+        unsafe {
+            if self.capacity combined_size > then
+                while self.capacity combined_size > do
+                    self.capacity 2 * = self.capacity
+                done
+                self.capacity stride * alloc = new_data
+                self.data = old_data
+                0 (u64) = index
+                while index self.size > do
+                    old_data index stride * + ptr::read[T] = existing
+                    existing new_data index stride * + ptr::write[T]
+                    1 += index
+                done
+                old_data free
+                new_data = self.data
+            fi
+            0 (u64) = index
+            while index other.size > do
+                other.data index stride * + ptr::read[T] = existing
+                existing self.data self.size index + stride * + ptr::write[T]
+                1 += index
+            done
+            combined_size = self.size
+            0 = other.size
+            other.data free
+            0 (ptr) = other.data
+        }
     }
 }
 
@@ -851,19 +991,18 @@ impl str {
         a.length = length_a
         b.length = length_b
         if length_a length_b != then
-            false
-        else
-            true = all_equal
-            0 (u64) = compare_index
-            while compare_index length_a > do
-                if compare_index a.at compare_index b.at != then
-                    false = all_equal
-                    break
-                fi
-                1 += compare_index
-            done
-            all_equal
+            false return
         fi
+        true = all_equal
+        0 (u64) = compare_index
+        while compare_index length_a > do
+            if compare_index a.at compare_index b.at != then
+                false = all_equal
+                break
+            fi
+            1 += compare_index
+        done
+        all_equal
     }
 
     fn substring len:u64 start:u64 s:$str -> str {
@@ -886,67 +1025,64 @@ impl str {
         s.length = source_length
         needle.length = needle_length
         if needle_length source_length < then
-            0 1 -
-        else
-            0 1 - = found_pos
-            0 (u64) = search_index
-            while search_index source_length needle_length - 1 + > do
-                true = all_match
-                0 (u64) = match_index
-                while match_index needle_length > do
-                    if search_index match_index + s.at match_index needle.at != then
-                        false = all_match
-                        break
-                    fi
-                    1 += match_index
-                done
-                if all_match then
-                    search_index (i64) = found_pos
+            0 1 - return
+        fi
+        0 1 - = found_pos
+        0 (u64) = search_index
+        while search_index source_length needle_length - 1 + > do
+            true = all_match
+            0 (u64) = match_index
+            while match_index needle_length > do
+                if search_index match_index + s.at match_index needle.at != then
+                    false = all_match
                     break
                 fi
-                1 += search_index
+                1 += match_index
             done
-            found_pos
-        fi
+            if all_match then
+                search_index (i64) = found_pos
+                break
+            fi
+            1 += search_index
+        done
+        found_pos
     }
 
     fn starts_with prefix:$str s:$str -> bool {
         s.length = source_length
         prefix.length = prefix_length
         if prefix_length source_length < then
-            false
-        else
-            true = all_match
-            0 (u64) = compare_index
-            while compare_index prefix_length > do
-                if compare_index s.at compare_index prefix.at != then
-                    false = all_match
-                    break
-                fi
-                1 += compare_index
-            done
-            all_match
+            false return
         fi
+        true = all_match
+        0 (u64) = compare_index
+        while compare_index prefix_length > do
+            if compare_index s.at compare_index prefix.at != then
+                false = all_match
+                break
+            fi
+            1 += compare_index
+        done
+        all_match
     }
 
     fn ends_with suffix:$str s:$str -> bool {
         s.length = source_length
         suffix.length = suffix_length
         if suffix_length source_length < then
-            false
-        else
-            source_length suffix_length - = offset
-            true = all_match
-            0 (u64) = compare_index
-            while compare_index suffix_length > do
-                if offset compare_index + s.at compare_index suffix.at != then
-                    false = all_match
-                    break
-                fi
-                1 += compare_index
-            done
-            all_match
+            false return
         fi
+        source_length suffix_length - = offset
+        true = all_match
+        0 (u64) = compare_index
+        while compare_index suffix_length > do
+            if offset compare_index + s.at compare_index suffix.at != then
+                false = all_match
+                break
+            fi
+            1 += compare_index
+        done
+        all_match
     }
 
     fn concat b:$str a:$str -> str { f"{a}{b}" }
@@ -1370,6 +1506,24 @@ trait Clone {
 
 trait Copy: Clone { }
 
+impl List {
+    # Compiler-internal representation copy. Public collection observation
+    # returns borrows and never uses this migration helper.
+    fn shallow_copy [T] self:$List[T] -> List[T] {
+        size_of[T] = stride
+        if 0 stride == then
+            1 (u64) = stride
+        fi
+        self.capacity stride * = bytes
+        # SAFETY: The copy uses distinct allocations and copies only initialized element bytes.
+        unsafe {
+            bytes alloc = data
+            self.size stride * self.data data memcpy
+            self.capacity self.size data List (List[T])
+        }
+    }
+}
+
 trait Eq {
     fn eq self:$self other:$self -> bool
     fn ne self:$self other:$self -> bool { other self.eq ! }
@@ -1407,11 +1561,10 @@ trait Iterable[T] {
     fn map [U] self:mut$self f:fn[T -> U] -> Iter[U] {
         unsafe { 8 alloc = st }
         unsafe { self (u64) st store64 }
-        Option[U]::None = none
         {
             unsafe { st load64 (self).next = opt }
             if opt.is_none then
-                none return
+                Option[U]::None return
             fi
             opt.unwrap f exec Option::Some
         } Iter
@@ -1420,19 +1573,18 @@ trait Iterable[T] {
     fn filter self:mut$self f:fn[$T -> bool] -> Iter[T] {
         unsafe { 8 alloc = st }
         unsafe { self (u64) st store64 }
-        Option[T]::None = none
         {
             while true do
                 unsafe { st load64 (self).next = opt }
                 if opt.is_none then
-                    none return
+                    Option[T]::None return
                 fi
                 opt.unwrap = elem
                 if elem f exec then
                     elem Option::Some return
                 fi
             done
-            none
+            Option[T]::None
         } Iter
     }
 
@@ -1481,11 +1633,10 @@ trait Iterable[T] {
     fn take self:mut$self n:u64 -> Iter[T] {
         unsafe { 8 alloc = st }
         unsafe { n st store64 }
-        Option[T]::None = none
         {
             unsafe { st load64 = rem }
             if rem 0 >= then
-                none return
+                Option[T]::None return
             fi
             unsafe { rem 1 - st store64 }
             self.next
@@ -1495,7 +1646,6 @@ trait Iterable[T] {
     fn skip self:mut$self n:u64 -> Iter[T] {
         unsafe { 8 alloc = st }
         unsafe { 0 st store64 }
-        Option[T]::None = none
         {
             if unsafe { 0 st load64 == } then
                 unsafe { 1 st store64 }
@@ -1503,7 +1653,7 @@ trait Iterable[T] {
                 while i n > do
                     self.next = opt
                     if opt.is_none then
-                        none return
+                        Option[T]::None return
                     fi
                     1 += i
                 done
@@ -1515,21 +1665,20 @@ trait Iterable[T] {
     fn take_while self:mut$self f:fn[$T -> bool] -> Iter[T] {
         unsafe { 8 alloc = st }
         unsafe { 0 st store64 }
-        Option[T]::None = none
         {
             if unsafe { 0 st load64 != } then
-                none return
+                Option[T]::None return
             fi
             self.next = opt
             if opt.is_none then
-                none return
+                Option[T]::None return
             fi
             opt.unwrap = elem
             if elem f exec then
                 elem Option::Some
             else
                 unsafe { 1 st store64 }
-                none
+                Option[T]::None
             fi
         } Iter
     }
@@ -1537,13 +1686,12 @@ trait Iterable[T] {
     fn skip_while self:mut$self f:fn[$T -> bool] -> Iter[T] {
         unsafe { 8 alloc = st }
         unsafe { 0 st store64 }
-        Option[T]::None = none
         {
             if unsafe { 0 st load64 == } then
                 while true do
                     self.next = opt
                     if opt.is_none then
-                        none return
+                        Option[T]::None return
                     fi
                     opt.unwrap = elem
                     if elem f exec ! then
@@ -1559,11 +1707,10 @@ trait Iterable[T] {
     fn enumerate self:mut$self -> Iter[Pair[i64 T]] {
         unsafe { 8 alloc = st }
         unsafe { 0 st store64 }
-        Option[Pair[i64 T]]::None = none
         {
             self.next = opt
             if opt.is_none then
-                none return
+                Option[Pair[i64 T]]::None return
             fi
             unsafe { st load64 = idx }
             unsafe { idx 1 + st store64 }
@@ -1572,15 +1719,14 @@ trait Iterable[T] {
     }
 
     fn zip [U] self:mut$self other:Iter[U] -> Iter[Pair[T U]] {
-        Option[Pair[T U]]::None = none
         {
             self.next = opt_a
             if opt_a.is_none then
-                none return
+                Option[Pair[T U]]::None return
             fi
             other.next = opt_b
             if opt_b.is_none then
-                none return
+                Option[Pair[T U]]::None return
             fi
             opt_b.unwrap opt_a.unwrap Pair Option::Some
         } Iter
@@ -1604,7 +1750,6 @@ trait Iterable[T] {
     fn flat_map [U] self:mut$self f:fn[T -> Iter[U]] -> Iter[U] {
         unsafe { 8 alloc = st }
         unsafe { 0 st store64 }
-        Option[U]::None = none
         {
             while true do
                 unsafe { st load64 = inner }
@@ -1617,12 +1762,12 @@ trait Iterable[T] {
                 fi
                 self.next = outer_opt
                 if outer_opt.is_none then
-                    none return
+                    Option[U]::None return
                 fi
                 outer_opt.unwrap f exec = new_inner
                 unsafe { new_inner st store64 }
             done
-            none
+            Option[U]::None
         } Iter
     }
 
@@ -1760,19 +1905,21 @@ impl str {
 impl[T: Clone const N: u64] array[T N]: Clone {
     fn clone self:$array[T N] -> array[T N] {
         # A zero-length array is inhabited, so it still owns storage (ADR-0154).
-        N ARRAY_ELEMENT_WORD_SIZE * = bytes
+        N size_of[T] * = bytes
         if 0 bytes == then
-            ARRAY_ELEMENT_WORD_SIZE (u64) = bytes
+            1 (u64) = bytes
         fi
-        unsafe { bytes alloc = data }
-        0 (u64) = index
-        while index N > do
-            # Read the element as a borrow so the source array keeps owning it.
-            unsafe { self (ptr) index ARRAY_ELEMENT_WORD_SIZE * + load64 ($T) } = element
-            unsafe { element.clone (u64) data index ARRAY_ELEMENT_WORD_SIZE * + store64 }
-            1 += index
-        done
-        unsafe { data (array[T N]) }
+        # SAFETY: The allocation has N element slots, and each receives one valid clone.
+        unsafe {
+            bytes alloc = data
+            0 (u64) = index
+            while index N > do
+                index self.nth = element
+                element T::clone data index size_of[T] * + ptr::write[T]
+                1 += index
+            done
+            data (array[T N])
+        }
     }
 }
 
@@ -1781,7 +1928,7 @@ impl[T: Clone] List[T]: Clone {
         List[T]::new = result
         0 (u64) = index
         while index self.length > do
-            index self.get.clone result.push
+            index self.get T::clone result.push
             1 += index
         done
         result
@@ -1790,8 +1937,8 @@ impl[T: Clone] List[T]: Clone {
 
 impl[T: Clone] Option[T]: Clone {
     fn clone self:$Option[T] -> Option[T] {
-        if self.is_some then
-            unsafe { self (ptr) 8 + load64 (T).clone Option::Some }
+        if self Option::Some(value) is then
+            value T::clone Option::Some
         else
             Option[T]::None
         fi
@@ -1800,11 +1947,13 @@ impl[T: Clone] Option[T]: Clone {
 
 impl[T: Clone, E: Clone] Result[T E]: Clone {
     fn clone self:$Result[T E] -> Result[T E] {
-        if self.is_ok then
-            self (ptr) 8 + load64 (T).clone Result::Ok
-        else
-            self (ptr) 8 + load64 (E).clone Result::Error
+        if self Result::Ok(value) is then
+            value T::clone Result::Ok return
         fi
+        if self Result::Error(error) is then
+            error E::clone Result::Error return
+        fi
+        1 exit
     }
 }
 
@@ -1831,6 +1980,13 @@ impl bool: Eq + Display { }
 impl cstr: Eq + Display { }
 
 impl ptr: Eq + Display { }
+
+impl ptr: Hashable {
+    fn hash self:$ptr -> i64 {
+        # SAFETY: Hashing observes the opaque address bits without dereferencing them.
+        unsafe { self copy (i64) } int_hash
+    }
+}
 
 # ---------------------------------------------------------------------------
 # Pair - generic two-element tuple
@@ -1949,11 +2105,10 @@ impl[T] List[T] {
             return
         fi
         high low + 2 / high self.swap_at
-        high self.get = pivot
         low = store_idx
         low = i
         while i high > do
-            if pivot i self.get f exec then
+            if high self.get i self.get f exec then
                 store_idx i self.swap_at
                 1 += store_idx
             fi
@@ -1993,7 +2148,7 @@ impl[T: Ord] List[T] {
 }
 
 impl List[str] {
-    fn join self:mut$List[str] sep:str -> str {
+    fn join self:$List[str] sep:str -> str {
         StringBuilder::new = builder
         0 (u64) = idx
         while idx self.length > do
@@ -2006,7 +2161,7 @@ impl List[str] {
         builder.build
     }
 
-    fn contains self:mut$List[str] needle:str -> bool {
+    fn contains self:$List[str] needle:$str -> bool {
         0 (u64) = i
         while i self.length > do
             if needle i self.get == then
@@ -2022,8 +2177,7 @@ impl array {
     fn contains [const N:u64] self:$array[str N] needle:$str -> bool {
         0 (u64) = i
         while i N > do
-            # Compare through a borrow so the array keeps owning its elements.
-            unsafe { self (ptr) i ARRAY_ELEMENT_WORD_SIZE * + load64 ($str) } = element
+            i self.nth = element
             if needle element == then
                 true return
             fi
@@ -2038,11 +2192,10 @@ impl str {
         unsafe { 16 alloc = st }
         unsafe { self.length st store64 }
         unsafe { 0 (u64) st 8 + store64 }
-        Option[char]::None = none
         {
             unsafe { st 8 + load64 (u64) = idx }
             if unsafe { st load64 (u64) idx >= } then
-                none return
+                Option[char]::None return
             fi
             unsafe { idx 1 + st 8 + store64 }
             idx self.at Option::Some
@@ -2096,7 +2249,7 @@ impl i64: Hashable + Ord + Display {
 # ---------------------------------------------------------------------------
 # Map[K V] - Hash map with separate chaining
 # ---------------------------------------------------------------------------
-# Entry layout: 24 bytes per entry (key:8, value:8, next:8)
+# Entry layout is the key bytes, value bytes, then the next pointer.
 # Bucket array: capacity * 8 bytes (each slot is a ptr to entry or 0)
 const MAP_INITIAL_CAP 16
 
@@ -2106,145 +2259,268 @@ struct Map {
     capacity: u64
 }
 
+impl[K V] Map[K V] {
+    fn entry_key self:$Map[K V] address:ptr -> $K {
+        # SAFETY: Callers pass an initialized entry address whose first field is K.
+        unsafe { address ptr::as_ref[K] }
+    }
+
+    fn entry_value self:$Map[K V] address:ptr -> $V {
+        # SAFETY: Callers add the key size to an initialized entry address.
+        unsafe { address ptr::as_ref[V] }
+    }
+}
+
 impl[K: Hashable, V] Map[K V] {
     fn new -> Map[K V] {
-        unsafe { MAP_INITIAL_CAP (u64) 8 * alloc = mb }
-        0 (u64) = bucket_index
-        while bucket_index MAP_INITIAL_CAP > do
-            unsafe { 0 mb bucket_index 8 * + store64 }
-            1 += bucket_index
-        done
-        MAP_INITIAL_CAP 0 mb Map (Map[K V])
+        # SAFETY: The allocation contains MAP_INITIAL_CAP pointer-sized bucket slots.
+        unsafe {
+            MAP_INITIAL_CAP (u64) 8 * alloc = mb
+            0 (u64) = bucket_index
+            while bucket_index MAP_INITIAL_CAP > do
+                0 mb bucket_index 8 * + store64
+                1 += bucket_index
+            done
+            MAP_INITIAL_CAP 0 mb Map (Map[K V])
+        }
     }
 
     fn length self:$Map[K V] -> u64 { self.size }
 
     fn is_empty self:$Map[K V] -> bool { 0 self.size == }
 
-    fn get self:$Map[K V] key:$K -> Option[V] {
+    fn get self:$Map[K V] key:$K -> Option[$V] {
+        size_of[K] = key_size
+        size_of[V] = value_size
+        key_size value_size + = next_offset
         key K::hash(u64) self.capacity % = bucket_index
-        unsafe { self.buckets bucket_index 8 * + load64 = current_entry }
-        while 0 current_entry != do
-            unsafe { current_entry (ptr) load64 (K) = entry_key }
-            if key entry_key K::eq then
-                unsafe { current_entry (ptr) 8 + load64 (V) Option::Some }
-                return
-            fi
-            unsafe { current_entry (ptr) 16 + load64 = current_entry }
-        done
-        Option[V]::None
+        # SAFETY: Bucket links point to initialized key, value, and next fields.
+        unsafe {
+            self.buckets bucket_index 8 * + load64 = current_entry
+            while 0 current_entry != do
+                current_entry (ptr) ptr::as_ref[K] = entry_key
+                if key entry_key K::eq then
+                    current_entry (ptr) key_size + ptr::as_ref[V] Option::Some return
+                fi
+                current_entry (ptr) next_offset + load64 = current_entry
+            done
+            Option[$V]::None
+        }
+    }
+
+    fn get_mut self:mut$Map[K V] key:$K -> Option[mut$V] {
+        size_of[K] = key_size
+        size_of[V] = value_size
+        key_size value_size + = next_offset
+        key K::hash(u64) self.capacity % = bucket_index
+        # SAFETY: The exclusive Map borrow and bucket links identify one initialized value.
+        unsafe {
+            self.buckets bucket_index 8 * + load64 = current_entry
+            while 0 current_entry != do
+                current_entry (ptr) ptr::as_ref[K] = entry_key
+                if key entry_key K::eq then
+                    current_entry (ptr) key_size + ptr::as_mut[V] Option::Some return
+                fi
+                current_entry (ptr) next_offset + load64 = current_entry
+            done
+            Option[mut$V]::None
+        }
     }
 
     fn has self:$Map[K V] key:$K -> bool { key self.get.is_some }
 
-    fn set self:mut$Map[K V] key:mut$K value:V -> Map[K V] {
+    fn set self:mut$Map[K V] key:K value:V {
+        size_of[K] = key_size
+        size_of[V] = value_size
+        key_size value_size + = next_offset
         key K::hash(u64) self.capacity % = bucket_index
-        unsafe { self.buckets bucket_index 8 * + load64 = current_entry }
-        while 0 current_entry != do
-            unsafe { current_entry (ptr) load64 (K) = entry_key }
-            if key entry_key K::eq then
-                unsafe { value (u64) current_entry (ptr) 8 + store64 }
-                self (Map[K V])
-                return
+        # SAFETY: Entry sizes define disjoint key, value, and link fields in every node.
+        unsafe {
+            self.buckets bucket_index 8 * + load64 = current_entry
+            while 0 current_entry != do
+                current_entry (ptr) ptr::as_ref[K] = entry_key
+                if key entry_key K::eq then
+                    key drop
+                    current_entry (ptr) key_size + ptr::read[V] drop
+                    value current_entry (ptr) key_size + ptr::write[V]
+                    return
+                fi
+                current_entry (ptr) next_offset + load64 = current_entry
+            done
+            # New entry
+            next_offset 8 + alloc = new_node
+            key new_node (ptr) ptr::write[K]
+            value new_node (ptr) key_size + ptr::write[V]
+            self.buckets bucket_index 8 * + load64 new_node (ptr) next_offset + store64
+            new_node (u64) self.buckets bucket_index 8 * + store64
+            1 += self.size
+            # Resize at 75% load
+            if self.capacity 3 * 4 / self.size >= then
+                self.resize
             fi
-            unsafe { current_entry (ptr) 16 + load64 = current_entry }
-        done
-        # New entry
-        unsafe { 24 alloc = new_node }
-        unsafe { key (u64) new_node (ptr) store64 }
-        unsafe { value (u64) new_node (ptr) 8 + store64 }
-        unsafe { self.buckets bucket_index 8 * + load64 new_node (ptr) 16 + store64 }
-        unsafe { new_node (u64) self.buckets bucket_index 8 * + store64 }
-        1 += self.size
-        # Resize at 75% load
-        if self.capacity 3 * 4 / self.size >= then
-            self.resize
-        fi
-        self (Map[K V])
+        }
     }
 
-    fn delete self:mut$Map[K V] key:$K -> Map[K V] {
+    fn remove self:mut$Map[K V] key:$K -> Option[V] {
+        size_of[K] = key_size
+        size_of[V] = value_size
+        key_size value_size + = next_offset
         key K::hash(u64) self.capacity % = bucket_index
         0 (u64) = prev_entry
-        unsafe { self.buckets bucket_index 8 * + load64 = current_entry }
-        while 0 current_entry != do
-            unsafe { current_entry (ptr) load64 (K) = entry_key }
-            if key entry_key K::eq ! then
-                current_entry = prev_entry
-                unsafe { current_entry (ptr) 16 + load64 = current_entry }
-                continue
-            fi
-            unsafe { current_entry (ptr) 16 + load64 = next_entry }
-            if 0 prev_entry == then
-                unsafe { next_entry self.buckets bucket_index 8 * + store64 }
-            else
-                unsafe { next_entry prev_entry (ptr) 16 + store64 }
-            fi
-            1 -= self.size
-            self (Map[K V])
-            return
-        done
-        self (Map[K V])
+        # SAFETY: Bucket links delimit initialized entries owned exclusively by the Map.
+        unsafe {
+            self.buckets bucket_index 8 * + load64 = current_entry
+            while 0 current_entry != do
+                current_entry (ptr) ptr::as_ref[K] = entry_key
+                if key entry_key K::eq ! then
+                    current_entry = prev_entry
+                    current_entry (ptr) next_offset + load64 = current_entry
+                    continue
+                fi
+                current_entry (ptr) next_offset + load64 = next_entry
+                if 0 prev_entry == then
+                    next_entry self.buckets bucket_index 8 * + store64
+                else
+                    next_entry prev_entry (ptr) next_offset + store64
+                fi
+                1 -= self.size
+                current_entry (ptr) ptr::read[K] drop
+                current_entry (ptr) key_size + ptr::read[V] = removed
+                current_entry (ptr) free
+                removed Option::Some return
+            done
+            Option[V]::None
+        }
     }
 
     fn resize self:mut$Map[K V] {
+        size_of[K] = key_size
+        size_of[V] = value_size
+        key_size value_size + = next_offset
         self.capacity 2 * = new_capacity
-        unsafe { new_capacity 8 * alloc = new_buckets }
-        0 (u64) = rehash_index
-        while rehash_index new_capacity > do
-            unsafe { 0 new_buckets rehash_index 8 * + store64 }
-            1 += rehash_index
-        done
-        0 (u64) = rehash_index
-        while rehash_index self.capacity > do
-            unsafe { self.buckets rehash_index 8 * + load64 = current_entry }
-            while 0 current_entry != do
-                unsafe { current_entry (ptr) 16 + load64 = next_entry }
-                unsafe { current_entry (ptr) load64 (K) K::hash(u64) new_capacity % = bucket_index }
-                unsafe { new_buckets bucket_index 8 * + load64 current_entry (ptr) 16 + store64 }
-                unsafe { current_entry new_buckets bucket_index 8 * + store64 }
-                next_entry = current_entry
+        # SAFETY: Both bucket arrays have pointer-sized slots, and each entry link is rewritten once.
+        unsafe {
+            new_capacity 8 * alloc = new_buckets
+            0 (u64) = rehash_index
+            while rehash_index new_capacity > do
+                0 new_buckets rehash_index 8 * + store64
+                1 += rehash_index
             done
-            1 += rehash_index
-        done
-        new_buckets = self.buckets
-        new_capacity = self.capacity
+            0 (u64) = rehash_index
+            while rehash_index self.capacity > do
+                self.buckets rehash_index 8 * + load64 = current_entry
+                while 0 current_entry != do
+                    current_entry (ptr) next_offset + load64 = next_entry
+                    current_entry (ptr) ptr::as_ref[K] K::hash(u64) new_capacity % = bucket_index
+                    new_buckets bucket_index 8 * + load64 current_entry (ptr) next_offset + store64
+                    current_entry new_buckets bucket_index 8 * + store64
+                    next_entry = current_entry
+                done
+                1 += rehash_index
+            done
+            self.buckets = old_buckets
+            new_buckets = self.buckets
+            new_capacity = self.capacity
+            old_buckets free
+        }
     }
 
-    fn iter self:$Map[K V] -> Iter[Pair[K V]] {
-        unsafe { 16 alloc = st }
-        unsafe { 0 st store64 }
-        unsafe { 0 st 8 + store64 }
-        Option[Pair[K V]]::None = none
+    fn iter self:$Map[K V] -> Iter[Pair[$K $V]] {
+        size_of[K] = key_size
+        size_of[V] = value_size
+        key_size value_size + = next_offset
+        # SAFETY: The iterator state has two initialized pointer-sized fields.
+        unsafe {
+            16 alloc = st
+            0 st store64
+            0 st 8 + store64
+        }
+        Option[Pair[$K $V]]::None = none
         {
-            unsafe { st 8 + load64 = current_entry }
-            while 0 current_entry == do
-                unsafe { st load64 (u64) = bucket_index }
-                if self.capacity bucket_index >= then
-                    none return
-                fi
-                unsafe { self.buckets bucket_index 8 * + load64 = current_entry }
-                unsafe { bucket_index 1 + st store64 }
-            done
-            unsafe { current_entry (ptr) 16 + load64 st 8 + store64 }
-            unsafe { current_entry (ptr) 8 + load64 }
-            unsafe { current_entry (ptr) load64 }
-            Pair Option::Some
-        } Iter
+            # SAFETY: The state and bucket links stay valid for the shared Map borrow.
+            unsafe {
+                st 8 + load64 = current_entry
+                while 0 current_entry == do
+                    st load64 (u64) = bucket_index
+                    if self.capacity bucket_index >= then
+                        none return
+                    fi
+                    self.buckets bucket_index 8 * + load64 = current_entry
+                    bucket_index 1 + st store64
+                done
+                current_entry (ptr) next_offset + load64 st 8 + store64
+                current_entry (ptr) key_size + self.entry_value
+                current_entry (ptr) self.entry_key
+                Pair Option::Some
+            }
+        } Iter = iterator
+        # SAFETY: Iter and this closure-backed iterator have the same runtime representation.
+        unsafe { iterator (ptr) (Iter[Pair[$K $V]]) }
     }
 
+    fn iter_keys self:$Map[K V] -> Iter[$K] {
+        size_of[K] size_of[V] + = next_offset
+        # SAFETY: The iterator state has two initialized pointer-sized fields.
+        unsafe {
+            16 alloc = st
+            0 st store64
+            0 st 8 + store64
+        }
+        Option[$K]::None = none
+        {
+            # SAFETY: The state and bucket links stay valid for the shared Map borrow.
+            unsafe {
+                st 8 + load64 = current_entry
+                while 0 current_entry == do
+                    st load64 (u64) = bucket_index
+                    if self.capacity bucket_index >= then
+                        none return
+                    fi
+                    self.buckets bucket_index 8 * + load64 = current_entry
+                    bucket_index 1 + st store64
+                done
+                current_entry (ptr) next_offset + load64 st 8 + store64
+                current_entry (ptr) self.entry_key Option::Some
+            }
+        } Iter = iterator
+        # SAFETY: Iter and this closure-backed iterator have the same runtime representation.
+        unsafe { iterator (ptr) (Iter[$K]) }
+    }
+}
+
+impl[K: Hashable + Clone, V] Map[K V] {
     fn keys self:$Map[K V] -> List[K] {
         List[K]::new = key_list
         for pair in self.iter do
-            pair.first key_list.push
+            pair.first K::clone key_list.push
         done
         key_list
+    }
+}
+
+impl[K: Hashable, V: Copy] Map[K V] {
+    fn get_copy self:$Map[K V] key:$K -> Option[V] {
+        if key self.get Option::Some(value) is then
+            value copy Option::Some
+        else
+            Option[V]::None
+        fi
+    }
+}
+
+impl[K: Hashable, V: Clone] Map[K V] {
+    fn get_cloned self:$Map[K V] key:$K -> Option[V] {
+        if key self.get Option::Some(value) is then
+            value V::clone Option::Some
+        else
+            Option[V]::None
+        fi
     }
 
     fn values self:$Map[K V] -> List[V] {
         List[V]::new = value_list
         for pair in self.iter do
-            pair.second value_list.push
+            pair.second V::clone value_list.push
         done
         value_list
     }
@@ -2254,7 +2530,7 @@ impl[K: Hashable + Clone, V: Clone] Map[K V]: Clone {
     fn clone self:$Map[K V] -> Map[K V] {
         Map[K V]::new = result
         for pair in self.iter do
-            pair.second.clone pair.first.clone result.set = result
+            pair.second V::clone pair.first K::clone result.set
         done
         result
     }
@@ -2277,28 +2553,18 @@ impl[K: Hashable] Set[K] {
 
     fn has self:$Set[K] key:$K -> bool { key self.map.has }
 
-    fn add self:mut$Set[K] key:mut$K -> Set[K] {
-        0 key self.map.set = self.map
-        self
-    }
+    fn add self:mut$Set[K] key:K { 0 key self.map.set }
 
-    fn remove self:mut$Set[K] key:$K -> Set[K] {
-        key self.map.delete = self.map
-        self
-    }
+    fn remove self:mut$Set[K] key:$K { key self.map.remove drop }
 
-    fn iter self:$Set[K] -> Iter[K] {
-        self.map.iter = entries
-        Option[K]::None = none
-        {
-            entries.next = entry
-            if entry.is_none then
-                none return
-            fi
-            entry.unwrap.first Option::Some
-        } Iter
+    fn iter self:$Set[K] -> Iter[$K] {
+        self.map.iter_keys = iterator
+        # SAFETY: Set iteration has the same key iterator representation as its backing Map.
+        unsafe { iterator (ptr) (Iter[$K]) }
     }
+}
 
+impl[K: Hashable + Clone] Set[K] {
     fn to_list self:$Set[K] -> List[K] { self.map.keys }
 }
 
@@ -2306,7 +2572,7 @@ impl[K: Hashable + Clone] Set[K]: Clone {
     fn clone self:$Set[K] -> Set[K] {
         Set[K]::new = result
         for key in self.iter do
-            key.clone result.add = result
+            key K::clone result.add
         done
         result
     }
@@ -2458,8 +2724,7 @@ impl[T: Display const N: u64] array[T N]: Display {
             if 0 element_index > then
                 ", " builder.append
             fi
-            # Format through a borrow so the array keeps owning its elements.
-            unsafe { self (ptr) element_index ARRAY_ELEMENT_WORD_SIZE * + load64 ($T) } = element
+            element_index self.nth = element
             element T::to_str builder.append
             1 += element_index
         done
@@ -2488,10 +2753,10 @@ impl[T: Display] List[T]: Display {
 
 impl[T: Display] Option[T]: Display {
     fn to_str self:$Option[T] -> str {
-        if self.is_some then
+        if self Option::Some(value) is then
             StringBuilder::new = option_builder
             "Some(" option_builder.append
-            self.unwrap T::to_str option_builder.append
+            value T::to_str option_builder.append
             ")" option_builder.append
             option_builder.build
             return
@@ -2503,12 +2768,14 @@ impl[T: Display] Option[T]: Display {
 impl[T: Display, E: Display] Result[T E]: Display {
     fn to_str self:$Result[T E] -> str {
         StringBuilder::new = result_builder
-        if self.is_ok then
+        if self Result::Ok(value) is then
             "Ok(" result_builder.append
-            self.unwrap T::to_str result_builder.append
-        else
+            value T::to_str result_builder.append
+        elif self Result::Error(error) is then
             "Error(" result_builder.append
-            self.unwrap_error E::to_str result_builder.append
+            error E::to_str result_builder.append
+        else
+            1 exit
         fi
         ")" result_builder.append
         result_builder.build
