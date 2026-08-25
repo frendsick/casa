@@ -98,30 +98,34 @@ numbers.sort
 |---|---|
 | `List[T]::new -> List[T]` | Empty list |
 | `from_array values:array[T N] -> List[T]` | List containing the array values |
-| `length self:List[T] -> u64` | Number of elements |
+| `length self:$List[T] -> u64` | Number of elements |
 | `is_empty self:$List[T] -> bool` | Whether the list has no elements |
-| `get self:$List[T] index:u64 -> T` | Element at a zero-based index |
+| `get self:$List[T] index:u64 -> $T` | Borrow of the element at a zero-based index |
 | `get_ref self:$List[T] index:u64 -> $T` | Borrow of the element at a zero-based index |
+| `get_mut self:mut$List[T] index:u64 -> mut$T` | Exclusive borrow of an element |
 | `slice self:$List[T] start:u64 stop:u64 -> Slice[T]` | Borrowed half-open range `[start, stop)` |
 | `to_array self:$List[T] -> Slice[T]` | Borrowed view of the complete list |
-| `set self:List[T] index:u64 value:T` | Replace an element |
-| `push self:List[T] value:T` | Add at the end |
-| `pop self:List[T] -> T` | Remove and return the last element |
-| `insert self:List[T] value:T index:u64` | Insert before `index` |
-| `swap_at self:List[T] first:u64 second:u64` | Exchange two elements |
-| `reverse self:List[T]` | Reverse in place |
+| `set self:mut$List[T] index:u64 value:T` | Replace and destroy an element |
+| `replace self:mut$List[T] index:u64 value:T -> T` | Replace and return an element |
+| `push self:mut$List[T] value:T` | Add at the end |
+| `pop self:mut$List[T] -> T` | Remove and return the last element |
+| `insert self:mut$List[T] value:T index:u64` | Insert before `index` |
+| `remove self:mut$List[T] index:u64 -> Option[T]` | Remove and return an element if present |
+| `swap_at self:mut$List[T] first:u64 second:u64` | Exchange two elements |
+| `reverse self:mut$List[T]` | Reverse in place |
 | `append self:mut$List[T] other:List[T]` | Move every element of `other` onto the end |
-| `clone self:List[T] -> List[T]` | Independent list when `T: Clone` |
+| `clone self:$List[T] -> List[T]` | Independent list when `T: Clone` |
 | `iter self:$List[T] -> Iter[$T]` | Iterator over borrows of the elements |
-| `sort self:List[T]` | Sort in place when `T` implements `Ord` |
-| `sort_by self:List[T] compare:fn[T T -> bool]` | Sort in place with a callback |
-| `sort_by_range self:List[T] low:u64 high:u64 compare:fn[T T -> bool]` | Sort an inclusive index range |
-| `join self:List[str] separator:str -> str` | Join a string list |
-| `contains self:List[str] needle:str -> bool` | Whether a string list contains `needle` |
+| `sort self:mut$List[T]` | Sort in place when `T` implements `Ord` |
+| `sort_by self:mut$List[T] compare:fn[$T $T -> bool]` | Sort in place with a callback |
+| `sort_by_range self:mut$List[T] low:u64 high:u64 compare:fn[$T $T -> bool]` | Sort an inclusive index range |
+| `join self:$List[str] separator:str -> str` | Join a string list |
+| `contains self:$List[str] needle:$str -> bool` | Whether a string list contains `needle` |
 
-`get_ref` and `iter` borrow the element in place, so the list stays its owner.
-`get` still returns an owned handle to storage the list also references; prefer
-`get_ref` for reads and use `.clone` when an owned value is needed.
+`get`, `get_ref`, and `iter` borrow elements in place, so the list stays their
+owner. Use `get_mut` for exclusive access. Use `.clone` when an owned value is
+needed. `set` destroys the replaced value. `replace`, `remove`, and `pop` move
+values out instead.
 
 Out-of-range indexing, slicing, insertion, and popping an empty list terminate
 the program.
@@ -135,7 +139,7 @@ reversing.
 
 ```casa
 Map[str i64]::new = scores
-10 "Ada" scores.set = scores
+10 "Ada" scores.set
 
 "Ada" scores.get match
     Option::Some(score) => score print
@@ -146,19 +150,22 @@ end
 | Method | Result or action |
 |---|---|
 | `Map[K V]::new -> Map[K V]` | Empty map |
-| `length self:Map[K V] -> u64` | Number of entries |
+| `length self:$Map[K V] -> u64` | Number of entries |
 | `is_empty self:$Map[K V] -> bool` | Whether the map has no entries |
-| `get self:Map[K V] key:K -> Option[V]` | Value for a key, if present |
-| `has self:Map[K V] key:K -> bool` | Whether a key exists |
-| `set self:Map[K V] key:K value:V -> Map[K V]` | Insert or replace an entry |
-| `delete self:Map[K V] key:K -> Map[K V]` | Remove an entry if present |
-| `iter self:Map[K V] -> Iter[Pair[K V]]` | Iterator over key-value pairs |
-| `keys self:Map[K V] -> List[K]` | List of keys |
-| `values self:Map[K V] -> List[V]` | List of values |
-| `clone self:Map[K V] -> Map[K V]` | Independent map when `K: Clone` and `V: Clone` |
+| `get self:$Map[K V] key:$K -> Option[$V]` | Borrow of a value, if present |
+| `get_mut self:mut$Map[K V] key:$K -> Option[mut$V]` | Exclusive borrow of a value, if present |
+| `get_copy self:$Map[K V] key:$K -> Option[V]` | Owned value when `V: Copy` |
+| `get_cloned self:$Map[K V] key:$K -> Option[V]` | Owned value when `V: Clone` |
+| `has self:$Map[K V] key:$K -> bool` | Whether a key exists |
+| `set self:mut$Map[K V] key:K value:V` | Insert or replace an entry |
+| `remove self:mut$Map[K V] key:$K -> Option[V]` | Remove and return a value, if present |
+| `iter self:$Map[K V] -> Iter[Pair[$K $V]]` | Iterator over borrowed key-value pairs |
+| `keys self:$Map[K V] -> List[K]` | Cloned keys when `K: Clone` |
+| `values self:$Map[K V] -> List[V]` | Cloned values when `V: Clone` |
+| `clone self:$Map[K V] -> Map[K V]` | Independent map when `K: Clone` and `V: Clone` |
 
-Rebind the result of `set` and `delete`, as shown above. Iteration order is not
-specified.
+`get` and `iter` keep the map as owner. `set` destroys a replaced value.
+`remove` moves a value out. Iteration order is not specified.
 
 See [`examples/hash_map.casa`](../examples/hash_map.casa) for a runnable map
 example.
@@ -169,24 +176,24 @@ example.
 
 ```casa
 Set[str]::new = names
-"Ada" names.add = names
-"Grace" names.add = names
+"Ada" names.add
+"Grace" names.add
 "Ada" names.has print    # true
 ```
 
 | Method | Result or action |
 |---|---|
 | `Set[K]::new -> Set[K]` | Empty set |
-| `length self:Set[K] -> u64` | Number of values |
+| `length self:$Set[K] -> u64` | Number of values |
 | `is_empty self:$Set[K] -> bool` | Whether the set has no values |
-| `has self:Set[K] key:K -> bool` | Whether a value exists |
-| `add self:Set[K] key:K -> Set[K]` | Add a value |
-| `remove self:Set[K] key:K -> Set[K]` | Remove a value if present |
-| `iter self:Set[K] -> Iter[K]` | Iterator over the values |
-| `to_list self:Set[K] -> List[K]` | Values in unspecified order |
-| `clone self:Set[K] -> Set[K]` | Independent set when `K: Clone` |
+| `has self:$Set[K] key:$K -> bool` | Whether a value exists |
+| `add self:mut$Set[K] key:K` | Add a value |
+| `remove self:mut$Set[K] key:$K` | Remove a value if present |
+| `iter self:$Set[K] -> Iter[$K]` | Iterator over borrowed values |
+| `to_list self:$Set[K] -> List[K]` | Cloned values in unspecified order when `K: Clone` |
+| `clone self:$Set[K] -> Set[K]` | Independent set when `K: Clone` |
 
-Rebind the result of `add` and `remove`.
+`iter` keeps the set as owner. `to_list` and `clone` require `K: Clone`.
 
 ## String builders
 
@@ -219,15 +226,14 @@ builder.build print
 | `List[T]` | `Iter[$T]` |
 | `Slice[T]` | `Iter[$T]` |
 | `str` | `Iter[char]` |
-| `Map[K V]` | `Iter[Pair[K V]]` |
-| `Set[K]` | `Iter[K]` |
+| `Map[K V]` | `Iter[Pair[$K $V]]` |
+| `Set[K]` | `Iter[$K]` |
 
 A `for` loop consumes the iterator. Create another iterator to traverse the
 source again.
 
-`array[T N]`, `List[T]`, and `Slice[T]` yield borrows of their elements, because
-the source keeps owning them. A loop variable bound from one of these iterators
-is a `$T`; `.clone` it when an owned value is needed.
+Arrays, lists, slices, maps, and sets yield borrows because the source keeps
+owning its elements. Clone a yielded value when an owned value is needed.
 
 ## Lazy iterator operations
 
@@ -277,7 +283,7 @@ them. Only `collect` runs the pipeline:
 2 [1, 2, 3, 4, 5, 6, 7] (array[i64 7]).iter.skip = rest
 4 rest.take = window
 { 2 % 0 == } window.filter = even
-{ 2 * } even.map.collect = doubled
+{ = value:$i64 value copy 2 * } even.map.collect = doubled
 ```
 
 See [`examples/iterator_combinators.casa`](../examples/iterator_combinators.casa)
