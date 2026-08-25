@@ -3224,6 +3224,21 @@ fn builtin_type_layout builtin:$BuiltinType -> TypeLayout {
         _ => 8 8 TypeLayout
     end
 }
+# Aggregate fields keep the language's one-word indirect representation for
+# nested aggregates. Generic fields also use one word because generic functions
+# are shared across all instantiations.
+
+fn aggregate_field_layout typ:$Type store:$SymbolStore visiting:mut$Set[str] -> Option[TypeLayout] {
+    if typ.has_unresolved_type_var then
+        8 8 TypeLayout Option::Some return
+    fi
+    if store typ type_value_representation Option::Some(representation) is then
+        if VALUE_REPR_INDIRECT representation == then
+            8 8 TypeLayout Option::Some return
+        fi
+    fi
+    visiting store typ type_layout
+}
 
 fn struct_type_layout
     typ:$Type
@@ -3231,12 +3246,10 @@ fn struct_type_layout
     store:$SymbolStore
     visiting:mut$Set[str]
 -> Option[TypeLayout] {
-    casa_struct.type_vars typ aggregate_type_bindings = substitutions
     0 (u64) = size
     1 (u64) = alignment
     for member in casa_struct.members.iter do
-        substitutions member.typ.substitute_t = member_type
-        if visiting store member_type type_layout Option::Some(member_layout) is then
+        if visiting store member.typ aggregate_field_layout Option::Some(member_layout) is then
             member_layout.alignment size align_up = size
             member_layout.size += size
             if alignment member_layout.alignment > then
@@ -3259,19 +3272,12 @@ fn enum_type_layout
     store:$SymbolStore
     visiting:mut$Set[str]
 -> Option[TypeLayout] {
-    casa_enum.type_vars typ aggregate_type_bindings = substitutions
     8 (u64) = size
     8 (u64) = alignment
-    for
-        payload_types in casa_enum
-            .variant_types
-            .values
-            .iter
-    do
+    for pair in casa_enum.variant_types.iter do
         8 (u64) = variant_size
-        for payload_type in payload_types.iter do
-            substitutions payload_type.substitute_t = resolved_payload
-            if visiting store resolved_payload type_layout Option::Some(payload_layout) is then
+        for payload_type in pair.second.iter do
+            if visiting store payload_type aggregate_field_layout Option::Some(payload_layout) is then
                 payload_layout.alignment variant_size align_up = variant_size
                 payload_layout.size += variant_size
                 if alignment payload_layout.alignment > then
@@ -3287,6 +3293,79 @@ fn enum_type_layout
     done
     alignment size align_up = size
     alignment size TypeLayout Option::Some
+}
+
+fn struct_member_offset casa_struct:$CasaStruct member_index:u64 store:$SymbolStore -> Option[u64] {
+    Set[str]::new = visiting
+    0 (u64) = offset
+    0 (u64) = index
+    while index casa_struct.members.length > do
+        index casa_struct.members.get = member
+        if visiting store member.typ aggregate_field_layout Option::Some(layout) is then
+            layout.alignment offset align_up = offset
+            if index member_index == then
+                offset Option::Some return
+            fi
+            layout.size += offset
+        else
+            Option[u64]::None return
+        fi
+        1 += index
+    done
+    Option[u64]::None
+}
+
+fn next_struct_member_offset
+    prior_members:$List[Member]
+    member_type:$Type
+    store:$SymbolStore
+-> Option[u64] {
+    Set[str]::new = visiting
+    0 (u64) = offset
+    for member in prior_members.iter do
+        8 8 TypeLayout = layout
+        if visiting store member.typ aggregate_field_layout Option::Some(found_layout) is then
+            found_layout = layout
+        fi
+        layout.alignment offset align_up layout.size + = offset
+    done
+    # An imported or forward aggregate can be absent while its accessors are
+    # parsed. Aggregate fields always use one indirect word in that case.
+    8 8 TypeLayout = member_layout
+    if visiting store member_type aggregate_field_layout Option::Some(found_member_layout) is then
+        found_member_layout = member_layout
+    fi
+    member_layout.alignment offset align_up Option::Some
+}
+
+fn enum_payload_offset
+    casa_enum:$CasaEnum
+    variant_name:$str
+    payload_index:u64
+    store:$SymbolStore
+-> Option[u64] {
+    variant_name casa_enum.variant_types.get = payload_types_opt
+    if payload_types_opt.is_none then
+        Option[u64]::None return
+    fi
+    payload_types_opt.unwrap = payload_types
+    Set[str]::new = visiting
+    8 (u64) = offset
+    0 (u64) = index
+    while index payload_types.length > do
+        index payload_types.get = payload_type
+        if visiting store payload_type aggregate_field_layout Option::Some(layout) is then
+            layout.alignment offset align_up = offset
+            if index payload_index == then
+                offset Option::Some return
+            fi
+            layout.size += offset
+        else
+            Option[u64]::None return
+        fi
+        1 += index
+    done
+    Option[u64]::None
 }
 
 fn type_layout typ:$Type store:$SymbolStore visiting:mut$Set[str] -> Option[TypeLayout] {
@@ -3324,14 +3403,14 @@ fn type_layout typ:$Type store:$SymbolStore visiting:mut$Set[str] -> Option[Type
             if type_name visiting.has then
                 8 8 TypeLayout Option::Some return
             fi
-            type_name.clone visiting.add drop
+            type_name.clone visiting.add
             Option[TypeLayout]::None = result
             if generic.base store.structs.get Option::Some(casa_struct) is then
                 visiting store casa_struct typ struct_type_layout = result
             elif generic.base store.enums.get Option::Some(casa_enum) is then
                 visiting store casa_enum typ enum_type_layout = result
             fi
-            type_name visiting.remove drop
+            type_name visiting.remove
             result
         }
         _ => {
