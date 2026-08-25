@@ -479,6 +479,7 @@ enum BranchFrame {
 impl BranchFrame {
     fn as_if_mut self:mut$BranchFrame -> Option[mut$IfContext] {
         if self BranchFrame::BranchIf is then
+            # SAFETY: The variant check proves the payload is an initialized IfContext.
             unsafe { self (ptr) size_of[u64] + load64 (ptr) ptr::as_mut[IfContext] Option::Some }
         else
             Option[mut$IfContext]::None
@@ -487,6 +488,7 @@ impl BranchFrame {
 
     fn as_while_mut self:mut$BranchFrame -> Option[mut$WhileContext] {
         if self BranchFrame::BranchWhile is then
+            # SAFETY: The variant check proves the payload is an initialized WhileContext.
             unsafe { self (ptr) size_of[u64] + load64 (ptr) ptr::as_mut[WhileContext] Option::Some }
         else
             Option[mut$WhileContext]::None
@@ -495,6 +497,7 @@ impl BranchFrame {
 
     fn as_match_mut self:mut$BranchFrame -> Option[mut$MatchContext] {
         if self BranchFrame::BranchMatch is then
+            # SAFETY: The variant check proves the payload is an initialized MatchContext.
             unsafe { self (ptr) size_of[u64] + load64 (ptr) ptr::as_mut[MatchContext] Option::Some }
         else
             Option[mut$MatchContext]::None
@@ -642,9 +645,9 @@ impl TypeChecker {
         TypeChecker
     }
 
-    fn assign_op_id tc:mut$TypeChecker op:mut$Op {
-        tc.store.next_op_id = op.id
-        1 += tc.store.next_op_id
+    fn assign_op_id self:mut$TypeChecker op:mut$Op {
+        self.store.next_op_id = op.id
+        1 += self.store.next_op_id
     }
 }
 
@@ -4670,16 +4673,59 @@ fn bounds_imply_trait bounds:mut$List[TraitBound] target:mut$Type store:$SymbolS
     false
 }
 
+fn caller_forwards_trait_bound
+    function_opt:mut$Option[Function]
+    concrete_name:$str
+    trait_type:$Type
+    store:$SymbolStore
+-> bool {
+    if function_opt Option::Some(function) is then
+        if
+            concrete_name function
+                .stack_effect
+                .trait_bounds
+                .get Option::Some(caller_bounds) is
+        then
+            if store trait_type caller_bounds bounds_imply_trait then
+                true return
+            fi
+        fi
+    fi
+    false
+}
+
+fn find_forwarded_layout_argument
+    function_opt:mut$Option[Function]
+    parameter_name:$str
+-> Option[OpValue] {
+    if function_opt Option::Some(caller) is then
+        for
+            caller_parameter in caller
+                .stack_effect
+                .parameters
+                .iter
+        do
+            if parameter_name caller_parameter.name == then
+                parameter_name.clone OpValue::PushVar Option::Some return
+            fi
+        done
+        if parameter_name caller.captures variable_list_contains then
+            parameter_name.clone OpValue::PushCapture Option::Some return
+        fi
+    fi
+    Option[OpValue]::None
+}
+
 impl TypeChecker {
-    fn ensure_function_clone_method tc:mut$TypeChecker typ:mut$Type location:mut$Location {
+    fn ensure_function_clone_method self:mut$TypeChecker typ:mut$Type location:mut$Location {
         if typ Type::Function(_) is ! then
             return
         fi
         if
-            "Copy" tc
+            "Copy" self
                 .store
                 .traits
-                .has ! "Clone" tc
+                .has ! "Clone" self
                 .store
                 .traits
                 .has ! ||
@@ -4688,13 +4734,13 @@ impl TypeChecker {
         fi
         "Copy" GenericType::new Type::Generic = copy_type
         "Clone" GenericType::new Type::Generic = clone_trait_type
-        if tc.store clone_trait_type copy_type trait_type_implies ! then
+        if self.store clone_trait_type copy_type trait_type_implies ! then
             return
         fi
 
         "clone" typ.make_method_key = function_name
         if
-            function_name tc
+            function_name self
                 .store
                 .functions
                 .has
@@ -4715,14 +4761,14 @@ impl TypeChecker {
         List[Variable]::new = variables
         typ clone_type "self" Variable variables.push
         variables function Function::set_variables
-        function function_name tc
+        function function_name self
             .store
             .functions
             .set
     }
 
     fn ensure_layout_adapter
-        tc:mut$TypeChecker
+        self:mut$TypeChecker
         target_name:$str
         exposed_effect:$StackEffect
         concrete_type:$Type
@@ -4731,7 +4777,7 @@ impl TypeChecker {
     -> str {
         f"__layout_adapter_{target_name}_{concrete_type.format}_{method_name}" = adapter_name
         if
-            adapter_name tc
+            adapter_name self
                 .store
                 .functions
                 .has
@@ -4758,11 +4804,11 @@ impl TypeChecker {
         Function::with_stack_effect = adapter
         adapter_variables adapter Function::set_variables
         true adapter Function::set_is_used
-        adapter adapter_name.clone tc
+        adapter adapter_name.clone self
             .store
             .functions
             .set
-        tc.diagnostics tc.store adapter_name ensure_typechecked drop
+        self.diagnostics self.store adapter_name ensure_typechecked drop
         adapter_name
     }
 
@@ -4829,6 +4875,72 @@ impl TypeChecker {
         fi
         effect.type_vars actual pattern bindings bind_generic_params_standalone = bindings
         actual pattern bindings bind_standalone_constant_parameters
+    }
+
+    fn inject_trait_method_pointer
+        self:mut$TypeChecker
+        method:$TraitMethod
+        concrete_type:$Type
+        concrete_name:$str
+        seen_methods:mut$Set[str]
+        ops:mut$List[Op]
+        insert_pos:u64
+        inserted:u64
+        location:mut$Location
+        forwarding:bool
+    -> u64 u64 {
+        if 0 method.default_ops.length != method.name seen_methods.has || then
+            inserted insert_pos return
+        fi
+        method.name seen_methods.add
+        if "clone" method.name == then
+            location concrete_type self.ensure_function_clone_method
+        fi
+        if forwarding then
+            f"__trait_{concrete_name}_{method.name}" = hidden_variable
+            location.clone hidden_variable OpValue::PushVar Op::new = push_op
+            insert_pos push_op ops.insert
+            1 += insert_pos
+            1 += inserted
+            concrete_type method.stack_effect resolve_trait_stack_effect = forwarded_effect
+            forwarded_effect stack_effect_to_function_type self.stack_push_type
+            inserted insert_pos return
+        fi
+
+        self.store Option[Function]::None concrete_type method.name resolve_method_semantics
+        = method_semantics_opt
+        if method_semantics_opt Option::Some(method_semantics) is then
+            method_semantics.function_name = function_name
+            if
+                function_name self
+                    .store
+                    .functions
+                    .get_mut Option::Some(stored_function) is
+            then
+                true stored_function Function::set_is_used
+            fi
+            self.diagnostics self.store function_name ensure_typechecked = checked_function_opt
+            if checked_function_opt Option::Some(checked_function) is then
+                concrete_type method.stack_effect resolve_trait_stack_effect = callable_effect
+                if checked_function.stack_effect needs_hidden_arguments then
+                    location method.name concrete_type callable_effect function_name self.ensure_layout_adapter
+                    = function_name
+                fi
+                location.clone function_name OpValue::FnPush Op::new = push_op
+                insert_pos push_op ops.insert
+                1 += insert_pos
+                1 += inserted
+                callable_effect stack_effect_to_function_type self.stack_push_type
+                inserted insert_pos return
+            else
+                location f"Function `{function_name}` required by trait method `{method.name}` not found"
+                ErrorKind::TypeMismatch self.diagnostics.record_error
+                inserted insert_pos return
+            fi
+        fi
+        location f"Function required by trait method `{method.name}` not found"
+        ErrorKind::TypeMismatch self.diagnostics.record_error
+        inserted insert_pos
     }
 
     fn inject_trait_fn_ptrs
@@ -4959,23 +5071,14 @@ impl TypeChecker {
                 fi
                 trait_def_opt.unwrap.clone = trait_def
 
-                false = is_forwarding
-                if function_opt Option::Some(function) is then
-                    concrete function
-                        .stack_effect
-                        .trait_bounds
-                        .get = caller_bounds_opt
-                    if caller_bounds_opt Option::Some(caller_bounds) is then
-                        if tc.store resolved_trait_type caller_bounds bounds_imply_trait then
-                            true = is_forwarding
-                        fi
-                    fi
-                fi
+                tc.store resolved_trait_type concrete function_opt caller_forwards_trait_bound
+                = is_forwarding
 
-                if is_forwarding ! then
-                    if tc.diagnostics tc.store function_opt resolved_trait_type concrete_t type_satisfies_trait ! then
-                        location f"Type `{concrete}` does not satisfy trait `{trait_name}`" ErrorKind::TypeMismatch tc.diagnostics.record_error
-                    fi
+                if
+                    is_forwarding ! tc.diagnostics tc.store function_opt resolved_trait_type concrete_t
+                    type_satisfies_trait ! &&
+                then
+                    location f"Type `{concrete}` does not satisfy trait `{trait_name}`" ErrorKind::TypeMismatch tc.diagnostics.record_error
                 fi
 
                 trait_def tc.store collect_trait_methods = expanded_methods
@@ -4983,56 +5086,8 @@ impl TypeChecker {
                 while 0 method_index != do
                     1 -= method_index
                     method_index expanded_methods.get = method
-                    if
-                        0 method.default_ops.length ==
-                        method.name seen_methods.has ! &&
-                    then
-                        method.name seen_methods.add
-                        if "clone" method.name == then
-                            location concrete_t tc.ensure_function_clone_method
-                        fi
-                        if is_forwarding then
-                            f"__trait_{concrete}_{method TraitMethod::name}" = hidden_var
-                            location.clone hidden_var OpValue::PushVar Op::new = push_op
-                            insert_pos push_op ops.insert
-                            1 += insert_pos
-                            1 += inserted
-                            concrete_t method TraitMethod::stack_effect resolve_trait_stack_effect = forward_stack_effect
-                            forward_stack_effect stack_effect_to_function_type tc.stack_push_type
-                        else
-                            tc.store Option[Function]::None concrete_t method.name
-                            resolve_method_semantics = method_semantics_opt
-                            Option[CheckedFunction]::None = global_fn_opt
-                            "" = fn_name
-                            if method_semantics_opt Option::Some(method_semantics) is then
-                                method_semantics.function_name = fn_name
-                                if
-                                    fn_name tc
-                                        .store
-                                        .functions
-                                        .get_mut Option::Some(stored_global_fn) is
-                                then
-                                    true stored_global_fn Function::set_is_used
-                                fi
-                                tc.diagnostics tc.store fn_name ensure_typechecked = global_fn_opt
-                            fi
-                            if global_fn_opt.is_some then
-                                global_fn_opt.unwrap = global_fn
-                                concrete_t method TraitMethod::stack_effect
-                                resolve_trait_stack_effect = callable_effect
-                                if global_fn.stack_effect needs_hidden_arguments then
-                                    location method.name concrete_t callable_effect fn_name tc.ensure_layout_adapter = fn_name
-                                fi
-                                location.clone fn_name OpValue::FnPush Op::new = push_op
-                                insert_pos push_op ops.insert
-                                1 += insert_pos
-                                1 += inserted
-                                callable_effect stack_effect_to_function_type tc.stack_push_type
-                            else
-                                location f"Function `{fn_name}` required by trait `{trait_name}` not found" ErrorKind::TypeMismatch tc.diagnostics.record_error
-                            fi
-                        fi
-                    fi
+                    is_forwarding location inserted insert_pos ops seen_methods concrete concrete_t method
+                    tc.inject_trait_method_pointer = insert_pos = inserted
                 done
             done
         done
@@ -5061,26 +5116,7 @@ impl TypeChecker {
                     resolved_type make_hidden_repr_parameter_name
                 fi
                 = forwarded_name
-                Option[OpValue]::None = forward_value
-                if function_opt Option::Some(caller) is then
-                    for
-                        caller_parameter in caller
-                            .stack_effect
-                            .parameters
-                            .iter
-                    do
-                        if forwarded_name caller_parameter.name == then
-                            forwarded_name.clone OpValue::PushVar Option::Some = forward_value
-                            break
-                        fi
-                    done
-                    if
-                        forward_value.is_none
-                        forwarded_name caller.captures variable_list_contains &&
-                    then
-                        forwarded_name.clone OpValue::PushCapture Option::Some = forward_value
-                    fi
-                fi
+                forwarded_name function_opt find_forwarded_layout_argument = forward_value
                 if forward_value Option::Some(value) is then
                     location.clone value Op::new Option::Some = layout_operation
                 else
