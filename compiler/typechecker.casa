@@ -792,19 +792,22 @@ fn resolve_default_literals ops:mut$List[Op] diagnostics:mut$Diagnostics {
         1 += default_op_index
         if op.value OpValue::PushInt is then
             if op.type_hint Option::Some(target) is then
-                diagnostics target op.resolve_literal drop
+                target clone_type = resolved_target
+                diagnostics resolved_target op.resolve_literal drop
             else
                 diagnostics TYPE_I64_T op.resolve_literal drop
             fi
         elif op.value OpValue::PushFloat is then
             if op.type_hint Option::Some(target) is then
-                diagnostics target op.resolve_literal drop
+                target clone_type = resolved_target
+                diagnostics resolved_target op.resolve_literal drop
             else
                 diagnostics TYPE_F64_T op.resolve_literal drop
             fi
         elif op.value OpValue::PushArray(items) is then
             if op.type_hint Option::Some(target) is then
-                diagnostics target op.resolve_literal drop
+                target clone_type = resolved_target
+                diagnostics resolved_target op.resolve_literal drop
             else
                 diagnostics items resolve_default_literals
             fi
@@ -820,7 +823,15 @@ fn apply_resolved_literal_hints ops:mut$List[Op] resolutions:$Map[i64 Type] {
     for op in ops.iter do
         if 0 op.id != then
             if op.id resolutions.get Option::Some(target) is then
-                target clone_type Option::Some op Op::set_type_hint
+                target clone_type = resolved_target
+                if op.value OpValue::PushArray(items) is then
+                    if target Type::Generic(generic) is then
+                        if ARRAY_TYPE generic.base == 1 generic.params.length == && then
+                            items.length 0 generic.params.get clone_type make_array_type = resolved_target
+                        fi
+                    fi
+                fi
+                resolved_target Option::Some op Op::set_type_hint
             fi
         fi
         if op.value OpValue::PushArray(items) is then
@@ -1432,7 +1443,7 @@ impl TypeChecker {
             value.type_value resolve_numeric_literal_default = resolved
             tc.literal_resolutions tc.diagnostics resolved value.resolve_literals drop
             false value.origins clone_origins value.source value.binding value.capability value.place
-            List[Op]::new value.origin
+            List[LiteralRef]::new value.origin
             resolved clone_type TypedValue top tc
                 .stack
                 .values
@@ -1787,6 +1798,20 @@ impl TypeChecker {
         existing.unwrap = bound
         if bound.has_unresolved_type_var actual.has_unresolved_type_var ! && then
             actual clone_type type_var.clone bindings.set
+            bindings return
+        fi
+        if
+            bound.is_integer_literal_t actual.is_integer_type_t &&
+            bound.is_float_literal_t actual.is_float_type_t && ||
+        then
+            actual clone_type type_var.clone bindings.set
+            bindings return
+        fi
+        if
+            actual.is_integer_literal_t bound.is_integer_type_t &&
+            actual.is_float_literal_t bound.is_float_type_t && ||
+        then
+            bound type_var.clone bindings.set
             bindings return
         fi
         actual.is_unknown_placeholder = actual_unknown
@@ -4051,6 +4076,7 @@ impl TypeChecker {
                 else
                     tc.store if_after tc.stack.unify_types = unified
                     if 0 unified.length != if_after if_before.equals ! && then
+                        tc.stack if_after.merge_literals
                         if_after.mark_literals_runtime
                         unified if_after.set_types
                         if_before tc.stack.restore
@@ -4092,6 +4118,7 @@ impl TypeChecker {
                 fi
                 tc.store if_after tc.stack.unify_types = unified
                 if 0 unified.length != if_ctx IfContext::default_present && then
+                    tc.stack if_after.merge_literals
                     if_after.mark_literals_runtime
                     if_after tc.stack.restore
                     unified tc.stack.set_types
@@ -4099,6 +4126,7 @@ impl TypeChecker {
                 fi
                 tc.store if_before tc.stack.unify_types = unified_before
                 if 0 unified_before.length != if_ctx IfContext::default_present ! && then
+                    tc.stack if_before.merge_literals
                     if_before tc.stack.restore
                     unified_before tc.stack.set_types
                     return
@@ -4829,6 +4857,20 @@ impl TypeChecker {
             actual clone_type name.clone bindings.set
             bindings return
         fi
+        if
+            existing.is_integer_literal_t actual.is_integer_type_t &&
+            existing.is_float_literal_t actual.is_float_type_t && ||
+        then
+            actual clone_type name.clone bindings.set
+            bindings return
+        fi
+        if
+            actual.is_integer_literal_t existing.is_integer_type_t &&
+            actual.is_float_literal_t existing.is_float_type_t && ||
+        then
+            existing name.clone bindings.set
+            bindings return
+        fi
         if existing actual.eq ! then
             location f"Type variable `{name}` bound to `{existing.format}` but got `{actual.format}`" ErrorKind::TypeMismatch tc.diagnostics.record_error
         fi
@@ -4863,7 +4905,7 @@ impl TypeChecker {
                     actual resolve_numeric_literal_default = fallback
                     existing_option fallback value tc.resolve_type_var_literals = actual
                     false value.origins clone_origins value.source value.binding value.capability value.place
-                    List[Op]::new value.origin
+                    List[LiteralRef]::new value.origin
                     actual clone_type TypedValue
                     stack_index tc
                         .stack
@@ -6014,6 +6056,7 @@ impl TypeChecker {
                     then
                         tc.store match_after tc.stack.unify_types = last_unified
                         if 0 last_unified.length != match_after match_before.equals ! && then
+                            tc.stack match_after.merge_literals
                             match_after.mark_literals_runtime
                             last_unified match_after.set_types
                         elif match_after match_before.equals then
@@ -6116,6 +6159,7 @@ impl TypeChecker {
                 fi
                 tc.store final_after tc.stack.unify_types = unified
                 if 0 unified.length != then
+                    tc.stack final_after.merge_literals
                     final_after.mark_literals_runtime
                     final_after tc.stack.restore
                     unified tc.stack.set_types
@@ -6443,9 +6487,9 @@ impl TypeChecker {
         receiver tc.stack_push_type
         semantics.method_name receiver.make_method_key = method_key
         function_opt Option[Type]::None method_key semantics.stack_effect tc.apply_stack_effect
-        semantics.function_name OpValue::PushVar op Op::set_value
-        op.location OpValue::FnExec Op::new = exec_op
-        op_index exec_op ops.insert
+        op.location.clone semantics.function_name OpValue::PushVar Op::new = push_op
+        op_index 1 - push_op ops.insert
+        OpValue::FnExec op Op::set_value
         op_index 1 +
     }
 }
@@ -6858,8 +6902,10 @@ fn prepare_generic_size_queries function:mut$Function {
     do
         return_type clone_type signature_types.push
     done
-    for signature_type in signature_types.iter do
-        signature_type clone_type = parameter_type
+    0 (u64) = signature_index
+    while signature_index signature_types.length > do
+        signature_index signature_types.get clone_type = parameter_type
+        1 += signature_index
         if parameter_type.borrow_target Option::Some(target) is then
             target = parameter_type
         fi
@@ -6871,6 +6917,9 @@ fn prepare_generic_size_queries function:mut$Function {
             storage_type.base "Set" == ||
             = carries_inline_values
             if carries_inline_values ! then
+                for nested_type in storage_type.params.iter do
+                    nested_type clone_type signature_types.push
+                done
                 continue
             fi
             storage_type.params.length = element_count
@@ -7437,7 +7486,7 @@ impl TypeChecker {
                 checker.literal_resolutions checker.diagnostics declared_return return_value.resolve_literals drop
                 false return_value.origins clone_origins return_value.source return_value.binding
                 return_value.capability return_value.place
-                List[Op]::new return_value.origin
+                List[LiteralRef]::new return_value.origin
                 declared_return TypedValue
                 return_index checker
                     .stack
