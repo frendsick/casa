@@ -1,4 +1,6 @@
 # Copy is a validated standard marker trait
+status: amended by [ADR-0150](0150-shared-borrow-duplication-is-not-copy-conformance.md)
+related issue: #314
 
 `Copy` is declared as a methodless standard-library marker trait. Its minimum declaration is:
 

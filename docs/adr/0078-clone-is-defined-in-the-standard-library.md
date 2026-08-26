@@ -1,5 +1,5 @@
 # Clone is defined in the standard library
-status: implicit Clone body consequence narrowed by ADR-0084 and ADR-0092
+status: amended by [ADR-0084](0084-standard-copy-extends-clone.md) and [ADR-0092](0092-copy-provided-clone-composes-field-clone.md)
 
 `Clone` is declared as an ordinary trait in `std` rather than injected by the compiler:
 

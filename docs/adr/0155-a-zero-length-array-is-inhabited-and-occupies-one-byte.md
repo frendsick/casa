@@ -1,4 +1,6 @@
 # A zero-length array is inhabited and occupies one byte
+status: amended by [ADR-0156](0156-owned-values-have-independent-behavior-not-address-identity.md)
+related issue: #439
 
 `array[T 0]` is an ordinary inhabited type. It has exactly one value, the empty
 sequence, and ADR-0132's one-byte minimum applies to it without an exception:
@@ -8,12 +10,12 @@ size_of[array[T N]] # N size_of[T] * for N > 0
 size_of[array[T 0]] # 1
 ```
 
-The storage holds no elements. The byte exists so the value has an address of
-its own, so two zero-length arrays are distinct places, and so a generic
-container computing `capacity size_of[T] *` gets a nonzero stride for an empty
-array element the same way it does for an empty struct. Array storage is
-word-granular today, so the compiler reserves a word rather than a byte; that is
-layout, not contract (ADR-0127).
+The storage holds no elements. The byte gives a materialized value a nonzero
+layout and gives an empty array element a nonzero stride when a generic container
+computes `capacity size_of[T] *`. Array storage is word-granular today, so the
+compiler reserves a word rather than a byte. That is layout, not contract
+(ADR-0127). ADR-0156 makes addresses across independently owned values a
+representation detail.
 
 This supersedes the line in ADR-0152 that gave `array[T 0]` size zero.
 
@@ -35,9 +37,8 @@ This supersedes the line in ADR-0152 that gave `array[T 0]` size zero.
 
 - `size_of[array[T N]]` is `N size_of[T] *` for every `N > 0`, and 1 for `N`
   zero.
-- `[]` allocates and yields a distinct address rather than a null or shared one.
-- A static empty array literal still reserves storage, so its label does not
-  collide with whatever follows it.
+- A materialized `[]` follows the one-byte layout whether its storage is inline,
+  static, or shared.
 - Destruction of an `array[T 0]` visits no elements, which the length in the
   type already states.
 - No compiler or library path needs a zero-sized-value branch, which is what

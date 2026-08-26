@@ -1,5 +1,5 @@
 ---
-status: superseded by ADR-0020
+status: superseded by [ADR-0020](0020-array-literals-have-owned-value-semantics.md)
 ---
 
 # Static emission for array literals

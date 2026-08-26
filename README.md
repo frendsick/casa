@@ -51,7 +51,8 @@ Common compiler options:
 | `-L`, `--library-path` | Add a module search directory |
 | `-r`, `--run` | Run the program after compilation |
 | `--keep-asm` | Keep the generated assembly file |
-| `-v`, `--verbose` | Print compiler progress |
+| `-v`, `--version` | Print the compiler version |
+| `--verbose` | Print compiler progress |
 
 ## Learn Casa
 

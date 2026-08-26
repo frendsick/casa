@@ -1,4 +1,6 @@
 # Copy is methodless
+status: amended by [ADR-0150](0150-shared-borrow-duplication-is-not-copy-conformance.md)
+related issue: #314
 
 `Copy` is Casa's methodless standard marker for implicit duplication: copying always duplicates representation bits and never invokes user code. It enables implicit reuse of copied bindings plus `dup`, the copied operand of `over`, and ADR-0136's `copy` intrinsic for producing owned `T` from `$T`. Built-in scalars, shared borrows, and named function references automatically implement Copy; user-defined structs and enums opt in with `derives Copy` or an equivalent validated empty implementation.
 

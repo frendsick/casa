@@ -37,6 +37,7 @@ After the implementation is stable:
 
   ```
   tests/test_compiler.sh
+  tests/test_cli.sh
   tests/test_examples.sh
   tests/test_bootstrap.sh
   tests/test_formatter.sh
@@ -81,6 +82,7 @@ fixed-point tests.
 | Script | What it tests |
 |---|---|
 | `test_compiler.sh` | Unit tests (`tests/compiler/test_*.casa`) and error fixtures (`tests/compiler/errors/*.casa`) |
+| `test_cli.sh` | Compiler version and progress flags |
 | `test_examples.sh` | Example programs (`examples/*.casa`) against expected output |
 | `test_formatter.sh` | Golden file formatting, idempotency sweep, safety checks |
 | `test_bootstrap.sh` | Self-compilation (3-stage) and fixed-point verification |
