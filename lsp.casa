@@ -20,7 +20,7 @@ import "compiler/document.casa"
 # LSP structs
 # ============================================================================
 
-struct LspRange {
+struct LspRange derives Copy {
     start_line: i64
     start_col:  i64
     end_line:   i64
@@ -65,6 +65,22 @@ struct HoverContent {
 struct CompileResult {
     document: AnalyzedDocument
     analysis: AnalysisResult
+}
+
+impl CompileResult {
+    fn into_parts self:CompileResult -> AnalyzedDocument AnalysisResult {
+        self match
+            CompileResult { document: document analysis: analysis } => document analysis
+        end
+    }
+}
+
+impl LspLocation {
+    fn into_parts self:LspLocation -> str LspRange {
+        self match
+            LspLocation { uri: uri range: range } => uri range
+        end
+    }
 }
 
 # ============================================================================
@@ -115,10 +131,10 @@ fn convert_location_to_lsp_range sources:$SourceStore location:$Location -> LspR
     location.span.offset length + location.file sources.convert_offset_to_position = end_result
     if start_result Option::Some(start_position) is then
         if end_result Option::Some(end_position) is then
-            end_position.column 1 -
-            end_position.line 1 -
-            start_position.column 1 -
-            start_position.line 1 -
+            end_position.column 1 - (i64)
+            end_position.line 1 - (i64)
+            start_position.column 1 - (i64)
+            start_position.line 1 - (i64)
             LspRange return
         fi
     fi
@@ -159,7 +175,7 @@ impl LspRange {
 
 impl LspLocation {
     fn to_json loc:$LspLocation -> JsonValue {
-        loc LspLocation::range = loc_range
+        loc LspLocation::range = loc_range: $LspRange
         json_object
         "uri" loc LspLocation::uri.clone JsonValue::JsonString json_set
         "range" loc_range.to_json json_set
@@ -169,7 +185,7 @@ impl LspLocation {
 
 impl LspDiagnostic {
     fn to_json diag:$LspDiagnostic -> JsonValue {
-        diag LspDiagnostic::range = diag_range
+        diag LspDiagnostic::range = diag_range: $LspRange
         json_object
         "range" diag_range.to_json json_set
         "message" diag LspDiagnostic::message.clone JsonValue::JsonString json_set
@@ -193,7 +209,7 @@ impl CompletionItem {
 
 impl TextEdit {
     fn to_json edit:$TextEdit -> JsonValue {
-        edit TextEdit::range = edit_range
+        edit TextEdit::range = edit_range: $LspRange
         json_object
         "range" edit_range.to_json json_set
         "newText" edit TextEdit::new_text.clone JsonValue::JsonString json_set
@@ -230,13 +246,10 @@ fn read_message reader:mut$StdinReader -> Option[JsonValue] {
     length (u64) reader stdin_read_exact = body
     body Cursor::new = cursor
     cursor json_parse = parse_result
-    if parse_result.is_error then
-        Option[JsonValue]::None
-    elif parse_result Result::Ok(parsed) is then
-        parsed Option::Some
-    else
-        Option[JsonValue]::None
-    fi
+    parse_result match
+        Result::Ok(parsed) => parsed Option::Some
+        Result::Error(_) => Option[JsonValue]::None
+    end
 }
 
 fn send_json_rpc body:str {
@@ -275,7 +288,7 @@ fn compile_document
     for uri in uris.iter do
         uri open_docs.get.unwrap = cached_state
         if cached_state.file_path file_path != then
-            cached_state.source cached_state.file_path input.source_overrides.set
+            cached_state.source.clone cached_state.file_path.clone input.source_overrides.set
         fi
     done
     input analyze = analysis
@@ -293,9 +306,9 @@ fn ingest_document_into
     open_docs:Map[str AnalyzedDocument]
 -> List[LspDiagnostic] Map[str AnalyzedDocument] {
     uri uri_to_path = path
-    open_docs source path compile_document = result
-    result.document uri.clone open_docs.set
-    path result diagnostics_from
+    open_docs source path compile_document.into_parts = analysis = document
+    document uri.clone open_docs.set
+    path analysis diagnostics_from
     open_docs
 }
 
@@ -305,9 +318,8 @@ fn ingest_document uri:$str source:$str -> List[LspDiagnostic] {
     diagnostics
 }
 
-fn diagnostics_from result:CompileResult path:str -> List[LspDiagnostic] {
-    result.analysis.diagnostics = compiler_diagnostics
-    result.analysis.sources = sources
+fn diagnostics_from analysis:AnalysisResult path:str -> List[LspDiagnostic] {
+    analysis.into_parts = typechecked = sources = compiler_diagnostics
 
     List[LspDiagnostic]::new = diagnostics
 
@@ -319,7 +331,7 @@ fn diagnostics_from result:CompileResult path:str -> List[LspDiagnostic] {
             then
                 continue
             fi
-            error.location = location
+            error.location.clone = location
             if location.file sources.get.is_none then
                 path.clone = location.file
             fi
@@ -349,12 +361,12 @@ fn diagnostics_from result:CompileResult path:str -> List[LspDiagnostic] {
             then
                 continue
             fi
-            warning.location = location
+            warning.location.clone = location
             if location.file sources.get.is_none then
                 path.clone = location.file
             fi
             DIAGNOSTIC_WARNING
-            warning CasaWarning::message
+            warning CasaWarning::message.clone
             location sources convert_location_to_lsp_range
             LspDiagnostic diagnostics.push
         fi
@@ -378,7 +390,7 @@ fn publish_diagnostics uri:$str diagnostics:List[LspDiagnostic] {
 }
 
 fn convert_document_location_to_lsp sources:$SourceStore location:$DocumentLocation -> LspLocation {
-    location.length location.offset location.file Location::new
+    location.length location.offset location.file.clone Location::new
     sources
     convert_location_to_lsp_range
     location.file path_to_uri
@@ -542,7 +554,7 @@ fn handle_definition message:$JsonValue {
 
 fn convert_document_hover_to_lsp sources:$SourceStore hover:$DocumentHover -> HoverContent {
     hover.location sources convert_document_location_to_lsp = location
-    location.range f"```casa\n{hover.content}\n```" HoverContent
+    location.range copy f"```casa\n{hover.content}\n```" HoverContent
 }
 
 fn compute_hover state:$AnalyzedDocument line:i64 column:i64 -> Option[HoverContent] {
@@ -579,7 +591,7 @@ fn handle_hover message:$JsonValue {
     json_object
     "contents" json_object
     "kind" "markdown" JsonValue::JsonString json_set
-    "value" hover HoverContent::content JsonValue::JsonString json_set
+    "value" hover HoverContent::content.clone JsonValue::JsonString json_set
     JsonValue::JsonObject json_set
     "range" hover HoverContent::range.to_json json_set
     JsonValue::JsonObject request_id send_response
@@ -622,7 +634,7 @@ fn format_completion_candidate candidate:$CompletionCandidate -> CompletionItem 
             "" COMPLETION_ENUM enum_name.clone CompletionItem
         }
         CompletionCandidate::EnumVariant(variant_name) => {
-            "" COMPLETION_ENUM_MEMBER variant_name CompletionItem
+            "" COMPLETION_ENUM_MEMBER variant_name.clone CompletionItem
         }
         CompletionCandidate::Method(function_name) => {
             "" COMPLETION_METHOD function_name "::" str::split.pop CompletionItem
@@ -773,19 +785,19 @@ fn compute_rename
     if true position state.find_references_at Option::Some(document_references) is then
         Map[str List[TextEdit]]::new = edits_map
         for document_reference in document_references.iter do
-            document_reference state.sources convert_document_location_to_lsp = reference_location
-            reference_location.uri = reference_uri
-            reference_location.range = edit_range
+            document_reference state.sources convert_document_location_to_lsp.into_parts
+            = edit_range = reference_uri
 
             new_name.clone edit_range TextEdit = edit
             reference_uri edits_map.get_mut = existing_edits
-            if existing_edits Option::Some(edits) is then
-                edit edits.push
-            else
-                List[TextEdit]::new = document_edits
-                edit document_edits.push
-                document_edits reference_uri edits_map.set
-            fi
+            existing_edits match
+                Option::Some(edits) => edit edits.push
+                Option::None => {
+                    List[TextEdit]::new = document_edits
+                    edit document_edits.push
+                    document_edits reference_uri edits_map.set
+                }
+            end
         done
         edits_map Option::Some return
     fi
@@ -867,10 +879,10 @@ fn map_document_token_type kind:DocumentTokenKind -> i64 {
 fn compute_semantic_tokens state:$AnalyzedDocument -> List[SemanticToken] {
     List[SemanticToken]::new = tokens
     for document_token in state.find_semantic_tokens.iter do
-        document_token.location = location
-        location state.sources convert_document_location_to_lsp.range = range
+        document_token.location = location: $DocumentLocation
+        location state.sources convert_document_location_to_lsp.range copy = range
         0
-        document_token.kind map_document_token_type
+        document_token.kind copy map_document_token_type
         location.length
         range.start_col
         range.start_line
