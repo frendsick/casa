@@ -20,8 +20,30 @@ code:
 fn length [T const N:u64] self:$array[T N] -> u64 { N }
 ```
 
-An index that is a compile-time constant is checked against `N` during
-typechecking. A runtime index keeps the terminating bounds check.
+An index is rejected during typechecking only when both the index and array
+length are concrete at that checking site. For example, this definition is
+rejected because `3` is outside the concrete length `3`:
+
+```casa
+fn fourth values:$array[i64 3] -> i64 { 3 values.nth.clone }
+```
+
+A constant parameter remains symbolic while its generic body is checked under
+ADR-0069. The same index is therefore accepted here because `N` is not concrete:
+
+```casa
+fn fourth [const N:u64] values:$array[i64 N] -> i64 {
+    3 values.nth.clone
+}
+
+[1, 2, 3] fourth drop # Specializes N to 3 and terminates at runtime.
+```
+
+Each generated specialization retains the ordinary terminating runtime bounds
+check. This applies even when its array length later becomes concrete. Casa does
+not need a generic constraint solver or a new body check for each
+specialization. An index that is not a compile-time constant also keeps the
+runtime bounds check.
 
 A view over a runtime-length range can no longer be an array, because its length
 is not known when the type is written. Casa needs a separate runtime-length
@@ -52,8 +74,9 @@ an array literal still produces an independent owned value.
   [1, 2, 3] fi` becomes a type error, and existing sources that rely on the
   joined type must change.
 - `.length` resolves to a constant. No array operation loads a stored length.
-- Indexing an `array[T N]` with an out-of-range constant is a compile-time
-  error. Indexing with a runtime value still terminates the program.
+- Indexing an array with an out-of-range constant is a compile-time error when
+  the array length is also concrete at that checking site. A symbolic generic
+  length or runtime index keeps the terminating runtime bounds check.
 - `[]` is `array[T 0]`. ADR-0155 settles its size: a zero-length array is
   inhabited and keeps ADR-0132's one-byte minimum, so `N * size_of[T]`
   describes its element storage rather than the whole value.
