@@ -63,6 +63,11 @@ These operations expose raw byte-addressed memory. Prefer standard-library
 collections and strings for application code. Each operation must be inside
 an `unsafe` block.
 
+Comparing raw pointers is safe, but an address identifies storage rather than
+an owner. Raw addresses obtained from independently owned values may compare
+equal or unequal when storage can be shared safely. Programs must not use
+either result as owner identity.
+
 | Intrinsic | Stack effect | Action |
 |---|---|---|
 | `alloc` | `u64 -> ptr` | Allocate bytes or terminate on failure |
