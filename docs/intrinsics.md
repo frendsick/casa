@@ -78,6 +78,7 @@ either result as owner identity.
 | `load64` | `ptr -> u64` | Load an unsigned 64-bit value |
 | `ptr::as_ref[T]` | `ptr -> $T` | Form a shared borrow of typed storage |
 | `ptr::as_mut[T]` | `ptr -> mut$T` | Form an exclusive borrow of typed storage |
+| `ptr::into_raw` | `T -> ptr` | Transfer a heap-indirect owner without destruction |
 | `ptr::read[T]` | `ptr -> T` | Move an initialized `T` out of typed storage |
 | `store8` | `ptr u8 -> None` | Store an 8-bit value |
 | `store16` | `ptr u16 -> None` | Store a 16-bit value |
@@ -104,6 +105,10 @@ representation. `ptr::as_ref[T]` and `ptr::as_mut[T]` borrow live storage. A
 typed read leaves its source uninitialized. A typed write requires
 uninitialized destination storage. The caller must track each moved owner
 exactly once.
+
+`ptr::into_raw` consumes a heap-indirect owner and returns its allocation
+address without running its destructor. The caller must transfer the allocation
+to another owner or destroy its contents and call `free`.
 
 `0 alloc` returns null, and `free` does nothing when given null. A positive
 allocation is non-null. Double free, use after free, and freeing an interior or
