@@ -71,7 +71,7 @@ The shared front-end compiler output containing exact compiler sources, collecte
 _Avoid_: CLI compile result, LSP compiler snapshot, global compiler result
 
 **Array literal**:
-A bracket-delimited list of values (`[1, 2, 3]`, `["a", "b"]`, `[[1], [2]]`, `[my_fn]`) that produces an independent owned `array[T N]`, where the element count `N` is part of the type. Elements may be primitive literals, enum variants, nested array literals, function references, lambda expressions, or struct literals; storage placement and unobservable sharing remain compiler decisions.
+A bracket-delimited list of values (`[1, 2, 3]`, `["a", "b"]`, `[[1], [2]]`, `[my_fn]`) that produces an independent owned `array[T N]`, where the element count `N` is part of the type. Elements may be primitive literals, enum variants, nested array literals, function references, lambda expressions, or struct literals. Storage placement and behavior-preserving sharing remain compiler decisions.
 _Avoid_: Static array, const array, inline array
 
 ### Type representation
@@ -233,7 +233,7 @@ _Avoid_: Release lint, tag lint
 - The **Compiler diagnostics schema** preserves emission order in one diagnostic list; error and warning variants encode severity without a separate severity field while retaining their different payload shapes.
 - CLI reporting, LSP conversion, and test inspection are adapters outside the **Compiler diagnostics schema**.
 - Diagnostics migration is complete only when compiler-global diagnostics, source, and mode state is deleted and all adapters consume explicit results; snapshot or copy bridges do not satisfy the deletion test.
-- Each evaluation of an **Array literal** has independent owned-value semantics. The compiler may share or statically emit backing data only when doing so is unobservable to safe code.
+- Each evaluation of an **Array literal** has independent owned-value semantics. The compiler may share or statically emit backing data when mutation and destruction still behave independently. Raw address equality is a representation detail.
 - The **Documentation glossary** names project concepts that prevent drift; language keywords and ordinary programming concepts belong in reference docs.
 - Function, operator, intrinsic, and expression docs should use **Stack effect**; **Operand order** explains how stack values map to operands.
 - Public reference docs should use one **Stack effect** line for an operation instead of separate signature and stack-effect lines.
