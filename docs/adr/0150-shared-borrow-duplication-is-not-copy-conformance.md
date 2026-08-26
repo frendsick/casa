@@ -1,4 +1,5 @@
 # Shared-borrow duplication is not Copy conformance
+related issue: #422
 
 A shared borrow `$T` may be duplicated with `dup` and as the copied operand of
 `over`. This duplicates the borrow and preserves its loan origin. It does not

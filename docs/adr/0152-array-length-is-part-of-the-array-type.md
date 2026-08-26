@@ -77,7 +77,7 @@ an array literal still produces an independent owned value.
 - Indexing an array with an out-of-range constant is a compile-time error when
   the array length is also concrete at that checking site. A symbolic generic
   length or runtime index keeps the terminating runtime bounds check.
-- `[]` is `array[T 0]`. ADR-0154 settles its size: a zero-length array is
+- `[]` is `array[T 0]`. ADR-0155 settles its size: a zero-length array is
   inhabited and keeps ADR-0132's one-byte minimum, so `N * size_of[T]`
   describes its element storage rather than the whole value.
 - Casa gains a third sequence concept. `array[T N]` is fixed and statically

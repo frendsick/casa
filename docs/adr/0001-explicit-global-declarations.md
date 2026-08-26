@@ -1,5 +1,5 @@
 ---
-status: superseded by ADR-0047
+status: superseded by [ADR-0047](0047-safe-code-has-no-mutable-globals.md)
 ---
 
 # Explicit `global` declarations for in-function global writes
