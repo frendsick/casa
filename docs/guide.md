@@ -39,8 +39,8 @@ dup:   [T: Copy] T -> T T
 +:     T T -> T
 ```
 
-`None` means that the operation has no stack input or output. It is not the
-`Option::None` value.
+`None` means that the corresponding side of the stack effect is empty. It is
+not the `Option::None` value.
 
 Most functions use the topmost value as their first argument. Arithmetic is the
 explicit exception: `10 3 -` means `10 - 3`.
@@ -92,20 +92,33 @@ answer print
 ```
 
 An owned value that does not implement `Copy` moves when an operation consumes
-it. The source binding cannot be used again. A parameter of type `$T` observes
-an owned value without moving it. A `mut$T` parameter can update it through an
-exclusive borrow. Casa destroys each remaining owner when its scope ends. See
-[Custom destruction](structs-and-methods.md#custom-destruction) for cleanup
-methods and destruction order.
-
-The compiler infers the binding type. Add an annotation when inference needs
-help:
+it. The source binding cannot be used again. A parameter of type `$T` borrows
+an owned value without moving it:
 
 ```casa
 import "std"
 
-Option::None = missing:Option[i64]
-missing drop
+fn length text:$str -> u64 {
+    text.length
+}
+
+"Casa" = text
+text length print
+text print
+```
+
+A `mut$T` parameter can update an owner through an exclusive borrow. See
+[Ownership and borrows](functions-and-lambdas.md#ownership-and-borrows) for
+mutable borrow examples and the complete rules. Casa destroys each remaining
+owner when its scope ends. See [Custom destruction](structs-and-methods.md#custom-destruction)
+for cleanup methods and destruction order.
+
+The compiler infers the binding type. Add an annotation to select or require a
+specific type:
+
+```casa
+255 = byte:u8
+byte print
 ```
 
 Pass `-L lib` when a program uses module-style imports from this repository.
@@ -133,6 +146,11 @@ Remember that comparison uses the topmost value as its left operand. Therefore,
 `90 score >=` means `score >= 90`.
 
 ## Try a complete program
+
+This program adds an [array iterator](collections.md#arrays), a
+[`for` loop](control-flow.md#for-loops),
+[string interpolation](types-and-literals.md#string-interpolation), and
+`println` from the standard library.
 
 ```casa
 import "std"
