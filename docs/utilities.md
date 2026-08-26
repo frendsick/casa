@@ -71,6 +71,7 @@ terminate with exit code `2`.
 | `ArgParser::new -> ArgParser` | Parser named from argument `0` |
 | `add_positional self name help_text` | Required positional value |
 | `add_flag self name short long help_text` | Boolean flag |
+| `add_terminal_flag self name short long help_text` | Flag that permits missing positional values |
 | `add_option self name short long help_text` | Option with one string value |
 | `add_multi_option self name short long help_text` | Repeatable string option |
 | `parse_args self:$ArgParser -> ParsedArgs` | Parse process arguments without changing definitions |
