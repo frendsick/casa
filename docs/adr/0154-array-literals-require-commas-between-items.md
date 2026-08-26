@@ -1,4 +1,5 @@
 # Array literals require commas between items
+related issue: #437
 
 An array literal MUST separate its items with commas: `[1, 2, 3]`. A missing
 comma between two items is a syntax error. A single trailing comma before the

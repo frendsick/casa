@@ -1,4 +1,5 @@
 # Constant type parameters accept integers, bool, and char
+related issue: #438
 
 ADR-0152 introduced constant type parameters and accepted `u64` only, because a
 `u64` array length was the sole use it needed. Because the declaration already

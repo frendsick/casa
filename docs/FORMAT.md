@@ -142,7 +142,7 @@ value List[T]::from_array
 
 - Items MUST be comma-separated, with a space after each comma. A missing comma
   between items is a syntax error (see
-  [ADR-0153](adr/0153-array-literals-require-commas-between-items.md)).
+  [ADR-0154](adr/0154-array-literals-require-commas-between-items.md)).
 - A single trailing comma before `]` is allowed. The compact form omits it; the
   expanded form adds it.
 - One space before the opening `[` when it follows another token:

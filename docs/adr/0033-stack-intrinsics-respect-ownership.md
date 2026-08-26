@@ -1,4 +1,6 @@
 # Stack intrinsics respect ownership
+status: amended by [ADR-0150](0150-shared-borrow-duplication-is-not-copy-conformance.md)
+related issue: #314
 
 Stack manipulation operates on typed values, not untracked machine words. `dup` requires its top value to be `Copy`; `over` requires the deeper value it copies to be `Copy`. ADR-0136 adds `copy` with `[T: Copy] $T -> T` for materializing an owned Copy value through a borrow. `swap` and `rot` only reorder values and accept non-`Copy` owners without cloning them. `drop` consumes its top value and runs the same deterministic destruction used at scope exit.
 

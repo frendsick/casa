@@ -1,4 +1,5 @@
 # A zero-length array is inhabited and occupies one byte
+related issue: #439
 
 `array[T 0]` is an ordinary inhabited type. It has exactly one value, the empty
 sequence, and ADR-0132's one-byte minimum applies to it without an exception:

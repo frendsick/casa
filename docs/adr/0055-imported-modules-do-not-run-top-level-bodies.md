@@ -1,5 +1,4 @@
 # Imported modules do not run top-level bodies
-status: former title "Imported modules have no top-level effects" superseded by this narrower rule
 
 A module's top-level program body runs only when that module is the root program. Importing a module contributes its declarations and runs the exactly-once immutable-global initializers in its dependency closure. The imported top-level statements that are not global initializers, such as unrelated I/O, `exit`, and test execution, do not run.
 

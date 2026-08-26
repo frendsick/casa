@@ -1,5 +1,6 @@
 # Method availability follows receiver capability
-status: borrow Clone consequences superseded by ADR-0150
+status: amended by [ADR-0150](0150-shared-borrow-duplication-is-not-copy-conformance.md)
+related issue: #314
 
 Method availability is determined by the declared receiver and the capability available at the call site:
 

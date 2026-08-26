@@ -1,5 +1,6 @@
 # Cloning a shared borrow clones the borrow
-status: superseded by ADR-0150
+status: superseded by [ADR-0150](0150-shared-borrow-duplication-is-not-copy-conformance.md)
+related issue: #314
 
 Under Casa's standard `Copy: Clone` declaration, calling `.clone` on a value whose type is `$T` returns another `$T`. Clone always returns the same `Self` type as its selected implementation, and shared borrows are `Copy` values satisfying that ordinary supertrait relationship:
 
