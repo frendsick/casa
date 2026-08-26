@@ -81,8 +81,8 @@ reserved `drop` method runs its hook once, when the array is destroyed. Use
 | `iter self:$Slice[T] -> Iter[$T]` | Iterator over borrows of the elements |
 
 A slice contains a borrow of its source list. It does not own or destroy the
-elements. The list stays loaned until the slice's last use. `List::to_array`
-returns a slice over the complete list for compatibility with existing code.
+elements. The list stays loaned until the slice's last use. `List::as_slice`
+returns a slice over the complete list.
 
 ## Lists
 
@@ -104,7 +104,7 @@ numbers.sort
 | `get_ref self:$List[T] index:u64 -> $T` | Borrow of the element at a zero-based index |
 | `get_mut self:mut$List[T] index:u64 -> mut$T` | Exclusive borrow of an element |
 | `slice self:$List[T] start:u64 stop:u64 -> Slice[T]` | Borrowed half-open range `[start, stop)` |
-| `to_array self:$List[T] -> Slice[T]` | Borrowed view of the complete list |
+| `as_slice self:$List[T] -> Slice[T]` | Borrowed view of the complete list |
 | `set self:mut$List[T] index:u64 value:T` | Replace and destroy an element |
 | `replace self:mut$List[T] index:u64 value:T -> T` | Replace and return an element |
 | `push self:mut$List[T] value:T` | Add at the end |
