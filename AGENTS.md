@@ -52,3 +52,4 @@ Always load the relevant doc when the matching workflow comes up:
 - **Triage labels** — `docs/agents/triage-labels.md`
 - **Domain docs** — `docs/agents/domain.md`
 - **Memory efficiency**: `docs/agents/memory.md`
+- **Functions**: use `function-design` when adding, changing, or reviewing non-trivial functions.
