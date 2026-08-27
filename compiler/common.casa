@@ -89,6 +89,7 @@ enum KeywordKind derives Copy {
     In
     Global
     Const
+    Move
 }
 
 # ============================================================================
@@ -321,7 +322,12 @@ enum InstValue {
     ConstantLoad (u64)
     ConstantStore (u64)
     # Closures
+    CaptureFlagClear (u64)
+    CaptureFlagLoad (u64)
+    CaptureFlagMark (u64)
     CaptureLoad (u64)
+    CaptureSet (u64)
+    ClosureDrop
     ClosureRecord (u64)
     FnPushStatic (str)
     # Strings
@@ -649,6 +655,7 @@ fn clone_op_value value:$OpValue -> OpValue {
         OpValue::Lt => OpValue::Lt
         OpValue::Ne => OpValue::Ne
         OpValue::FnExec => OpValue::FnExec
+        OpValue::FnExecOwned => OpValue::FnExecOwned
         OpValue::FnReturn => OpValue::FnReturn
         OpValue::UnsafeStart => OpValue::UnsafeStart
         OpValue::UnsafeEnd => OpValue::UnsafeEnd
@@ -1248,6 +1255,7 @@ enum OpValue {
     # Functions
     FnCall (str)
     FnExec
+    FnExecOwned
     FnPush (str)
     FnReturn
     DestructionFn (Type)
@@ -1798,6 +1806,9 @@ struct Function {
     variables:            List[Variable]
     captures:             List[Variable]
     global_captures:      List[str]
+    owned_captures:       List[str]
+    captures_by_move:     bool
+    captures_shared:      bool
     has_deferred_methods: bool
     is_const_fn:          bool
     is_unsafe:            bool
@@ -1805,17 +1816,20 @@ struct Function {
 
 impl Function {
     fn new name:str ops:List[Op] location:Location -> Function {
-        false false false List[str]::new List[Variable]::new List[Variable]::new false false empty_stack_effect location ops name Function
+        false false false false false List[str]::new List[str]::new List[Variable]::new List[Variable]::new false false empty_stack_effect location ops name Function
     }
 
     fn with_stack_effect name:str ops:List[Op] location:Location effect:StackEffect -> Function {
-        false false false List[str]::new List[Variable]::new List[Variable]::new false false effect location ops name Function
+        false false false false false List[str]::new List[str]::new List[Variable]::new List[Variable]::new false false effect location ops name Function
     }
 
     fn clone_for_import self:$Function -> Function {
         self.is_unsafe
         self.is_const_fn
         self.has_deferred_methods
+        self.captures_shared
+        self.captures_by_move
+        self.owned_captures.clone
         self.global_captures.clone
         self.captures.clone
         self.variables.clone
@@ -1833,6 +1847,9 @@ impl Function {
         self.is_unsafe
         self.is_const_fn
         self.has_deferred_methods
+        self.captures_shared
+        self.captures_by_move
+        self.owned_captures.clone
         self.global_captures.clone
         self.captures.clone
         self.variables.clone
@@ -1848,9 +1865,9 @@ impl Function {
     # Split an owned function into its declaration and body.
     fn split_body self:Function -> Function List[Op] {
         self match
-            Function { name: name ops: ops location: location stack_effect: stack_effect is_used: is_used is_typechecked: is_typechecked variables: variables captures: captures global_captures: global_captures has_deferred_methods: has_deferred_methods is_const_fn: is_const_fn is_unsafe: is_unsafe } => {
-                is_unsafe is_const_fn has_deferred_methods
-                global_captures captures variables is_typechecked is_used
+            Function { name: name ops: ops location: location stack_effect: stack_effect is_used: is_used is_typechecked: is_typechecked variables: variables captures: captures global_captures: global_captures owned_captures: owned_captures captures_by_move: captures_by_move captures_shared: captures_shared has_deferred_methods: has_deferred_methods is_const_fn: is_const_fn is_unsafe: is_unsafe } => {
+                is_unsafe is_const_fn has_deferred_methods captures_shared captures_by_move
+                owned_captures global_captures captures variables is_typechecked is_used
                 stack_effect location List[Op]::new name Function
                 ops
             }
@@ -3306,6 +3323,7 @@ impl KeywordKind {
             KeywordKind::In => "in"
             KeywordKind::Global => "global"
             KeywordKind::Const => "const"
+            KeywordKind::Move => "move"
         end
     }
 }
@@ -3922,56 +3940,21 @@ fn aggregate_type_bindings typ:$Type type_vars:$List[str] -> Map[str Type] {
     bindings
 }
 
-fn type_needs_destruction typ:mut$Type store:$SymbolStore visiting:mut$Set[str] -> bool {
+fn type_needs_destruction_in_store typ:mut$Type store:$SymbolStore -> bool {
     if typ.is_borrow then
         false return
     fi
     if typ Type::TypeVar is then
         true return
     fi
+    if typ Type::Function(_) is then
+        true return
+    fi
     if f"{typ.match_base}::drop" store.functions.has then
         true return
     fi
-    typ clone_type = inspected_type
-    if inspected_type Type::Generic(generic) is then
-        typ.format = type_name
-        if type_name visiting.has then
-            false return
-        fi
-        type_name.clone visiting.add
-        if "array" generic.base == then
-            if 0 generic.params.length != then
-                visiting store 0 generic.params.get type_needs_destruction = needed
-                type_name visiting.remove
-                needed return
-            fi
-        elif generic.base store.structs.get Option::Some(casa_struct) is then
-            casa_struct.type_vars typ aggregate_type_bindings = substitutions
-            for member in casa_struct.members.iter do
-                substitutions member.typ.substitute_t = member_type
-                if visiting store member_type type_needs_destruction then
-                    type_name visiting.remove
-                    true return
-                fi
-            done
-        elif generic.base store.enums.get Option::Some(casa_enum) is then
-            casa_enum.type_vars typ aggregate_type_bindings = substitutions
-            for pair in casa_enum.variant_types.iter do
-                for payload_type in pair.second.iter do
-                    substitutions payload_type.substitute_t = resolved_payload
-                    if visiting store resolved_payload type_needs_destruction then
-                        type_name visiting.remove
-                        true return
-                    fi
-                done
-            done
-        fi
-        type_name visiting.remove
+    if store typ type_value_representation Option::Some(representation) is then
+        VALUE_REPR_INDIRECT representation == return
     fi
     false
-}
-
-fn type_needs_destruction_in_store typ:mut$Type store:$SymbolStore -> bool {
-    Set[str]::new = visiting
-    visiting store typ type_needs_destruction
 }

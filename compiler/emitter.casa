@@ -199,6 +199,7 @@ impl Emitter {
             name sanitize_name = label
             ".align 8" self.line
             f"closure_{label}: .quad fn_{label}" self.line
+            ".quad 0" self.line
         done
 
         # Static array literals
@@ -1830,33 +1831,81 @@ impl Emitter {
                 "pushq %rax" self.indent
             }
             InstValue::CaptureLoad(capture_index) => {
-                capture_index 1 + WORD_SIZE * = offset
+                capture_index 2 * 2 + WORD_SIZE * = offset
                 "movq current_env(%rip), %rax" self.indent
                 f"movq {offset}(%rax), %rax" self.indent
                 "pushq %rax" self.indent
             }
+            InstValue::CaptureSet(capture_index) => {
+                capture_index 2 * 2 + WORD_SIZE * = offset
+                "popq %rax" self.indent
+                "movq current_env(%rip), %rbx" self.indent
+                f"movq %rax, {offset}(%rbx)" self.indent
+            }
+            InstValue::CaptureFlagLoad(capture_index) => {
+                capture_index 2 * 3 + WORD_SIZE * = offset
+                "movq current_env(%rip), %rax" self.indent
+                f"movq {offset}(%rax), %rax" self.indent
+                "pushq %rax" self.indent
+            }
+            InstValue::CaptureFlagClear(capture_index) => {
+                capture_index 2 * 3 + WORD_SIZE * = offset
+                "movq current_env(%rip), %rax" self.indent
+                f"movq $0, {offset}(%rax)" self.indent
+            }
+            InstValue::CaptureFlagMark(capture_index) => {
+                capture_index 2 * 3 + WORD_SIZE * = offset
+                "movq current_env(%rip), %rax" self.indent
+                f"movq $1, {offset}(%rax)" self.indent
+            }
             InstValue::ClosureRecord(capture_count) => {
-                capture_count 1 + WORD_SIZE * = record_size
-                # Bump-allocate the record from the heap.
-                "leaq heap(%rip), %rbx" self.indent
-                "movq heap_ptr(%rip), %rcx" self.indent
-                "leaq (%rbx,%rcx), %rdx" self.indent
-                f"addq ${record_size}, %rcx" self.indent
-                "movq %rcx, heap_ptr(%rip)" self.indent
-                # Stack top is the function pointer; store it at offset 0.
+                capture_count 2 * 2 + WORD_SIZE * = record_size
+                f"movq ${record_size}, %rdi" self.indent
+                "closure_alloc_done" "heap_alloc" self.emit_call_via_return_stack
+                "popq %rdx" self.indent
+                # Stack top is the destruction function, followed by the call function.
+                "popq %rax" self.indent
+                "movq %rax, 8(%rdx)" self.indent
                 "popq %rax" self.indent
                 "movq %rax, (%rdx)" self.indent
-                # Captures were pushed in order 0..N-1, so the top of the stack is
-                # capture N-1. Pop them in reverse to fill record[N], record[N-1],
-                # ..., record[1].
                 capture_count 0 + = capture_remaining
                 while 0 capture_remaining > do
-                    capture_remaining WORD_SIZE * = field_offset
+                    capture_remaining 1 - 2 * 2 + WORD_SIZE * = field_offset
+                    field_offset 8 + = flag_offset
+                    "popq %rax" self.indent
+                    f"movq %rax, {flag_offset}(%rdx)" self.indent
                     "popq %rax" self.indent
                     f"movq %rax, {field_offset}(%rdx)" self.indent
                     capture_remaining 1 - = capture_remaining
                 done
                 "pushq %rdx" self.indent
+            }
+            InstValue::ClosureDrop => {
+                self.emit_uid = uid
+                "popq %rax" self.indent
+                "movq 8(%rax), %rdx" self.indent
+                "testq %rdx, %rdx" self.indent
+                f"jz .Lclosure_drop_done_{uid}" self.indent
+                "movq current_env(%rip), %rbx" self.indent
+                "movq env_sp(%rip), %rcx" self.indent
+                f"cmpq ${RETURN_STACK_SIZE}, %rcx" self.indent
+                "jge env_stack_overflow" self.indent
+                "movq %rbx, env_stack(%rcx)" self.indent
+                "addq $8, %rcx" self.indent
+                "movq %rcx, env_sp(%rip)" self.indent
+                "movq %rax, current_env(%rip)" self.indent
+                "pushq %rax" self.indent
+                f"leaq .Lclosure_drop_return_{uid}(%rip), %rcx" self.indent
+                "movq %rcx, (%r14)" self.indent
+                "addq $8, %r14" self.indent
+                "jmpq *%rdx" self.indent
+                f".Lclosure_drop_return_{uid}:" self.line
+                "movq env_sp(%rip), %rcx" self.indent
+                "subq $8, %rcx" self.indent
+                "movq %rcx, env_sp(%rip)" self.indent
+                "movq env_stack(%rcx), %rax" self.indent
+                "movq %rax, current_env(%rip)" self.indent
+                f".Lclosure_drop_done_{uid}:" self.line
             }
             InstValue::FnPush(fn_name) => {
                 fn_name sanitize_name = fn_label
@@ -2121,6 +2170,11 @@ impl Emitter {
             InstValue::ConstantLoad => is_global inst self.emit_control_flow
             InstValue::ConstantStore => is_global inst self.emit_control_flow
             InstValue::CaptureLoad => is_global inst self.emit_control_flow
+            InstValue::CaptureSet => is_global inst self.emit_control_flow
+            InstValue::CaptureFlagLoad => is_global inst self.emit_control_flow
+            InstValue::CaptureFlagClear => is_global inst self.emit_control_flow
+            InstValue::CaptureFlagMark => is_global inst self.emit_control_flow
+            InstValue::ClosureDrop => is_global inst self.emit_control_flow
             InstValue::ClosureRecord => is_global inst self.emit_control_flow
             InstValue::FnCall => is_global inst self.emit_control_flow
             InstValue::FnExec => is_global inst self.emit_control_flow

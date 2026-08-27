@@ -626,6 +626,9 @@ impl BytecodeCompiler {
         if typ.is_borrow then
             InstValue::Drop bytecode.push return
         fi
+        if typ Type::Function(_) is then
+            InstValue::ClosureDrop bytecode.push return
+        fi
         bytecode op typ compiler.compile_drop_hook
         typ clone_type = destruction_type
         if destruction_type Type::Generic(generic) is then
@@ -1146,6 +1149,44 @@ impl BytecodeCompiler {
 
     fn compile_assignment compiler:mut$BytecodeCompiler op:mut$Op bytecode:mut$List[InstValue] {
         op op_str_value = name
+        if name compiler.capture_slots.get_copy Option::Some(capture_index) is then
+            false = owns_capture
+            TYPE_UNKNOWN_T clone_type = capture_type
+            if compiler.function Option::Some(function) is then
+                name function.owned_captures string_list_contains = owns_capture
+                capture_index function.captures.get Variable::typ clone_type = capture_type
+            fi
+            if op.value OpValue::AssignVar is then
+                if owns_capture then
+                    compiler.new_label = inactive_label
+                    capture_index InstValue::CaptureFlagLoad bytecode.push
+                    0 InstValue::Push bytecode.push
+                    InstValue::Ne bytecode.push
+                    inactive_label InstValue::JumpNe bytecode.push
+                    capture_index InstValue::CaptureLoad bytecode.push
+                    bytecode op capture_type compiler.compile_destruction
+                    inactive_label InstValue::Label bytecode.push
+                fi
+                capture_index InstValue::CaptureSet bytecode.push
+                if owns_capture then
+                    capture_index InstValue::CaptureFlagMark bytecode.push
+                fi
+                return
+            fi
+            capture_index InstValue::CaptureLoad bytecode.push
+            if op.value OpValue::AssignDec is then
+                InstValue::Swap bytecode.push
+                InstValue::Sub bytecode.push
+            elif op.value OpValue::AssignInc is then
+                InstValue::Add bytecode.push
+            else
+                "compile_assignment received an unsupported capture assignment" compiler.record_failure
+                return
+            fi
+            bytecode op compiler.emit_integer_normalization
+            capture_index InstValue::CaptureSet bytecode.push
+            return
+        fi
         name compiler.resolve_variable = resolved
 
         op.value match
@@ -2144,6 +2185,40 @@ impl BytecodeCompiler {
 }
 
 impl BytecodeCompiler {
+    fn ensure_closure_destruction_function
+        compiler:mut$BytecodeCompiler
+        lambda:$Function
+        op:mut$Op
+    -> str {
+        f"__drop_closure_{lambda.name}" = drop_name
+        if drop_name compiler.state.program.functions.has then
+            drop_name return
+        fi
+        List[InstValue]::new drop_name.clone compiler.state.program.functions.set
+
+        List[InstValue]::new = body
+        lambda.ops lambda compiler.child = destructor
+        0 (u64) = capture_index
+        while capture_index lambda.captures.length > do
+            capture_index lambda.captures.get = capture
+            if capture.name lambda.owned_captures string_list_contains then
+                destructor.new_label = end_label
+                capture_index InstValue::CaptureFlagLoad body.push
+                0 InstValue::Push body.push
+                InstValue::Ne body.push
+                end_label InstValue::JumpNe body.push
+                capture_index InstValue::CaptureLoad body.push
+                body op capture.typ destructor.compile_destruction
+                end_label InstValue::Label body.push
+            fi
+            1 += capture_index
+        done
+        InstValue::HeapFree body.push
+        InstValue::FnReturn body.push
+        body drop_name.clone compiler.state.program.functions.set
+        drop_name
+    }
+
     fn compile_function_ops compiler:mut$BytecodeCompiler op:mut$Op bytecode:mut$List[InstValue] {
         op op_str_value = name
 
@@ -2163,26 +2238,39 @@ impl BytecodeCompiler {
                     .functions
                     .get
                     .unwrap
-                    .captures
-                    .clone = captures
+                    .clone_declaration = lambda
+                lambda.captures.clone = captures
 
                 # Zero-capture closures share a single static record so trait
                 # dispatch and named-function pushes do not allocate per call.
                 if 0 captures.length == then
                     name InstValue::FnPushStatic bytecode.push
                 else
-                    # Captures are pushed before the function pointer so InstClosureRecord
-                    # pops fn_ptr first into record[0] and then captures into record[1..].
+                    # Each capture is followed by its ownership flag. The record
+                    # header stores the call and destruction functions.
                     for capture in captures.iter do
                         capture Variable::name = capture_name: $str
+                        capture_name lambda.owned_captures string_list_contains = owns_capture
                         if capture_name compiler.capture_slots.get_copy Option::Some(capture_index) is then
                             capture_index InstValue::CaptureLoad bytecode.push
+                            if owns_capture then
+                                capture_index InstValue::CaptureFlagClear bytecode.push
+                            fi
                         else
                             capture_name compiler.resolve_variable = capture_resolved
                             bytecode capture_resolved.emit_get
+                            if owns_capture then
+                                if capture_name compiler.owner_flags.get_copy Option::Some(flag) is then
+                                    0 InstValue::Push bytecode.push
+                                    flag InstValue::LocalSet bytecode.push
+                                fi
+                            fi
                         fi
+                        if owns_capture then 1 else 0 fi InstValue::Push bytecode.push
                     done
                     name InstValue::FnPush bytecode.push
+                    op lambda compiler.ensure_closure_destruction_function = drop_name
+                    drop_name InstValue::DropFn bytecode.push
                     captures.length InstValue::ClosureRecord bytecode.push
                 fi
             }
@@ -2368,6 +2456,16 @@ impl BytecodeCompiler {
             else
                 InstValue::Drop bytecode.push
             fi
+            return
+        fi
+        if op.value OpValue::FnExecOwned is then
+            compiler.locals_count = closure_local
+            1 += compiler.locals_count
+            InstValue::Dup bytecode.push
+            closure_local InstValue::LocalSet bytecode.push
+            InstValue::FnExec bytecode.push
+            closure_local InstValue::LocalGet bytecode.push
+            InstValue::ClosureDrop bytecode.push
             return
         fi
         op.value direct_op_to_inst = direct_inst_opt
@@ -2638,6 +2736,14 @@ impl BytecodeCompiler {
                 f"Capture `{capture_name}` reached global bytecode compilation" compiler.record_failure
             elif capture_name compiler.capture_slots.get_copy Option::Some(capture_index) is then
                 capture_index InstValue::CaptureLoad bytecode.push
+                if
+                    op op_identity compiler.state.store.clone_ownership
+                    Option::Some(owned_ownership) is
+                then
+                    if owned_ownership.moves_owner then
+                        capture_index InstValue::CaptureFlagClear bytecode.push
+                    fi
+                fi
             else
                 f"Capture `{capture_name}` is missing during bytecode compilation" compiler.record_failure
             fi

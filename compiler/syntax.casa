@@ -1255,6 +1255,7 @@ fn handle_fstring
             token Token::location.clone OpValue::FstringToStr Op::new expr_ops.push
             f"lambda__{function_name}_o{token Token::location Location::span Span::offset}" = lambda_name
             token Token::location.clone expr_ops lambda_name.clone Function::new = lambda_function
+            true lambda_function Function::set_captures_shared
             lambda_function lambda_name.clone parser.put_function
             token Token::location.clone lambda_name OpValue::FnPush Op::new ops.push
             token Token::location.clone OpValue::FnExec Op::new ops.push
@@ -5312,6 +5313,24 @@ fn get_op_keyword
         return
     fi
 
+    # move { ... } -> closure that owns its affine captures
+    if KeywordKind::Move keyword == then
+        cursor.peek = move_next_opt
+        if move_next_opt Option::Some(move_next) is then
+            if "{" move_next Token::value == then
+                f"lambda__{function_name}_o{token Token::location Location::span Span::offset}" = lambda_name
+                lambda_name cursor parser parse_block_ops = lambda_ops
+                token Token::location.clone lambda_ops lambda_name.clone Function::new = lambda_function
+                true lambda_function Function::set_captures_by_move
+                lambda_function lambda_name.clone parser.put_function
+                token Token::location lambda_name OpValue::FnPush Op::new ops.push
+                return
+            fi
+        fi
+        token Token::location "Expected `{` after `move`" ErrorKind::Syntax parser.state.record_error
+        return
+    fi
+
     # Simple keyword -> OpValue lookup
     keyword keyword_to_op_value = simple_opt
     simple_opt match
@@ -6200,7 +6219,9 @@ fn gather_captures store:mut$SymbolStore lambda_function:mut$Function function:m
             0 (u64) = variable_index
             while variable_index function Function::variables.length > do
                 if name variable_index function Function::variables.get_ref Variable::name == then
-                    variable_index function Function::variables.get clone_variable lambda_function Function::captures.push
+                    if name lambda_function.captures variable_list_contains ! then
+                        variable_index function Function::variables.get clone_variable lambda_function Function::captures.push
+                    fi
                     true = captured
                     break
                 fi
@@ -6208,11 +6229,29 @@ fn gather_captures store:mut$SymbolStore lambda_function:mut$Function function:m
             done
 
             if captured ! then
+                # A nested closure can capture a value already captured by its
+                # enclosing closure.
+                0 (u64) = capture_index
+                while capture_index function Function::captures.length > do
+                    if name capture_index function Function::captures.get_ref Variable::name == then
+                        if name lambda_function.captures variable_list_contains ! then
+                            capture_index function Function::captures.get clone_variable lambda_function Function::captures.push
+                        fi
+                        true = captured
+                        break
+                    fi
+                    1 += capture_index
+                done
+            fi
+
+            if captured ! then
                 # Check global variables
                 name store.variables.get = global_var_opt
                 if global_var_opt Option::Some(global_var) is then
-                    global_var clone_variable lambda_function Function::captures.push
-                    name.clone lambda_function.global_captures.push
+                    if name lambda_function.captures variable_list_contains ! then
+                        global_var clone_variable lambda_function Function::captures.push
+                        name.clone lambda_function.global_captures.push
+                    fi
                 fi
             fi
         fi
@@ -6533,7 +6572,10 @@ fn resolve_identifiers
                 continue
             fi
             if var_name function Function::variables variable_list_contains ! then
-                if var_name declared_globals.has ! then
+                if
+                    var_name declared_globals.has !
+                    var_name function Function::captures variable_list_contains ! &&
+                then
                     variable function Function::variables.push
                 fi
             fi

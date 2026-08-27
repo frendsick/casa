@@ -687,6 +687,7 @@ struct TypeChecker {
     binding_origins:            Map[str List[str]]
     remaining_uses:             Map[str u64]
     unsafe_depth:               u64
+    required_drop_types:        List[Type]
     literal_resolutions:        Map[i64 Type]
     diagnostics:                mut$Diagnostics
 }
@@ -731,6 +732,7 @@ impl TypeChecker {
     fn new store:mut$SymbolStore diagnostics:mut$Diagnostics -> TypeChecker {
         diagnostics # diagnostics
         Map[i64 Type]::new # literal_resolutions
+        List[Type]::new # required_drop_types
         0 # unsafe_depth
         Map[str u64]::new # remaining_uses
         Map[str List[str]]::new # binding_origins
@@ -1301,7 +1303,7 @@ impl TypeChecker {
             builtin BuiltinType::Str != return
         fi
         if typ Type::Function(_) is then
-            true return
+            false return
         fi
         if typ.has_unresolved_type_var then
             "Copy" GenericType::new Type::Generic = unresolved_copy_type
@@ -1341,6 +1343,11 @@ impl TypeChecker {
     {
         if is_global function_opt.is_some && then
             return
+        fi
+        if function_opt Option::Some(function) is then
+            if name function.captures variable_list_contains then
+                return
+            fi
         fi
         if typ.is_borrow function_opt typ tc.type_is_duplicable || then
             return
@@ -1494,7 +1501,11 @@ impl TypeChecker {
 
     fn stack_push_global tc:mut$TypeChecker type_value:mut$Type name:mut$str in_function:bool {
         if in_function ! then
-            type_value tc.stack_push_type return
+            false Option[List[str]]::None Option[i64]::None Option[str]::None
+            type_value type_capability name.clone Option::Some
+            List[LiteralRef]::new tc.current_location.clone type_value clone_type TypedValue
+            tc.stack.values.push
+            return
         fi
         if Option[Function]::None type_value tc.type_is_duplicable then
             type_value tc.stack_push_type return
@@ -1552,7 +1563,7 @@ impl TypeChecker {
             value.type_value.is_borrow ! &&
         then
             if value.place Option::Some(place) is then
-                tc.current_location f"Cannot move borrowed value `{place}`; clone it first"
+                tc.current_location f"Cannot move borrowed value `{place}` of type `{value.type_value.format}` in `{tc.current_op_context}`; clone it first"
                 ErrorKind::InvalidVariable tc.diagnostics.record_error
             else
                 tc.current_location "Cannot move a borrowed value; clone it first"
@@ -3429,7 +3440,7 @@ impl TypeChecker {
         # User-defined types must satisfy Eq (or Ord) explicitly.
         tc.store function_opt type1_t clone_type Option::Some cmp_value analyze_operation
         = semantics
-        trait_name GenericType::new Type::Generic = trait_type
+        trait_name.clone GenericType::new Type::Generic = trait_type
         if tc.diagnostics tc.store function_opt trait_type type1_t type_satisfies_trait ! then
             cmp_value comparison_op_str = cmp_str
             op Op::location f"Type `{type1}` cannot be compared with `{cmp_str}`: does not satisfy trait `{trait_name}`" ErrorKind::MissingTraitMethod tc.diagnostics.record_error
@@ -4151,6 +4162,24 @@ impl TypeChecker {
                 return
             fi
 
+            # Assignments to a capture update the closure record. Owned moving
+            # captures stay owned by the closure across invocations.
+            -1 (i64) = capture_index
+            if function_opt Option::Some(function) is then
+                var_name function Function::captures variable_list_index = capture_index
+            fi
+            if 0 capture_index >= then
+                function_opt var_name tc.local_var_type.unwrap = captured_type
+                "capture" effective_type_t captured_type var_name op tc.unify_assignment_type
+                = unified_capture
+                function_opt effective_type_t var_name tc.assignment_origins = origins
+                effective_type_t tc.expect_type_t
+                origins var_name tc.record_binding_origins
+                false var_name tc.set_owner_moved
+                unified_capture drop
+                return
+            fi
+
             # Try global variables
             var_name tc
                 .store
@@ -4562,36 +4591,68 @@ impl TypeChecker {
 # Trait support: bind_generic_params_standalone, type_satisfies_trait, inject_trait_fn_ptrs
 # ============================================================================
 
+fn bind_direct_generic_params
+    bindings:Map[str Type]
+    expected_type:$Type
+    actual_type:$Type
+    type_vars:$Set[str]
+-> Map[str Type] {
+    if expected_type.type_var_name Option::Some(type_var_name) is then
+        if type_var_name type_vars.has type_var_name bindings.get.is_none && then
+            actual_type clone_type type_var_name.clone bindings.set
+        fi
+        bindings return
+    fi
+    if expected_type Type::Generic(expected_generic) is then
+        if actual_type Type::Generic(actual_generic) is then
+            if expected_generic.base actual_generic.base != then
+                bindings return
+            fi
+            0 (u64) = index
+            while
+                index expected_generic.params.length >
+                index actual_generic.params.length > &&
+            do
+                index expected_generic.params.get = expected_parameter
+                if expected_parameter.type_var_name Option::Some(type_var_name) is then
+                    if type_var_name type_vars.has type_var_name bindings.get.is_none && then
+                        index actual_generic.params.get clone_type type_var_name.clone bindings.set
+                    fi
+                fi
+                1 += index
+            done
+        fi
+    fi
+    bindings
+}
+
 fn bind_generic_params_standalone
     bindings:Map[str Type]
     expected_type:$Type
     actual_type:$Type
     type_vars:$Set[str]
 -> Map[str Type] {
-    if expected_type.as_generic Option::Some(expected_g) is then
-        if actual_type.as_generic Option::Some(actual_g) is then
-            if expected_g.base actual_g.base == then
-                0 (u64) = index
-                while
-                    index expected_g.params.length >
-                    index actual_g.params.length > &&
-                do
-                    if
-                        index expected_g
-                            .params
-                            .get
-                            .type_var_name Option::Some(tv_name) is
-                    then
-                        if
-                            tv_name type_vars.has
-                            tv_name bindings.get.is_none &&
-                        then
-                            index actual_g.params.get clone_type tv_name.clone bindings.set
-                        fi
-                    fi
-                    1 += index
-                done
-            fi
+    type_vars actual_type expected_type bindings bind_direct_generic_params = bindings
+    if expected_type Type::Function(expected_function) is then
+        if actual_type Type::Function(actual_function) is then
+            0 (u64) = index
+            while
+                index expected_function.parameters.length >
+                index actual_function.parameters.length > &&
+            do
+                type_vars index actual_function.parameters.get index expected_function.parameters.get bindings
+                bind_direct_generic_params = bindings
+                1 += index
+            done
+            0 (u64) = index
+            while
+                index expected_function.return_types.length >
+                index actual_function.return_types.length > &&
+            do
+                type_vars index actual_function.return_types.get index expected_function.return_types.get bindings
+                bind_direct_generic_params = bindings
+                1 += index
+            done
         fi
     fi
     bindings
@@ -5502,13 +5563,19 @@ impl TypeChecker {
                 forward_value match
                     Option::Some(value) => location.clone value Op::new Option::Some = layout_operation
                     Option::None => {
-                        if is_drop then
-                            f"Cannot determine destructor for `{resolved_type.format}` in this generic call"
+                        if is_drop function_opt.is_some && then
+                            resolved_type clone_type tc.required_drop_types.push
+                            location.clone forwarded_name OpValue::PushVar Op::new Option::Some
+                            = layout_operation
                         else
-                            f"Cannot determine layout of `{resolved_type.format}` in this generic call"
-                        fi = message
-                        location message
-                        ErrorKind::TypeMismatch tc.diagnostics.record_error
+                            if is_drop then
+                                f"Cannot determine destructor for `{resolved_type.format}` in this generic call"
+                            else
+                                f"Cannot determine layout of `{resolved_type.format}` in this generic call"
+                            fi = message
+                            location message
+                            ErrorKind::TypeMismatch tc.diagnostics.record_error
+                        fi
                     }
                 end
             elif is_drop then
@@ -5770,6 +5837,65 @@ impl TypeChecker {
         done
     }
 
+    fn check_closure_captures
+        tc:mut$TypeChecker
+        lambda:mut$Function
+        op:mut$Op
+        function_opt:mut$Option[Function]
+    -> Option[List[str]] {
+        Option[List[str]]::None = closure_origins
+        List[str]::new = owned_captures
+        for capture in lambda Function::captures.iter do
+            capture Variable::name = capture_name: $str
+            if capture_name lambda.global_captures string_list_contains then
+                continue
+            fi
+            capture.typ clone_type = capture_type
+            if capture_type.is_unknown_placeholder then
+                continue
+            fi
+
+            function_opt op capture_name capture_type tc.stack_push_binding
+            tc.stack_pop_value = captured_value
+            captured_value.origins closure_origins merge_origins = closure_origins
+
+            if capture_type.is_borrow then
+                captured_value tc.release_value
+                if captured_value.origins.is_none then
+                    if captured_value.place Option::Some(place) is then
+                        capture_type.is_exclusive_borrow place closure_origins add_origin
+                        = closure_origins
+                    fi
+                fi
+                continue
+            fi
+            if function_opt capture_type tc.type_is_duplicable then
+                captured_value tc.release_value
+                continue
+            fi
+            if lambda.captures_by_move then
+                captured_value tc.consume_value
+                capture_name.clone owned_captures.push
+                continue
+            fi
+
+            lambda.captures_shared ! = capture_exclusive
+            if
+                lambda.captures_shared !
+                capture_exclusive tc.stack.values.length capture_name tc.place_has_conflicting_loan &&
+            then
+                op.location f"Cannot capture owner `{capture_name}` while it is borrowed"
+                ErrorKind::InvalidVariable tc.diagnostics.record_error
+            fi
+            captured_value tc.release_value
+            capture_exclusive capture_name closure_origins add_origin = closure_origins
+            if capture_exclusive then EXCLUSIVE_BORROW_TYPE else SHARED_BORROW_TYPE fi
+            capture_type apply_borrow_type capture Variable::set_typ
+        done
+        owned_captures = lambda.owned_captures
+        closure_origins
+    }
+
     # Resolve `?` only after the input and enclosing return types are known.
     # The hidden local owns the value until exactly one branch consumes it.
     fn lower_question_operator
@@ -5874,12 +6000,27 @@ impl TypeChecker {
                     fi
                 fi
             fi
-        elif fn_value OpValue::FnExec is then
+        elif fn_value OpValue::FnExec is fn_value OpValue::FnExecOwned is || then
             tc.stack_peek_type = fn_ptr_type
+            if fn_ptr_type.borrow_target Option::Some(callable_target) is then
+                callable_target clone_type = fn_ptr_type
+            fi
             if fn_ptr_type.is_unknown_placeholder then
                 TYPE_UNKNOWN_T tc.expect_type_t
             else
-                fn_ptr_type tc.expect_type_t
+                tc.stack_pop_value = function_value
+                if fn_ptr_type Type::Function(_) is ! then
+                    function_value fn_ptr_type tc.expect_value_type_t
+                elif
+                    function_value.binding.is_none
+                    function_value.place.is_none &&
+                    function_value.capability ValueCapability::Owned is &&
+                then
+                    function_value tc.consume_value
+                    OpValue::FnExecOwned op Op::set_value
+                else
+                    function_value tc.release_value
+                fi
                 tc.store function_opt fn_ptr_type Option::Some fn_value
                 analyze_operation = semantics
                 if semantics.into_stack_effect Option::Some(effect) is then
@@ -5889,20 +6030,35 @@ impl TypeChecker {
                 fi
             fi
         elif fn_value OpValue::FnPush(push_name) is then
-            if
-                push_name tc
-                    .store
-                    .functions
-                    .get_mut Option::Some(pending_push_fn) is
-            then
-                function_opt pending_push_fn tc.sync_capture_types
-            fi
+            Option[List[str]]::None = closure_origins
+            push_name tc.store.functions.remove = pending_push_opt
+            pending_push_opt match
+                Option::Some(pending_push_fn) => {
+                    function_opt pending_push_fn tc.sync_capture_types
+                    function_opt op pending_push_fn tc.check_closure_captures = closure_origins
+                    pending_push_fn push_name.clone tc.store.functions.set
+                }
+                Option::None => {
+                }
+            end
             tc.diagnostics tc.store push_name ensure_typechecked = push_fn_opt
+            if push_name tc.store.clone_function Option::Some(checked_lambda) is then
+                for capture in checked_lambda.captures.iter do
+                    if capture.name HIDDEN_DROP_PREFIX str::starts_with then
+                        HIDDEN_DROP_PREFIX capture.name hidden_layout_parameter_type
+                        tc.required_drop_types.push
+                    fi
+                done
+            fi
             if push_fn_opt.is_some then
                 push_fn_opt.unwrap = push_fn
                 push_fn.into_parts = is_unsafe = effect
                 effect make_function_reference_stack_effect = reference_effect
                 function_opt Option[Type]::None "" reference_effect tc.apply_stack_effect
+                if closure_origins.is_some then
+                    tc.stack.values.length 1 - tc.stack.values.get_mut = closure_value
+                    closure_origins = closure_value.origins
+                fi
             else
                 List[Type]::new List[Type]::new FunctionType Type::Function tc.stack_push_type
             fi
@@ -6782,6 +6938,25 @@ fn instantiate_default_trait_method
                 lambda_type_var.clone lambda_effect StackEffect::type_vars.add
             done
             lambda_effect lambda Function::location.clone lambda_ops cloned_lambda_name.clone Function::with_stack_effect = cloned_lambda
+            lambda.variables.clone cloned_lambda Function::set_variables
+            lambda.captures.clone cloned_lambda Function::set_captures
+            lambda.global_captures.clone cloned_lambda Function::set_global_captures
+            lambda.captures_by_move cloned_lambda Function::set_captures_by_move
+            lambda.captures_shared cloned_lambda Function::set_captures_shared
+            for lambda_op in cloned_lambda.ops.iter do
+                if lambda_op.value OpValue::PushCapture(capture_name) is then
+                    if capture_name cloned_lambda.captures variable_list_contains ! then
+                        capture_name.clone Variable::new cloned_lambda.captures.push
+                    fi
+                fi
+            done
+            for type_var_name in resolved_stack_effect.type_vars.to_list.iter do
+                type_var_name.clone Type::TypeVar = type_var
+                type_var make_hidden_drop_parameter_name = hidden_drop
+                if hidden_drop cloned_lambda.captures variable_list_contains ! then
+                    TYPE_U64_T clone_type hidden_drop Variable cloned_lambda.captures.push
+                fi
+            done
             cloned_lambda cloned_lambda_name.clone store.functions.set
             cloned_lambda_name OpValue::FnPush body_op Op::set_value
             1 += cloned_lambda_index
@@ -7158,23 +7333,63 @@ fn add_hidden_layout_parameter
 
 fn add_hidden_drop_parameters
     typ:mut$Type
+    store:$SymbolStore
     hidden_parameters:mut$List[Parameter]
     variables:mut$List[Variable]
     assignments:mut$List[Op]
     seen:mut$Set[str]
+    visiting:mut$Set[str]
     location:mut$Location
 {
-    typ match
+    if typ.is_shared_borrow then
+        return
+    fi
+    if typ.borrow_target Option::Some(target) is then
+        location visiting seen assignments variables hidden_parameters store target
+        add_hidden_drop_parameters
+        return
+    fi
+    typ clone_type = inspected_type
+    inspected_type match
         Type::TypeVar(_) => {
             typ make_hidden_drop_parameter_name = hidden_drop
             location seen assignments variables hidden_parameters hidden_drop
             add_hidden_layout_parameter
         }
         Type::Generic(generic) => {
-            for parameter in generic.params.iter do
-                location seen assignments variables hidden_parameters parameter
-                add_hidden_drop_parameters
-            done
+            typ.format = type_name
+            if type_name visiting.has then
+                return
+            fi
+            type_name.clone visiting.add
+            if f"{typ.match_base}::drop" store.functions.has then
+                for parameter in generic.params.iter do
+                    location visiting seen assignments variables hidden_parameters store parameter
+                    add_hidden_drop_parameters
+                done
+            elif ARRAY_TYPE generic.base == then
+                if 0 generic.params.length != then
+                    location visiting seen assignments variables hidden_parameters store
+                    0 generic.params.get add_hidden_drop_parameters
+                fi
+            elif generic.base store.clone_struct Option::Some(casa_struct) is then
+                casa_struct.type_vars typ aggregate_type_bindings = substitutions
+                for member in casa_struct.members.iter do
+                    substitutions member.typ.substitute_t = member_type
+                    location visiting seen assignments variables hidden_parameters store member_type
+                    add_hidden_drop_parameters
+                done
+            elif generic.base store.clone_enum Option::Some(casa_enum) is then
+                casa_enum.type_vars typ aggregate_type_bindings = substitutions
+                for pair in casa_enum.variant_types.iter do
+                    for payload_type in pair.second.iter do
+                        substitutions payload_type.substitute_t = resolved_payload
+                        location visiting seen assignments variables hidden_parameters store resolved_payload
+                        add_hidden_drop_parameters
+                    done
+                done
+            fi
+            type_name visiting.remove
         }
         _ => {
         }
@@ -7271,12 +7486,6 @@ fn prepare_generic_size_queries function:mut$Function {
             .parameters
             .iter
     do
-        parameter.typ clone_type = destruction_parameter_type
-        if destruction_parameter_type.borrow_target Option::Some(target) is then
-            target clone_type = destruction_parameter_type
-        fi
-        function.location seen assignments function.variables hidden_parameters
-        destruction_parameter_type add_hidden_drop_parameters
         parameter.typ clone_type signature_types.push
     done
     for
@@ -7440,7 +7649,7 @@ impl TypeChecker {
                 EXCLUSIVE_BORROW_TYPE copied_type clone_type apply_borrow_type = copied_type
             fi
         fi
-        copied_type = copy_check_type
+        copied_type clone_type = copy_check_type
         if op.value OpValue::Copy is then
             if copy_check_type.borrow_target Option::Some(target) is then
                 target clone_type = copy_check_type
@@ -7595,6 +7804,7 @@ impl TypeChecker {
             if
                 current_op.value OpValue::FnCall is
                 current_op.value OpValue::FnExec is ||
+                current_op.value OpValue::FnExecOwned is ||
                 current_op.value OpValue::FnPush is ||
                 current_op.value OpValue::FnReturn is ||
             then
@@ -7898,6 +8108,103 @@ impl TypeChecker {
     }
 }
 
+fn collect_cleanup_drop_types ops:$List[Op] store:$SymbolStore required:mut$List[Type] {
+    for op in ops.iter do
+        op.value clone_op_value = value
+        if value OpValue::Drop is then
+            if op.type_hint Option::Some(drop_type) is then
+                if drop_type.has_unresolved_type_var then
+                    drop_type clone_type required.push
+                fi
+            fi
+        fi
+        if op.id store.clone_ownership Option::Some(ownership) is then
+            for event in ownership.cleanups.iter do
+                if event.typ.has_unresolved_type_var then
+                    event.typ clone_type required.push
+                fi
+            done
+        fi
+        value match
+            OpValue::PushArray(items) => {
+                required store items collect_cleanup_drop_types
+            }
+            OpValue::ExprGroup(items) => {
+                required store items collect_cleanup_drop_types
+            }
+            OpValue::MatchArm(arm) => {
+                required store arm.guard_ops collect_cleanup_drop_types
+            }
+            _ => {
+            }
+        end
+    done
+}
+
+fn add_required_drop_parameters
+    function:mut$Function
+    ops:mut$List[Op]
+    store:$SymbolStore
+    forwarded_types:$List[Type]
+{
+    List[Type]::new = cleanup_types
+    cleanup_types store ops collect_cleanup_drop_types
+    List[Parameter]::new = hidden_parameters
+    List[Variable]::new = hidden_variables
+    List[Op]::new = assignments
+    Set[str]::new = seen
+    Set[str]::new = visiting
+    for
+        parameter in function
+            .stack_effect
+            .parameters
+            .iter
+    do
+        parameter.name.clone seen.add
+    done
+    for forwarded_type in forwarded_types.iter do
+        forwarded_type make_hidden_drop_parameter_name = hidden_drop
+        function.location seen assignments hidden_variables hidden_parameters hidden_drop
+        add_hidden_layout_parameter
+    done
+    for cleanup_type in cleanup_types.iter do
+        function.location visiting seen assignments hidden_variables hidden_parameters store cleanup_type
+        add_hidden_drop_parameters
+    done
+    if function.name "lambda__" str::starts_with then
+        for type_var_name in function.stack_effect.type_vars.to_list.iter do
+            type_var_name.clone Type::TypeVar = type_var
+            type_var make_hidden_drop_parameter_name = hidden_drop
+            function.location seen assignments hidden_variables hidden_parameters hidden_drop
+            add_hidden_layout_parameter
+        done
+    fi
+    if hidden_parameters.is_empty then
+        return
+    fi
+    if function.name "lambda__" str::starts_with then
+        for hidden_variable in hidden_variables.iter do
+            if hidden_variable.name function.captures variable_list_contains ! then
+                hidden_variable clone_variable function.captures.push
+            fi
+        done
+        return
+    fi
+    hidden_variables function.variables.append
+    for
+        parameter in function
+            .stack_effect
+            .parameters
+            .iter
+    do
+        parameter.name.clone parameter.typ clone_type Parameter hidden_parameters.push
+    done
+    hidden_parameters function.stack_effect StackEffect::set_parameters
+    while assignments.is_empty ! do
+        0 assignments.pop ops.insert
+    done
+}
+
 fn check_ops
     ops:mut$List[Op]
     function_opt:mut$Option[Function]
@@ -7925,6 +8232,13 @@ fn check_ops
             checked_function checker.validate_borrow_returns
         fi
         checked_function checker.resolve_declared_return_literals
+        for capture_name in checked_function.owned_captures.iter do
+            if capture_name checker.owner_is_moved then
+                checked_function.location
+                f"Repeatable closure does not restore captured owner `{capture_name}`"
+                ErrorKind::InvalidVariable checker.diagnostics.record_error
+            fi
+        done
     fi
 
     0 (u64) = stack_index
@@ -7991,6 +8305,11 @@ fn check_ops
         fi
     fi
 
+    if function_opt Option::Some(checked_function) is then
+        checker.required_drop_types.clone = forwarded_types
+        forwarded_types checker.store ops checked_function add_required_drop_parameters
+    fi
+
     inferred
 }
 
@@ -8005,11 +8324,12 @@ fn check_functions store:mut$SymbolStore diagnostics:mut$Diagnostics {
     for function_name in function_names.iter do
         function_name store
             .functions
-            .get_mut
-            .unwrap = function: mut$Function
+            .remove
+            .unwrap = function
         if function.name "lambda__" str::starts_with ! function.is_typechecked ! && then
             function prepare_generic_size_queries
         fi
+        function function_name.clone store.functions.set
     done
     for func_name in function_names.iter do
         func_name store
