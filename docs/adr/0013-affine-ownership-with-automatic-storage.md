@@ -1,5 +1,5 @@
 # Affine ownership with automatic storage placement
-status: amended by [ADR-0150](0150-shared-borrow-duplication-is-not-copy-conformance.md)
+status: amended by [ADR-0150](0150-shared-borrow-duplication-is-not-copy-conformance.md) and [ADR-0158](0158-copy-requires-a-raw-value-representation.md)
 related issue: #314
 
 Casa will use affine ownership with compiler-checked borrowing and deterministic destruction. It will not use tracing garbage collection or automatic reference counting. Memory ownership is visible in function contracts, but allocator and arena selection are not part of ordinary source code.

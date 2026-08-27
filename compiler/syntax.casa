@@ -19,7 +19,7 @@ import "selective_import"
 # spans are produced during normal compilation.
 # ============================================================================
 
-enum SyntaxSpanKind {
+enum SyntaxSpanKind derives Copy {
     Definition
     DelimitedForm
     StructBody
@@ -60,7 +60,7 @@ struct ParseState {
 }
 
 impl ParseState {
-    fn new diagnostics:mut$Diagnostics -> ParseState {
+    fn new diagnostics:Diagnostics -> ParseState {
         List[bool]::new = store_mutated
         false store_mutated.push
         List[bool]::new = recovery_required
@@ -93,12 +93,12 @@ impl ParseState {
 
     fn mark_output_unusable self:mut$ParseState { false 0 self.output_usable.set }
 
-    fn has_usable_output self:mut$ParseState -> bool { 0 self.output_usable.get bool::clone }
+    fn has_usable_output self:mut$ParseState -> bool { 0 self.output_usable.get copy }
 
     fn request_recovery self:mut$ParseState { true 0 self.recovery_required.set }
 
     fn take_recovery_request self:mut$ParseState -> bool {
-        0 self.recovery_required.get bool::clone = requested
+        0 self.recovery_required.get copy = requested
         false 0 self.recovery_required.set
         requested
     }
@@ -107,7 +107,13 @@ impl ParseState {
 
     fn mark_store_mutated self:mut$ParseState { true 0 self.store_mutated.set }
 
-    fn store_was_mutated self:mut$ParseState -> bool { 0 self.store_mutated.get bool::clone }
+    fn store_was_mutated self:mut$ParseState -> bool { 0 self.store_mutated.get copy }
+
+    fn into_diagnostics self:ParseState -> Diagnostics {
+        self match
+            ParseState { diagnostics: diagnostics } => diagnostics
+        end
+    }
 
     # Record one structural layout span.
     fn record_span self:mut$ParseState kind:SyntaxSpanKind start:u64 close:u64 {
@@ -159,7 +165,7 @@ struct Parser {
     included_files:         Set[str]
     selective_import_cache: Map[str ImportedModule]
     search_paths:           List[str]
-    sources:                SourceStore
+    sources:                mut$SourceStore
     state:                  ParseState
     syntax_only:            bool
 }
@@ -170,6 +176,13 @@ struct ParseResolveResult {
     diagnostics: Diagnostics
 }
 
+impl ParseResolveResult {
+    fn into_parts self:ParseResolveResult -> Option[List[Op]] SymbolStore Diagnostics {
+        self match
+            ParseResolveResult { ops: ops store: store diagnostics: diagnostics } => ops store diagnostics
+        end
+    }
+}
 # Data-only facts used to prove that formatting preserves source meaning.
 
 struct SyntaxTokenFact {
@@ -195,8 +208,16 @@ struct SyntaxResult {
     diagnostics: Diagnostics
 }
 
+impl SyntaxResult {
+    fn into_parts self:SyntaxResult -> List[Token] Option[SyntaxFacts] Diagnostics {
+        self match
+            SyntaxResult { tokens: tokens facts: facts diagnostics: diagnostics } => tokens facts diagnostics
+        end
+    }
+}
+
 impl Parser {
-    fn new store:mut$SymbolStore diagnostics:mut$Diagnostics sources:SourceStore -> Parser {
+    fn new store:SymbolStore diagnostics:Diagnostics sources:mut$SourceStore -> Parser {
         false
         diagnostics ParseState::new
         sources
@@ -205,6 +226,32 @@ impl Parser {
         Set[str]::new
         store
         Parser
+    }
+
+    fn into_parts self:Parser -> SymbolStore Set[str] ParseState {
+        self match
+            Parser { store: store included_files: included_files state: state } => store included_files state
+        end
+    }
+
+    fn into_diagnostics self:Parser -> Diagnostics {
+        self.into_parts = state = included_files = store
+        state.into_diagnostics
+    }
+
+    fn into_result self:Parser ops:Option[List[Op]] -> ParseResolveResult List[str] {
+        self.into_parts = state = included_files = store
+        included_files.to_list = included_file_list
+        state.into_diagnostics store ops ParseResolveResult
+        included_file_list
+    }
+
+    fn into_failed_result self:Parser -> ParseResolveResult List[str] {
+        self.into_parts = state = included_files = store
+        store drop
+        included_files.to_list = included_file_list
+        state.into_diagnostics symbol_store_new Option[List[Op]]::None ParseResolveResult
+        included_file_list
     }
 
     fn put_function self:mut$Parser name:str function:Function {
@@ -438,13 +485,15 @@ impl SymbolStore {
                 .functions
                 .remove
                 .unwrap = imported_function
-            if name self.functions.get_mut Option::Some(existing_function) is then
-                if imported_function.is_used then
-                    true = existing_function.is_used
-                fi
-            else
-                imported_function name.clone self.functions.set
-            fi
+            name self.functions.get_mut = existing_function_opt
+            existing_function_opt match
+                Option::Some(existing_function) => {
+                    if imported_function.is_used then
+                        true = existing_function.is_used
+                    fi
+                }
+                Option::None => imported_function name.clone self.functions.set
+            end
         done
         imported self.merge_import_metadata
     }
@@ -570,26 +619,27 @@ fn op_value_to_operator_kind op_value:mut$OpValue -> Option[OperatorKind] {
 struct TokenCursor {
     tokens: List[Token]
     pos:    u64
-    state:  ParseState
 }
 
 impl TokenCursor {
-    fn new tokens:List[Token] state:ParseState -> TokenCursor { state 0 tokens TokenCursor }
+    fn new tokens:List[Token] -> TokenCursor { 0 tokens TokenCursor }
 
     fn pop self:mut$TokenCursor -> Option[Token] {
-        if self TokenCursor::tokens.length self TokenCursor::pos >= then
+        self TokenCursor::pos copy = pos
+        if self TokenCursor::tokens.length pos >= then
             Option::None return
         fi
-        self TokenCursor::pos self TokenCursor::tokens.get Token::clone = token
-        self TokenCursor::pos 1 + self TokenCursor::set_pos
+        pos self TokenCursor::tokens.get.clone = token
+        pos 1 + self TokenCursor::set_pos
         token Option::Some
     }
 
     fn peek self:mut$TokenCursor -> Option[Token] {
-        if self TokenCursor::tokens.length self TokenCursor::pos >= then
+        self TokenCursor::pos copy = pos
+        if self TokenCursor::tokens.length pos >= then
             Option::None return
         fi
-        self TokenCursor::pos self TokenCursor::tokens.get Token::clone Option::Some
+        pos self TokenCursor::tokens.get.clone Option::Some
     }
 
     fn is_finished self:mut$TokenCursor -> bool {
@@ -634,7 +684,7 @@ fn is_parser_synchronization_token token:mut$Token -> bool {
     if token is_parser_delimiter then
         true return
     fi
-    token.value = value
+    token.value = value: $str
     "fn" value ==
     "enum" value == ||
     "struct" value == ||
@@ -645,7 +695,7 @@ fn is_parser_synchronization_token token:mut$Token -> bool {
 }
 
 fn is_parser_delimiter token:mut$Token -> bool {
-    token.value = value
+    token.value = value: $str
     "}" value == "fi" value == || "done" value == || "end" value == ||
 }
 
@@ -655,26 +705,26 @@ fn is_parser_delimiter token:mut$Token -> bool {
 
 fn fallback_token -> Token { empty_location TokenKind::Eof "" Token::new }
 
-fn expect_token cursor:mut$TokenCursor -> Option[Token] {
+fn expect_token cursor:mut$TokenCursor state:mut$ParseState -> Option[Token] {
     cursor.pop = result_opt
     if result_opt.is_none then
-        empty_location "Unexpected end of input" ErrorKind::UnexpectedToken cursor.state.record_error
-        cursor.state.mark_output_unusable
-        cursor.state.request_recovery
+        empty_location "Unexpected end of input" ErrorKind::UnexpectedToken state.record_error
+        state.mark_output_unusable
+        state.request_recovery
         Option::None return
     fi
     result_opt.unwrap = token
     if TokenKind::Eof token Token::kind == then
-        token Token::location "Unexpected end of input" ErrorKind::UnexpectedToken cursor.state.record_error
-        cursor.state.mark_output_unusable
-        cursor.state.request_recovery
+        token Token::location "Unexpected end of input" ErrorKind::UnexpectedToken state.record_error
+        state.mark_output_unusable
+        state.request_recovery
         Option::None return
     fi
     token Option::Some
 }
 
-fn expect_token_value cursor:mut$TokenCursor expected:str -> Option[Token] {
-    cursor expect_token = token_opt
+fn expect_token_value cursor:mut$TokenCursor expected:str state:mut$ParseState -> Option[Token] {
+    state cursor expect_token = token_opt
     if token_opt.is_none then
         Option::None return
     fi
@@ -686,23 +736,27 @@ fn expect_token_value cursor:mut$TokenCursor expected:str -> Option[Token] {
         token Token::location
         "Unexpected token"
         ErrorKind::UnexpectedToken
-        cursor.state.record_error_expected
-        cursor.state.request_recovery
+        state.record_error_expected
+        state.request_recovery
         Option::None return
     fi
     token Option::Some
 }
 
-fn expect_token_kind cursor:mut$TokenCursor expected_kind:TokenKind -> Option[Token] {
-    cursor expect_token = token_opt
+fn expect_token_kind
+    cursor:mut$TokenCursor
+    expected_kind:TokenKind
+    state:mut$ParseState
+-> Option[Token] {
+    state cursor expect_token = token_opt
     if token_opt.is_none then
         Option::None return
     fi
     token_opt.unwrap = token
     if expected_kind token Token::kind != then
         cursor.retreat
-        token Token::location "Unexpected token" ErrorKind::UnexpectedToken cursor.state.record_error
-        cursor.state.request_recovery
+        token Token::location "Unexpected token" ErrorKind::UnexpectedToken state.record_error
+        state.request_recovery
         Option::None return
     fi
     token Option::Some
@@ -741,10 +795,10 @@ fn is_type_argument_literal value:$str -> bool {
     value char_literal_codepoint.is_some
 }
 
-fn parse_type_ast cursor:mut$TokenCursor -> Type {
+fn parse_type_ast cursor:mut$TokenCursor state:mut$ParseState -> Type {
     cursor.peek = peek_opt
     if peek_opt.is_none then
-        empty_location "Expected type" ErrorKind::UnexpectedToken cursor.state.record_error
+        empty_location "Expected type" ErrorKind::UnexpectedToken state.record_error
         Type::Unknown return
     fi
     peek_opt.unwrap = peek
@@ -755,14 +809,14 @@ fn parse_type_ast cursor:mut$TokenCursor -> Type {
         cursor.pop drop
         "fn" = base
     else
-        fallback_token cursor expect_token.unwrap_or = base_token
+        fallback_token state cursor expect_token.unwrap_or = base_token
         if
             TokenKind::Identifier base_token Token::kind !=
             base_token Token::value is_type_argument_literal ! &&
         then
-            base_token Token::location "Expected type name" ErrorKind::UnexpectedToken cursor.state.record_error
+            base_token Token::location "Expected type name" ErrorKind::UnexpectedToken state.record_error
         fi
-        base_token Token::value = base
+        base_token Token::value.clone = base
     fi
     if base "mut$" str::starts_with then
         EXCLUSIVE_BORROW_TYPE = borrow_prefix
@@ -775,7 +829,7 @@ fn parse_type_ast cursor:mut$TokenCursor -> Type {
     fi
     if base "$" str::starts_with base "mut$" str::starts_with || then
         peek.location "Nested borrow qualifiers are not supported" ErrorKind::Syntax
-        cursor.state.record_error
+        state.record_error
         Type::Unknown return
     fi
 
@@ -805,7 +859,7 @@ fn parse_type_ast cursor:mut$TokenCursor -> Type {
             if inner_opt.is_none then
                 break
             fi
-            inner_opt.unwrap Token::value = ival
+            inner_opt.unwrap Token::value = ival: $str
             if "]" ival == then
                 cursor.pop drop
                 break
@@ -815,7 +869,7 @@ fn parse_type_ast cursor:mut$TokenCursor -> Type {
                 true = past_arrow
                 continue
             fi
-            cursor parse_type_ast = inner_type
+            state cursor parse_type_ast = inner_type
             if past_arrow then
                 inner_type fn_returns.push
             else
@@ -834,10 +888,10 @@ fn parse_type_ast cursor:mut$TokenCursor -> Type {
                 break
             fi
         fi
-        cursor parse_type_ast inner_types.push
+        state cursor parse_type_ast inner_types.push
     done
     if 0 inner_types.length == then
-        empty_location f"Expected type parameter inside `{base}[...]`" ErrorKind::UnexpectedToken cursor.state.record_error
+        empty_location f"Expected type parameter inside `{base}[...]`" ErrorKind::UnexpectedToken state.record_error
     fi
     borrow_prefix inner_types base GenericType Type::Generic apply_borrow_type
 }
@@ -846,15 +900,15 @@ fn parse_type_ast cursor:mut$TokenCursor -> Type {
 # get_op_type_cast - parse (type) cast
 # ============================================================================
 
-fn get_op_type_cast cursor:mut$TokenCursor -> Op {
-    fallback_token "(" cursor expect_token_value.unwrap_or = open_token
-    cursor parse_type_ast = cast_type
-    fallback_token ")" cursor expect_token_value.unwrap_or = close_token
+fn get_op_type_cast cursor:mut$TokenCursor state:mut$ParseState -> Op {
+    fallback_token state "(" cursor expect_token_value.unwrap_or = open_token
+    state cursor parse_type_ast = cast_type
+    fallback_token state ")" cursor expect_token_value.unwrap_or = close_token
 
     open_token Token::location Location::span Span::offset = open_offset
     close_token Token::location Location::span Span::offset = close_offset
     close_offset open_offset - 1 + = length
-    length open_offset open_token Token::location Location::file Location::new = loc
+    length open_offset open_token Token::location Location::file.clone Location::new = loc
 
     loc cast_type OpValue::TypeCast Op::new
 }
@@ -879,8 +933,8 @@ fn char_literal_codepoint value:$str -> Option[i64] {
     Option[i64]::None
 }
 
-fn get_op_literal token:mut$Token cursor:mut$TokenCursor -> Op {
-    token Token::value = value
+fn get_op_literal token:mut$Token cursor:mut$TokenCursor state:mut$ParseState -> Op {
+    token Token::value = value: $str
     if "true" value == then
         token Token::location 1 OpValue::PushBool Op::new return
     fi
@@ -889,11 +943,11 @@ fn get_op_literal token:mut$Token cursor:mut$TokenCursor -> Op {
     fi
     # Numeric literal (positive or negative)
     if value is_float_literal then
-        token Token::location value OpValue::PushFloat Op::new return
+        token Token::location value.clone OpValue::PushFloat Op::new return
     fi
     if 0 value.at.is_digit value is_negative_integer_literal || then
         value.clone str_to_int = int_value
-        token Token::location int_value value IntegerLiteral::new OpValue::PushInt Op::new return
+        token Token::location int_value value.clone IntegerLiteral::new OpValue::PushInt Op::new return
     fi
     value char_literal_codepoint = char_opt
     if char_opt Option::Some(char_value) is then
@@ -905,7 +959,7 @@ fn get_op_literal token:mut$Token cursor:mut$TokenCursor -> Op {
         value 1 value_length 2 - str::substring = str_value
         token Token::location str_value OpValue::PushStr Op::new return
     fi
-    token Token::location f"Token `{value}` is not a literal" ErrorKind::Syntax cursor.state.record_error
+    token Token::location f"Token `{value}` is not a literal" ErrorKind::Syntax state.record_error
     token Token::location 0 make_integer_op_value Op::new
 }
 
@@ -913,24 +967,24 @@ fn get_op_literal token:mut$Token cursor:mut$TokenCursor -> Op {
 # get_op_intrinsic - convert intrinsic token to op
 # ============================================================================
 
-fn get_op_intrinsic token:mut$Token cursor:mut$TokenCursor -> Op {
+fn get_op_intrinsic token:mut$Token cursor:mut$TokenCursor state:mut$ParseState -> Op {
     token Token::value intrinsic_from_str = kind_opt
-    if kind_opt.is_none then
-        token Token::location f"Token `{token Token::value}` is not an intrinsic" ErrorKind::Syntax cursor.state.record_error
-    fi
-    kind_opt.unwrap = intrinsic_kind
-    if intrinsic_kind IntrinsicKind::SizeOf == then
-        fallback_token "[" cursor expect_token_value.unwrap_or drop
-        cursor parse_type_ast = target_type
-        fallback_token "]" cursor expect_token_value.unwrap_or drop
-        token Token::location target_type OpValue::SizeOf Op::new return
-    fi
-    intrinsic_kind intrinsic_to_op_value = op_value_opt
-    if op_value_opt.is_none then
-        token Token::location f"No OpValue for intrinsic `{token Token::value}`" ErrorKind::Syntax cursor.state.record_error
-    fi
-    if op_value_opt Option::Some(op_value) is then
-        token Token::location op_value Op::new return
+    if kind_opt Option::Some(kind) is then
+        kind copy = intrinsic_kind
+        if intrinsic_kind IntrinsicKind::SizeOf == then
+            fallback_token state "[" cursor expect_token_value.unwrap_or drop
+            state cursor parse_type_ast = target_type
+            fallback_token state "]" cursor expect_token_value.unwrap_or drop
+            token Token::location target_type OpValue::SizeOf Op::new return
+        fi
+        intrinsic_kind intrinsic_to_op_value match
+            Option::Some(op_value) => token Token::location op_value Op::new return
+            Option::None => {
+                token Token::location f"No OpValue for intrinsic `{token Token::value}`" ErrorKind::Syntax state.record_error
+            }
+        end
+    else
+        token Token::location f"Token `{token Token::value}` is not an intrinsic" ErrorKind::Syntax state.record_error
     fi
     token Token::location 0 make_integer_op_value Op::new
 }
@@ -939,64 +993,66 @@ fn get_op_intrinsic token:mut$Token cursor:mut$TokenCursor -> Op {
 # get_op_operator - convert operator token to op
 # ============================================================================
 
-fn parse_assignment_target cursor:mut$TokenCursor -> Location str {
-    fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = root_token
-    root_token Token::value = target
+fn parse_assignment_target cursor:mut$TokenCursor state:mut$ParseState -> Location str {
+    fallback_token state TokenKind::Identifier cursor expect_token_kind.unwrap_or = root_token
+    root_token Token::value.clone = target
     while "." cursor expect_delimiter do
-        fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or Token::value = field
+        fallback_token state TokenKind::Identifier cursor expect_token_kind.unwrap_or Token::value = field: $str
         f"{target}.{field}" = target
     done
-    root_token Token::location
+    root_token Token::location.clone
     target
 }
 
-fn get_op_operator token:mut$Token cursor:mut$TokenCursor function_name:mut$str -> Op {
+fn get_op_operator
+    token:mut$Token
+    cursor:mut$TokenCursor
+    function_name:mut$str
+    state:mut$ParseState
+-> Op {
     token Token::value operator_from_str = kind_opt
-    if kind_opt.is_none then
-        token Token::location f"Token `{token Token::value}` is not an operator" ErrorKind::Syntax cursor.state.record_error
-    fi
-    kind_opt.unwrap = operator_kind
+    if kind_opt Option::Some(kind) is then
+        kind copy = operator_kind
 
-    # Assignment: = varname
-    if OperatorKind::Assign operator_kind == then
-        cursor parse_assignment_target = var_name = target_location
+        # Assignment: = varname
+        if OperatorKind::Assign operator_kind == then
+            state cursor parse_assignment_target = var_name = target_location
 
-        # Optional type annotation: = varname : type
-        Option[Type]::None = type_hint
-        cursor.peek = colon_opt
-        if colon_opt Option::Some(colon) is then
-            if ":" colon Token::value == then
-                cursor.advance
-                cursor parse_type_ast Option::Some = type_hint
+            # Optional type annotation: = varname : type
+            Option[Type]::None = type_hint
+            cursor.peek = colon_opt
+            if colon_opt Option::Some(colon) is then
+                if ":" colon Token::value == then
+                    cursor.advance
+                    state cursor parse_type_ast Option::Some = type_hint
+                fi
             fi
+            target_location var_name OpValue::AssignVar Op::new = assign_op
+            type_hint = assign_op.type_hint
+            assign_op return
         fi
-        target_location var_name OpValue::AssignVar Op::new = assign_op
-        if type_hint Option::Some(hint) is then
-            hint Option::Some = assign_op.type_hint
+
+        # Compound assignment: += varname
+        if OperatorKind::AssignInc operator_kind == then
+            state cursor parse_assignment_target = inc_target = inc_location
+            inc_location inc_target OpValue::AssignInc Op::new return
         fi
-        assign_op
-        return
-    fi
 
-    # Compound assignment: += varname
-    if OperatorKind::AssignInc operator_kind == then
-        cursor parse_assignment_target = inc_target = inc_location
-        inc_location inc_target OpValue::AssignInc Op::new return
-    fi
+        # Compound assignment: -= varname
+        if OperatorKind::AssignDec operator_kind == then
+            state cursor parse_assignment_target = dec_target = dec_location
+            dec_location dec_target OpValue::AssignDec Op::new return
+        fi
 
-    # Compound assignment: -= varname
-    if OperatorKind::AssignDec operator_kind == then
-        cursor parse_assignment_target = dec_target = dec_location
-        dec_location dec_target OpValue::AssignDec Op::new return
-    fi
-
-    # Simple operator -> OpValue lookup
-    operator_kind operator_to_op_value = op_value_opt
-    if op_value_opt.is_none then
-        token Token::location f"No OpValue for operator `{token Token::value}`" ErrorKind::Syntax cursor.state.record_error
-    fi
-    if op_value_opt Option::Some(op_value) is then
-        token Token::location op_value Op::new return
+        # Simple operator -> OpValue lookup
+        operator_kind operator_to_op_value match
+            Option::Some(op_value) => token Token::location op_value Op::new return
+            Option::None => {
+                token Token::location f"No OpValue for operator `{token Token::value}`" ErrorKind::Syntax state.record_error
+            }
+        end
+    else
+        token Token::location f"Token `{token Token::value}` is not an operator" ErrorKind::Syntax state.record_error
     fi
     token Token::location 0 make_integer_op_value Op::new
 }
@@ -1031,13 +1087,13 @@ fn parse_array_lambda
     cursor.retreat
     f"lambda__{function_name}_o{brace_token Token::location Location::span Span::offset}" = arr_lam_name
     arr_lam_name cursor parser parse_block_ops = arr_lam_ops
-    brace_token Token::location arr_lam_ops arr_lam_name Function::new = arr_lam_fn
+    brace_token Token::location.clone arr_lam_ops arr_lam_name.clone Function::new = arr_lam_fn
     arr_lam_fn arr_lam_name.clone parser.put_function
-    brace_token Token::location arr_lam_name OpValue::FnPush Op::new items.push
+    brace_token Token::location.clone arr_lam_name OpValue::FnPush Op::new items.push
 }
 
 fn get_op_array parser:mut$Parser function_name:mut$str cursor:mut$TokenCursor -> Op {
-    fallback_token "[" cursor expect_token_value.unwrap_or = open_token
+    fallback_token parser.state "[" cursor expect_token_value.unwrap_or = open_token
     List[Op]::new = items
     while true do
         # Close on `]` (also reached after an optional trailing comma).
@@ -1069,17 +1125,17 @@ fn get_op_array parser:mut$Parser function_name:mut$str cursor:mut$TokenCursor -
             if "{" value_token Token::value == then
                 items value_token cursor function_name parser parse_array_lambda
             elif TokenKind::Literal value_token Token::kind == then
-                cursor value_token get_op_literal items.push
+                parser.state cursor value_token get_op_literal items.push
             elif TokenKind::Identifier value_token Token::kind == then
                 cursor.peek = struct_peek_opt
                 if struct_peek_opt Option::Some(struct_peek) is then
                     if "{" struct_peek Token::value == then
                         items value_token cursor function_name parser parse_array_struct_literal
                     else
-                        value_token Token::location value_token Token::value OpValue::Identifier Op::new items.push
+                        value_token Token::location value_token Token::value.clone OpValue::Identifier Op::new items.push
                     fi
                 else
-                    value_token Token::location value_token Token::value OpValue::Identifier Op::new items.push
+                    value_token Token::location value_token Token::value.clone OpValue::Identifier Op::new items.push
                 fi
             else
                 value_token Token::location "Unexpected token in array literal" ErrorKind::UnexpectedToken parser.state.record_error
@@ -1118,7 +1174,7 @@ fn get_op_array parser:mut$Parser function_name:mut$str cursor:mut$TokenCursor -
 # ============================================================================
 
 fn parse_block_ops parser:mut$Parser cursor:mut$TokenCursor function_name:mut$str -> List[Op] {
-    fallback_token "{" cursor expect_token_value.unwrap_or = open_token
+    fallback_token parser.state "{" cursor expect_token_value.unwrap_or = open_token
     List[Op]::new = ops
     while true do
         cursor.pop = token_opt
@@ -1191,16 +1247,17 @@ fn handle_fstring
         fi
         token_opt.unwrap = token
         if TokenKind::FstringText token Token::kind == then
-            token Token::location token Token::value OpValue::PushStr Op::new ops.push
+            token Token::location token Token::value.clone OpValue::PushStr Op::new ops.push
             1 += part_count
         elif TokenKind::FstringExprStart token Token::kind == then
             function_name cursor parser parse_fstring_expr = expr_ops
+            token Token::location.clone OpValue::FstringToStr Op::new expr_ops.push
             f"lambda__{function_name}_o{token Token::location Location::span Span::offset}" = lambda_name
-            token Token::location expr_ops lambda_name Function::new = lambda_function
+            token Token::location.clone expr_ops lambda_name.clone Function::new = lambda_function
+            true lambda_function Function::set_captures_shared
             lambda_function lambda_name.clone parser.put_function
-            token Token::location lambda_name OpValue::FnPush Op::new ops.push
-            token Token::location OpValue::FnExec Op::new ops.push
-            token Token::location OpValue::FstringToStr Op::new ops.push
+            token Token::location.clone lambda_name OpValue::FnPush Op::new ops.push
+            token Token::location.clone OpValue::FnExec Op::new ops.push
             1 += part_count
         elif TokenKind::FstringEnd token Token::kind == then
             break
@@ -1226,17 +1283,17 @@ fn get_op_delimiter
     function_name:mut$str
     ops:mut$List[Op]
 {
-    token Token::value = value
+    token Token::value = value: $str
 
     # Dot . method
     if "." value == then
-        cursor expect_function_name = method_token
+        parser.state cursor expect_function_name = method_token
         if parser.syntax_only then
             method_token Token::location Location::span Span::offset
             token Token::location Location::span Span::offset
             parser.state.record_accessor
         fi
-        method_token Token::location method_token Token::value OpValue::MethodCall Op::new ops.push
+        method_token Token::location method_token Token::value.clone OpValue::MethodCall Op::new ops.push
         return
     fi
 
@@ -1245,7 +1302,7 @@ fn get_op_delimiter
         cursor.retreat
         f"lambda__{function_name}_o{token Token::location Location::span Span::offset}" = lambda_name
         lambda_name cursor parser parse_block_ops = lambda_ops
-        token Token::location lambda_ops lambda_name Function::new = lambda_function
+        token Token::location.clone lambda_ops lambda_name.clone Function::new = lambda_function
         lambda_function lambda_name.clone parser.put_function
         token Token::location lambda_name OpValue::FnPush Op::new ops.push
         return
@@ -1261,7 +1318,7 @@ fn get_op_delimiter
     # Open paren ( -> type cast
     if "(" value == then
         cursor.retreat
-        cursor get_op_type_cast ops.push
+        parser.state cursor get_op_type_cast ops.push
         return
     fi
 
@@ -1275,48 +1332,49 @@ fn get_op_delimiter
 
 fn try_parse_is_check token:mut$Token cursor:mut$TokenCursor -> Option[Op] {
     cursor.save = saved_pos
-    cursor.peek ? = peek_token
-
     List[str]::new = bindings
 
     # Check for bindings: Enum::Variant(a b) is
-    if "(" peek_token Token::value == then
+    false = has_bindings
+    if cursor.peek Option::Some(peek_token) is then
+        "(" peek_token Token::value == = has_bindings
+    else
+        Option[Op]::None return
+    fi
+    if has_bindings then
         cursor.pop drop # consume (
         while true do
-            cursor.peek = inner_opt
-            if inner_opt.is_none then
-                saved_pos cursor.restore
-                Option::None return
-            fi
-            inner_opt.unwrap = inner
-            if ")" inner Token::value == then
-                cursor.pop drop # consume )
-                if 0 bindings.length == then
+            if cursor.peek Option::Some(inner) is then
+                if ")" inner Token::value == then
+                    cursor.pop drop # consume )
+                    if 0 bindings.length == then
+                        saved_pos cursor.restore
+                        Option::None return
+                    fi
+                    break
+                fi
+                if TokenKind::Identifier inner Token::kind != then
                     saved_pos cursor.restore
                     Option::None return
                 fi
-                break
-            fi
-            if TokenKind::Identifier inner Token::kind != then
+                cursor.pop drop
+                inner Token::value.clone bindings.push
+            else
                 saved_pos cursor.restore
                 Option::None return
             fi
-            cursor.pop drop
-            inner Token::value bindings.push
         done
     fi
 
     # Check if next token is `is`
-    cursor.peek = is_opt
-    if is_opt.is_none then
-        saved_pos cursor.restore
-        Option::None return
-    fi
-    if is_opt Option::Some(is_token) is then
+    if cursor.peek Option::Some(is_token) is then
         if "is" is_token Token::value != then
             saved_pos cursor.restore
             Option::None return
         fi
+    else
+        saved_pos cursor.restore
+        Option::None return
     fi
     cursor.pop drop # consume `is`
 
@@ -1327,7 +1385,8 @@ fn try_parse_is_check token:mut$Token cursor:mut$TokenCursor -> Option[Op] {
 
     Option::None variant_name enum_name EnumVariant::new = variant
     bindings variant EnumVariant::set_bindings
-    token Token::location variant OpValue::IsCheck Op::new Option::Some
+    token Token::location variant OpValue::IsCheck Op::new = parsed_is
+    parsed_is Option::Some
 }
 
 # ============================================================================
@@ -1350,12 +1409,25 @@ struct ParsedTypeVariables {
     const_params: Map[str BuiltinType]
 }
 
+impl ParsedTypeVariables {
+    fn into_parts
+        self:ParsedTypeVariables
+    -> List[str] Map[str List[TraitBound]] Map[str BuiltinType] {
+        self match
+            ParsedTypeVariables { names: names trait_bounds: trait_bounds const_params: const_params } => names trait_bounds const_params
+        end
+    }
+}
 # Parse the `[arg1 arg2 ...]` type argument list that follows a generic trait
 # name in a trait bound (e.g. `I: Iterable[i64]`). The caller has already
 # consumed the trait identifier. If the next token is not `[`, returns an
 # empty list. Otherwise parses each argument as a Type AST value.
 
-fn parse_bound_type_args cursor:mut$TokenCursor trait_token:mut$Token -> List[Type] {
+fn parse_bound_type_args
+    cursor:mut$TokenCursor
+    trait_token:mut$Token
+    state:mut$ParseState
+-> List[Type] {
     List[Type]::new = bound_args
     cursor.peek = bracket_opt
     if bracket_opt.is_none then
@@ -1370,11 +1442,11 @@ fn parse_bound_type_args cursor:mut$TokenCursor trait_token:mut$Token -> List[Ty
     while true do
         cursor.peek = argument_token_option
         if argument_token_option.is_none then
-            trait_token Token::location "Unclosed trait bound type argument list" ErrorKind::Syntax cursor.state.record_error
-            cursor.state.mark_output_unusable
+            trait_token Token::location "Unclosed trait bound type argument list" ErrorKind::Syntax state.record_error
+            state.mark_output_unusable
             bound_args return
         fi
-        argument_token_option.unwrap Token::value = argument_value
+        argument_token_option.unwrap Token::value = argument_value: $str
         if "]" argument_value == then
             cursor.pop drop
             bound_args return
@@ -1383,7 +1455,7 @@ fn parse_bound_type_args cursor:mut$TokenCursor trait_token:mut$Token -> List[Ty
             cursor.pop drop
             continue
         fi
-        cursor parse_type_ast bound_args.push
+        state cursor parse_type_ast bound_args.push
     done
     bound_args
 }
@@ -1454,7 +1526,8 @@ fn bound_is_compatible
         false return
     fi
     candidate_trait_opt.unwrap = candidate_trait
-    for candidate_method in candidate_trait parser.store collect_trait_methods.iter do
+    candidate_trait parser.store collect_trait_methods = candidate_methods
+    for candidate_method in candidate_methods.iter do
         candidate_trait candidate candidate_method type_variable trait_bound_method_effect
         = candidate_effect
         for existing_bound in existing_bounds.iter do
@@ -1466,7 +1539,8 @@ fn bound_is_compatible
                 continue
             fi
             existing_trait_opt.unwrap = existing_trait
-            for existing_method in existing_trait parser.store collect_trait_methods.iter do
+            existing_trait parser.store collect_trait_methods = existing_methods
+            for existing_method in existing_methods.iter do
                 if existing_method.name candidate_method.name != then
                     continue
                 fi
@@ -1482,7 +1556,7 @@ fn bound_is_compatible
 }
 
 fn parse_type_variables parser:mut$Parser cursor:mut$TokenCursor -> ParsedTypeVariables {
-    fallback_token "[" cursor expect_token_value.unwrap_or drop
+    fallback_token parser.state "[" cursor expect_token_value.unwrap_or drop
     List[str]::new = vars
     Set[str]::new = seen
     Map[str List[TraitBound]]::new = trait_bounds
@@ -1533,8 +1607,8 @@ fn parse_type_variables parser:mut$Parser cursor:mut$TokenCursor -> ParsedTypeVa
                     List[TraitBound]::new = bounds
                     true = parse_bounds
                     while parse_bounds do
-                        fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = trait_token
-                        trait_token Token::value = bound_trait_name
+                        fallback_token parser.state TokenKind::Identifier cursor expect_token_kind.unwrap_or = trait_token
+                        trait_token Token::value.clone = bound_trait_name
                         bound_trait_name parser
                             .store
                             .traits
@@ -1542,9 +1616,9 @@ fn parse_type_variables parser:mut$Parser cursor:mut$TokenCursor -> ParsedTypeVa
                         if bound_trait_def_opt.is_none parser.syntax_only ! && then
                             trait_token Token::location f"Trait `{bound_trait_name}` is not defined" ErrorKind::UndefinedName parser.state.record_error
                         fi
-                        trait_token cursor parse_bound_type_args = bound_args
+                        parser.state trait_token cursor parse_bound_type_args = bound_args
                         if bound_trait_def_opt Option::Some(bound_trait_def) is then
-                            bound_trait_def CasaTrait::type_params = declared_params
+                            bound_trait_def CasaTrait::type_params = declared_params: $List[str]
                             if bound_args.length declared_params.length != then
                                 trait_token Token::location f"Trait `{bound_trait_name}` expects {declared_params.length} type argument(s), got {bound_args.length}" ErrorKind::Syntax parser.state.record_error
                             fi
@@ -1595,7 +1669,7 @@ fn parse_const_type_parameter
     seen:mut$Set[str]
     const_params:Map[str BuiltinType]
 -> Map[str BuiltinType] {
-    fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
+    fallback_token parser.state TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
     if
         name_token Token::value parser
             .store
@@ -1609,8 +1683,8 @@ fn parse_const_type_parameter
     fi
     name_token Token::value.clone vars.push
     name_token Token::value.clone seen.add
-    fallback_token ":" cursor expect_token_value.unwrap_or drop
-    fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = type_token
+    fallback_token parser.state ":" cursor expect_token_value.unwrap_or drop
+    fallback_token parser.state TokenKind::Identifier cursor expect_token_kind.unwrap_or = type_token
     type_token Token::value parse_builtin = builtin_opt
     if builtin_opt Option::Some(const_builtin) is then
         if const_builtin const_type_parameter_type_allowed ! then
@@ -1639,7 +1713,7 @@ fn const_type_parameter_type_allowed builtin:$BuiltinType -> bool {
 fn rewrite_type_const_params typ:$Type const_params:$Map[str BuiltinType] -> Type {
     typ match
         Type::TypeVar(name) => {
-            if name const_params.get Option::Some(type_var_builtin) is then
+            if name const_params.get_copy Option::Some(type_var_builtin) is then
                 type_var_builtin name.clone ConstType::symbolic Type::Const
             else
                 typ clone_type
@@ -1647,7 +1721,7 @@ fn rewrite_type_const_params typ:$Type const_params:$Map[str BuiltinType] -> Typ
         }
         Type::Generic(generic) => {
             if 0 generic.params.length == then
-                if generic.base const_params.get Option::Some(bare_builtin) is then
+                if generic.base const_params.get_copy Option::Some(bare_builtin) is then
                     bare_builtin generic.base.clone ConstType::symbolic Type::Const return
                 fi
                 typ clone_type return
@@ -1684,7 +1758,7 @@ fn rewrite_stack_effect_constant_parameters
     List[Parameter]::new = new_parameters
     for parameter in effect.parameters.iter do
         constant_parameters parameter.typ rewrite_type_const_params = rewritten_type
-        parameter.name rewritten_type Parameter new_parameters.push
+        parameter.name.clone rewritten_type Parameter new_parameters.push
     done
     List[Type]::new = new_return_types
     for return_type in effect.return_types.iter do
@@ -1722,7 +1796,7 @@ fn inject_constant_parameters
     location:Location
 -> List[Op] {
     List[Op]::new = assignments
-    effect.const_params = constant_parameters
+    effect.const_params = constant_parameters: $Map[str BuiltinType]
     if 0 constant_parameters.keys.length == then
         assignments return
     fi
@@ -1732,7 +1806,7 @@ fn inject_constant_parameters
         constant_name make_hidden_const_parameter_name constant_type clone_type Parameter::named new_parameters.push
         constant_type clone_type constant_name.clone Variable variables.push
         location.clone constant_name.clone OpValue::AssignVar Op::new = assignment
-        constant_type Option::Some assignment Op::set_type_hint
+        constant_type clone_type Option::Some assignment Op::set_type_hint
         assignment assignments.push
     done
     0 (u64) = parameter_index
@@ -1751,24 +1825,28 @@ fn inject_constant_parameters
 # named parameter (`name:type`) if the next token is `:`, or an unnamed
 # parameter by rewinding and re-parsing as a type expression.
 
-fn parse_parameter_maybe_named cursor:mut$TokenCursor token:mut$Token -> Parameter {
+fn parse_parameter_maybe_named
+    cursor:mut$TokenCursor
+    token:mut$Token
+    state:mut$ParseState
+-> Parameter {
     cursor.peek = next_opt
     if { Token::value ":" == } next_opt.filter.is_some then
         cursor.advance # consume :
-        cursor parse_type_ast = param_type
+        state cursor parse_type_ast = param_type
         token Token::value param_type Parameter::named return
     fi
     cursor.retreat
-    "" cursor parse_type_ast Parameter::named
+    "" state cursor parse_type_ast Parameter::named
 }
 
-fn parse_parameters cursor:mut$TokenCursor -> List[Parameter] {
+fn parse_parameters cursor:mut$TokenCursor state:mut$ParseState -> List[Parameter] {
     List[Parameter]::new = params
     while true do
         cursor.pop = token_opt
         if token_opt.is_none then
-            empty_location "Unexpected end of input" ErrorKind::UnexpectedToken cursor.state.record_error
-            cursor.state.mark_output_unusable
+            empty_location "Unexpected end of input" ErrorKind::UnexpectedToken state.record_error
+            state.mark_output_unusable
             params return
         fi
         token_opt.unwrap = token
@@ -1782,15 +1860,15 @@ fn parse_parameters cursor:mut$TokenCursor -> List[Parameter] {
         # Allow fn keyword as unnamed parameter type
         if "fn" token Token::value == then
             cursor.retreat
-            "" cursor parse_type_ast Parameter::named params.push
+            "" state cursor parse_type_ast Parameter::named params.push
             continue
         fi
 
         if TokenKind::Identifier token Token::kind != then
-            token Token::location "Unexpected token in parameter list" ErrorKind::UnexpectedToken cursor.state.record_error
+            token Token::location "Unexpected token in parameter list" ErrorKind::UnexpectedToken state.record_error
         fi
 
-        token cursor parse_parameter_maybe_named params.push
+        state token cursor parse_parameter_maybe_named params.push
     done
     params
 }
@@ -1799,13 +1877,13 @@ fn parse_parameters cursor:mut$TokenCursor -> List[Parameter] {
 # parse_return_types - parse return types after ->
 # ============================================================================
 
-fn parse_return_types cursor:mut$TokenCursor -> List[Type] {
+fn parse_return_types cursor:mut$TokenCursor state:mut$ParseState -> List[Type] {
     List[Type]::new = types
     while true do
         cursor.peek = peek_opt
         if peek_opt.is_none then
-            empty_location "Unexpected end of input" ErrorKind::UnexpectedToken cursor.state.record_error
-            cursor.state.mark_output_unusable
+            empty_location "Unexpected end of input" ErrorKind::UnexpectedToken state.record_error
+            state.mark_output_unusable
             types return
         fi
         if peek_opt Option::Some(peek) is then
@@ -1813,7 +1891,7 @@ fn parse_return_types cursor:mut$TokenCursor -> List[Type] {
                 types return
             fi
         fi
-        cursor parse_type_ast types.push
+        state cursor parse_type_ast types.push
     done
     types
 }
@@ -1822,20 +1900,20 @@ fn parse_return_types cursor:mut$TokenCursor -> List[Type] {
 # parse_stack_effect - parse function stack effect
 # ============================================================================
 
-fn parse_stack_effect cursor:mut$TokenCursor -> StackEffect {
-    cursor parse_parameters = params
+fn parse_stack_effect cursor:mut$TokenCursor state:mut$ParseState -> StackEffect {
+    state cursor parse_parameters = params
     List[Type]::new = returns
 
     cursor.peek = next_opt
     if next_opt.is_none then
-        empty_location "Unexpected end of input" ErrorKind::UnexpectedToken cursor.state.record_error
-        cursor.state.mark_output_unusable
+        empty_location "Unexpected end of input" ErrorKind::UnexpectedToken state.record_error
+        state.mark_output_unusable
         returns params StackEffect::new return
     fi
     if next_opt Option::Some(next) is then
         if "->" next Token::value == then
             cursor.advance # consume ->
-            cursor parse_return_types = returns
+            state cursor parse_return_types = returns
         fi
     fi
     returns params StackEffect::new
@@ -1877,20 +1955,21 @@ fn build_hidden_trait_methods
             # Build substitution map from trait's declared type_params to the
             # concrete type_args carried on the bound.
             Map[str Type]::new = bound_subs
-            bound_trait CasaTrait::type_params = bhtm_params
-            bound TraitBound::type_args = bhtm_args
+            bound_trait CasaTrait::type_params = bhtm_params: $List[str]
+            bound TraitBound::type_args = bhtm_args: $List[Type]
             if bhtm_params.length bhtm_args.length == then
                 for pair in bhtm_args.iter bhtm_params.iter.zip do
                     pair.second clone_type pair.first.clone bound_subs.set
                 done
             fi
-            for bound_method in bound_trait parser.store collect_trait_methods.iter do
+            bound_trait parser.store collect_trait_methods = bound_methods
+            for bound_method in bound_methods.iter do
                 # Skip default methods — only abstract methods need hidden fn ptrs
                 if
                     0 bound_method TraitMethod::default_ops.length ==
                     bound_method.name seen_methods.has ! &&
                 then
-                    bound_method.name seen_methods.add
+                    bound_method.name.clone seen_methods.add
                     f"__trait_{bound_type_var}_{bound_method TraitMethod::name}" = hidden_name
                     bound_subs bound_type_var.clone Type::TypeVar bound_method TraitMethod::stack_effect resolve_trait_stack_effect apply_type_subs_to_stack_effect = hidden_stack_effect
                     hidden_stack_effect stack_effect_to_function_type = hidden_type
@@ -1981,7 +2060,7 @@ fn try_fold_const_fn_call
     fi
     first_arg_idx = check_idx
     while check_idx call_idx > do
-        check_idx ops.get Op::value = check_val
+        check_idx ops.get Op::value clone_op_value = check_val
         if check_val is_const_fold_literal ! then
             op_index return
         fi
@@ -1991,13 +2070,13 @@ fn try_fold_const_fn_call
     List[str]::new = fold_eval_stack
     first_arg_idx = load_idx
     while load_idx call_idx > do
-        load_idx ops.get Op::value = load_val
+        load_idx ops.get Op::value clone_op_value = load_val
         if load_val OpValue::PushInt(li) is then
-            li ConstantValue::Int fold_stack.push
+            li.value li.raw.clone IntegerLiteral::new ConstantValue::Int fold_stack.push
         elif load_val OpValue::PushFloat(float_literal) is then
-            float_literal ConstantValue::Float fold_stack.push
+            float_literal.clone ConstantValue::Float fold_stack.push
         elif load_val OpValue::PushStr(ls) is then
-            ls ConstantValue::Str fold_stack.push
+            ls.clone ConstantValue::Str fold_stack.push
         elif load_val OpValue::PushBool(lb) is then
             lb ConstantValue::Bool fold_stack.push
         elif load_val OpValue::PushChar(lc) is then
@@ -2060,7 +2139,7 @@ fn try_fold_const_fn_call
 
 fn validate_const_fn_body function:mut$Function diagnostics:mut$Diagnostics {
     for op in function Function::ops.iter do
-        op Op::value = v
+        op Op::value = v: $OpValue
         if v OpValue::IfStart is then
             op Op::location "Control flow (`if`) is not allowed in const fn" ErrorKind::Syntax diagnostics.record_error
         fi
@@ -2122,7 +2201,7 @@ fn const_eval_apply_operator
         if a_val ConstantValue::Bool(a_bool) is then
             if 0 a_bool != then 0 else 1 fi ConstantValue::Bool stack.push
         elif a_val ConstantValue::Int(a_int) is then
-            if diagnostics location TYPE_I64_T a_val validate_constant_numeric ! then
+            if diagnostics location TYPE_I64_T a_val.clone validate_constant_numeric ! then
                 0 IntegerLiteral::from_int ConstantValue::Int stack.push
                 return
             fi
@@ -2138,7 +2217,7 @@ fn const_eval_apply_operator
         fi
         stack.pop = bitnot_val
         if bitnot_val ConstantValue::Int(bitnot_int) is then
-            if diagnostics location TYPE_I64_T bitnot_val validate_constant_numeric ! then
+            if diagnostics location TYPE_I64_T bitnot_val.clone validate_constant_numeric ! then
                 0 IntegerLiteral::from_int ConstantValue::Int stack.push
                 return
             fi
@@ -2156,8 +2235,8 @@ fn const_eval_apply_operator
     if a_val ConstantValue::Int(a_int) is then
         if b_val ConstantValue::Int(b_int) is then
             if
-                diagnostics location TYPE_I64_T a_val validate_constant_numeric !
-                diagnostics location TYPE_I64_T b_val validate_constant_numeric ! ||
+                diagnostics location TYPE_I64_T a_val.clone validate_constant_numeric !
+                diagnostics location TYPE_I64_T b_val.clone validate_constant_numeric ! ||
             then
                 0 IntegerLiteral::from_int ConstantValue::Int stack.push
                 return
@@ -2250,7 +2329,7 @@ fn eval_const_fn
         location f"`{fn_name}` is not a const fn" ErrorKind::Syntax diagnostics.record_error
         false return
     fi
-    fn_opt.unwrap = function
+    fn_opt.unwrap = function: $Function
     if function Function::is_const_fn ! then
         location f"`{fn_name}` is not a const fn" ErrorKind::Syntax diagnostics.record_error
         false return
@@ -2270,29 +2349,29 @@ fn eval_const_fn
             .stack_effect
             .parameters
             .get
-            .typ = parameter_type
+            .typ = parameter_type: $Type
         if diagnostics location parameter_type argument validate_constant_numeric ! then
             false return
         fi
         argument fn_stack.push
         1 += pi
     done
-    function Function::ops = fn_ops
+    function Function::ops = fn_ops: $List[Op]
     0 (u64) = oi
     while oi fn_ops.length > do
         oi fn_ops.get = fn_op
         1 += oi
-        fn_op Op::value = op_value
+        fn_op Op::value clone_op_value = op_value
         if op_value OpValue::PushInt(push_int) is then
-            push_int ConstantValue::Int fn_stack.push
+            push_int.value push_int.raw.clone IntegerLiteral::new ConstantValue::Int fn_stack.push
             continue
         fi
         if op_value OpValue::PushFloat(push_float) is then
-            push_float ConstantValue::Float fn_stack.push
+            push_float.clone ConstantValue::Float fn_stack.push
             continue
         fi
         if op_value OpValue::PushStr(push_str) is then
-            push_str ConstantValue::Str fn_stack.push
+            push_str.clone ConstantValue::Str fn_stack.push
             continue
         fi
         if op_value OpValue::PushBool(push_bool) is then
@@ -2319,7 +2398,7 @@ fn eval_const_fn
         fi
         if op_value OpValue::AssignVar(assign_name) is then
             if 0 fn_stack.length != then
-                fn_stack.pop assign_name locals.set
+                fn_stack.pop assign_name.clone locals.set
             fi
             continue
         fi
@@ -2377,7 +2456,7 @@ fn eval_const_block
     cursor:mut$TokenCursor
     location:mut$Location
 -> ConstantValue {
-    fallback_token "{" cursor expect_token_value.unwrap_or drop
+    fallback_token parser.state "{" cursor expect_token_value.unwrap_or drop
     List[ConstantValue]::new = stack
     List[str]::new = eval_stack
     while true do
@@ -2398,7 +2477,7 @@ fn eval_const_block
             continue
         fi
         if TokenKind::Literal tok Token::kind == then
-            tok Token::value parse_literal_to_constant_value stack.push
+            tok Token::value.clone parse_literal_to_constant_value stack.push
             continue
         fi
         if TokenKind::Operator tok Token::kind == then
@@ -2409,7 +2488,7 @@ fn eval_const_block
             continue
         fi
         if TokenKind::Identifier tok Token::kind == then
-            tok Token::value = ident
+            tok Token::value = ident: $str
             ident parser
                 .store
                 .constants
@@ -2450,18 +2529,18 @@ fn eval_const_block
 # parse_function - parse function definition
 # ============================================================================
 
-fn expect_function_name cursor:mut$TokenCursor -> Token {
+fn expect_function_name cursor:mut$TokenCursor state:mut$ParseState -> Token {
     if cursor.peek Option::Some(token) is then
         if "drop" token.value == then
             cursor.pop.unwrap return
         fi
     fi
-    fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or
+    fallback_token state TokenKind::Identifier cursor expect_token_kind.unwrap_or
 }
 
 fn parse_function parser:mut$Parser cursor:mut$TokenCursor -> Function {
-    fallback_token "fn" cursor expect_token_value.unwrap_or = fn_token
-    cursor expect_function_name = name_token
+    fallback_token parser.state "fn" cursor expect_token_value.unwrap_or = fn_token
+    parser.state cursor expect_function_name = name_token
 
     # Parse optional type parameters
     List[str]::new = type_vars
@@ -2471,11 +2550,9 @@ fn parse_function parser:mut$Parser cursor:mut$TokenCursor -> Function {
     if tvars_opt Option::Some(tvars) is then
         if "[" tvars Token::value == then
             cursor parser parse_type_variables = parsed_type_variables
-            parsed_type_variables.trait_bounds = trait_bounds
-            parsed_type_variables.const_params = const_params
+            parsed_type_variables.into_parts = const_params = trait_bounds = all_type_param_names
             # `names` mixes type variables and const parameters; keep only the
             # type variables here (ADR-0152).
-            parsed_type_variables.names = all_type_param_names
             for candidate_name in all_type_param_names.iter do
                 if candidate_name const_params.has ! then
                     candidate_name.clone type_vars.push
@@ -2484,7 +2561,7 @@ fn parse_function parser:mut$Parser cursor:mut$TokenCursor -> Function {
         fi
     fi
 
-    cursor parse_stack_effect = effect
+    parser.state cursor parse_stack_effect = effect
 
     # Rewrite signature const params to symbolic constants so unification treats
     # them as constants, not type variables (ADR-0152).
@@ -2498,12 +2575,9 @@ fn parse_function parser:mut$Parser cursor:mut$TokenCursor -> Function {
             type_var.clone effect StackEffect::type_vars.add
         done
         trait_bounds effect StackEffect::set_trait_bounds
-        Set[str]::new = canonical_type_vars
-        for canonical_type_var in effect StackEffect::type_vars.iter do
-            canonical_type_var.clone canonical_type_vars.add
-        done
-        canonical_type_vars effect canonicalize_stack_effect_type_vars
     fi
+    type_vars string_list_to_set = function_type_vars
+    function_type_vars effect canonicalize_stack_effect_type_vars
     List[Op]::new = ops
     List[Variable]::new = variables
 
@@ -2512,19 +2586,19 @@ fn parse_function parser:mut$Parser cursor:mut$TokenCursor -> Function {
     # Constant parameters become hidden parameters the call site pushes
     # (ADR-0152). Prepend them before the trait pointers so the assignment
     # order below matches the parameter order.
-    name_token Token::location variables effect inject_constant_parameters = constant_assignments
+    name_token Token::location.clone variables effect inject_constant_parameters = constant_assignments
 
     # Inject hidden __trait_* parameters for trait-bounded type vars
     if 0 effect StackEffect::trait_bounds.keys.length != then
         List[Parameter]::new = hidden_params
         effect StackEffect::trait_bounds parser build_hidden_trait_methods = hidden_methods
         for hidden in hidden_methods.iter do
-            hidden HiddenTraitMethod::var_name = hidden_name
-            hidden HiddenTraitMethod::fn_type = hidden_type
+            hidden HiddenTraitMethod::var_name = hidden_name: $str
+            hidden HiddenTraitMethod::fn_type = hidden_type: $Type
             hidden_name.clone hidden_type clone_type Parameter::named hidden_params.push
             hidden_type clone_type hidden_name.clone Variable variables.push
             name_token Token::location hidden_name.clone OpValue::AssignVar Op::new = hidden_assign
-            hidden_type Option::Some hidden_assign Op::set_type_hint
+            hidden_type clone_type Option::Some hidden_assign Op::set_type_hint
             hidden_assign ops.push
         done
         # Prepend hidden params to stack effect parameters
@@ -2541,13 +2615,14 @@ fn parse_function parser:mut$Parser cursor:mut$TokenCursor -> Function {
     for parameter in effect.parameters.iter do
         if "" parameter.name != then
             if parameter.name is_hidden_parameter_name ! then
-                parameter.typ parameter.name Variable variables.push
-                name_token.location parameter.name OpValue::AssignVar Op::new ops.push
+                parameter.typ clone_type parameter.name.clone Variable variables.push
+                name_token.location parameter.name.clone OpValue::AssignVar Op::new ops.push
             fi
         fi
     done
 
     name_token Token::value cursor parser parse_block_ops = body_ops
+    function_type_vars body_ops canonicalize_operation_type_vars
     effect.const_params body_ops rewrite_operation_constant_parameters
     body_ops ops.append
 
@@ -2557,7 +2632,7 @@ fn parse_function parser:mut$Parser cursor:mut$TokenCursor -> Function {
         SyntaxSpanKind::Definition parser.state.record_span
     fi
 
-    effect name_token Token::location ops name_token Token::value Function::with_stack_effect = function
+    effect name_token Token::location.clone ops name_token Token::value.clone Function::with_stack_effect = function
     variables function Function::set_variables
     function
 }
@@ -2566,7 +2641,7 @@ fn parse_function parser:mut$Parser cursor:mut$TokenCursor -> Function {
 # parse_enum - parse enum definition
 # ============================================================================
 
-fn parse_derived_traits cursor:mut$TokenCursor -> List[str] {
+fn parse_derived_traits cursor:mut$TokenCursor state:mut$ParseState -> List[str] {
     List[str]::new = derived_traits
     if cursor.peek Option::Some(token) is then
         if "derives" token.value != then
@@ -2578,7 +2653,7 @@ fn parse_derived_traits cursor:mut$TokenCursor -> List[str] {
                 if "{" derived.value == then
                     break
                 fi
-                fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or
+                fallback_token state TokenKind::Identifier cursor expect_token_kind.unwrap_or
                 Token::value.clone derived_traits.push
             else
                 break
@@ -2589,27 +2664,30 @@ fn parse_derived_traits cursor:mut$TokenCursor -> List[str] {
 }
 
 fn parse_enum parser:mut$Parser cursor:mut$TokenCursor -> CasaEnum {
-    fallback_token "enum" cursor expect_token_value.unwrap_or drop
-    fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
+    fallback_token parser.state "enum" cursor expect_token_value.unwrap_or drop
+    fallback_token parser.state TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
 
     # Parse optional type parameters
     List[str]::new = type_vars
     cursor.peek = tvars_opt
     if tvars_opt Option::Some(tvars) is then
         if "[" tvars Token::value == then
-            cursor parser parse_type_variables.names = type_vars
+            cursor parser parse_type_variables = parsed_type_variables
+            parsed_type_variables.into_parts = parsed_const_params = parsed_bounds = type_vars
+            parsed_const_params drop
+            parsed_bounds drop
         fi
     fi
 
-    cursor parse_derived_traits = derived_traits
+    parser.state cursor parse_derived_traits = derived_traits
 
-    fallback_token "{" cursor expect_token_value.unwrap_or = enum_open_token
+    fallback_token parser.state "{" cursor expect_token_value.unwrap_or = enum_open_token
     List[str]::new = variants
     Map[str List[Type]]::new = variant_types
     Map[str Location]::new = variant_locations
 
     while true do
-        fallback_token cursor expect_token.unwrap_or = variant_token
+        fallback_token parser.state cursor expect_token.unwrap_or = variant_token
         if "}" variant_token Token::value == then
             if parser.syntax_only then
                 variant_token Token::location Location::span Span::offset
@@ -2646,7 +2724,7 @@ fn parse_enum parser:mut$Parser cursor:mut$TokenCursor -> CasaEnum {
                             break
                         fi
                     fi
-                    cursor parse_type_ast inner_types.push
+                    parser.state cursor parse_type_ast inner_types.push
                 done
                 if 0 inner_types.length == then
                     variant_token Token::location "Variant inner types cannot be empty" ErrorKind::Syntax parser.state.record_error
@@ -2660,20 +2738,18 @@ fn parse_enum parser:mut$Parser cursor:mut$TokenCursor -> CasaEnum {
         name_token Token::location "Enum must have at least one variant" ErrorKind::Syntax parser.state.record_error
     fi
 
-    if 0 type_vars.length != then
-        type_vars string_list_to_set = tv_set
-        for variant_name in variants.iter do
-            variant_name variant_types.get_mut = vt_opt
-            if vt_opt.is_some then
-                vt_opt.unwrap = vt_inner
-                0 (u64) = vt_index
-                while vt_index vt_inner.length > do
-                    tv_set vt_index vt_inner.get clone_type canonicalize_type_var vt_index vt_inner.set
-                    1 += vt_index
-                done
-            fi
-        done
-    fi
+    type_vars string_list_to_set = tv_set
+    for variant_name in variants.iter do
+        variant_name variant_types.get_mut = vt_opt
+        if vt_opt.is_some then
+            vt_opt.unwrap = vt_inner
+            0 (u64) = vt_index
+            while vt_index vt_inner.length > do
+                tv_set vt_index vt_inner.get clone_type canonicalize_type_var vt_index vt_inner.set
+                1 += vt_index
+            done
+        fi
+    done
 
     variant_locations derived_traits type_vars variant_types name_token Token::location.clone variants
     name_token Token::value.clone CasaEnum
@@ -2688,8 +2764,8 @@ fn synthesize_hashable_for_enum parser:mut$Parser casa_enum:mut$CasaEnum {
     if casa_enum has_inner_values then
         return
     fi
-    casa_enum CasaEnum::name = enum_name
-    casa_enum CasaEnum::location = location
+    casa_enum CasaEnum::name.clone = enum_name
+    casa_enum CasaEnum::location.clone = location
 
     f"{enum_name}::hash" = hash_name
     if
@@ -2707,7 +2783,7 @@ fn synthesize_hashable_for_enum parser:mut$Parser casa_enum:mut$CasaEnum {
         List[Type]::new = hash_returns
         TYPE_I64_T clone_type hash_returns.push
         hash_returns hash_params StackEffect::new = hash_stack_effect
-        hash_stack_effect location.clone hash_ops hash_name Function::with_stack_effect = hash_fn
+        hash_stack_effect location.clone hash_ops hash_name.clone Function::with_stack_effect = hash_fn
         hash_fn hash_name parser.put_function
     fi
 
@@ -2729,7 +2805,7 @@ fn synthesize_hashable_for_enum parser:mut$Parser casa_enum:mut$CasaEnum {
         List[Type]::new = eq_returns
         TYPE_BOOL_T clone_type eq_returns.push
         eq_returns eq_params StackEffect::new = eq_stack_effect
-        eq_stack_effect location.clone eq_ops eq_name Function::with_stack_effect = eq_fn
+        eq_stack_effect location.clone eq_ops eq_name.clone Function::with_stack_effect = eq_fn
         eq_fn eq_name parser.put_function
     fi
 
@@ -2769,16 +2845,16 @@ fn derive_hashable_for_enums parser:mut$Parser {
 
 fn register_derived_copy
     parser:mut$Parser
-    name:mut$str
-    type_vars:mut$List[str]
+    name:$str
+    type_vars:$List[str]
     required_type_vars:Set[str]
-    location:mut$Location
+    location:$Location
 {
     List[Type]::new = arguments
     for type_variable in type_vars.iter do
         type_variable.clone Type::TypeVar arguments.push
     done
-    arguments name GenericType Type::Generic = receiver
+    arguments name.clone GenericType Type::Generic = receiver
     List[Type]::new "Copy" TraitBound = copy_bound
     if parser.store copy_bound trait_bound_to_type receiver type_has_satisfying_trait_impl then
         return
@@ -2792,10 +2868,10 @@ fn register_derived_copy
         List[Type]::new "Copy" TraitBound type_bounds.push
         type_bounds type_variable.clone trait_bounds.set
     done
-    location
+    location.clone
     Map[str str]::new
     trait_bounds
-    type_vars
+    type_vars.clone
     copy_bound
     receiver
     TraitImpl
@@ -2900,8 +2976,8 @@ fn register_builtin_copy_impls parser:mut$Parser {
 
 fn create_member_accessor
     parser:mut$Parser
-    struct_name:str
-    member_name:str
+    struct_name:$str
+    member_name:$str
     member_type:$Type
     prior_members:$List[Member]
     location:$Location
@@ -3012,8 +3088,8 @@ fn create_member_accessor
 # ============================================================================
 
 fn parse_struct parser:mut$Parser cursor:mut$TokenCursor -> CasaStruct {
-    fallback_token "struct" cursor expect_token_value.unwrap_or drop
-    fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
+    fallback_token parser.state "struct" cursor expect_token_value.unwrap_or drop
+    fallback_token parser.state TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
 
     # Parse optional type parameters
     List[str]::new = type_vars
@@ -3021,27 +3097,23 @@ fn parse_struct parser:mut$Parser cursor:mut$TokenCursor -> CasaStruct {
     if tvars_opt Option::Some(tvars) is then
         if "[" tvars Token::value == then
             cursor parser parse_type_variables = parsed_type_variables
-            parsed_type_variables.names = type_vars
+            parsed_type_variables.into_parts = parsed_const_params = parsed_bounds = type_vars
+            parsed_const_params drop
             # Trait bounds are not allowed on struct definitions
-            if
-                0 parsed_type_variables
-                    .trait_bounds
-                    .keys
-                    .length !=
-            then
+            if 0 parsed_bounds.keys.length != then
                 name_token Token::location "Trait bounds are not allowed on struct definitions. Use `impl[K: Bound] StructName[K]` instead" ErrorKind::UnexpectedToken parser.state.record_error
             fi
         fi
     fi
 
-    cursor parse_derived_traits = derived_traits
+    parser.state cursor parse_derived_traits = derived_traits
 
     List[Member]::new = members
     type_vars string_list_to_set = struct_type_vars
-    fallback_token "{" cursor expect_token_value.unwrap_or = struct_open_token
+    fallback_token parser.state "{" cursor expect_token_value.unwrap_or = struct_open_token
 
     while true do
-        fallback_token cursor expect_token.unwrap_or = member_token
+        fallback_token parser.state cursor expect_token.unwrap_or = member_token
         if "}" member_token Token::value == then
             if parser.syntax_only then
                 member_token Token::location Location::span Span::offset
@@ -3053,24 +3125,22 @@ fn parse_struct parser:mut$Parser cursor:mut$TokenCursor -> CasaStruct {
         if TokenKind::Identifier member_token Token::kind != then
             member_token Token::location "Expected member name" ErrorKind::UnexpectedToken parser.state.record_error
         fi
-        fallback_token ":" cursor expect_token_value.unwrap_or drop
-        cursor parse_type_ast = member_type
-        if 0 type_vars.length != then
-            struct_type_vars member_type canonicalize_type_var = member_type
-        fi
+        fallback_token parser.state ":" cursor expect_token_value.unwrap_or drop
+        parser.state cursor parse_type_ast = member_type
+        struct_type_vars member_type canonicalize_type_var = member_type
 
         type_vars member_token Token::location members member_type member_token Token::value name_token Token::value parser create_member_accessor
-        member_type member_token Token::value Member members.push
+        member_type member_token Token::value.clone Member members.push
     done
 
-    derived_traits type_vars name_token Token::location members name_token Token::value CasaStruct
+    derived_traits type_vars name_token Token::location.clone members name_token Token::value.clone CasaStruct
 }
 
 # ============================================================================
 # parse_trait - parse trait definition
 # ============================================================================
 
-fn parse_trait_method_stack_effect cursor:mut$TokenCursor -> StackEffect {
+fn parse_trait_method_stack_effect cursor:mut$TokenCursor state:mut$ParseState -> StackEffect {
     List[Parameter]::new = params
 
     # Parse parameters, stopping at ->, fn, or }
@@ -3094,10 +3164,10 @@ fn parse_trait_method_stack_effect cursor:mut$TokenCursor -> StackEffect {
             TokenKind::Identifier peek Token::kind !=
             "fn" peek Token::value != &&
         then
-            peek Token::location "Unexpected token in trait method parameter list" ErrorKind::UnexpectedToken cursor.state.record_error
+            peek Token::location "Unexpected token in trait method parameter list" ErrorKind::UnexpectedToken state.record_error
         fi
 
-        peek cursor parse_parameter_maybe_named params.push
+        state peek cursor parse_parameter_maybe_named params.push
     done
 
     List[Type]::new = returns
@@ -3118,7 +3188,7 @@ fn parse_trait_method_stack_effect cursor:mut$TokenCursor -> StackEffect {
                 then
                     break
                 fi
-                cursor parse_type_ast returns.push
+                state cursor parse_type_ast returns.push
             done
         fi
     fi
@@ -3130,15 +3200,15 @@ fn parse_trait_method_stack_effect cursor:mut$TokenCursor -> StackEffect {
 # into error messages. Does *not* accept trait bounds; for those use
 # `parse_type_variables`.
 
-fn parse_simple_type_vars cursor:mut$TokenCursor context:str -> List[str] {
+fn parse_simple_type_vars cursor:mut$TokenCursor context:str state:mut$ParseState -> List[str] {
     cursor.pop drop # consume [
     List[str]::new = collected
     true = loop_flag
     while loop_flag do
         cursor.peek = token_opt
         if token_opt.is_none then
-            empty_location f"Unclosed {context} type parameter list" ErrorKind::UnmatchedBlock cursor.state.record_error
-            cursor.state.mark_output_unusable
+            empty_location f"Unclosed {context} type parameter list" ErrorKind::UnmatchedBlock state.record_error
+            state.mark_output_unusable
             false = loop_flag
         else
             token_opt.unwrap = token
@@ -3146,11 +3216,11 @@ fn parse_simple_type_vars cursor:mut$TokenCursor context:str -> List[str] {
                 cursor.pop drop
                 false = loop_flag
             elif TokenKind::Identifier token Token::kind != then
-                token Token::location f"Expected type parameter identifier in {context}" ErrorKind::UnexpectedToken cursor.state.record_error
+                token Token::location f"Expected type parameter identifier in {context}" ErrorKind::UnexpectedToken state.record_error
                 false = loop_flag
             else
                 cursor.pop drop
-                token Token::value collected.push
+                token Token::value.clone collected.push
             fi
         fi
     done
@@ -3158,13 +3228,13 @@ fn parse_simple_type_vars cursor:mut$TokenCursor context:str -> List[str] {
 }
 
 fn parse_trait parser:mut$Parser cursor:mut$TokenCursor -> CasaTrait {
-    fallback_token "trait" cursor expect_token_value.unwrap_or drop
-    fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
+    fallback_token parser.state "trait" cursor expect_token_value.unwrap_or drop
+    fallback_token parser.state TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
 
     List[str]::new = type_params
     cursor.peek = bracket_opt
     if { Token::value "[" == } bracket_opt.filter.is_some then
-        "trait" cursor parse_simple_type_vars = type_params
+        parser.state "trait" cursor parse_simple_type_vars = type_params
     fi
 
     List[TraitBound]::new = supertraits
@@ -3173,15 +3243,15 @@ fn parse_trait parser:mut$Parser cursor:mut$TokenCursor -> CasaTrait {
         cursor.pop drop
         true = parse_super_loop
         while parse_super_loop do
-            fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = super_token
-            super_token Token::value = super_name
+            fallback_token parser.state TokenKind::Identifier cursor expect_token_kind.unwrap_or = super_token
+            super_token Token::value.clone = super_name
             super_name parser
                 .store
                 .traits
                 .get = super_def_opt
-            super_token cursor parse_bound_type_args = super_args
+            parser.state super_token cursor parse_bound_type_args = super_args
             if super_def_opt Option::Some(super_def) is then
-                super_def CasaTrait::type_params = super_params
+                super_def CasaTrait::type_params = super_params: $List[str]
                 if super_args.length super_params.length != then
                     super_token Token::location f"Supertrait `{super_name}` expects {super_params.length} type argument(s), got {super_args.length}" ErrorKind::Syntax parser.state.record_error
                 fi
@@ -3197,7 +3267,7 @@ fn parse_trait parser:mut$Parser cursor:mut$TokenCursor -> CasaTrait {
     fi
 
     List[TraitMethod]::new = methods
-    fallback_token "{" cursor expect_token_value.unwrap_or drop
+    fallback_token parser.state "{" cursor expect_token_value.unwrap_or drop
 
     true = parse_trait_loop
     while parse_trait_loop do
@@ -3216,7 +3286,7 @@ fn parse_trait parser:mut$Parser cursor:mut$TokenCursor -> CasaTrait {
             else
                 next Token::location Location::span Span::offset = trait_fn_offset
                 cursor.pop drop # consume fn
-                cursor expect_function_name = method_name
+                parser.state cursor expect_function_name = method_name
                 if "drop" method_name Token::value == then
                     method_name Token::location "`drop` is reserved for inherent cleanup methods" ErrorKind::InvalidScope parser.state.record_error
                 fi
@@ -3225,11 +3295,11 @@ fn parse_trait parser:mut$Parser cursor:mut$TokenCursor -> CasaTrait {
                 List[str]::new = method_type_vars
                 if cursor.peek Option::Some(mtv_bracket) is then
                     if "[" mtv_bracket Token::value == then
-                        "trait method" cursor parse_simple_type_vars = method_type_vars
+                        parser.state "trait method" cursor parse_simple_type_vars = method_type_vars
                     fi
                 fi
 
-                cursor parse_trait_method_stack_effect = method_stack_effect
+                parser.state cursor parse_trait_method_stack_effect = method_stack_effect
 
                 type_params string_list_to_set = trait_tv_set
                 TRAIT_SELF_TYPE trait_tv_set.add
@@ -3243,6 +3313,7 @@ fn parse_trait parser:mut$Parser cursor:mut$TokenCursor -> CasaTrait {
                 if cursor.peek Option::Some(body_peek) is then
                     if "{" body_peek Token::value == then
                         f"{name_token Token::value}::{method_name Token::value}" cursor parser parse_block_ops = default_ops
+                        trait_tv_set default_ops canonicalize_operation_type_vars
                         if parser.syntax_only then
                             cursor.previous_offset
                             trait_fn_offset
@@ -3251,14 +3322,14 @@ fn parse_trait parser:mut$Parser cursor:mut$TokenCursor -> CasaTrait {
                     fi
                 fi
 
-                method_type_vars default_ops method_stack_effect method_name Token::value TraitMethod methods.push
+                method_type_vars default_ops method_stack_effect method_name Token::value.clone TraitMethod methods.push
             fi
         else
             false = parse_trait_loop
         fi
     done
 
-    name_token Token::location supertraits methods type_params name_token Token::value CasaTrait
+    name_token Token::location.clone supertraits methods type_params name_token Token::value.clone CasaTrait
 }
 
 # ============================================================================
@@ -3272,7 +3343,7 @@ fn inject_implementation_parameters
     trait_bounds:$Map[str List[TraitBound]]
     constant_parameters:$Map[str BuiltinType]
 {
-    function.stack_effect = effect
+    function.stack_effect clone_stack_effect = effect
 
     # Merge the impl block's constant parameters (ADR-0152) and rewrite the
     # method declaration and body so their names read as constants, not type
@@ -3291,16 +3362,27 @@ fn inject_implementation_parameters
 
     # Merge type vars into function stack effect
     for type_var in type_vars.iter do
-        if type_var effect StackEffect::type_vars.has ! then
-            type_var.clone effect StackEffect::type_vars.add
+        if type_var effect.type_vars.has ! then
+            type_var.clone effect.type_vars.add
         fi
+    done
+    effect.type_vars.clone = active_impl_type_vars
+    active_impl_type_vars effect canonicalize_stack_effect_type_vars
+    active_impl_type_vars function.ops canonicalize_operation_type_vars
+    0 (u64) = variable_index
+    while variable_index function.variables.length > do
+        variable_index function.variables.get clone_variable = variable
+        active_impl_type_vars variable.typ canonicalize_type_var = variable_type
+        variable_type variable Variable::set_typ
+        variable variable_index function.variables.set
+        1 += variable_index
     done
 
     # Merge trait bounds
     trait_bounds.keys = bound_keys
     for bound_key in bound_keys.iter do
         if bound_key trait_bounds.get Option::Some(bounds) is then
-            bounds.clone bound_key.clone effect StackEffect::trait_bounds.set
+            bounds.clone bound_key.clone effect.trait_bounds.set
         fi
     done
 
@@ -3309,18 +3391,18 @@ fn inject_implementation_parameters
     0 (u64) = insert_pos
     effect.trait_bounds parser build_hidden_trait_methods = hidden_methods
     for hidden in hidden_methods.iter do
-        hidden HiddenTraitMethod::var_name = hidden_name
-        hidden HiddenTraitMethod::fn_type = hidden_type
-        hidden_name hidden_type Parameter::named hidden_params.push
+        hidden HiddenTraitMethod::var_name = hidden_name: $str
+        hidden HiddenTraitMethod::fn_type = hidden_type: $Type
+        hidden_name.clone hidden_type clone_type Parameter::named hidden_params.push
         hidden_name Variable::new function.variables.push
-        function.location hidden_name OpValue::AssignVar Op::new = assignment_operation
-        hidden_type Option::Some assignment_operation Op::set_type_hint
+        function.location.clone hidden_name.clone OpValue::AssignVar Op::new = assignment_operation
+        hidden_type clone_type Option::Some assignment_operation Op::set_type_hint
         insert_pos assignment_operation function.ops.insert
         1 += insert_pos
     done
 
     # Inject hidden parameters for the implementation's constant parameters.
-    function.location function.variables effect inject_constant_parameters = constant_assignments
+    function.location.clone function.variables effect inject_constant_parameters = constant_assignments
     while 0 constant_assignments.length != do
         constant_assignments.pop = assignment
         insert_pos assignment function.ops.insert
@@ -3335,6 +3417,7 @@ fn inject_implementation_parameters
         done
         hidden_params effect StackEffect::set_parameters
     fi
+    effect function Function::set_stack_effect
 }
 
 fn namespace_trait_impl_type typ:mut$Type type_vars:mut$List[str] prefix:str -> Type {
@@ -3518,7 +3601,7 @@ fn register_trait_impl parser:mut$Parser trait_impl:TraitImpl {
             .trait_impls
             .iter
     do
-        pair.second = existing
+        pair.second = existing: $TraitImpl
         if trait_impl existing trait_impls_overlap then
             trait_impl.location f"Trait implementation `{trait_impl trait_impl_key}` overlaps an existing implementation in `{existing.location.file}`" ErrorKind::DuplicateName parser.state.record_error
             return
@@ -3598,7 +3681,7 @@ fn language_trait_method_matches
     method_kind:i64
     casa_trait:mut$CasaTrait
 -> bool {
-    candidate.effect = effect
+    candidate.effect = effect: $StackEffect
     if 1 method_kind == then
         if 2 effect.parameters.length != then
             false return
@@ -3606,9 +3689,9 @@ fn language_trait_method_matches
         0 effect
             .parameters
             .get
-            .typ = receiver_type
-        if receiver_type.borrow_target Option::Some(receiver_target) is then
-            receiver_target = receiver_type
+            .typ clone_type = receiver_type
+        if receiver_type.borrow_target Option::Some(target) is then
+            target clone_type = receiver_type
         fi
         if receiver_type.is_self_type ! then
             false return
@@ -3616,9 +3699,9 @@ fn language_trait_method_matches
         1 effect
             .parameters
             .get
-            .typ = other_type
-        if other_type.borrow_target Option::Some(other_target) is then
-            other_target = other_type
+            .typ clone_type = other_type
+        if other_type.borrow_target Option::Some(target) is then
+            target clone_type = other_type
         fi
         if other_type.is_self_type ! then
             false return
@@ -3634,9 +3717,9 @@ fn language_trait_method_matches
     0 effect
         .parameters
         .get
-        .typ = receiver_type
-    if receiver_type.borrow_target Option::Some(receiver_target) is then
-        receiver_target = receiver_type
+        .typ clone_type = receiver_type
+    if receiver_type.borrow_target Option::Some(target) is then
+        target clone_type = receiver_type
     fi
     if receiver_type.is_self_type ! then
         false return
@@ -3688,7 +3771,7 @@ fn language_trait_method_role method_kind:i64 -> str {
 }
 
 fn validate_language_trait_contract parser:mut$Parser casa_trait:mut$CasaTrait -> bool {
-    casa_trait.name = trait_name
+    casa_trait.name.clone = trait_name
     if
         "Eq" trait_name != "Ord" trait_name != &&
         "Hashable" trait_name != && "Display" trait_name != &&
@@ -3862,7 +3945,123 @@ fn validate_traits parser:mut$Parser -> bool {
             false 0 valid.set
         fi
     done
-    0 valid.get bool::clone
+    0 valid.get copy
+}
+
+fn type_is_known_inhabited typ:$Type store:$SymbolStore inhabited:$Set[str] -> bool {
+    if typ.borrow_target Option::Some(target) is then
+        inhabited store target type_is_known_inhabited return
+    fi
+    typ match
+        Type::Generic(generic) => {
+            if ARRAY_TYPE generic.base == then
+                if typ get_concrete_array_length Option::Some(length) is then
+                    if 0 length == then
+                        true return
+                    fi
+                fi
+                if 0 generic.params.length == then
+                    false return
+                fi
+                inhabited store 0 generic.params.get type_is_known_inhabited
+            elif generic.base store.structs.has generic.base store.enums.has || then
+                generic.base inhabited.has
+            else
+                true
+            fi
+        }
+        Type::Unknown => true
+        Type::TypeVar(_) => true
+        Type::Builtin(_) => true
+        Type::Function(_) => true
+        Type::Const(_) => true
+    end
+}
+
+fn validate_inhabited_aggregates parser:mut$Parser {
+    Set[str]::new = inhabited
+    true = changed
+    while changed do
+        false = changed
+        for
+            casa_struct in parser
+                .store
+                .structs
+                .values
+                .iter
+        do
+            if casa_struct.name inhabited.has then
+                continue
+            fi
+            true = fields_inhabited
+            for member in casa_struct.members.iter do
+                if inhabited parser.store member.typ type_is_known_inhabited ! then
+                    false = fields_inhabited
+                    break
+                fi
+            done
+            if fields_inhabited then
+                casa_struct.name.clone inhabited.add
+                true = changed
+            fi
+        done
+        for
+            casa_enum in parser
+                .store
+                .enums
+                .values
+                .iter
+        do
+            if casa_enum.name inhabited.has then
+                continue
+            fi
+            false = enum_inhabited
+            for pair in casa_enum.variant_types.iter do
+                true = variant_inhabited
+                for payload_type in pair.second.iter do
+                    if inhabited parser.store payload_type type_is_known_inhabited ! then
+                        false = variant_inhabited
+                        break
+                    fi
+                done
+                if variant_inhabited then
+                    true = enum_inhabited
+                    break
+                fi
+            done
+            if enum_inhabited then
+                casa_enum.name.clone inhabited.add
+                true = changed
+            fi
+        done
+    done
+
+    for
+        casa_struct in parser
+            .store
+            .structs
+            .values
+            .iter
+    do
+        if casa_struct.name inhabited.has ! then
+            casa_struct.location
+            f"Type `{casa_struct.name}` has no finite safe value; add `Option` or an enum leaf variant"
+            ErrorKind::TypeMismatch parser.state.record_error
+        fi
+    done
+    for
+        casa_enum in parser
+            .store
+            .enums
+            .values
+            .iter
+    do
+        if casa_enum.name inhabited.has ! then
+            casa_enum.location
+            f"Type `{casa_enum.name}` has no finite safe value; add an enum leaf variant"
+            ErrorKind::TypeMismatch parser.state.record_error
+        fi
+    done
 }
 
 fn copy_representation_is_eligible
@@ -3876,6 +4075,11 @@ fn copy_representation_is_eligible
     fi
     if typ.is_exclusive_borrow then
         false return
+    fi
+    if store typ type_value_representation Option::Some(representation) is then
+        if VALUE_REPR_INDIRECT representation == then
+            false return
+        fi
     fi
     typ match
         Type::Builtin(builtin) => {
@@ -3992,7 +4196,7 @@ fn validate_drop_methods parser:mut$Parser {
             .store
             .functions
             .get
-            .unwrap = function
+            .unwrap = function: $Function
         if "drop" function_name == then
             function.location "`drop` must be declared in an inherent implementation" ErrorKind::InvalidScope parser.state.record_error
             continue
@@ -4061,7 +4265,7 @@ fn append_struct_copy_clone_body casa_struct:$CasaStruct location:mut$Location o
         1 -= member_index
         member_index casa_struct.members.get = member
         location.clone "self" OpValue::PushVar Op::new ops.push
-        location.clone member.name OpValue::MethodCall Op::new ops.push
+        location.clone member.name.clone OpValue::MethodCall Op::new ops.push
         if member.typ.is_shared_borrow ! then
             location.clone "clone" OpValue::MethodCall Op::new ops.push
         fi
@@ -4118,7 +4322,7 @@ fn make_copy_clone_fallback
     trait_impl.receiver clone_type returns.push
     returns parameters StackEffect::new = effect
     trait_impl.type_vars string_list_to_set = effect.type_vars
-    trait_impl.trait_bounds effect StackEffect::set_trait_bounds
+    trait_impl.trait_bounds.clone effect StackEffect::set_trait_bounds
 
     List[Op]::new = ops
     List[Variable]::new = variables
@@ -4132,9 +4336,9 @@ fn make_copy_clone_fallback
         trait_impl.trait_bounds parser build_hidden_trait_methods = hidden_methods
         for hidden in hidden_methods.iter do
             hidden.var_name hidden.fn_type Parameter::named hidden_parameters.push
-            hidden.fn_type hidden.var_name Variable variables.push
-            trait_impl.location hidden.var_name OpValue::AssignVar Op::new = hidden_assign
-            hidden.fn_type Option::Some hidden_assign Op::set_type_hint
+            hidden.fn_type clone_type hidden.var_name.clone Variable variables.push
+            trait_impl.location.clone hidden.var_name.clone OpValue::AssignVar Op::new = hidden_assign
+            hidden.fn_type clone_type Option::Some hidden_assign Op::set_type_hint
             hidden_assign ops.push
         done
         0 (u64) = visible_param_index
@@ -4145,7 +4349,7 @@ fn make_copy_clone_fallback
         hidden_parameters effect StackEffect::set_parameters
     fi
     receiver "self" Variable variables.push
-    trait_impl.location "self" OpValue::AssignVar Op::new ops.push
+    trait_impl.location.clone "self" OpValue::AssignVar Op::new ops.push
     trait_impl.receiver.match_base = receiver_name
     if
         receiver_name parser
@@ -4162,10 +4366,11 @@ fn make_copy_clone_fallback
     then
         ops trait_impl.location casa_enum append_enum_copy_clone_body
     else
-        trait_impl.location "self" OpValue::PushVar Op::new ops.push
+        trait_impl.location.clone "self" OpValue::PushVar Op::new ops.push
+        trait_impl.location.clone OpValue::Copy Op::new ops.push
     fi
 
-    effect trait_impl.location ops function_name Function::with_stack_effect = function
+    effect trait_impl.location.clone ops function_name.clone Function::with_stack_effect = function
     variables function Function::set_variables
     function
 }
@@ -4203,7 +4408,7 @@ fn synthesize_copy_clone_fallbacks parser:mut$Parser {
         fi
         parser.store clone_trait_type clone_type Option::Some trait_impl.receiver "clone" resolve_trait_method_semantics_for = clone_method
         if clone_method Option::Some(method) is then
-            method.function_name "clone" trait_impl.methods.set
+            method.function_name.clone "clone" trait_impl.methods.set
             trait_impl copy_impl_key.clone parser
                 .store
                 .trait_impls
@@ -4320,7 +4525,7 @@ fn finalize_trait_impl_methods parser:mut$Parser skip_functions:$Set[str] {
 }
 
 fn parse_impl_block parser:mut$Parser cursor:mut$TokenCursor {
-    fallback_token "impl" cursor expect_token_value.unwrap_or = impl_token
+    fallback_token parser.state "impl" cursor expect_token_value.unwrap_or = impl_token
 
     # Parse optional type parameters with trait bounds
     List[str]::new = type_vars
@@ -4330,11 +4535,9 @@ fn parse_impl_block parser:mut$Parser cursor:mut$TokenCursor {
     if tvars_opt Option::Some(tvars) is then
         if "[" tvars Token::value == then
             cursor parser parse_type_variables = parsed_type_variables
-            parsed_type_variables.trait_bounds = trait_bounds
-            parsed_type_variables.const_params = const_params
+            parsed_type_variables.into_parts = const_params = trait_bounds = all_type_param_names
             # `names` mixes type variables and constant parameters; keep only
             # the type variables here (ADR-0152).
-            parsed_type_variables.names = all_type_param_names
             for candidate_name in all_type_param_names.iter do
                 if candidate_name const_params.has ! then
                     candidate_name.clone type_vars.push
@@ -4343,7 +4546,7 @@ fn parse_impl_block parser:mut$Parser cursor:mut$TokenCursor {
         fi
     fi
 
-    cursor parse_type_ast = impl_type
+    parser.state cursor parse_type_ast = impl_type
     type_vars string_list_to_set = type_var_set
     type_var_set impl_type canonicalize_type_var = impl_type
     # Constant parameters in the implemented type are constants, not type
@@ -4363,8 +4566,8 @@ fn parse_impl_block parser:mut$Parser cursor:mut$TokenCursor {
             cursor.pop drop
             true = parse_implemented_traits
             while parse_implemented_traits do
-                fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = trait_token
-                trait_token cursor parse_bound_type_args = trait_args
+                fallback_token parser.state TokenKind::Identifier cursor expect_token_kind.unwrap_or = trait_token
+                parser.state trait_token cursor parse_bound_type_args = trait_args
                 trait_token.value parser
                     .store
                     .traits
@@ -4379,10 +4582,10 @@ fn parse_impl_block parser:mut$Parser cursor:mut$TokenCursor {
                     if trait_args.length casa_trait.type_params.length != then
                         trait_token.location f"Trait `{trait_token.value}` expects {casa_trait.type_params.length} type argument(s), got {trait_args.length}" ErrorKind::Syntax parser.state.record_error
                     else
-                        trait_args trait_token.value TraitBound implemented_traits.push
+                        trait_args trait_token.value.clone TraitBound implemented_traits.push
                     fi
                 else
-                    trait_args trait_token.value TraitBound implemented_traits.push
+                    trait_args trait_token.value.clone TraitBound implemented_traits.push
                 fi
                 cursor.peek = plus_opt
                 if plus_opt Option::Some(plus) is then
@@ -4398,7 +4601,7 @@ fn parse_impl_block parser:mut$Parser cursor:mut$TokenCursor {
         fi
     fi
 
-    fallback_token "{" cursor expect_token_value.unwrap_or drop
+    fallback_token parser.state "{" cursor expect_token_value.unwrap_or drop
     while true do
         cursor.peek = fn_opt
         if fn_opt.is_none then
@@ -4415,7 +4618,7 @@ fn parse_impl_block parser:mut$Parser cursor:mut$TokenCursor {
         fi
         cursor parser parse_function = function
         is_unsafe_method function Function::set_is_unsafe
-        function Function::name = method_name
+        function Function::name = method_name: $str
         if "drop" method_name == 0 implemented_traits.length != && then
             function.location "`drop` must be declared in an inherent implementation" ErrorKind::InvalidScope parser.state.record_error
         fi
@@ -4423,7 +4626,7 @@ fn parse_impl_block parser:mut$Parser cursor:mut$TokenCursor {
         if 0 implemented_traits.length != then
             0 implemented_traits.get trait_bound_to_type.format = trait_name
             f"{base_type}::{trait_name}::{method_name}" = fn_name
-            fn_name.clone method_name trait_impl_methods.set
+            fn_name.clone method_name.clone trait_impl_methods.set
         else
             f"{base_type}::{method_name}" = fn_name
         fi
@@ -4443,7 +4646,7 @@ fn parse_impl_block parser:mut$Parser cursor:mut$TokenCursor {
         fi
         function fn_name parser.put_function
     done
-    fallback_token "}" cursor expect_token_value.unwrap_or drop
+    fallback_token parser.state "}" cursor expect_token_value.unwrap_or drop
 
     for implemented_trait in implemented_traits.iter do
         Map[str str]::new = cloned_methods
@@ -4452,10 +4655,10 @@ fn parse_impl_block parser:mut$Parser cursor:mut$TokenCursor {
         done
         Map[str List[TraitBound]]::new = cloned_bounds
         for pair in trait_bounds.iter do
-            pair.second.shallow_copy pair.first.clone cloned_bounds.set
+            pair.second.clone pair.first.clone cloned_bounds.set
         done
-        impl_token.location cloned_methods cloned_bounds type_vars.shallow_copy
-        implemented_trait impl_type clone_type TraitImpl
+        impl_token.location.clone cloned_methods cloned_bounds type_vars.clone
+        implemented_trait.clone impl_type clone_type TraitImpl
         parser register_trait_impl
     done
 }
@@ -4466,7 +4669,7 @@ fn parse_impl_block parser:mut$Parser cursor:mut$TokenCursor {
 
 fn is_match_arm_boundary parser:mut$Parser cursor:mut$TokenCursor -> bool {
     cursor TokenCursor::pos = pos
-    cursor TokenCursor::tokens = token_list
+    cursor TokenCursor::tokens = token_list: $List[Token]
     if pos 1 + token_list.length < then
         false return
     fi
@@ -4520,7 +4723,7 @@ fn is_match_arm_boundary parser:mut$Parser cursor:mut$TokenCursor -> bool {
             while scan_pos token_list.length > do
                 if ")" scan_pos token_list.get Token::value == then
                     if scan_pos 1 + token_list.length > then
-                        scan_pos 1 + token_list.get Token::value = after_paren
+                        scan_pos 1 + token_list.get Token::value = after_paren: $str
                         if "=>" after_paren == then
                             true return
                         fi
@@ -4542,7 +4745,7 @@ fn parse_struct_match_pattern
     name_token:mut$Token
     cursor:mut$TokenCursor
 -> StructPattern {
-    fallback_token "{" cursor expect_token_value.unwrap_or drop
+    fallback_token parser.state "{" cursor expect_token_value.unwrap_or drop
     name_token Token::value parser
         .store
         .structs
@@ -4565,13 +4768,13 @@ fn parse_struct_match_pattern
                 break
             fi
         fi
-        fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = field_token
-        fallback_token ":" cursor expect_token_value.unwrap_or drop
-        fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = var_token
-        var_token Token::value field_token Token::value bindings.set
+        fallback_token parser.state TokenKind::Identifier cursor expect_token_kind.unwrap_or = field_token
+        fallback_token parser.state ":" cursor expect_token_value.unwrap_or drop
+        fallback_token parser.state TokenKind::Identifier cursor expect_token_kind.unwrap_or = var_token
+        var_token Token::value.clone field_token Token::value.clone bindings.set
     done
 
-    bindings name_token Token::value StructPattern
+    bindings name_token Token::value.clone StructPattern
 }
 # parse_pattern_terminator — consume the `=>` that separates a match-arm
 # pattern from its body. If an `if` keyword appears first the guard
@@ -4597,7 +4800,7 @@ fn parse_pattern_terminator
             if next_opt.is_none then
                 break
             fi
-            next_opt.unwrap Token::value = next_value
+            next_opt.unwrap Token::value = next_value: $str
             if "=>" next_value == 0 match_depth == && then
                 break
             fi
@@ -4618,12 +4821,12 @@ fn parse_pattern_terminator
             guard_ops function_name cursor guard_token parser token_to_op
         done
     fi
-    fallback_token "=>" cursor expect_token_value.unwrap_or drop
+    fallback_token parser.state "=>" cursor expect_token_value.unwrap_or drop
     guard_ops
 }
 
 fn parse_literal_match_pattern token:mut$Token parser:mut$Parser -> LiteralPattern {
-    token Token::value = value
+    token Token::value = value: $str
     if "true" value == then
         "true" true LiteralValue::Bool LiteralPattern return
     fi
@@ -4631,15 +4834,15 @@ fn parse_literal_match_pattern token:mut$Token parser:mut$Parser -> LiteralPatte
         "false" false LiteralValue::Bool LiteralPattern return
     fi
     if 0 value.at.is_digit value is_negative_integer_literal || then
-        value.clone value.clone str_to_int value IntegerLiteral::new LiteralValue::Int LiteralPattern return
+        value.clone value.clone str_to_int value.clone IntegerLiteral::new LiteralValue::Int LiteralPattern return
     fi
     if value char_literal_codepoint Option::Some(character) is then
-        value character LiteralValue::Char LiteralPattern return
+        value.clone character LiteralValue::Char LiteralPattern return
     fi
     if '"' 0 value.at == '"' value.length 1 - value.at == && then
         value.length = value_length
         value 1 value_length 2 - str::substring = string_value
-        value string_value LiteralValue::Str LiteralPattern return
+        value.clone string_value LiteralValue::Str LiteralPattern return
     fi
     token Token::location f"Unsupported literal in match arm: `{value}`" ErrorKind::UnexpectedToken parser.state.record_error
     # Unreachable
@@ -4679,7 +4882,7 @@ fn parse_match_arm_pattern
         arm_token Token::location struct_arm OpValue::MatchArm Op::new ops.push
     elif arm_token Token::value "::" str::find 0 > then
         function_name cursor parser parse_pattern_terminator = bare_guard_ops
-        Option::None arm_token Token::value "" EnumVariant::new = bare_variant
+        Option::None arm_token Token::value.clone "" EnumVariant::new = bare_variant
         bare_guard_ops bare_variant PatternValue::EnumVariant MatchArm::new = bare_arm
         arm_token Token::location bare_arm OpValue::MatchArm Op::new ops.push
     else
@@ -4704,8 +4907,8 @@ fn parse_match_arm_pattern
                         break
                     fi
                 fi
-                fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = binding_token
-                binding_token Token::value bindings.push
+                fallback_token parser.state TokenKind::Identifier cursor expect_token_kind.unwrap_or = binding_token
+                binding_token Token::value.clone bindings.push
             done
         fi
 
@@ -4762,7 +4965,7 @@ fn parse_match_block
     token Token::location OpValue::MatchStart Op::new ops.push
 
     while true do
-        fallback_token cursor expect_token.unwrap_or = arm_token
+        fallback_token parser.state cursor expect_token.unwrap_or = arm_token
         if "end" arm_token Token::value == then
             arm_token Token::location OpValue::MatchEnd Op::new ops.push
             if parser.syntax_only then
@@ -4857,14 +5060,18 @@ fn resolve_import
     ""
 }
 
-fn parse_selective_import_symbols cursor:mut$TokenCursor location:mut$Location -> List[str] {
+fn parse_selective_import_symbols
+    cursor:mut$TokenCursor
+    location:mut$Location
+    state:mut$ParseState
+-> List[str] {
     List[str]::new = symbols
-    fallback_token "{" cursor expect_token_value.unwrap_or drop
+    fallback_token state "{" cursor expect_token_value.unwrap_or drop
     while true do
         cursor.pop = symbol_opt
         if symbol_opt.is_none then
-            location "Unclosed selective import list" ErrorKind::UnmatchedBlock cursor.state.record_error
-            cursor.state.mark_output_unusable
+            location "Unclosed selective import list" ErrorKind::UnmatchedBlock state.record_error
+            state.mark_output_unusable
             symbols return
         fi
         symbol_opt.unwrap = symbol_token
@@ -4876,34 +5083,34 @@ fn parse_selective_import_symbols cursor:mut$TokenCursor location:mut$Location -
         fi
         if "}" symbol_token Token::value == then
             if 0 symbols.length == then
-                symbol_token Token::location "Selective import list cannot be empty" ErrorKind::Syntax cursor.state.record_error
+                symbol_token Token::location "Selective import list cannot be empty" ErrorKind::Syntax state.record_error
             fi
             symbols return
         fi
         if TokenKind::Identifier symbol_token Token::kind != then
-            symbol_token Token::location "Expected identifier in selective import list" ErrorKind::UnexpectedToken cursor.state.record_error
+            symbol_token Token::location "Expected identifier in selective import list" ErrorKind::UnexpectedToken state.record_error
         fi
-        symbol_token Token::value symbols.push
+        symbol_token Token::value.clone symbols.push
     done
     symbols
 }
 
 fn handle_keyword_import parser:mut$Parser cursor:mut$TokenCursor -> Op {
-    fallback_token TokenKind::Literal cursor expect_token_kind.unwrap_or = path_token
-    cursor path_token get_op_literal = literal_op
+    fallback_token parser.state TokenKind::Literal cursor expect_token_kind.unwrap_or = path_token
+    parser.state cursor path_token get_op_literal = literal_op
     if literal_op.value OpValue::PushStr(spec) is then
-        path_token Token::location = path_location
+        path_token Token::location.clone = path_location
         if parser.syntax_only then
             spec.clone
         else
-            path_location Location::file = importing_file
+            path_location Location::file = importing_file: $str
             path_location spec importing_file parser resolve_import
         fi
         = resolved
 
         cursor.peek = next_opt
         if { Token::value "{" == } next_opt.filter.is_some then
-            path_location cursor parse_selective_import_symbols = symbols
+            parser.state path_location cursor parse_selective_import_symbols = symbols
             symbols resolved SelectiveImport = selective
             path_location selective OpValue::ImportFileSelective Op::new return
         fi
@@ -4915,7 +5122,7 @@ fn handle_keyword_import parser:mut$Parser cursor:mut$TokenCursor -> Op {
 }
 
 fn handle_selective_import parser:mut$Parser selective:SelectiveImport location:mut$Location {
-    selective.path = import_path
+    selective.path = import_path: $str
     if 0 import_path.length == then
         return
     fi
@@ -4943,45 +5150,56 @@ fn handle_selective_import parser:mut$Parser selective:SelectiveImport location:
             .trait_impls
             .keys string_list_to_set = inherited_impls
         base_store included_files import_path.clone parser.analyze_import = import_result
-        if import_result Result::Error(read_error) is then
-            location f"Cannot read import `{import_path}`: {read_error.to_str}" ErrorKind::Syntax parser
-                .state
-                .diagnostics
-                .record_error_at_encounter
-            parser.state.mark_output_unusable
-            return
-        fi
-        import_result.unwrap = imported_result
-        location imported_result.diagnostics parser
-            .state
-            .diagnostics
-            .merge_at_encounter
-        if imported_result.ops Option::Some(imported_ops) is then
-            inherited_impls.clone inherited_symbols.clone included_files imported_ops imported_result.store
-            ImportedModule = imported_module
-            imported_module.store.clone_for_selective_import = imported_store
-            imported_module import_path.clone parser.selective_import_cache.set
-        else
-            parser.state.mark_output_unusable
-            return
-        fi
+        import_result match
+            Result::Ok(imported_result) => {
+                imported_result.into_parts = imported_diagnostics = imported_store_result = imported_ops_opt
+                location imported_diagnostics parser
+                    .state
+                    .diagnostics
+                    .merge_at_encounter
+                imported_ops_opt match
+                    Option::Some(imported_ops) => {
+                        inherited_impls.clone inherited_symbols.clone included_files imported_ops imported_store_result
+                        ImportedModule = imported_module
+                        imported_module.store.clone_for_selective_import = imported_store
+                        imported_module import_path.clone parser.selective_import_cache.set
+                    }
+                    Option::None => {
+                        parser.state.mark_output_unusable
+                        return
+                    }
+                end
+            }
+            Result::Error(read_error) => {
+                location f"Cannot read import `{import_path}`: {read_error.to_str}" ErrorKind::Syntax parser
+                    .state
+                    .diagnostics
+                    .record_error_at_encounter
+                parser.state.mark_output_unusable
+                return
+            }
+        end
     fi
 
     inherited_impls
     inherited_symbols
     location
-    selective.symbols
+    selective.symbols.clone
     parser.store
     imported_store
     merge_selective_import_closure_with_inherited = merge_result
-    if merge_result Result::Error(merge_diagnostics) is then
-        location merge_diagnostics parser
-            .state
-            .diagnostics
-            .merge_at_encounter
-        parser.state.mark_output_unusable
-        return
-    fi
+    merge_result match
+        Result::Ok(_) => {
+        }
+        Result::Error(merge_diagnostics) => {
+            location merge_diagnostics parser
+                .state
+                .diagnostics
+                .merge_at_encounter
+            parser.state.mark_output_unusable
+            return
+        }
+    end
 }
 
 fn handle_full_import
@@ -4994,41 +5212,53 @@ fn handle_full_import
         return
     fi
     import_path.clone parser.included_files.add
-    if import_path parser.selective_import_cache.remove Option::Some(cached_import) is then
-        for included_file in cached_import.included_files.iter do
-            included_file.clone parser.included_files.add
-        done
-        cached_import.store parser.store.merge_import
-        cached_import.ops expanded.append
-        return
-    fi
+    import_path parser.selective_import_cache.remove = cached_import_opt
+    cached_import_opt match
+        Option::Some(cached_import) => {
+            cached_import match
+                ImportedModule {
+                    store: cached_store ops: cached_ops included_files: cached_included_files
+                } => {
+                    for included_file in cached_included_files.iter do
+                        included_file.clone parser.included_files.add
+                    done
+                    cached_store parser.store.merge_import
+                    cached_ops expanded.append
+                }
+            end
+            return
+        }
+        Option::None => {
+        }
+    end
 
-    parser.store = import_store
-    parser.included_files = imported_files
-    symbol_store_new = parser.store
-    Set[str]::new = parser.included_files
+    parser.store.clone = import_store
+    parser.included_files.to_list string_list_to_set = imported_files
     import_store imported_files import_path.clone parser.analyze_import = import_result
-    import_store = parser.store
     imported_files = parser.included_files
-    if import_result Result::Error(read_error) is then
-        location f"Cannot read import `{import_path}`: {read_error.to_str}" ErrorKind::Syntax parser
-            .state
-            .diagnostics
-            .record_error_at_encounter
-        parser.state.mark_output_unusable
-        return
-    fi
-    import_result.unwrap = imported_result
-    location imported_result.diagnostics parser
-        .state
-        .diagnostics
-        .merge_at_encounter
-    if imported_result.ops Option::Some(import_ops) is then
-        imported_result.store parser.store.merge_import
-        import_ops expanded.append
-    else
-        parser.state.mark_output_unusable
-    fi
+    import_result match
+        Result::Ok(imported_result) => {
+            imported_result.into_parts = imported_diagnostics = imported_store_result = import_ops_opt
+            location imported_diagnostics parser
+                .state
+                .diagnostics
+                .merge_at_encounter
+            import_ops_opt match
+                Option::Some(import_ops) => {
+                    imported_store_result parser.store.merge_import
+                    import_ops expanded.append
+                }
+                Option::None => parser.state.mark_output_unusable
+            end
+        }
+        Result::Error(read_error) => {
+            location f"Cannot read import `{import_path}`: {read_error.to_str}" ErrorKind::Syntax parser
+                .state
+                .diagnostics
+                .record_error_at_encounter
+            parser.state.mark_output_unusable
+        }
+    end
 }
 
 # ============================================================================
@@ -5060,13 +5290,13 @@ fn handle_question_operator token:mut$Token ops:mut$List[Op] {
 # Source `for x in <iter> do <body> done` lowers to roughly:
 #
 #     <iter_expr_ops>
-#     = __for_iter_N
+#     = $for_iter_FILE_N
 #     while
-#         __for_iter_N .next
-#         = __for_opt_N
-#         __for_opt_N .is_some
+#         $for_iter_FILE_N .next
+#         = $for_opt_FILE_N
+#         $for_opt_FILE_N .is_some
 #     do
-#         __for_opt_N .unwrap
+#         $for_opt_FILE_N .unwrap
 #         = x
 #         <body_ops>
 #     done
@@ -5083,14 +5313,15 @@ fn handle_keyword_for
     function_name:mut$str
     ops:mut$List[Op]
 {
-    fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = loop_var_token
-    loop_var_token Token::value = loop_var_name
-    fallback_token "in" cursor expect_token_value.unwrap_or drop
+    fallback_token parser.state TokenKind::Identifier cursor expect_token_kind.unwrap_or = loop_var_token
+    loop_var_token Token::value.clone = loop_var_name
+    fallback_token parser.state "in" cursor expect_token_value.unwrap_or drop
 
-    token Token::location = for_loc
+    token Token::location.clone = for_loc
     for_loc Location::span Span::offset = for_offset
-    f"__for_iter_{for_offset}" = hidden_iter_name
-    f"__for_opt_{for_offset}" = hidden_opt_name
+    for_loc.file str_hash = for_file_hash
+    f"$for_iter_{for_file_hash}_{for_offset}" = hidden_iter_name
+    f"$for_opt_{for_file_hash}_{for_offset}" = hidden_opt_name
 
     # Iterable-expression phase — emit ops until the matching `do`. These ops
     # leave the iterator value on the stack, which the synthesized
@@ -5205,8 +5436,8 @@ fn get_op_keyword
                 then
                     function Function::location f"Identifier `{function Function::name}` is already defined" ErrorKind::DuplicateName parser.state.record_error
                 fi
-                function Function::name = unsafe_function_name
-                function unsafe_function_name parser.put_function
+                function Function::name.clone = unsafe_function_name
+                function unsafe_function_name.clone parser.put_function
                 return
             fi
             if "{" unsafe_next Token::value == then
@@ -5221,16 +5452,38 @@ fn get_op_keyword
         return
     fi
 
-    # Simple keyword -> OpValue lookup
-    keyword keyword_to_op_value = simple_opt
-    if simple_opt Option::Some(simple) is then
-        if parser.syntax_only then
-            token Token::location Location::span Span::offset
-            simple parser.state.record_control_op
+    # move { ... } -> closure that owns its affine captures
+    if KeywordKind::Move keyword == then
+        cursor.peek = move_next_opt
+        if move_next_opt Option::Some(move_next) is then
+            if "{" move_next Token::value == then
+                f"lambda__{function_name}_o{token Token::location Location::span Span::offset}" = lambda_name
+                lambda_name cursor parser parse_block_ops = lambda_ops
+                token Token::location.clone lambda_ops lambda_name.clone Function::new = lambda_function
+                true lambda_function Function::set_captures_by_move
+                lambda_function lambda_name.clone parser.put_function
+                token Token::location lambda_name OpValue::FnPush Op::new ops.push
+                return
+            fi
         fi
-        token Token::location simple Op::new ops.push
+        token Token::location "Expected `{` after `move`" ErrorKind::Syntax parser.state.record_error
         return
     fi
+
+    # Simple keyword -> OpValue lookup
+    keyword keyword_to_op_value = simple_opt
+    simple_opt match
+        Option::Some(simple) => {
+            if parser.syntax_only then
+                token Token::location Location::span Span::offset
+                simple parser.state.record_control_op
+            fi
+            token Token::location simple Op::new ops.push
+            return
+        }
+        Option::None => {
+        }
+    end
 
     # end without match
     if KeywordKind::End keyword == then
@@ -5251,8 +5504,8 @@ fn get_op_keyword
         then
             casa_enum CasaEnum::location f"Enum `{casa_enum CasaEnum::name}` is already defined" ErrorKind::DuplicateName parser.state.record_error
         fi
-        casa_enum CasaEnum::name = enum_name
-        casa_enum enum_name parser.put_enum
+        casa_enum CasaEnum::name.clone = enum_name
+        casa_enum enum_name.clone parser.put_enum
         return
     fi
 
@@ -5270,8 +5523,8 @@ fn get_op_keyword
         then
             function Function::location f"Identifier `{function Function::name}` is already defined" ErrorKind::DuplicateName parser.state.record_error
         fi
-        function Function::name = parsed_function_name
-        function parsed_function_name parser.put_function
+        function Function::name.clone = parsed_function_name
+        function parsed_function_name.clone parser.put_function
         return
     fi
 
@@ -5307,7 +5560,7 @@ fn get_op_keyword
         parser token Token::location "Structs" function_name require_global_scope
         cursor.retreat
         cursor parser parse_struct = casa_struct
-        casa_struct CasaStruct::name = parsed_struct_name
+        casa_struct CasaStruct::name.clone = parsed_struct_name
         casa_struct parsed_struct_name parser.put_struct
         return
     fi
@@ -5340,8 +5593,8 @@ fn get_op_keyword
                 return
             fi
         done
-        fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
-        token Token::location name_token Token::value OpValue::DeclareGlobal Op::new ops.push
+        fallback_token parser.state TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
+        token Token::location name_token Token::value.clone OpValue::DeclareGlobal Op::new ops.push
         return
     fi
 
@@ -5366,13 +5619,13 @@ fn get_op_keyword
                 then
                     function Function::location f"Identifier `{function Function::name}` is already defined" ErrorKind::DuplicateName parser.state.record_error
                 fi
-                function Function::name = const_function_name
-                function const_function_name parser.put_function
+                function Function::name.clone = const_function_name
+                function const_function_name.clone parser.put_function
                 return
             fi
         fi
-        fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = const_name_token
-        const_name_token Token::value = const_name
+        fallback_token parser.state TokenKind::Identifier cursor expect_token_kind.unwrap_or = const_name_token
+        const_name_token Token::value.clone = const_name
         if
             const_name parser
                 .store
@@ -5432,17 +5685,17 @@ fn get_op_keyword
                 token Token::location cursor parser eval_const_block
             fi
             = const_block_val
-            token Token::location const_block_val const_name.clone Constant = casa_const
+            token Token::location.clone const_block_val const_name.clone Constant = casa_const
             casa_const const_name parser.put_constant
         elif TokenKind::Literal const_value_token Token::kind == then
-            const_value_token Token::value parse_literal_to_constant_value = const_lit_val
-            token Token::location const_lit_val const_name.clone Constant = casa_const
+            const_value_token Token::value.clone parse_literal_to_constant_value = const_lit_val
+            token Token::location.clone const_lit_val const_name.clone Constant = casa_const
             casa_const const_name parser.put_constant
         elif TokenKind::Identifier const_value_token Token::kind == then
-            const_value_token Token::value = const_ref_name
+            const_value_token Token::value.clone = const_ref_name
             if parser.syntax_only then
                 0 IntegerLiteral::from_int ConstantValue::Int = syntax_const_value
-                token Token::location syntax_const_value const_name.clone Constant = casa_const
+                token Token::location.clone syntax_const_value const_name.clone Constant = casa_const
                 casa_const const_name parser.put_constant
                 return
             fi
@@ -5451,7 +5704,7 @@ fn get_op_keyword
                 .constants
                 .get = const_ref_opt
             if const_ref_opt Option::Some(const_ref) is then
-                token Token::location const_ref Constant::value clone_constant_value const_name.clone Constant
+                token Token::location.clone const_ref Constant::value clone_constant_value const_name.clone Constant
                 = casa_const
                 casa_const const_name parser.put_constant
             elif
@@ -5501,8 +5754,8 @@ fn get_op_keyword
         then
             casa_trait CasaTrait::location f"Trait `{casa_trait CasaTrait::name}` is already defined" ErrorKind::DuplicateName parser.state.record_error
         fi
-        casa_trait CasaTrait::name = parsed_trait_name
-        casa_trait parsed_trait_name parser.put_trait
+        casa_trait CasaTrait::name.clone = parsed_trait_name
+        casa_trait parsed_trait_name.clone parser.put_trait
         return
     fi
 }
@@ -5513,7 +5766,7 @@ fn get_op_keyword
 
 fn is_struct_field_boundary cursor:mut$TokenCursor member_names:mut$List[str] -> bool {
     cursor TokenCursor::pos = pos
-    cursor TokenCursor::tokens = token_list
+    cursor TokenCursor::tokens = token_list: $List[Token]
     if pos 1 + token_list.length < then
         false return
     fi
@@ -5530,7 +5783,6 @@ fn is_struct_field_boundary cursor:mut$TokenCursor member_names:mut$List[str] ->
 fn parse_struct_field_value
     parser:mut$Parser
     cursor:mut$TokenCursor
-    struct_name:str
     member_names:mut$List[str]
     function_name:mut$str
     all_ops:mut$List[Op]
@@ -5567,7 +5819,7 @@ fn parse_struct_literal
     cursor:mut$TokenCursor
     function_name:mut$str
 -> List[Op] {
-    fallback_token "{" cursor expect_token_value.unwrap_or drop
+    fallback_token parser.state "{" cursor expect_token_value.unwrap_or drop
     name_token Token::value parser.store.clone_struct = casa_struct_opt
     if casa_struct_opt.is_none then
         empty_location "Expected option value while unwrapping name_token Token::value parser.store.structs.get" ErrorKind::Syntax parser.state.record_error
@@ -5597,26 +5849,26 @@ fn parse_struct_literal
             fi
         fi
 
-        fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = field_token
+        fallback_token parser.state TokenKind::Identifier cursor expect_token_kind.unwrap_or = field_token
         if field_token Token::value member_names string_list_contains ! then
             field_token Token::location f"Struct `{name_token Token::value}` has no field `{field_token Token::value}`" ErrorKind::UndefinedName parser.state.record_error
         fi
         if field_token Token::value seen.has then
             field_token Token::location f"Duplicate field `{field_token Token::value}` in struct literal" ErrorKind::DuplicateName parser.state.record_error
         fi
-        field_token Token::value seen.add
-        field_token Token::value field_order.push
+        field_token Token::value.clone seen.add
+        field_token Token::value.clone field_order.push
 
-        fallback_token ":" cursor expect_token_value.unwrap_or drop
+        fallback_token parser.state ":" cursor expect_token_value.unwrap_or drop
 
         all_ops.length = ops_before
-        all_ops function_name member_names name_token Token::value cursor parser parse_struct_field_value
+        all_ops function_name member_names cursor parser parse_struct_field_value
         if ops_before all_ops.length == then
             field_token Token::location f"Missing value for field `{field_token Token::value}`" ErrorKind::Syntax parser.state.record_error
         fi
     done
 
-    field_order name_token Token::value StructLiteral = literal
+    field_order name_token Token::value.clone StructLiteral = literal
     name_token Token::location literal OpValue::StructLiteral Op::new all_ops.push
     all_ops
 }
@@ -5625,11 +5877,16 @@ fn parse_struct_literal
 # token_to_op - main dispatch: token kind -> handler
 # ============================================================================
 
-fn try_parse_typed_pointer_operation
+fn try_parse_pointer_operation
     token:mut$Token
     cursor:mut$TokenCursor
     ops:mut$List[Op]
+    state:mut$ParseState
 -> bool {
+    if "ptr::into_raw" token.value == then
+        token.location OpValue::PtrIntoRaw Op::new ops.push
+        true return
+    fi
     if
         "ptr::read" token.value !=
         "ptr::write" token.value != &&
@@ -5648,8 +5905,8 @@ fn try_parse_typed_pointer_operation
         fi
     fi
     cursor.pop drop
-    cursor parse_type_ast = target_type
-    fallback_token "]" cursor expect_token_value.unwrap_or drop
+    state cursor parse_type_ast = target_type
+    fallback_token state "]" cursor expect_token_value.unwrap_or drop
     if "ptr::read" token.value == then
         token.location target_type OpValue::PtrRead Op::new ops.push
     elif "ptr::write" token.value == then
@@ -5666,6 +5923,7 @@ fn try_parse_explicit_associated_item
     token:mut$Token
     cursor:mut$TokenCursor
     ops:mut$List[Op]
+    state:mut$ParseState
 -> bool {
     cursor.save = saved_pos
     cursor.peek = open_opt
@@ -5697,33 +5955,32 @@ fn try_parse_explicit_associated_item
                 break
             fi
         fi
-        cursor parse_type_ast type_args.push
+        state cursor parse_type_ast type_args.push
     done
     cursor.pop = first_colon
     cursor.pop = second_colon
     cursor.pop = member_opt
-    if
-        first_colon.is_none second_colon.is_none ||
-        member_opt.is_none ||
-    then
-        saved_pos cursor.restore
-        false return
+    if first_colon Option::Some(first_colon_token) is then
+        if second_colon Option::Some(second_colon_token) is then
+            if member_opt Option::Some(member_token) is then
+                if
+                    ":" first_colon_token Token::value ==
+                    ":" second_colon_token Token::value == &&
+                    TokenKind::Identifier member_token Token::kind == &&
+                then
+                    member_token Token::value.clone = member
+                    token Token::value.clone = base
+                    token Token::location f"{base}::{member}" OpValue::Identifier Op::new = associated_op
+                    type_args base GenericType Type::Generic = result_type
+                    result_type Option::Some associated_op Op::set_type_hint
+                    associated_op ops.push
+                    true return
+                fi
+            fi
+        fi
     fi
-    if
-        first_colon.unwrap Token::value ":" !=
-        second_colon.unwrap Token::value ":" != ||
-        member_opt.unwrap Token::kind TokenKind::Identifier != ||
-    then
-        saved_pos cursor.restore
-        false return
-    fi
-    member_opt.unwrap Token::value = member
-    token Token::value = base
-    token Token::location f"{base}::{member}" OpValue::Identifier Op::new = associated_op
-    type_args base GenericType Type::Generic = result_type
-    result_type Option::Some associated_op Op::set_type_hint
-    associated_op ops.push
-    true
+    saved_pos cursor.restore
+    false
 }
 
 fn token_to_op
@@ -5760,12 +6017,12 @@ fn token_to_op
     fi
 
     if TokenKind::Literal kind == then
-        cursor token get_op_literal ops.push
+        parser.state cursor token get_op_literal ops.push
         return
     fi
 
     if TokenKind::Intrinsic kind == then
-        cursor token get_op_intrinsic ops.push
+        parser.state cursor token get_op_intrinsic ops.push
         return
     fi
 
@@ -5779,15 +6036,15 @@ fn token_to_op
             ops token handle_question_operator
             return
         fi
-        function_name cursor token get_op_operator ops.push
+        parser.state function_name cursor token get_op_operator ops.push
         return
     fi
 
     if TokenKind::Identifier kind == then
-        if ops cursor token try_parse_typed_pointer_operation then
+        if parser.state ops cursor token try_parse_pointer_operation then
             return
         fi
-        if ops cursor token try_parse_explicit_associated_item then
+        if parser.state ops cursor token try_parse_explicit_associated_item then
             return
         fi
         # Check for struct literal: StructName { ... }
@@ -5811,14 +6068,18 @@ fn token_to_op
         # Check for is check: Enum::Variant is
         if token Token::value "::" str::find 0 <= then
             cursor token try_parse_is_check = is_check_opt
-            if is_check_opt Option::Some(is_check_op) is then
-                is_check_op ops.push
-                return
-            fi
+            is_check_opt match
+                Option::Some(is_check) => {
+                    is_check ops.push
+                    return
+                }
+                Option::None => {
+                }
+            end
         fi
 
         # Plain identifier
-        token Token::location token Token::value OpValue::Identifier Op::new ops.push
+        token Token::location token Token::value.clone OpValue::Identifier Op::new ops.push
         return
     fi
 
@@ -5839,7 +6100,7 @@ fn token_to_op
 # ============================================================================
 
 fn parse_ops parser:mut$Parser tokens:List[Token] -> List[Op] {
-    parser.state tokens TokenCursor::new = cursor
+    tokens TokenCursor::new = cursor
     List[Op]::new = ops
     while cursor.is_finished ! do
         cursor.pop = token_opt
@@ -5986,13 +6247,13 @@ fn analyze_syntax source:$str file:$str -> SyntaxResult {
     SourceStore::new = sources
     source file sources.add
     file source lex_source_fmt = lex_result
-    lex_result.tokens = tokens
-    if lex_result.diagnostics.has_errors then
-        lex_result.diagnostics Option[SyntaxFacts]::None tokens SyntaxResult return
+    lex_result.into_parts = diagnostics = tokens
+    if diagnostics.has_errors then
+        diagnostics Option[SyntaxFacts]::None tokens SyntaxResult return
     fi
 
     tokens syntax_parser_tokens = parser_tokens
-    sources lex_result.diagnostics symbol_store_new Parser::new = parser
+    sources diagnostics symbol_store_new Parser::new = parser
     true = parser.syntax_only
     parser_tokens parser parse_ops drop
 
@@ -6006,24 +6267,24 @@ fn analyze_syntax source:$str file:$str -> SyntaxResult {
             .state
             .spans
             .clone tokens source build_syntax_facts = facts
-        parser.state.diagnostics facts Option::Some tokens SyntaxResult
+        parser.into_diagnostics facts Option::Some tokens SyntaxResult
     else
-        parser.state.diagnostics Option[SyntaxFacts]::None tokens SyntaxResult
+        parser.into_diagnostics Option[SyntaxFacts]::None tokens SyntaxResult
     fi
 }
 
 impl Parser {
     fn finish_resolution
-        self:mut$Parser
+        self:Parser
         ops:List[Op]
         skip_functions:Set[str]
-    -> ParseResolveResult {
+    -> ParseResolveResult List[str] {
         if self.state.has_usable_output ! then
-            self.state.diagnostics symbol_store_new Option[List[Op]]::None ParseResolveResult return
+            self.into_failed_result return
         fi
         skip_functions ops self resolve_identifiers_global = resolved_ops
         if self.state.has_usable_output ! then
-            self.state.diagnostics symbol_store_new Option[List[Op]]::None ParseResolveResult return
+            self.into_failed_result return
         fi
         self
             .store
@@ -6041,7 +6302,7 @@ impl Parser {
                 .functions
                 .remove
                 .unwrap = function
-            function.take_ops = function_ops
+            function.split_body = function_ops = function
             function.clone_declaration function_name.clone self
                 .store
                 .functions
@@ -6055,21 +6316,21 @@ impl Parser {
         done
         self derive_hashable_for_enums
         if self.state.has_usable_output then resolved_ops Option::Some else Option::None fi = result_ops
-        self.state.diagnostics self.store result_ops ParseResolveResult
+        result_ops self.into_result
     }
 }
 
 fn parse_and_resolve
     tokens:List[Token]
     search_paths:List[str]
-    diagnostics:mut$Diagnostics
-    sources:SourceStore
+    diagnostics:Diagnostics
+    sources:mut$SourceStore
 -> ParseResolveResult {
     sources diagnostics symbol_store_new Parser::new = parser
     search_paths parser Parser::set_search_paths
     tokens parser parse_ops = ops
     Set[str]::new = skip_functions
-    skip_functions ops parser.finish_resolution = result
+    skip_functions ops parser.finish_resolution = included_files = result
     result
 }
 
@@ -6081,7 +6342,7 @@ fn gather_captures store:mut$SymbolStore lambda_function:mut$Function function:m
     for op in lambda_function Function::ops.iter do
         Option[str]::None = name_opt
         if op.value OpValue::Identifier(identifier_name) is then
-            identifier_name Option::Some = name_opt
+            identifier_name.clone Option::Some = name_opt
         elif
             op.value OpValue::AssignVar is
             op.value OpValue::AssignInc is ||
@@ -6099,7 +6360,9 @@ fn gather_captures store:mut$SymbolStore lambda_function:mut$Function function:m
             0 (u64) = variable_index
             while variable_index function Function::variables.length > do
                 if name variable_index function Function::variables.get_ref Variable::name == then
-                    variable_index function Function::variables.get clone_variable lambda_function Function::captures.push
+                    if name lambda_function.captures variable_list_contains ! then
+                        variable_index function Function::variables.get clone_variable lambda_function Function::captures.push
+                    fi
                     true = captured
                     break
                 fi
@@ -6107,11 +6370,29 @@ fn gather_captures store:mut$SymbolStore lambda_function:mut$Function function:m
             done
 
             if captured ! then
+                # A nested closure can capture a value already captured by its
+                # enclosing closure.
+                0 (u64) = capture_index
+                while capture_index function Function::captures.length > do
+                    if name capture_index function Function::captures.get_ref Variable::name == then
+                        if name lambda_function.captures variable_list_contains ! then
+                            capture_index function Function::captures.get clone_variable lambda_function Function::captures.push
+                        fi
+                        true = captured
+                        break
+                    fi
+                    1 += capture_index
+                done
+            fi
+
+            if captured ! then
                 # Check global variables
                 name store.variables.get = global_var_opt
                 if global_var_opt Option::Some(global_var) is then
-                    global_var clone_variable lambda_function Function::captures.push
-                    name.clone lambda_function.global_captures.push
+                    if name lambda_function.captures variable_list_contains ! then
+                        global_var clone_variable lambda_function Function::captures.push
+                        name.clone lambda_function.global_captures.push
+                    fi
                 fi
             fi
         fi
@@ -6143,7 +6424,8 @@ fn gather_captures store:mut$SymbolStore lambda_function:mut$Function function:m
         layout_index function.variables.get = layout_variable
         layout_variable.name HIDDEN_SIZE_PREFIX str::starts_with = is_size
         layout_variable.name HIDDEN_REPR_PREFIX str::starts_with = is_repr
-        if is_size is_repr || ! then
+        layout_variable.name HIDDEN_DROP_PREFIX str::starts_with = is_drop
+        if is_size is_repr || is_drop || ! then
             1 += layout_index
             continue
         fi
@@ -6166,18 +6448,19 @@ fn resolve_array_identifiers
             diagnostics errors function inner_items store resolve_array_identifiers
         elif rai_item.value OpValue::ExprGroup(group_inner) is then
             diagnostics function group_inner store resolve_identifiers
-        elif rai_item.value OpValue::Identifier(rai_name) is then
+        elif rai_item.value OpValue::Identifier(rai_name_ref) is then
+            rai_name_ref.clone = rai_name
             if rai_name function Function::variables variable_list_contains then
-                rai_name OpValue::PushVar rai_item Op::set_value
+                rai_name.clone OpValue::PushVar rai_item Op::set_value
             elif rai_name function Function::captures variable_list_contains then
-                rai_name OpValue::PushCapture rai_item Op::set_value
+                rai_name.clone OpValue::PushCapture rai_item Op::set_value
             elif
                 rai_name store
                     .variables
                     .get
                     .is_some
             then
-                rai_name OpValue::PushVar rai_item Op::set_value
+                rai_name.clone OpValue::PushVar rai_item Op::set_value
             elif rai_name store.constants.get = rai_const_opt rai_const_opt Option::Some(rai_const) is then
                 rai_const Constant::value clone_constant_value = rai_const_value
                 rai_const_value match
@@ -6202,7 +6485,7 @@ fn resolve_array_identifiers
                 rai_name.clone OpValue::FnPush rai_item Op::set_value
                 true rai_fn Function::set_is_used
             else
-                rai_item Op::location f"Identifier `{rai_name}` is not defined" ErrorKind::UndefinedName CasaError::new errors.push
+                rai_item Op::location.clone f"Identifier `{rai_name}` is not defined" ErrorKind::UndefinedName CasaError::new errors.push
             fi
         fi
     done
@@ -6210,7 +6493,7 @@ fn resolve_array_identifiers
 
 fn resolve_enum_variant
     store:mut$SymbolStore
-    variant:EnumVariant
+    variant:mut$EnumVariant
     op:mut$Op
     function:mut$Function
     errors:mut$List[CasaError]
@@ -6219,12 +6502,12 @@ fn resolve_enum_variant
     if variant EnumVariant::enum_name.length 0 != variant EnumVariant::ordinal.is_none && then
         variant EnumVariant::enum_name store.enums.get = rev_enum_opt
         if rev_enum_opt.is_none then
-            op Op::location f"Enum `{variant EnumVariant::enum_name}` is not defined" ErrorKind::UndefinedName CasaError::new errors.push
+            op Op::location.clone f"Enum `{variant EnumVariant::enum_name}` is not defined" ErrorKind::UndefinedName CasaError::new errors.push
         else
             rev_enum_opt.unwrap = rev_enum
             variant EnumVariant::variant_name rev_enum CasaEnum::variants string_list_index = rev_ordinal
             if 0 rev_ordinal < then
-                op Op::location f"Variant `{variant EnumVariant::variant_name}` is not defined in enum `{variant EnumVariant::enum_name}`" ErrorKind::UndefinedName CasaError::new errors.push
+                op Op::location.clone f"Variant `{variant EnumVariant::variant_name}` is not defined in enum `{variant EnumVariant::enum_name}`" ErrorKind::UndefinedName CasaError::new errors.push
             else
                 rev_ordinal Option::Some variant EnumVariant::set_ordinal
             fi
@@ -6250,39 +6533,44 @@ impl Parser {
         self:mut$Parser
         import_path:mut$str
         included_files:mut$Set[str]
-        base_store:$SymbolStore
+        base_store:SymbolStore
     -> Result[ParseResolveResult IoError] {
         self.sources import_path.clone lex_file = import_result
-        if import_result Result::Error(read_error) is then
-            read_error Result::Error return
-        fi
-        import_result.unwrap = lex_result
         Diagnostics::new = diagnostics
-        lex_result.diagnostics diagnostics.merge
+        List[Token]::new = tokens
+        import_result match
+            Result::Ok(lex_result) => lex_result.into_parts = diagnostics = tokens
+            Result::Error(error) => error Result::Error return
+        end
         if diagnostics.has_errors then
             diagnostics symbol_store_new Option[List[Op]]::None ParseResolveResult Result::Ok
             return
         fi
         base_store.functions.keys string_list_to_set = existing_functions
-        base_store.clone = imported_store
+        base_store = imported_store
         self.sources diagnostics imported_store Parser::new = import_parser
-        self.search_paths = import_parser.search_paths
+        self.search_paths.clone = import_parser.search_paths
         included_files.to_list = existing_included_files
         for included_file in existing_included_files.iter do
             included_file.clone import_parser.included_files.add
         done
-        lex_result.tokens import_parser parse_ops = imported_ops
-        if diagnostics.has_errors import_parser.state.has_usable_output ! || then
-            diagnostics symbol_store_new Option[List[Op]]::None ParseResolveResult Result::Ok
+        tokens import_parser parse_ops = imported_ops
+        if
+            import_parser
+                .state
+                .diagnostics
+                .has_errors import_parser.state.has_usable_output ! ||
+        then
+            import_parser.into_diagnostics symbol_store_new Option[List[Op]]::None ParseResolveResult Result::Ok
             return
         fi
-        existing_functions imported_ops import_parser.finish_resolution = result
-        import_parser.included_files.to_list = nested_included_files
+        existing_functions imported_ops import_parser.finish_resolution = nested_included_files = result
         for included_file in nested_included_files.iter do
             included_file.clone included_files.add
         done
         if result.diagnostics.has_errors then
-            result.diagnostics symbol_store_new Option[List[Op]]::None ParseResolveResult Result::Ok
+            result.into_parts = result_diagnostics = result_store = result_ops
+            result_diagnostics symbol_store_new Option[List[Op]]::None ParseResolveResult Result::Ok
             return
         fi
         result Result::Ok
@@ -6295,7 +6583,8 @@ fn expand_imports parser:mut$Parser ops:List[Op] -> List[Op] {
     while ops.is_empty ! do
         ops.pop = current_op
         if current_op.value OpValue::ImportFileSelective(selective_import) is then
-            current_op.location selective_import parser handle_selective_import
+            selective_import clone_selective_import = owned_import
+            current_op.location owned_import parser handle_selective_import
             if parser.state.has_usable_output ! then
                 expanded return
             fi
@@ -6303,7 +6592,8 @@ fn expand_imports parser:mut$Parser ops:List[Op] -> List[Op] {
         fi
 
         if current_op.value OpValue::ImportFile(import_path) is then
-            expanded current_op.location import_path parser handle_full_import
+            import_path.clone = owned_path
+            expanded current_op.location owned_path parser handle_full_import
             if parser.state.has_usable_output ! then
                 expanded return
             fi
@@ -6314,18 +6604,17 @@ fn expand_imports parser:mut$Parser ops:List[Op] -> List[Op] {
     expanded
 }
 
-fn resolve_identifiers_global
-    parser:mut$Parser
-    ops:List[Op]
-    skip_functions:$Set[str]
--> List[Op] {
+fn resolve_identifiers_global parser:mut$Parser ops:List[Op] skip_functions:$Set[str] -> List[Op] {
     ops parser expand_imports = expanded_ops
     if parser.state.has_usable_output ! then
         List[Op]::new return
     fi
+    Set[str]::new = no_type_vars
+    no_type_vars expanded_ops canonicalize_operation_type_vars
     if parser validate_traits ! then
         List[Op]::new return
     fi
+    parser validate_inhabited_aggregates
     parser derive_copy_for_aggregates
     parser register_builtin_copy_impls
     parser validate_drop_methods
@@ -6340,17 +6629,6 @@ fn resolve_identifiers_global
     expanded_ops
 }
 
-fn replace_op ops:mut$List[Op] index:u64 replacement:Op -> Op {
-    size_of[Op] = stride
-    # SAFETY: The caller supplies an in-bounds operation index in initialized List storage.
-    unsafe {
-        ops.data index stride * + = address
-        address ptr::read[Op] = previous
-        replacement address ptr::write[Op]
-        previous
-    }
-}
-
 fn resolve_identifiers
     store:mut$SymbolStore
     ops:mut$List[Op]
@@ -6361,24 +6639,26 @@ fn resolve_identifiers
     List[CasaError]::new = resolve_errors
     Set[str]::new = declared_globals
     while op_index ops.length > do
-        empty_location OpValue::OwnerCleanup Op::new op_index ops replace_op = current_op
+        empty_location OpValue::OwnerCleanup Op::new op_index ops.replace = current_op
         1 += op_index
 
-        if current_op.value OpValue::DeclareGlobal(global_name) is then
+        if current_op.value OpValue::DeclareGlobal(global_name_ref) is then
+            global_name_ref.clone = global_name
             if
                 global_name store
                     .variables
                     .get
                     .is_none
             then
-                current_op Op::location f"`{global_name}` is not a global variable" ErrorKind::UndefinedGlobal CasaError::new resolve_errors.push
+                current_op Op::location.clone f"`{global_name}` is not a global variable" ErrorKind::UndefinedGlobal CasaError::new resolve_errors.push
             fi
-            global_name declared_globals.add
+            global_name.clone declared_globals.add
             current_op op_index 1 - ops.set
             continue
         fi
 
-        if current_op.value OpValue::AssignInc(inc_name) is then
+        if current_op.value OpValue::AssignInc(inc_name_ref) is then
+            inc_name_ref.clone = inc_name
             inc_name "." str::split = inc_parts
             0 inc_parts.get = inc_root
             if
@@ -6387,13 +6667,14 @@ fn resolve_identifiers
                     .get
                     .is_some
             then
-                current_op Op::location f"Cannot assign to constant `{inc_root}`" ErrorKind::Syntax CasaError::new resolve_errors.push
+                current_op Op::location.clone f"Cannot assign to constant `{inc_root}`" ErrorKind::Syntax CasaError::new resolve_errors.push
                 current_op op_index 1 - ops.set
                 continue
             fi
         fi
 
-        if current_op.value OpValue::AssignDec(dec_name) is then
+        if current_op.value OpValue::AssignDec(dec_name_ref) is then
+            dec_name_ref.clone = dec_name
             dec_name "." str::split = dec_parts
             0 dec_parts.get = dec_root
             if
@@ -6402,13 +6683,14 @@ fn resolve_identifiers
                     .get
                     .is_some
             then
-                current_op Op::location f"Cannot assign to constant `{dec_root}`" ErrorKind::Syntax CasaError::new resolve_errors.push
+                current_op Op::location.clone f"Cannot assign to constant `{dec_root}`" ErrorKind::Syntax CasaError::new resolve_errors.push
                 current_op op_index 1 - ops.set
                 continue
             fi
         fi
 
-        if current_op.value OpValue::AssignVar(var_name) is then
+        if current_op.value OpValue::AssignVar(var_name_ref) is then
+            var_name_ref.clone = var_name
             var_name "." str::split = var_parts
             0 var_parts.get = var_root
             if
@@ -6417,7 +6699,7 @@ fn resolve_identifiers
                     .get
                     .is_some
             then
-                current_op Op::location f"Cannot assign to constant `{var_root}`" ErrorKind::Syntax CasaError::new resolve_errors.push
+                current_op Op::location.clone f"Cannot assign to constant `{var_root}`" ErrorKind::Syntax CasaError::new resolve_errors.push
                 current_op op_index 1 - ops.set
                 continue
             fi
@@ -6428,13 +6710,16 @@ fn resolve_identifiers
             var_name Variable::new = variable
             if GLOBAL_SCOPE_LABEL function Function::name == then
                 if var_name store.variables.has ! then
-                    variable var_name store.variables.set
+                    variable var_name.clone store.variables.set
                 fi
                 current_op op_index 1 - ops.set
                 continue
             fi
             if var_name function Function::variables variable_list_contains ! then
-                if var_name declared_globals.has ! then
+                if
+                    var_name declared_globals.has !
+                    var_name function Function::captures variable_list_contains ! &&
+                then
                     variable function Function::variables.push
                 fi
             fi
@@ -6442,17 +6727,22 @@ fn resolve_identifiers
             continue
         fi
 
-        if current_op.value OpValue::FnPush(fn_name) is then
+        if current_op.value OpValue::FnPush(fn_name_ref) is then
+            fn_name_ref.clone = fn_name
             fn_name store.functions.remove = lambda_opt
-            if lambda_opt Option::Some(lambda) is then
-                true lambda Function::set_is_used
-                function lambda store gather_captures
-                lambda.take_ops = lambda_ops
-                lambda.clone_declaration fn_name.clone store.functions.set
-                diagnostics lambda lambda_ops store resolve_identifiers
-                lambda_ops lambda Function::set_ops
-                lambda fn_name.clone store.functions.set
-            fi
+            lambda_opt match
+                Option::Some(lambda) => {
+                    true lambda Function::set_is_used
+                    function lambda store gather_captures
+                    lambda.split_body = lambda_ops = lambda
+                    lambda.clone_declaration fn_name.clone store.functions.set
+                    diagnostics lambda lambda_ops store resolve_identifiers
+                    lambda_ops lambda Function::set_ops
+                    lambda fn_name.clone store.functions.set
+                }
+                Option::None => {
+                }
+            end
             current_op op_index 1 - ops.set
             continue
         fi
@@ -6469,12 +6759,17 @@ fn resolve_identifiers
             continue
         fi
 
-        if current_op.value OpValue::Identifier(ident) is then
+        if current_op.value OpValue::Identifier(ident_ref) is then
+            ident_ref.clone = ident
             if resolve_errors ident current_op function store try_resolve_fn_ref then
                 current_op op_index 1 - ops.set
                 continue
             fi
             if ident current_op try_resolve_numeric_call then
+                current_op op_index 1 - ops.set
+                continue
+            fi
+            if ident current_op function try_resolve_trait_method_call then
                 current_op op_index 1 - ops.set
                 continue
             fi
@@ -6487,10 +6782,6 @@ fn resolve_identifiers
                 continue
             fi
             if ident current_op store try_resolve_type_qualified_method then
-                current_op op_index 1 - ops.set
-                continue
-            fi
-            if ident current_op function try_resolve_trait_method_call then
                 current_op op_index 1 - ops.set
                 continue
             fi
@@ -6513,7 +6804,9 @@ fn resolve_identifiers
         fi
 
         if current_op.value OpValue::IsCheck(is_enum_variant) is then
-            resolve_errors function current_op is_enum_variant store resolve_enum_variant
+            is_enum_variant.clone = resolved_variant
+            resolve_errors function current_op resolved_variant store resolve_enum_variant
+            resolved_variant OpValue::IsCheck current_op Op::set_value
             current_op op_index 1 - ops.set
             continue
         fi
@@ -6573,6 +6866,14 @@ fn register_struct_pattern_binding
     fi
 }
 
+impl Op {
+    fn set_match_pattern_value self:mut$Op pattern_value:PatternValue {
+        if self.value OpValue::MatchArm(arm) is then
+            pattern_value arm MatchArm::set_pattern_value
+        fi
+    }
+}
+
 fn resolve_match_op
     store:mut$SymbolStore
     function:mut$Function
@@ -6580,28 +6881,27 @@ fn resolve_match_op
     errors:mut$List[CasaError]
     diagnostics:mut$Diagnostics
 {
+    op pattern_value_of match
+        PatternValue::Struct(struct_pattern) => {
+            struct_pattern.bindings.keys = pattern_keys
+            for pattern_key in pattern_keys.iter do
+                pattern_key struct_pattern
+                    .bindings
+                    .get
+                    .unwrap = binding_name
+                binding_name function store register_struct_pattern_binding
+            done
+        }
+        PatternValue::EnumVariant(variant) => {
+            errors function op variant store resolve_enum_variant
+            variant PatternValue::EnumVariant op.set_match_pattern_value
+        }
+        PatternValue::Literal => {
+        }
+    end
     if op.value OpValue::MatchArm(arm) is then
-        arm.pattern_value match
-            PatternValue::Struct(struct_pattern) => {
-                struct_pattern.bindings.keys = pattern_keys
-                for pattern_key in pattern_keys.iter do
-                    pattern_key struct_pattern
-                        .bindings
-                        .get
-                        .unwrap = binding_name
-                    binding_name function store register_struct_pattern_binding
-                done
-            }
-            PatternValue::EnumVariant(variant) => {
-                errors function op variant store resolve_enum_variant
-            }
-            PatternValue::Literal => {
-            }
-        end
-        arm.guard_ops = guard_ops
-        if guard_ops.length 0 != then
-            diagnostics function guard_ops store resolve_identifiers
-            guard_ops arm MatchArm::set_guard_ops
+        if arm.guard_ops.length 0 != then
+            diagnostics function arm.guard_ops store resolve_identifiers
         fi
     fi
 }
@@ -6621,20 +6921,20 @@ fn try_resolve_fn_ref
     fi
     ident 1 ident.length 1 - str::substring = ref_name
     if 0 ref_name.length == then
-        op Op::location "Expected function name after `&`" ErrorKind::Syntax CasaError::new resolve_errors.push
+        op Op::location.clone "Expected function name after `&`" ErrorKind::Syntax CasaError::new resolve_errors.push
         true return
     fi
     ref_name "::" str::split = ref_parts
     if 2 ref_parts.length == "drop" ref_parts.length 1 - ref_parts.get == && then
-        op Op::location "Reserved `drop` methods cannot be referenced" ErrorKind::InvalidScope CasaError::new resolve_errors.push
+        op Op::location.clone "Reserved `drop` methods cannot be referenced" ErrorKind::InvalidScope CasaError::new resolve_errors.push
         true return
     fi
     if 3 ref_parts.length == then
         0 ref_parts.get parse_type_str = receiver_type
-        1 ref_parts.get GenericType::new Type::Generic = qualifier_type
+        1 ref_parts.get.clone GenericType::new Type::Generic = qualifier_type
         if op.type_hint Option::Some(hint) is then
             if hint.type_params Option::Some(type_arguments) is then
-                type_arguments 1 ref_parts.get GenericType Type::Generic = qualifier_type
+                type_arguments.clone 1 ref_parts.get.clone GenericType Type::Generic = qualifier_type
             fi
         fi
         2 ref_parts.get = method_name
@@ -6643,7 +6943,7 @@ fn try_resolve_fn_ref
         if method_opt Option::Some(method) is then
             if method.function_name store.functions.get Option::Some(method_function) is then
                 if method_function.is_unsafe then
-                    op Op::location f"Unsafe function `{method.function_name}` cannot be referenced" ErrorKind::InvalidScope CasaError::new resolve_errors.push
+                    op Op::location.clone f"Unsafe function `{method.function_name}` cannot be referenced" ErrorKind::InvalidScope CasaError::new resolve_errors.push
                     true return
                 fi
                 method.function_name.clone OpValue::FnPush op Op::set_value
@@ -6670,7 +6970,7 @@ fn try_resolve_fn_ref
         if method_opt Option::Some(method) is then
             if method.function_name store.functions.get Option::Some(method_function) is then
                 if method_function.is_unsafe then
-                    op Op::location f"Unsafe function `{method.function_name}` cannot be referenced" ErrorKind::InvalidScope CasaError::new resolve_errors.push
+                    op Op::location.clone f"Unsafe function `{method.function_name}` cannot be referenced" ErrorKind::InvalidScope CasaError::new resolve_errors.push
                     true return
                 fi
                 method.function_name.clone OpValue::FnPush op Op::set_value
@@ -6682,13 +6982,13 @@ fn try_resolve_fn_ref
     ref_name store.functions.get_mut = ref_fn_opt
     if ref_fn_opt Option::Some(ref_fn) is then
         if ref_fn.is_unsafe then
-            op Op::location f"Unsafe function `{ref_name}` cannot be referenced" ErrorKind::InvalidScope CasaError::new resolve_errors.push
+            op Op::location.clone f"Unsafe function `{ref_name}` cannot be referenced" ErrorKind::InvalidScope CasaError::new resolve_errors.push
             true return
         fi
         ref_name.clone OpValue::FnPush op Op::set_value
         true ref_fn Function::set_is_used
     else
-        op Op::location f"Function `{ref_name}` is not defined" ErrorKind::UndefinedName CasaError::new resolve_errors.push
+        op Op::location.clone f"Function `{ref_name}` is not defined" ErrorKind::UndefinedName CasaError::new resolve_errors.push
     fi
     true
 }
@@ -6714,7 +7014,7 @@ fn try_resolve_enum_variant_ident
     enum_opt.unwrap = casa_enum
     binding_name casa_enum CasaEnum::variants string_list_index = ordinal
     if 0 ordinal < then
-        op Op::location f"Variant `{binding_name}` is not defined in enum `{enum_name}`" ErrorKind::UndefinedName CasaError::new resolve_errors.push
+        op Op::location.clone f"Variant `{binding_name}` is not defined in enum `{enum_name}`" ErrorKind::UndefinedName CasaError::new resolve_errors.push
     else
         ordinal Option::Some binding_name enum_name EnumVariant::new = enum_variant
         enum_variant OpValue::PushEnumVariant op Op::set_value
@@ -6751,11 +7051,11 @@ fn try_resolve_qualified_trait_method store:mut$SymbolStore op:mut$Op ident:mut$
         false return
     fi
     1 parts.get = method_name
-    trait_name GenericType::new Type::Generic = trait_type
+    trait_name.clone GenericType::new Type::Generic = trait_type
     if op.type_hint Option::Some(hint) is then
-        hint = trait_type
+        hint clone_type = trait_type
     fi
-    method_name trait_type false QualifiedMethod OpValue::QualifiedMethodCall op Op::set_value
+    method_name.clone trait_type false QualifiedMethod OpValue::QualifiedMethodCall op Op::set_value
     true
 }
 
@@ -6778,7 +7078,7 @@ fn try_resolve_type_qualified_method store:mut$SymbolStore op:mut$Op ident:mut$s
     if method_opt.is_none then
         false return
     fi
-    method_name receiver_type true QualifiedMethod OpValue::QualifiedMethodCall op Op::set_value
+    method_name.clone receiver_type true QualifiedMethod OpValue::QualifiedMethodCall op Op::set_value
     true
 }
 # Resolve a bare identifier after `&`-ref, enum-variant, and trait-method
@@ -6794,7 +7094,7 @@ fn resolve_plain_identifier
 {
     ident "::" str::split = identifier_parts
     if 2 identifier_parts.length == "drop" identifier_parts.length 1 - identifier_parts.get == && then
-        op Op::location "Reserved `drop` methods cannot be called directly; use the `drop` intrinsic" ErrorKind::InvalidScope CasaError::new resolve_errors.push
+        op Op::location.clone "Reserved `drop` methods cannot be called directly; use the `drop` intrinsic" ErrorKind::InvalidScope CasaError::new resolve_errors.push
         return
     fi
     if ident function Function::variables variable_list_contains then
@@ -6859,5 +7159,5 @@ fn resolve_plain_identifier
         return
     fi
 
-    op Op::location f"Identifier `{ident}` is not defined" ErrorKind::UndefinedName CasaError::new resolve_errors.push
+    op Op::location.clone f"Identifier `{ident}` is not defined" ErrorKind::UndefinedName CasaError::new resolve_errors.push
 }

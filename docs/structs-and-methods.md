@@ -101,26 +101,23 @@ A struct or enum can contain a borrow, including through a generic field. The
 aggregate keeps the borrowed owner loaned until the aggregate's last use. A
 function that returns such an aggregate preserves the same origin.
 
-## Derive Copy
+## Copy and Clone
 
-A struct can derive `Copy` when every stored field is representation-copyable:
+Struct values currently use heap-indirect storage, so they cannot implement
+`Copy`. Use `Clone` when a struct needs explicit independent duplication:
 
 ```casa
-struct Point derives Copy {
-    x: i64
-    y: i64
+impl Point: Clone {
+    fn clone self:$Point -> Point {
+        self.y self.x Point
+    }
 }
-
-2 1 Point dup
 ```
 
-Copy is allocation-free. Use an explicit `Clone` conformance when
-duplication must allocate or call field Clone methods. See
-[Copy and Clone](traits.md#copy-and-clone).
-
-A shared-borrow field is representation-copyable even though `$T` does not
-satisfy a Copy bound. Copy-generated Clone preserves that borrow and its owner
-origin.
+Payload-free enums use a raw representation and can derive `Copy`. Payload
+enums, arrays, and structs remain non-Copy until their value representation can
+be duplicated without allocation or aliasing. See [Copy and
+Clone](traits.md#copy-and-clone).
 
 ## Custom destruction
 

@@ -4,38 +4,30 @@ import "helpers.casa"
 
 const COPY_TRAITS "trait Clone { fn clone self:$self -> self } trait Copy: Clone { } "
 
-struct CopyPoint derives Copy {
-    value: i64
-}
-
 struct CustomClone {
     value: i64
 }
 
-struct CustomCopy derives Copy {
-    value: i64
-}
-
-impl CustomCopy: Clone {
-    fn clone self:$CustomCopy -> CustomCopy { self.value 1 + CustomCopy }
-}
-
-struct CopyWrapper derives Copy {
-    inner: CustomCopy
-}
-
-struct BorrowView derives Copy {
+struct BorrowView {
     value: $CustomClone
 }
 
-enum CopyChoice derives Copy {
-    None
-    Some (CustomCopy)
-}
-
-enum BorrowChoice derives Copy {
+enum BorrowChoice {
     None
     Some ($CustomClone)
+}
+
+impl BorrowView: Clone {
+    fn clone self:$BorrowView -> BorrowView { self.value BorrowView }
+}
+
+impl BorrowChoice: Clone {
+    fn clone self:$BorrowChoice -> BorrowChoice {
+        self match
+            BorrowChoice::None => BorrowChoice::None
+            BorrowChoice::Some(value) => value BorrowChoice::Some
+        end
+    }
 }
 
 impl CustomClone: Clone {
@@ -76,38 +68,8 @@ fn clone_borrow_view value:$CustomClone -> BorrowView { value BorrowView.clone }
 fn clone_borrow_choice value:$CustomClone -> BorrowChoice { value BorrowChoice::Some.clone }
 
 fn check_source diagnostics:mut$Diagnostics source:$str {
-    diagnostics source parse_resolve_test_source = result
-    if result.ops Option::Some(ops) is then
-        result.store ops type_check = checked
-        checked.diagnostics diagnostics.merge
-    fi
-}
-
-fn test_copy_intrinsics_and_fallback_clone {
-    "copy_intrinsics_and_fallback_clone" test_start
-    7 CopyPoint = point
-    point dup = first = second
-    "dup first" 7 first.value assert_eq
-    "dup second" 7 second.value assert_eq
-    "copy" 7 point copy.value assert_eq
-    "fallback clone" 7 point.clone.value assert_eq
-
-    8 CustomCopy dup = copied_first = copied_second
-    "Copy does not call custom Clone" 8 copied_first.value assert_eq
-    "Copy preserves the source value" 8 copied_second.value assert_eq
-
-    8 CustomCopy CopyWrapper.clone.inner = cloned_inner
-    "fallback clone composes field Clone" 9 cloned_inner.value assert_eq
-
-    10 CustomCopy CopyChoice::Some.clone = cloned_choice
-    cloned_choice match
-        CopyChoice::Some(value) => {
-            "fallback clone composes payload Clone" 11 value.value assert_eq
-        }
-        CopyChoice::None => {
-            "expected cloned payload" false assert_true
-        }
-    end
+    diagnostics source typecheck_test_source = checked
+    checked.diagnostics.clone diagnostics.merge
 }
 
 fn test_standard_owner_clone_composes {
@@ -198,7 +160,7 @@ fn test_shared_borrow_duplication_preserves_origins {
 
     Diagnostics::new = clone_diagnostics
     COPY_TRAITS
-    "struct Owner { value: str } struct View derives Copy { value: $Owner } fn make_view owner:$Owner -> View { owner View } fn invalid owner:Owner { owner make_view.clone owner drop drop }"
+    "struct Owner { value: str } struct View { value: $Owner } impl View: Clone { fn clone self:$View -> View { self.value View } } fn make_view owner:$Owner -> View { owner View } fn invalid owner:Owner { owner make_view.clone owner drop drop }"
     str::concat clone_diagnostics check_source
     clone_diagnostics "generated Clone retains a stored borrow origin"
     "Cannot move owner `owner` while it is borrowed" assert_error_contains
@@ -245,7 +207,7 @@ fn test_borrowed_calls_preserve_owner {
 fn test_receiver_capabilities {
     "receiver_capabilities" test_start
     COPY_TRAITS
-    "struct Item derives Copy { value: i64 } impl Item { fn take self:Item { } fn read self:$Item { } fn write self:mut$Item { } } fn owned item:Item { item.read item.write item.take } fn shared item:$Item { item.read } fn exclusive item:mut$Item { item.read item.write } fn clone_shared item:$Item -> Item { item.clone } fn clone_exclusive item:mut$Item -> Item { item.clone }"
+    "struct Item { value: i64 } impl Item: Clone { fn clone self:$Item -> Item { self.value Item } } impl Item { fn take self:Item { } fn read self:$Item { } fn write self:mut$Item { } } fn owned item:Item { item.read item.write item.take } fn shared item:$Item { item.read } fn exclusive item:mut$Item { item.read item.write } fn clone_shared item:$Item -> Item { item.clone } fn clone_exclusive item:mut$Item -> Item { item.clone }"
     str::concat = declarations
 
     Diagnostics::new = valid_diagnostics
@@ -287,7 +249,7 @@ fn test_receiver_capabilities {
 fn test_exclusive_call_loans_do_not_alias {
     "exclusive_call_loans_do_not_alias" test_start
     COPY_TRAITS
-    "struct Item derives Copy { value: i64 } fn read_both left:$Item right:$Item { } fn write_both left:mut$Item right:mut$Item { } impl Item { fn update self:mut$Item other:$Item { } } fn valid item:Item { item item read_both }"
+    "struct Item { value: i64 } fn read_both left:$Item right:$Item { } fn write_both left:mut$Item right:mut$Item { } impl Item { fn update self:mut$Item other:$Item { } } fn valid item:Item { item item read_both }"
     str::concat = declarations
 
     Diagnostics::new = valid_diagnostics
@@ -544,26 +506,23 @@ fn test_stack_reordering_preserves_owner_identity {
     diagnostics "swap rot and over preserve owner" assert_no_errors
 }
 
-fn test_copy_derivation_validates_fields {
-    "copy_derivation_validates_fields" test_start
-    Diagnostics::new = diagnostics
-    COPY_TRAITS "struct Bad derives Copy { value: str }" str::concat diagnostics check_source
-    diagnostics "invalid representation" "cannot implement `Copy`" assert_error_contains
+fn test_copy_derivation_rejects_indirect_aggregates {
+    "copy_derivation_rejects_indirect_aggregates" test_start
+    Diagnostics::new = struct_diagnostics
+    COPY_TRAITS "struct Point derives Copy { value: i64 }" str::concat
+    struct_diagnostics check_source
+    struct_diagnostics "indirect struct" "cannot implement `Copy`" assert_error_contains
 
-    Diagnostics::new = phantom_diagnostics
-    phantom_diagnostics
-    COPY_TRAITS "struct Phantom[T] derives Copy { value: i64 }" str::concat
-    parse_resolve_test_source = result
-    phantom_diagnostics result.store Option[Function]::None "Copy" "Phantom[str]" parse_type_str
-    type_satisfies_trait_for_test
-    = phantom_is_copy
-    "unused generic parameter does not need Copy" phantom_is_copy assert_true
-
-    Diagnostics::new = generic_diagnostics
-    COPY_TRAITS "struct Holder[T] derives Copy { value: T } \"owned\" Holder dup" str::concat
-    generic_diagnostics check_source
-    generic_diagnostics "used generic parameter requires Copy" "does not satisfy trait `Copy`"
+    Diagnostics::new = payload_enum_diagnostics
+    COPY_TRAITS "enum Value derives Copy { Some(i64) }" str::concat
+    payload_enum_diagnostics check_source
+    payload_enum_diagnostics "indirect payload enum" "cannot implement `Copy`"
     assert_error_contains
+
+    Diagnostics::new = fieldless_enum_diagnostics
+    COPY_TRAITS "enum Flag derives Copy { Off On } Flag::On dup drop drop" str::concat
+    fieldless_enum_diagnostics check_source
+    fieldless_enum_diagnostics "raw fieldless enum" assert_no_errors
 }
 
 fn test_explicit_copy_implementation_is_validated {
@@ -574,23 +533,24 @@ fn test_explicit_copy_implementation_is_validated {
     invalid_diagnostics "invalid explicit implementation" "cannot implement `Copy`"
     assert_error_contains
 
-    Diagnostics::new = valid_diagnostics
+    Diagnostics::new = indirect_diagnostics
     COPY_TRAITS "struct Good { value: i64 } impl Good: Copy { } 1 Good dup drop drop"
-    str::concat valid_diagnostics check_source
-    valid_diagnostics "valid explicit implementation" assert_no_errors
+    str::concat indirect_diagnostics check_source
+    indirect_diagnostics "indirect explicit implementation" "cannot implement `Copy`"
+    assert_error_contains
 }
 
 fn test_copy_bound_and_clone_supertrait {
     "copy_bound_and_clone_supertrait" test_start
     Diagnostics::new = diagnostics
-    COPY_TRAITS "struct Point derives Copy { value: i64 } fn duplicate[T: Copy] value:T -> T T { value dup } fn cloned[T: Clone] value:T -> T { value.clone } 1 Point duplicate drop cloned drop" str::concat diagnostics check_source
+    COPY_TRAITS "enum Flag derives Copy { Off On } fn duplicate[T: Copy] value:T -> T T { value dup } fn cloned[T: Clone] value:T -> T { value.clone } Flag::On duplicate drop cloned drop" str::concat diagnostics check_source
     diagnostics "Copy works as a Clone supertrait" assert_no_errors
 }
 
 fn test_borrows_do_not_satisfy_copy_or_clone {
     "borrows_do_not_satisfy_copy_or_clone" test_start
     Diagnostics::new = diagnostics
-    diagnostics COPY_TRAITS "struct Item derives Copy { value: i64 }" str::concat
+    diagnostics COPY_TRAITS "enum Item derives Copy { Value }" str::concat
     parse_resolve_test_source = result
 
     diagnostics result.store Option[Function]::None "Copy" "$Item" parse_type_str
@@ -638,7 +598,6 @@ fn test_clone_contract_is_infallible_self_to_self {
     "trait Clone { fn clone self:self -> Option[self] }" diagnostics check_source
     diagnostics "Clone result contract" "incompatible `clone`" assert_error_contains
 }
-test_copy_intrinsics_and_fallback_clone
 test_standard_owner_clone_composes
 test_borrow_clone_uses_borrowed_value
 test_non_copy_dup_is_rejected
@@ -657,7 +616,7 @@ test_loop_back_edges_and_exits_track_ownership
 test_control_flow_joins_merge_possible_loans
 test_field_sensitive_borrows_and_patterns
 test_stack_reordering_preserves_owner_identity
-test_copy_derivation_validates_fields
+test_copy_derivation_rejects_indirect_aggregates
 test_explicit_copy_implementation_is_validated
 test_copy_bound_and_clone_supertrait
 test_borrows_do_not_satisfy_copy_or_clone

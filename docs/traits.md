@@ -122,28 +122,22 @@ references are Copy. Owned `str`, arrays, and collections are not.
 Shared borrows can be duplicated with `dup` and `over`, but `$T` does not
 implement or satisfy `Copy`. An exclusive `mut$T` borrow cannot be duplicated.
 
-Eligible structs and enums opt in with `derives Copy` or an empty
-implementation:
+Payload-free enums can opt in with `derives Copy` or an empty implementation:
 
 ```casa
-struct Point derives Copy {
-    x: i64
-    y: i64
+enum Direction derives Copy {
+    North
+    South
 }
 
-impl Point: Copy { }
+impl Direction: Copy { }
 ```
 
-Both forms validate every field or payload. A generic derivation requires each
-type argument to implement Copy. The standard `Copy: Clone` declaration also
-provides explicit `.clone` behavior unless the type supplies a custom Clone
-implementation.
-
-A stored shared-borrow field is representation-copyable, so an otherwise
-eligible aggregate can implement Copy. Its generated Clone keeps that field as
-a borrow with the same origin. When `T` implements Clone, calling `.clone` on
-`$T` or `mut$T` calls the borrowed value's implementation and returns an owned
-`T`.
+Structs, payload enums, and arrays currently use heap-indirect value storage.
+They cannot implement `Copy`, even when every field is Copy, because duplicating
+their handle would alias one allocation. Use `Clone` for explicit independent
+duplication. When `T` implements Clone, calling `.clone` on `$T` or `mut$T`
+calls the borrowed value's implementation and returns an owned `T`.
 
 Clone is always explicit and can allocate or run user code:
 

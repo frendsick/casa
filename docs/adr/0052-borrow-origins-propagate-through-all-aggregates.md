@@ -1,4 +1,5 @@
 # Borrow origins propagate through all aggregates
+status: amended by [ADR-0158](0158-copy-requires-a-raw-value-representation.md)
 
 Every struct and enum may contain shared or exclusive borrows. The compiler propagates the contained origin sets through construction, field access, patterns, calls, and returns; an aggregate cannot outlive any owner from which one of its borrows originates.
 

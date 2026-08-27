@@ -8,8 +8,9 @@ import "common"
 const INT32_MAX 2147483647
 const INT32_MIN -2147483648
 const RETURN_STACK_SIZE 1048576
+const SMALL_ALLOC_LIMIT 512
 # Keep enough headroom for the compiler and its largest test programs.
-const HEAP_SIZE 6442450944
+const HEAP_SIZE 12884901888
 
 # ============================================================================
 # Emitter state
@@ -19,6 +20,20 @@ struct Emitter {
     asm:           StringBuilder
     label_counter: u64
     program:       Program
+}
+
+impl Program {
+    # Keep global bytecode outside Emitter so emission can mutate its output
+    # while it reads the instruction list.
+    fn split_bytecode self:Program -> Program List[InstValue] {
+        self match
+            Program { bytecode: bytecode functions: functions strings: strings static_arrays: static_arrays static_structs: static_structs globals_count: globals_count constants_count: constants_count } => {
+                constants_count globals_count static_structs static_arrays
+                strings functions List[InstValue]::new Program
+                bytecode
+            }
+        end
+    }
 }
 
 impl Emitter {
@@ -130,6 +145,7 @@ impl Emitter {
         ".align 16" self.line
         "heap_ptr: .skip 8" self.line
         "free_list: .skip 8" self.line
+        f"small_free_lists: .skip {SMALL_ALLOC_LIMIT}" self.line
         "__argc: .skip 8" self.line
         "__argv: .skip 8" self.line
         "__envp: .skip 8" self.line
@@ -183,6 +199,7 @@ impl Emitter {
             name sanitize_name = label
             ".align 8" self.line
             f"closure_{label}: .quad fn_{label}" self.line
+            ".quad 0" self.line
         done
 
         # Static array literals
@@ -198,7 +215,7 @@ impl Emitter {
                 .static_arrays
                 .get
                 .clone = sa
-            sa StaticArray::elements = elems
+            sa StaticArray::elements = elems: $List[StaticArrayElement]
             ".align 8" self.line
             f"static_array_{sa_index}:" self.line
             # A zero-length array is inhabited, so its label owns storage of
@@ -232,7 +249,7 @@ impl Emitter {
                 .static_structs
                 .get
                 .clone = ss
-            ss StaticStruct::fields = fields
+            ss StaticStruct::fields = fields: $List[StaticArrayElement]
             ".align 8" self.line
             f"static_struct_{ss_index}:" self.line
             for field in fields.iter do
@@ -255,18 +272,19 @@ impl Emitter {
     # TEXT section
     # ============================================================================
 
-    fn emit_text self:mut$Emitter {
+    fn emit_text self:mut$Emitter bytecode:$List[InstValue] {
         ".section .text" self.line
         self.emit_helpers
         self.emit_functions
-        self.emit_start
+        bytecode self.emit_start
     }
 
     # ============================================================================
     # Helper subroutines
     # ============================================================================
 
-    # ponytail: first-fit reuse does not split or coalesce blocks; add both if
+    # Small blocks use exact-size bins. Larger blocks keep first-fit reuse.
+    # ponytail: large blocks are not split or coalesced; add both if large-block
     # fragmentation becomes measurable before the fixed heap is exhausted.
     fn emit_heap_helpers self:mut$Emitter {
         # heap_alloc: requested byte count in %rdi, pushes an aligned pointer.
@@ -277,6 +295,19 @@ impl Emitter {
         "addq $7, %rax" self.indent
         "jc .Lheap_alloc_oom" self.indent
         "andq $-8, %rax" self.indent
+        f"cmpq ${SMALL_ALLOC_LIMIT}, %rax" self.indent
+        "ja .Lheap_alloc_large" self.indent
+        "leaq small_free_lists(%rip), %r9" self.indent
+        "leaq -8(%r9,%rax), %r9" self.indent
+        "movq (%r9), %rcx" self.indent
+        "testq %rcx, %rcx" self.indent
+        "jz .Lheap_alloc_bump" self.indent
+        "movq 8(%rcx), %r8" self.indent
+        "movq %r8, (%r9)" self.indent
+        "leaq 8(%rcx), %rax" self.indent
+        "pushq %rax" self.indent
+        "jmp .Lheap_alloc_return" self.indent
+        ".Lheap_alloc_large:" self.line
         "movq free_list(%rip), %rcx" self.indent
         "xorq %rdx, %rdx" self.indent
         ".Lheap_alloc_search:" self.line
@@ -339,6 +370,16 @@ impl Emitter {
         "testq %rdi, %rdi" self.indent
         "jz .Lheap_free_return" self.indent
         "leaq -8(%rdi), %rax" self.indent
+        "movq (%rax), %rdx" self.indent
+        f"cmpq ${SMALL_ALLOC_LIMIT}, %rdx" self.indent
+        "ja .Lheap_free_large" self.indent
+        "leaq small_free_lists(%rip), %rcx" self.indent
+        "leaq -8(%rcx,%rdx), %rcx" self.indent
+        "movq (%rcx), %rdx" self.indent
+        "movq %rdx, 8(%rax)" self.indent
+        "movq %rax, (%rcx)" self.indent
+        "jmp .Lheap_free_return" self.indent
+        ".Lheap_free_large:" self.line
         "movq free_list(%rip), %rcx" self.indent
         "movq %rcx, 8(%rax)" self.indent
         "movq %rax, free_list(%rip)" self.indent
@@ -669,7 +710,7 @@ impl Emitter {
     # Emit _start entry point
     # ============================================================================
 
-    fn emit_start self:mut$Emitter {
+    fn emit_start self:mut$Emitter bytecode:$List[InstValue] {
         ".globl _start" self.line
         "_start:" self.line
         "leaq return_stack(%rip), %r14" self.indent
@@ -681,7 +722,7 @@ impl Emitter {
         "addq $1, %rcx" self.indent
         "leaq 8(%rsp,%rcx,8), %rax" self.indent
         "movq %rax, __envp(%rip)" self.indent
-        true self.program.bytecode self.emit_bytecode
+        true bytecode self.emit_bytecode
         "movq $60, %rax" self.indent
         "xorq %rdi, %rdi" self.indent
         "syscall" self.indent
@@ -692,7 +733,7 @@ impl Emitter {
     # Emit bytecode sequence
     # ============================================================================
 
-    fn emit_bytecode self:mut$Emitter bytecode:List[InstValue] is_global:bool {
+    fn emit_bytecode self:mut$Emitter bytecode:$List[InstValue] is_global:bool {
         for inst in bytecode.iter do
             is_global inst self.emit_inst
         done
@@ -719,7 +760,7 @@ impl Emitter {
         ["%rdi", "%rsi", "%rdx", "%r10", "%r8", "%r9"] = syscall_regs
         0 (u64) = index
         while index arg_count > do
-            f"popq {index syscall_regs array::nth(str)}" self.indent
+            f"popq {index syscall_regs array::nth}" self.indent
             1 += index
         done
         "syscall" self.indent
@@ -953,8 +994,19 @@ impl Emitter {
                 "pushq %rax" self.indent
             }
             InstValue::PushStaticArray(array_index) => {
-                f"leaq static_array_{array_index}(%rip), %rax" self.indent
-                "pushq %rax" self.indent
+                array_index self
+                    .program
+                    .static_arrays
+                    .get StaticArray::elements.length 8 * = byte_count
+                if 0 byte_count == then
+                    1 (u64) = byte_count
+                fi
+                f"movq ${byte_count}, %rdi" self.indent
+                "static_array_alloc_done" "heap_alloc" self.emit_call_via_return_stack
+                "movq (%rsp), %rdi" self.indent
+                f"leaq static_array_{array_index}(%rip), %rsi" self.indent
+                f"movq ${byte_count}, %rcx" self.indent
+                "rep movsb" self.indent
             }
             InstValue::PushChar(char_value) => f"pushq ${char_value}" self.indent
             InstValue::Drop => "addq $8, %rsp" self.indent
@@ -1204,7 +1256,7 @@ impl Emitter {
             "xorq %rdx, %rdx" self.indent
             "divq %rbx" self.indent
         else
-            builtin (i64) (BuiltinType) Type::Builtin = integer_type
+            builtin copy (i64) (BuiltinType) Type::Builtin = integer_type
             integer_type.get_integer_min = minimum
             self.emit_uid = uid
             "cmpq $-1, %rbx" self.indent
@@ -1760,34 +1812,100 @@ impl Emitter {
                 "movq env_stack(%rcx), %rax" self.indent
                 "movq %rax, current_env(%rip)" self.indent
             }
+            InstValue::DynamicDrop => {
+                self.emit_uid = uid
+                "popq %rax" self.indent
+                "testq %rax, %rax" self.indent
+                f"jz .Ldynamic_drop_trivial_{uid}" self.indent
+                f"leaq .Ldynamic_drop_done_{uid}(%rip), %rcx" self.indent
+                "movq %rcx, (%r14)" self.indent
+                "addq $8, %r14" self.indent
+                "jmpq *%rax" self.indent
+                f".Ldynamic_drop_trivial_{uid}:" self.line
+                "addq $8, %rsp" self.indent
+                f".Ldynamic_drop_done_{uid}:" self.line
+            }
+            InstValue::DropFn(fn_name) => {
+                fn_name sanitize_name = fn_label
+                f"leaq fn_{fn_label}(%rip), %rax" self.indent
+                "pushq %rax" self.indent
+            }
             InstValue::CaptureLoad(capture_index) => {
-                capture_index 1 + WORD_SIZE * = offset
+                capture_index 2 * 2 + WORD_SIZE * = offset
                 "movq current_env(%rip), %rax" self.indent
                 f"movq {offset}(%rax), %rax" self.indent
                 "pushq %rax" self.indent
             }
+            InstValue::CaptureSet(capture_index) => {
+                capture_index 2 * 2 + WORD_SIZE * = offset
+                "popq %rax" self.indent
+                "movq current_env(%rip), %rbx" self.indent
+                f"movq %rax, {offset}(%rbx)" self.indent
+            }
+            InstValue::CaptureFlagLoad(capture_index) => {
+                capture_index 2 * 3 + WORD_SIZE * = offset
+                "movq current_env(%rip), %rax" self.indent
+                f"movq {offset}(%rax), %rax" self.indent
+                "pushq %rax" self.indent
+            }
+            InstValue::CaptureFlagClear(capture_index) => {
+                capture_index 2 * 3 + WORD_SIZE * = offset
+                "movq current_env(%rip), %rax" self.indent
+                f"movq $0, {offset}(%rax)" self.indent
+            }
+            InstValue::CaptureFlagMark(capture_index) => {
+                capture_index 2 * 3 + WORD_SIZE * = offset
+                "movq current_env(%rip), %rax" self.indent
+                f"movq $1, {offset}(%rax)" self.indent
+            }
             InstValue::ClosureRecord(capture_count) => {
-                capture_count 1 + WORD_SIZE * = record_size
-                # Bump-allocate the record from the heap.
-                "leaq heap(%rip), %rbx" self.indent
-                "movq heap_ptr(%rip), %rcx" self.indent
-                "leaq (%rbx,%rcx), %rdx" self.indent
-                f"addq ${record_size}, %rcx" self.indent
-                "movq %rcx, heap_ptr(%rip)" self.indent
-                # Stack top is the function pointer; store it at offset 0.
+                capture_count 2 * 2 + WORD_SIZE * = record_size
+                f"movq ${record_size}, %rdi" self.indent
+                "closure_alloc_done" "heap_alloc" self.emit_call_via_return_stack
+                "popq %rdx" self.indent
+                # Stack top is the destruction function, followed by the call function.
+                "popq %rax" self.indent
+                "movq %rax, 8(%rdx)" self.indent
                 "popq %rax" self.indent
                 "movq %rax, (%rdx)" self.indent
-                # Captures were pushed in order 0..N-1, so the top of the stack is
-                # capture N-1. Pop them in reverse to fill record[N], record[N-1],
-                # ..., record[1].
                 capture_count 0 + = capture_remaining
                 while 0 capture_remaining > do
-                    capture_remaining WORD_SIZE * = field_offset
+                    capture_remaining 1 - 2 * 2 + WORD_SIZE * = field_offset
+                    field_offset 8 + = flag_offset
+                    "popq %rax" self.indent
+                    f"movq %rax, {flag_offset}(%rdx)" self.indent
                     "popq %rax" self.indent
                     f"movq %rax, {field_offset}(%rdx)" self.indent
                     capture_remaining 1 - = capture_remaining
                 done
                 "pushq %rdx" self.indent
+            }
+            InstValue::ClosureDrop => {
+                self.emit_uid = uid
+                "popq %rax" self.indent
+                "movq 8(%rax), %rdx" self.indent
+                "testq %rdx, %rdx" self.indent
+                f"jz .Lclosure_drop_done_{uid}" self.indent
+                "movq current_env(%rip), %rbx" self.indent
+                "movq env_sp(%rip), %rcx" self.indent
+                f"cmpq ${RETURN_STACK_SIZE}, %rcx" self.indent
+                "jge env_stack_overflow" self.indent
+                "movq %rbx, env_stack(%rcx)" self.indent
+                "addq $8, %rcx" self.indent
+                "movq %rcx, env_sp(%rip)" self.indent
+                "movq %rax, current_env(%rip)" self.indent
+                "pushq %rax" self.indent
+                f"leaq .Lclosure_drop_return_{uid}(%rip), %rcx" self.indent
+                "movq %rcx, (%r14)" self.indent
+                "addq $8, %r14" self.indent
+                "jmpq *%rdx" self.indent
+                f".Lclosure_drop_return_{uid}:" self.line
+                "movq env_sp(%rip), %rcx" self.indent
+                "subq $8, %rcx" self.indent
+                "movq %rcx, env_sp(%rip)" self.indent
+                "movq env_stack(%rcx), %rax" self.indent
+                "movq %rax, current_env(%rip)" self.indent
+                f".Lclosure_drop_done_{uid}:" self.line
             }
             InstValue::FnPush(fn_name) => {
                 fn_name sanitize_name = fn_label
@@ -2052,12 +2170,19 @@ impl Emitter {
             InstValue::ConstantLoad => is_global inst self.emit_control_flow
             InstValue::ConstantStore => is_global inst self.emit_control_flow
             InstValue::CaptureLoad => is_global inst self.emit_control_flow
+            InstValue::CaptureSet => is_global inst self.emit_control_flow
+            InstValue::CaptureFlagLoad => is_global inst self.emit_control_flow
+            InstValue::CaptureFlagClear => is_global inst self.emit_control_flow
+            InstValue::CaptureFlagMark => is_global inst self.emit_control_flow
+            InstValue::ClosureDrop => is_global inst self.emit_control_flow
             InstValue::ClosureRecord => is_global inst self.emit_control_flow
             InstValue::FnCall => is_global inst self.emit_control_flow
             InstValue::FnExec => is_global inst self.emit_control_flow
             InstValue::FnPush => is_global inst self.emit_control_flow
             InstValue::FnPushStatic => is_global inst self.emit_control_flow
             InstValue::FnReturn => is_global inst self.emit_control_flow
+            InstValue::DynamicDrop => is_global inst self.emit_control_flow
+            InstValue::DropFn => is_global inst self.emit_control_flow
 
             # Memory operations
             InstValue::HeapAlloc => inst self.emit_memory
@@ -2120,9 +2245,10 @@ impl Emitter {
 }
 
 fn emit program:Program -> str {
+    program.split_bytecode = bytecode = program
     program Emitter::new = emitter
     emitter.emit_bss
     emitter.emit_data
-    emitter.emit_text
+    bytecode emitter.emit_text
     emitter.asm.build
 }
