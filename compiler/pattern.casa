@@ -158,40 +158,50 @@ fn unify_arm_stacks tc:mut$TypeChecker match_ctx:mut$MatchContext op:mut$Op {
 
 fn assign_struct_binding_type
     tc:mut$TypeChecker
-    matched_struct:$CasaStruct
     match_subject_type:$Type
-    field_name:$str
+    binding_type:Type
     bound_var:str
     function_opt:mut$Option[Function]
 {
-    match_subject_type clone_type = subject_type
-    if subject_type.borrow_target Option::Some(target) is then
-        target clone_type = subject_type
-    fi
-    matched_struct.type_vars subject_type aggregate_type_bindings = bindings
-    for member in matched_struct CasaStruct::members.iter do
-        if field_name member Member::name == then
-            bindings member Member::typ.substitute_t = binding_type
-            if match_subject_type.is_borrow function_opt binding_type tc.type_is_duplicable ! && then
-                binding_type clone_type = target
-                false = shared
-                if binding_type.borrow_target Option::Some(borrowed_target) is then
-                    borrowed_target clone_type = target
-                    binding_type.is_shared_borrow = shared
-                fi
-                if match_subject_type.is_shared_borrow then
-                    true = shared
-                fi
-                if shared then
-                    SHARED_BORROW_TYPE
-                else
-                    EXCLUSIVE_BORROW_TYPE
-                fi
-                target apply_borrow_type = binding_type
-            fi
-            function_opt binding_type bound_var tc set_binding_type
+    if match_subject_type.is_borrow function_opt binding_type tc.type_is_duplicable ! && then
+        binding_type clone_type = target
+        false = shared
+        if binding_type.borrow_target Option::Some(borrowed_target) is then
+            borrowed_target clone_type = target
+            binding_type.is_shared_borrow = shared
         fi
-    done
+        if match_subject_type.is_shared_borrow then
+            true = shared
+        fi
+        if shared then
+            SHARED_BORROW_TYPE
+        else
+            EXCLUSIVE_BORROW_TYPE
+        fi
+        target apply_borrow_type = binding_type
+    fi
+    function_opt binding_type bound_var tc set_binding_type
+}
+
+fn resolve_struct_pattern_field_types
+    subject_type:$Type
+    struct_name:$str
+    store:$SymbolStore
+-> Option[Map[str Type]] {
+    if struct_name store.structs.get Option::Some(casa_struct) is then
+        subject_type clone_type = owned_subject_type
+        if owned_subject_type.borrow_target Option::Some(target) is then
+            target clone_type = owned_subject_type
+        fi
+        casa_struct.type_vars owned_subject_type aggregate_type_bindings = bindings
+        Map[str Type]::new = field_types
+        for member in casa_struct.members.iter do
+            bindings member.typ.substitute_t member.name.clone field_types.set
+        done
+        field_types Option::Some
+    else
+        Option[Map[str Type]]::None
+    fi
 }
 
 fn register_struct_pattern_bindings
@@ -200,17 +210,20 @@ fn register_struct_pattern_bindings
     struct_pattern:StructPattern
     match_subject_type:$Type
 {
-    struct_pattern StructPattern::struct_name tc.store.clone_struct = matched_struct_opt
-    if matched_struct_opt.is_none then
+    tc.store struct_pattern.struct_name match_subject_type resolve_struct_pattern_field_types
+    = field_types_opt
+    if field_types_opt.is_none then
         empty_location "Expected option value while unwrapping struct_pattern StructPattern::struct_name tc.store.structs.get" ErrorKind::Syntax tc.diagnostics.record_error
         return
     fi
-    matched_struct_opt.unwrap = matched_struct
+    field_types_opt.unwrap = field_types
     struct_pattern StructPattern::bindings.keys = binding_keys
     for field_name in binding_keys.iter do
         if field_name struct_pattern StructPattern::bindings.get Option::Some(bound_var) is then
-            function_opt bound_var.clone field_name match_subject_type matched_struct tc
-            assign_struct_binding_type
+            if field_name field_types.get Option::Some(binding_type) is then
+                function_opt bound_var.clone binding_type clone_type match_subject_type tc
+                assign_struct_binding_type
+            fi
         else
             empty_location "Expected option value while unwrapping field_name struct_pattern StructPattern::bindings.get" ErrorKind::Syntax tc.diagnostics.record_error
         fi
@@ -242,16 +255,31 @@ fn register_enum_pattern_bindings
         target clone_type = subject_type
     fi
     subject_type.match_base = base_enum_name
-    if base_enum_name tc.store.clone_enum Option::Some(casa_enum) is then
-        casa_enum.clone = owned_enum
-        if
-            variant EnumVariant::variant_name owned_enum CasaEnum::variant_types.get Option::Some(inner_types) is
-        then
-            subject_type owned_enum build_enum_type_bindings = type_bindings
-            match_subject_type borrow_prefix variant type_bindings inner_types function_opt tc
-            apply_enum_bindings
+    if
+        tc.store base_enum_name variant.variant_name subject_type resolve_enum_pattern_types
+        Option::Some(inner_types) is
+    then
+        match_subject_type borrow_prefix variant inner_types function_opt tc apply_enum_bindings
+    fi
+}
+
+fn resolve_enum_pattern_types
+    subject_type:$Type
+    variant_name:$str
+    enum_name:$str
+    store:$SymbolStore
+-> Option[List[Type]] {
+    if enum_name store.enums.get Option::Some(casa_enum) is then
+        subject_type casa_enum build_enum_type_bindings = type_bindings
+        if variant_name casa_enum.variant_types.get Option::Some(payload_types) is then
+            List[Type]::new = resolved_types
+            for payload_type in payload_types.iter do
+                type_bindings payload_type.substitute_t resolved_types.push
+            done
+            resolved_types Option::Some return
         fi
     fi
+    Option[List[Type]]::None
 }
 
 fn build_enum_type_bindings casa_enum:$CasaEnum match_subject_type:$Type -> Map[str Type] {
@@ -278,7 +306,6 @@ fn apply_enum_bindings
     tc:mut$TypeChecker
     function_opt:mut$Option[Function]
     inner_types:$List[Type]
-    type_bindings:$Map[str Type]
     variant:$EnumVariant
     borrow_prefix:$str
     match_subject_type:$Type
@@ -290,7 +317,6 @@ fn apply_enum_bindings
     do
         bind_index variant EnumVariant::bindings.get = binding_var
         bind_index inner_types.get clone_type = binding_type
-        type_bindings binding_type.substitute_t = binding_type
         if "" borrow_prefix != function_opt binding_type tc.type_is_duplicable ! && then
             binding_type clone_type = target
             SHARED_BORROW_TYPE borrow_prefix == = shared
