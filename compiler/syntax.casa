@@ -3935,6 +3935,90 @@ fn validate_traits parser:mut$Parser -> bool {
     0 valid.get copy
 }
 
+fn type_is_known_inhabited typ:$Type store:$SymbolStore inhabited:$Set[str] -> bool {
+    if typ.borrow_target Option::Some(target) is then
+        inhabited store target type_is_known_inhabited return
+    fi
+    typ match
+        Type::Generic(generic) => {
+            if ARRAY_TYPE generic.base == then
+                if typ get_concrete_array_length Option::Some(length) is then
+                    if 0 length == then true return fi
+                fi
+                if 0 generic.params.length == then false return fi
+                inhabited store 0 generic.params.get type_is_known_inhabited
+            elif generic.base store.structs.has generic.base store.enums.has || then
+                generic.base inhabited.has
+            else
+                true
+            fi
+        }
+        Type::Unknown => true
+        Type::TypeVar(_) => true
+        Type::Builtin(_) => true
+        Type::Function(_) => true
+        Type::Const(_) => true
+    end
+}
+
+fn validate_inhabited_aggregates parser:mut$Parser {
+    Set[str]::new = inhabited
+    true = changed
+    while changed do
+        false = changed
+        for casa_struct in parser.store.structs.values.iter do
+            if casa_struct.name inhabited.has then continue fi
+            true = fields_inhabited
+            for member in casa_struct.members.iter do
+                if inhabited parser.store member.typ type_is_known_inhabited ! then
+                    false = fields_inhabited
+                    break
+                fi
+            done
+            if fields_inhabited then
+                casa_struct.name.clone inhabited.add
+                true = changed
+            fi
+        done
+        for casa_enum in parser.store.enums.values.iter do
+            if casa_enum.name inhabited.has then continue fi
+            false = enum_inhabited
+            for pair in casa_enum.variant_types.iter do
+                true = variant_inhabited
+                for payload_type in pair.second.iter do
+                    if inhabited parser.store payload_type type_is_known_inhabited ! then
+                        false = variant_inhabited
+                        break
+                    fi
+                done
+                if variant_inhabited then
+                    true = enum_inhabited
+                    break
+                fi
+            done
+            if enum_inhabited then
+                casa_enum.name.clone inhabited.add
+                true = changed
+            fi
+        done
+    done
+
+    for casa_struct in parser.store.structs.values.iter do
+        if casa_struct.name inhabited.has ! then
+            casa_struct.location
+            f"Type `{casa_struct.name}` has no finite safe value; add `Option` or an enum leaf variant"
+            ErrorKind::TypeMismatch parser.state.record_error
+        fi
+    done
+    for casa_enum in parser.store.enums.values.iter do
+        if casa_enum.name inhabited.has ! then
+            casa_enum.location
+            f"Type `{casa_enum.name}` has no finite safe value; add an enum leaf variant"
+            ErrorKind::TypeMismatch parser.state.record_error
+        fi
+    done
+}
+
 fn copy_representation_is_eligible
     typ:mut$Type
     trait_bounds:mut$Map[str List[TraitBound]]
@@ -6476,6 +6560,7 @@ fn resolve_identifiers_global parser:mut$Parser ops:List[Op] skip_functions:$Set
     if parser validate_traits ! then
         List[Op]::new return
     fi
+    parser validate_inhabited_aggregates
     parser derive_copy_for_aggregates
     parser register_builtin_copy_impls
     parser validate_drop_methods
