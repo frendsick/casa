@@ -51,13 +51,13 @@ the implementing type:
 
 ```casa
 trait Describe {
-    fn describe self:self -> str
+    fn describe self:self -> String
 }
 
 struct User { name: str }
 
 impl User: Describe {
-    fn describe self:User -> str { self.name }
+    fn describe self:User -> String { self.name.to_str }
 }
 ```
 
@@ -101,7 +101,7 @@ their relationships and language uses.
 | `Ord` | `lt self:self other:self -> bool` | None | `<`, `<=`, `>`, and `>=` |
 | `Word` | No methods | None | Raw memory stores and system calls |
 | `Hashable` | `hash self:self -> i64` | `Eq + Word` | `Map` keys and `Set` elements |
-| `Display` | `to_str self:self -> str` | `Word` | `print` and string interpolation |
+| `Display` | `to_str self:$self -> String` | `Word` | `print` and string interpolation |
 | `Iterable[T]` | `next self:self -> Option[T]` | None | `for` loops and iterator methods |
 
 `Eq` supplies a default `ne`. `Ord` supplies `le`, `gt`, and `ge` from `lt`.
@@ -116,8 +116,8 @@ Primitive comparisons and printing remain available without importing `std`.
 ## Copy and Clone
 
 `Copy` marks values whose representation can be duplicated without allocation
-or user code. Scalars, raw pointers, C string pointers, and named function
-references are Copy. Owned `str`, arrays, and collections are not.
+or user code. Scalars, `str` views, raw pointers, C string pointers, and named
+function references are Copy. `String`, arrays, and collections are not.
 
 Shared borrows can be duplicated with `dup` and `over`, but `$T` does not
 implement or satisfy `Copy`. An exclusive `mut$T` borrow cannot be duplicated.
@@ -149,8 +149,9 @@ impl Document: Clone {
 }
 ```
 
-`str`, `array[T N]`, `List[T]`, `Option[T]`, `Result[T E]`, `Map[K V]`, and
-`Set[T]` implement Clone when their owned contents implement Clone.
+`String`, `array[T N]`, `List[T]`, `Option[T]`, `Result[T E]`, `Map[K V]`, and
+`Set[T]` implement Clone when their owned contents implement Clone. Cloning a
+`String` allocates independent storage. Cloning a `str` copies its view.
 
 ## Advanced trait implementations
 
@@ -161,7 +162,7 @@ effect. One block can implement several traits:
 struct Item { id: i64 name: str }
 
 impl Item: Describe + Stored {
-    fn describe self:Item -> str { self.name }
+    fn describe self:Item -> String { self.name.to_str }
 }
 ```
 
@@ -183,7 +184,7 @@ impl[T] Box[T] {
 }
 
 impl[T: Describe] Box[T]: Describe {
-    fn describe self:Box[T] -> str { self.value.describe }
+    fn describe self:Box[T] -> String { self.value.describe }
 }
 ```
 
@@ -196,11 +197,11 @@ A trait can extend other traits and provide method bodies:
 
 ```casa
 trait Labeled {
-    fn label self:self -> str
+    fn label self:self -> String
 }
 
 trait Greet: Labeled {
-    fn greeting self:self -> str {
+    fn greeting self:self -> String {
         f"Hello, {self.label}!"
     }
 }
@@ -219,7 +220,7 @@ Inside generic code, dot syntax and the type-parameter namespace are
 equivalent:
 
 ```casa
-fn description[T: Describe] value:T -> str {
+fn description[T: Describe] value:T -> String {
     value T::describe
 }
 ```

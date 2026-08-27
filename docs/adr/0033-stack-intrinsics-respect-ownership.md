@@ -21,4 +21,4 @@ Dropping a shared or exclusive borrow ends that loan without destroying the borr
 - `drop` on an owner may run custom cleanup followed by field destruction; it is no longer always a single stack-pointer adjustment.
 - An owner cannot be dropped or physically relocated while a borrow requiring its current storage remains live.
 - Compiler-synthesized stack shuffles obey the same rules as source-written intrinsics.
-- Existing raw-word lowering and documentation examples using `str dup` must migrate because owned `str` is non-`Copy`.
+- A `str` view is `Copy`, so stack intrinsics may duplicate its one-word view. Owned `String` values remain non-`Copy` and use explicit `clone` when duplication is required.

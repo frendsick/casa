@@ -14,5 +14,5 @@ Casa will distinguish text from arbitrary bytes. `str` contains validated UTF-8 
 - Strings do not provide ambiguous integer indexing. `.bytes` and `.chars` expose explicit iterators, and slicing APIs name whether their units are bytes or Unicode scalars.
 - Text literals accept direct Unicode and `\u{scalar}`. `\xHH` is restricted to ASCII values so it cannot inject invalid UTF-8 into `char` or `str`.
 - Existing byte-oriented `char` and `str` code requires migration.
-- Compact binary storage is a stdlib `Bytes` type rather than another compiler-owned collection. Raw file, standard-input, and captured-process data enters safe code as `Bytes` and requires explicit UTF-8 validation before becoming `str`.
-- Foreign NUL-terminated bytes are exposed as `$cstr`; converting them to `str` validates UTF-8 and returns `Result[str Utf8Error]`.
+- Compact binary storage is a stdlib `Bytes` type rather than another compiler-owned collection. Raw file, standard-input, and captured-process data enters safe code as `Bytes` and requires explicit UTF-8 validation before becoming `String`.
+- Foreign NUL-terminated bytes are exposed as `$cstr`; converting them to owned text validates UTF-8 and returns `Result[String Utf8Error]`.

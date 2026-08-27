@@ -4,12 +4,12 @@ Safe code cannot construct an owned aggregate that contains both an owner and a 
 
 ```casa
 struct TextView {
-    text: str
+    text: String
     view: $str
 }
 
-"hello" = text
-text borrow = view
+"hello".to_str = text
+text.as_str = view
 
 TextView {
     text: text

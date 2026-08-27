@@ -45,20 +45,20 @@ fn errno_to_io_error syscall_result:i64 -> IoError {
 }
 
 impl IoError: Display {
-    fn to_str self:$IoError -> str {
+    fn to_str self:$IoError -> String {
         self match
-            IoError::NotFound => "not found"
-            IoError::PermissionDenied => "permission denied"
-            IoError::AlreadyExists => "already exists"
-            IoError::IsDirectory => "is a directory"
-            IoError::NotDirectory => "not a directory"
-            IoError::NotEmpty => "directory not empty"
-            IoError::BadFd => "bad file descriptor"
+            IoError::NotFound => "not found".to_str
+            IoError::PermissionDenied => "permission denied".to_str
+            IoError::AlreadyExists => "already exists".to_str
+            IoError::IsDirectory => "is a directory".to_str
+            IoError::NotDirectory => "not a directory".to_str
+            IoError::NotEmpty => "directory not empty".to_str
+            IoError::BadFd => "bad file descriptor".to_str
             IoError::Other(errno) => f"errno {errno.to_str}"
         end
     }
 
-    fn format self:$IoError -> str { self.to_str }
+    fn format self:$IoError -> String { self.to_str }
 }
 
 # ---------------------------------------------------------------------------
@@ -101,39 +101,53 @@ impl FileStat {
 
 impl file {
     fn open path:$str flags:i64 mode:i64 -> i64 {
-        unsafe { mode flags path.as_cstr (ptr) 2 syscall3 }
+        path.as_cstr = path_cstr
+        if path_cstr.is_none then
+            0 22 - return
+        fi
+        # SAFETY: as_cstr validated the path and keeps its storage live for the syscall.
+        unsafe { mode flags path_cstr.unwrap (ptr) 2 syscall3 }
     }
 
     fn read fd:i64 buf:ptr size:u64 -> i64 {
+        # SAFETY: The caller supplies a writable buffer of at least size bytes.
         unsafe { size buf fd 0 syscall3 }
     }
 
     fn write fd:i64 data:$str -> i64 {
-        unsafe { data.length data.as_cstr (ptr) fd 1 syscall3 }
+        # SAFETY: The text view contains `length` readable bytes after its header.
+        unsafe { data.length data (ptr) 8 + fd 1 syscall3 }
     }
 
     fn close fd:i64 -> i64 {
+        # SAFETY: close accepts any file descriptor and reports invalid values as an error.
         unsafe { fd 3 syscall1 }
     }
 
-    fn read_all path:$str -> Result[str IoError] {
+    fn read_all path:$str -> Result[String IoError] {
         0 O_RDONLY path file::open = file_fd
         if 0 file_fd < then
             file_fd errno_to_io_error Result::Error return
         fi
+        # SAFETY: file_fd is open and lseek does not dereference user memory.
         unsafe { 2 0 file_fd 8 syscall3 = file_size }
+        # SAFETY: file_fd remains open and lseek does not dereference user memory.
         unsafe { 0 0 file_fd 8 syscall3 drop }
         file_size (u64) = size
-        unsafe { size 9 + alloc (str) = result_buf }
-        unsafe { size result_buf (ptr) store64 }
-        unsafe { file_size result_buf.as_cstr (ptr) file_fd 0 syscall3 = bytes_read }
+        size String::with_capacity = result
+        # SAFETY: result has size writable bytes and file_fd remains open.
+        unsafe { file_size result.data (ptr) 8 + file_fd 0 syscall3 = bytes_read }
         if 0 bytes_read < then
             file_fd file::close drop
             bytes_read errno_to_io_error Result::Error return
         fi
-        '\0' size result_buf.set
+        # SAFETY: read initialized bytes_read bytes within result's allocated capacity.
+        unsafe {
+            bytes_read (u64) result.data (ptr) store64
+            0 result.data (ptr) 8 + bytes_read (u64) + store8
+        }
         file_fd file::close drop
-        result_buf Result::Ok
+        result Result::Ok
     }
 
     fn write_all path:$str content:$str -> Result[bool IoError] {
@@ -151,7 +165,12 @@ impl file {
     }
 
     fn remove path:$str -> Result[bool IoError] {
-        unsafe { path.as_cstr (ptr) 87 syscall1 = remove_result }
+        path.as_cstr = path_cstr
+        if path_cstr.is_none then
+            22 IoError::Other Result::Error return
+        fi
+        # SAFETY: as_cstr validated the path and keeps its storage live for the syscall.
+        unsafe { path_cstr.unwrap (ptr) 87 syscall1 = remove_result }
         if 0 remove_result < then
             remove_result errno_to_io_error Result::Error return
         fi
@@ -159,21 +178,38 @@ impl file {
     }
 
     fn exists path:$str -> bool {
+        path.as_cstr = path_cstr
+        if path_cstr.is_none then
+            false return
+        fi
+        # SAFETY: alloc returns 144 writable bytes for the stat structure.
         unsafe { 144 alloc = stat_buf }
-        unsafe { stat_buf (ptr) path.as_cstr (ptr) 4 syscall2 = stat_result }
+        # SAFETY: stat_buf has the required size and path_cstr remains live.
+        unsafe { stat_buf (ptr) path_cstr.unwrap (ptr) 4 syscall2 = stat_result }
         0 stat_result >=
     }
 
     fn stat path:$str -> Result[FileStat IoError] {
+        path.as_cstr = path_cstr
+        if path_cstr.is_none then
+            22 IoError::Other Result::Error return
+        fi
+        # SAFETY: alloc returns 144 writable bytes for the stat structure.
         unsafe { 144 alloc = stat_buf }
-        unsafe { stat_buf (ptr) path.as_cstr (ptr) 4 syscall2 = stat_result }
+        # SAFETY: stat_buf has the required size and path_cstr remains live.
+        unsafe { stat_buf (ptr) path_cstr.unwrap (ptr) 4 syscall2 = stat_result }
         if 0 stat_result < then
             stat_result errno_to_io_error Result::Error return
         fi
+        # SAFETY: A successful stat initialized every field read from the 144-byte buffer.
         unsafe { stat_buf 48 + load64 (i64) = size }
+        # SAFETY: A successful stat initialized every field read from the 144-byte buffer.
         unsafe { stat_buf 24 + load32 (i64) = mode }
+        # SAFETY: A successful stat initialized every field read from the 144-byte buffer.
         unsafe { stat_buf 72 + load64 (i64) = atime }
+        # SAFETY: A successful stat initialized every field read from the 144-byte buffer.
         unsafe { stat_buf 88 + load64 (i64) = mtime }
+        # SAFETY: A successful stat initialized every field read from the 144-byte buffer.
         unsafe { stat_buf 104 + load64 (i64) = ctime }
         FileStat { size: size (u64) mode: mode mtime: mtime atime: atime ctime: ctime } Result::Ok
     }
@@ -184,17 +220,25 @@ impl file {
 # ---------------------------------------------------------------------------
 
 impl dir {
-    fn list path:$str -> Result[List[str] IoError] {
-        unsafe { 0 65536 path.as_cstr (ptr) 2 syscall3 = dir_fd }
+    fn list path:$str -> Result[List[String] IoError] {
+        path.as_cstr = path_cstr
+        if path_cstr.is_none then
+            22 IoError::Other Result::Error return
+        fi
+        # SAFETY: as_cstr validated the path and keeps its storage live for the syscall.
+        unsafe { 0 65536 path_cstr.unwrap (ptr) 2 syscall3 = dir_fd }
         if 0 dir_fd < then
             dir_fd errno_to_io_error Result::Error return
         fi
-        List[str]::new = entries
+        List[String]::new = entries
+        # SAFETY: alloc returns a writable directory-entry buffer of the requested size.
         unsafe { 1024 alloc = buf }
         true = reading
         while reading do
+            # SAFETY: buf has 1024 writable bytes and dir_fd remains open.
             unsafe { 1024 buf dir_fd 217 syscall3 = nread }
             if 0 nread < then
+                # SAFETY: dir_fd is an open descriptor owned by this function.
                 unsafe { dir_fd 3 syscall1 drop }
                 nread errno_to_io_error Result::Error return
             fi
@@ -203,23 +247,33 @@ impl dir {
             else
                 0 = pos
                 while pos nread > do
+                    # SAFETY: pos identifies an entry within the initialized getdents buffer.
                     unsafe { buf pos (u64) + = entry_ptr }
+                    # SAFETY: Linux dirent records store reclen at byte offset 16.
                     unsafe { entry_ptr 16 + load16 = rec_len }
+                    # SAFETY: Linux dirent records store the NUL-terminated name at byte offset 19.
                     unsafe { entry_ptr 19 + = name_ptr }
+                    # SAFETY: getdents returned a complete record with a NUL-terminated name.
                     unsafe { name_ptr (ptr) str::from_cstr = name }
-                    if "." name str::eq ! ".." name str::eq ! && then
+                    if "." name.as_str str::eq ! ".." name.as_str str::eq ! && then
                         name entries.push
                     fi
                     rec_len (i64) += pos
                 done
             fi
         done
+        # SAFETY: dir_fd is an open descriptor owned by this function.
         unsafe { dir_fd 3 syscall1 drop }
         entries Result::Ok
     }
 
     fn create path:$str mode:i64 -> Result[bool IoError] {
-        unsafe { mode path.as_cstr (ptr) 83 syscall2 = result }
+        path.as_cstr = path_cstr
+        if path_cstr.is_none then
+            22 IoError::Other Result::Error return
+        fi
+        # SAFETY: as_cstr validated the path and keeps its storage live for the syscall.
+        unsafe { mode path_cstr.unwrap (ptr) 83 syscall2 = result }
         if 0 result < then
             result errno_to_io_error Result::Error return
         fi
@@ -227,7 +281,12 @@ impl dir {
     }
 
     fn remove path:$str -> Result[bool IoError] {
-        unsafe { path.as_cstr (ptr) 84 syscall1 = result }
+        path.as_cstr = path_cstr
+        if path_cstr.is_none then
+            22 IoError::Other Result::Error return
+        fi
+        # SAFETY: as_cstr validated the path and keeps its storage live for the syscall.
+        unsafe { path_cstr.unwrap (ptr) 84 syscall1 = result }
         if 0 result < then
             result errno_to_io_error Result::Error return
         fi
@@ -235,25 +294,40 @@ impl dir {
     }
 
     fn exists path:$str -> bool {
+        path.as_cstr = path_cstr
+        if path_cstr.is_none then
+            false return
+        fi
+        # SAFETY: alloc returns 144 writable bytes for the stat structure.
         unsafe { 144 alloc = stat_buf }
-        unsafe { stat_buf (ptr) path.as_cstr (ptr) 4 syscall2 = stat_result }
+        # SAFETY: stat_buf has the required size and path_cstr remains live.
+        unsafe { stat_buf (ptr) path_cstr.unwrap (ptr) 4 syscall2 = stat_result }
         if 0 stat_result < then
             false return
         fi
+        # SAFETY: A successful stat initialized the mode field at byte offset 24.
         unsafe { stat_buf 24 + load32 61440 & 16384 == }
     }
 
-    fn current -> Result[str IoError] {
+    fn current -> Result[String IoError] {
+        # SAFETY: alloc returns a writable path buffer of the requested size.
         unsafe { 4096 alloc = buf }
+        # SAFETY: buf has 4096 writable bytes for getcwd.
         unsafe { 4096 buf 79 syscall2 = result }
         if 0 result < then
             result errno_to_io_error Result::Error return
         fi
+        # SAFETY: A successful getcwd writes a NUL-terminated path into buf.
         unsafe { buf (ptr) str::from_cstr Result::Ok }
     }
 
     fn change path:$str -> Result[bool IoError] {
-        unsafe { path.as_cstr (ptr) 80 syscall1 = result }
+        path.as_cstr = path_cstr
+        if path_cstr.is_none then
+            22 IoError::Other Result::Error return
+        fi
+        # SAFETY: as_cstr validated the path and keeps its storage live for the syscall.
+        unsafe { path_cstr.unwrap (ptr) 80 syscall1 = result }
         if 0 result < then
             result errno_to_io_error Result::Error return
         fi
@@ -266,17 +340,17 @@ impl dir {
 # ---------------------------------------------------------------------------
 
 impl env {
-    fn get name:$str -> Option[str] {
+    fn get name:$str -> Option[String] {
         envp = env_ptr
         0 = offset
         unsafe { env_ptr offset (u64) + load64 = entry }
         while 0 entry (i64) != do
             unsafe { entry (ptr) str::from_cstr = entry_str }
             name "=" str::concat = prefix
-            if entry_str prefix str::starts_with then
+            if entry_str.as_str prefix.as_str str::starts_with then
                 name.length 1 + = val_start
                 entry_str.length val_start - = val_len
-                entry_str val_start val_len str::substring Option::Some return
+                entry_str.as_str val_start val_len str::substring Option::Some return
             fi
             8 += offset
             unsafe { env_ptr offset (u64) + load64 = entry }
@@ -290,40 +364,32 @@ impl env {
 # ---------------------------------------------------------------------------
 
 impl path {
-    fn join b:$str a:$str -> str {
+    fn join b:$str a:$str -> String {
         if 0 a.length == then
-            b.clone return
+            b.to_str return
         fi
         if 0 b.length == then
-            a.clone return
+            a.to_str return
         fi
         a.length 1 - a.at = a_last
         0 b.at = b_first
         if '/' a_last == '/' b_first == && then
-            unsafe { a.length b.length + 9 + alloc (str) = result }
-            unsafe { a.length b.length 1 - + result (ptr) store64 }
-            0 (u64) = i
-            while i a.length > do
-                i a.at i result.set
-                1 += i
-            done
-            1 (u64) = j
-            while j b.length > do
-                j b.at a.length j + 1 - result.set
-                1 += j
-            done
-            '\0' a.length b.length 1 - + result.set
+            a.length b.length + 1 - String::with_capacity = result
+            a result.append
+            b 1 b.length 1 - str::substring = suffix
+            suffix.as_str result.append
             result return
         fi
         if '/' a_last == '/' b_first == || then
             a b str::concat return
         fi
-        a "/" str::concat b str::concat
+        a "/" str::concat = prefix
+        prefix.as_str b str::concat
     }
 
-    fn dirname p:$str -> str {
+    fn dirname p:$str -> String {
         if 0 p.length == then
-            "." return
+            ".".to_str return
         fi
         p.length = len
         if 1 len > '/' len 1 - p.at == && then
@@ -334,17 +400,17 @@ impl path {
             1 -= i
             if '/' i p.at == then
                 if 0 i == then
-                    "/" return
+                    "/".to_str return
                 fi
                 p 0 i str::substring return
             fi
         done
-        "."
+        ".".to_str
     }
 
-    fn basename p:$str -> str {
+    fn basename p:$str -> String {
         if 0 p.length == then
-            "" return
+            String::new return
         fi
         p.length = len
         if 1 len > '/' len 1 - p.at == && then
@@ -360,15 +426,15 @@ impl path {
         p 0 len str::substring
     }
 
-    fn extension p:$str -> str {
+    fn extension p:$str -> String {
         p path::basename = base
         base.length = i
         while 0 i > do
             1 -= i
             if '.' i base.at == then
-                base.clone i 1 + base.length i - 1 - str::substring return
+                base.as_str i 1 + base.length i - 1 - str::substring return
             fi
         done
-        ""
+        String::new
     }
 }

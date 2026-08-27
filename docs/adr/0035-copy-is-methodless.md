@@ -19,6 +19,6 @@ Casa initially deferred a generic deep-duplication capability. ADR-0074 and ADR-
 
 - `struct Point derives Copy` may be used with `dup`, `over`, `copy` through `$Point`, and ordinary implicit copying when its fields qualify.
 - A representation-eligible struct that does not implement Copy remains move-only.
-- `str`, `Bytes`, lists, maps, owned closures, and resource owners are not `Copy`; suitable types may separately implement `Clone`.
+- `String`, `Bytes`, lists, maps, owned closures, and resource owners are not `Copy`; suitable types may separately implement `Clone`. The non-owning `str` view is `Copy`.
 - Generic trivial duplication uses `[T: Copy]`; generic explicit duplication uses `[T: Clone]`.
 - `Copy` never allocates under ADR-0072. Any relationship to Clone comes from the active trait declaration under ADR-0080.

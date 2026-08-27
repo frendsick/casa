@@ -4,7 +4,7 @@
 
 Automatic storage placement remains separate. The compiler may allocate an enclosing or escaping destination just as it would when constructing the value there, but performing `Copy` introduces no additional backing allocation. Lowering writes directly into caller-provided destination storage and should avoid temporary buffers.
 
-An `array[T N]` is never `Copy` because it owns its element storage. Types that own indirect storage, including `str`, `Bytes`, dynamic collections, and compiler-indirected recursive values, are also never `Copy`. Allocation does not make raw duplication of their owning handles safe.
+An `array[T N]` is never `Copy` because it owns its element storage. Types that own indirect storage, including `String`, `Bytes`, dynamic collections, and compiler-indirected recursive values, are also never `Copy`. Allocation does not make raw duplication of their owning handles safe. A `str` is a non-owning view, so copying it copies only its fixed representation.
 
 ## Consequences
 

@@ -470,14 +470,14 @@ f"Hello, {name}!" print
 name " is " str::concat age i64::to_str str::concat print
 ```
 
-Use `StringBuilder` for incremental or loop-based string construction:
+Use `String` for incremental or loop-based string construction:
 
 ```casa
-StringBuilder::new = builder
+String::new = text
 items.length 0 == ! while
-    items.pop builder.append
+    items.pop.as_str text.append
 done
-builder.build
+text
 ```
 
 Never use `str::concat` for more than two strings.

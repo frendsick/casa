@@ -1,6 +1,6 @@
 # Text literals encode Unicode scalars
 
-Casa source files and text literals contain valid UTF-8. A `char` literal denotes exactly one Unicode scalar value, and a `str` literal denotes a sequence of Unicode scalars. Source may contain Unicode directly or use `\u{scalar}` with hexadecimal scalar notation. Surrogates, values above `U+10FFFF`, malformed source UTF-8, and character literals containing zero or multiple scalars are compile errors.
+Casa source files and text literals contain valid UTF-8. A `char` literal denotes exactly one Unicode scalar value, and a `str` literal denotes a copied view of a static sequence of Unicode scalars under ADR-0023. Source may contain Unicode directly or use `\u{scalar}` with hexadecimal scalar notation. Surrogates, values above `U+10FFFF`, malformed source UTF-8, and character literals containing zero or multiple scalars are compile errors.
 
 The `\xHH` escape remains available only for values `00` through `7F`, where one byte is also one Unicode scalar encoded identically in UTF-8. It is useful for ASCII control values such as `\x1b`; it never injects an arbitrary byte into text. `\0` denotes Unicode NUL and remains valid text, although a `str` containing it cannot be borrowed as `$cstr`.
 
