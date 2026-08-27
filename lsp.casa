@@ -73,11 +73,27 @@ struct CompileResult {
     analysis: AnalysisResult
 }
 
+struct LspState {
+    library_paths:  List[str]
+    open_documents: Map[str AnalyzedDocument]
+    reader:         StdinReader
+}
+
 impl CompileResult {
     fn into_parts self:CompileResult -> AnalyzedDocument AnalysisResult {
         self match
             CompileResult { document: document analysis: analysis } => document analysis
         end
+    }
+}
+
+impl LspState {
+    fn new -> LspState {
+        LspState {
+            library_paths: List[str]::new
+            open_documents: Map[str AnalyzedDocument]::new
+            reader: StdinReader::new
+        }
     }
 }
 
@@ -112,13 +128,6 @@ const TOKEN_TYPE 6
 const TOKEN_ENUM_MEMBER 7
 const TOKEN_STRUCT 8
 const TOKEN_MACRO 9
-List[str]::new = LSP_LIBRARY_PATHS
-
-# ============================================================================
-# Global state
-# ============================================================================
-Map[str AnalyzedDocument]::new = OPEN_DOCUMENTS
-StdinReader::new = STDIN_READER
 
 # ============================================================================
 # Coordinate conversion utilities
@@ -283,13 +292,14 @@ fn send_notification method:str params:JsonValue {
 # Compilation pipeline
 # ============================================================================
 
-fn compile_document
+fn compile_document_with_paths
     file_path:$str
     source:$str
     open_docs:$Map[str AnalyzedDocument]
+    library_paths:$List[str]
 -> CompileResult {
     source.clone file_path.clone AnalysisInput::new = input
-    LSP_LIBRARY_PATHS = input.library_paths
+    library_paths.clone = input.library_paths
     open_docs.keys = uris
     for uri in uris.iter do
         uri open_docs.get.unwrap = cached_state
@@ -306,6 +316,15 @@ fn compile_document
     CompileResult
 }
 
+fn compile_document
+    file_path:$str
+    source:$str
+    open_docs:$Map[str AnalyzedDocument]
+-> CompileResult {
+    List[str]::new = library_paths
+    library_paths open_docs source file_path compile_document_with_paths
+}
+
 fn ingest_document_into
     uri:$str
     source:$str
@@ -318,10 +337,12 @@ fn ingest_document_into
     open_docs
 }
 
-fn ingest_document uri:$str source:$str -> List[LspDiagnostic] {
-    global OPEN_DOCUMENTS
-    OPEN_DOCUMENTS source uri ingest_document_into = OPEN_DOCUMENTS = diagnostics
-    diagnostics
+fn ingest_document uri:$str source:$str state:mut$LspState -> List[LspDiagnostic] {
+    uri uri_to_path = path
+    state.library_paths state.open_documents source path compile_document_with_paths.into_parts
+    = analysis = document
+    document uri.clone state.open_documents.set
+    path analysis diagnostics_from
 }
 
 fn diagnostics_from analysis:AnalysisResult path:str -> List[LspDiagnostic] {
@@ -449,7 +470,7 @@ fn extract_position message:$JsonValue -> LspRange {
     0 0 character line LspRange
 }
 
-fn handle_did_open message:$JsonValue {
+fn handle_did_open message:$JsonValue state:mut$LspState {
     "params" message json_get_object = params_opt
     if params_opt.is_none then
         "Expected option value while unwrapping params message json_get_object" exit_with_lsp_error
@@ -470,11 +491,11 @@ fn handle_did_open message:$JsonValue {
         "Expected option value while unwrapping text text_document json_get_str" exit_with_lsp_error
     fi
     text_opt.unwrap = text
-    text uri ingest_document = diagnostics
+    state text uri ingest_document = diagnostics
     diagnostics uri publish_diagnostics
 }
 
-fn handle_did_change message:$JsonValue {
+fn handle_did_change message:$JsonValue state:mut$LspState {
     "params" message json_get_object = params_opt
     if params_opt.is_none then
         "Expected option value while unwrapping params message json_get_object" exit_with_lsp_error
@@ -501,11 +522,11 @@ fn handle_did_change message:$JsonValue {
         "Expected option value while unwrapping text change json_get_str" exit_with_lsp_error
     fi
     text_opt.unwrap = text
-    text uri ingest_document = diagnostics
+    state text uri ingest_document = diagnostics
     diagnostics uri publish_diagnostics
 }
 
-fn handle_did_save message:$JsonValue {
+fn handle_did_save message:$JsonValue state:mut$LspState {
     message extract_uri = uri
     uri uri_to_path file::read_all = read_result
     if read_result Result::Error(read_err) is then
@@ -513,7 +534,7 @@ fn handle_did_save message:$JsonValue {
         return
     fi
     read_result.unwrap = saved_source
-    saved_source uri ingest_document = diagnostics
+    state saved_source uri ingest_document = diagnostics
     diagnostics uri publish_diagnostics
 }
 
@@ -530,7 +551,7 @@ fn compute_definition state:$AnalyzedDocument line:i64 column:i64 -> Option[LspL
     fi
 }
 
-fn handle_definition message:$JsonValue {
+fn handle_definition message:$JsonValue state:$LspState {
     message extract_uri = uri
     "id" message json_get_value = request_id_opt
     if request_id_opt.is_none then
@@ -538,15 +559,15 @@ fn handle_definition message:$JsonValue {
     fi
     request_id_opt.unwrap = request_id
 
-    uri OPEN_DOCUMENTS.get = state_opt
-    if state_opt.is_none then
+    uri state.open_documents.get = document_opt
+    if document_opt.is_none then
         JsonValue::JsonNull request_id send_response
         return
     fi
-    state_opt.unwrap = state
+    document_opt.unwrap = document
 
     message extract_position = position
-    position LspRange::start_col position LspRange::start_line state compute_definition = loc_opt
+    position LspRange::start_col position LspRange::start_line document compute_definition = loc_opt
     if loc_opt Option::Some(loc) is then
         loc.to_json request_id send_response
     else
@@ -572,7 +593,7 @@ fn compute_hover state:$AnalyzedDocument line:i64 column:i64 -> Option[HoverCont
     fi
 }
 
-fn handle_hover message:$JsonValue {
+fn handle_hover message:$JsonValue state:$LspState {
     message extract_uri = uri
     "id" message json_get_value = request_id_opt
     if request_id_opt.is_none then
@@ -580,15 +601,15 @@ fn handle_hover message:$JsonValue {
     fi
     request_id_opt.unwrap = request_id
 
-    uri OPEN_DOCUMENTS.get = state_opt
-    if state_opt.is_none then
+    uri state.open_documents.get = document_opt
+    if document_opt.is_none then
         JsonValue::JsonNull request_id send_response
         return
     fi
-    state_opt.unwrap = state
+    document_opt.unwrap = document
 
     message extract_position = position
-    position LspRange::start_col position LspRange::start_line state compute_hover = hover_opt
+    position LspRange::start_col position LspRange::start_line document compute_hover = hover_opt
     if hover_opt.is_none then
         JsonValue::JsonNull request_id send_response
         return
@@ -663,7 +684,7 @@ fn compute_completion
     items
 }
 
-fn handle_completion message:$JsonValue {
+fn handle_completion message:$JsonValue state:$LspState {
     message extract_uri = uri
     "id" message json_get_value = request_id_opt
     if request_id_opt.is_none then
@@ -671,15 +692,15 @@ fn handle_completion message:$JsonValue {
     fi
     request_id_opt.unwrap = request_id
 
-    uri OPEN_DOCUMENTS.get = state_opt
-    if state_opt.is_none then
+    uri state.open_documents.get = document_opt
+    if document_opt.is_none then
         json_object
         "isIncomplete" false JsonValue::JsonBool json_set
         "items" List[JsonValue]::new JsonValue::JsonArray json_set
         JsonValue::JsonObject request_id send_response
         return
     fi
-    state_opt.unwrap = state
+    document_opt.unwrap = document
 
     # Check trigger character
     "params" message json_get_object = params_opt
@@ -697,7 +718,7 @@ fn handle_completion message:$JsonValue {
     fi
 
     message extract_position = position
-    trigger position LspRange::start_col position LspRange::start_line state compute_completion = items
+    trigger position LspRange::start_col position LspRange::start_line document compute_completion = items
 
     # Build response
     List[JsonValue]::new = json_items
@@ -733,7 +754,7 @@ fn compute_references
     Option[List[LspLocation]]::None
 }
 
-fn handle_references message:$JsonValue {
+fn handle_references message:$JsonValue state:$LspState {
     message extract_uri = uri
     "id" message json_get_value = request_id_opt
     if request_id_opt.is_none then
@@ -741,12 +762,12 @@ fn handle_references message:$JsonValue {
     fi
     request_id_opt.unwrap = request_id
 
-    uri OPEN_DOCUMENTS.get = state_opt
-    if state_opt.is_none then
+    uri state.open_documents.get = document_opt
+    if document_opt.is_none then
         JsonValue::JsonNull request_id send_response
         return
     fi
-    state_opt.unwrap = state
+    document_opt.unwrap = document
 
     # includeDeclaration
     Option[$JsonValue]::None = context_opt
@@ -762,7 +783,7 @@ fn handle_references message:$JsonValue {
     fi
 
     message extract_position = position
-    include_decl position LspRange::start_col position LspRange::start_line state compute_references = refs_opt
+    include_decl position LspRange::start_col position LspRange::start_line document compute_references = refs_opt
     if refs_opt.is_none then
         JsonValue::JsonNull request_id send_response
         return
@@ -810,7 +831,7 @@ fn compute_rename
     Option[Map[str List[TextEdit]]]::None
 }
 
-fn handle_rename message:$JsonValue {
+fn handle_rename message:$JsonValue state:$LspState {
     message extract_uri = uri
     "id" message json_get_value = request_id_opt
     if request_id_opt.is_none then
@@ -818,12 +839,12 @@ fn handle_rename message:$JsonValue {
     fi
     request_id_opt.unwrap = request_id
 
-    uri OPEN_DOCUMENTS.get = state_opt
-    if state_opt.is_none then
+    uri state.open_documents.get = document_opt
+    if document_opt.is_none then
         JsonValue::JsonNull request_id send_response
         return
     fi
-    state_opt.unwrap = state
+    document_opt.unwrap = document
 
     "params" message json_get_object = params_opt
     if params_opt.is_none then
@@ -837,7 +858,7 @@ fn handle_rename message:$JsonValue {
     new_name_opt.unwrap = new_name
 
     message extract_position = position
-    new_name position LspRange::start_col position LspRange::start_line state compute_rename = edits_opt
+    new_name position LspRange::start_col position LspRange::start_line document compute_rename = edits_opt
     if edits_opt.is_none then
         JsonValue::JsonNull request_id send_response
         return
@@ -897,7 +918,7 @@ fn compute_semantic_tokens state:$AnalyzedDocument -> List[SemanticToken] {
     tokens
 }
 
-fn handle_semantic_tokens message:$JsonValue {
+fn handle_semantic_tokens message:$JsonValue state:$LspState {
     message extract_uri = uri
     "id" message json_get_value = request_id_opt
     if request_id_opt.is_none then
@@ -905,16 +926,16 @@ fn handle_semantic_tokens message:$JsonValue {
     fi
     request_id_opt.unwrap = request_id
 
-    uri OPEN_DOCUMENTS.get = state_opt
-    if state_opt.is_none then
+    uri state.open_documents.get = document_opt
+    if document_opt.is_none then
         json_object
         "data" List[JsonValue]::new JsonValue::JsonArray json_set
         JsonValue::JsonObject request_id send_response
         return
     fi
-    state_opt.unwrap = state
+    document_opt.unwrap = document
 
-    state compute_semantic_tokens = tokens
+    document compute_semantic_tokens = tokens
 
     # Delta-encode
     List[JsonValue]::new = encoded_data
@@ -971,15 +992,14 @@ fn extract_library_paths message:$JsonValue -> List[str] {
     paths
 }
 
-fn handle_initialize message:$JsonValue {
-    global LSP_LIBRARY_PATHS
+fn handle_initialize message:$JsonValue state:mut$LspState {
     "id" message json_get_value = request_id_opt
     if request_id_opt.is_none then
         "Expected option value while unwrapping id message json_get_value" exit_with_lsp_error
     fi
     request_id_opt.unwrap = request_id
 
-    message extract_library_paths = LSP_LIBRARY_PATHS
+    message extract_library_paths = state.library_paths
 
     # Build semantic tokens legend
     List[JsonValue]::new = token_types
@@ -1034,7 +1054,7 @@ fn handle_shutdown message:$JsonValue {
 
 fn handle_exit message:$JsonValue { 0 exit }
 
-fn dispatch_message message:$JsonValue {
+fn dispatch_message message:$JsonValue state:mut$LspState {
     "method" message json_get_str = method_opt
     if method_opt.is_none then
         return
@@ -1042,40 +1062,41 @@ fn dispatch_message message:$JsonValue {
     method_opt.unwrap = method
 
     if "initialize" method == then
-        message handle_initialize
+        state message handle_initialize
     elif "shutdown" method == then
         message handle_shutdown
     elif "exit" method == then
         message handle_exit
     elif "textDocument/didOpen" method == then
-        message handle_did_open
+        state message handle_did_open
     elif "textDocument/didChange" method == then
-        message handle_did_change
+        state message handle_did_change
     elif "textDocument/didSave" method == then
-        message handle_did_save
+        state message handle_did_save
     elif "textDocument/definition" method == then
-        message handle_definition
+        state message handle_definition
     elif "textDocument/hover" method == then
-        message handle_hover
+        state message handle_hover
     elif "textDocument/completion" method == then
-        message handle_completion
+        state message handle_completion
     elif "textDocument/references" method == then
-        message handle_references
+        state message handle_references
     elif "textDocument/rename" method == then
-        message handle_rename
+        state message handle_rename
     elif "textDocument/semanticTokens/full" method == then
-        message handle_semantic_tokens
+        state message handle_semantic_tokens
     fi
 }
 
 fn main {
+    LspState::new = state
     while true do
-        STDIN_READER read_message = msg_opt
+        state.reader read_message = msg_opt
         if msg_opt.is_none then
             break
         fi
         if msg_opt Option::Some(message) is then
-            message dispatch_message
+            state message dispatch_message
         fi
     done
 }
