@@ -8,6 +8,7 @@ import "common"
 const INT32_MAX 2147483647
 const INT32_MIN -2147483648
 const RETURN_STACK_SIZE 1048576
+const SMALL_ALLOC_LIMIT 512
 # Keep enough headroom for the compiler and its largest test programs.
 const HEAP_SIZE 12884901888
 
@@ -144,6 +145,7 @@ impl Emitter {
         ".align 16" self.line
         "heap_ptr: .skip 8" self.line
         "free_list: .skip 8" self.line
+        f"small_free_lists: .skip {SMALL_ALLOC_LIMIT}" self.line
         "__argc: .skip 8" self.line
         "__argv: .skip 8" self.line
         "__envp: .skip 8" self.line
@@ -280,7 +282,8 @@ impl Emitter {
     # Helper subroutines
     # ============================================================================
 
-    # ponytail: first-fit reuse does not split or coalesce blocks; add both if
+    # Small blocks use exact-size bins. Larger blocks keep first-fit reuse.
+    # ponytail: large blocks are not split or coalesced; add both if large-block
     # fragmentation becomes measurable before the fixed heap is exhausted.
     fn emit_heap_helpers self:mut$Emitter {
         # heap_alloc: requested byte count in %rdi, pushes an aligned pointer.
@@ -291,6 +294,19 @@ impl Emitter {
         "addq $7, %rax" self.indent
         "jc .Lheap_alloc_oom" self.indent
         "andq $-8, %rax" self.indent
+        f"cmpq ${SMALL_ALLOC_LIMIT}, %rax" self.indent
+        "ja .Lheap_alloc_large" self.indent
+        "leaq small_free_lists(%rip), %r9" self.indent
+        "leaq -8(%r9,%rax), %r9" self.indent
+        "movq (%r9), %rcx" self.indent
+        "testq %rcx, %rcx" self.indent
+        "jz .Lheap_alloc_bump" self.indent
+        "movq 8(%rcx), %r8" self.indent
+        "movq %r8, (%r9)" self.indent
+        "leaq 8(%rcx), %rax" self.indent
+        "pushq %rax" self.indent
+        "jmp .Lheap_alloc_return" self.indent
+        ".Lheap_alloc_large:" self.line
         "movq free_list(%rip), %rcx" self.indent
         "xorq %rdx, %rdx" self.indent
         ".Lheap_alloc_search:" self.line
@@ -353,6 +369,16 @@ impl Emitter {
         "testq %rdi, %rdi" self.indent
         "jz .Lheap_free_return" self.indent
         "leaq -8(%rdi), %rax" self.indent
+        "movq (%rax), %rdx" self.indent
+        f"cmpq ${SMALL_ALLOC_LIMIT}, %rdx" self.indent
+        "ja .Lheap_free_large" self.indent
+        "leaq small_free_lists(%rip), %rcx" self.indent
+        "leaq -8(%rcx,%rdx), %rcx" self.indent
+        "movq (%rcx), %rdx" self.indent
+        "movq %rdx, 8(%rax)" self.indent
+        "movq %rax, (%rcx)" self.indent
+        "jmp .Lheap_free_return" self.indent
+        ".Lheap_free_large:" self.line
         "movq free_list(%rip), %rcx" self.indent
         "movq %rcx, 8(%rax)" self.indent
         "movq %rax, free_list(%rip)" self.indent
