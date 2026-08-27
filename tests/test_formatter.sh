@@ -94,11 +94,27 @@ if matches_filter "compiler_categories" "$@"; then
     matched=true
     compiler_categories_ok=true
 
-    if ! output=$(CASA_TEST_CATEGORY=internals \
-        tests/test_compiler.sh array_is_not_copy) || \
+    if ! output=$(CASA_TEST_CATEGORY=compiler_analysis \
+        tests/test_compiler.sh typechecker) || \
         ! printf '%s\n' "$output" | grep -F "Summary: 1 passed, 0 failed" >/dev/null
     then
         printf "${RED}[FAIL]${RESET} Failed: compiler_categories (selection)\n"
+        printf '%s\n' "$output"
+        compiler_categories_ok=false
+    fi
+
+    uncategorized_fixture=$(mktemp \
+        "$ROOT_DIR/tests/compiler/test_uncategorized.XXXXXX.casa")
+    trap 'rm -f "$uncategorized_fixture"' EXIT
+    status=0
+    output=$(tests/test_compiler.sh no-such-test 2>&1) || status=$?
+    rm -f "$uncategorized_fixture"
+    trap - EXIT
+    if [ "$status" -eq 0 ] || \
+        ! printf '%s\n' "$output" | \
+            grep -F "Uncategorized compiler test: test/" >/dev/null
+    then
+        printf "${RED}[FAIL]${RESET} Failed: compiler_categories (coverage)\n"
         printf '%s\n' "$output"
         compiler_categories_ok=false
     fi
