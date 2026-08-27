@@ -51,3 +51,4 @@ Always load the relevant doc when the matching workflow comes up:
 - **Issue tracker** — `docs/agents/issue-tracker.md`
 - **Triage labels** — `docs/agents/triage-labels.md`
 - **Domain docs** — `docs/agents/domain.md`
+- **Memory efficiency**: `docs/agents/memory.md`
