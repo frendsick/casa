@@ -11,6 +11,30 @@ view. `String` owns growable text and releases it during destruction. String
 indexes and lengths use bytes. Character iteration and reversal decode Unicode
 scalar values. Character classification and case conversion cover ASCII.
 
+## Choose a text type
+
+- Use `str` for literals, read-only parameters, and views into existing text.
+- Prefer a `$str` parameter when a function only reads text. A caller can pass a
+  literal or use `String.as_str` without allocation.
+- Use `String` when text must grow, be retained independently of an input
+  borrow, move into an owning value, or be returned as newly constructed text.
+- Return `str` only for static storage or a view tied to an input lifetime.
+  Return `String` for allocated or assembled text.
+- Convert explicitly at ownership boundaries. Do not allocate a `String` only
+  to pass read-only text to a function.
+
+This example passes both static and owned text to one read-only operation:
+
+```casa
+import "std"
+
+fn print_length text:$str { text.length print }
+
+"literal" print_length
+"owned".to_str = text
+text.as_str print_length
+```
+
 ## Text views
 
 | Method | Result or action |

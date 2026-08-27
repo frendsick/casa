@@ -177,9 +177,9 @@ A plain `T` parameter consumes an owned value. Non-Copy owners can be consumed
 only once:
 
 ```casa
-fn consume text:str { text drop }
+fn consume text:String { text drop }
 
-"one owner" = text
+"one owner".to_str = text
 text consume
 # text consume    # Error: text was already moved.
 ```
@@ -189,12 +189,12 @@ borrow an available owner automatically:
 
 ```casa
 fn length text:$str -> u64 { text.length }
-fn clear text:mut$str { text.clear }
+fn clear text:mut$String { text.clear }
 
-"Casa" = text
-text length print
+"Casa".to_str = text
+text.as_str length print
 text clear
-text length print
+text.as_str length print
 ```
 
 Shared borrows can be duplicated with `dup` and `over`, but they do not satisfy
