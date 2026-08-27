@@ -619,20 +619,10 @@ fn op_value_to_operator_kind op_value:mut$OpValue -> Option[OperatorKind] {
 struct TokenCursor {
     tokens: List[Token]
     pos:    u64
-    state:  ptr
 }
 
 impl TokenCursor {
-    # The cursor exists only inside `parse_ops`, whose Parser owns this state.
-    fn new tokens:List[Token] state:mut$ParseState -> TokenCursor {
-        # SAFETY: `parse_ops` keeps the Parser and its state alive until this cursor is destroyed.
-        unsafe { state (ptr) } 0 tokens TokenCursor
-    }
-
-    fn parse_state self:mut$TokenCursor -> mut$ParseState {
-        # SAFETY: `new` stores the live Parser state, and the cursor never escapes `parse_ops`.
-        unsafe { self.state ptr::as_mut[ParseState] }
-    }
+    fn new tokens:List[Token] -> TokenCursor { 0 tokens TokenCursor }
 
     fn pop self:mut$TokenCursor -> Option[Token] {
         self TokenCursor::pos copy = pos
@@ -715,26 +705,26 @@ fn is_parser_delimiter token:mut$Token -> bool {
 
 fn fallback_token -> Token { empty_location TokenKind::Eof "" Token::new }
 
-fn expect_token cursor:mut$TokenCursor -> Option[Token] {
+fn expect_token cursor:mut$TokenCursor state:mut$ParseState -> Option[Token] {
     cursor.pop = result_opt
     if result_opt.is_none then
-        empty_location "Unexpected end of input" ErrorKind::UnexpectedToken cursor.parse_state.record_error
-        cursor.parse_state.mark_output_unusable
-        cursor.parse_state.request_recovery
+        empty_location "Unexpected end of input" ErrorKind::UnexpectedToken state.record_error
+        state.mark_output_unusable
+        state.request_recovery
         Option::None return
     fi
     result_opt.unwrap = token
     if TokenKind::Eof token Token::kind == then
-        token Token::location "Unexpected end of input" ErrorKind::UnexpectedToken cursor.parse_state.record_error
-        cursor.parse_state.mark_output_unusable
-        cursor.parse_state.request_recovery
+        token Token::location "Unexpected end of input" ErrorKind::UnexpectedToken state.record_error
+        state.mark_output_unusable
+        state.request_recovery
         Option::None return
     fi
     token Option::Some
 }
 
-fn expect_token_value cursor:mut$TokenCursor expected:str -> Option[Token] {
-    cursor expect_token = token_opt
+fn expect_token_value cursor:mut$TokenCursor expected:str state:mut$ParseState -> Option[Token] {
+    state cursor expect_token = token_opt
     if token_opt.is_none then
         Option::None return
     fi
@@ -746,23 +736,27 @@ fn expect_token_value cursor:mut$TokenCursor expected:str -> Option[Token] {
         token Token::location
         "Unexpected token"
         ErrorKind::UnexpectedToken
-        cursor.parse_state.record_error_expected
-        cursor.parse_state.request_recovery
+        state.record_error_expected
+        state.request_recovery
         Option::None return
     fi
     token Option::Some
 }
 
-fn expect_token_kind cursor:mut$TokenCursor expected_kind:TokenKind -> Option[Token] {
-    cursor expect_token = token_opt
+fn expect_token_kind
+    cursor:mut$TokenCursor
+    expected_kind:TokenKind
+    state:mut$ParseState
+-> Option[Token] {
+    state cursor expect_token = token_opt
     if token_opt.is_none then
         Option::None return
     fi
     token_opt.unwrap = token
     if expected_kind token Token::kind != then
         cursor.retreat
-        token Token::location "Unexpected token" ErrorKind::UnexpectedToken cursor.parse_state.record_error
-        cursor.parse_state.request_recovery
+        token Token::location "Unexpected token" ErrorKind::UnexpectedToken state.record_error
+        state.request_recovery
         Option::None return
     fi
     token Option::Some
@@ -801,10 +795,10 @@ fn is_type_argument_literal value:$str -> bool {
     value char_literal_codepoint.is_some
 }
 
-fn parse_type_ast cursor:mut$TokenCursor -> Type {
+fn parse_type_ast cursor:mut$TokenCursor state:mut$ParseState -> Type {
     cursor.peek = peek_opt
     if peek_opt.is_none then
-        empty_location "Expected type" ErrorKind::UnexpectedToken cursor.parse_state.record_error
+        empty_location "Expected type" ErrorKind::UnexpectedToken state.record_error
         Type::Unknown return
     fi
     peek_opt.unwrap = peek
@@ -815,12 +809,12 @@ fn parse_type_ast cursor:mut$TokenCursor -> Type {
         cursor.pop drop
         "fn" = base
     else
-        fallback_token cursor expect_token.unwrap_or = base_token
+        fallback_token state cursor expect_token.unwrap_or = base_token
         if
             TokenKind::Identifier base_token Token::kind !=
             base_token Token::value is_type_argument_literal ! &&
         then
-            base_token Token::location "Expected type name" ErrorKind::UnexpectedToken cursor.parse_state.record_error
+            base_token Token::location "Expected type name" ErrorKind::UnexpectedToken state.record_error
         fi
         base_token Token::value.clone = base
     fi
@@ -835,7 +829,7 @@ fn parse_type_ast cursor:mut$TokenCursor -> Type {
     fi
     if base "$" str::starts_with base "mut$" str::starts_with || then
         peek.location "Nested borrow qualifiers are not supported" ErrorKind::Syntax
-        cursor.parse_state.record_error
+        state.record_error
         Type::Unknown return
     fi
 
@@ -875,7 +869,7 @@ fn parse_type_ast cursor:mut$TokenCursor -> Type {
                 true = past_arrow
                 continue
             fi
-            cursor parse_type_ast = inner_type
+            state cursor parse_type_ast = inner_type
             if past_arrow then
                 inner_type fn_returns.push
             else
@@ -894,10 +888,10 @@ fn parse_type_ast cursor:mut$TokenCursor -> Type {
                 break
             fi
         fi
-        cursor parse_type_ast inner_types.push
+        state cursor parse_type_ast inner_types.push
     done
     if 0 inner_types.length == then
-        empty_location f"Expected type parameter inside `{base}[...]`" ErrorKind::UnexpectedToken cursor.parse_state.record_error
+        empty_location f"Expected type parameter inside `{base}[...]`" ErrorKind::UnexpectedToken state.record_error
     fi
     borrow_prefix inner_types base GenericType Type::Generic apply_borrow_type
 }
@@ -906,10 +900,10 @@ fn parse_type_ast cursor:mut$TokenCursor -> Type {
 # get_op_type_cast - parse (type) cast
 # ============================================================================
 
-fn get_op_type_cast cursor:mut$TokenCursor -> Op {
-    fallback_token "(" cursor expect_token_value.unwrap_or = open_token
-    cursor parse_type_ast = cast_type
-    fallback_token ")" cursor expect_token_value.unwrap_or = close_token
+fn get_op_type_cast cursor:mut$TokenCursor state:mut$ParseState -> Op {
+    fallback_token state "(" cursor expect_token_value.unwrap_or = open_token
+    state cursor parse_type_ast = cast_type
+    fallback_token state ")" cursor expect_token_value.unwrap_or = close_token
 
     open_token Token::location Location::span Span::offset = open_offset
     close_token Token::location Location::span Span::offset = close_offset
@@ -939,7 +933,7 @@ fn char_literal_codepoint value:$str -> Option[i64] {
     Option[i64]::None
 }
 
-fn get_op_literal token:mut$Token cursor:mut$TokenCursor -> Op {
+fn get_op_literal token:mut$Token cursor:mut$TokenCursor state:mut$ParseState -> Op {
     token Token::value = value: $str
     if "true" value == then
         token Token::location 1 OpValue::PushBool Op::new return
@@ -965,7 +959,7 @@ fn get_op_literal token:mut$Token cursor:mut$TokenCursor -> Op {
         value 1 value_length 2 - str::substring = str_value
         token Token::location str_value OpValue::PushStr Op::new return
     fi
-    token Token::location f"Token `{value}` is not a literal" ErrorKind::Syntax cursor.parse_state.record_error
+    token Token::location f"Token `{value}` is not a literal" ErrorKind::Syntax state.record_error
     token Token::location 0 make_integer_op_value Op::new
 }
 
@@ -973,24 +967,24 @@ fn get_op_literal token:mut$Token cursor:mut$TokenCursor -> Op {
 # get_op_intrinsic - convert intrinsic token to op
 # ============================================================================
 
-fn get_op_intrinsic token:mut$Token cursor:mut$TokenCursor -> Op {
+fn get_op_intrinsic token:mut$Token cursor:mut$TokenCursor state:mut$ParseState -> Op {
     token Token::value intrinsic_from_str = kind_opt
     if kind_opt Option::Some(kind) is then
         kind copy = intrinsic_kind
         if intrinsic_kind IntrinsicKind::SizeOf == then
-            fallback_token "[" cursor expect_token_value.unwrap_or drop
-            cursor parse_type_ast = target_type
-            fallback_token "]" cursor expect_token_value.unwrap_or drop
+            fallback_token state "[" cursor expect_token_value.unwrap_or drop
+            state cursor parse_type_ast = target_type
+            fallback_token state "]" cursor expect_token_value.unwrap_or drop
             token Token::location target_type OpValue::SizeOf Op::new return
         fi
         intrinsic_kind intrinsic_to_op_value match
             Option::Some(op_value) => token Token::location op_value Op::new return
             Option::None => {
-                token Token::location f"No OpValue for intrinsic `{token Token::value}`" ErrorKind::Syntax cursor.parse_state.record_error
+                token Token::location f"No OpValue for intrinsic `{token Token::value}`" ErrorKind::Syntax state.record_error
             }
         end
     else
-        token Token::location f"Token `{token Token::value}` is not an intrinsic" ErrorKind::Syntax cursor.parse_state.record_error
+        token Token::location f"Token `{token Token::value}` is not an intrinsic" ErrorKind::Syntax state.record_error
     fi
     token Token::location 0 make_integer_op_value Op::new
 }
@@ -999,25 +993,30 @@ fn get_op_intrinsic token:mut$Token cursor:mut$TokenCursor -> Op {
 # get_op_operator - convert operator token to op
 # ============================================================================
 
-fn parse_assignment_target cursor:mut$TokenCursor -> Location str {
-    fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = root_token
+fn parse_assignment_target cursor:mut$TokenCursor state:mut$ParseState -> Location str {
+    fallback_token state TokenKind::Identifier cursor expect_token_kind.unwrap_or = root_token
     root_token Token::value.clone = target
     while "." cursor expect_delimiter do
-        fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or Token::value = field: $str
+        fallback_token state TokenKind::Identifier cursor expect_token_kind.unwrap_or Token::value = field: $str
         f"{target}.{field}" = target
     done
     root_token Token::location.clone
     target
 }
 
-fn get_op_operator token:mut$Token cursor:mut$TokenCursor function_name:mut$str -> Op {
+fn get_op_operator
+    token:mut$Token
+    cursor:mut$TokenCursor
+    function_name:mut$str
+    state:mut$ParseState
+-> Op {
     token Token::value operator_from_str = kind_opt
     if kind_opt Option::Some(kind) is then
         kind copy = operator_kind
 
         # Assignment: = varname
         if OperatorKind::Assign operator_kind == then
-            cursor parse_assignment_target = var_name = target_location
+            state cursor parse_assignment_target = var_name = target_location
 
             # Optional type annotation: = varname : type
             Option[Type]::None = type_hint
@@ -1025,7 +1024,7 @@ fn get_op_operator token:mut$Token cursor:mut$TokenCursor function_name:mut$str 
             if colon_opt Option::Some(colon) is then
                 if ":" colon Token::value == then
                     cursor.advance
-                    cursor parse_type_ast Option::Some = type_hint
+                    state cursor parse_type_ast Option::Some = type_hint
                 fi
             fi
             target_location var_name OpValue::AssignVar Op::new = assign_op
@@ -1035,13 +1034,13 @@ fn get_op_operator token:mut$Token cursor:mut$TokenCursor function_name:mut$str 
 
         # Compound assignment: += varname
         if OperatorKind::AssignInc operator_kind == then
-            cursor parse_assignment_target = inc_target = inc_location
+            state cursor parse_assignment_target = inc_target = inc_location
             inc_location inc_target OpValue::AssignInc Op::new return
         fi
 
         # Compound assignment: -= varname
         if OperatorKind::AssignDec operator_kind == then
-            cursor parse_assignment_target = dec_target = dec_location
+            state cursor parse_assignment_target = dec_target = dec_location
             dec_location dec_target OpValue::AssignDec Op::new return
         fi
 
@@ -1049,11 +1048,11 @@ fn get_op_operator token:mut$Token cursor:mut$TokenCursor function_name:mut$str 
         operator_kind operator_to_op_value match
             Option::Some(op_value) => token Token::location op_value Op::new return
             Option::None => {
-                token Token::location f"No OpValue for operator `{token Token::value}`" ErrorKind::Syntax cursor.parse_state.record_error
+                token Token::location f"No OpValue for operator `{token Token::value}`" ErrorKind::Syntax state.record_error
             }
         end
     else
-        token Token::location f"Token `{token Token::value}` is not an operator" ErrorKind::Syntax cursor.parse_state.record_error
+        token Token::location f"Token `{token Token::value}` is not an operator" ErrorKind::Syntax state.record_error
     fi
     token Token::location 0 make_integer_op_value Op::new
 }
@@ -1094,7 +1093,7 @@ fn parse_array_lambda
 }
 
 fn get_op_array parser:mut$Parser function_name:mut$str cursor:mut$TokenCursor -> Op {
-    fallback_token "[" cursor expect_token_value.unwrap_or = open_token
+    fallback_token parser.state "[" cursor expect_token_value.unwrap_or = open_token
     List[Op]::new = items
     while true do
         # Close on `]` (also reached after an optional trailing comma).
@@ -1126,7 +1125,7 @@ fn get_op_array parser:mut$Parser function_name:mut$str cursor:mut$TokenCursor -
             if "{" value_token Token::value == then
                 items value_token cursor function_name parser parse_array_lambda
             elif TokenKind::Literal value_token Token::kind == then
-                cursor value_token get_op_literal items.push
+                parser.state cursor value_token get_op_literal items.push
             elif TokenKind::Identifier value_token Token::kind == then
                 cursor.peek = struct_peek_opt
                 if struct_peek_opt Option::Some(struct_peek) is then
@@ -1175,7 +1174,7 @@ fn get_op_array parser:mut$Parser function_name:mut$str cursor:mut$TokenCursor -
 # ============================================================================
 
 fn parse_block_ops parser:mut$Parser cursor:mut$TokenCursor function_name:mut$str -> List[Op] {
-    fallback_token "{" cursor expect_token_value.unwrap_or = open_token
+    fallback_token parser.state "{" cursor expect_token_value.unwrap_or = open_token
     List[Op]::new = ops
     while true do
         cursor.pop = token_opt
@@ -1288,7 +1287,7 @@ fn get_op_delimiter
 
     # Dot . method
     if "." value == then
-        cursor expect_function_name = method_token
+        parser.state cursor expect_function_name = method_token
         if parser.syntax_only then
             method_token Token::location Location::span Span::offset
             token Token::location Location::span Span::offset
@@ -1319,7 +1318,7 @@ fn get_op_delimiter
     # Open paren ( -> type cast
     if "(" value == then
         cursor.retreat
-        cursor get_op_type_cast ops.push
+        parser.state cursor get_op_type_cast ops.push
         return
     fi
 
@@ -1424,7 +1423,11 @@ impl ParsedTypeVariables {
 # consumed the trait identifier. If the next token is not `[`, returns an
 # empty list. Otherwise parses each argument as a Type AST value.
 
-fn parse_bound_type_args cursor:mut$TokenCursor trait_token:mut$Token -> List[Type] {
+fn parse_bound_type_args
+    cursor:mut$TokenCursor
+    trait_token:mut$Token
+    state:mut$ParseState
+-> List[Type] {
     List[Type]::new = bound_args
     cursor.peek = bracket_opt
     if bracket_opt.is_none then
@@ -1439,8 +1442,8 @@ fn parse_bound_type_args cursor:mut$TokenCursor trait_token:mut$Token -> List[Ty
     while true do
         cursor.peek = argument_token_option
         if argument_token_option.is_none then
-            trait_token Token::location "Unclosed trait bound type argument list" ErrorKind::Syntax cursor.parse_state.record_error
-            cursor.parse_state.mark_output_unusable
+            trait_token Token::location "Unclosed trait bound type argument list" ErrorKind::Syntax state.record_error
+            state.mark_output_unusable
             bound_args return
         fi
         argument_token_option.unwrap Token::value = argument_value: $str
@@ -1452,7 +1455,7 @@ fn parse_bound_type_args cursor:mut$TokenCursor trait_token:mut$Token -> List[Ty
             cursor.pop drop
             continue
         fi
-        cursor parse_type_ast bound_args.push
+        state cursor parse_type_ast bound_args.push
     done
     bound_args
 }
@@ -1553,7 +1556,7 @@ fn bound_is_compatible
 }
 
 fn parse_type_variables parser:mut$Parser cursor:mut$TokenCursor -> ParsedTypeVariables {
-    fallback_token "[" cursor expect_token_value.unwrap_or drop
+    fallback_token parser.state "[" cursor expect_token_value.unwrap_or drop
     List[str]::new = vars
     Set[str]::new = seen
     Map[str List[TraitBound]]::new = trait_bounds
@@ -1604,7 +1607,7 @@ fn parse_type_variables parser:mut$Parser cursor:mut$TokenCursor -> ParsedTypeVa
                     List[TraitBound]::new = bounds
                     true = parse_bounds
                     while parse_bounds do
-                        fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = trait_token
+                        fallback_token parser.state TokenKind::Identifier cursor expect_token_kind.unwrap_or = trait_token
                         trait_token Token::value.clone = bound_trait_name
                         bound_trait_name parser
                             .store
@@ -1613,7 +1616,7 @@ fn parse_type_variables parser:mut$Parser cursor:mut$TokenCursor -> ParsedTypeVa
                         if bound_trait_def_opt.is_none parser.syntax_only ! && then
                             trait_token Token::location f"Trait `{bound_trait_name}` is not defined" ErrorKind::UndefinedName parser.state.record_error
                         fi
-                        trait_token cursor parse_bound_type_args = bound_args
+                        parser.state trait_token cursor parse_bound_type_args = bound_args
                         if bound_trait_def_opt Option::Some(bound_trait_def) is then
                             bound_trait_def CasaTrait::type_params = declared_params: $List[str]
                             if bound_args.length declared_params.length != then
@@ -1666,7 +1669,7 @@ fn parse_const_type_parameter
     seen:mut$Set[str]
     const_params:Map[str BuiltinType]
 -> Map[str BuiltinType] {
-    fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
+    fallback_token parser.state TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
     if
         name_token Token::value parser
             .store
@@ -1680,8 +1683,8 @@ fn parse_const_type_parameter
     fi
     name_token Token::value.clone vars.push
     name_token Token::value.clone seen.add
-    fallback_token ":" cursor expect_token_value.unwrap_or drop
-    fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = type_token
+    fallback_token parser.state ":" cursor expect_token_value.unwrap_or drop
+    fallback_token parser.state TokenKind::Identifier cursor expect_token_kind.unwrap_or = type_token
     type_token Token::value parse_builtin = builtin_opt
     if builtin_opt Option::Some(const_builtin) is then
         if const_builtin const_type_parameter_type_allowed ! then
@@ -1822,24 +1825,28 @@ fn inject_constant_parameters
 # named parameter (`name:type`) if the next token is `:`, or an unnamed
 # parameter by rewinding and re-parsing as a type expression.
 
-fn parse_parameter_maybe_named cursor:mut$TokenCursor token:mut$Token -> Parameter {
+fn parse_parameter_maybe_named
+    cursor:mut$TokenCursor
+    token:mut$Token
+    state:mut$ParseState
+-> Parameter {
     cursor.peek = next_opt
     if { Token::value ":" == } next_opt.filter.is_some then
         cursor.advance # consume :
-        cursor parse_type_ast = param_type
+        state cursor parse_type_ast = param_type
         token Token::value param_type Parameter::named return
     fi
     cursor.retreat
-    "" cursor parse_type_ast Parameter::named
+    "" state cursor parse_type_ast Parameter::named
 }
 
-fn parse_parameters cursor:mut$TokenCursor -> List[Parameter] {
+fn parse_parameters cursor:mut$TokenCursor state:mut$ParseState -> List[Parameter] {
     List[Parameter]::new = params
     while true do
         cursor.pop = token_opt
         if token_opt.is_none then
-            empty_location "Unexpected end of input" ErrorKind::UnexpectedToken cursor.parse_state.record_error
-            cursor.parse_state.mark_output_unusable
+            empty_location "Unexpected end of input" ErrorKind::UnexpectedToken state.record_error
+            state.mark_output_unusable
             params return
         fi
         token_opt.unwrap = token
@@ -1853,15 +1860,15 @@ fn parse_parameters cursor:mut$TokenCursor -> List[Parameter] {
         # Allow fn keyword as unnamed parameter type
         if "fn" token Token::value == then
             cursor.retreat
-            "" cursor parse_type_ast Parameter::named params.push
+            "" state cursor parse_type_ast Parameter::named params.push
             continue
         fi
 
         if TokenKind::Identifier token Token::kind != then
-            token Token::location "Unexpected token in parameter list" ErrorKind::UnexpectedToken cursor.parse_state.record_error
+            token Token::location "Unexpected token in parameter list" ErrorKind::UnexpectedToken state.record_error
         fi
 
-        token cursor parse_parameter_maybe_named params.push
+        state token cursor parse_parameter_maybe_named params.push
     done
     params
 }
@@ -1870,13 +1877,13 @@ fn parse_parameters cursor:mut$TokenCursor -> List[Parameter] {
 # parse_return_types - parse return types after ->
 # ============================================================================
 
-fn parse_return_types cursor:mut$TokenCursor -> List[Type] {
+fn parse_return_types cursor:mut$TokenCursor state:mut$ParseState -> List[Type] {
     List[Type]::new = types
     while true do
         cursor.peek = peek_opt
         if peek_opt.is_none then
-            empty_location "Unexpected end of input" ErrorKind::UnexpectedToken cursor.parse_state.record_error
-            cursor.parse_state.mark_output_unusable
+            empty_location "Unexpected end of input" ErrorKind::UnexpectedToken state.record_error
+            state.mark_output_unusable
             types return
         fi
         if peek_opt Option::Some(peek) is then
@@ -1884,7 +1891,7 @@ fn parse_return_types cursor:mut$TokenCursor -> List[Type] {
                 types return
             fi
         fi
-        cursor parse_type_ast types.push
+        state cursor parse_type_ast types.push
     done
     types
 }
@@ -1893,20 +1900,20 @@ fn parse_return_types cursor:mut$TokenCursor -> List[Type] {
 # parse_stack_effect - parse function stack effect
 # ============================================================================
 
-fn parse_stack_effect cursor:mut$TokenCursor -> StackEffect {
-    cursor parse_parameters = params
+fn parse_stack_effect cursor:mut$TokenCursor state:mut$ParseState -> StackEffect {
+    state cursor parse_parameters = params
     List[Type]::new = returns
 
     cursor.peek = next_opt
     if next_opt.is_none then
-        empty_location "Unexpected end of input" ErrorKind::UnexpectedToken cursor.parse_state.record_error
-        cursor.parse_state.mark_output_unusable
+        empty_location "Unexpected end of input" ErrorKind::UnexpectedToken state.record_error
+        state.mark_output_unusable
         returns params StackEffect::new return
     fi
     if next_opt Option::Some(next) is then
         if "->" next Token::value == then
             cursor.advance # consume ->
-            cursor parse_return_types = returns
+            state cursor parse_return_types = returns
         fi
     fi
     returns params StackEffect::new
@@ -2449,7 +2456,7 @@ fn eval_const_block
     cursor:mut$TokenCursor
     location:mut$Location
 -> ConstantValue {
-    fallback_token "{" cursor expect_token_value.unwrap_or drop
+    fallback_token parser.state "{" cursor expect_token_value.unwrap_or drop
     List[ConstantValue]::new = stack
     List[str]::new = eval_stack
     while true do
@@ -2522,18 +2529,18 @@ fn eval_const_block
 # parse_function - parse function definition
 # ============================================================================
 
-fn expect_function_name cursor:mut$TokenCursor -> Token {
+fn expect_function_name cursor:mut$TokenCursor state:mut$ParseState -> Token {
     if cursor.peek Option::Some(token) is then
         if "drop" token.value == then
             cursor.pop.unwrap return
         fi
     fi
-    fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or
+    fallback_token state TokenKind::Identifier cursor expect_token_kind.unwrap_or
 }
 
 fn parse_function parser:mut$Parser cursor:mut$TokenCursor -> Function {
-    fallback_token "fn" cursor expect_token_value.unwrap_or = fn_token
-    cursor expect_function_name = name_token
+    fallback_token parser.state "fn" cursor expect_token_value.unwrap_or = fn_token
+    parser.state cursor expect_function_name = name_token
 
     # Parse optional type parameters
     List[str]::new = type_vars
@@ -2554,7 +2561,7 @@ fn parse_function parser:mut$Parser cursor:mut$TokenCursor -> Function {
         fi
     fi
 
-    cursor parse_stack_effect = effect
+    parser.state cursor parse_stack_effect = effect
 
     # Rewrite signature const params to symbolic constants so unification treats
     # them as constants, not type variables (ADR-0152).
@@ -2634,7 +2641,7 @@ fn parse_function parser:mut$Parser cursor:mut$TokenCursor -> Function {
 # parse_enum - parse enum definition
 # ============================================================================
 
-fn parse_derived_traits cursor:mut$TokenCursor -> List[str] {
+fn parse_derived_traits cursor:mut$TokenCursor state:mut$ParseState -> List[str] {
     List[str]::new = derived_traits
     if cursor.peek Option::Some(token) is then
         if "derives" token.value != then
@@ -2646,7 +2653,7 @@ fn parse_derived_traits cursor:mut$TokenCursor -> List[str] {
                 if "{" derived.value == then
                     break
                 fi
-                fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or
+                fallback_token state TokenKind::Identifier cursor expect_token_kind.unwrap_or
                 Token::value.clone derived_traits.push
             else
                 break
@@ -2657,8 +2664,8 @@ fn parse_derived_traits cursor:mut$TokenCursor -> List[str] {
 }
 
 fn parse_enum parser:mut$Parser cursor:mut$TokenCursor -> CasaEnum {
-    fallback_token "enum" cursor expect_token_value.unwrap_or drop
-    fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
+    fallback_token parser.state "enum" cursor expect_token_value.unwrap_or drop
+    fallback_token parser.state TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
 
     # Parse optional type parameters
     List[str]::new = type_vars
@@ -2672,15 +2679,15 @@ fn parse_enum parser:mut$Parser cursor:mut$TokenCursor -> CasaEnum {
         fi
     fi
 
-    cursor parse_derived_traits = derived_traits
+    parser.state cursor parse_derived_traits = derived_traits
 
-    fallback_token "{" cursor expect_token_value.unwrap_or = enum_open_token
+    fallback_token parser.state "{" cursor expect_token_value.unwrap_or = enum_open_token
     List[str]::new = variants
     Map[str List[Type]]::new = variant_types
     Map[str Location]::new = variant_locations
 
     while true do
-        fallback_token cursor expect_token.unwrap_or = variant_token
+        fallback_token parser.state cursor expect_token.unwrap_or = variant_token
         if "}" variant_token Token::value == then
             if parser.syntax_only then
                 variant_token Token::location Location::span Span::offset
@@ -2717,7 +2724,7 @@ fn parse_enum parser:mut$Parser cursor:mut$TokenCursor -> CasaEnum {
                             break
                         fi
                     fi
-                    cursor parse_type_ast inner_types.push
+                    parser.state cursor parse_type_ast inner_types.push
                 done
                 if 0 inner_types.length == then
                     variant_token Token::location "Variant inner types cannot be empty" ErrorKind::Syntax parser.state.record_error
@@ -3081,8 +3088,8 @@ fn create_member_accessor
 # ============================================================================
 
 fn parse_struct parser:mut$Parser cursor:mut$TokenCursor -> CasaStruct {
-    fallback_token "struct" cursor expect_token_value.unwrap_or drop
-    fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
+    fallback_token parser.state "struct" cursor expect_token_value.unwrap_or drop
+    fallback_token parser.state TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
 
     # Parse optional type parameters
     List[str]::new = type_vars
@@ -3099,14 +3106,14 @@ fn parse_struct parser:mut$Parser cursor:mut$TokenCursor -> CasaStruct {
         fi
     fi
 
-    cursor parse_derived_traits = derived_traits
+    parser.state cursor parse_derived_traits = derived_traits
 
     List[Member]::new = members
     type_vars string_list_to_set = struct_type_vars
-    fallback_token "{" cursor expect_token_value.unwrap_or = struct_open_token
+    fallback_token parser.state "{" cursor expect_token_value.unwrap_or = struct_open_token
 
     while true do
-        fallback_token cursor expect_token.unwrap_or = member_token
+        fallback_token parser.state cursor expect_token.unwrap_or = member_token
         if "}" member_token Token::value == then
             if parser.syntax_only then
                 member_token Token::location Location::span Span::offset
@@ -3118,8 +3125,8 @@ fn parse_struct parser:mut$Parser cursor:mut$TokenCursor -> CasaStruct {
         if TokenKind::Identifier member_token Token::kind != then
             member_token Token::location "Expected member name" ErrorKind::UnexpectedToken parser.state.record_error
         fi
-        fallback_token ":" cursor expect_token_value.unwrap_or drop
-        cursor parse_type_ast = member_type
+        fallback_token parser.state ":" cursor expect_token_value.unwrap_or drop
+        parser.state cursor parse_type_ast = member_type
         struct_type_vars member_type canonicalize_type_var = member_type
 
         type_vars member_token Token::location members member_type member_token Token::value name_token Token::value parser create_member_accessor
@@ -3133,7 +3140,7 @@ fn parse_struct parser:mut$Parser cursor:mut$TokenCursor -> CasaStruct {
 # parse_trait - parse trait definition
 # ============================================================================
 
-fn parse_trait_method_stack_effect cursor:mut$TokenCursor -> StackEffect {
+fn parse_trait_method_stack_effect cursor:mut$TokenCursor state:mut$ParseState -> StackEffect {
     List[Parameter]::new = params
 
     # Parse parameters, stopping at ->, fn, or }
@@ -3157,10 +3164,10 @@ fn parse_trait_method_stack_effect cursor:mut$TokenCursor -> StackEffect {
             TokenKind::Identifier peek Token::kind !=
             "fn" peek Token::value != &&
         then
-            peek Token::location "Unexpected token in trait method parameter list" ErrorKind::UnexpectedToken cursor.parse_state.record_error
+            peek Token::location "Unexpected token in trait method parameter list" ErrorKind::UnexpectedToken state.record_error
         fi
 
-        peek cursor parse_parameter_maybe_named params.push
+        state peek cursor parse_parameter_maybe_named params.push
     done
 
     List[Type]::new = returns
@@ -3181,7 +3188,7 @@ fn parse_trait_method_stack_effect cursor:mut$TokenCursor -> StackEffect {
                 then
                     break
                 fi
-                cursor parse_type_ast returns.push
+                state cursor parse_type_ast returns.push
             done
         fi
     fi
@@ -3193,15 +3200,15 @@ fn parse_trait_method_stack_effect cursor:mut$TokenCursor -> StackEffect {
 # into error messages. Does *not* accept trait bounds; for those use
 # `parse_type_variables`.
 
-fn parse_simple_type_vars cursor:mut$TokenCursor context:str -> List[str] {
+fn parse_simple_type_vars cursor:mut$TokenCursor context:str state:mut$ParseState -> List[str] {
     cursor.pop drop # consume [
     List[str]::new = collected
     true = loop_flag
     while loop_flag do
         cursor.peek = token_opt
         if token_opt.is_none then
-            empty_location f"Unclosed {context} type parameter list" ErrorKind::UnmatchedBlock cursor.parse_state.record_error
-            cursor.parse_state.mark_output_unusable
+            empty_location f"Unclosed {context} type parameter list" ErrorKind::UnmatchedBlock state.record_error
+            state.mark_output_unusable
             false = loop_flag
         else
             token_opt.unwrap = token
@@ -3209,7 +3216,7 @@ fn parse_simple_type_vars cursor:mut$TokenCursor context:str -> List[str] {
                 cursor.pop drop
                 false = loop_flag
             elif TokenKind::Identifier token Token::kind != then
-                token Token::location f"Expected type parameter identifier in {context}" ErrorKind::UnexpectedToken cursor.parse_state.record_error
+                token Token::location f"Expected type parameter identifier in {context}" ErrorKind::UnexpectedToken state.record_error
                 false = loop_flag
             else
                 cursor.pop drop
@@ -3221,13 +3228,13 @@ fn parse_simple_type_vars cursor:mut$TokenCursor context:str -> List[str] {
 }
 
 fn parse_trait parser:mut$Parser cursor:mut$TokenCursor -> CasaTrait {
-    fallback_token "trait" cursor expect_token_value.unwrap_or drop
-    fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
+    fallback_token parser.state "trait" cursor expect_token_value.unwrap_or drop
+    fallback_token parser.state TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
 
     List[str]::new = type_params
     cursor.peek = bracket_opt
     if { Token::value "[" == } bracket_opt.filter.is_some then
-        "trait" cursor parse_simple_type_vars = type_params
+        parser.state "trait" cursor parse_simple_type_vars = type_params
     fi
 
     List[TraitBound]::new = supertraits
@@ -3236,13 +3243,13 @@ fn parse_trait parser:mut$Parser cursor:mut$TokenCursor -> CasaTrait {
         cursor.pop drop
         true = parse_super_loop
         while parse_super_loop do
-            fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = super_token
+            fallback_token parser.state TokenKind::Identifier cursor expect_token_kind.unwrap_or = super_token
             super_token Token::value.clone = super_name
             super_name parser
                 .store
                 .traits
                 .get = super_def_opt
-            super_token cursor parse_bound_type_args = super_args
+            parser.state super_token cursor parse_bound_type_args = super_args
             if super_def_opt Option::Some(super_def) is then
                 super_def CasaTrait::type_params = super_params: $List[str]
                 if super_args.length super_params.length != then
@@ -3260,7 +3267,7 @@ fn parse_trait parser:mut$Parser cursor:mut$TokenCursor -> CasaTrait {
     fi
 
     List[TraitMethod]::new = methods
-    fallback_token "{" cursor expect_token_value.unwrap_or drop
+    fallback_token parser.state "{" cursor expect_token_value.unwrap_or drop
 
     true = parse_trait_loop
     while parse_trait_loop do
@@ -3279,7 +3286,7 @@ fn parse_trait parser:mut$Parser cursor:mut$TokenCursor -> CasaTrait {
             else
                 next Token::location Location::span Span::offset = trait_fn_offset
                 cursor.pop drop # consume fn
-                cursor expect_function_name = method_name
+                parser.state cursor expect_function_name = method_name
                 if "drop" method_name Token::value == then
                     method_name Token::location "`drop` is reserved for inherent cleanup methods" ErrorKind::InvalidScope parser.state.record_error
                 fi
@@ -3288,11 +3295,11 @@ fn parse_trait parser:mut$Parser cursor:mut$TokenCursor -> CasaTrait {
                 List[str]::new = method_type_vars
                 if cursor.peek Option::Some(mtv_bracket) is then
                     if "[" mtv_bracket Token::value == then
-                        "trait method" cursor parse_simple_type_vars = method_type_vars
+                        parser.state "trait method" cursor parse_simple_type_vars = method_type_vars
                     fi
                 fi
 
-                cursor parse_trait_method_stack_effect = method_stack_effect
+                parser.state cursor parse_trait_method_stack_effect = method_stack_effect
 
                 type_params string_list_to_set = trait_tv_set
                 TRAIT_SELF_TYPE trait_tv_set.add
@@ -3949,9 +3956,13 @@ fn type_is_known_inhabited typ:$Type store:$SymbolStore inhabited:$Set[str] -> b
         Type::Generic(generic) => {
             if ARRAY_TYPE generic.base == then
                 if typ get_concrete_array_length Option::Some(length) is then
-                    if 0 length == then true return fi
+                    if 0 length == then
+                        true return
+                    fi
                 fi
-                if 0 generic.params.length == then false return fi
+                if 0 generic.params.length == then
+                    false return
+                fi
                 inhabited store 0 generic.params.get type_is_known_inhabited
             elif generic.base store.structs.has generic.base store.enums.has || then
                 generic.base inhabited.has
@@ -3972,8 +3983,16 @@ fn validate_inhabited_aggregates parser:mut$Parser {
     true = changed
     while changed do
         false = changed
-        for casa_struct in parser.store.structs.values.iter do
-            if casa_struct.name inhabited.has then continue fi
+        for
+            casa_struct in parser
+                .store
+                .structs
+                .values
+                .iter
+        do
+            if casa_struct.name inhabited.has then
+                continue
+            fi
             true = fields_inhabited
             for member in casa_struct.members.iter do
                 if inhabited parser.store member.typ type_is_known_inhabited ! then
@@ -3986,8 +4005,16 @@ fn validate_inhabited_aggregates parser:mut$Parser {
                 true = changed
             fi
         done
-        for casa_enum in parser.store.enums.values.iter do
-            if casa_enum.name inhabited.has then continue fi
+        for
+            casa_enum in parser
+                .store
+                .enums
+                .values
+                .iter
+        do
+            if casa_enum.name inhabited.has then
+                continue
+            fi
             false = enum_inhabited
             for pair in casa_enum.variant_types.iter do
                 true = variant_inhabited
@@ -4009,14 +4036,26 @@ fn validate_inhabited_aggregates parser:mut$Parser {
         done
     done
 
-    for casa_struct in parser.store.structs.values.iter do
+    for
+        casa_struct in parser
+            .store
+            .structs
+            .values
+            .iter
+    do
         if casa_struct.name inhabited.has ! then
             casa_struct.location
             f"Type `{casa_struct.name}` has no finite safe value; add `Option` or an enum leaf variant"
             ErrorKind::TypeMismatch parser.state.record_error
         fi
     done
-    for casa_enum in parser.store.enums.values.iter do
+    for
+        casa_enum in parser
+            .store
+            .enums
+            .values
+            .iter
+    do
         if casa_enum.name inhabited.has ! then
             casa_enum.location
             f"Type `{casa_enum.name}` has no finite safe value; add an enum leaf variant"
@@ -4486,7 +4525,7 @@ fn finalize_trait_impl_methods parser:mut$Parser skip_functions:$Set[str] {
 }
 
 fn parse_impl_block parser:mut$Parser cursor:mut$TokenCursor {
-    fallback_token "impl" cursor expect_token_value.unwrap_or = impl_token
+    fallback_token parser.state "impl" cursor expect_token_value.unwrap_or = impl_token
 
     # Parse optional type parameters with trait bounds
     List[str]::new = type_vars
@@ -4507,7 +4546,7 @@ fn parse_impl_block parser:mut$Parser cursor:mut$TokenCursor {
         fi
     fi
 
-    cursor parse_type_ast = impl_type
+    parser.state cursor parse_type_ast = impl_type
     type_vars string_list_to_set = type_var_set
     type_var_set impl_type canonicalize_type_var = impl_type
     # Constant parameters in the implemented type are constants, not type
@@ -4527,8 +4566,8 @@ fn parse_impl_block parser:mut$Parser cursor:mut$TokenCursor {
             cursor.pop drop
             true = parse_implemented_traits
             while parse_implemented_traits do
-                fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = trait_token
-                trait_token cursor parse_bound_type_args = trait_args
+                fallback_token parser.state TokenKind::Identifier cursor expect_token_kind.unwrap_or = trait_token
+                parser.state trait_token cursor parse_bound_type_args = trait_args
                 trait_token.value parser
                     .store
                     .traits
@@ -4562,7 +4601,7 @@ fn parse_impl_block parser:mut$Parser cursor:mut$TokenCursor {
         fi
     fi
 
-    fallback_token "{" cursor expect_token_value.unwrap_or drop
+    fallback_token parser.state "{" cursor expect_token_value.unwrap_or drop
     while true do
         cursor.peek = fn_opt
         if fn_opt.is_none then
@@ -4607,7 +4646,7 @@ fn parse_impl_block parser:mut$Parser cursor:mut$TokenCursor {
         fi
         function fn_name parser.put_function
     done
-    fallback_token "}" cursor expect_token_value.unwrap_or drop
+    fallback_token parser.state "}" cursor expect_token_value.unwrap_or drop
 
     for implemented_trait in implemented_traits.iter do
         Map[str str]::new = cloned_methods
@@ -4706,7 +4745,7 @@ fn parse_struct_match_pattern
     name_token:mut$Token
     cursor:mut$TokenCursor
 -> StructPattern {
-    fallback_token "{" cursor expect_token_value.unwrap_or drop
+    fallback_token parser.state "{" cursor expect_token_value.unwrap_or drop
     name_token Token::value parser
         .store
         .structs
@@ -4729,9 +4768,9 @@ fn parse_struct_match_pattern
                 break
             fi
         fi
-        fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = field_token
-        fallback_token ":" cursor expect_token_value.unwrap_or drop
-        fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = var_token
+        fallback_token parser.state TokenKind::Identifier cursor expect_token_kind.unwrap_or = field_token
+        fallback_token parser.state ":" cursor expect_token_value.unwrap_or drop
+        fallback_token parser.state TokenKind::Identifier cursor expect_token_kind.unwrap_or = var_token
         var_token Token::value.clone field_token Token::value.clone bindings.set
     done
 
@@ -4782,7 +4821,7 @@ fn parse_pattern_terminator
             guard_ops function_name cursor guard_token parser token_to_op
         done
     fi
-    fallback_token "=>" cursor expect_token_value.unwrap_or drop
+    fallback_token parser.state "=>" cursor expect_token_value.unwrap_or drop
     guard_ops
 }
 
@@ -4868,7 +4907,7 @@ fn parse_match_arm_pattern
                         break
                     fi
                 fi
-                fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = binding_token
+                fallback_token parser.state TokenKind::Identifier cursor expect_token_kind.unwrap_or = binding_token
                 binding_token Token::value.clone bindings.push
             done
         fi
@@ -4926,7 +4965,7 @@ fn parse_match_block
     token Token::location OpValue::MatchStart Op::new ops.push
 
     while true do
-        fallback_token cursor expect_token.unwrap_or = arm_token
+        fallback_token parser.state cursor expect_token.unwrap_or = arm_token
         if "end" arm_token Token::value == then
             arm_token Token::location OpValue::MatchEnd Op::new ops.push
             if parser.syntax_only then
@@ -5021,14 +5060,18 @@ fn resolve_import
     ""
 }
 
-fn parse_selective_import_symbols cursor:mut$TokenCursor location:mut$Location -> List[str] {
+fn parse_selective_import_symbols
+    cursor:mut$TokenCursor
+    location:mut$Location
+    state:mut$ParseState
+-> List[str] {
     List[str]::new = symbols
-    fallback_token "{" cursor expect_token_value.unwrap_or drop
+    fallback_token state "{" cursor expect_token_value.unwrap_or drop
     while true do
         cursor.pop = symbol_opt
         if symbol_opt.is_none then
-            location "Unclosed selective import list" ErrorKind::UnmatchedBlock cursor.parse_state.record_error
-            cursor.parse_state.mark_output_unusable
+            location "Unclosed selective import list" ErrorKind::UnmatchedBlock state.record_error
+            state.mark_output_unusable
             symbols return
         fi
         symbol_opt.unwrap = symbol_token
@@ -5040,12 +5083,12 @@ fn parse_selective_import_symbols cursor:mut$TokenCursor location:mut$Location -
         fi
         if "}" symbol_token Token::value == then
             if 0 symbols.length == then
-                symbol_token Token::location "Selective import list cannot be empty" ErrorKind::Syntax cursor.parse_state.record_error
+                symbol_token Token::location "Selective import list cannot be empty" ErrorKind::Syntax state.record_error
             fi
             symbols return
         fi
         if TokenKind::Identifier symbol_token Token::kind != then
-            symbol_token Token::location "Expected identifier in selective import list" ErrorKind::UnexpectedToken cursor.parse_state.record_error
+            symbol_token Token::location "Expected identifier in selective import list" ErrorKind::UnexpectedToken state.record_error
         fi
         symbol_token Token::value.clone symbols.push
     done
@@ -5053,8 +5096,8 @@ fn parse_selective_import_symbols cursor:mut$TokenCursor location:mut$Location -
 }
 
 fn handle_keyword_import parser:mut$Parser cursor:mut$TokenCursor -> Op {
-    fallback_token TokenKind::Literal cursor expect_token_kind.unwrap_or = path_token
-    cursor path_token get_op_literal = literal_op
+    fallback_token parser.state TokenKind::Literal cursor expect_token_kind.unwrap_or = path_token
+    parser.state cursor path_token get_op_literal = literal_op
     if literal_op.value OpValue::PushStr(spec) is then
         path_token Token::location.clone = path_location
         if parser.syntax_only then
@@ -5067,7 +5110,7 @@ fn handle_keyword_import parser:mut$Parser cursor:mut$TokenCursor -> Op {
 
         cursor.peek = next_opt
         if { Token::value "{" == } next_opt.filter.is_some then
-            path_location cursor parse_selective_import_symbols = symbols
+            parser.state path_location cursor parse_selective_import_symbols = symbols
             symbols resolved SelectiveImport = selective
             path_location selective OpValue::ImportFileSelective Op::new return
         fi
@@ -5270,9 +5313,9 @@ fn handle_keyword_for
     function_name:mut$str
     ops:mut$List[Op]
 {
-    fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = loop_var_token
+    fallback_token parser.state TokenKind::Identifier cursor expect_token_kind.unwrap_or = loop_var_token
     loop_var_token Token::value.clone = loop_var_name
-    fallback_token "in" cursor expect_token_value.unwrap_or drop
+    fallback_token parser.state "in" cursor expect_token_value.unwrap_or drop
 
     token Token::location.clone = for_loc
     for_loc Location::span Span::offset = for_offset
@@ -5549,7 +5592,7 @@ fn get_op_keyword
                 return
             fi
         done
-        fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
+        fallback_token parser.state TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
         token Token::location name_token Token::value.clone OpValue::DeclareGlobal Op::new ops.push
         return
     fi
@@ -5580,7 +5623,7 @@ fn get_op_keyword
                 return
             fi
         fi
-        fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = const_name_token
+        fallback_token parser.state TokenKind::Identifier cursor expect_token_kind.unwrap_or = const_name_token
         const_name_token Token::value.clone = const_name
         if
             const_name parser
@@ -5775,7 +5818,7 @@ fn parse_struct_literal
     cursor:mut$TokenCursor
     function_name:mut$str
 -> List[Op] {
-    fallback_token "{" cursor expect_token_value.unwrap_or drop
+    fallback_token parser.state "{" cursor expect_token_value.unwrap_or drop
     name_token Token::value parser.store.clone_struct = casa_struct_opt
     if casa_struct_opt.is_none then
         empty_location "Expected option value while unwrapping name_token Token::value parser.store.structs.get" ErrorKind::Syntax parser.state.record_error
@@ -5805,7 +5848,7 @@ fn parse_struct_literal
             fi
         fi
 
-        fallback_token TokenKind::Identifier cursor expect_token_kind.unwrap_or = field_token
+        fallback_token parser.state TokenKind::Identifier cursor expect_token_kind.unwrap_or = field_token
         if field_token Token::value member_names string_list_contains ! then
             field_token Token::location f"Struct `{name_token Token::value}` has no field `{field_token Token::value}`" ErrorKind::UndefinedName parser.state.record_error
         fi
@@ -5815,7 +5858,7 @@ fn parse_struct_literal
         field_token Token::value.clone seen.add
         field_token Token::value.clone field_order.push
 
-        fallback_token ":" cursor expect_token_value.unwrap_or drop
+        fallback_token parser.state ":" cursor expect_token_value.unwrap_or drop
 
         all_ops.length = ops_before
         all_ops function_name member_names cursor parser parse_struct_field_value
@@ -5833,10 +5876,11 @@ fn parse_struct_literal
 # token_to_op - main dispatch: token kind -> handler
 # ============================================================================
 
-fn try_parse_typed_pointer_operation
+fn try_parse_pointer_operation
     token:mut$Token
     cursor:mut$TokenCursor
     ops:mut$List[Op]
+    state:mut$ParseState
 -> bool {
     if "ptr::into_raw" token.value == then
         token.location OpValue::PtrIntoRaw Op::new ops.push
@@ -5860,8 +5904,8 @@ fn try_parse_typed_pointer_operation
         fi
     fi
     cursor.pop drop
-    cursor parse_type_ast = target_type
-    fallback_token "]" cursor expect_token_value.unwrap_or drop
+    state cursor parse_type_ast = target_type
+    fallback_token state "]" cursor expect_token_value.unwrap_or drop
     if "ptr::read" token.value == then
         token.location target_type OpValue::PtrRead Op::new ops.push
     elif "ptr::write" token.value == then
@@ -5878,6 +5922,7 @@ fn try_parse_explicit_associated_item
     token:mut$Token
     cursor:mut$TokenCursor
     ops:mut$List[Op]
+    state:mut$ParseState
 -> bool {
     cursor.save = saved_pos
     cursor.peek = open_opt
@@ -5909,7 +5954,7 @@ fn try_parse_explicit_associated_item
                 break
             fi
         fi
-        cursor parse_type_ast type_args.push
+        state cursor parse_type_ast type_args.push
     done
     cursor.pop = first_colon
     cursor.pop = second_colon
@@ -5971,12 +6016,12 @@ fn token_to_op
     fi
 
     if TokenKind::Literal kind == then
-        cursor token get_op_literal ops.push
+        parser.state cursor token get_op_literal ops.push
         return
     fi
 
     if TokenKind::Intrinsic kind == then
-        cursor token get_op_intrinsic ops.push
+        parser.state cursor token get_op_intrinsic ops.push
         return
     fi
 
@@ -5990,15 +6035,15 @@ fn token_to_op
             ops token handle_question_operator
             return
         fi
-        function_name cursor token get_op_operator ops.push
+        parser.state function_name cursor token get_op_operator ops.push
         return
     fi
 
     if TokenKind::Identifier kind == then
-        if ops cursor token try_parse_typed_pointer_operation then
+        if parser.state ops cursor token try_parse_pointer_operation then
             return
         fi
-        if ops cursor token try_parse_explicit_associated_item then
+        if parser.state ops cursor token try_parse_explicit_associated_item then
             return
         fi
         # Check for struct literal: StructName { ... }
@@ -6054,7 +6099,7 @@ fn token_to_op
 # ============================================================================
 
 fn parse_ops parser:mut$Parser tokens:List[Token] -> List[Op] {
-    parser.state tokens TokenCursor::new = cursor
+    tokens TokenCursor::new = cursor
     List[Op]::new = ops
     while cursor.is_finished ! do
         cursor.pop = token_opt
