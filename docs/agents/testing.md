@@ -36,9 +36,15 @@ After the implementation is stable:
   only to duplicate pull request CI. CI runs:
 
   ```
-  CASA_TEST_CATEGORY=internals tests/test_compiler.sh
-  CASA_TEST_CATEGORY=types tests/test_compiler.sh
-  CASA_TEST_CATEGORY=language tests/test_compiler.sh
+  CASA_TEST_CATEGORY=compiler_parsing tests/test_compiler.sh
+  CASA_TEST_CATEGORY=compiler_analysis tests/test_compiler.sh
+  CASA_TEST_CATEGORY=compiler_integration tests/test_compiler.sh
+  CASA_TEST_CATEGORY=types_ownership tests/test_compiler.sh
+  CASA_TEST_CATEGORY=types_generics tests/test_compiler.sh
+  CASA_TEST_CATEGORY=types_traits tests/test_compiler.sh
+  CASA_TEST_CATEGORY=language_memory tests/test_compiler.sh
+  CASA_TEST_CATEGORY=language_control_flow tests/test_compiler.sh
+  CASA_TEST_CATEGORY=language_values tests/test_compiler.sh
   CASA_TEST_CATEGORY=runtime tests/test_compiler.sh
   tests/test_cli.sh
   tests/test_examples.sh
@@ -71,13 +77,11 @@ tests/test_examples.sh fibonacci          # only fibonacci example
 tests/test_formatter.sh indent            # only golden file tests matching "indent"
 ```
 
-Set `CASA_TEST_CATEGORY` to run one compiler-test category:
+Set `CASA_TEST_CATEGORY` to one of the values in the CI list above to run that
+compiler-test category:
 
 ```
-CASA_TEST_CATEGORY=internals tests/test_compiler.sh
-CASA_TEST_CATEGORY=types tests/test_compiler.sh
-CASA_TEST_CATEGORY=language tests/test_compiler.sh
-CASA_TEST_CATEGORY=runtime tests/test_compiler.sh
+CASA_TEST_CATEGORY=types_ownership tests/test_compiler.sh
 ```
 
 Category selection and substring filters can be combined. The compiler test
