@@ -36,7 +36,10 @@ After the implementation is stable:
   only to duplicate pull request CI. CI runs:
 
   ```
-  tests/test_compiler.sh
+  CASA_TEST_CATEGORY=internals tests/test_compiler.sh
+  CASA_TEST_CATEGORY=types tests/test_compiler.sh
+  CASA_TEST_CATEGORY=language tests/test_compiler.sh
+  CASA_TEST_CATEGORY=runtime tests/test_compiler.sh
   tests/test_cli.sh
   tests/test_examples.sh
   tests/test_bootstrap.sh
@@ -67,6 +70,19 @@ tests/test_compiler.sh lexer typechecker  # tests matching "lexer" OR "typecheck
 tests/test_examples.sh fibonacci          # only fibonacci example
 tests/test_formatter.sh indent            # only golden file tests matching "indent"
 ```
+
+Set `CASA_TEST_CATEGORY` to run one compiler-test category:
+
+```
+CASA_TEST_CATEGORY=internals tests/test_compiler.sh
+CASA_TEST_CATEGORY=types tests/test_compiler.sh
+CASA_TEST_CATEGORY=language tests/test_compiler.sh
+CASA_TEST_CATEGORY=runtime tests/test_compiler.sh
+```
+
+Category selection and substring filters can be combined. The compiler test
+runner fails when a fixture has no category so category-based CI cannot skip a
+new fixture.
 
 When `test_formatter.sh` has filters, idempotency and safety tests
 are skipped (they only run in the full suite).
