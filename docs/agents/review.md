@@ -15,19 +15,23 @@ Assign each finding one class:
 
 Before opening a pull request:
 
+Do not run tests for documentation-only changes.
+
 1. Run the `ponytail-review` skill on the diff.
-2. Review the Standards and Spec axes.
-3. Classify each finding.
-4. **MUST** fix every Must fix finding without pausing. Run focused tests and
+2. Review non-trivial functions added or changed with `function-design` as part
+   of the Standards axis.
+3. Review the Standards and Spec axes.
+4. Classify each finding.
+5. **MUST** fix every Must fix finding without pausing. Run focused tests and
    review only the affected axis again.
-5. Implement an untracked Prerequisite in the current work. For a tracked
+6. Implement an untracked Prerequisite in the current work. For a tracked
    Prerequisite, keep the pull request in draft and add a native GitHub blocker
    relationship to the originating issue. If there is no originating issue, add
    the relationship to the pull request instead. See
    [issue-tracker.md](./issue-tracker.md#blocker-relationships).
-6. Report Non-blocking findings to the user and in the pull request. Do not
+7. Report Non-blocking findings to the user and in the pull request. Do not
    implement them.
-7. Repeat until no Must fix or untracked Prerequisite findings remain, then open
+8. Repeat until no Must fix or untracked Prerequisite findings remain, then open
    or update the pull request. See [git.md](./git.md).
 
 ## Why no pausing
