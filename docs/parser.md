@@ -6,14 +6,14 @@ Import `parser` for cursor-based text scanning:
 import "parser"
 ```
 
-`Cursor` contains the source string and a mutable `u64` position. `ParseError`
+`Cursor` borrows the source string and contains a mutable `u64` position. `ParseError`
 contains a message and the `u64` position at which parsing failed.
 
 ## Cursor API
 
 | Method | Result or action |
 |---|---|
-| `Cursor::new source:str -> Cursor` | Cursor at position `0` |
+| `Cursor::new source:$str -> Cursor` | Cursor at position `0` |
 | `is_eof self:$Cursor -> bool` | Whether the position reached the end |
 | `peek self:$Cursor -> Option[char]` | Current character without advancing |
 | `peek_at self:$Cursor offset:u64 -> Option[char]` | Character at a relative offset |
