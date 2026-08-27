@@ -131,8 +131,10 @@ that is not a Unicode scalar.
 |---|---|
 | `print` | Standard output |
 | `println text:$str` | Standard output, then newline |
+| `println_string text:String` | Consume owned text and write it with a newline |
 | `eprint text:$str` | Standard error |
 | `eprintln text:$str` | Standard error, then newline |
+| `eprintln_string text:String` | Consume owned text and write it to standard error with a newline |
 
 ```casa
 "ready" println
@@ -143,7 +145,7 @@ that is not a Unicode scalar.
 
 ```casa
 42.to_str = answer
-f"answer: {answer}" println
+f"answer: {answer}" println_string
 ```
 
 See the [built-in trait catalog](traits.md#built-in-traits) for displayable
