@@ -1,4 +1,5 @@
 # Aggregate padding is unspecified and may be uninitialized
+status: amended by [ADR-0158](0158-copy-requires-a-raw-value-representation.md)
 
 Padding inserted by the compiler is not part of a Casa value's semantic data. Its bytes have unspecified contents and may remain uninitialized:
 

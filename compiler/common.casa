@@ -5,7 +5,7 @@ import "std"
 # Token kinds
 # ============================================================================
 
-enum TokenKind {
+enum TokenKind derives Copy {
     Comment
     Delimiter
     Eof
@@ -89,6 +89,7 @@ enum KeywordKind derives Copy {
     In
     Global
     Const
+    Move
 }
 
 # ============================================================================
@@ -141,7 +142,7 @@ enum OperatorKind derives Copy {
     Question
 }
 
-enum NumericConversionKind {
+enum NumericConversionKind derives Copy {
     Exact
     FromBits
     Rounded
@@ -150,7 +151,7 @@ enum NumericConversionKind {
     Wrapping
 }
 
-enum IntegerTryKind {
+enum IntegerTryKind derives Copy {
     Add
     Div
     Mod
@@ -321,7 +322,12 @@ enum InstValue {
     ConstantLoad (u64)
     ConstantStore (u64)
     # Closures
+    CaptureFlagClear (u64)
+    CaptureFlagLoad (u64)
+    CaptureFlagMark (u64)
     CaptureLoad (u64)
+    CaptureSet (u64)
+    ClosureDrop
     ClosureRecord (u64)
     FnPushStatic (str)
     # Strings
@@ -349,7 +355,7 @@ enum InstValue {
 # Error kinds
 # ============================================================================
 
-enum ErrorKind {
+enum ErrorKind derives Copy {
     Syntax
     UnexpectedToken
     UndefinedName
@@ -370,7 +376,7 @@ enum ErrorKind {
 # Warning kinds
 # ============================================================================
 
-enum WarningKind {
+enum WarningKind derives Copy {
     UnusedParameter
     LossyTypeAnnotation
 }
@@ -379,14 +385,22 @@ enum WarningKind {
 # Core data structures
 # ============================================================================
 
-struct Span derives Copy {
+struct Span {
     offset: u64
     length: u64
 }
 
-struct SourcePosition derives Copy {
+struct SourcePosition {
     line:   u64
     column: u64
+}
+
+impl Span: Clone {
+    fn clone self:$Span -> Span { self.length self.offset Span }
+}
+
+impl SourcePosition: Clone {
+    fn clone self:$SourcePosition -> SourcePosition { self.column self.line SourcePosition }
 }
 
 impl SourcePosition {
@@ -447,7 +461,9 @@ struct OwnerEvent {
 }
 
 impl OwnerEvent {
-    fn new name:mut$str typ:mut$Type generation:u64 -> OwnerEvent { generation typ name OwnerEvent }
+    fn new name:mut$str typ:mut$Type generation:u64 -> OwnerEvent {
+        generation typ clone_type name.clone OwnerEvent
+    }
 
     fn clone self:$OwnerEvent -> OwnerEvent {
         self.generation self.typ clone_type self.name.clone OwnerEvent
@@ -543,6 +559,7 @@ fn clone_op_value value:$OpValue -> OpValue {
         OpValue::SizeOf(typ) => typ clone_type OpValue::SizeOf
         OpValue::PtrAsRef(typ) => typ clone_type OpValue::PtrAsRef
         OpValue::PtrAsMut(typ) => typ clone_type OpValue::PtrAsMut
+        OpValue::PtrIntoRaw => OpValue::PtrIntoRaw
         OpValue::PtrRead(typ) => typ clone_type OpValue::PtrRead
         OpValue::PtrWrite(typ) => typ clone_type OpValue::PtrWrite
         OpValue::PushArray(items) => items clone_ops OpValue::PushArray
@@ -646,6 +663,7 @@ fn clone_op_value value:$OpValue -> OpValue {
         OpValue::Lt => OpValue::Lt
         OpValue::Ne => OpValue::Ne
         OpValue::FnExec => OpValue::FnExec
+        OpValue::FnExecOwned => OpValue::FnExecOwned
         OpValue::FnReturn => OpValue::FnReturn
         OpValue::UnsafeStart => OpValue::UnsafeStart
         OpValue::UnsafeEnd => OpValue::UnsafeEnd
@@ -692,15 +710,42 @@ fn clone_ops ops:$List[Op] -> List[Op] {
     result
 }
 
+fn substitute_op_value_type value:$OpValue subs:mut$Map[str Type] -> Option[OpValue] {
+    value match
+        OpValue::TypeCast(cast_type) => {
+            subs cast_type.substitute_t OpValue::TypeCast Option::Some
+        }
+        OpValue::NumericTry(numeric_try) => {
+            numeric_try.target subs numeric_try.source.substitute_t NumericTry
+            OpValue::NumericTry Option::Some
+        }
+        OpValue::SizeOf(target) => {
+            subs target.substitute_t OpValue::SizeOf Option::Some
+        }
+        OpValue::PtrRead(target) => {
+            subs target.substitute_t OpValue::PtrRead Option::Some
+        }
+        OpValue::PtrWrite(target) => {
+            subs target.substitute_t OpValue::PtrWrite Option::Some
+        }
+        OpValue::PtrAsRef(target) => {
+            subs target.substitute_t OpValue::PtrAsRef Option::Some
+        }
+        OpValue::PtrAsMut(target) => {
+            subs target.substitute_t OpValue::PtrAsMut Option::Some
+        }
+        _ => Option::None
+    end
+}
+
 fn substitute_ops_types ops:mut$List[Op] subs:mut$Map[str Type] {
     for sub_op in ops.iter do
-        if sub_op.value OpValue::TypeCast(cast_type) is then
-            subs cast_type.substitute_t OpValue::TypeCast sub_op Op::set_value
-        fi
-        if sub_op.value OpValue::NumericTry(numeric_try) is then
-            numeric_try.target subs numeric_try.source.substitute_t NumericTry
-            OpValue::NumericTry sub_op Op::set_value
-        fi
+        subs sub_op.value substitute_op_value_type = replacement
+        replacement match
+            Option::Some(value) => value sub_op Op::set_value
+            Option::None => {
+            }
+        end
         if sub_op Op::type_hint Option::Some(hint) is then
             subs hint.substitute_t = substituted_hint
             substituted_hint Option::Some sub_op Op::set_type_hint
@@ -708,17 +753,7 @@ fn substitute_ops_types ops:mut$List[Op] subs:mut$Map[str Type] {
         if sub_op Op::deferred_return_hint Option::Some(deferred_hint) is then
             subs deferred_hint.substitute_t Option::Some sub_op Op::set_deferred_return_hint
         fi
-        if sub_op.value OpValue::SizeOf(target) is then
-            subs target.substitute_t OpValue::SizeOf sub_op Op::set_value
-        elif sub_op.value OpValue::PtrRead(target) is then
-            subs target.substitute_t OpValue::PtrRead sub_op Op::set_value
-        elif sub_op.value OpValue::PtrWrite(target) is then
-            subs target.substitute_t OpValue::PtrWrite sub_op Op::set_value
-        elif sub_op.value OpValue::PtrAsRef(target) is then
-            subs target.substitute_t OpValue::PtrAsRef sub_op Op::set_value
-        elif sub_op.value OpValue::PtrAsMut(target) is then
-            subs target.substitute_t OpValue::PtrAsMut sub_op Op::set_value
-        elif sub_op.value OpValue::PushArray(items) is then
+        if sub_op.value OpValue::PushArray(items) is then
             subs items substitute_ops_types
         elif sub_op.value OpValue::ExprGroup(items) is then
             subs items substitute_ops_types
@@ -855,7 +890,7 @@ struct Variable {
 }
 
 impl Variable {
-    fn new name:mut$str -> Variable { Type::Unknown name Variable }
+    fn new name:mut$str -> Variable { Type::Unknown name.clone Variable }
 }
 
 fn clone_variable variable:$Variable -> Variable {
@@ -925,7 +960,7 @@ impl EnumVariant {
         for binding in self.bindings.iter do
             binding.clone bindings.push
         done
-        bindings self.ordinal self.variant_name.clone self.enum_name.clone EnumVariant
+        bindings self.ordinal.clone self.variant_name.clone self.enum_name.clone EnumVariant
     }
 }
 
@@ -1083,7 +1118,7 @@ fn make_const_argument_operation
     location:mut$Location
 -> Op {
     if constant.is_symbolic then
-        constant.name = constant_name
+        constant.name = constant_name: $str
         # Inside a closure the forwarded constant is a capture, not a local.
         if function Option::Some(enclosing) is then
             if
@@ -1175,6 +1210,7 @@ enum OpValue {
     Load64
     PtrAsRef (Type)
     PtrAsMut (Type)
+    PtrIntoRaw
     PtrRead (Type)
     Store8
     Store16
@@ -1227,6 +1263,7 @@ enum OpValue {
     # Functions
     FnCall (str)
     FnExec
+    FnExecOwned
     FnPush (str)
     FnReturn
     DestructionFn (Type)
@@ -1443,11 +1480,12 @@ fn op_is_static_array_with_store items:$List[Op] store:$SymbolStore -> bool {
 }
 
 fn enum_variant_of op:Op -> EnumVariant {
-    if op.value OpValue::PushEnumVariant(variant) is then
-        variant return
+    op.value clone_op_value = value
+    if value OpValue::PushEnumVariant(variant) is then
+        variant.clone return
     fi
-    if op.value OpValue::IsCheck(variant) is then
-        variant return
+    if value OpValue::IsCheck(variant) is then
+        variant.clone return
     fi
     "Internal error: enum_variant_of called on non-EnumVariant op\n" eprint
     1 exit
@@ -1476,7 +1514,7 @@ impl MatchArm {
 
 fn pattern_value_of op:$Op -> PatternValue {
     if op.value OpValue::MatchArm(arm) is then
-        unsafe { arm.pattern_value (ptr) (PatternValue) } return
+        arm.pattern_value clone_pattern_value return
     fi
     "Internal error: pattern_value_of called on non-MatchArm op\n" eprint
     1 exit
@@ -1721,7 +1759,7 @@ impl TraitImpl: Clone {
 }
 
 fn trait_bound_to_str bound:$TraitBound -> str {
-    bound TraitBound::type_args = type_args
+    bound TraitBound::type_args = type_args: $List[Type]
     if 0 type_args.length == then
         bound TraitBound::name.clone return
     fi
@@ -1738,15 +1776,19 @@ fn trait_impl_key trait_impl:$TraitImpl -> str {
 }
 
 fn trait_bound_to_type bound:$TraitBound -> Type {
-    bound TraitBound::type_args.shallow_copy bound TraitBound::name.clone GenericType Type::Generic
+    List[Type]::new = type_arguments
+    for argument in bound.type_args.iter do
+        argument clone_type type_arguments.push
+    done
+    type_arguments bound TraitBound::name.clone GenericType Type::Generic
 }
 
 fn trait_bound_eq a:$TraitBound b:$TraitBound -> bool {
     if a TraitBound::name b TraitBound::name != then
         false return
     fi
-    a TraitBound::type_args = args_a
-    b TraitBound::type_args = args_b
+    a TraitBound::type_args = args_a: $List[Type]
+    b TraitBound::type_args = args_b: $List[Type]
     if args_a.length args_b.length != then
         false return
     fi
@@ -1772,29 +1814,30 @@ struct Function {
     variables:            List[Variable]
     captures:             List[Variable]
     global_captures:      List[str]
+    owned_captures:       List[str]
+    captures_by_move:     bool
+    captures_shared:      bool
     has_deferred_methods: bool
     is_const_fn:          bool
     is_unsafe:            bool
 }
 
 impl Function {
-    fn new name:mut$str ops:List[Op] location:Location -> Function {
-        false false false List[str]::new List[Variable]::new List[Variable]::new false false empty_stack_effect location ops name Function
+    fn new name:str ops:List[Op] location:Location -> Function {
+        false false false false false List[str]::new List[str]::new List[Variable]::new List[Variable]::new false false empty_stack_effect location ops name Function
     }
 
-    fn with_stack_effect
-        name:mut$str
-        ops:List[Op]
-        location:Location
-        effect:StackEffect
-    -> Function {
-        false false false List[str]::new List[Variable]::new List[Variable]::new false false effect location ops name Function
+    fn with_stack_effect name:str ops:List[Op] location:Location effect:StackEffect -> Function {
+        false false false false false List[str]::new List[str]::new List[Variable]::new List[Variable]::new false false effect location ops name Function
     }
 
     fn clone_for_import self:$Function -> Function {
         self.is_unsafe
         self.is_const_fn
         self.has_deferred_methods
+        self.captures_shared
+        self.captures_by_move
+        self.owned_captures.clone
         self.global_captures.clone
         self.captures.clone
         self.variables.clone
@@ -1812,6 +1855,9 @@ impl Function {
         self.is_unsafe
         self.is_const_fn
         self.has_deferred_methods
+        self.captures_shared
+        self.captures_by_move
+        self.owned_captures.clone
         self.global_captures.clone
         self.captures.clone
         self.variables.clone
@@ -1824,11 +1870,16 @@ impl Function {
         Function
     }
 
-    # Replace the stored body with an empty list and return its sole owner.
-    fn take_ops self:mut$Function -> List[Op] {
-        self.ops = ops
-        List[Op]::new self.set_ops
-        ops
+    # Split an owned function into its declaration and body.
+    fn split_body self:Function -> Function List[Op] {
+        self match
+            Function { name: name ops: ops location: location stack_effect: stack_effect is_used: is_used is_typechecked: is_typechecked variables: variables captures: captures global_captures: global_captures owned_captures: owned_captures captures_by_move: captures_by_move captures_shared: captures_shared has_deferred_methods: has_deferred_methods is_const_fn: is_const_fn is_unsafe: is_unsafe } => {
+                is_unsafe is_const_fn has_deferred_methods captures_shared captures_by_move
+                owned_captures global_captures captures variables is_typechecked is_used
+                stack_effect location List[Op]::new name Function
+                ops
+            }
+        end
     }
 }
 
@@ -2058,7 +2109,7 @@ struct GenericType {
 }
 
 impl GenericType {
-    fn new name:mut$str -> GenericType { List[Type]::new name GenericType }
+    fn new name:str -> GenericType { List[Type]::new name GenericType }
 }
 
 struct FunctionType {
@@ -2078,7 +2129,7 @@ struct ConstType {
 }
 
 impl ConstType {
-    fn symbolic name:mut$str typ:BuiltinType -> ConstType { 0 typ name ConstType }
+    fn symbolic name:str typ:BuiltinType -> ConstType { 0 typ name ConstType }
 
     fn concrete value:i64 typ:BuiltinType -> ConstType { value typ "" ConstType }
 
@@ -2139,7 +2190,7 @@ fn get_array_length_parameter array_type:$Type -> Option[ConstType] {
             Option[ConstType]::None return
         fi
         if 1 generic.params.get Type::Const(length) is then
-            length Option::Some return
+            length.value length.typ length.name.clone ConstType Option::Some return
         fi
     fi
     Option[ConstType]::None
@@ -2328,7 +2379,7 @@ impl Type {
                 if 0 generic.params.length == then
                     Option::None
                 else
-                    generic.base Option::Some
+                    generic.base.clone Option::Some
                 fi
             }
             _ => {
@@ -2337,34 +2388,22 @@ impl Type {
         end
     }
 
-    fn type_params self:$Type -> Option[List[Type]] {
-        self match
-            Type::Generic(generic) => {
-                if 0 generic.params.length == then
-                    Option::None
-                else
-                    generic.params.shallow_copy Option::Some
-                fi
-            }
-            _ => {
-                Option::None
-            }
-        end
+    fn type_params self:$Type -> Option[$List[Type]] {
+        if self Type::Generic(generic) is then
+            if 0 generic.params.length != then
+                generic.params Option[$List[Type]]::Some return
+            fi
+        fi
+        Option::None
     }
 
-    fn as_generic self:$Type -> Option[GenericType] {
-        self match
-            Type::Generic(generic) => {
-                if 0 generic.params.length == then
-                    Option::None
-                else
-                    generic.params.shallow_copy generic.base.clone GenericType Option::Some
-                fi
-            }
-            _ => {
-                Option::None
-            }
-        end
+    fn as_generic self:$Type -> Option[$GenericType] {
+        if self Type::Generic(generic) is then
+            if 0 generic.params.length != then
+                generic Option[$GenericType]::Some return
+            fi
+        fi
+        Option::None
     }
 
     fn substitute_t self:$Type bindings:$Map[str Type] -> Type {
@@ -2394,12 +2433,12 @@ impl Type {
                 fi
             }
             Type::Generic(generic) => {
-                generic.base = base
+                generic.base = base: $str
                 if 0 generic.params.length == then
                     if base bindings.get Option::Some(bound) is then
                         bound clone_type return
                     fi
-                    generic.params.shallow_copy base.clone GenericType Type::Generic return
+                    List[Type]::new base.clone GenericType Type::Generic return
                 fi
                 List[Type]::new = new_params
                 for param in generic.params.iter do
@@ -2589,7 +2628,7 @@ impl Type {
     fn match_base self:$Type -> str {
         self match
             Type::Generic(generic) => {
-                generic.base
+                generic.base.clone
             }
             _ => {
                 self.format
@@ -2770,6 +2809,13 @@ fn string_list_to_set items:$List[str] -> Set[str] {
 
 fn canonicalize_type_var typ:$Type type_vars:$Set[str] -> Type {
     typ match
+        Type::TypeVar(name) => {
+            if name type_vars.has then
+                typ clone_type
+            else
+                name.clone GenericType::new Type::Generic
+            fi
+        }
         Type::Generic(generic) => {
             if 0 generic.params.length == then
                 if generic.base type_vars.has then
@@ -2801,9 +2847,6 @@ fn canonicalize_type_var typ:$Type type_vars:$Set[str] -> Type {
 }
 
 fn canonicalize_stack_effect_type_vars effect:mut$StackEffect type_vars:$Set[str] {
-    if 0 type_vars.length == then
-        return
-    fi
     0 (u64) = index
     while index effect StackEffect::parameters.length > do
         index effect StackEffect::parameters.get = param
@@ -2814,6 +2857,58 @@ fn canonicalize_stack_effect_type_vars effect:mut$StackEffect type_vars:$Set[str
     while ret_index effect StackEffect::return_types.length > do
         type_vars ret_index effect StackEffect::return_types.get canonicalize_type_var ret_index effect StackEffect::return_types.set
         1 += ret_index
+    done
+}
+
+fn canonicalize_operation_type_vars ops:mut$List[Op] type_vars:$Set[str] {
+    for op in ops.iter do
+        op.value clone_op_value = value
+        value match
+            OpValue::TypeCast(target) => {
+                type_vars target canonicalize_type_var OpValue::TypeCast op Op::set_value
+            }
+            OpValue::NumericTry(numeric_try) => {
+                numeric_try.target type_vars numeric_try.source canonicalize_type_var NumericTry
+                OpValue::NumericTry op Op::set_value
+            }
+            OpValue::SizeOf(target) => {
+                type_vars target canonicalize_type_var OpValue::SizeOf op Op::set_value
+            }
+            OpValue::PtrRead(target) => {
+                type_vars target canonicalize_type_var OpValue::PtrRead op Op::set_value
+            }
+            OpValue::PtrWrite(target) => {
+                type_vars target canonicalize_type_var OpValue::PtrWrite op Op::set_value
+            }
+            OpValue::PtrAsRef(target) => {
+                type_vars target canonicalize_type_var OpValue::PtrAsRef op Op::set_value
+            }
+            OpValue::PtrAsMut(target) => {
+                type_vars target canonicalize_type_var OpValue::PtrAsMut op Op::set_value
+            }
+            OpValue::PushArray(items) => {
+                type_vars items canonicalize_operation_type_vars
+                items OpValue::PushArray op Op::set_value
+            }
+            OpValue::ExprGroup(items) => {
+                type_vars items canonicalize_operation_type_vars
+                items OpValue::ExprGroup op Op::set_value
+            }
+            OpValue::MatchArm(arm) => {
+                type_vars arm.guard_ops canonicalize_operation_type_vars
+                arm OpValue::MatchArm op Op::set_value
+            }
+            _ => {
+            }
+        end
+        op.type_hint.clone = type_hint
+        if type_hint Option::Some(hint) is then
+            type_vars hint canonicalize_type_var Option::Some op Op::set_type_hint
+        fi
+        op.deferred_return_hint.clone = deferred_return_hint
+        if deferred_return_hint Option::Some(hint) is then
+            type_vars hint canonicalize_type_var Option::Some op Op::set_deferred_return_hint
+        fi
     done
 }
 
@@ -3070,16 +3165,12 @@ fn stack_effect_to_function_type effect:$StackEffect -> Type {
 fn function_type_to_stack_effect fn_type:$FunctionType -> StackEffect {
     List[Parameter]::new = params
     for param_type in fn_type FunctionType::parameters.iter do
-        "" param_type Parameter params.push
+        "" param_type clone_type Parameter params.push
     done
-    fn_type FunctionType::return_types params StackEffect::new
+    fn_type FunctionType::return_types.clone params StackEffect::new
 }
 
-fn stack_effect_type_param_matches
-    expected:mut$Type
-    actual:mut$Type
-    type_vars:mut$Set[str]
--> bool {
+fn stack_effect_type_param_matches expected:$Type actual:$Type type_vars:mut$Set[str] -> bool {
     if expected actual.eq then
         true return
     fi
@@ -3104,7 +3195,7 @@ fn stack_effect_type_param_matches
 
 fn collect_stack_effect_type_vars typ:$Type type_vars:mut$Set[str] {
     if typ.type_var_name Option::Some(type_var_name) is then
-        type_var_name type_vars.add
+        type_var_name.clone type_vars.add
         return
     fi
     typ match
@@ -3126,7 +3217,7 @@ fn collect_stack_effect_type_vars typ:$Type type_vars:mut$Set[str] {
     end
 }
 
-fn stack_effect_type_matches expected:mut$Type actual:mut$Type -> bool {
+fn stack_effect_type_matches expected:$Type actual:$Type -> bool {
     if expected actual.eq then
         true return
     fi
@@ -3224,8 +3315,8 @@ fn stack_effect_matches effect_a:$StackEffect effect_b:$StackEffect -> bool {
     fi
 
     for param_pair in effect_b StackEffect::parameters.iter effect_a StackEffect::parameters.iter.zip do
-        param_pair.first Parameter::typ = type_a
-        param_pair.second Parameter::typ = type_b
+        param_pair.first Parameter::typ = type_a: $Type
+        param_pair.second Parameter::typ = type_b: $Type
         if type_b type_a stack_effect_type_matches ! then
             false return
         fi
@@ -3252,10 +3343,9 @@ fn apply_type_subs_to_stack_effect effect:$StackEffect subs:mut$Map[str Type] ->
     for return_type in effect StackEffect::return_types.iter do
         subs return_type.substitute_t returns.push
     done
-    returns params StackEffect::new = resolved
-    effect.type_vars resolved StackEffect::set_type_vars
-    effect.trait_bounds resolved StackEffect::set_trait_bounds
-    effect.const_params resolved StackEffect::set_const_params
+    effect.clone = resolved
+    params resolved StackEffect::set_parameters
+    returns resolved StackEffect::set_return_types
     resolved
 }
 
@@ -3297,6 +3387,7 @@ impl KeywordKind {
             KeywordKind::In => "in"
             KeywordKind::Global => "global"
             KeywordKind::Const => "const"
+            KeywordKind::Move => "move"
         end
     }
 }
@@ -3760,7 +3851,7 @@ fn next_struct_member_offset
     for member in prior_members.iter do
         WORD_SIZE WORD_SIZE TypeLayout = layout
         if visiting store member.typ aggregate_field_layout Option::Some(found_layout) is then
-            found_layout = layout
+            found_layout.alignment found_layout.size TypeLayout = layout
         fi
         layout.alignment offset align_up layout.size + = offset
     done
@@ -3768,7 +3859,7 @@ fn next_struct_member_offset
     # parsed. Aggregate fields always use one indirect word in that case.
     WORD_SIZE WORD_SIZE TypeLayout = member_layout
     if visiting store member_type aggregate_field_layout Option::Some(found_member_layout) is then
-        found_member_layout = member_layout
+        found_member_layout.alignment found_member_layout.size TypeLayout = member_layout
     fi
     member_layout.alignment offset align_up Option::Some
 }
@@ -3913,56 +4004,21 @@ fn aggregate_type_bindings typ:$Type type_vars:$List[str] -> Map[str Type] {
     bindings
 }
 
-fn type_needs_destruction typ:mut$Type store:$SymbolStore visiting:mut$Set[str] -> bool {
+fn type_needs_destruction_in_store typ:mut$Type store:$SymbolStore -> bool {
     if typ.is_borrow then
         false return
     fi
     if typ Type::TypeVar is then
         true return
     fi
+    if typ Type::Function(_) is then
+        true return
+    fi
     if f"{typ.match_base}::drop" store.functions.has then
         true return
     fi
-    typ clone_type = inspected_type
-    if inspected_type Type::Generic(generic) is then
-        typ.format = type_name
-        if type_name visiting.has then
-            false return
-        fi
-        type_name.clone visiting.add
-        if "array" generic.base == then
-            if 0 generic.params.length != then
-                visiting store 0 generic.params.get type_needs_destruction = needed
-                type_name visiting.remove
-                needed return
-            fi
-        elif generic.base store.structs.get Option::Some(casa_struct) is then
-            casa_struct.type_vars typ aggregate_type_bindings = substitutions
-            for member in casa_struct.members.iter do
-                substitutions member.typ.substitute_t = member_type
-                if visiting store member_type type_needs_destruction then
-                    type_name visiting.remove
-                    true return
-                fi
-            done
-        elif generic.base store.enums.get Option::Some(casa_enum) is then
-            casa_enum.type_vars typ aggregate_type_bindings = substitutions
-            for pair in casa_enum.variant_types.iter do
-                for payload_type in pair.second.iter do
-                    substitutions payload_type.substitute_t = resolved_payload
-                    if visiting store resolved_payload type_needs_destruction then
-                        type_name visiting.remove
-                        true return
-                    fi
-                done
-            done
-        fi
-        type_name visiting.remove
+    if store typ type_value_representation Option::Some(representation) is then
+        VALUE_REPR_INDIRECT representation == return
     fi
     false
-}
-
-fn type_needs_destruction_in_store typ:mut$Type store:$SymbolStore -> bool {
-    Set[str]::new = visiting
-    visiting store typ type_needs_destruction
 }

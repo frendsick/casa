@@ -1,4 +1,5 @@
 # Inhabited types have a minimum size of one byte
+status: amended by [ADR-0158](0158-copy-requires-a-raw-value-representation.md)
 
 Every inhabited concrete Casa type has `size_of[T] >= 1`. An empty struct therefore occupies one byte:
 

@@ -6,7 +6,8 @@ const LSP_TEST_FILE "/tmp/lsp_test.casa"
 fn lsp_empty_documents -> Map[str AnalyzedDocument] { Map[str AnalyzedDocument]::new }
 
 fn lsp_test_state source:$str -> AnalyzedDocument {
-    lsp_empty_documents source LSP_TEST_FILE compile_document.document
+    lsp_empty_documents source LSP_TEST_FILE compile_document.into_parts = analysis = document
+    document
 }
 
 fn lsp_test_uri -> str { LSP_TEST_FILE path_to_uri }
@@ -111,16 +112,11 @@ fn test_extract_library_paths_skips_non_string_entries {
 }
 
 fn test_compile_document_unresolved_module_does_not_crash {
-    global LSP_LIBRARY_PATHS
     "compile_document_unresolved_module_does_not_crash" test_start
-    List[str]::new = LSP_LIBRARY_PATHS
-    lsp_empty_documents "import \"this_module_does_not_exist\"\n42 print" LSP_TEST_FILE compile_document = result
-    result.document = state
+    lsp_empty_documents "import \"this_module_does_not_exist\"\n42 print" LSP_TEST_FILE compile_document.into_parts
+    = analysis = state
     "failed import has no ops" 0 state.ops.length assert_eq
-    "has errors" result
-        .analysis
-        .diagnostics
-        .has_errors assert_true
+    "has errors" analysis.diagnostics.has_errors assert_true
 }
 
 # ============================================================================
@@ -151,6 +147,14 @@ fn test_ingest_document_returns_updated_open_documents {
     "source matches" "42 print" state.source assert_str_eq
 }
 
+fn test_ingest_document_mutates_server_state {
+    "ingest_document_mutates_server_state" test_start
+    LspState::new = state
+    state "42 print" lsp_test_uri ingest_document = diagnostics
+    "no diagnostics" 0 diagnostics.length assert_eq
+    "uri stored" lsp_test_uri state.open_documents.has assert_true
+}
+
 # ============================================================================
 # Test: compile_document
 # ============================================================================
@@ -166,13 +170,10 @@ fn test_compile_document_returns_document {
 
 fn test_compile_document_partial_failure_still_returns_ops {
     "compile_document_partial_failure_still_returns_ops" test_start
-    lsp_empty_documents "42 print \"hello\" 1 *" LSP_TEST_FILE compile_document = result
-    result.document = state
+    lsp_empty_documents "42 print \"hello\" 1 *" LSP_TEST_FILE compile_document.into_parts
+    = analysis = state
     "partial failure has ops" 0 state.ops.length > assert_true
-    "partial failure has diagnostics" result
-        .analysis
-        .diagnostics
-        .has_errors assert_true
+    "partial failure has diagnostics" analysis.diagnostics.has_errors assert_true
     "completed op remains resolved" 1 state
         .ops
         .get
@@ -240,7 +241,7 @@ fn test_compile_document_seeds_open_docs_into_source_store {
     "compile_document_seeds_open_docs_into_source_store" test_start
     "/tmp/lsp_peer.casa" = peer_path
     "fn peer_helper { 0 print }" = peer_source
-    lsp_empty_documents peer_source peer_path compile_document.document = peer_state
+    lsp_empty_documents peer_source peer_path compile_document.into_parts = peer_analysis = peer_state
     Map[str AnalyzedDocument]::new = open_docs
     peer_state peer_path.clone open_docs.set
     open_docs "42 print" LSP_TEST_FILE compile_document = result
@@ -867,7 +868,7 @@ fn test_compute_rename_uses_exact_reference_ranges {
     "total" 0 1 state compute_rename = edits
     if edits Option::Some(edit_map) is then
         lsp_test_uri edit_map.get.unwrap = document_edits
-        0 document_edits.get TextEdit::range = assignment_range
+        0 document_edits.get TextEdit::range = assignment_range: $LspRange
         "assignment start line" 0 assignment_range LspRange::start_line assert_eq
         "assignment starts at name" 5 assignment_range LspRange::start_col assert_eq
         "assignment ends after name" 10 assignment_range LspRange::end_col assert_eq
@@ -880,10 +881,11 @@ fn test_compute_rename_groups_multi_file_references {
     "compute_rename_groups_multi_file_references" test_start
     "/tmp/lsp_rename_peer.casa" = peer_path
     "fn shared { 0 print }\nshared" = peer_source
-    lsp_empty_documents peer_source peer_path compile_document.document = peer
+    lsp_empty_documents peer_source peer_path compile_document.into_parts = peer_analysis = peer
     Map[str AnalyzedDocument]::new = open_documents
     peer peer_path.clone open_documents.set
-    open_documents f"import \"{peer_path}\"\nshared" LSP_TEST_FILE compile_document.document = state
+    open_documents f"import \"{peer_path}\"\nshared" LSP_TEST_FILE compile_document.into_parts
+    = state_analysis = state
     "renamed" 0 1 state compute_rename = edits
     if edits Option::Some(edit_map) is then
         "has root edits" lsp_test_uri edit_map.has assert_true
@@ -900,7 +902,7 @@ fn test_compute_rename_groups_multi_file_references {
 fn collect_document_token_kinds tokens:$List[DocumentToken] -> List[DocumentTokenKind] {
     List[DocumentTokenKind]::new = kinds
     for token in tokens.iter do
-        token.kind kinds.push
+        token.kind copy kinds.push
     done
     kinds
 }
@@ -1145,8 +1147,9 @@ fn test_compute_definition_enum_variant_member {
     "enum Color { Red Green Blue }\nColor::Blue print" lsp_test_state = state
     7 1 state compute_definition = result
     "is some" result.is_some assert_true
-    "line is 0" 0 result.unwrap LspLocation::range LspRange::start_line assert_eq
-    "col is 23" 23 result.unwrap LspLocation::range LspRange::start_col assert_eq
+    result.unwrap = location
+    "line is 0" 0 location LspLocation::range LspRange::start_line assert_eq
+    "col is 23" 23 location LspLocation::range LspRange::start_col assert_eq
 }
 
 fn test_compute_definition_enum_variant_type {
@@ -1154,8 +1157,9 @@ fn test_compute_definition_enum_variant_type {
     "enum Color { Red Green Blue }\nColor::Blue print" lsp_test_state = state
     0 1 state compute_definition = result
     "is some" result.is_some assert_true
-    "line is 0" 0 result.unwrap LspLocation::range LspRange::start_line assert_eq
-    "col is 5" 5 result.unwrap LspLocation::range LspRange::start_col assert_eq
+    result.unwrap = location
+    "line is 0" 0 location LspLocation::range LspRange::start_line assert_eq
+    "col is 5" 5 location LspLocation::range LspRange::start_col assert_eq
 }
 
 # ============================================================================
@@ -1173,6 +1177,7 @@ test_compile_document_unresolved_module_does_not_crash
 test_ingest_document_valid_code_produces_no_diagnostics
 test_ingest_document_invalid_code_produces_error_diagnostics
 test_ingest_document_returns_updated_open_documents
+test_ingest_document_mutates_server_state
 test_compile_document_returns_document
 test_compile_document_partial_failure_still_returns_ops
 test_compile_document_ambiguous_parse_skips_later_phases

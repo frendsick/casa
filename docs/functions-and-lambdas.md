@@ -258,13 +258,27 @@ The compiler infers a lambda's stack effect from its body and the context in
 which it is used. Here, `increment` has type `fn[i64 -> i64]`.
 
 A lambda can capture bindings from its enclosing scope. Copy values are copied.
-A non-Copy owner moves into the lambda:
+An ordinary lambda borrows a non-Copy owner for the lifetime of the closure:
 
 ```casa
-10 = offset
-{ offset + } = add_offset
-32 add_offset exec print    # 42
+[1, 2, 3] List::from_array = values
+{ values.length } = count_values
+count_values exec print    # 3
 ```
+
+Use `move` when the closure must own its captures and outlive their original
+scope:
+
+```casa
+fn counter values:List[i64] -> fn[-> u64] {
+    move { values.length }
+}
+```
+
+Both forms create repeatable closures. A moving closure can inspect or mutate
+an owned capture. If one invocation moves or destroys that capture, every
+continuing path must restore it before returning. Destroying the closure
+destroys its owned captures once.
 
 Use a lambda for a short callback. Use a named function when the operation is
 shared or needs its own documentation.
