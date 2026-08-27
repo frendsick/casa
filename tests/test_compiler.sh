@@ -14,6 +14,58 @@ if [ "$TEST_TOOL_ARG" = true ]; then
     shift
 fi
 
+TEST_CATEGORY=${CASA_TEST_CATEGORY:-all}
+case "$TEST_CATEGORY" in
+    all|internals|types|language|runtime) ;;
+    *)
+        echo "Unknown compiler test category: $TEST_CATEGORY" >&2
+        exit 2
+        ;;
+esac
+
+# Assign every fixture to one CI category. Unknown fixtures fail instead of
+# being silently omitted from category-based CI runs.
+set_test_category() {
+    case "$1" in
+        test/test_analysis|test/test_block_scope|test/test_bytecode|\
+        test/test_common|test/test_const|test/test_document|test/test_emitter|\
+        test/test_error|test/test_lexer|test/test_lsp|test/test_parser|\
+        test/test_pattern|test/test_selective_import_closure|\
+        test/test_semantics|test/test_type_ast|test/test_typechecker|error/*)
+            TEST_CASE_CATEGORY=internals
+            ;;
+        test/test_closure_ownership|test/test_const_param|test/test_copy_clone|\
+        test/test_display|test/test_enum_variant_hint|test/test_for_owned_item|\
+        test/test_generic_structs|test/test_one_letter_nominal_types|\
+        test/test_owned_contexts|test/test_scope|\
+        test/test_selective_import_type_deps|test/test_traits|\
+        test/test_type_annotations|test/test_typed_struct_fields|\
+        test/test_underflow_messages)
+            TEST_CASE_CATEGORY=types
+            ;;
+        test/test_argv|test/test_array_length|test/test_array_methods|\
+        test/test_compare|test/test_enum|test/test_global_keyword|\
+        test/test_global_silent_shadow|test/test_global_write|\
+        test/test_match_underflow|test/test_numeric_types|test/test_question|\
+        test/test_selective_import|test/test_size_of|test/test_struct_literal|\
+        test/test_typed_raw|test/test_typeof|test/test_unsafe)
+            TEST_CASE_CATEGORY=language
+            ;;
+        test/test_argparse|test/test_collection_is_empty|\
+        test/test_collection_reclamation|test/test_destruction|test/test_file|\
+        test/test_iterator_combinators|test/test_list_contains|\
+        test/test_map_iter|test/test_parser_borrows|test/test_set_iter|\
+        test/test_slice|test/test_sorting|test/test_string_iteration|\
+        test/test_string_utilities|runtime_error/*)
+            TEST_CASE_CATEGORY=runtime
+            ;;
+        *)
+            echo "Uncategorized compiler test: $1" >&2
+            return 1
+            ;;
+    esac
+}
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 RESET='\033[0m'
@@ -24,6 +76,11 @@ matched=false
 
 for f in "$TESTS_DIR"/test_*.casa; do
     base=$(basename "$f" .casa)
+
+    set_test_category "test/$base"
+    if [ "$TEST_CATEGORY" != all ] && [ "$TEST_CATEGORY" != "$TEST_CASE_CATEGORY" ]; then
+        continue
+    fi
 
     if ! matches_filter "$base" "$@"; then
         continue
@@ -61,6 +118,11 @@ for f in "$TESTS_DIR"/errors/*.casa; do
     [ -f "$f" ] || continue
     base=$(basename "$f" .casa)
 
+    set_test_category "error/$base"
+    if [ "$TEST_CATEGORY" != all ] && [ "$TEST_CATEGORY" != "$TEST_CASE_CATEGORY" ]; then
+        continue
+    fi
+
     if ! matches_filter "$base" "$@"; then
         continue
     fi
@@ -88,6 +150,11 @@ done
 for f in "$TESTS_DIR"/runtime_errors/*.casa; do
     [ -f "$f" ] || continue
     base=$(basename "$f" .casa)
+
+    set_test_category "runtime_error/$base"
+    if [ "$TEST_CATEGORY" != all ] && [ "$TEST_CATEGORY" != "$TEST_CASE_CATEGORY" ]; then
+        continue
+    fi
 
     if ! matches_filter "$base" "$@"; then
         continue

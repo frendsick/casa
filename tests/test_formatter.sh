@@ -89,6 +89,39 @@ if matches_filter "filter_notice" "$@"; then
     fi
 fi
 
+# Category-based CI must select known fixtures and reject unknown categories.
+if matches_filter "compiler_categories" "$@"; then
+    matched=true
+    compiler_categories_ok=true
+
+    if ! output=$(CASA_TEST_CATEGORY=internals \
+        tests/test_compiler.sh array_is_not_copy) || \
+        ! printf '%s\n' "$output" | grep -F "Summary: 1 passed, 0 failed" >/dev/null
+    then
+        printf "${RED}[FAIL]${RESET} Failed: compiler_categories (selection)\n"
+        printf '%s\n' "$output"
+        compiler_categories_ok=false
+    fi
+
+    status=0
+    output=$(CASA_TEST_CATEGORY=unknown tests/test_compiler.sh 2>&1) || status=$?
+    if [ "$status" -ne 2 ] || \
+        ! printf '%s\n' "$output" | \
+            grep -F "Unknown compiler test category: unknown" >/dev/null
+    then
+        printf "${RED}[FAIL]${RESET} Failed: compiler_categories (validation)\n"
+        printf '%s\n' "$output"
+        compiler_categories_ok=false
+    fi
+
+    if [ "$compiler_categories_ok" = true ]; then
+        printf "${GREEN}[OK]${RESET} Passed: compiler_categories\n"
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1))
+    fi
+fi
+
 if [ "$has_filter" = false ]; then
 
 # ============================================================================
