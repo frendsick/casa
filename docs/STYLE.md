@@ -164,7 +164,7 @@ without a type-name prefix is acceptable.
   the type checker can infer them. This documents intent for readers:
 
   ```casa
-  fn greet name:str -> str {
+  fn greet name:$str -> String {
       f"Hello, {name}!"
   }
   ```
@@ -359,15 +359,15 @@ without a type-name prefix is acceptable.
   `Diagnostics`; callers decide whether to continue, report, or exit.
 - Application adapters may print an unrecoverable internal error and exit when their
   public interface cannot represent failure.
-- **MUST** write error messages as plain string literals, not `StringBuilder`-constructed
-  strings:
+- **MUST** write fixed error messages as plain string literals, not constructed
+  `String` values:
 
   ```casa
   # MUST
   location "Expected type name" ErrorKind::Syntax diagnostics.record_error
 
   # MUST NOT
-  StringBuilder::new = msg
+  String::new = msg
   "Expected " msg.append ...
-  location msg.build ErrorKind::Syntax diagnostics.record_error
+  location msg ErrorKind::Syntax diagnostics.record_error
   ```

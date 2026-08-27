@@ -12,7 +12,7 @@ operation or binding that uses them.
 | `f32`, `f64` | Floating-point numbers |
 | `bool` | `true` or `false` |
 | `char` | One Unicode scalar value |
-| `str` | A Casa string |
+| `str` | An immutable UTF-8 text view |
 | `cstr` | A null-terminated C string |
 
 An unconstrained integer literal defaults to `i64`. An unconstrained
@@ -55,6 +55,15 @@ Source files and text literals must be valid UTF-8. A character literal must
 contain exactly one Unicode scalar. Surrogates, values above `U+10FFFF`, and
 non-ASCII `\x` escapes are compile-time errors.
 
+A string literal is a copied `str` view of static read-only storage. Convert it
+with `.to_str` when you need an owned, growable `String`:
+
+```casa
+"Casa".to_str = name:String
+'!' name.push
+name.as_str print
+```
+
 ```casa
 '\u{1F600}' print       # 😀
 "\u{3BB}" print         # λ
@@ -64,7 +73,7 @@ non-ASCII `\x` escapes are compile-time errors.
 interface needs a null-terminated string:
 
 ```casa
-"hello" .as_cstr = message:cstr
+"hello" .as_cstr.unwrap = message:cstr
 ```
 
 See [Text and I/O](strings-and-io.md) for string operations and conversions.
@@ -90,6 +99,7 @@ Use `\{` and `\}` for literal braces.
 | `array[T N]` | An owned sequence of exactly `N` elements |
 | `Slice[T]` | A borrowed sequence with a runtime length |
 | `List[T]` | An owned growable sequence |
+| `String` | Owned growable UTF-8 text |
 | `fn[inputs -> outputs]` | A function value |
 | `Option[T]` | A value that can be absent |
 | `Result[T E]` | A success value or an error |

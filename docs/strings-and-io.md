@@ -6,33 +6,34 @@ Import `std` for the methods and functions on this page:
 import "std"
 ```
 
-Source files and string literals contain valid UTF-8. The current string
-collection API still uses byte indexes, and character classification and case
-conversion cover ASCII. Use the code-point APIs when you need one Unicode
-scalar value.
+Source files and string literals contain valid UTF-8. `str` is an immutable
+view. `String` owns growable text and releases it during destruction. String
+indexes and lengths use bytes. Character iteration and reversal decode Unicode
+scalar values. Character classification and case conversion cover ASCII.
 
-## String API
+## Text views
 
 | Method | Result or action |
 |---|---|
-| `length self:str -> u64` | Length in bytes |
+| `length self:$str -> u64` | Length in bytes |
 | `is_empty self:$str -> bool` | Whether the string has no bytes |
-| `at self:str index:u64 -> char` | Character at a byte index |
-| `eq self:str other:str -> bool` | Content equality. `==` is the usual form |
-| `substring length:u64 start:u64 self:str -> str` | Copy a byte range |
-| `find needle:str self:str -> i64` | First byte index, or `-1` |
-| `starts_with prefix:str self:str -> bool` | Whether text starts with a prefix |
-| `ends_with suffix:str self:str -> bool` | Whether text ends with a suffix |
-| `concat suffix:str self:str -> str` | Concatenated text |
-| `contains needle:str self:str -> bool` | Whether text contains a substring |
-| `split delimiter:str self:str -> List[str]` | Split text into parts |
-| `trim self:str -> str` | Remove surrounding ASCII whitespace |
-| `replace old:str replacement:str self:str -> str` | Replace all matches |
-| `to_upper self:str -> str` | Uppercase ASCII letters |
-| `to_lower self:str -> str` | Lowercase ASCII letters |
-| `repeat count:u64 self:str -> str` | Repeat text |
-| `reverse self:str -> str` | Reverse the bytes |
-| `iter self:str -> Iter[char]` | Iterator over characters |
+| `at self:$str index:u64 -> char` | Byte at `index`, represented as `char` |
+| `eq self:$str other:$str -> bool` | Content equality. `==` is the usual form |
+| `substring length:u64 start:u64 self:$str -> String` | Copy a byte range on UTF-8 boundaries |
+| `find needle:$str self:$str -> i64` | First byte index, or `-1` |
+| `starts_with prefix:$str self:$str -> bool` | Whether text starts with a prefix |
+| `ends_with suffix:$str self:$str -> bool` | Whether text ends with a suffix |
+| `concat suffix:$str self:$str -> String` | Concatenated owned text |
+| `contains needle:$str self:$str -> bool` | Whether text contains a substring |
+| `split delimiter:$str self:$str -> List[String]` | Copy split parts |
+| `trim self:$str -> String` | Copy without surrounding ASCII whitespace |
+| `replace old:$str replacement:$str self:$str -> String` | Replace all matches |
+| `to_upper self:$str -> String` | Copy with ASCII letters uppercased |
+| `to_lower self:$str -> String` | Copy with ASCII letters lowercased |
+| `repeat count:u64 self:$str -> String` | Repeat text |
+| `reverse self:$str -> String` | Reverse Unicode scalar values |
+| `iter self:$str -> Iter[char]` | Iterator over Unicode scalar values |
+| `to_str self:$str -> String` | Allocate an independent owner |
 
 Functions with more than one string argument are often clearest with qualified
 names:
@@ -42,20 +43,48 @@ names:
 "," "a,b,c".split = parts
 ```
 
-`List[str]::join` performs the inverse of `split`:
+`List[String]::join_strings` joins owned parts:
 
 ```casa
-["a", "b", "c"] List::from_array = parts
-", " parts.join print    # a, b, c
+"a,b,c" "," str::split = parts
+", " parts.join_strings print    # a, b, c
+```
+
+## Owned strings
+
+`String` is non-`Copy` and moves by default. Use `clone` when you need an
+independent owner. `as_str` returns a borrowed view without allocation.
+
+| Method | Result or action |
+|---|---|
+| `String::new -> String` | Empty owned text |
+| `String::with_capacity capacity:u64 -> String` | Empty text with reserved byte capacity |
+| `String::from_str text:$str -> String` | Copy a view into owned storage |
+| `as_str self:$String -> $str` | Borrow the current text without allocation |
+| `length self:$String -> u64` | Length in bytes |
+| `capacity self:$String -> u64` | Byte capacity |
+| `reserve self:mut$String additional:u64` | Reserve space after the current text |
+| `append self:mut$String text:$str` | Append a borrowed view |
+| `append_string self:mut$String text:String` | Append and consume owned text |
+| `push self:mut$String character:char` | Append one Unicode scalar value |
+| `clear self:mut$String` | Remove all text and retain capacity |
+| `clone self:$String -> String` | Allocate an independent owner |
+
+```casa
+"Hello".to_str = message
+", " message.append
+'世' message.push
+'界' message.push
+message.as_str print
 ```
 
 ## Parse text
 
 | Method | Result |
 |---|---|
-| `to_int self:str -> Option[i64]` | Signed decimal integer |
-| `to_f32 self:str -> Option[f32]` | 32-bit decimal floating-point value |
-| `to_f64 self:str -> Option[f64]` | 64-bit decimal floating-point value |
+| `to_int self:$str -> Option[i64]` | Signed decimal integer |
+| `to_f32 self:$str -> Option[f32]` | 32-bit decimal floating-point value |
+| `to_f64 self:$str -> Option[f64]` | 64-bit decimal floating-point value |
 
 Malformed input returns `Option::None`. Integer parsing does not ignore
 whitespace, so call `trim` first when needed. Floating-point parsing accepts
@@ -101,16 +130,16 @@ that is not a Unicode scalar.
 | Function | Destination |
 |---|---|
 | `print` | Standard output |
-| `println text:str` | Standard output, then newline |
-| `eprint text:str` | Standard error |
-| `eprintln text:str` | Standard error, then newline |
+| `println text:$str` | Standard output, then newline |
+| `eprint text:$str` | Standard error |
+| `eprintln text:$str` | Standard error, then newline |
 
 ```casa
 "ready" println
 "warning" eprintln
 ```
 
-Use `.to_str` on a `Display` value, or use string interpolation:
+`Display.to_str` and string interpolation produce owned `String` values:
 
 ```casa
 42.to_str = answer
@@ -123,15 +152,14 @@ f-strings.
 
 ## C strings and mutable buffers
 
-`as_cstr` returns a null-terminated view for system interfaces. `to_str`
-copies a `cstr` into Casa text:
+`as_cstr` checks for interior NUL and returns an optional null-terminated view
+for system interfaces. `to_str` copies a `cstr` into owned Casa text:
 
 ```casa
-"hello".as_cstr = raw:cstr
+"hello".as_cstr.unwrap = raw:cstr
 raw.to_str print
 ```
 
-Low-level code can use `str::from_cstr pointer:ptr -> str` and
-`set self:str index:u64 character:char` when it owns a suitable buffer. These
-operations do not validate buffer capacity. Prefer normal string operations in
-application code.
+Low-level code can use `str::from_cstr pointer:ptr -> String`. It scans until
+the first NUL and copies the bytes. Prefer bounded operating-system wrappers
+when the foreign buffer length is known.

@@ -74,6 +74,14 @@ _Avoid_: CLI compile result, LSP compiler snapshot, global compiler result
 A bracket-delimited list of values (`[1, 2, 3]`, `["a", "b"]`, `[[1], [2]]`, `[my_fn]`) that produces an independent owned `array[T N]`, where the element count `N` is part of the type. Elements may be primitive literals, enum variants, nested array literals, function references, lambda expressions, or struct literals. Storage placement and behavior-preserving sharing remain compiler decisions.
 _Avoid_: Static array, const array, inline array
 
+**Text view**:
+A `str` value that provides immutable UTF-8 access without owning or freeing its storage. String literals are static text views. `String.as_str` borrows owned text as a text view without allocation.
+_Avoid_: Immutable string, owned str
+
+**Owned text**:
+A non-`Copy` `String` value that owns growable UTF-8 storage, moves by default, and releases dynamic storage during destruction.
+_Avoid_: StringBuilder, growable str
+
 ### Type representation
 
 **Type AST**:
@@ -234,6 +242,8 @@ _Avoid_: Release lint, tag lint
 - CLI reporting, LSP conversion, and test inspection are adapters outside the **Compiler diagnostics schema**.
 - Diagnostics migration is complete only when compiler-global diagnostics, source, and mode state is deleted and all adapters consume explicit results; snapshot or copy bridges do not satisfy the deletion test.
 - Each evaluation of an **Array literal** has independent owned-value semantics. The compiler may share or statically emit backing data when mutation and destruction still behave independently. Raw address equality is a representation detail.
+- A **Text view** never releases storage. An **Owned text** value releases its storage exactly once.
+- Converting **Owned text** to a **Text view** borrows without allocation. Converting a **Text view** to **Owned text** allocates and copies.
 - The **Documentation glossary** names project concepts that prevent drift; language keywords and ordinary programming concepts belong in reference docs.
 - Function, operator, intrinsic, and expression docs should use **Stack effect**; **Operand order** explains how stack values map to operands.
 - Public reference docs should use one **Stack effect** line for an operation instead of separate signature and stack-effect lines.

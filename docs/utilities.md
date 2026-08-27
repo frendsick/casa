@@ -45,7 +45,7 @@ f"elapsed: {timer}\n" print
 | `Timer::new -> Timer` | Start a timer |
 | `elapsed_ns self:Timer -> i64` | Elapsed nanoseconds |
 | `elapsed_ms self:Timer -> i64` | Elapsed milliseconds |
-| `to_str self:Timer -> str` | Fractional seconds, such as `1.042s` |
+| `to_str self:$Timer -> String` | Fractional seconds, such as `1.042s` |
 | `timer_start` | Start the global timer |
 | `timer_elapsed_ns -> i64` | Global elapsed nanoseconds |
 | `timer_elapsed_ms -> i64` | Global elapsed milliseconds |
@@ -75,9 +75,9 @@ terminate with exit code `2`.
 | `add_option self name short long help_text` | Option with one string value |
 | `add_multi_option self name short long help_text` | Repeatable string option |
 | `parse_args self:$ArgParser -> ParsedArgs` | Parse process arguments without changing definitions |
-| `get self:ParsedArgs name:str -> Option[str]` | Positional or option value |
-| `get_flag self:ParsedArgs name:str -> bool` | Flag state |
-| `get_multi self:ParsedArgs name:str -> Option[List[str]]` | Repeatable values |
+| `get self:$ParsedArgs name:$str -> Option[String]` | Positional or option value |
+| `get_flag self:$ParsedArgs name:$str -> bool` | Flag state |
+| `get_multi self:$ParsedArgs name:$str -> Option[List[String]]` | Repeatable values |
 
 Use `""` when an option has no short or long spelling.
 
@@ -102,16 +102,16 @@ import "json"
 | API | Result |
 |---|---|
 | `json_parse cursor:Cursor -> Result[JsonValue ParseError]` | Parse one value |
-| `json_serialize value:JsonValue -> str` | Serialize a value |
-| `json_escape_string text:str -> str` | Escape string contents |
+| `json_serialize value:$JsonValue -> String` | Serialize a value |
+| `json_escape_string text:$str -> String` | Escape string contents |
 | `json_get_value value key -> Option[JsonValue]` | Object member |
-| `json_get_str value key -> Option[str]` | String member |
+| `json_get_str value key -> Option[String]` | Cloned string member |
 | `json_get_int value key -> Option[i64]` | Integer member |
 | `json_get_bool value key -> Option[bool]` | Boolean member |
 | `json_get_object value key -> Option[JsonValue]` | Object member |
 | `json_get_array value key -> Option[List[JsonValue]]` | Array member |
-| `json_object -> Map[str JsonValue]` | Empty object map |
-| `json_set value key map -> Map[str JsonValue]` | Add an object member |
+| `json_object -> Map[String JsonValue]` | Empty object map |
+| `json_set value key map -> Map[String JsonValue]` | Add an object member |
 
 JSON numbers are integers. Unicode `\uXXXX` escapes currently decode as `?`.
 

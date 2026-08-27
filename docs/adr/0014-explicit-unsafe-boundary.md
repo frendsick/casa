@@ -16,6 +16,6 @@ Ordinary collection access returns a borrow such as `Option[$T]`; removing an el
 - Safe Casa code cannot cause memory unsafety through compiler-provided operations.
 - `get` returns `Option[$T]`, `get_mut` returns `Option[mut$T]`, and their unchecked forms require `unsafe`.
 - Stdlib wrappers concentrate unsafe code and expose checked safe APIs.
-- Constructing `$cstr` from a raw pointer requires `unsafe`; safe foreign-string wrappers preserve a source borrow or return an owned validated `str`.
+- Constructing `$cstr` from a raw pointer requires `unsafe`; safe foreign-string wrappers preserve a source borrow or return an owned validated `String`.
 - Existing compiler and stdlib pointer/syscall code requires an explicit migration.
 - Casa does not add exception handling.

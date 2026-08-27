@@ -119,8 +119,10 @@ numbers.sort
 | `sort self:mut$List[T]` | Sort in place when `T` implements `Ord` |
 | `sort_by self:mut$List[T] compare:fn[$T $T -> bool]` | Sort in place with a callback |
 | `sort_by_range self:mut$List[T] low:u64 high:u64 compare:fn[$T $T -> bool]` | Sort an inclusive index range |
-| `join self:$List[str] separator:str -> str` | Join a string list |
+| `join self:$List[str] separator:$str -> String` | Join a string-view list |
 | `contains self:$List[str] needle:$str -> bool` | Whether a string list contains `needle` |
+| `join_strings self:$List[String] separator:$str -> String` | Join owned strings |
+| `push_str self:mut$List[String] value:$str` | Copy and append one text view |
 
 `get`, `get_ref`, and `iter` borrow elements in place, so the list stays their
 owner. Use `get_mut` for exclusive access. Use `.clone` when an owned value is
@@ -167,6 +169,17 @@ end
 `get` and `iter` keep the map as owner. `set` destroys a replaced value.
 `remove` moves a value out. Iteration order is not specified.
 
+`Map[String V]` also accepts borrowed text keys without allocating a temporary
+owner:
+
+| Method | Result or action |
+|---|---|
+| `set_str self:mut$Map[String V] key:$str value:V` | Copy and insert a text key |
+| `get_str self:$Map[String V] key:$str -> Option[$V]` | Borrow a value |
+| `get_mut_str self:mut$Map[String V] key:$str -> Option[mut$V]` | Exclusively borrow a value |
+| `has_str self:$Map[String V] key:$str -> bool` | Whether the text key exists |
+| `remove_str self:mut$Map[String V] key:$str -> Option[V]` | Remove a value |
+
 See [`examples/hash_map.casa`](../examples/hash_map.casa) for a runnable map
 example.
 
@@ -195,26 +208,30 @@ Set[str]::new = names
 
 `iter` keeps the set as owner. `to_list` and `clone` require `K: Clone`.
 
-## String builders
+`Set[String]` provides `add_str`, `has_str`, and `remove_str` for borrowed
+`$str` values. `add_str` copies the key. Lookup and removal do not allocate.
 
-`StringBuilder` avoids repeated string concatenation when text is assembled in
-steps:
+## Owned strings
+
+`String` owns growable UTF-8 text. It avoids repeated concatenation when text
+is assembled in steps:
 
 ```casa
-StringBuilder::new = builder
-"Hello" builder.append
-", " builder.append
-"Casa" builder.append
-builder.build print
+String::new = text
+"Hello" text.append
+", " text.append
+"Casa" text.append
+text.as_str print
 ```
 
 | Method | Result or action |
 |---|---|
-| `StringBuilder::new -> StringBuilder` | Empty builder |
-| `append self:StringBuilder text:str` | Add a string |
-| `append_char self:StringBuilder character:char` | Add one character |
-| `build self:StringBuilder -> str` | Build the current text |
-| `length self:StringBuilder -> u64` | Current character count |
+| `String::new -> String` | Empty owned text |
+| `append self:mut$String text:$str` | Append borrowed text |
+| `append_string self:mut$String text:String` | Append and consume owned text |
+| `push self:mut$String character:char` | Append one Unicode scalar value |
+| `as_str self:$String -> $str` | Borrow the current text without allocation |
+| `length self:$String -> u64` | Current byte length |
 
 ## Iterator sources
 

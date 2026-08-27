@@ -1,6 +1,6 @@
 # Linux OS strings are Bytes
 
-On Casa's Linux target, process arguments, environment values, directory entry names, and similar OS-provided strings without a UTF-8 guarantee enter safe code as owned `Bytes`. Callers use `to_str` when their domain expects text. Casa does not add `OsString` or `OsStr`; on Linux those types would wrap the same arbitrary byte sequences without adding a new invariant.
+On Casa's Linux target, process arguments, environment values, directory entry names, and similar OS-provided strings without a UTF-8 guarantee enter safe code as owned `Bytes`. Callers use `to_str` to validate and create an owned `String` when their domain expects text. Casa does not add `OsString` or `OsStr`; on Linux those types would wrap the same arbitrary byte sequences without adding a new invariant.
 
 The initial APIs include `process::args -> List[Bytes]`, `env::get key:$str -> Option[Bytes]`, and `dir::list path:$str -> Result[List[Bytes] IoError]`. Filesystem paths and environment keys initially accept only `$str`. Casa deliberately defers raw `Bytes` path inputs, a `Path` type, duplicate raw-path functions, and implicit `str`/`Bytes` coercions.
 
