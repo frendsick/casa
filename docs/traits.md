@@ -149,9 +149,10 @@ impl Document: Clone {
 }
 ```
 
-`String`, `array[T N]`, `List[T]`, `Option[T]`, `Result[T E]`, `Map[K V]`, and
-`Set[T]` implement Clone when their owned contents implement Clone. Cloning a
-`String` allocates independent storage. Cloning a `str` copies its view.
+`String`, `Bytes`, `array[T N]`, `List[T]`, `Option[T]`, `Result[T E]`,
+`Map[K V]`, and `Set[T]` implement Clone when their owned contents implement
+Clone. Cloning a `String` or `Bytes` allocates independent storage. Cloning a
+`str` copies its view.
 
 ## Advanced trait implementations
 

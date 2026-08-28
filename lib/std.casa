@@ -2833,6 +2833,123 @@ fn eprintln message:$str { f"{message}\n".as_str eprint }
 fn eprintln_string message:String { message.as_str eprint "\n" eprint }
 
 # ---------------------------------------------------------------------------
+# Bytes
+# ---------------------------------------------------------------------------
+const BYTES_INITIAL_CAPACITY 8
+const UTF8_ASCII_MAX 127
+const UTF8_CONTINUATION_MIN 128
+const UTF8_CONTINUATION_MAX 191
+const UTF8_TWO_BYTE_LEAD_MIN 194
+const UTF8_TWO_BYTE_LEAD_MAX 223
+const UTF8_THREE_BYTE_LEAD_MIN 224
+const UTF8_THREE_BYTE_LEAD_MAX 239
+const UTF8_FOUR_BYTE_LEAD_MIN 240
+const UTF8_FOUR_BYTE_LEAD_MAX 244
+const UTF8_E0_SECOND_MIN 160
+const UTF8_ED_LEAD 237
+const UTF8_ED_SECOND_MAX 159
+const UTF8_F0_SECOND_MIN 144
+const UTF8_F4_SECOND_MAX 143
+
+struct Utf8Error {
+    index: u64
+}
+
+struct Bytes {
+    data:             ptr
+    size:             u64
+    storage_capacity: u64
+}
+
+impl Bytes {
+    fn new -> Bytes {
+        # SAFETY: The allocation creates the initial byte slots with no initialized values.
+        unsafe { BYTES_INITIAL_CAPACITY 0 BYTES_INITIAL_CAPACITY alloc Bytes }
+    }
+
+    fn length self:$Bytes -> u64 { self.size }
+
+    fn capacity self:$Bytes -> u64 { self.storage_capacity }
+
+    fn ensure_capacity self:mut$Bytes required:u64 {
+        if self.storage_capacity required <= then
+            return
+        fi
+        self.storage_capacity 2 * = new_capacity
+        if required new_capacity < then
+            required = new_capacity
+        fi
+        # SAFETY: The replacement has room for every initialized byte, which is copied once.
+        unsafe {
+            new_capacity alloc = new_data
+            self.size self.data new_data memcpy
+            self.data free
+            new_data = self.data
+            new_capacity = self.storage_capacity
+        }
+    }
+
+    fn push self:mut$Bytes byte:u8 {
+        self.size 1 + self.ensure_capacity
+        # SAFETY: ensure_capacity provides one writable byte after the initialized range.
+        unsafe { byte self.data self.size + store8 }
+        1 += self.size
+    }
+
+    fn append self:mut$Bytes source:$Bytes {
+        self.size source.size + self.ensure_capacity
+        # SAFETY: source is initialized and ensure_capacity provides a disjoint destination.
+        unsafe { source.size source.data self.data self.size + memcpy }
+        source.size += self.size
+    }
+
+    fn get self:$Bytes index:u64 -> Option[u8] {
+        if self.size index >= then
+            Option[u8]::None
+        else
+            # SAFETY: The bounds check identifies one initialized byte.
+            unsafe { self.data index + load8 } Option::Some
+        fi
+    }
+
+    fn is_byte_in_range self:$Bytes index:u64 minimum:u8 maximum:u8 -> bool {
+        index self.get match
+            Option::Some(byte) => minimum byte >= maximum byte <= &&
+            Option::None => false
+        end
+    }
+
+    fn iter self:$Bytes -> Iter[u8] {
+        0 (u64) = index
+        {
+            index self.get = byte
+            if byte.is_some then
+                1 += index
+            fi
+            byte
+        } Iter
+    }
+
+    fn drop self:mut$Bytes {
+        # SAFETY: Bytes exclusively owns data until drop releases the allocation.
+        unsafe {
+            self.data free
+            0 (ptr) = self.data
+            0 (u64) = self.size
+            0 (u64) = self.storage_capacity
+        }
+    }
+}
+
+impl Bytes: Clone {
+    fn clone self:$Bytes -> Bytes {
+        Bytes::new = result
+        self result.append
+        result
+    }
+}
+
+# ---------------------------------------------------------------------------
 # String
 # ---------------------------------------------------------------------------
 
@@ -2992,6 +3109,65 @@ impl String {
             self.data (ptr) free
             0 (ptr) (str) = self.data
         }
+    }
+}
+
+impl Bytes {
+    fn to_str self:$Bytes -> Result[String Utf8Error] {
+        0 (u64) = index
+        while index self.size > do
+            index self.get.unwrap = first
+            1 (u64) = width
+            UTF8_CONTINUATION_MIN (u8) = second_minimum
+            UTF8_CONTINUATION_MAX (u8) = second_maximum
+            if UTF8_ASCII_MAX first <= then
+                1 (u64) = width
+            elif UTF8_TWO_BYTE_LEAD_MIN first >= UTF8_TWO_BYTE_LEAD_MAX first <= && then
+                2 (u64) = width
+            elif UTF8_THREE_BYTE_LEAD_MIN first >= UTF8_THREE_BYTE_LEAD_MAX first <= && then
+                3 (u64) = width
+                if UTF8_THREE_BYTE_LEAD_MIN first == then
+                    UTF8_E0_SECOND_MIN (u8) = second_minimum
+                elif UTF8_ED_LEAD first == then
+                    UTF8_ED_SECOND_MAX (u8) = second_maximum
+                fi
+            elif UTF8_FOUR_BYTE_LEAD_MIN first >= UTF8_FOUR_BYTE_LEAD_MAX first <= && then
+                4 (u64) = width
+                if UTF8_FOUR_BYTE_LEAD_MIN first == then
+                    UTF8_F0_SECOND_MIN (u8) = second_minimum
+                elif UTF8_FOUR_BYTE_LEAD_MAX first == then
+                    UTF8_F4_SECOND_MAX (u8) = second_maximum
+                fi
+            else
+                index Utf8Error Result::Error return
+            fi
+
+            if 1 width > then
+                if second_maximum second_minimum index 1 + self.is_byte_in_range ! then
+                    index 1 + Utf8Error Result::Error return
+                fi
+            fi
+            2 (u64) = offset
+            while offset width > do
+                if
+                    UTF8_CONTINUATION_MAX UTF8_CONTINUATION_MIN
+                    index offset + self.is_byte_in_range !
+                then
+                    index offset + Utf8Error Result::Error return
+                fi
+                1 += offset
+            done
+            width += index
+        done
+
+        self.size String::with_capacity = text
+        # SAFETY: Validation established UTF-8, and text has matching capacity plus a NUL slot.
+        unsafe {
+            self.size text.data (ptr) store64
+            self.size self.data text.data (ptr) 8 + memcpy
+            0 text.data (ptr) 8 + self.size + store8
+        }
+        text Result::Ok
     }
 }
 

@@ -119,6 +119,21 @@ decimal exponents, signed zero, `inf`, `-inf`, and `NaN`.
 "1.5e3".to_f64 .unwrap print
 ```
 
+## Convert bytes to text
+
+`Bytes.to_str self:$Bytes -> Result[String Utf8Error]` validates UTF-8 and
+copies valid bytes into an owned `String`. It borrows the byte buffer, so the
+source remains available after conversion. Invalid UTF-8 returns `Utf8Error`.
+Casa does not provide a consuming `into_str` conversion.
+
+```casa
+Bytes::new = bytes
+72 bytes.push
+105 bytes.push
+bytes.to_str.unwrap = text
+text.as_str print
+```
+
 ## Characters
 
 | Method | Result or action |
