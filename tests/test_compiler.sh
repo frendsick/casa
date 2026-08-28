@@ -38,7 +38,7 @@ test_category() {
             echo compiler_analysis
             ;;
         test/test_bytecode|test/test_document|test/test_emitter|test/test_error|\
-        test/test_lsp|test/test_selective_import|\
+        test/test_lsp|test/test_modules|test/test_selective_import|\
         test/test_selective_import_closure)
             echo compiler_integration
             ;;
@@ -67,7 +67,7 @@ test_category() {
         test/test_numeric_types|test/test_struct_literal|test/test_typeof)
             echo language_values
             ;;
-        test/test_argparse|test/test_collection_is_empty|\
+        test/test_argparse|test/test_bytes|test/test_collection_is_empty|\
         test/test_collection_reclamation|test/test_destruction|test/test_file|\
         test/test_iterator_combinators|test/test_list_contains|\
         test/test_map_iter|test/test_parser_borrows|test/test_set_iter|\

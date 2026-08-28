@@ -102,6 +102,7 @@ Use `\{` and `\}` for literal braces.
 | `array[T N]` | An owned sequence of exactly `N` elements |
 | `Slice[T]` | A borrowed sequence with a runtime length |
 | `List[T]` | An owned growable sequence |
+| `Bytes` | An owned growable byte buffer |
 | `String` | Owned growable UTF-8 text |
 | `fn[inputs -> outputs]` | A function value |
 | `Option[T]` | A value that can be absent |
@@ -117,9 +118,10 @@ type:
 [] = names:array[str 0]
 ```
 
-The annotation gives an empty array its element type. Every evaluation of an
-array literal produces an independent owned array that takes ownership of its
-elements. `Slice[T]` borrows a runtime-length range from a `List[T]`. See
+The annotation gives an empty array its element type. Use `Bytes` for compact
+binary data. It stores one `u8` per byte and has no byte-literal syntax. Every
+evaluation of an array literal produces an independent owned array that takes
+ownership of its elements. `Slice[T]` borrows a runtime-length range from a `List[T]`. See
 [Collections](collections.md),
 [Optional Values and Errors](optional-values-and-errors.md),
 [Functions and Lambdas](functions-and-lambdas.md), [Structs and

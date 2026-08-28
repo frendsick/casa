@@ -32,6 +32,7 @@ The examples are ordered from introductory programs to low-level system code.
 | 20 | [`sized_memory.casa`](sized_memory.casa) | Unsafe allocation and sized memory access |
 | 21 | [`unicode.casa`](unicode.casa) | Direct Unicode, Unicode escapes, and code-point conversion |
 | 22 | [`owned_string.casa`](owned_string.casa) | Owned string growth, borrowing, and cloning |
-| 23 | [`game_of_life.casa`](game_of_life.casa) | An interactive terminal program with raw Linux calls |
+| 23 | [`bytes.casa`](bytes.casa) | Compact binary storage, iteration, and validated text conversion |
+| 24 | [`game_of_life.casa`](game_of_life.casa) | An interactive terminal program with raw Linux calls |
 
 `game_of_life.casa` needs an interactive terminal. Stop it with Ctrl+C.

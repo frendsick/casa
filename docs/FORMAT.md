@@ -59,7 +59,7 @@ fn fizzbuzz number:i64 {
 ## Blank lines
 
 - **1 blank line** before and after top-level definitions (`fn`, `struct`, `enum`,
-  `impl`, `trait`) and import groups.
+  `impl`, `trait`, with an optional `pub` prefix) and import groups.
 - Consecutive plain top-level statements (global assignments, map `.set` chains)
   are grouped **without** blank lines.
 - Consecutive `import` statements are grouped **without** blank lines.
@@ -210,7 +210,7 @@ This applies to pattern matching (`is` checks), constructors, and `match` arms.
 
 ## Struct and enum field layout
 
-- Struct and enum fields use `name: Type` (space after colon).
+- Struct and enum fields use `name: Type` or `pub name: Type` (space after colon).
 - When a struct has 2 or more fields, **align type names to the same column**:
 
 ```casa
@@ -220,9 +220,9 @@ struct Parser {
 }
 
 struct Token {
-    kind:     TokenKind
-    location: Location
-    value:    str
+    pub kind:     TokenKind
+    location:     Location
+    value:        str
 }
 ```
 
@@ -285,7 +285,8 @@ not apply to lambdas or match-arm blocks.
 
 ### Wrapped form
 
-When the function declaration would exceed 100 characters, wrap as follows:
+When the function declaration would exceed 100 characters, wrap as follows.
+Keep `pub` and `unsafe` before `fn` on the first line.
 
 - `fn name` alone on the first line
 - Each parameter on its own line, indented 4 spaces, `name:type` compact

@@ -16,8 +16,8 @@ Compile module-style imports with a library path such as `casac -L lib`.
 ```casa
 import "log"
 
-LogLevel::Info log_set_level
-"server started" log_info
+log::LogLevel::Info log::log_set_level
+"server started" log::log_info
 ```
 
 The default level is `Warning`. A selected level includes less verbose levels.
@@ -36,7 +36,7 @@ The default level is `Warning`. A selected level includes less verbose levels.
 ```casa
 import "timer"
 
-Timer::new = timer
+timer::Timer::new = timer
 f"elapsed: {timer}\n" print
 ```
 
@@ -46,18 +46,14 @@ f"elapsed: {timer}\n" print
 | `elapsed_ns self:Timer -> i64` | Elapsed nanoseconds |
 | `elapsed_ms self:Timer -> i64` | Elapsed milliseconds |
 | `to_str self:$Timer -> String` | Fractional seconds, such as `1.042s` |
-| `timer_start` | Start the global timer |
-| `timer_elapsed_ns -> i64` | Global elapsed nanoseconds |
-| `timer_elapsed_ms -> i64` | Global elapsed milliseconds |
-
-The global elapsed functions terminate if `timer_start` was not called.
+Create a `Timer` value and keep it for later elapsed-time queries. The timer module has no global convenience state.
 
 ## Argument parsing
 
 ```casa
 import "argparse"
 
-ArgParser::new = parser
+argparse::ArgParser::new = parser
 "input file" "input" parser.add_positional
 "verbose output" "--verbose" "-v" "verbose" parser.add_flag
 parser.parse_args = arguments
@@ -91,9 +87,10 @@ identifiers, strings, characters, and escapes. See the compact
 
 ```casa
 import "json"
+import "parser"
 
-"{\"name\":\"Ada\"}" Cursor::new json_parse .unwrap = value
-"name" value json_get_str .unwrap print
+"{\"name\":\"Ada\"}" parser::Cursor::new json::json_parse .unwrap = value
+"name" value json::json_get_str .unwrap print
 ```
 
 `JsonValue` variants are `JsonNull`, `JsonBool`, `JsonInt`, `JsonString`,

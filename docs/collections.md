@@ -135,6 +135,28 @@ the program.
 See [`examples/sorting.casa`](../examples/sorting.casa) for sorting and
 reversing.
 
+## Bytes
+
+`Bytes` is a non-`Copy` owned growable buffer for binary data. It stores one
+`u8` per byte. Mutation requires an exclusive borrow.
+
+| Method | Result or action |
+|---|---|
+| `Bytes::new -> Bytes` | Empty byte buffer |
+| `length self:$Bytes -> u64` | Number of initialized bytes |
+| `capacity self:$Bytes -> u64` | Number of bytes available before growth |
+| `push self:mut$Bytes byte:u8` | Add one byte |
+| `append self:mut$Bytes source:$Bytes` | Copy the source bytes onto the end |
+| `get self:$Bytes index:u64 -> Option[u8]` | Copy one byte if the index is in range |
+| `iter self:$Bytes -> Iter[u8]` | Iterator that copies each byte |
+| `clone self:$Bytes -> Bytes` | Independent byte buffer |
+| `to_str self:$Bytes -> Result[String Utf8Error]` | Validate and copy UTF-8 text |
+
+`to_str` borrows the buffer and keeps it unchanged. Invalid UTF-8 returns
+`Utf8Error`. There is no consuming `into_str` conversion.
+
+See [`examples/bytes.casa`](../examples/bytes.casa) for a runnable example.
+
 ## Maps
 
 `Map[K V]` associates unique keys with values. `K` must implement `Hashable`:
@@ -242,6 +264,7 @@ text.as_str print
 | `array[T N]` | `Iter[$T]` |
 | `List[T]` | `Iter[$T]` |
 | `Slice[T]` | `Iter[$T]` |
+| `Bytes` | `Iter[u8]` |
 | `str` | `Iter[char]` |
 | `Map[K V]` | `Iter[Pair[$K $V]]` |
 | `Set[K]` | `Iter[$K]` |
