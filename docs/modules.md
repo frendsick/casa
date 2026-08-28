@@ -87,6 +87,8 @@ Private declarations remain available to code in the same module. Imports do not
 
 An imported file must lex, parse, and resolve successfully before its declarations are added to the importing file. A failed full or selective import reports the imported file's diagnostics at the import position and stops further import expansion and identifier resolution.
 
+Module imports must be acyclic. A cycle is a compile-time error that lists the complete resolved path from the first repeated module back to itself. The compiler visits dependencies in source order before their importers and processes repeated imports only once.
+
 ### `-L` / `--library-path`
 
 Repeatable. Adds a directory to the module search path:
