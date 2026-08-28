@@ -15,7 +15,8 @@ Assign each finding one class:
 
 Before opening a pull request:
 
-Do not run tests for documentation-only changes.
+Do not run focused behavior tests for documentation-only changes. The complete
+pre-PR suite required by [testing.md](./testing.md) still applies.
 
 1. Run the `ponytail-review` skill on the diff.
 2. Review non-trivial functions added or changed with `function-design` as part
