@@ -5,6 +5,7 @@ import "../../compiler/lexer.casa" as lexer
 import "../../compiler/syntax.casa" as syntax
 import "../../lib/os.casa" as os
 import "../../lib/test.casa" as test
+import "../../lib/timer.casa" as timer
 
 pub fn test_integer_literal {
     "integer_literal" test::test_start
@@ -1052,7 +1053,6 @@ pub fn test_string_adjacent_backslash_then_n {
 # ============================================================================
 # Hex escape sequences
 # ============================================================================
-
 pub fn test_string_hex_escape_printable {
     "string_hex_escape_printable" test::test_start
     "test" "\"\\x41\"" lexer::lex_source = lex_result
@@ -1182,7 +1182,6 @@ pub fn test_malformed_utf8_source_rejected {
 # ============================================================================
 # Fat arrow delimiter
 # ============================================================================
-
 pub fn test_fat_arrow_delimiter {
     "fat_arrow_delimiter" test::test_start
     "test" "=>" lexer::lex_source = lex_result
@@ -1206,7 +1205,6 @@ pub fn test_fat_arrow_in_match {
 # ============================================================================
 # Additional intrinsic value tests
 # ============================================================================
-
 pub fn test_typeof_intrinsic {
     "typeof_intrinsic" test::test_start
     "test" "typeof" lexer::lex_source = lex_result
@@ -1246,7 +1244,6 @@ pub fn test_exec_intrinsic {
 # ============================================================================
 # Additional keyword value tests
 # ============================================================================
-
 pub fn test_enum_keyword {
     "enum_keyword" test::test_start
     "test" "enum" lexer::lex_source = lex_result
@@ -1362,6 +1359,161 @@ pub fn test_import_lexical_diagnostics_are_merged {
 }
 
 # ============================================================================
+# SourceStore line-start index tests
+# ============================================================================
+# Multiple positions in a single LF source; exercises every code path of the
+# binary search (first line, mid-line, line boundary, last line).
+pub fn test_source_store_positions_lf {
+    "source_store_positions_lf" test::test_start
+    lexer::SourceStore::new = store
+    "abc\ndef\nghi" "test.casa" store.add
+    "line 1 start line" 1 0 "test.casa" store
+        .convert_offset_to_position
+        .unwrap
+        .line test::assert_eq
+    "line 1 col 1" 1 0 "test.casa" store
+        .convert_offset_to_position
+        .unwrap
+        .column test::assert_eq
+    "line 1 col 3" 3 2 "test.casa" store
+        .convert_offset_to_position
+        .unwrap
+        .column test::assert_eq
+    "newline line 1" 1 3 "test.casa" store
+        .convert_offset_to_position
+        .unwrap
+        .line test::assert_eq
+    "line 2 start line" 2 4 "test.casa" store
+        .convert_offset_to_position
+        .unwrap
+        .line test::assert_eq
+    "line 2 col 1" 1 4 "test.casa" store
+        .convert_offset_to_position
+        .unwrap
+        .column test::assert_eq
+    "line 2 col 3" 3 6 "test.casa" store
+        .convert_offset_to_position
+        .unwrap
+        .column test::assert_eq
+    "line 3 start line" 3 8 "test.casa" store
+        .convert_offset_to_position
+        .unwrap
+        .line test::assert_eq
+    "line 3 col 3" 3 10 "test.casa" store
+        .convert_offset_to_position
+        .unwrap
+        .column test::assert_eq
+}
+# CRLF newlines: \r counts as a column byte; only \n advances the line.
+pub fn test_source_store_positions_crlf {
+    "source_store_positions_crlf" test::test_start
+    lexer::SourceStore::new = store
+    "ab\r\ncd\r\nef" "test.casa" store.add
+    "line 1 col 1" 1 0 "test.casa" store
+        .convert_offset_to_position
+        .unwrap
+        .line test::assert_eq
+    "cr col 3" 3 2 "test.casa" store
+        .convert_offset_to_position
+        .unwrap
+        .column test::assert_eq
+    "lf still line 1" 1 3 "test.casa" store
+        .convert_offset_to_position
+        .unwrap
+        .line test::assert_eq
+    "after crlf line 2" 2 4 "test.casa" store
+        .convert_offset_to_position
+        .unwrap
+        .line test::assert_eq
+    "after crlf col 1" 1 4 "test.casa" store
+        .convert_offset_to_position
+        .unwrap
+        .column test::assert_eq
+    "line 3 start" 3 8 "test.casa" store
+        .convert_offset_to_position
+        .unwrap
+        .line test::assert_eq
+}
+# Non-ASCII UTF-8: offsets are byte-based, not codepoint-based.
+pub fn test_source_store_positions_non_ascii {
+    "source_store_positions_non_ascii" test::test_start
+    lexer::SourceStore::new = store
+    # "é" is 2 bytes (0xC3 0xA9); "😀" is 4 bytes.
+    "a\né\n😀" "test.casa" store.add
+    "line 1" 1 0 "test.casa" store
+        .convert_offset_to_position
+        .unwrap
+        .line test::assert_eq
+    "line 2 at byte 2" 2 2 "test.casa" store
+        .convert_offset_to_position
+        .unwrap
+        .line test::assert_eq
+    "line 3 at byte 5" 3 5 "test.casa" store
+        .convert_offset_to_position
+        .unwrap
+        .line test::assert_eq
+}
+# Edge cases: empty source, single-line source, and offset at end of file.
+pub fn test_source_store_position_boundary {
+    "source_store_position_boundary" test::test_start
+    lexer::SourceStore::new = store
+    "" "empty.casa" store.add
+    "empty line 1" 1 0 "empty.casa" store
+        .convert_offset_to_position
+        .unwrap
+        .line test::assert_eq
+    "hello" "single.casa" store.add
+    "single line 1" 1 4 "single.casa" store
+        .convert_offset_to_position
+        .unwrap
+        .line test::assert_eq
+    "single col 5" 5 4 "single.casa" store
+        .convert_offset_to_position
+        .unwrap
+        .column test::assert_eq
+}
+# Round-trip: every offset in a small multi-line source survives offset→position→offset.
+pub fn test_source_store_convert_position_roundtrip {
+    "source_store_convert_position_roundtrip" test::test_start
+    lexer::SourceStore::new = store
+    "ab\ncd\nef" "test.casa" store.add
+    0 (u64) = offset
+    while offset 9 > do
+        if offset "test.casa" store.convert_offset_to_position std::Option::Some(pos) is then
+            if pos "test.casa" store.convert_position_to_offset std::Option::Some(back) is then
+                "roundtrip" offset back test::assert_eq
+            fi
+        fi
+        1 += offset
+    done
+}
+# Benchmark: 1 000 lines × 50 reps, querying every 100 bytes.
+# Prints elapsed time; no pass/fail assertion (timing varies by machine).
+pub fn test_source_store_position_benchmark {
+    "source_store_position_benchmark" test::test_start
+    lexer::SourceStore::new = store
+    std::String::new = src
+    0 (u64) = line_count
+    while line_count 1000 > do
+        "a line of source text with some typical length\n" src.append
+        1 += line_count
+    done
+    src.as_str "bench.casa" store.add
+
+    timer::Timer::new = t
+    0 (u64) = rep
+    while rep 50 > do
+        0 (u64) = query_offset
+        while query_offset src.length > do
+            query_offset "bench.casa" store.convert_offset_to_position drop
+            100 += query_offset
+        done
+        1 += rep
+    done
+    f"  position_benchmark: {t}\n" print
+}
+
+# ============================================================================
 # Run all tests
 # ============================================================================
 test_integer_literal
@@ -1469,4 +1621,10 @@ test_source_store_prefers_normalized_override
 test_source_store_missing_lookup_is_explicit
 test_source_store_lookup_borrows_source
 test_import_lexical_diagnostics_are_merged
+test_source_store_positions_lf
+test_source_store_positions_crlf
+test_source_store_positions_non_ascii
+test_source_store_position_boundary
+test_source_store_convert_position_roundtrip
+test_source_store_position_benchmark
 test::test_summary
