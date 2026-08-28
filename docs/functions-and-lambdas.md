@@ -171,6 +171,28 @@ fn increment_counter {
 `global NAME` must appear before other statements. The global must already
 exist. Lambdas cannot declare globals.
 
+Declare an immutable runtime global at the top level with an initializer:
+
+```casa
+global LIMIT 100
+
+global OPERATORS {
+    build_operators
+}
+
+pub global PUBLIC_LIMIT 200
+```
+
+A direct initializer is one operation. Use a block for a multi-operation
+initializer. The initializer must produce one value. Dependency modules
+initialize before their importers, and globals in one module initialize in
+source order. A global cannot read a later global during initialization.
+
+An immutable global is private unless it has `pub`. A `Copy` value is copied
+when an owned value is required. A non-`Copy` value is borrowed and cannot move
+out of its global place. Local and pattern bindings cannot shadow a visible
+immutable global.
+
 Use `= name:Type` when the value needs an explicit type:
 
 ```casa

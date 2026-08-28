@@ -62,6 +62,7 @@ Selective imports use the same resolution rules, then make the requested public 
 - Function imports include referenced functions, constants, structs, enums, traits, and methods needed by the imported function body and function declaration.
 - Struct and enum imports include generated accessors plus functions in their `impl` blocks.
 - Constants can be imported directly.
+- Public immutable globals can be imported directly. A selected declaration also includes private immutable globals and initializer helpers in its dependency closure.
 - Top-level expressions, assignments, and bare calls in the imported file are skipped.
 - Importing a function that depends on skipped top-level state is a compile error.
 - Names referenced directly by the importing file must be listed explicitly.
@@ -88,6 +89,10 @@ Private declarations remain available to code in the same module. Imports do not
 ### Import failures
 
 An imported file must lex, parse, and resolve successfully before its declarations are added to the importing file. A failed full or selective import reports the imported file's diagnostics at the import position and stops further import expansion and identifier resolution.
+
+Module imports must be acyclic. A cycle is a compile-time error that lists the complete resolved path from the first repeated module back to itself. The compiler visits dependencies in source order before their importers and processes repeated imports only once.
+
+Imports do not run the imported root body. Full imports initialize the module's immutable globals. Selective imports initialize only globals in the selected declarations' dependency closure. Each physical global initializes once, even when the file is imported through more than one alias.
 
 ### `-L` / `--library-path`
 

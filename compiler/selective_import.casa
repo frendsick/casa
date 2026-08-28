@@ -4,8 +4,15 @@ import "common" as common
 import "error" as error
 import "semantics" as semantics
 
+pub struct SelectiveGlobal {
+    pub variable:     common::Variable
+    pub file:         std::String
+    pub storage_name: std::String
+}
+
 pub enum SelectiveImportDeclaration {
     Function (common::Function)
+    Global (SelectiveGlobal)
     Constant (common::Constant)
     Struct (common::CasaStruct)
     Enum (common::CasaEnum)
@@ -33,6 +40,10 @@ impl SelectiveImportDeclaration {
     pub fn get_name self:$SelectiveImportDeclaration -> std::String {
         self match
             SelectiveImportDeclaration::Function(function) => function.name.clone
+            SelectiveImportDeclaration::Global(imported_global) => imported_global
+                .variable
+                .name
+                .clone
             SelectiveImportDeclaration::Constant(constant) => constant.name.clone
             SelectiveImportDeclaration::Struct(casa_struct) => casa_struct.name.clone
             SelectiveImportDeclaration::Enum(casa_enum) => casa_enum.name.clone
@@ -51,6 +62,13 @@ impl SelectiveImportDeclaration {
             SelectiveImportDeclaration::Function(function) => {
                 if function.name destination.functions.has then
                     "function".to_str std::Option::Some
+                else
+                    std::Option[std::String]::None
+                fi
+            }
+            SelectiveImportDeclaration::Global(imported_global) => {
+                if imported_global.variable.name destination.variables.has then
+                    "global".to_str std::Option::Some
                 else
                     std::Option[std::String]::None
                 fi
@@ -104,6 +122,16 @@ impl SelectiveImportDeclaration {
                 function.name.clone = name
                 function name destination.functions.set
             }
+            SelectiveImportDeclaration::Global(imported_global) => {
+                imported_global
+                    .variable
+                    .name
+                    .clone = name
+                imported_global.variable.clone name.clone destination.variables.set
+                name.clone destination.immutable_globals.add
+                imported_global.file.clone name.clone destination.immutable_global_files.set
+                imported_global.storage_name.clone name destination.immutable_global_slots.set
+            }
             SelectiveImportDeclaration::Constant(constant) => {
                 constant.name.clone = name
                 constant name destination.constants.set
@@ -132,13 +160,13 @@ pub struct SelectiveImportClosureBuilder {
     pub store:                common::SymbolStore
     pub location:             common::Location
     pub visited:              std::Set[std::String]
-    pub invalid_globals:      std::Set[std::String]
     pub declarations:         std::List[SelectiveImportDeclaration]
     pub diagnostics:          error::Diagnostics
     pub inferred_effects:     std::Map[std::String common::StackEffect]
     pub inherited_symbols:    std::Set[std::String]
     pub inherited_impls:      std::Set[std::String]
     pub public_surface_types: std::Set[std::String]
+    pub global_initializers:  std::List[common::Op]
 }
 
 impl SelectiveImportClosureBuilder {
@@ -148,6 +176,7 @@ impl SelectiveImportClosureBuilder {
         inherited_symbols:std::Set[std::String]
         inherited_impls:std::Set[std::String]
     -> SelectiveImportClosureBuilder {
+        std::List[common::Op]::new
         std::Set[std::String]::new
         inherited_impls
         inherited_symbols
@@ -155,10 +184,114 @@ impl SelectiveImportClosureBuilder {
         error::Diagnostics::new
         std::List[SelectiveImportDeclaration]::new
         std::Set[std::String]::new
-        std::Set[std::String]::new
         location.clone
         store
         SelectiveImportClosureBuilder
+    }
+
+    pub fn collect_initializer_dependencies
+        self:mut$SelectiveImportClosureBuilder
+        ops:$std::List[common::Op]
+    {
+        self.store self.inferred_effects ops semantics::analyze_global_initializer_semantics
+        = initializer_semantics
+        for fact in initializer_semantics.ordered_facts.iter do
+            fact match
+                semantics::SemanticDependency::Symbol(dependency) => {
+                    dependency.as_str self.collect_symbol
+                }
+                semantics::SemanticDependency::Call(dependency) => {
+                    if
+                        dependency.as_str self
+                            .store
+                            .functions
+                            .has_str
+                    then
+                        dependency.as_str self.collect_symbol
+                    fi
+                }
+                semantics::SemanticDependency::BoundCall(call) => {
+                    call.function_name.as_str self.collect_symbol
+                    for
+                        callables in call
+                            .argument_callables
+                            .values
+                            .iter
+                    do
+                        for dependency in callables.iter do
+                            dependency.as_str self.collect_symbol
+                        done
+                    done
+                }
+                semantics::SemanticDependency::DefaultMethodCall(call) => {
+                    call self.collect_default_method_dependencies
+                }
+                semantics::SemanticDependency::Type(type_dependency) => {
+                    type_dependency self.collect_type
+                }
+                semantics::SemanticDependency::Global(reference) => {
+                    reference.name.as_str "." str::split = parts
+                    0 parts.get = root_name
+                    if
+                        root_name.as_str self
+                            .store
+                            .immutable_globals
+                            .has_str
+                    then
+                        root_name.as_str self.collect_symbol
+                    fi
+                }
+            end
+        done
+    }
+
+    pub fn collect_default_method_dependencies
+        self:mut$SelectiveImportClosureBuilder
+        call:$semantics::SemanticDefaultMethodCall
+    {
+        for
+            callables in call
+                .argument_callables
+                .values
+                .iter
+        do
+            for dependency in callables.iter do
+                dependency.as_str self.collect_symbol
+            done
+        done
+        f"default:{call.trait_name}:{call.method_name}" = call_key
+        if call_key.as_str self.visited.has_str then
+            return
+        fi
+        call_key self.visited.add
+        std::List[common::Op]::new = default_ops
+        if
+            call.trait_name.as_str self
+                .store
+                .traits
+                .get_str std::Option::Some(casa_trait) is
+        then
+            for method in casa_trait.methods.iter do
+                if method.name.as_str call.method_name.as_str == then
+                    method.default_ops common::clone_ops = default_ops
+                    break
+                fi
+            done
+        fi
+        default_ops self.collect_initializer_dependencies
+    }
+
+    pub fn collect_global_initializer self:mut$SelectiveImportClosureBuilder symbol:$str {
+        std::List[common::Op]::new = initializer_ops
+        for op in self.global_initializers.iter do
+            if op.value common::OpValue::InitGlobal(initializer) is then
+                if initializer.name.as_str symbol == then
+                    initializer.ops common::clone_ops = initializer_ops
+                    break
+                fi
+            fi
+        done
+        initializer_ops self.collect_initializer_dependencies
     }
 
     pub fn collect_type self:mut$SelectiveImportClosureBuilder type_value:$common::Type {
@@ -364,6 +497,19 @@ impl SelectiveImportClosureBuilder {
         if
             symbol self
                 .store
+                .immutable_globals
+                .has_str
+            symbol self
+                .store
+                .variables
+                .get_str std::Option::Some(variable) is &&
+        then
+            variable.typ self.collect_public_type
+            return
+        fi
+        if
+            symbol self
+                .store
                 .functions
                 .get_str std::Option::Some(function) is
         then
@@ -407,7 +553,7 @@ impl SelectiveImportClosureBuilder {
         done
     }
 
-    pub fn record_global_dependency
+    pub fn collect_global_dependency
         self:mut$SelectiveImportClosureBuilder
         function:mut$common::Function
         variable_name:$str
@@ -429,16 +575,21 @@ impl SelectiveImportClosureBuilder {
             declared_global
             root_name.as_str function.variables common::variable_list_contains ! || &&
         then
-            f"{function.name}\n{root_name}" = dependency_key
-            if dependency_key self.invalid_globals.has then
-                return
+            if
+                root_name.as_str self
+                    .store
+                    .immutable_globals
+                    .has_str
+            then
+                root_name.as_str self.collect_symbol
+            else
+                location
+                f"Selective import `{function.name}` depends on global variable `{root_name}`"
+                common::ErrorKind::InvalidVariable
+                self.diagnostics.record_error_string
             fi
-            dependency_key self.invalid_globals.add
-            location
-            f"Selective import `{function.name}` depends on global variable `{root_name}`"
-            common::ErrorKind::InvalidVariable
-            self.diagnostics.record_error_string
         fi
+        location drop
     }
 
     pub fn collect_function_semantics
@@ -452,6 +603,32 @@ impl SelectiveImportClosureBuilder {
                 semantics::SemanticDependency::Symbol(dependency) => {
                     dependency.as_str self.collect_symbol
                 }
+                semantics::SemanticDependency::Call(dependency) => {
+                    if
+                        dependency.as_str self
+                            .store
+                            .functions
+                            .has_str
+                    then
+                        dependency.as_str self.collect_symbol
+                    fi
+                }
+                semantics::SemanticDependency::BoundCall(call) => {
+                    call.function_name.as_str self.collect_symbol
+                    for
+                        callables in call
+                            .argument_callables
+                            .values
+                            .iter
+                    do
+                        for dependency in callables.iter do
+                            dependency.as_str self.collect_symbol
+                        done
+                    done
+                }
+                semantics::SemanticDependency::DefaultMethodCall(call) => {
+                    call self.collect_default_method_dependencies
+                }
                 semantics::SemanticDependency::Type(type_dependency) => {
                     type_dependency self.collect_type
                 }
@@ -460,7 +637,7 @@ impl SelectiveImportClosureBuilder {
                     reference.location
                     reference.name.as_str
                     function
-                    self.record_global_dependency
+                    self.collect_global_dependency
                 }
             end
         done
@@ -589,12 +766,41 @@ impl SelectiveImportClosureBuilder {
             symbol self
                 .store
                 .variables
-                .has_str
+                .get_str std::Option::Some(variable) is
         then
-            self.location
-            f"Selective import cannot import global variable `{symbol}`"
-            common::ErrorKind::InvalidVariable
-            self.diagnostics.record_error_string
+            if
+                symbol self
+                    .store
+                    .immutable_globals
+                    .has_str
+            then
+                "".to_str = global_file
+                "".to_str = storage_name
+                if
+                    symbol self
+                        .store
+                        .immutable_global_files
+                        .get_str std::Option::Some(file) is
+                then
+                    file.clone = global_file
+                fi
+                if
+                    symbol self
+                        .store
+                        .immutable_global_slots
+                        .get_str std::Option::Some(slot) is
+                then
+                    slot.clone = storage_name
+                fi
+                storage_name global_file variable.clone SelectiveGlobal
+                SelectiveImportDeclaration::Global self.declarations.push
+                symbol self.collect_global_initializer
+            else
+                self.location
+                f"Selective import cannot import global variable `{symbol}`"
+                common::ErrorKind::InvalidVariable
+                self.diagnostics.record_error_string
+            fi
             return
         fi
         self.location
@@ -680,8 +886,10 @@ pub fn compute_selective_import_closure_with_inherited
     location:$common::Location
     inherited_symbols:std::Set[std::String]
     inherited_impls:std::Set[std::String]
+    global_initializers:std::List[common::Op]
 -> std::Result[SelectiveImportClosure error::Diagnostics] {
     inherited_impls inherited_symbols location store SelectiveImportClosureBuilder::new = builder
+    global_initializers = builder.global_initializers
     for symbol in requested_symbols.iter do
         symbol.as_str builder.collect_symbol
     done
@@ -753,8 +961,9 @@ pub fn merge_selective_import_closure_with_inherited
     location:$common::Location
     inherited_symbols:std::Set[std::String]
     inherited_impls:std::Set[std::String]
+    global_initializers:std::List[common::Op]
 -> std::Result[std::Set[std::String] error::Diagnostics] {
-    inherited_impls inherited_symbols location requested_symbols source
+    global_initializers inherited_impls inherited_symbols location requested_symbols source
     compute_selective_import_closure_with_inherited = closure_result
     location destination closure_result merge_selective_import_result
 }
