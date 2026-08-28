@@ -456,6 +456,7 @@ struct Op {
     location:             Location
     type_hint:            Option[Type]
     deferred_return_hint: Option[Type]
+    call_bindings:        Map[String Type]
     value:                OpValue
 }
 
@@ -505,6 +506,49 @@ struct QualifiedMethod {
     method_name:    String
 }
 
+# A checked trait-bound operation keeps its declared contract until a concrete
+# specialization can select the implementation.
+
+struct DeferredTraitCall {
+    method_name:  String
+    receiver:     Type
+    trait_type:   Option[Type]
+    stack_effect: StackEffect
+}
+
+impl DeferredTraitCall {
+    fn unresolved method_name:String receiver:Type -> DeferredTraitCall {
+        empty_stack_effect Option[Type]::None receiver method_name DeferredTraitCall
+    }
+
+    fn new
+        method_name:String
+        receiver:Type
+        trait_type:Option[Type]
+        stack_effect:StackEffect
+    -> DeferredTraitCall {
+        stack_effect trait_type receiver method_name DeferredTraitCall
+    }
+
+    fn substitute self:$DeferredTraitCall bindings:mut$Map[String Type] -> DeferredTraitCall {
+        bindings self.stack_effect apply_type_subs_to_stack_effect = effect
+        self.trait_type.clone = trait_type
+        if trait_type Option::Some(bound) is then
+            bindings bound.substitute_t Option::Some = trait_type
+        fi
+        effect trait_type bindings self.receiver.substitute_t
+        self.method_name.clone
+        DeferredTraitCall
+    }
+}
+
+impl DeferredTraitCall: Clone {
+    fn clone self:$DeferredTraitCall -> DeferredTraitCall {
+        self.stack_effect.clone self.trait_type.clone self.receiver clone_type
+        self.method_name.clone DeferredTraitCall
+    }
+}
+
 struct TemporaryBinding {
     name:  String
     depth: u64
@@ -520,7 +564,7 @@ impl TemporaryBinding: Clone {
 
 impl Op {
     fn new value:OpValue location:$Location -> Op {
-        value Option[Type]::None Option[Type]::None location.clone 0 Op
+        value Map[String Type]::new Option[Type]::None Option[Type]::None location.clone 0 Op
     }
 }
 
@@ -590,7 +634,8 @@ fn clone_op_value value:$OpValue -> OpValue {
         OpValue::QuestionMove(name) => name.clone OpValue::QuestionMove
         OpValue::MethodCall(name) => name.clone OpValue::MethodCall
         OpValue::QualifiedMethodCall(method) => method clone_qualified_method OpValue::QualifiedMethodCall
-        OpValue::TraitMethodCall(name) => name.clone OpValue::TraitMethodCall
+        OpValue::TraitMethodCall(call) => call.clone OpValue::TraitMethodCall
+        OpValue::TraitMethodRef(call) => call.clone OpValue::TraitMethodRef
         OpValue::AssignDec(name) => name.clone OpValue::AssignDec
         OpValue::AssignInc(name) => name.clone OpValue::AssignInc
         OpValue::AssignVar(name) => name.clone OpValue::AssignVar
@@ -708,6 +753,7 @@ fn clone_op_value value:$OpValue -> OpValue {
 
 fn clone_op source_op:$Op -> Op {
     source_op.value clone_op_value
+    source_op.call_bindings clone_type_bindings
     source_op.deferred_return_hint.clone
     source_op.type_hint.clone
     source_op.location.clone
@@ -725,6 +771,32 @@ fn clone_ops ops:$List[Op] -> List[Op] {
         source_op clone_op result.push
     done
     result
+}
+
+fn clone_type_bindings bindings:$Map[String Type] -> Map[String Type] {
+    Map[String Type]::new = cloned
+    for pair in bindings.iter do
+        pair.second clone_type pair.first.clone cloned.set
+    done
+    cloned
+}
+
+fn substituted_constant_value name:$String subs:mut$Map[String Type] -> Option[OpValue] {
+    if name subs.get Option::Some(bound) is then
+        if bound Type::Const(constant) is then
+            if constant.is_symbolic then
+                Option[OpValue]::None return
+            fi
+            if constant.typ BuiltinType::Bool == then
+                constant.value OpValue::PushBool Option::Some return
+            fi
+            if constant.typ BuiltinType::Char == then
+                constant.value OpValue::PushChar Option::Some return
+            fi
+            constant.value make_integer_op_value Option::Some return
+        fi
+    fi
+    Option[OpValue]::None
 }
 
 fn substitute_op_value_type value:$OpValue subs:mut$Map[String Type] -> Option[OpValue] {
@@ -751,6 +823,17 @@ fn substitute_op_value_type value:$OpValue subs:mut$Map[String Type] -> Option[O
         OpValue::PtrAsMut(target) => {
             subs target.substitute_t OpValue::PtrAsMut Option::Some
         }
+        OpValue::DestructionFn(target) => {
+            subs target.substitute_t OpValue::DestructionFn Option::Some
+        }
+        OpValue::TraitMethodCall(call) => {
+            subs call.substitute OpValue::TraitMethodCall Option::Some
+        }
+        OpValue::TraitMethodRef(call) => {
+            subs call.substitute OpValue::TraitMethodRef Option::Some
+        }
+        OpValue::PushVar(name) => subs name substituted_constant_value
+        OpValue::PushCapture(name) => subs name substituted_constant_value
         _ => Option::None
     end
 }
@@ -772,6 +855,11 @@ fn substitute_ops_types ops:mut$List[Op] subs:mut$Map[String Type] {
         if sub_op Op::deferred_return_hint Option::Some(deferred_hint) is then
             subs deferred_hint.substitute_t Option::Some sub_op Op::set_deferred_return_hint
         fi
+        Map[String Type]::new = substituted_bindings
+        for pair in sub_op.call_bindings.iter do
+            subs pair.second.substitute_t pair.first.clone substituted_bindings.set
+        done
+        substituted_bindings = sub_op.call_bindings
         sub_op.value clone_op_value = nested_value
         if nested_value OpValue::PushArray(items) is then
             items clone_ops = owned_items
@@ -781,6 +869,10 @@ fn substitute_ops_types ops:mut$List[Op] subs:mut$Map[String Type] {
             items clone_ops = owned_items
             subs owned_items substitute_ops_types
             owned_items OpValue::ExprGroup sub_op Op::set_value
+        elif nested_value OpValue::MatchArm(arm) is then
+            arm.clone = owned_arm
+            subs owned_arm.guard_ops substitute_ops_types
+            owned_arm OpValue::MatchArm sub_op Op::set_value
         fi
         1 += op_index
     done
@@ -1305,7 +1397,8 @@ enum OpValue {
     OwnerCleanup
     MethodCall (String)
     QualifiedMethodCall (QualifiedMethod)
-    TraitMethodCall (String)
+    TraitMethodCall (DeferredTraitCall)
+    TraitMethodRef (DeferredTraitCall)
     # Loops
     WhileStart
     WhileCondition
@@ -1374,9 +1467,6 @@ fn op_str_value op:$Op -> String {
         value.clone return
     fi
     if op.value OpValue::MethodCall(value) is then
-        value.clone return
-    fi
-    if op.value OpValue::TraitMethodCall(value) is then
         value.clone return
     fi
     if op.value OpValue::PushStr(value) is then
@@ -1732,15 +1822,6 @@ impl TraitBound: Clone {
 impl TraitMethod: Clone {
     fn clone self:$TraitMethod -> TraitMethod { self clone_trait_method }
 }
-# Per-method hidden-parameter info produced by build_hidden_trait_methods.
-# Both parse_function and inject_implementation_parameters consume this list to
-# prepend `__trait_{type_var}_{method}` function-pointer parameters.
-
-struct HiddenTraitMethod {
-    var_name: String # e.g. "__trait_I_next"
-    fn_type:  Type # e.g. fn[I -> Option[i64]]
-}
-
 # A generic trait bound attached to a type variable in a function or impl
 # header. For `fn foo[I: Iterable[i64]] ...` the bound is
 # TraitBound{name="Iterable", type_args=[Type::Builtin(BuiltinType::I64)]}. For non-generic bounds
@@ -1852,18 +1933,20 @@ struct Function {
     has_deferred_methods: bool
     is_const_fn:          bool
     is_unsafe:            bool
+    generic_params:       List[String]
 }
 
 impl Function {
     fn new name:String ops:List[Op] location:Location -> Function {
-        false false false false false List[String]::new List[String]::new List[Variable]::new List[Variable]::new false false empty_stack_effect location ops name Function
+        List[String]::new false false false false false List[String]::new List[String]::new List[Variable]::new List[Variable]::new false false empty_stack_effect location ops name Function
     }
 
     fn with_stack_effect name:String ops:List[Op] location:Location effect:StackEffect -> Function {
-        false false false false false List[String]::new List[String]::new List[Variable]::new List[Variable]::new false false effect location ops name Function
+        List[String]::new false false false false false List[String]::new List[String]::new List[Variable]::new List[Variable]::new false false effect location ops name Function
     }
 
     fn clone_for_import self:$Function -> Function {
+        self.generic_params.clone
         self.is_unsafe
         self.is_const_fn
         self.has_deferred_methods
@@ -1884,6 +1967,7 @@ impl Function {
 
     # Preserve callable metadata while an owned function body is updated or compiled.
     fn clone_declaration self:$Function -> Function {
+        self.generic_params.clone
         self.is_unsafe
         self.is_const_fn
         self.has_deferred_methods
@@ -1905,7 +1989,8 @@ impl Function {
     # Split an owned function into its declaration and body.
     fn split_body self:Function -> Function List[Op] {
         self match
-            Function { name: name ops: ops location: location stack_effect: stack_effect is_used: is_used is_typechecked: is_typechecked variables: variables captures: captures global_captures: global_captures owned_captures: owned_captures captures_by_move: captures_by_move captures_shared: captures_shared has_deferred_methods: has_deferred_methods is_const_fn: is_const_fn is_unsafe: is_unsafe } => {
+            Function { name: name ops: ops location: location stack_effect: stack_effect is_used: is_used is_typechecked: is_typechecked variables: variables captures: captures global_captures: global_captures owned_captures: owned_captures captures_by_move: captures_by_move captures_shared: captures_shared has_deferred_methods: has_deferred_methods is_const_fn: is_const_fn is_unsafe: is_unsafe generic_params: generic_params } => {
+                generic_params
                 is_unsafe is_const_fn has_deferred_methods captures_shared captures_by_move
                 owned_captures global_captures captures variables is_typechecked is_used
                 stack_effect location List[Op]::new name Function

@@ -65,6 +65,14 @@ fn apply operation:fn[i64 -> i64] value:i64 -> i64 {
 The function value must be on top when `exec` runs. Its arguments stay below
 it.
 
+A generic function reference must name its concrete arguments:
+
+```casa
+fn identity[T] value:T -> T { value }
+
+&identity[i64] = integer_identity
+```
+
 ## Unsafe boundaries
 
 Raw memory operations, pointer arithmetic and conversion, and Linux system
