@@ -48,5 +48,6 @@ Rules for commits, branches, and pull requests in this repo.
 ## Workflow
 
 - MUST make a commit once a planned change is finished.
-- MUST open a pull request after the review loop has resolved all findings that
-  can be completed in the current work. See [review.md](./review.md).
+- MUST open a pull request for every implemented issue and other completed
+  planned change after resolving all review findings that can be completed in
+  the current work. See [review.md](./review.md).
