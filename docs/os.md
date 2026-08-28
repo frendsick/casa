@@ -4,6 +4,7 @@ Import the Linux operating-system module with a library path that contains
 `os.casa`:
 
 ```casa
+import "std" { Result eprint }
 import "os"
 ```
 

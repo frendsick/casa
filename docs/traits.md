@@ -58,6 +58,8 @@ A trait declares methods that a type promises to provide. `self` stands for
 the implementing type:
 
 ```casa
+import "std" { String }
+
 trait Describe {
     fn describe self:self -> String
 }
@@ -144,6 +146,8 @@ implement or satisfy `Copy`. An exclusive `mut$T` borrow cannot be duplicated.
 Payload-free enums can opt in with `derives Copy` or an empty implementation:
 
 ```casa
+import "std" { Copy }
+
 enum Direction derives Copy {
     North
     South

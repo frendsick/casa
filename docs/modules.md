@@ -43,6 +43,8 @@ std::List[i64]::new = values
 parser::Cursor::new = cursor
 ```
 
+`std` follows the same rule. A full `std` import does not add unqualified names.
+
 Aliases and declarations cannot use the same source name. Importing two modules with one alias is also an error.
 
 ### Selective imports

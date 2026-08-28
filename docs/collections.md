@@ -3,7 +3,7 @@
 Import `std` to use the collection methods on this page:
 
 ```casa
-import "std"
+import "std" { Bytes Iter List Map Option Pair Set Slice String }
 ```
 
 ## Arrays

@@ -168,7 +168,7 @@ fn rating score:i64 -> str {
 [72, 95, 81] = scores
 for score in scores.iter do
     score rating = label
-    f"{score}: {label}" println_string
+    f"{score}: {label}" std::println_string
 done
 ```
 

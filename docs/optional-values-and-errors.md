@@ -4,7 +4,7 @@
 Import them from `std`:
 
 ```casa
-import "std"
+import "std" { Option Result }
 ```
 
 Compile with a library path that contains `std.casa`, such as
