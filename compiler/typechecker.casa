@@ -6804,6 +6804,509 @@ impl TypeChecker {
 }
 
 # ============================================================================
+# diagnose_bare_enum_pattern — emit a targeted error if a match arm uses an
+# unqualified enum variant (e.g. `North =>` instead of `Direction::North =>`).
+
+pub fn diagnose_bare_enum_pattern
+    tc:mut$TypeChecker
+    op:mut$common::Op
+    variant:common::EnumVariant
+    arm_base:$str
+{
+    if "" variant common::EnumVariant::enum_name.as_str != then
+        return
+    fi
+    if
+        arm_base tc
+            .store
+            .enums
+            .get_str std::Option::Some(bare_enum) is
+    then
+        variant common::EnumVariant::variant_name.as_str = bare_name: $str
+        bare_name bare_enum common::CasaEnum::variants common::string_list_index = bare_index
+        if 0 bare_index >= then
+            op common::Op::location f"Unqualified enum variant `{bare_name}`. Did you mean `{arm_base}::{bare_name}`?" common::ErrorKind::TypeMismatch tc.diagnostics.record_error_string
+        else
+            op common::Op::location f"Expected qualified enum variant (e.g. `{arm_base}::{0 bare_enum common::CasaEnum::variants.get}`) or `_`, got `{bare_name}`" common::ErrorKind::TypeMismatch tc.diagnostics.record_error_string
+        fi
+    fi
+}
+
+# ============================================================================
+# detect_duplicate_arm — raise an error if the current pattern's covered key
+# has already been recorded on this match context.
+
+pub fn detect_duplicate_arm
+    type_checker:mut$TypeChecker
+    match_ctx:mut$MatchContext
+    op:mut$common::Op
+    covered_key:$str
+{
+    if "" covered_key.as_str == then
+        return
+    fi
+    for record in match_ctx MatchContext::branch_records.iter do
+        if covered_key record.as_str == then
+            op common::Op::location f"Duplicate match arm for `{covered_key}`" common::ErrorKind::DuplicateName type_checker.diagnostics.record_error_string
+        fi
+    done
+    if covered_key match_ctx MatchContext::current_branch_label.as_str == then
+        op common::Op::location f"Duplicate match arm for `{covered_key}`" common::ErrorKind::DuplicateName type_checker.diagnostics.record_error_string
+    fi
+}
+
+# ============================================================================
+# unify_arm_stacks — reconcile the stack effect of the arm just finished
+# against the arm template recorded on the MatchContext. Runs only when a
+# prior arm has already executed (condition_present).
+
+pub fn unify_arm_stacks tc:mut$TypeChecker match_ctx:mut$MatchContext op:mut$common::Op {
+    if "" match_ctx MatchContext::current_branch_label.as_str != then
+        match_ctx MatchContext::current_branch_label.clone match_ctx MatchContext::branch_records.push
+    fi
+    match_ctx MatchContext::before = match_before: mut$TypedStack
+    match_ctx MatchContext::after = match_after: mut$TypedStack
+    if
+        match_before tc.stack.equals
+        match_after match_before.equals && !
+    then
+        tc.store match_after tc.stack.unify_types = unified
+        if 0 unified.length != match_after match_before.equals ! && then
+            tc.stack match_after.merge_literals
+            match_after.mark_literals_runtime
+            unified match_after.set_types
+        elif match_after match_before.equals then
+            tc.stack match_after.restore
+        else
+            op common::Op::location "Match arms have incompatible stack effects" common::ErrorKind::StackMismatch tc.diagnostics.record_error
+        fi
+    fi
+    match_before tc.stack.restore
+}
+
+# ============================================================================
+# register_struct_pattern_bindings — attach field types to each local bound
+# by a struct destructure arm.
+
+pub fn assign_struct_binding_type
+    tc:mut$TypeChecker
+    match_subject_type:$common::Type
+    binding_type:common::Type
+    bound_var:$str
+    function_opt:mut$std::Option[common::Function]
+{
+    if match_subject_type.is_borrow function_opt binding_type tc.type_is_duplicable ! && then
+        binding_type common::clone_type = target
+        false = shared
+        if binding_type.borrow_target std::Option::Some(borrowed_target) is then
+            borrowed_target common::clone_type = target
+            binding_type.is_shared_borrow = shared
+        fi
+        if match_subject_type.is_shared_borrow then
+            true = shared
+        fi
+        if shared then
+            common::SHARED_BORROW_TYPE
+        else
+            common::EXCLUSIVE_BORROW_TYPE
+        fi
+        target common::apply_borrow_type = binding_type
+    fi
+    function_opt binding_type bound_var tc set_binding_type
+}
+
+pub fn resolve_struct_pattern_field_types
+    subject_type:$common::Type
+    struct_name:$str
+    store:$common::SymbolStore
+-> std::Option[std::Map[std::String common::Type]] {
+    if struct_name store.structs.get_str std::Option::Some(casa_struct) is then
+        subject_type common::clone_type = owned_subject_type
+        if owned_subject_type.borrow_target std::Option::Some(target) is then
+            target common::clone_type = owned_subject_type
+        fi
+        casa_struct.type_vars owned_subject_type common::aggregate_type_bindings = bindings
+        std::Map[std::String common::Type]::new = field_types
+        for member in casa_struct.members.iter do
+            bindings member.typ.substitute_t member.name.clone field_types.set
+        done
+        field_types std::Option::Some
+    else
+        std::Option[std::Map[std::String common::Type]]::None
+    fi
+}
+
+pub fn register_struct_pattern_bindings
+    tc:mut$TypeChecker
+    function_opt:mut$std::Option[common::Function]
+    struct_pattern:common::StructPattern
+    match_subject_type:$common::Type
+{
+    tc.store struct_pattern.struct_name.as_str match_subject_type resolve_struct_pattern_field_types
+    = field_types_opt
+    if field_types_opt.is_none then
+        common::empty_location "Expected option value while unwrapping struct_pattern StructPattern::struct_name tc.store.structs.get" common::ErrorKind::Syntax tc.diagnostics.record_error
+        return
+    fi
+    field_types_opt.unwrap = field_types
+    struct_pattern common::StructPattern::bindings.keys = binding_keys
+    for field_name in binding_keys.iter do
+        if
+            field_name struct_pattern common::StructPattern::bindings.get std::Option::Some(bound_var) is
+        then
+            if field_name field_types.get std::Option::Some(binding_type) is then
+                function_opt bound_var.as_str binding_type common::clone_type match_subject_type tc
+                assign_struct_binding_type
+            fi
+        else
+            common::empty_location "Expected option value while unwrapping field_name struct_pattern StructPattern::bindings.get" common::ErrorKind::Syntax tc.diagnostics.record_error
+        fi
+    done
+}
+
+# ============================================================================
+# register_enum_pattern_bindings — attach payload types to each local bound
+# by an enum-variant destructure arm.
+
+pub fn register_enum_pattern_bindings
+    tc:mut$TypeChecker
+    function_opt:mut$std::Option[common::Function]
+    variant:common::EnumVariant
+    match_subject_type:$common::Type
+{
+    if 0 variant common::EnumVariant::bindings.length == then
+        return
+    fi
+    "" = borrow_prefix
+    match_subject_type common::clone_type = subject_type
+    if match_subject_type.borrow_target std::Option::Some(target) is then
+        if match_subject_type.is_shared_borrow then
+            common::SHARED_BORROW_TYPE
+        else
+            common::EXCLUSIVE_BORROW_TYPE
+        fi
+        = borrow_prefix
+        target common::clone_type = subject_type
+    fi
+    subject_type.match_base = base_enum_name
+    if
+        tc.store base_enum_name.as_str variant.variant_name.as_str subject_type resolve_enum_pattern_types
+        std::Option::Some(inner_types) is
+    then
+        match_subject_type borrow_prefix variant inner_types function_opt tc apply_enum_bindings
+    fi
+}
+
+pub fn resolve_enum_pattern_types
+    subject_type:$common::Type
+    variant_name:$str
+    enum_name:$str
+    store:$common::SymbolStore
+-> std::Option[std::List[common::Type]] {
+    if enum_name store.enums.get_str std::Option::Some(casa_enum) is then
+        subject_type casa_enum build_enum_type_bindings = type_bindings
+        if variant_name casa_enum.variant_types.get_str std::Option::Some(payload_types) is then
+            std::List[common::Type]::new = resolved_types
+            for payload_type in payload_types.iter do
+                type_bindings payload_type.substitute_t resolved_types.push
+            done
+            resolved_types std::Option::Some return
+        fi
+    fi
+    std::Option[std::List[common::Type]]::None
+}
+
+pub fn build_enum_type_bindings
+    casa_enum:$common::CasaEnum
+    match_subject_type:$common::Type
+-> std::Map[std::String common::Type] {
+    std::Map[std::String common::Type]::new = type_bindings
+    if 0 casa_enum common::CasaEnum::type_vars.length == then
+        type_bindings return
+    fi
+    if match_subject_type.type_params std::Option::Some(type_params) is then
+        0 (u64) = type_var_index
+        while
+            type_var_index casa_enum common::CasaEnum::type_vars.length >
+            type_var_index type_params.length > &&
+        do
+            type_var_index type_params.get common::clone_type
+            type_var_index casa_enum common::CasaEnum::type_vars.get.clone
+            type_bindings.set
+            1 += type_var_index
+        done
+    fi
+    type_bindings
+}
+
+pub fn apply_enum_bindings
+    tc:mut$TypeChecker
+    function_opt:mut$std::Option[common::Function]
+    inner_types:$std::List[common::Type]
+    variant:$common::EnumVariant
+    borrow_prefix:$str
+    match_subject_type:$common::Type
+{
+    0 (u64) = bind_index
+    while
+        bind_index variant common::EnumVariant::bindings.length >
+        bind_index inner_types.length > &&
+    do
+        bind_index variant common::EnumVariant::bindings.get = binding_var
+        bind_index inner_types.get common::clone_type = binding_type
+        if "" borrow_prefix.as_str != function_opt binding_type tc.type_is_duplicable ! && then
+            binding_type common::clone_type = target
+            common::SHARED_BORROW_TYPE borrow_prefix == = shared
+            if binding_type.borrow_target std::Option::Some(borrowed_target) is then
+                borrowed_target common::clone_type = target
+                if binding_type.is_shared_borrow then
+                    true = shared
+                fi
+            fi
+            if match_subject_type.is_shared_borrow then
+                true = shared
+            fi
+            if shared then
+                common::SHARED_BORROW_TYPE
+            else
+                common::EXCLUSIVE_BORROW_TYPE
+            fi
+            target common::apply_borrow_type = binding_type
+        fi
+        function_opt binding_type binding_var.as_str tc set_binding_type
+        1 += bind_index
+    done
+}
+
+# ============================================================================
+# register_pattern_bindings — dispatch binding registration by pattern kind.
+
+pub fn register_pattern_bindings
+    tc:mut$TypeChecker
+    function_opt:mut$std::Option[common::Function]
+    op:mut$common::Op
+    match_subject_type:$common::Type
+{
+    op common::pattern_value_of match
+        common::PatternValue::Struct(struct_pattern) => {
+            match_subject_type struct_pattern function_opt tc register_struct_pattern_bindings
+        }
+        common::PatternValue::EnumVariant(variant) => {
+            if op pattern::pattern_is_wildcard then
+                return
+            fi
+            match_subject_type variant function_opt tc register_enum_pattern_bindings
+        }
+        common::PatternValue::Literal => {
+        }
+    end
+}
+
+pub fn record_match_pattern_origins
+    tc:mut$TypeChecker
+    op:mut$common::Op
+    match_subject_type:$common::Type
+    match_origins:mut$std::Option[std::List[std::String]]
+    match_place:mut$std::Option[std::String]
+    function_opt:mut$std::Option[common::Function]
+{
+    for binding_name in op pattern::pattern_bindings.iter do
+        if binding_name.as_str tc.scope.lookup std::Option::Some(binding_type) is then
+            if
+                tc.store binding_type type_has_borrow
+                match_subject_type.is_borrow
+                function_opt binding_type tc.type_is_duplicable ! && ||
+            then
+                match_origins clone_origins = origins
+                if match_subject_type.is_borrow then
+                    if match_place std::Option::Some(subject_place) is then
+                        subject_place.clone = binding_place
+                        if op common::pattern_value_of common::PatternValue::Struct(struct_pattern) is then
+                            for pair in struct_pattern.bindings.iter do
+                                if pair.second binding_name == then
+                                    f"{subject_place}.{pair.first}" = binding_place
+                                fi
+                            done
+                        fi
+                        binding_type.is_exclusive_borrow binding_place.as_str origins add_origin = origins
+                    fi
+                fi
+                origins binding_name.as_str tc.record_binding_origins
+            fi
+        fi
+    done
+}
+
+pub fn check_literal_pattern
+    tc:mut$TypeChecker
+    op:mut$common::Op
+    literal_pattern:common::LiteralPattern
+    subject_type:$common::Type
+{
+    subject_type common::clone_type = pattern_type
+    if pattern_type.borrow_target std::Option::Some(target) is then
+        target common::clone_type = pattern_type
+    fi
+    if pattern_type.is_unknown_placeholder then
+        return
+    fi
+    literal_pattern.value match
+        common::LiteralValue::Int(literal) => {
+            if pattern_type.is_integer_type_t ! then
+                op.location f"Integer pattern `{literal.raw}` requires an integer subject, got `{pattern_type.format}`" common::ErrorKind::TypeMismatch tc.diagnostics.record_error_string
+                return
+            fi
+            if pattern_type literal.fits ! then
+                pattern_type.get_integer_min = minimum
+                pattern_type.get_integer_max = maximum
+                op.location f"Integer pattern `{literal.raw}` is outside `{pattern_type.format}` range {minimum}..{maximum}" common::ErrorKind::TypeMismatch tc.diagnostics.record_error_string
+                return
+            fi
+        }
+        common::LiteralValue::Str(_) => {
+            if pattern_type common::make_str_type.eq ! then
+                op.location f"String pattern requires a `str` subject, got `{pattern_type.format}`" common::ErrorKind::TypeMismatch tc.diagnostics.record_error_string
+                return
+            fi
+        }
+        common::LiteralValue::Bool(_) => {
+            if pattern_type common::make_bool_type.eq ! then
+                op.location f"Boolean pattern requires a `bool` subject, got `{pattern_type.format}`" common::ErrorKind::TypeMismatch tc.diagnostics.record_error_string
+                return
+            fi
+        }
+        common::LiteralValue::Char(_) => {
+            if pattern_type common::make_char_type.eq ! then
+                op.location f"Character pattern requires a `char` subject, got `{pattern_type.format}`" common::ErrorKind::TypeMismatch tc.diagnostics.record_error_string
+                return
+            fi
+        }
+    end
+    subject_type common::clone_type std::Option::Some op common::Op::set_type_hint
+}
+
+# ============================================================================
+# typecheck_match_op — per-arm typecheck entry point.
+#
+# Handles pattern-shape validation, duplicate-arm detection, match-arm
+# stack unification, and binding-type registration for a single OpMatchArm.
+# Callers (currently check_match) delegate the entire arm body to this
+# function; start/end of the match block remain in check_match.
+
+pub fn typecheck_match_op
+    tc:mut$TypeChecker
+    function_opt:mut$std::Option[common::Function]
+    op:mut$common::Op
+{
+    if 0 tc.branched_stacks.length == then
+        return
+    fi
+    tc.branched_stacks.pop = top_frame
+    if top_frame BranchFrame::BranchMatch is then
+        top_frame.into_match = match_ctx
+        if match_ctx.condition_present then
+            if tc.path_continues then
+                match_ctx.before tc.materialize_branch_results
+            fi
+            match_ctx.flow_after tc.merge_current_ownership_flow
+            if tc.path_continues then
+                true = match_ctx.has_continuing_arm
+            fi
+            match_ctx.flow_before tc.restore_ownership_flow
+            match_ctx.entry_continues = tc.path_continues
+        fi
+        match_ctx MatchContext::match_type common::clone_type = match_subject_type
+        op pattern::pattern_covered_key = covered_key
+        match_subject_type.match_base = arm_base
+
+        # A prior arm has already opened (and left open) its scope frame iff the
+        # match has seen a condition. Capture this before the block below sets it.
+        match_ctx MatchContext::condition_present = arm_has_predecessor
+
+        op common::pattern_value_of match
+            common::PatternValue::EnumVariant(variant) => {
+                if op pattern::pattern_is_wildcard ! then
+                    arm_base.as_str variant op tc diagnose_bare_enum_pattern
+                fi
+            }
+            common::PatternValue::Literal(literal_pattern) => {
+                match_subject_type literal_pattern op tc check_literal_pattern
+            }
+            _ => {
+            }
+        end
+
+        covered_key.as_str op match_ctx tc detect_duplicate_arm
+
+        if match_ctx MatchContext::condition_present then
+            op match_ctx tc unify_arm_stacks
+        else
+            true match_ctx MatchContext::set_condition_present
+            tc.stack match_ctx MatchContext::before.restore
+            tc.stack match_ctx MatchContext::after.restore
+        fi
+
+        # Each arm body gets its own scope frame: pattern bindings and any
+        # block-local assignments live here, invisible to other arms and after
+        # `end`. Close the previous arm's frame before opening this one.
+        if arm_has_predecessor then
+            op tc.attach_scope_cleanups
+            tc.scope.exit
+        fi
+        tc.scope.enter
+
+        # Record pattern bindings in the arm scope; implicit bindings cannot
+        # shadow an accessible outer variable (same rule as is-bindings).
+        for binding_var in op pattern::pattern_bindings.iter do
+            op binding_var.as_str tc.record_implicit_binding
+        done
+
+        match_subject_type op function_opt tc register_pattern_bindings
+        function_opt match_ctx.match_place match_ctx.match_origins match_subject_type op tc
+        record_match_pattern_origins
+        match_subject_type common::clone_type std::Option::Some op common::Op::set_type_hint
+        for binding_var in op pattern::pattern_bindings.iter do
+            if binding_var.as_str tc.scope.lookup std::Option::Some(binding_type) is then
+                false function_opt binding_type binding_var.as_str op tc.record_owner_assignment
+            fi
+        done
+
+        if op pattern::pattern_is_guarded then
+            op common::pattern_guard_ops = guard_ops
+            tc.scope.snapshot = guard_scope
+            tc.current_ownership_flow = guard_flow
+            tc.diagnostics tc.store TypeChecker::new = guard_checker
+            guard_scope = guard_checker.scope
+            guard_flow guard_checker.restore_ownership_flow
+            std::Map[std::String u64]::new guard_ops count_variable_uses = guard_checker.remaining_uses
+            function_opt guard_ops guard_checker.run_type_check_ops
+            for name in guard_checker.moved_owners.iter do
+                if name.as_str tc.moved_owners common::string_list_contains ! then
+                    op.location f"Match guard cannot move owner `{name}`"
+                    common::ErrorKind::InvalidVariable guard_checker.diagnostics.record_error_string
+                fi
+            done
+            guard_checker.stack.get_types = guard_stack
+            false = guard_ok
+            if 1 guard_stack.length == then
+                0 guard_stack.get.format = guard_type
+                if "bool" guard_type.as_str == then
+                    true = guard_ok
+                fi
+            fi
+            if guard_ok ! then
+                op common::Op::location "Guard expression must leave a single `bool` on the stack" common::ErrorKind::TypeMismatch guard_checker.diagnostics.record_error
+            fi
+        fi
+
+        covered_key match_ctx MatchContext::set_current_branch_label
+        op common::Op::location.clone match_ctx MatchContext::set_current_branch_location
+        match_ctx BranchFrame::BranchMatch = top_frame
+    fi
+    top_frame tc.branched_stacks.push
+}
+
+# ============================================================================
 # Check is keyword
 # ============================================================================
 
@@ -6866,7 +7369,7 @@ impl TypeChecker {
             then
                 common::SHARED_BORROW_TYPE observed_type common::apply_borrow_type = observed_type
             fi
-            observed_type variant.clone function_opt tc pattern::register_enum_pattern_bindings
+            observed_type variant.clone function_opt tc register_enum_pattern_bindings
             subject.origins clone_origins = binding_origins
             if subject.place std::Option::Some(subject_place) is then
                 false subject_place.as_str binding_origins add_origin = binding_origins
@@ -7125,7 +7628,7 @@ impl TypeChecker {
         fi
         match_ctx.has_continuing_arm = self.path_continues
         if match_ctx MatchContext::condition_present then
-            op match_ctx self pattern::unify_arm_stacks
+            op match_ctx self unify_arm_stacks
         fi
 
         match_ctx op self.check_match_exhaustiveness
@@ -7139,7 +7642,7 @@ impl TypeChecker {
     {
         op.value match
             common::OpValue::MatchStart => function_opt op self.begin_match
-            common::OpValue::MatchArm => op function_opt self pattern::typecheck_match_op
+            common::OpValue::MatchArm => op function_opt self typecheck_match_op
             common::OpValue::MatchEnd => op self.finish_match
             _ => {
             }
