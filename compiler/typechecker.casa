@@ -1121,7 +1121,7 @@ impl TypeChecker {
         for name in names.iter do
             false name.as_str tc.set_owner_moved
             if name.as_str tc.binding_origins.has_str then
-                name.as_str tc.binding_origins.remove_str drop
+                name.as_str tc.binding_origins.delete_str
             fi
         done
     }
@@ -1242,7 +1242,7 @@ impl TypeChecker {
         if origins std::Option::Some(items) is then
             items.clone name.clone tc.binding_origins.set_str
         elif name tc.binding_origins.has_str then
-            name tc.binding_origins.remove_str drop
+            name tc.binding_origins.delete_str
         fi
     }
 
@@ -3105,6 +3105,24 @@ impl TypeChecker {
         fi
     }
 
+    fn should_preserve_contained_call_origins
+        self:mut$TypeChecker
+        effect:$common::StackEffect
+        bindings:mut$std::Map[std::String common::Type]
+    -> bool {
+        false = has_nested_borrow
+        for return_type in effect.return_types.iter do
+            bindings return_type.substitute_t = resolved_return
+            if self.store resolved_return type_has_borrow then
+                if resolved_return.is_borrow then
+                    false return
+                fi
+                true = has_nested_borrow
+            fi
+        done
+        has_nested_borrow
+    }
+
     pub fn apply_stack_effect
         tc:mut$TypeChecker
         effect:$common::StackEffect
@@ -3163,9 +3181,7 @@ impl TypeChecker {
         std::Option[std::List[std::String]]::None = shared_origins
         std::Option[std::List[std::String]]::None = exclusive_origins
         if effect stack_effect_may_borrow then
-            # Clone preserves borrows stored inside the value, not a borrow of
-            # the value's temporary owner shell.
-            name.as_str "::Clone::clone" str::ends_with = prefer_contained_origins
+            bindings effect tc.should_preserve_contained_call_origins = prefer_contained_origins
             prefer_contained_origins false bindings effect tc.call_origins = shared_origins
             prefer_contained_origins true bindings effect tc.call_origins = exclusive_origins
             bindings effect tc.check_call_borrow_conflicts
@@ -3182,7 +3198,7 @@ impl TypeChecker {
             0 (u64) = index
             while index effect common::StackEffect::parameters.length > do
                 index effect common::StackEffect::parameters.get = parameter
-                if "" name.as_str != then
+                if "" name != then
                     f"parameter {index 1 +} of `{name}`" = tc.current_expect_ctx
                 elif "" parameter.name.as_str != then
                     parameter.name.clone = tc.current_expect_ctx
@@ -3216,7 +3232,7 @@ impl TypeChecker {
         while index effect.parameters.length > do
             index effect.parameters.get = parameter
 
-            if "" name.as_str != then
+            if "" name != then
                 f"parameter {index 1 +} of `{name}`" = tc.current_expect_ctx
             elif "" parameter.name.as_str != then
                 parameter.name.clone = tc.current_expect_ctx
@@ -4228,7 +4244,8 @@ impl TypeChecker {
         tc.store function_opt std::Option[$common::Type]::None op.value
         semantics::analyze_operation = semantics
         if semantics.into_stack_effect std::Option::Some(effect) is then
-            function_opt std::Option[common::Type]::None "" effect tc.apply_stack_effect
+            function_opt std::Option[common::Type]::None "" effect
+            tc.apply_stack_effect
         fi
     }
 }
@@ -4684,7 +4701,8 @@ impl TypeChecker {
             method.method_name.as_str receiver.make_method_key = method_key
             function_opt op_index ops op 0 effect tc.bind_borrowed_temporaries = bound
             bound += op_index
-            function_opt std::Option[common::Type]::None method_key.as_str effect tc.apply_stack_effect
+            function_opt std::Option[common::Type]::None method_key.as_str
+            effect tc.apply_stack_effect
             effect trait_type receiver common::clone_type method_name common::DeferredTraitCall::new
             common::OpValue::TraitMethodCall op common::Op::set_value
         fi
@@ -5041,7 +5059,7 @@ impl TypeChecker {
 }
 
 # ============================================================================
-# Trait support: bind_generic_params_standalone, type_satisfies_trait, inject_trait_fn_ptrs
+# Trait support: bind_generic_params_standalone and type_satisfies_trait
 # ============================================================================
 
 pub fn bind_standalone_type_variable
@@ -5657,51 +5675,6 @@ pub fn ensure_function_clone_method
 }
 
 impl TypeChecker {
-    pub fn ensure_layout_adapter
-        self:mut$TypeChecker
-        target_name:$str
-        exposed_effect:$common::StackEffect
-        concrete_type:$common::Type
-        method_name:$str
-        location:$common::Location
-    -> std::String {
-        f"__layout_adapter_{target_name}_{concrete_type.format}_{method_name}" = adapter_name
-        if
-            adapter_name.as_str self
-                .store
-                .functions
-                .has_str
-        then
-            adapter_name return
-        fi
-
-        std::List[common::Op]::new = adapter_ops
-        std::List[common::Variable]::new = adapter_variables
-        for parameter in exposed_effect.parameters.iter do
-            parameter.name.clone = parameter_name
-            parameter.typ common::clone_type parameter_name.clone common::Variable adapter_variables.push
-            location.clone parameter_name.clone common::OpValue::AssignVar common::Op::new adapter_ops.push
-        done
-        exposed_effect.parameters.length = parameter_index
-        while 0 parameter_index != do
-            1 -= parameter_index
-            parameter_index exposed_effect.parameters.get = parameter
-            location.clone parameter.name.clone common::OpValue::PushVar common::Op::new adapter_ops.push
-        done
-        location.clone target_name.to_str common::OpValue::FnCall common::Op::new adapter_ops.push
-
-        exposed_effect common::clone_stack_effect location.clone adapter_ops adapter_name.clone
-        common::Function::with_stack_effect = adapter
-        adapter_variables adapter common::Function::set_variables
-        true adapter common::Function::set_is_used
-        adapter adapter_name.clone self
-            .store
-            .functions
-            .set
-        self.diagnostics self.store adapter_name.as_str ensure_typechecked drop
-        adapter_name
-    }
-
     pub fn bind_concrete_type_variable
         tc:mut$TypeChecker
         name:$str
@@ -5798,95 +5771,6 @@ impl TypeChecker {
             .values
             .set
         location bindings effect stack_index parameter tc.bind_stack_parameter
-    }
-
-    pub fn inject_trait_method_pointer
-        self:mut$TypeChecker
-        method:$common::TraitMethod
-        concrete_type:$common::Type
-        concrete_name:$str
-        seen_methods:mut$std::Set[std::String]
-        ops:mut$std::List[common::Op]
-        insert_pos:u64
-        inserted:u64
-        location:$common::Location
-        forwarding:bool
-    -> u64 u64 {
-        if method.name.as_str seen_methods.has_str then
-            inserted insert_pos return
-        fi
-        method.name.clone seen_methods.add
-        if "clone" method.name.as_str == then
-            location concrete_type self.store ensure_function_clone_method
-        fi
-        if forwarding then
-            f"__trait_{concrete_name}_{method.name}" = hidden_variable
-            location.clone hidden_variable common::OpValue::PushVar common::Op::new = push_op
-            insert_pos push_op ops.insert
-            1 += insert_pos
-            1 += inserted
-            concrete_type method.stack_effect common::resolve_trait_stack_effect = forwarded_effect
-            forwarded_effect common::stack_effect_to_function_type self.stack_push_type
-            inserted insert_pos return
-        fi
-
-        self.store std::Option[common::Function]::None concrete_type method.name.as_str semantics::resolve_method_semantics
-        = method_semantics_opt
-        if method_semantics_opt std::Option::Some(method_semantics) is then
-            method_semantics.function_name.clone = function_name
-            if method_semantics.kind semantics::MethodSemanticsKind::DefaultMethod is then
-                concrete_type common::clone_type = default_receiver
-                if default_receiver.borrow_target std::Option::Some(target) is then
-                    target common::clone_type = default_receiver
-                fi
-                self.diagnostics self.store default_receiver method_semantics.clone
-                instantiate_default_trait_method = default_name_opt
-                if default_name_opt std::Option::Some(default_name) is then
-                    default_name.clone = function_name
-                fi
-            fi
-            function_name.as_str self.store syntax::mark_function_used
-            self.diagnostics self.store function_name.as_str ensure_typechecked = checked_function_opt
-            if checked_function_opt std::Option::Some(checked_function) is then
-                concrete_type method.stack_effect common::resolve_trait_stack_effect = callable_effect
-                if checked_function.stack_effect common::needs_hidden_arguments then
-                    location method.name.as_str concrete_type callable_effect function_name.as_str self.ensure_layout_adapter
-                    = function_name
-                fi
-                location.clone function_name common::OpValue::FnPush common::Op::new = push_op
-                insert_pos push_op ops.insert
-                1 += insert_pos
-                1 += inserted
-                callable_effect common::stack_effect_to_function_type self.stack_push_type
-                inserted insert_pos return
-            else
-                location f"Function `{function_name}` required by trait method `{method.name}` not found"
-                common::ErrorKind::TypeMismatch self.diagnostics.record_error_string
-                inserted insert_pos return
-            fi
-        fi
-        location f"Function required by trait method `{method.name}` not found"
-        common::ErrorKind::TypeMismatch self.diagnostics.record_error_string
-        inserted insert_pos
-    }
-
-    pub fn layout_constant_op
-        self:mut$TypeChecker
-        layout_value:std::Option[u64]
-        resolved_type:$common::Type
-        location:$common::Location
-    -> std::Option[common::Op] {
-        if layout_value std::Option::Some(value) is then
-            if value i64::try_from std::Option::Some(signed_value) is then
-                location.clone signed_value common::make_integer_op_value common::Op::new std::Option::Some return
-            fi
-            location.clone f"Layout of `{resolved_type.format}` exceeds the supported constant range"
-            common::ErrorKind::TypeMismatch self.diagnostics.record_error_string
-            std::Option[common::Op]::None return
-        fi
-        location.clone f"Cannot determine layout of `{resolved_type.format}`"
-        common::ErrorKind::TypeMismatch self.diagnostics.record_error_string
-        std::Option[common::Op]::None
     }
 
     pub fn resolve_generic_call_bindings
@@ -6011,254 +5895,6 @@ impl TypeChecker {
                 fi
             done
         done
-    }
-
-    pub fn inject_trait_fn_ptrs
-        tc:mut$TypeChecker
-        effect:$common::StackEffect
-        ops:mut$std::List[common::Op]
-        op_index:u64
-        location:$common::Location
-        function_opt:mut$std::Option[common::Function]
-        return_hint:std::Option[common::Type]
-    -> u64 {
-        # Bind type variables from the stack (peek at positions)
-        std::Map[std::String common::Type]::new = bindings
-
-        # Collect non-hidden parameters
-        std::List[common::Parameter]::new = non_hidden
-        0 (u64) = param_index
-        while param_index effect common::StackEffect::parameters.length > do
-            if
-                param_index effect
-                    .parameters
-                    .get_ref
-                    .name
-                    .as_str common::is_hidden_parameter_name !
-            then
-                param_index effect common::StackEffect::parameters.get common::clone_parameter non_hidden.push
-            fi
-            1 += param_index
-        done
-
-        # Peek at stack to bind type variables
-        tc
-            .stack
-            .values
-            .length = depth
-        0 (u64) = index
-        while index non_hidden.length > do
-            if index depth > then
-                depth 1 - index - = stack_index
-                index non_hidden.get = parameter
-                location bindings effect stack_index parameter tc.bind_stack_parameter = bindings
-            fi
-            1 += index
-        done
-        0 (u64) = index
-        while index non_hidden.length > do
-            if index depth > then
-                depth 1 - index - = stack_index
-                index non_hidden.get = parameter
-                location bindings effect stack_index parameter tc.finalize_stack_parameter_literals
-                = bindings
-            fi
-            1 += index
-        done
-
-        # Method stack-effect diff binding for bounds with type-var args.
-        # For a bound like `I: Iterable[T]` where T is still unbound but I is
-        # bound from the stack, inspect the concrete type's implementation of
-        # each trait method and diff its stack effect against the trait's declared
-        # stack effect to bind T. Single pass in declaration order.
-        tc.store bindings function_opt effect method_diff_bind_all
-
-        if return_hint std::Option::Some(hint) is then
-            for return_type in effect common::StackEffect::return_types.iter do
-                effect common::StackEffect::type_vars hint return_type bindings bind_generic_params_standalone = bindings
-            done
-        fi
-
-        # Inject FN_PUSH ops for each trait bound.
-        # Iterate type vars in reverse so the first param in the stack effect (which
-        # the parser prepends in forward key order) ends up on the top of the stack,
-        # matching the order apply_stack_effect pops parameters in.
-        0 (u64) = inserted
-        op_index 1 - = insert_pos
-
-        # Push the value of every constant parameter (ADR-0152). These go in
-        # before the trait pointers because the parser prepends trait pointers
-        # ahead of them, and in reverse key order for the same reason as below.
-        effect.const_params.keys = constant_keys
-        constant_keys.length = constant_index
-        while 0 constant_index != do
-            1 -= constant_index
-            constant_index constant_keys.get = constant_name
-            constant_name effect
-                .const_params
-                .get
-                .unwrap common::Type::Builtin = constant_type
-            constant_name.as_str bindings clone_type_binding = constant_bound_option
-            if constant_bound_option.is_none then
-                location f"Cannot determine the value of constant parameter `{constant_name}`" common::ErrorKind::TypeMismatch tc.diagnostics.record_error_string
-                continue
-            fi
-            constant_bound_option.unwrap = constant_bound_type
-            if function_opt std::Option::Some(caller) is then
-                caller.stack_effect.const_params constant_bound_type syntax::rewrite_type_const_params
-                = constant_bound_type
-            fi
-            if constant_bound_type common::Type::Const(constant_bound) is then
-                location function_opt constant_bound common::make_const_argument_operation = constant_push_operation
-                constant_type common::clone_type std::Option::Some constant_push_operation common::Op::set_type_hint
-                insert_pos constant_push_operation ops.insert
-                1 += insert_pos
-                1 += inserted
-                constant_type tc.stack_push_type
-            else
-                location f"Constant parameter `{constant_name}` requires a compile-time constant, got `{constant_bound_type.format}`" common::ErrorKind::TypeMismatch tc.diagnostics.record_error_string
-            fi
-        done
-
-        effect common::StackEffect::trait_bounds.keys = type_var_keys
-        type_var_keys.length = type_index
-        while 0 type_index != do
-            1 -= type_index
-            type_index type_var_keys.get = type_var
-            type_var.as_str effect common::StackEffect::trait_bounds.get_str = trait_bounds_opt
-            if trait_bounds_opt.is_none then
-                common::empty_location "Expected option value while unwrapping type_var effect StackEffect::trait_bounds.get" common::ErrorKind::Syntax tc.diagnostics.record_error
-                continue
-            fi
-            trait_bounds_opt.unwrap = trait_bounds
-            type_var.as_str bindings clone_type_binding = concrete_opt
-            if concrete_opt.is_none then
-                location f"Cannot determine concrete type for type variable `{type_var}`" common::ErrorKind::TypeMismatch tc.diagnostics.record_error_string
-                continue
-            fi
-            concrete_opt.unwrap = concrete_t
-            concrete_t.format = concrete
-            std::Set[std::String]::new = seen_methods
-            trait_bounds.length = bound_index
-            while 0 bound_index != do
-                1 -= bound_index
-                bound_index trait_bounds.get = trait_bound
-                trait_bound common::trait_bound_to_type = trait_bound_type
-                bindings trait_bound_type.substitute_t = resolved_trait_type
-                resolved_trait_type.format = trait_name
-                if
-                    trait_bound.name.as_str tc
-                        .store
-                        .traits
-                        .has_str !
-                then
-                    continue
-                fi
-
-                tc.store resolved_trait_type concrete.as_str function_opt caller_forwards_trait_bound
-                = is_forwarding
-
-                if
-                    is_forwarding ! tc.diagnostics tc.store function_opt resolved_trait_type concrete_t
-                    type_satisfies_trait ! &&
-                then
-                    location f"Type `{concrete}` does not satisfy trait `{trait_name}`" common::ErrorKind::TypeMismatch tc.diagnostics.record_error_string
-                fi
-
-                trait_bound.name.as_str "PartialEq" ==
-                trait_bound.name.as_str "Eq" == ||
-                trait_bound.name.as_str "PartialOrd" == ||
-                trait_bound.name.as_str "Ord" == || = include_defaults
-                tc.store trait_bound.name.as_str collect_trait_methods_named = expanded_methods
-                expanded_methods.length = method_index
-                while 0 method_index != do
-                    1 -= method_index
-                    method_index expanded_methods.get = method
-                    if 0 method.default_ops.length != include_defaults ! && then
-                        continue
-                    fi
-                    is_forwarding location inserted insert_pos ops seen_methods concrete.as_str concrete_t method
-                    tc.inject_trait_method_pointer = insert_pos = inserted
-                done
-            done
-        done
-
-        effect.parameters.length = layout_parameter_index
-        while 0 layout_parameter_index != do
-            1 -= layout_parameter_index
-            layout_parameter_index effect.parameters.get = layout_parameter
-            layout_parameter.name.as_str common::HIDDEN_SIZE_PREFIX str::starts_with = is_size
-            layout_parameter.name.as_str common::HIDDEN_REPR_PREFIX str::starts_with = is_repr
-            layout_parameter.name.as_str common::HIDDEN_DROP_PREFIX str::starts_with = is_drop
-            if is_size is_repr || is_drop || ! then
-                continue
-            fi
-            if is_size then
-                common::HIDDEN_SIZE_PREFIX layout_parameter.name.as_str common::hidden_layout_parameter_type
-            elif is_repr then
-                common::HIDDEN_REPR_PREFIX layout_parameter.name.as_str common::hidden_layout_parameter_type
-            else
-                common::HIDDEN_DROP_PREFIX layout_parameter.name.as_str common::hidden_layout_parameter_type
-            fi
-            = queried_type
-            bindings queried_type.substitute_t resolve_numeric_literal_default = resolved_type
-            std::Option[common::Op]::None = layout_operation
-            if is_drop tc.store resolved_type common::type_needs_destruction_in_store ! && then
-                location.clone resolved_type common::OpValue::DestructionFn common::Op::new std::Option::Some
-                = layout_operation
-            elif resolved_type.has_unresolved_type_var then
-                if is_size then
-                    resolved_type common::make_hidden_size_parameter_name
-                elif is_repr then
-                    resolved_type common::make_hidden_repr_parameter_name
-                else
-                    resolved_type common::make_hidden_drop_parameter_name
-                fi
-                = forwarded_name
-                forwarded_name.as_str function_opt find_forwarded_layout_argument = forward_value
-                forward_value match
-                    std::Option::Some(value) => location.clone value common::Op::new std::Option::Some = layout_operation
-                    std::Option::None => {
-                        if is_drop function_opt.is_some && then
-                            resolved_type common::clone_type tc.required_drop_types.push
-                            location.clone forwarded_name common::OpValue::PushVar common::Op::new std::Option::Some
-                            = layout_operation
-                        else
-                            if is_drop then
-                                f"Cannot determine destructor for `{resolved_type.format}` in this generic call"
-                            else
-                                f"Cannot determine layout of `{resolved_type.format}` in this generic call"
-                            fi = message
-                            location message
-                            common::ErrorKind::TypeMismatch tc.diagnostics.record_error_string
-                        fi
-                    }
-                end
-            elif is_drop then
-                location.clone resolved_type common::OpValue::DestructionFn common::Op::new std::Option::Some
-                = layout_operation
-            else
-                if is_size then
-                    tc.store resolved_type common::type_inline_size
-                else
-                    tc.store resolved_type common::type_value_representation
-                fi
-                = layout_value
-                location resolved_type layout_value tc.layout_constant_op = layout_operation
-            fi
-            layout_operation match
-                std::Option::Some(push_layout) => {
-                    common::make_u64_type common::clone_type std::Option::Some push_layout common::Op::set_type_hint
-                    insert_pos push_layout ops.insert
-                    1 += insert_pos
-                    1 += inserted
-                    common::make_u64_type tc.stack_push_type
-                }
-                std::Option::None => {
-                }
-            end
-        done
-        inserted
     }
 }
 
@@ -6681,7 +6317,8 @@ impl TypeChecker {
                 fi
                 function_opt op_index ops op 0 effect tc.bind_borrowed_temporaries = bound
                 bound += op_index
-                function_opt op.type_hint.clone fn_name.as_str effect tc.apply_stack_effect
+                function_opt op.type_hint.clone fn_name.as_str effect
+                tc.apply_stack_effect
                 call_receiver_capability fn_name.as_str tc.mark_struct_getter_borrow
                 if op.type_hint std::Option::Some(explicit_type) is then
                     false = valid_explicit_type
@@ -6742,7 +6379,8 @@ impl TypeChecker {
                 fi
                 if effect_opt std::Option::Some(effect) is then
                     if 0 effect.parameters.length != 0 effect.return_types.length != || then
-                        function_opt std::Option[common::Type]::None "exec" effect tc.apply_stack_effect
+                        function_opt std::Option[common::Type]::None "exec"
+                        effect tc.apply_stack_effect
                     fi
                 fi
             fi
@@ -6845,7 +6483,8 @@ impl TypeChecker {
                     fi
                 fi
                 effect semantics::make_function_reference_stack_effect = reference_effect
-                function_opt std::Option[common::Type]::None "" reference_effect tc.apply_stack_effect
+                function_opt std::Option[common::Type]::None ""
+                reference_effect tc.apply_stack_effect
                 if closure_origins.is_some then
                     tc
                         .stack
@@ -7292,218 +6931,219 @@ pub fn set_binding_type
 }
 
 impl TypeChecker {
-    pub fn check_match
-        tc:mut$TypeChecker
+    fn begin_match
+        self:mut$TypeChecker
         op:mut$common::Op
         function_opt:mut$std::Option[common::Function]
     {
-        if op.value common::OpValue::MatchStart is then
-            std::Option[std::List[std::String]]::None = match_origins
-            std::Option[std::String]::None = match_place
-            if
-                0 tc
-                    .stack
-                    .values
-                    .length ==
-            then
-                tc.within_param_cap = inferring_stack_effect
-                if function_opt std::Option::Some(function) is then
-                    if function common::Function::name.as_str "lambda__" str::starts_with ! then
-                        false = inferring_stack_effect
-                    fi
-                else
-                    false = inferring_stack_effect
-                fi
-                if inferring_stack_effect ! then
-                    op common::Op::location "`match` requires a subject value on the stack" common::ErrorKind::StackUnderflow tc.diagnostics.record_error
-                    true = tc.underflow_reported_this_op
-                fi
-            fi
-            0 tc
+        std::Option[std::List[std::String]]::None = match_origins
+        std::Option[std::String]::None = match_place
+        if
+            0 self
                 .stack
                 .values
-                .length != = has_match_subject
-            tc.stack_pop_value = match_subject
-            match_subject.type_value common::clone_type = match_type
-            if 0 match_subject.literals.length != then
-                match_type resolve_numeric_literal_default = match_type
-                tc.literal_resolutions tc.diagnostics match_type match_subject.resolve_literals drop
-            fi
-            if has_match_subject then
-                match_subject.origins clone_origins = match_origins
-                if match_subject.place std::Option::Some(place) is then
-                    place.clone std::Option::Some = match_place
+                .length ==
+        then
+            self.within_param_cap = inferring_stack_effect
+            if function_opt std::Option::Some(function) is then
+                if function common::Function::name.as_str "lambda__" str::starts_with ! then
+                    false = inferring_stack_effect
                 fi
-                match_subject tc.finish_value_use
-                if match_subject.capability ValueCapability::Owned is ! then
-                    if match_type.is_borrow ! then
-                        if match_subject.capability ValueCapability::Shared is then
-                            common::SHARED_BORROW_TYPE
-                        else
-                            common::EXCLUSIVE_BORROW_TYPE
-                        fi
-                        match_type common::apply_borrow_type = match_type
-                    fi
-                fi
-            fi
-            match_type MatchContext::new = match_ctx
-            match_origins = match_ctx.match_origins
-            match_place = match_ctx.match_place
-            tc.path_continues = match_ctx.entry_continues
-            tc.current_ownership_flow = match_ctx.flow_before
-            # Snapshot the entry stack state eagerly so that an OpFnReturn visiting
-            # this frame before any OpMatchArm still finds a correct `before` to
-            # restore from. Matches the pre-refactor make_branched_stack behavior.
-            tc.stack match_ctx MatchContext::before.restore
-            tc.stack match_ctx MatchContext::after.restore
-            op common::Op::location.clone match_ctx MatchContext::set_current_branch_location
-            match_ctx BranchFrame::BranchMatch = match_frame
-            match_frame tc.branched_stacks.push
-        elif op.value common::OpValue::MatchArm is then
-            op function_opt tc pattern::typecheck_match_op
-        elif op.value common::OpValue::MatchEnd is then
-            tc
-                .branched_stacks
-                .pop
-                .into_match = match_ctx
-            # Close the final arm's scope frame (only opened if an arm ran).
-            if match_ctx MatchContext::condition_present then
-                if tc.path_continues then
-                    match_ctx.before tc.materialize_branch_results
-                fi
-                op tc.attach_scope_cleanups
-                tc.scope.exit
-            fi
-            match_ctx.flow_after tc.merge_current_ownership_flow
-            if tc.path_continues then
-                true = match_ctx.has_continuing_arm
-            fi
-            if match_ctx.has_continuing_arm then
-                match_ctx.flow_after tc.restore_ownership_flow
             else
-                match_ctx.flow_before tc.restore_ownership_flow
+                false = inferring_stack_effect
             fi
-            match_ctx.has_continuing_arm = tc.path_continues
-            # Record last arm label
-            if "" match_ctx MatchContext::current_branch_label.as_str != then
-                match_ctx MatchContext::current_branch_label.clone match_ctx MatchContext::branch_records.push
+            if inferring_stack_effect ! then
+                op common::Op::location "`match` requires a subject value on the stack" common::ErrorKind::StackUnderflow self.diagnostics.record_error
+                true = self.underflow_reported_this_op
             fi
-            # Record last arm stack effect (same logic as next-arm recording)
-            if match_ctx MatchContext::condition_present then
-                match_ctx MatchContext::before = match_before: mut$TypedStack
-                match_ctx MatchContext::after = match_after: mut$TypedStack
-                if
-                    match_before tc.stack.equals
-                    match_after match_before.equals && !
-                then
-                    tc.store match_after tc.stack.unify_types = last_unified
-                    if 0 last_unified.length != match_after match_before.equals ! && then
-                        tc.stack match_after.merge_literals
-                        match_after.mark_literals_runtime
-                        last_unified match_after.set_types
-                    elif match_after match_before.equals then
-                        tc.stack match_after.restore
-                    else
-                        op common::Op::location "Match arms have incompatible stack effects" common::ErrorKind::StackMismatch tc.diagnostics.record_error
-                    fi
-                fi
-                match_before tc.stack.restore
-            fi
-
-            match_ctx MatchContext::match_type = end_match_type: mut$common::Type
-            end_match_type.match_base = end_base
-
-            # Build covered set
-            std::Set[std::String]::new = covered_set
-            for record in match_ctx MatchContext::branch_records.iter do
-                if record.as_str "__covered:" str::starts_with then
-                    record.as_str 10 record.length 10 - str::substring covered_set.add
-                fi
-            done
-            common::MATCH_WILDCARD covered_set.has_str = has_wildcard
-
-            # Check exhaustiveness
-            if has_wildcard ! then
-                if
-                    end_base tc
-                        .store
-                        .enums
-                        .get std::Option::Some(end_enum) is
-                then
-                    std::List[std::String]::new = missing
-                    for variant_name in end_enum common::CasaEnum::variants.iter do
-                        if variant_name covered_set.has ! then
-                            variant_name.clone missing.push
-                        fi
-                    done
-                    if 0 missing.length != then
-                        std::List[std::String]::new = formatted_missing
-                        for variant_name in missing.iter do
-                            f"`{end_base}::{variant_name}`" formatted_missing.push
-                        done
-                        ", " formatted_missing.join_strings = missing_str
-                        op common::Op::location f"Non-exhaustive match, missing arms: {missing_str}" common::ErrorKind::TypeMismatch tc.diagnostics.record_error_string
-                    fi
-                fi
-            fi
-            if
-                end_base tc
-                    .store
-                    .structs
-                    .has has_wildcard ! &&
-            then
-                if end_base covered_set.has ! then
-                    op common::Op::location f"Non-exhaustive match on struct `{end_match_type.format}`" common::ErrorKind::TypeMismatch tc.diagnostics.record_error_string
-                fi
-            fi
-            # Literal exhaustiveness
-            if
-                "bool" end_base.as_str ==
-                end_match_type.is_integer_type_t ||
-                "char" end_base.as_str == ||
-                "str" end_base.as_str == ||
-            then
-                if has_wildcard ! then
-                    if "bool" end_base.as_str == then
-                        std::List[std::String]::new = bool_missing
-                        if "true".to_str covered_set.has ! then
-                            "true".to_str bool_missing.push
-                        fi
-                        if "false".to_str covered_set.has ! then
-                            "false".to_str bool_missing.push
-                        fi
-                        if 0 bool_missing.length != then
-                            op common::Op::location "Non-exhaustive match on `bool`" common::ErrorKind::TypeMismatch tc.diagnostics.record_error
-                        fi
-                    else
-                        op common::Op::location f"Non-exhaustive match on type `{end_base}`. A wildcard `_` arm is required" common::ErrorKind::TypeMismatch tc.diagnostics.record_error_string
-                    fi
-                fi
-            fi
-
-            # Apply final stack state
-            match_ctx MatchContext::before = final_before: mut$TypedStack
-            match_ctx MatchContext::after = final_after: mut$TypedStack
-            # When stack == before and before == after, nothing changed
-            if final_before tc.stack.equals final_after final_before.equals && then
-                return
-            fi
-            # When stack == before but after differs (e.g. wildcard-only match),
-            # accept the after state directly
-            if final_before tc.stack.equals final_after final_before.equals ! && then
-                final_after tc.stack.restore
-                return
-            fi
-            tc.store final_after tc.stack.unify_types = unified
-            if 0 unified.length != then
-                tc.stack final_after.merge_literals
-                final_after.mark_literals_runtime
-                final_after tc.stack.restore
-                unified tc.stack.set_types
-                return
-            fi
-            op common::Op::location "Match arms have incompatible stack effects" common::ErrorKind::StackMismatch tc.diagnostics.record_error
         fi
+        0 self
+            .stack
+            .values
+            .length != = has_match_subject
+        self.stack_pop_value = match_subject
+        match_subject.type_value common::clone_type = match_type
+        if 0 match_subject.literals.length != then
+            match_type resolve_numeric_literal_default = match_type
+            self.literal_resolutions self.diagnostics match_type match_subject.resolve_literals drop
+        fi
+        if has_match_subject then
+            match_subject.origins clone_origins = match_origins
+            if match_subject.place std::Option::Some(place) is then
+                place.clone std::Option::Some = match_place
+            fi
+            match_subject self.finish_value_use
+            if match_subject.capability ValueCapability::Owned is ! then
+                if match_type.is_borrow ! then
+                    if match_subject.capability ValueCapability::Shared is then
+                        common::SHARED_BORROW_TYPE
+                    else
+                        common::EXCLUSIVE_BORROW_TYPE
+                    fi
+                    match_type common::apply_borrow_type = match_type
+                fi
+            fi
+        fi
+        match_type MatchContext::new = match_ctx
+        match_origins = match_ctx.match_origins
+        match_place = match_ctx.match_place
+        self.path_continues = match_ctx.entry_continues
+        self.current_ownership_flow = match_ctx.flow_before
+        # Snapshot the entry stack state eagerly so that an OpFnReturn visiting
+        # this frame before any OpMatchArm still finds a correct `before` to
+        # restore from. Matches the pre-refactor make_branched_stack behavior.
+        self.stack match_ctx MatchContext::before.restore
+        self.stack match_ctx MatchContext::after.restore
+        op common::Op::location.clone match_ctx MatchContext::set_current_branch_location
+        match_ctx BranchFrame::BranchMatch = match_frame
+        match_frame self.branched_stacks.push
+    }
+
+    fn check_match_exhaustiveness
+        self:mut$TypeChecker
+        op:mut$common::Op
+        match_ctx:mut$MatchContext
+    {
+        match_ctx MatchContext::match_type = end_match_type: mut$common::Type
+        end_match_type.match_base = end_base
+
+        # Build covered set
+        std::Set[std::String]::new = covered_set
+        for record in match_ctx MatchContext::branch_records.iter do
+            if record.as_str "__covered:" str::starts_with then
+                record.as_str 10 record.length 10 - str::substring covered_set.add
+            fi
+        done
+        common::MATCH_WILDCARD covered_set.has_str = has_wildcard
+
+        # Check exhaustiveness
+        if has_wildcard ! then
+            if
+                end_base self
+                    .store
+                    .enums
+                    .get std::Option::Some(end_enum) is
+            then
+                std::List[std::String]::new = missing
+                for variant_name in end_enum common::CasaEnum::variants.iter do
+                    if variant_name covered_set.has ! then
+                        variant_name.clone missing.push
+                    fi
+                done
+                if 0 missing.length != then
+                    std::List[std::String]::new = formatted_missing
+                    for variant_name in missing.iter do
+                        f"`{end_base}::{variant_name}`" formatted_missing.push
+                    done
+                    ", " formatted_missing.join_strings = missing_str
+                    op common::Op::location f"Non-exhaustive match, missing arms: {missing_str}" common::ErrorKind::TypeMismatch self.diagnostics.record_error_string
+                fi
+            fi
+        fi
+        if
+            end_base self
+                .store
+                .structs
+                .has has_wildcard ! &&
+        then
+            if end_base covered_set.has ! then
+                op common::Op::location f"Non-exhaustive match on struct `{end_match_type.format}`" common::ErrorKind::TypeMismatch self.diagnostics.record_error_string
+            fi
+        fi
+        # Literal exhaustiveness
+        if
+            "bool" end_base.as_str ==
+            end_match_type.is_integer_type_t ||
+            "char" end_base.as_str == ||
+            "str" end_base.as_str == ||
+        then
+            if has_wildcard ! then
+                if "bool" end_base.as_str == then
+                    std::List[std::String]::new = bool_missing
+                    if "true".to_str covered_set.has ! then
+                        "true".to_str bool_missing.push
+                    fi
+                    if "false".to_str covered_set.has ! then
+                        "false".to_str bool_missing.push
+                    fi
+                    if 0 bool_missing.length != then
+                        op common::Op::location "Non-exhaustive match on `bool`" common::ErrorKind::TypeMismatch self.diagnostics.record_error
+                    fi
+                else
+                    op common::Op::location f"Non-exhaustive match on type `{end_base}`. A wildcard `_` arm is required" common::ErrorKind::TypeMismatch self.diagnostics.record_error_string
+                fi
+            fi
+        fi
+    }
+
+    fn apply_match_result_stack self:mut$TypeChecker op:mut$common::Op match_ctx:mut$MatchContext {
+        # Apply final stack state
+        match_ctx MatchContext::before = final_before: mut$TypedStack
+        match_ctx MatchContext::after = final_after: mut$TypedStack
+        # When stack == before and before == after, nothing changed
+        if final_before self.stack.equals final_after final_before.equals && then
+            return
+        fi
+        # When stack == before but after differs (e.g. wildcard-only match),
+        # accept the after state directly
+        if final_before self.stack.equals final_after final_before.equals ! && then
+            final_after self.stack.restore
+            return
+        fi
+        self.store final_after self.stack.unify_types = unified
+        if 0 unified.length != then
+            self.stack final_after.merge_literals
+            final_after.mark_literals_runtime
+            final_after self.stack.restore
+            unified self.stack.set_types
+            return
+        fi
+        op common::Op::location "Match arms have incompatible stack effects" common::ErrorKind::StackMismatch self.diagnostics.record_error
+    }
+
+    fn finish_match self:mut$TypeChecker op:mut$common::Op {
+        self
+            .branched_stacks
+            .pop
+            .into_match = match_ctx
+        # Close the final arm's scope frame (only opened if an arm ran).
+        if match_ctx MatchContext::condition_present then
+            if self.path_continues then
+                match_ctx.before self.materialize_branch_results
+            fi
+            op self.attach_scope_cleanups
+            self.scope.exit
+        fi
+        match_ctx.flow_after self.merge_current_ownership_flow
+        if self.path_continues then
+            true = match_ctx.has_continuing_arm
+        fi
+        if match_ctx.has_continuing_arm then
+            match_ctx.flow_after self.restore_ownership_flow
+        else
+            match_ctx.flow_before self.restore_ownership_flow
+        fi
+        match_ctx.has_continuing_arm = self.path_continues
+        if match_ctx MatchContext::condition_present then
+            op match_ctx self pattern::unify_arm_stacks
+        fi
+
+        match_ctx op self.check_match_exhaustiveness
+        match_ctx op self.apply_match_result_stack
+    }
+
+    pub fn check_match
+        self:mut$TypeChecker
+        op:mut$common::Op
+        function_opt:mut$std::Option[common::Function]
+    {
+        op.value match
+            common::OpValue::MatchStart => function_opt op self.begin_match
+            common::OpValue::MatchArm => op function_opt self pattern::typecheck_match_op
+            common::OpValue::MatchEnd => op self.finish_match
+            _ => {
+            }
+        end
     }
 }
 
@@ -7887,7 +7527,8 @@ impl TypeChecker {
         semantics.stack_effect.clone = effect
         function_opt op_index ops op 0 effect tc.bind_borrowed_temporaries = bound
         bound += op_index
-        function_opt std::Option[common::Type]::None method_key.as_str effect tc.apply_stack_effect
+        function_opt std::Option[common::Type]::None method_key.as_str
+        effect tc.apply_stack_effect
         effect semantics.trait_type.clone receiver common::clone_type semantics.method_name.clone
         common::DeferredTraitCall::new common::OpValue::TraitMethodCall op common::Op::set_value
         op_index
@@ -8133,7 +7774,8 @@ impl TypeChecker {
                             fi
                             function_opt op_index ops op 0 effect tc.bind_borrowed_temporaries = bound
                             bound += op_index
-                            function_opt op.type_hint.clone fn_name.as_str effect tc.apply_stack_effect
+                            function_opt op.type_hint.clone fn_name.as_str effect
+                            tc.apply_stack_effect
                             receiver_capability fn_name.as_str tc.mark_struct_getter_borrow
                             fn_name common::OpValue::FnCall op common::Op::set_value
                             op_index return
@@ -8236,258 +7878,6 @@ impl TypeChecker {
 # ============================================================================
 # Ensure a function is typechecked
 # ============================================================================
-
-pub fn add_hidden_layout_parameter
-    name:std::String
-    hidden_parameters:mut$std::List[common::Parameter]
-    variables:mut$std::List[common::Variable]
-    assignments:mut$std::List[common::Op]
-    seen:mut$std::Set[std::String]
-    location:$common::Location
-{
-    if name.as_str seen.has_str then
-        return
-    fi
-    name.clone seen.add
-    name.clone common::make_u64_type common::Parameter::named hidden_parameters.push
-    common::make_u64_type common::clone_type name.clone common::Variable variables.push
-    location.clone name.clone common::OpValue::AssignVar common::Op::new = assignment
-    common::make_u64_type common::clone_type std::Option::Some assignment common::Op::set_type_hint
-    assignment assignments.push
-}
-
-pub fn add_hidden_drop_parameters
-    typ:$common::Type
-    store:$common::SymbolStore
-    hidden_parameters:mut$std::List[common::Parameter]
-    variables:mut$std::List[common::Variable]
-    assignments:mut$std::List[common::Op]
-    seen:mut$std::Set[std::String]
-    visiting:mut$std::Set[std::String]
-    location:$common::Location
-{
-    if typ.is_shared_borrow then
-        return
-    fi
-    if typ.borrow_target std::Option::Some(target) is then
-        location visiting seen assignments variables hidden_parameters store target
-        add_hidden_drop_parameters
-        return
-    fi
-    typ common::clone_type = inspected_type
-    inspected_type match
-        common::Type::TypeVar(_) => {
-            typ common::make_hidden_drop_parameter_name = hidden_drop
-            location seen assignments variables hidden_parameters hidden_drop
-            add_hidden_layout_parameter
-        }
-        common::Type::Generic(generic) => {
-            typ.format = type_name
-            if type_name.as_str visiting.has_str then
-                return
-            fi
-            type_name.clone visiting.add
-            f"{typ.match_base}::drop" = drop_name
-            if drop_name.as_str store.functions.has_str then
-                for parameter in generic.params.iter do
-                    location visiting seen assignments variables hidden_parameters store parameter
-                    add_hidden_drop_parameters
-                done
-            elif common::ARRAY_TYPE generic.base.as_str == then
-                if 0 generic.params.length != then
-                    location visiting seen assignments variables hidden_parameters store
-                    0 generic.params.get add_hidden_drop_parameters
-                fi
-            elif generic.base.as_str store.structs.get_str std::Option::Some(casa_struct) is then
-                casa_struct.type_vars typ common::aggregate_type_bindings = substitutions
-                for member in casa_struct.members.iter do
-                    substitutions member.typ.substitute_t = member_type
-                    location visiting seen assignments variables hidden_parameters store member_type
-                    add_hidden_drop_parameters
-                done
-            elif generic.base.as_str store.enums.get_str std::Option::Some(casa_enum) is then
-                casa_enum.type_vars typ common::aggregate_type_bindings = substitutions
-                for pair in casa_enum.variant_types.iter do
-                    for payload_type in pair.second.iter do
-                        substitutions payload_type.substitute_t = resolved_payload
-                        location visiting seen assignments variables hidden_parameters store resolved_payload
-                        add_hidden_drop_parameters
-                    done
-                done
-            fi
-            type_name.as_str visiting.remove_str
-        }
-        _ => {
-        }
-    end
-}
-
-pub fn rewrite_generic_size_queries
-    ops:mut$std::List[common::Op]
-    hidden_parameters:mut$std::List[common::Parameter]
-    variables:mut$std::List[common::Variable]
-    assignments:mut$std::List[common::Op]
-    seen:mut$std::Set[std::String]
-    location:$common::Location
-{
-    0 (u64) = op_index
-    while op_index ops.length > do
-        op_index ops.get_mut = op
-        op.value common::clone_op_value = query_value
-        if query_value common::OpValue::SizeOf(target) is then
-            if target.has_unresolved_type_var then
-                target common::make_hidden_size_parameter_name = hidden_name
-                location seen assignments variables hidden_parameters hidden_name.clone
-                add_hidden_layout_parameter
-                hidden_name common::OpValue::PushVar op common::Op::set_value
-            fi
-        elif query_value common::OpValue::PtrRead(target) is then
-            if target.has_unresolved_type_var then
-                target common::make_hidden_size_parameter_name = hidden_size
-                location seen assignments variables hidden_parameters hidden_size
-                add_hidden_layout_parameter
-                target common::make_hidden_repr_parameter_name = hidden_repr
-                location seen assignments variables hidden_parameters hidden_repr
-                add_hidden_layout_parameter
-            fi
-        elif query_value common::OpValue::PtrWrite(target) is then
-            if target.has_unresolved_type_var then
-                target common::make_hidden_size_parameter_name = hidden_size
-                location seen assignments variables hidden_parameters hidden_size
-                add_hidden_layout_parameter
-                target common::make_hidden_repr_parameter_name = hidden_repr
-                location seen assignments variables hidden_parameters hidden_repr
-                add_hidden_layout_parameter
-            fi
-        elif query_value common::OpValue::PtrAsRef(target) is then
-            if target.has_unresolved_type_var then
-                target common::make_hidden_size_parameter_name = hidden_size
-                location seen assignments variables hidden_parameters hidden_size
-                add_hidden_layout_parameter
-                target common::make_hidden_repr_parameter_name = hidden_repr
-                location seen assignments variables hidden_parameters hidden_repr
-                add_hidden_layout_parameter
-            fi
-        elif query_value common::OpValue::PtrAsMut(target) is then
-            if target.has_unresolved_type_var then
-                target common::make_hidden_size_parameter_name = hidden_size
-                location seen assignments variables hidden_parameters hidden_size
-                add_hidden_layout_parameter
-                target common::make_hidden_repr_parameter_name = hidden_repr
-                location seen assignments variables hidden_parameters hidden_repr
-                add_hidden_layout_parameter
-            fi
-        elif query_value common::OpValue::PushArray(items) is then
-            items common::clone_ops = owned_items
-            location seen assignments variables hidden_parameters owned_items rewrite_generic_size_queries
-            owned_items common::OpValue::PushArray op common::Op::set_value
-        elif query_value common::OpValue::ExprGroup(items) is then
-            items common::clone_ops = owned_items
-            location seen assignments variables hidden_parameters owned_items rewrite_generic_size_queries
-            owned_items common::OpValue::ExprGroup op common::Op::set_value
-        elif query_value common::OpValue::MatchArm(arm) is then
-            arm.clone = rewritten_arm
-            location seen assignments variables hidden_parameters rewritten_arm.guard_ops
-            rewrite_generic_size_queries
-            rewritten_arm common::OpValue::MatchArm op common::Op::set_value
-        fi
-        1 += op_index
-    done
-}
-
-pub fn prepare_generic_size_queries function:mut$common::Function {
-    std::List[common::Parameter]::new = hidden_parameters
-    std::List[common::Op]::new = assignments
-    std::Set[std::String]::new = seen
-    for
-        existing_parameter in function
-            .stack_effect
-            .parameters
-            .iter
-    do
-        existing_parameter.name.as_str common::HIDDEN_SIZE_PREFIX str::starts_with = is_size
-        existing_parameter.name.as_str common::HIDDEN_REPR_PREFIX str::starts_with = is_repr
-        existing_parameter.name.as_str common::HIDDEN_DROP_PREFIX str::starts_with = is_drop
-        if is_size is_repr || is_drop || then
-            existing_parameter.name.clone seen.add
-        fi
-    done
-    function.location seen assignments function.variables hidden_parameters function.ops
-    rewrite_generic_size_queries
-    std::List[common::Type]::new = signature_types
-    for
-        parameter in function
-            .stack_effect
-            .parameters
-            .iter
-    do
-        parameter.typ common::clone_type signature_types.push
-    done
-    for
-        return_type in function
-            .stack_effect
-            .return_types
-            .iter
-    do
-        return_type common::clone_type signature_types.push
-    done
-    0 (u64) = signature_index
-    while signature_index signature_types.length > do
-        signature_index signature_types.get common::clone_type = parameter_type
-        1 += signature_index
-        if parameter_type.borrow_target std::Option::Some(target) is then
-            target common::clone_type = parameter_type
-        fi
-        if parameter_type common::Type::Generic(storage_type) is then
-            storage_type.base.as_str common::ARRAY_TYPE ==
-            storage_type.base.as_str "List" == ||
-            storage_type.base.as_str "Slice" == ||
-            storage_type.base.as_str "Map" == ||
-            storage_type.base.as_str "Set" == ||
-            = carries_inline_values
-            if carries_inline_values ! then
-                for nested_type in storage_type.params.iter do
-                    nested_type common::clone_type signature_types.push
-                done
-                continue
-            fi
-            storage_type.params.length = element_count
-            if common::ARRAY_TYPE storage_type.base.as_str == then
-                1 (u64) = element_count
-            fi
-            0 (u64) = element_index
-            while element_index element_count > do
-                element_index storage_type.params.get = element_type
-                if element_type.has_unresolved_type_var ! then
-                    1 += element_index
-                    continue
-                fi
-                element_type common::make_hidden_size_parameter_name = hidden_size
-                function.location seen assignments function.variables hidden_parameters hidden_size
-                add_hidden_layout_parameter
-                element_type common::make_hidden_repr_parameter_name = hidden_repr
-                function.location seen assignments function.variables hidden_parameters hidden_repr
-                add_hidden_layout_parameter
-                1 += element_index
-            done
-        fi
-    done
-    if 0 hidden_parameters.length == then
-        return
-    fi
-    for
-        parameter in function
-            .stack_effect
-            .parameters
-            .iter
-    do
-        parameter.name.clone parameter.typ common::clone_type common::Parameter hidden_parameters.push
-    done
-    hidden_parameters function.stack_effect common::StackEffect::set_parameters
-    while assignments.is_empty ! do
-        0 assignments.pop function.ops.insert
-    done
-}
 
 pub struct CheckedFunction {
     pub stack_effect: common::StackEffect
@@ -8601,372 +7991,194 @@ impl TypeChecker {
         function_opt op tc.apply_fixed_semantics
     }
 
+    fn check_size_of
+        self:mut$TypeChecker
+        op:mut$common::Op
+        target_type:$common::Type
+        function_opt:mut$std::Option[common::Function]
+    {
+        op.location function_opt target_type self.validate_type_exists
+        if
+            target_type.has_unresolved_type_var !
+            self.store target_type common::type_inline_size.is_none &&
+        then
+            op.location f"Cannot determine inline size of `{target_type.format}`"
+            common::ErrorKind::TypeMismatch self.diagnostics.record_error_string
+        fi
+        common::make_u64_type self.stack_push_type
+    }
+
+    fn check_type_cast
+        self:mut$TypeChecker
+        op:mut$common::Op
+        cast_type_ref:$common::Type
+        function_opt:mut$std::Option[common::Function]
+    {
+        cast_type_ref common::clone_type = cast_type
+        op common::Op::location function_opt cast_type self.validate_type_exists
+        self.stack_pop_value = cast_value
+        if
+            0 cast_value.literals.length !=
+            common::ARRAY_TYPE cast_type.match_base.as_str == &&
+        then
+            self.literal_resolutions self.diagnostics cast_type cast_value.resolve_literals drop
+        fi
+        cast_value.origins clone_origins = cast_origins
+        if cast_type common::make_char_type.eq then
+            op.location "Cast to `char` is not allowed; use `char::from_codepoint`" common::ErrorKind::TypeMismatch self.diagnostics.record_error
+        elif cast_value.type_value common::make_char_type.eq then
+            op.location "Cast from `char` is not allowed; use `.codepoint`" common::ErrorKind::TypeMismatch self.diagnostics.record_error
+        fi
+        if cast_type common::make_ptr_type.eq cast_value.type_value common::make_ptr_type.eq || then
+            "pointer cast" op self.require_unsafe
+        fi
+        if
+            cast_type common::make_ptr_type.eq
+            self.store cast_type type_has_borrow ||
+        then
+            cast_value self.release_value
+        else
+            cast_value self.consume_value
+        fi
+        if self.store cast_type type_has_borrow then
+            if cast_origins.is_none 0 self.unsafe_depth != && then
+                cast_type.is_exclusive_borrow function_opt
+                self.raw_borrow_input_origins = cast_origins
+            fi
+            cast_origins cast_type self.stack_push_origins
+        else
+            cast_type self.stack_push_type
+        fi
+    }
+
+    fn run_type_check_op
+        self:mut$TypeChecker
+        current_op:mut$common::Op
+        ops:mut$std::List[common::Op]
+        op_index:u64
+        function_opt:mut$std::Option[common::Function]
+    -> u64 {
+        if
+            current_op.value common::OpValue::Dup is
+            current_op.value common::OpValue::Over is ||
+            current_op.value common::OpValue::Copy is ||
+        then
+            function_opt current_op self.check_copy_operation
+            op_index return
+        fi
+        if
+            current_op.value common::OpValue::Add is
+            current_op.value common::OpValue::Sub is ||
+            current_op.value common::OpValue::Mul is ||
+            current_op.value common::OpValue::Div is ||
+            current_op.value common::OpValue::Mod is ||
+            current_op.value common::OpValue::Shl is ||
+            current_op.value common::OpValue::Shr is ||
+            current_op.value common::OpValue::BitAnd is ||
+            current_op.value common::OpValue::BitOr is ||
+            current_op.value common::OpValue::BitXor is ||
+            current_op.value common::OpValue::BitNot is ||
+        then
+            current_op self.check_integer_operation
+            op_index return
+        fi
+        if current_op.value common::OpValue::Drop is then
+            current_op self.check_stack_ops
+            op_index return
+        fi
+        if current_op.value semantics::operation_uses_fixed_typecheck_effect then
+            function_opt current_op self.apply_fixed_semantics
+            op_index return
+        fi
+        if current_op.value semantics::operation_is_comparison then
+            function_opt op_index ops current_op self.check_comparison return
+        fi
+        if current_op.value semantics::operation_is_memory then
+            function_opt current_op self.check_memory
+            op_index return
+        fi
+        current_op.value match
+            common::OpValue::UnsafeStart => 1 += self.unsafe_depth
+            common::OpValue::UnsafeEnd => {
+                if 0 self.unsafe_depth != then
+                    1 -= self.unsafe_depth
+                fi
+            }
+            common::OpValue::Question(_) => function_opt op_index ops current_op self.lower_question_operator
+            common::OpValue::QuestionMove(_) => current_op self.consume_question_owner
+            common::OpValue::NumericCall(_) => current_op self.check_numeric_call
+            common::OpValue::AssignVar(_) => function_opt op_index ops current_op self.check_assignment
+            common::OpValue::AssignDec(_) => function_opt op_index ops current_op self.check_assignment
+            common::OpValue::AssignInc(_) => function_opt op_index ops current_op self.check_assignment
+            common::OpValue::BindTemporary(_) => function_opt current_op self.check_temporary_binding
+            common::OpValue::PushVar(_) => function_opt current_op self.check_push_var
+            common::OpValue::PushCapture(_) => function_opt current_op self.check_push_var
+            common::OpValue::IfStart => current_op self.check_if_block
+            common::OpValue::IfCondition => current_op self.check_if_block
+            common::OpValue::IfElif => current_op self.check_if_block
+            common::OpValue::IfElse => current_op self.check_if_block
+            common::OpValue::IfEnd => current_op self.check_if_block
+            common::OpValue::WhileStart => current_op self.check_while_block
+            common::OpValue::WhileCondition => current_op self.check_while_block
+            common::OpValue::WhileBreak => current_op self.check_while_block
+            common::OpValue::WhileContinue => current_op self.check_while_block
+            common::OpValue::WhileEnd => current_op self.check_while_block
+            common::OpValue::TraitMethodRef(_) => function_opt current_op self.check_trait_method_ref
+            common::OpValue::FnCall(_) => function_opt op_index ops current_op self.check_function_ops = op_index
+            common::OpValue::FnExec => function_opt op_index ops current_op self.check_function_ops = op_index
+            common::OpValue::FnExecOwned => function_opt op_index ops current_op self.check_function_ops = op_index
+            common::OpValue::FnPush(_) => function_opt op_index ops current_op self.check_function_ops = op_index
+            common::OpValue::FnReturn => function_opt op_index ops current_op self.check_function_ops = op_index
+            common::OpValue::PushInt(_) => function_opt current_op self.check_literals
+            common::OpValue::PushFloat(_) => function_opt current_op self.check_literals
+            common::OpValue::PushArray(_) => function_opt current_op self.check_literals
+            common::OpValue::ExprGroup(_) => function_opt current_op self.check_literals
+            common::OpValue::Print => function_opt op_index ops current_op self.check_io = op_index
+            common::OpValue::Typeof => current_op self.check_typeof
+            common::OpValue::SizeOf(target_type) => function_opt target_type current_op self.check_size_of
+            common::OpValue::Syscall0 => function_opt current_op self.check_syscalls
+            common::OpValue::Syscall1 => function_opt current_op self.check_syscalls
+            common::OpValue::Syscall2 => function_opt current_op self.check_syscalls
+            common::OpValue::Syscall3 => function_opt current_op self.check_syscalls
+            common::OpValue::Syscall4 => function_opt current_op self.check_syscalls
+            common::OpValue::Syscall5 => function_opt current_op self.check_syscalls
+            common::OpValue::Syscall6 => function_opt current_op self.check_syscalls
+            common::OpValue::Argc => common::make_i64_type self.stack_push_type
+            common::OpValue::Argv => common::make_ptr_type self.stack_push_type
+            common::OpValue::Envp => common::make_ptr_type self.stack_push_type
+            common::OpValue::PushEnumVariant(_) => function_opt current_op self.check_enum_variant
+            common::OpValue::IsCheck(_) => function_opt current_op self.check_is
+            common::OpValue::MatchStart => function_opt current_op self.check_match
+            common::OpValue::MatchArm(_) => function_opt current_op self.check_match
+            common::OpValue::MatchEnd => function_opt current_op self.check_match
+            common::OpValue::StructNew(_) => current_op self.check_struct_new
+            common::OpValue::StructLiteral(_) => current_op self.check_struct_literal
+            common::OpValue::MethodCall(_) => function_opt op_index ops current_op self.check_method_call = op_index
+            common::OpValue::QualifiedMethodCall(_) => function_opt op_index ops current_op self.check_method_call = op_index
+            common::OpValue::TraitMethodCall(_) => function_opt op_index ops current_op self.check_trait_method_call = op_index
+            common::OpValue::FstringToStr => function_opt op_index ops current_op self.check_fstring_to_str = op_index
+            common::OpValue::TypeCast(cast_type) => function_opt cast_type current_op self.check_type_cast
+            _ => {
+            }
+        end
+        op_index
+    }
+
     pub fn run_type_check_ops
-        checker:mut$TypeChecker
+        self:mut$TypeChecker
         ops:mut$std::List[common::Op]
         function_opt:mut$std::Option[common::Function]
     {
         0 (u64) = op_index
         while op_index ops.length > do
-            checker.current_location.clone common::OpValue::OwnerCleanup common::Op::new
+            self.current_location.clone common::OpValue::OwnerCleanup common::Op::new
             op_index ops.replace = current_op
-            current_op checker.assign_op_id
+            current_op self.assign_op_id
             1 += op_index
-            current_op common::Op::location.clone = checker.current_location
-            "".to_str = checker.current_expect_ctx
-            false = checker.underflow_reported_this_op
-            if current_op.value common::OpValue::UnsafeStart is then
-                1 += checker.unsafe_depth
-                current_op op_index 1 - ops.set
-                continue
-            fi
-            if current_op.value common::OpValue::UnsafeEnd is then
-                if 0 checker.unsafe_depth != then
-                    1 -= checker.unsafe_depth
-                fi
-                current_op op_index 1 - ops.set
-                continue
-            fi
-            if current_op.value common::OpValue::Question is then
-                function_opt op_index ops current_op checker.lower_question_operator
-                current_op op_index 1 - ops.set
-                continue
-            fi
-            if current_op.value common::OpValue::QuestionMove is then
-                current_op checker.consume_question_owner
-                current_op op_index 1 - ops.set
-                continue
-            fi
-            if
-                current_op.value common::OpValue::Dup is
-                current_op.value common::OpValue::Over is ||
-                current_op.value common::OpValue::Copy is ||
-            then
-                function_opt current_op checker.check_copy_operation
-                current_op op_index 1 - ops.set
-                continue
-            fi
-            if
-                current_op.value common::OpValue::Add is
-                current_op.value common::OpValue::Sub is ||
-                current_op.value common::OpValue::Mul is ||
-                current_op.value common::OpValue::Div is ||
-                current_op.value common::OpValue::Mod is ||
-                current_op.value common::OpValue::Shl is ||
-                current_op.value common::OpValue::Shr is ||
-                current_op.value common::OpValue::BitAnd is ||
-                current_op.value common::OpValue::BitOr is ||
-                current_op.value common::OpValue::BitXor is ||
-                current_op.value common::OpValue::BitNot is ||
-            then
-                current_op checker.check_integer_operation
-                current_op op_index 1 - ops.set
-                continue
-            fi
-            if current_op.value common::OpValue::Drop is then
-                current_op checker.check_stack_ops
-                current_op op_index 1 - ops.set
-                continue
-            fi
-            if current_op.value semantics::operation_uses_fixed_typecheck_effect then
-                function_opt current_op checker.apply_fixed_semantics
-                current_op op_index 1 - ops.set
-                continue
-            fi
-            if current_op.value common::OpValue::NumericCall is then
-                current_op checker.check_numeric_call
-                current_op op_index 1 - ops.set
-                continue
-            fi
-            # Comparison
-            if current_op.value semantics::operation_is_comparison then
-                function_opt op_index ops current_op checker.check_comparison = op_index
-                current_op op_index 1 - ops.set
-                continue
-            fi
-
-            # Memory
-            if current_op.value semantics::operation_is_memory then
-                function_opt current_op checker.check_memory
-                current_op op_index 1 - ops.set
-                continue
-            fi
-
-            # Assignment
-            if
-                current_op.value common::OpValue::AssignVar is
-                current_op.value common::OpValue::AssignDec is ||
-                current_op.value common::OpValue::AssignInc is ||
-            then
-                function_opt op_index ops current_op checker.check_assignment
-                current_op op_index 1 - ops.set
-                continue
-            fi
-
-            if current_op.value common::OpValue::BindTemporary is then
-                function_opt current_op checker.check_temporary_binding
-                current_op op_index 1 - ops.set
-                continue
-            fi
-
-            # Push variable / capture
-            if
-                current_op.value common::OpValue::PushVar is
-                current_op.value common::OpValue::PushCapture is ||
-            then
-                function_opt current_op checker.check_push_var
-                current_op op_index 1 - ops.set
-                continue
-            fi
-
-            # If block
-            if
-                current_op.value common::OpValue::IfStart is
-                current_op.value common::OpValue::IfCondition is ||
-                current_op.value common::OpValue::IfElif is ||
-                current_op.value common::OpValue::IfElse is ||
-                current_op.value common::OpValue::IfEnd is ||
-            then
-                current_op checker.check_if_block
-                current_op op_index 1 - ops.set
-                continue
-            fi
-
-            # While block
-            if
-                current_op.value common::OpValue::WhileStart is
-                current_op.value common::OpValue::WhileCondition is ||
-                current_op.value common::OpValue::WhileBreak is ||
-                current_op.value common::OpValue::WhileContinue is ||
-                current_op.value common::OpValue::WhileEnd is ||
-            then
-                current_op checker.check_while_block
-                current_op op_index 1 - ops.set
-                continue
-            fi
-
-            # Function ops
-            if current_op.value common::OpValue::TraitMethodRef is then
-                function_opt current_op checker.check_trait_method_ref
-                current_op op_index 1 - ops.set
-                continue
-            fi
-            if
-                current_op.value common::OpValue::FnCall is
-                current_op.value common::OpValue::FnExec is ||
-                current_op.value common::OpValue::FnExecOwned is ||
-                current_op.value common::OpValue::FnPush is ||
-                current_op.value common::OpValue::FnReturn is ||
-            then
-                function_opt op_index ops current_op checker.check_function_ops = op_index
-                current_op op_index 1 - ops.set
-                continue
-            fi
-
-            # Literals
-            if
-                current_op.value common::OpValue::PushInt is
-                current_op.value common::OpValue::PushFloat is ||
-                current_op.value common::OpValue::PushArray is ||
-                current_op.value common::OpValue::ExprGroup is ||
-            then
-                function_opt current_op checker.check_literals
-                current_op op_index 1 - ops.set
-                continue
-            fi
-
-            # IO
-            if current_op.value common::OpValue::Print is then
-                function_opt op_index ops current_op checker.check_io = op_index
-                current_op op_index 1 - ops.set
-                continue
-            fi
-
-            # Typeof
-            if current_op.value common::OpValue::Typeof is then
-                current_op checker.check_typeof
-                current_op op_index 1 - ops.set
-                continue
-            fi
-
-            if current_op.value common::OpValue::SizeOf(target_type) is then
-                current_op.location function_opt target_type checker.validate_type_exists
-                if
-                    target_type.has_unresolved_type_var !
-                    checker.store target_type common::type_inline_size.is_none &&
-                then
-                    current_op.location f"Cannot determine inline size of `{target_type.format}`"
-                    common::ErrorKind::TypeMismatch checker.diagnostics.record_error_string
-                fi
-                common::make_u64_type checker.stack_push_type
-                current_op op_index 1 - ops.set
-                continue
-            fi
-
-            # Syscalls
-            if
-                current_op.value common::OpValue::Syscall0 is
-                current_op.value common::OpValue::Syscall1 is ||
-                current_op.value common::OpValue::Syscall2 is ||
-                current_op.value common::OpValue::Syscall3 is ||
-                current_op.value common::OpValue::Syscall4 is ||
-                current_op.value common::OpValue::Syscall5 is ||
-                current_op.value common::OpValue::Syscall6 is ||
-            then
-                function_opt current_op checker.check_syscalls
-                current_op op_index 1 - ops.set
-                continue
-            fi
-
-            # Argc / Argv
-            if current_op.value common::OpValue::Argc is then
-                common::make_i64_type checker.stack_push_type
-                current_op op_index 1 - ops.set
-                continue
-            fi
-            if current_op.value common::OpValue::Argv is then
-                common::make_ptr_type checker.stack_push_type
-                current_op op_index 1 - ops.set
-                continue
-            fi
-            if current_op.value common::OpValue::Envp is then
-                common::make_ptr_type checker.stack_push_type
-                current_op op_index 1 - ops.set
-                continue
-            fi
-
-            # Enum variant
-            if current_op.value common::OpValue::PushEnumVariant is then
-                function_opt current_op checker.check_enum_variant
-                current_op op_index 1 - ops.set
-                continue
-            fi
-
-            # Is check
-            if current_op.value common::OpValue::IsCheck is then
-                function_opt current_op checker.check_is
-                current_op op_index 1 - ops.set
-                continue
-            fi
-
-            # Match block
-            if
-                current_op.value common::OpValue::MatchStart is
-                current_op.value common::OpValue::MatchArm is ||
-                current_op.value common::OpValue::MatchEnd is ||
-            then
-                function_opt current_op checker.check_match
-                current_op op_index 1 - ops.set
-                continue
-            fi
-
-            # Struct new
-            if current_op.value common::OpValue::StructNew is then
-                current_op checker.check_struct_new
-                current_op op_index 1 - ops.set
-                continue
-            fi
-
-            # Struct literal
-            if current_op.value common::OpValue::StructLiteral is then
-                current_op checker.check_struct_literal
-                current_op op_index 1 - ops.set
-                continue
-            fi
-
-            # Method call
-            if
-                current_op.value common::OpValue::MethodCall is
-                current_op.value common::OpValue::QualifiedMethodCall is ||
-            then
-                function_opt op_index ops current_op checker.check_method_call = op_index
-                current_op op_index 1 - ops.set
-                continue
-            fi
-
-            # Trait-bound method call
-            if current_op.value common::OpValue::TraitMethodCall is then
-                function_opt op_index ops current_op checker.check_trait_method_call = op_index
-                current_op op_index 1 - ops.set
-                continue
-            fi
-
-            # F-string expression -> str conversion (Display trait)
-            if current_op.value common::OpValue::FstringToStr is then
-                function_opt op_index ops current_op checker.check_fstring_to_str = op_index
-                current_op op_index 1 - ops.set
-                continue
-            fi
-
-            # Type cast
-            if current_op.value common::OpValue::TypeCast(cast_type_ref) is then
-                cast_type_ref common::clone_type = cast_type
-                current_op common::Op::location function_opt cast_type checker.validate_type_exists
-                checker.stack_pop_value = cast_value
-                if
-                    0 cast_value.literals.length !=
-                    common::ARRAY_TYPE cast_type.match_base.as_str == &&
-                then
-                    checker.literal_resolutions checker.diagnostics cast_type cast_value.resolve_literals drop
-                fi
-                cast_value.origins clone_origins = cast_origins
-                if cast_type common::make_char_type.eq then
-                    current_op.location "Cast to `char` is not allowed; use `char::from_codepoint`" common::ErrorKind::TypeMismatch checker.diagnostics.record_error
-                elif cast_value.type_value common::make_char_type.eq then
-                    current_op.location "Cast from `char` is not allowed; use `.codepoint`" common::ErrorKind::TypeMismatch checker.diagnostics.record_error
-                fi
-                if cast_type common::make_ptr_type.eq cast_value.type_value common::make_ptr_type.eq || then
-                    "pointer cast" current_op checker.require_unsafe
-                fi
-                if
-                    cast_type common::make_ptr_type.eq
-                    checker.store cast_type type_has_borrow ||
-                then
-                    cast_value checker.release_value
-                else
-                    cast_value checker.consume_value
-                fi
-                if checker.store cast_type type_has_borrow then
-                    if cast_origins.is_none 0 checker.unsafe_depth != && then
-                        cast_type.is_exclusive_borrow function_opt
-                        checker.raw_borrow_input_origins = cast_origins
-                    fi
-                    cast_origins cast_type checker.stack_push_origins
-                else
-                    cast_type checker.stack_push_type
-                fi
-                current_op op_index 1 - ops.set
-                continue
-            fi
-
-            # Import file and DeclareGlobal (compile-time only, no type effect)
-            if
-                current_op.value common::OpValue::ImportFile is
-                current_op.value common::OpValue::ImportFileSelective is ||
-                current_op.value common::OpValue::DeclareGlobal is ||
-            then
-                current_op op_index 1 - ops.set
-                continue
-            fi
-
-            # Print variants (already resolved, should not appear)
-            if
-                current_op.value common::OpValue::PrintBool is
-                current_op.value common::OpValue::PrintChar is ||
-                current_op.value common::OpValue::PrintCstr is ||
-                current_op.value common::OpValue::PrintInt is ||
-                current_op.value common::OpValue::PrintStr is ||
-                current_op.value common::OpValue::PrintString is ||
-            then
-                current_op op_index 1 - ops.set
-                continue
-            fi
-
-            # Identifier (should be resolved by parser)
-            if current_op.value common::OpValue::Identifier is then
-                current_op op_index 1 - ops.set
-                continue
-            fi
+            current_op common::Op::location.clone = self.current_location
+            "".to_str = self.current_expect_ctx
+            false = self.underflow_reported_this_op
+            function_opt op_index ops current_op self.run_type_check_op = op_index
             current_op op_index 1 - ops.set
         done
     }
@@ -9060,113 +8272,6 @@ impl TypeChecker {
             1 += return_index
         done
     }
-}
-
-pub fn collect_cleanup_drop_types
-    ops:$std::List[common::Op]
-    store:$common::SymbolStore
-    required:mut$std::List[common::Type]
-{
-    for op in ops.iter do
-        op.value common::clone_op_value = value
-        if value common::OpValue::Drop is then
-            if op.type_hint std::Option::Some(drop_type) is then
-                if drop_type.has_unresolved_type_var then
-                    drop_type common::clone_type required.push
-                fi
-            fi
-        fi
-        if op.id store.clone_ownership std::Option::Some(ownership) is then
-            for event in ownership.cleanups.iter do
-                if event.typ.has_unresolved_type_var then
-                    event.typ common::clone_type required.push
-                fi
-            done
-        fi
-        value match
-            common::OpValue::PushArray(items) => {
-                required store items collect_cleanup_drop_types
-            }
-            common::OpValue::ExprGroup(items) => {
-                required store items collect_cleanup_drop_types
-            }
-            common::OpValue::MatchArm(arm) => {
-                required store arm.guard_ops collect_cleanup_drop_types
-            }
-            _ => {
-            }
-        end
-    done
-}
-
-pub fn add_required_drop_parameters
-    function:mut$common::Function
-    ops:mut$std::List[common::Op]
-    store:$common::SymbolStore
-    forwarded_types:$std::List[common::Type]
-{
-    std::List[common::Type]::new = cleanup_types
-    cleanup_types store ops collect_cleanup_drop_types
-    std::List[common::Parameter]::new = hidden_parameters
-    std::List[common::Variable]::new = hidden_variables
-    std::List[common::Op]::new = assignments
-    std::Set[std::String]::new = seen
-    std::Set[std::String]::new = visiting
-    for
-        parameter in function
-            .stack_effect
-            .parameters
-            .iter
-    do
-        parameter.name.clone seen.add
-    done
-    for forwarded_type in forwarded_types.iter do
-        forwarded_type common::make_hidden_drop_parameter_name = hidden_drop
-        function.location seen assignments hidden_variables hidden_parameters hidden_drop
-        add_hidden_layout_parameter
-    done
-    for cleanup_type in cleanup_types.iter do
-        function.location visiting seen assignments hidden_variables hidden_parameters store cleanup_type
-        add_hidden_drop_parameters
-    done
-    if function.name.as_str "lambda__" str::starts_with then
-        for
-            type_var_name in function
-                .stack_effect
-                .type_vars
-                .to_list
-                .iter
-        do
-            type_var_name.clone common::Type::TypeVar = type_var
-            type_var common::make_hidden_drop_parameter_name = hidden_drop
-            function.location seen assignments hidden_variables hidden_parameters hidden_drop
-            add_hidden_layout_parameter
-        done
-    fi
-    if hidden_parameters.is_empty then
-        return
-    fi
-    if function.name.as_str "lambda__" str::starts_with then
-        for hidden_variable in hidden_variables.iter do
-            if hidden_variable.name.as_str function.captures common::variable_list_contains ! then
-                hidden_variable common::clone_variable function.captures.push
-            fi
-        done
-        return
-    fi
-    hidden_variables function.variables.append
-    for
-        parameter in function
-            .stack_effect
-            .parameters
-            .iter
-    do
-        parameter.name.clone parameter.typ common::clone_type common::Parameter hidden_parameters.push
-    done
-    hidden_parameters function.stack_effect common::StackEffect::set_parameters
-    while assignments.is_empty ! do
-        0 assignments.pop ops.insert
-    done
 }
 
 pub fn checked_generic_body_type_matches inferred:$common::Type declared:$common::Type -> bool {
@@ -9517,7 +8622,7 @@ pub fn validate_generic_cycle_call
     fi
     key.clone function_name.clone active.set
     diagnostics store active composed callee_ops validate_generic_cycles_in_ops
-    function_name.as_str active.remove_str drop
+    function_name.as_str active.delete_str
 }
 
 pub fn validate_generic_cycles_in_ops

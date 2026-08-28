@@ -182,6 +182,7 @@ end
 | `get_cloned self:$Map[K V] key:$K -> Option[V]` | Owned value when `V: Clone` |
 | `has self:$Map[K V] key:$K -> bool` | Whether a key exists |
 | `set self:mut$Map[K V] key:K value:V` | Insert or replace an entry |
+| `delete self:mut$Map[K V] key:$K` | Remove and destroy a value, if present |
 | `remove self:mut$Map[K V] key:$K -> Option[V]` | Remove and return a value, if present |
 | `iter self:$Map[K V] -> Iter[Pair[$K $V]]` | Iterator over borrowed key-value pairs |
 | `keys self:$Map[K V] -> List[K]` | Cloned keys when `K: Clone` |
@@ -189,7 +190,8 @@ end
 | `clone self:$Map[K V] -> Map[K V]` | Independent map when `K: Clone` and `V: Clone` |
 
 `get` and `iter` keep the map as owner. `set` destroys a replaced value.
-`remove` moves a value out. Iteration order is not specified.
+`delete` destroys a removed value. `remove` moves it out. Iteration order is
+not specified.
 
 `Map[String V]` also accepts borrowed text keys without allocating a temporary
 owner:
@@ -200,6 +202,7 @@ owner:
 | `get_str self:$Map[String V] key:$str -> Option[$V]` | Borrow a value |
 | `get_mut_str self:mut$Map[String V] key:$str -> Option[mut$V]` | Exclusively borrow a value |
 | `has_str self:$Map[String V] key:$str -> bool` | Whether the text key exists |
+| `delete_str self:mut$Map[String V] key:$str` | Remove and destroy a value |
 | `remove_str self:mut$Map[String V] key:$str -> Option[V]` | Remove a value |
 
 See [`examples/hash_map.casa`](../examples/hash_map.casa) for a runnable map

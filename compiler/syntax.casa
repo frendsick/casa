@@ -605,7 +605,7 @@ impl common::SymbolStore {
                     .file
                     .as_str file !=
             then
-                name.as_str self.functions.remove_str drop
+                name.as_str self.functions.delete_str
             fi
         done
         self.constants.keys = constant_names
@@ -619,7 +619,7 @@ impl common::SymbolStore {
                     .file
                     .as_str file !=
             then
-                name.as_str self.constants.remove_str drop
+                name.as_str self.constants.delete_str
             fi
         done
         self.structs.keys = struct_names
@@ -633,7 +633,7 @@ impl common::SymbolStore {
                     .file
                     .as_str file !=
             then
-                name.as_str self.structs.remove_str drop
+                name.as_str self.structs.delete_str
             fi
         done
         self.enums.keys = enum_names
@@ -647,7 +647,7 @@ impl common::SymbolStore {
                     .file
                     .as_str file !=
             then
-                name.as_str self.enums.remove_str drop
+                name.as_str self.enums.delete_str
             fi
         done
         self.traits.keys = trait_names
@@ -661,7 +661,7 @@ impl common::SymbolStore {
                     .file
                     .as_str file !=
             then
-                name.as_str self.traits.remove_str drop
+                name.as_str self.traits.delete_str
             fi
         done
         self.trait_impls.keys = trait_impl_names
@@ -675,7 +675,7 @@ impl common::SymbolStore {
                     .file
                     .as_str file !=
             then
-                name.as_str self.trait_impls.remove_str drop
+                name.as_str self.trait_impls.delete_str
             fi
         done
         std::Map[std::String common::Variable]::new = self.variables
@@ -6101,6 +6101,243 @@ pub fn public_declaration_name
     std::Option[std::String]::None
 }
 
+impl Parser {
+    # unsafe function declaration or lexical block
+    fn handle_keyword_unsafe
+        self:mut$Parser
+        token:$common::Token
+        cursor:mut$TokenCursor
+        function_name:$str
+        ops:mut$std::List[common::Op]
+    {
+        cursor.peek = unsafe_next_opt
+        if unsafe_next_opt std::Option::Some(unsafe_next) is then
+            if "fn" unsafe_next common::Token::value.as_str == then
+                self token common::Token::location "Functions" function_name require_global_scope
+                cursor self parse_function = function
+                true function common::Function::set_is_unsafe
+                if
+                    function common::Function::name self
+                        .store
+                        .functions
+                        .get
+                        .is_some
+                then
+                    function common::Function::location f"Identifier `{function common::Function::name}` is already defined" common::ErrorKind::DuplicateName self.state.record_error_string
+                fi
+                function common::Function::name.clone = unsafe_function_name
+                function unsafe_function_name.clone self.put_function
+                return
+            fi
+            if "{" unsafe_next common::Token::value.as_str == then
+                token common::Token::location common::OpValue::UnsafeStart common::Op::new ops.push
+                function_name cursor self parse_block_ops = unsafe_ops
+                unsafe_ops ops.append
+                token common::Token::location common::OpValue::UnsafeEnd common::Op::new ops.push
+                return
+            fi
+        fi
+        token common::Token::location "Expected `fn` or `{` after `unsafe`" common::ErrorKind::Syntax self.state.record_error
+        return
+    }
+    # move { ... } -> closure that owns its affine captures
+    fn handle_keyword_move
+        self:mut$Parser
+        token:$common::Token
+        cursor:mut$TokenCursor
+        function_name:$str
+        ops:mut$std::List[common::Op]
+    {
+        cursor.peek = move_next_opt
+        if move_next_opt std::Option::Some(move_next) is then
+            if "{" move_next common::Token::value.as_str == then
+                f"lambda__{function_name}_o{token common::Token::location common::Location::span common::Span::offset}" = lambda_name
+                lambda_name.as_str cursor self parse_block_ops = lambda_ops
+                token common::Token::location.clone lambda_ops lambda_name.clone common::Function::new = lambda_function
+                true lambda_function common::Function::set_captures_by_move
+                lambda_function lambda_name.clone self.put_function
+                token common::Token::location lambda_name common::OpValue::FnPush common::Op::new ops.push
+                return
+            fi
+        fi
+        token common::Token::location "Expected `{` after `move`" common::ErrorKind::Syntax self.state.record_error
+        return
+    }
+    # global: compile-time declaration that emits DeclareGlobal
+    fn handle_keyword_global
+        self:mut$Parser
+        token:$common::Token
+        cursor:mut$TokenCursor
+        function_name:$str
+        ops:mut$std::List[common::Op]
+    {
+        if common::GLOBAL_SCOPE_LABEL function_name == then
+            token common::Token::location "`global` declaration is only valid inside a function body" common::ErrorKind::InvalidScope self.state.record_error
+            return
+        fi
+        if function_name "lambda__" str::starts_with then
+            token common::Token::location "`global` declaration is not allowed inside a lambda" common::ErrorKind::InvalidScope self.state.record_error
+            return
+        fi
+        # Placement check: all ops so far must be DeclareGlobal
+        for existing_op in ops.iter do
+            if existing_op.value common::OpValue::DeclareGlobal is ! then
+                token common::Token::location "`global` declaration must appear before any other statement in the function body" common::ErrorKind::Syntax self.state.record_error
+                return
+            fi
+        done
+        fallback_token self.state common::TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
+        token common::Token::location name_token common::Token::value.clone common::OpValue::DeclareGlobal common::Op::new ops.push
+        return
+    }
+    # const
+    fn handle_keyword_const
+        self:mut$Parser
+        token:$common::Token
+        cursor:mut$TokenCursor
+        function_name:$str
+    {
+        self token common::Token::location "Constants" function_name require_global_scope
+        # const fn is a compile-time evaluable function
+        cursor.peek = const_next_opt
+        if const_next_opt std::Option::Some(const_next) is then
+            if "fn" const_next common::Token::value.as_str == then
+                cursor self parse_function = function
+                true function common::Function::set_is_const_fn
+                if self.syntax_only ! then
+                    self.state.diagnostics function validate_const_fn_body
+                fi
+                if
+                    function common::Function::name self
+                        .store
+                        .functions
+                        .get
+                        .is_some
+                then
+                    function common::Function::location f"Identifier `{function common::Function::name}` is already defined" common::ErrorKind::DuplicateName self.state.record_error_string
+                fi
+                function common::Function::name.clone = const_function_name
+                function const_function_name.clone self.put_function
+                return
+            fi
+        fi
+        fallback_token self.state common::TokenKind::Identifier cursor expect_token_kind.unwrap_or = const_name_token
+        const_name_token common::Token::value.clone = const_name
+        if
+            const_name self
+                .store
+                .constants
+                .get
+                .is_some
+        then
+            token common::Token::location f"Constant `{const_name}` is already defined" common::ErrorKind::DuplicateName self.state.record_error_string
+        fi
+        if
+            const_name self
+                .store
+                .functions
+                .get
+                .is_some
+        then
+            token common::Token::location f"Constant `{const_name}` conflicts with an existing function" common::ErrorKind::DuplicateName self.state.record_error_string
+        fi
+        if
+            const_name self
+                .store
+                .variables
+                .get
+                .is_some
+        then
+            token common::Token::location f"Constant `{const_name}` conflicts with an existing variable" common::ErrorKind::DuplicateName self.state.record_error_string
+        fi
+        if
+            const_name self
+                .store
+                .structs
+                .get
+                .is_some
+        then
+            token common::Token::location f"Constant `{const_name}` conflicts with an existing struct" common::ErrorKind::DuplicateName self.state.record_error_string
+        fi
+        if
+            const_name self
+                .store
+                .enums
+                .get
+                .is_some
+        then
+            token common::Token::location f"Constant `{const_name}` conflicts with an existing enum" common::ErrorKind::DuplicateName self.state.record_error_string
+        fi
+        cursor.pop = const_value_token_opt
+        if const_value_token_opt.is_none then
+            token common::Token::location "Expected a literal value, block expression, or constant name after constant name" common::ErrorKind::Syntax self.state.record_error
+        fi
+        const_value_token_opt.unwrap = const_value_token
+        if "{" const_value_token common::Token::value.as_str == then
+            cursor.retreat
+            if self.syntax_only then
+                "const" cursor self parse_block_ops drop
+                0 common::IntegerLiteral::from_int common::ConstantValue::Int
+            else
+                token common::Token::location cursor self eval_const_block
+            fi
+            = const_block_val
+            token common::Token::location.clone const_block_val const_name.clone common::Constant = casa_const
+            casa_const const_name self.put_constant
+        elif common::TokenKind::Literal const_value_token common::Token::kind == then
+            const_value_token common::Token::value.as_str parse_literal_to_constant_value = const_lit_val
+            token common::Token::location.clone const_lit_val const_name.clone common::Constant = casa_const
+            casa_const const_name self.put_constant
+        elif common::TokenKind::Identifier const_value_token common::Token::kind == then
+            const_value_token common::Token::value.clone = const_ref_name
+            if self.syntax_only then
+                0 common::IntegerLiteral::from_int common::ConstantValue::Int = syntax_const_value
+                token common::Token::location.clone syntax_const_value const_name.clone common::Constant = casa_const
+                casa_const const_name self.put_constant
+                return
+            fi
+            const_ref_name self
+                .store
+                .constants
+                .get = const_ref_opt
+            if const_ref_opt std::Option::Some(const_ref) is then
+                token common::Token::location.clone const_ref common::Constant::value common::clone_constant_value const_name.clone common::Constant
+                = casa_const
+                casa_const const_name self.put_constant
+            elif
+                const_ref_name self
+                    .store
+                    .functions
+                    .get
+                    .is_some
+            then
+                token common::Token::location f"Cannot use `{const_ref_name}` as a constant value; it is not a constant" common::ErrorKind::Syntax self.state.record_error_string
+            elif
+                const_ref_name self
+                    .store
+                    .structs
+                    .get
+                    .is_some
+            then
+                token common::Token::location f"Cannot use `{const_ref_name}` as a constant value; it is not a constant" common::ErrorKind::Syntax self.state.record_error_string
+            elif
+                const_ref_name self
+                    .store
+                    .enums
+                    .get
+                    .is_some
+            then
+                token common::Token::location f"Cannot use `{const_ref_name}` as a constant value; it is not a constant" common::ErrorKind::Syntax self.state.record_error_string
+            else
+                token common::Token::location f"Undefined constant `{const_ref_name}` referenced in constant `{const_name}`" common::ErrorKind::Syntax self.state.record_error_string
+            fi
+        else
+            token common::Token::location f"Expected a literal value, block expression, or constant name for constant `{const_name}`" common::ErrorKind::Syntax self.state.record_error_string
+        fi
+        return
+    }
+}
+
 pub fn get_op_keyword
     parser:mut$Parser
     token:$common::Token
@@ -6142,52 +6379,13 @@ pub fn get_op_keyword
 
     # unsafe function declaration or lexical block
     if common::KeywordKind::Unsafe keyword == then
-        cursor.peek = unsafe_next_opt
-        if unsafe_next_opt std::Option::Some(unsafe_next) is then
-            if "fn" unsafe_next common::Token::value.as_str == then
-                parser token common::Token::location "Functions" function_name require_global_scope
-                cursor parser parse_function = function
-                true function common::Function::set_is_unsafe
-                if
-                    function common::Function::name parser
-                        .store
-                        .functions
-                        .get
-                        .is_some
-                then
-                    function common::Function::location f"Identifier `{function common::Function::name}` is already defined" common::ErrorKind::DuplicateName parser.state.record_error_string
-                fi
-                function common::Function::name.clone = unsafe_function_name
-                function unsafe_function_name.clone parser.put_function
-                return
-            fi
-            if "{" unsafe_next common::Token::value.as_str == then
-                token common::Token::location common::OpValue::UnsafeStart common::Op::new ops.push
-                function_name cursor parser parse_block_ops = unsafe_ops
-                unsafe_ops ops.append
-                token common::Token::location common::OpValue::UnsafeEnd common::Op::new ops.push
-                return
-            fi
-        fi
-        token common::Token::location "Expected `fn` or `{` after `unsafe`" common::ErrorKind::Syntax parser.state.record_error
+        ops function_name cursor token parser.handle_keyword_unsafe
         return
     fi
 
     # move { ... } -> closure that owns its affine captures
     if common::KeywordKind::Move keyword == then
-        cursor.peek = move_next_opt
-        if move_next_opt std::Option::Some(move_next) is then
-            if "{" move_next common::Token::value.as_str == then
-                f"lambda__{function_name}_o{token common::Token::location common::Location::span common::Span::offset}" = lambda_name
-                lambda_name.as_str cursor parser parse_block_ops = lambda_ops
-                token common::Token::location.clone lambda_ops lambda_name.clone common::Function::new = lambda_function
-                true lambda_function common::Function::set_captures_by_move
-                lambda_function lambda_name.clone parser.put_function
-                token common::Token::location lambda_name common::OpValue::FnPush common::Op::new ops.push
-                return
-            fi
-        fi
-        token common::Token::location "Expected `{` after `move`" common::ErrorKind::Syntax parser.state.record_error
+        ops function_name cursor token parser.handle_keyword_move
         return
     fi
 
@@ -6299,165 +6497,13 @@ pub fn get_op_keyword
 
     # global — compile-time declaration; emits DeclareGlobal op
     if common::KeywordKind::Global keyword == then
-        if common::GLOBAL_SCOPE_LABEL function_name == then
-            token common::Token::location "`global` declaration is only valid inside a function body" common::ErrorKind::InvalidScope parser.state.record_error
-            return
-        fi
-        if function_name "lambda__" str::starts_with then
-            token common::Token::location "`global` declaration is not allowed inside a lambda" common::ErrorKind::InvalidScope parser.state.record_error
-            return
-        fi
-        # Placement check: all ops so far must be DeclareGlobal
-        for existing_op in ops.iter do
-            if existing_op.value common::OpValue::DeclareGlobal is ! then
-                token common::Token::location "`global` declaration must appear before any other statement in the function body" common::ErrorKind::Syntax parser.state.record_error
-                return
-            fi
-        done
-        fallback_token parser.state common::TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
-        token common::Token::location name_token common::Token::value.clone common::OpValue::DeclareGlobal common::Op::new ops.push
+        ops function_name cursor token parser.handle_keyword_global
         return
     fi
 
     # const
     if common::KeywordKind::Const keyword == then
-        parser token common::Token::location "Constants" function_name require_global_scope
-        # const fn — compile-time evaluable function
-        cursor.peek = const_next_opt
-        if const_next_opt std::Option::Some(const_next) is then
-            if "fn" const_next common::Token::value.as_str == then
-                cursor parser parse_function = function
-                true function common::Function::set_is_const_fn
-                if parser.syntax_only ! then
-                    parser.state.diagnostics function validate_const_fn_body
-                fi
-                if
-                    function common::Function::name parser
-                        .store
-                        .functions
-                        .get
-                        .is_some
-                then
-                    function common::Function::location f"Identifier `{function common::Function::name}` is already defined" common::ErrorKind::DuplicateName parser.state.record_error_string
-                fi
-                function common::Function::name.clone = const_function_name
-                function const_function_name.clone parser.put_function
-                return
-            fi
-        fi
-        fallback_token parser.state common::TokenKind::Identifier cursor expect_token_kind.unwrap_or = const_name_token
-        const_name_token common::Token::value.clone = const_name
-        if
-            const_name parser
-                .store
-                .constants
-                .get
-                .is_some
-        then
-            token common::Token::location f"Constant `{const_name}` is already defined" common::ErrorKind::DuplicateName parser.state.record_error_string
-        fi
-        if
-            const_name parser
-                .store
-                .functions
-                .get
-                .is_some
-        then
-            token common::Token::location f"Constant `{const_name}` conflicts with an existing function" common::ErrorKind::DuplicateName parser.state.record_error_string
-        fi
-        if
-            const_name parser
-                .store
-                .variables
-                .get
-                .is_some
-        then
-            token common::Token::location f"Constant `{const_name}` conflicts with an existing variable" common::ErrorKind::DuplicateName parser.state.record_error_string
-        fi
-        if
-            const_name parser
-                .store
-                .structs
-                .get
-                .is_some
-        then
-            token common::Token::location f"Constant `{const_name}` conflicts with an existing struct" common::ErrorKind::DuplicateName parser.state.record_error_string
-        fi
-        if
-            const_name parser
-                .store
-                .enums
-                .get
-                .is_some
-        then
-            token common::Token::location f"Constant `{const_name}` conflicts with an existing enum" common::ErrorKind::DuplicateName parser.state.record_error_string
-        fi
-        cursor.pop = const_value_token_opt
-        if const_value_token_opt.is_none then
-            token common::Token::location "Expected a literal value, block expression, or constant name after constant name" common::ErrorKind::Syntax parser.state.record_error
-        fi
-        const_value_token_opt.unwrap = const_value_token
-        if "{" const_value_token common::Token::value.as_str == then
-            cursor.retreat
-            if parser.syntax_only then
-                "const" cursor parser parse_block_ops drop
-                0 common::IntegerLiteral::from_int common::ConstantValue::Int
-            else
-                token common::Token::location cursor parser eval_const_block
-            fi
-            = const_block_val
-            token common::Token::location.clone const_block_val const_name.clone common::Constant = casa_const
-            casa_const const_name parser.put_constant
-        elif common::TokenKind::Literal const_value_token common::Token::kind == then
-            const_value_token common::Token::value.as_str parse_literal_to_constant_value = const_lit_val
-            token common::Token::location.clone const_lit_val const_name.clone common::Constant = casa_const
-            casa_const const_name parser.put_constant
-        elif common::TokenKind::Identifier const_value_token common::Token::kind == then
-            const_value_token common::Token::value.clone = const_ref_name
-            if parser.syntax_only then
-                0 common::IntegerLiteral::from_int common::ConstantValue::Int = syntax_const_value
-                token common::Token::location.clone syntax_const_value const_name.clone common::Constant = casa_const
-                casa_const const_name parser.put_constant
-                return
-            fi
-            const_ref_name parser
-                .store
-                .constants
-                .get = const_ref_opt
-            if const_ref_opt std::Option::Some(const_ref) is then
-                token common::Token::location.clone const_ref common::Constant::value common::clone_constant_value const_name.clone common::Constant
-                = casa_const
-                casa_const const_name parser.put_constant
-            elif
-                const_ref_name parser
-                    .store
-                    .functions
-                    .get
-                    .is_some
-            then
-                token common::Token::location f"Cannot use `{const_ref_name}` as a constant value; it is not a constant" common::ErrorKind::Syntax parser.state.record_error_string
-            elif
-                const_ref_name parser
-                    .store
-                    .structs
-                    .get
-                    .is_some
-            then
-                token common::Token::location f"Cannot use `{const_ref_name}` as a constant value; it is not a constant" common::ErrorKind::Syntax parser.state.record_error_string
-            elif
-                const_ref_name parser
-                    .store
-                    .enums
-                    .get
-                    .is_some
-            then
-                token common::Token::location f"Cannot use `{const_ref_name}` as a constant value; it is not a constant" common::ErrorKind::Syntax parser.state.record_error_string
-            else
-                token common::Token::location f"Undefined constant `{const_ref_name}` referenced in constant `{const_name}`" common::ErrorKind::Syntax parser.state.record_error_string
-            fi
-        else
-            token common::Token::location f"Expected a literal value, block expression, or constant name for constant `{const_name}`" common::ErrorKind::Syntax parser.state.record_error_string
-        fi
+        function_name cursor token parser.handle_keyword_const
         return
     fi
 
