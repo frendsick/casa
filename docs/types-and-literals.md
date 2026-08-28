@@ -25,6 +25,9 @@ select another width:
 42 typeof print       # i64
 ```
 
+Floating-point values use partial equality and ordering because NaN is
+unordered. Integer values use total equality and ordering.
+
 Numeric operations require matching widths. Casa does not implicitly widen or
 narrow stored numeric values.
 
