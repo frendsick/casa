@@ -1586,10 +1586,7 @@ fn stack_effect_may_borrow effect:$StackEffect -> bool {
 
 impl TypeChecker {
     fn consume_value tc:mut$TypeChecker value:$TypedValue {
-        if
-            value.capability ValueCapability::Owned is !
-            value.type_value.is_borrow ! &&
-        then
+        if value.capability ValueCapability::Owned is ! then
             if value.place Option::Some(place) is then
                 tc.current_location f"Cannot move borrowed value `{place}` of type `{value.type_value.format}` in `{tc.current_op_context}`; clone it first"
                 ErrorKind::InvalidVariable tc.diagnostics.record_error_string
@@ -1782,6 +1779,8 @@ impl TypeChecker {
 impl TypeChecker {
     fn expect_value_type_t self:mut$TypeChecker expected:$Type et_value:mut$TypedValue {
         if expected.is_borrow then
+            et_value self.release_value
+        elif et_value.type_value expected self borrowed_copy_argument_matches then
             et_value self.release_value
         else
             et_value self.consume_value
@@ -2426,6 +2425,7 @@ impl TypeChecker {
         effect:$StackEffect
         bindings:mut$Map[String Type]
         exclusive:bool
+        prefer_contained_origins:bool
     -> Option[List[String]] {
         Option[List[String]]::None = origins
         tc
@@ -2460,7 +2460,10 @@ impl TypeChecker {
                 Option::None => {
                 }
             end
-            if parameter_type.is_borrow then
+            if
+                parameter_type.is_borrow
+                prefer_contained_origins ! argument.origins.is_none || &&
+            then
                 if argument.place Option::Some(place) is then
                     if exclusive ! parameter_type.is_exclusive_borrow || then
                         exclusive place.as_str origins add_origin = origins
@@ -2687,6 +2690,51 @@ impl TypeChecker {
         Option[String]::None
     }
 
+    fn mark_struct_getter_borrow
+        tc:mut$TypeChecker
+        function_name:$str
+        receiver_capability:$ValueCapability
+    {
+        function_name "::" str::split = name_parts
+        if
+            2 name_parts.length != 0 tc
+                .stack
+                .values
+                .length == ||
+        then
+            return
+        fi
+        0 name_parts.get = struct_name
+        1 name_parts.get = field_name
+        if
+            struct_name.as_str tc
+                .store
+                .structs
+                .get_str Option::Some(casa_struct) is
+        then
+            for member in casa_struct.members.iter do
+                if member.name.as_str field_name.as_str != then
+                    continue
+                fi
+                tc
+                    .stack
+                    .values
+                    .length 1 - tc
+                    .stack
+                    .values
+                    .get_mut = value
+                if tc.store value.type_value type_needs_destruction_in_store then
+                    if receiver_capability ValueCapability::Shared is then
+                        ValueCapability::Shared
+                    else
+                        ValueCapability::Exclusive
+                    fi = value.capability
+                fi
+                return
+            done
+        fi
+    }
+
     fn finish_struct_getter
         self:mut$TypeChecker
         field:mut$Option[String]
@@ -2822,6 +2870,137 @@ impl TypeChecker {
         fi
     }
 
+    # Keep borrowed owner temporaries in ordinary compiler-managed variables.
+    # This lets the existing move, loan, reassignment, and scope cleanup rules
+    # control their lifetime.
+    fn bind_borrowed_temporaries
+        tc:mut$TypeChecker
+        effect:$StackEffect
+        leading_values:u64
+        op:mut$Op
+        ops:mut$List[Op]
+        op_index:u64
+        function_opt:mut$Option[Function]
+    -> u64 {
+        effect.parameters.length leading_values + = required_values
+        if
+            required_values tc
+                .stack
+                .values
+                .length <
+        then
+            0 return
+        fi
+        op_index 1 - = insert_index
+        0 (u64) = inserted
+        0 (u64) = parameter_index
+        while parameter_index effect.parameters.length > do
+            parameter_index effect.parameters.get = parameter
+            tc
+                .stack
+                .values
+                .length leading_values - 1 - parameter_index - = stack_index
+            stack_index tc
+                .stack
+                .values
+                .get clone_typed_value = value
+            if
+                parameter.typ.is_borrow
+                value.capability ValueCapability::Owned is &&
+                value.binding.is_none &&
+                value.place.is_none &&
+                value.type_value.is_borrow ! &&
+                tc.store value.type_value type_needs_destruction_in_store &&
+            then
+                value.type_value clone_type = owner_type
+                parameter.typ.borrow_target = expected_owner_opt
+                if
+                    owner_type.has_unresolved_type_var
+                    expected_owner_opt Option::Some(expected_owner) is &&
+                    expected_owner.has_unresolved_type_var ! &&
+                then
+                    expected_owner clone_type = owner_type
+                fi
+                f"$borrowed_temporary_{op.id}_{parameter_index}" = name
+                function_opt.is_none = is_global
+                is_global name.as_str tc.scope.assign
+                if function_opt Option::Some(function) is then
+                    owner_type clone_type name.clone Variable function.variables.push
+                else
+                    owner_type clone_type name.clone Variable = variable
+                    variable name.clone tc
+                        .store
+                        .variables
+                        .set
+                fi
+                false name.as_str tc.set_owner_moved
+
+                leading_values parameter_index + = depth
+                depth name.clone TemporaryBinding = binding
+                op.location.clone binding OpValue::BindTemporary Op::new = bind_op
+                bind_op tc.assign_op_id
+                is_global function_opt owner_type name.as_str bind_op tc.record_owner_assignment
+                stack_index tc
+                    .stack
+                    .values
+                    .get_mut = stored_value
+                owner_type clone_type = stored_value.type_value
+                name.clone Option::Some = stored_value.place
+                name Option::Some = stored_value.binding
+                Option[i64]::None = stored_value.source
+
+                insert_index bind_op ops.insert
+                1 += insert_index
+                1 += inserted
+            fi
+            1 += parameter_index
+        done
+        inserted
+    }
+
+    fn check_temporary_binding tc:mut$TypeChecker op:mut$Op function_opt:mut$Option[Function] {
+        op.value clone_op_value = binding_value
+        if binding_value OpValue::BindTemporary(binding) is then
+            if
+                tc
+                    .stack
+                    .values
+                    .length binding.depth >=
+            then
+                return
+            fi
+            tc
+                .stack
+                .values
+                .length 1 - binding.depth - = stack_index
+            stack_index tc
+                .stack
+                .values
+                .get clone_typed_value = value
+            if
+                value.capability ValueCapability::Owned is !
+                value.binding.is_some ||
+                value.place.is_some ||
+                value.type_value.is_borrow ||
+                tc.store value.type_value type_needs_destruction_in_store ! ||
+            then
+                OpValue::OwnerCleanup op Op::set_value
+                return
+            fi
+            function_opt.is_none = is_global
+            is_global binding.name.as_str tc.scope.assign
+            false binding.name.as_str tc.set_owner_moved
+            is_global function_opt value.type_value binding.name.as_str op tc.record_owner_assignment
+            stack_index tc
+                .stack
+                .values
+                .get_mut = stored_value
+            binding.name.clone Option::Some = stored_value.place
+            binding.name.clone Option::Some = stored_value.binding
+            Option[i64]::None = stored_value.source
+        fi
+    }
+
     fn apply_stack_effect
         tc:mut$TypeChecker
         effect:$StackEffect
@@ -2880,8 +3059,11 @@ impl TypeChecker {
         Option[List[String]]::None = shared_origins
         Option[List[String]]::None = exclusive_origins
         if effect stack_effect_may_borrow then
-            false bindings effect tc.call_origins = shared_origins
-            true bindings effect tc.call_origins = exclusive_origins
+            # Clone preserves borrows stored inside the value, not a borrow of
+            # the value's temporary owner shell.
+            name.as_str "::Clone::clone" str::ends_with = prefer_contained_origins
+            prefer_contained_origins false bindings effect tc.call_origins = shared_origins
+            prefer_contained_origins true bindings effect tc.call_origins = exclusive_origins
             bindings effect tc.check_call_borrow_conflicts
             bindings effect tc.check_live_borrow_conflicts
         fi
@@ -3308,7 +3490,65 @@ fn comparison_op_str cmp_value:$OpValue -> str {
     ">="
 }
 
+fn borrowed_comparison_effect type1:$Type type2:$Type -> StackEffect {
+    List[Parameter]::new = parameters
+    SHARED_BORROW_TYPE type1 clone_type apply_borrow_type = first_borrow
+    "".to_str first_borrow Parameter::named parameters.push
+    SHARED_BORROW_TYPE type2 clone_type apply_borrow_type = second_borrow
+    "".to_str second_borrow Parameter::named parameters.push
+    List[Type]::new parameters StackEffect::new
+}
+
 impl TypeChecker {
+    fn prepare_comparison_values
+        tc:mut$TypeChecker
+        value1:TypedValue
+        value2:TypedValue
+        effect:$StackEffect
+        op:mut$Op
+        ops:mut$List[Op]
+        op_index:u64
+        function_opt:mut$Option[Function]
+    -> u64 {
+        value2 tc
+            .stack
+            .values
+            .push
+        value1 tc
+            .stack
+            .values
+            .push
+        function_opt op_index ops op 0 effect tc.bind_borrowed_temporaries = bound
+        bound += op_index
+        if 0 effect.parameters.length != then
+            tc
+                .stack
+                .values
+                .length 1 - tc
+                .stack
+                .values
+                .get_mut = first_value
+            0 effect
+                .parameters
+                .get
+                .typ type_capability = first_value.capability
+        fi
+        if 1 effect.parameters.length > then
+            tc
+                .stack
+                .values
+                .length 2 - tc
+                .stack
+                .values
+                .get_mut = second_value
+            1 effect
+                .parameters
+                .get
+                .typ type_capability = second_value.capability
+        fi
+        op_index
+    }
+
     fn check_float_to_bits tc:mut$TypeChecker op:mut$Op method_name:$str -> bool {
         if "to_bits" method_name.as_str != then
             false return
@@ -3409,6 +3649,11 @@ impl TypeChecker {
             if str_string string_str || then
                 if string_str then "StringStrEq".to_str else "StrStringEq".to_str fi GenericType::new
                 Type::Generic Option::Some op Op::set_type_hint
+                type2_t type1_t borrowed_comparison_effect = comparison_effect
+                function_opt op_index ops op comparison_effect value2 value1
+                tc.prepare_comparison_values = op_index
+                tc.stack_pop_drop
+                tc.stack_pop_drop
                 TYPE_BOOL_T tc.stack_push_type
                 op_index return
             fi
@@ -3445,6 +3690,11 @@ impl TypeChecker {
                     base1 GenericType::new Type::Generic Option::Some op Op::set_type_hint
                 fi
             fi
+            type2_t type1_t borrowed_comparison_effect = comparison_effect
+            function_opt op_index ops op comparison_effect value2 value1
+            tc.prepare_comparison_values = op_index
+            tc.stack_pop_drop
+            tc.stack_pop_drop
             TYPE_BOOL_T tc.stack_push_type
             op_index return
         fi
@@ -3476,13 +3726,23 @@ impl TypeChecker {
             op_index return
         fi
         # Lower the operator to the corresponding trait method call.
+        type2_t type1_t borrowed_comparison_effect = comparison_effect
         if semantics.into_method Option::Some(method) is then
+            method.stack_effect.clone = comparison_effect
+            if
+                method.function_name.as_str tc
+                    .store
+                    .functions
+                    .get_str Option::Some(checked_function) is
+            then
+                checked_function.stack_effect.clone = comparison_effect
+            fi
             method.method_name.clone
         else
             cmp_value comparison_method_name.to_str
         fi = method_name
-        type2_t tc.stack_push_type
-        type1_t tc.stack_push_type
+        function_opt op_index ops op comparison_effect value2 value1
+        tc.prepare_comparison_values = op_index
         method_name OpValue::MethodCall op Op::set_value
         function_opt op_index ops op tc.check_method_call
     }
@@ -3644,10 +3904,7 @@ impl TypeChecker {
                     .get = source_value
                 source_value.capability ValueCapability::Owned is = source_is_owned
             fi
-            if source_is_owned ! then
-                op.location "Cannot move a borrowed value; clone it first"
-                ErrorKind::InvalidVariable tc.diagnostics.record_error
-            elif source_type.has_unresolved_type_var ! then
+            if source_is_owned source_type.has_unresolved_type_var ! && then
                 if tc.store source_type type_value_representation Option::Some(representation) is then
                     if VALUE_REPR_INDIRECT representation != then
                         op.location f"`ptr::into_raw` requires a heap-indirect owner, got `{source_type.format}`"
@@ -4255,9 +4512,15 @@ impl TypeChecker {
         fi
     }
 
-    fn check_trait_method_call tc:mut$TypeChecker op:mut$Op function_opt:mut$Option[Function] {
+    fn check_trait_method_call
+        tc:mut$TypeChecker
+        op:mut$Op
+        ops:mut$List[Op]
+        op_index:u64
+        function_opt:mut$Option[Function]
+    -> u64 {
         if function_opt.is_none then
-            return
+            op_index return
         fi
         tc.stack_peek_type = receiver
         ValueCapability::Owned = receiver_capability
@@ -4282,8 +4545,11 @@ impl TypeChecker {
             method.stack_effect.clone = effect
             method.method_name.as_str receiver_capability effect tc.check_method_receiver_capability
             method.method_name.as_str receiver.make_method_key = method_key
+            function_opt op_index ops op 0 effect tc.bind_borrowed_temporaries = bound
+            bound += op_index
             function_opt Option[Type]::None method_key.as_str effect tc.apply_stack_effect
         fi
+        op_index
     }
 }
 
@@ -6049,11 +6315,31 @@ impl TypeChecker {
                 if is_unsafe then
                     fn_name.as_str op tc.require_unsafe
                 fi
+                ValueCapability::Owned = call_receiver_capability
+                if
+                    0 tc
+                        .stack
+                        .values
+                        .length !=
+                then
+                    tc
+                        .stack
+                        .values
+                        .length 1 - tc
+                        .stack
+                        .values
+                        .get
+                        .capability
+                    = call_receiver_capability
+                fi
                 if effect needs_hidden_arguments then
                     op.type_hint.clone function_opt op Op::location op_index ops effect tc.inject_trait_fn_ptrs = injected
                     injected += op_index
                 fi
+                function_opt op_index ops op 0 effect tc.bind_borrowed_temporaries = bound
+                bound += op_index
                 function_opt op.type_hint.clone fn_name.as_str effect tc.apply_stack_effect
+                call_receiver_capability fn_name.as_str tc.mark_struct_getter_borrow
                 if op.type_hint Option::Some(explicit_type) is then
                     false = valid_explicit_type
                     if 1 effect.return_types.length == then
@@ -6090,6 +6376,14 @@ impl TypeChecker {
             if fn_ptr_type.is_unknown_placeholder then
                 TYPE_UNKNOWN_T tc.expect_type_t
             else
+                tc.store function_opt fn_ptr_type make_type_borrow_option fn_value
+                analyze_operation.into_stack_effect = effect_opt
+                if effect_opt Option::Some(effect) is then
+                    if 0 effect.parameters.length != 0 effect.return_types.length != || then
+                        function_opt op_index ops op 1 effect tc.bind_borrowed_temporaries = bound
+                        bound += op_index
+                    fi
+                fi
                 tc.stack_pop_value = function_value
                 if fn_ptr_type Type::Function(_) is ! then
                     function_value fn_ptr_type tc.expect_value_type_t
@@ -6103,9 +6397,7 @@ impl TypeChecker {
                 else
                     function_value tc.release_value
                 fi
-                tc.store function_opt fn_ptr_type make_type_borrow_option fn_value
-                analyze_operation = semantics
-                if semantics.into_stack_effect Option::Some(effect) is then
+                if effect_opt Option::Some(effect) is then
                     if 0 effect.parameters.length != 0 effect.return_types.length != || then
                         function_opt Option[Type]::None "exec" effect tc.apply_stack_effect
                     fi
@@ -7166,6 +7458,8 @@ impl TypeChecker {
         tc.stack_pop_drop
         receiver tc.stack_push_type
         semantics.method_name.as_str receiver.make_method_key = method_key
+        function_opt op_index ops op 0 semantics.stack_effect tc.bind_borrowed_temporaries = bound
+        bound += op_index
         function_opt Option[Type]::None method_key.as_str semantics.stack_effect tc.apply_stack_effect
         op.location.clone semantics.function_name.clone OpValue::PushVar Op::new = push_op
         op_index 1 - push_op ops.insert
@@ -7392,7 +7686,10 @@ impl TypeChecker {
                                 Option[Type]::None function_opt op Op::location op_index ops effect
                                 tc.inject_trait_fn_ptrs += op_index
                             fi
+                            function_opt op_index ops op 0 effect tc.bind_borrowed_temporaries = bound
+                            bound += op_index
                             function_opt op.type_hint.clone fn_name.as_str effect tc.apply_stack_effect
+                            receiver_capability fn_name.as_str tc.mark_struct_getter_borrow
                             fn_name OpValue::FnCall op Op::set_value
                             op_index return
                         }
@@ -7958,6 +8255,12 @@ impl TypeChecker {
                 continue
             fi
 
+            if current_op.value OpValue::BindTemporary is then
+                function_opt current_op checker.check_temporary_binding
+                current_op op_index 1 - ops.set
+                continue
+            fi
+
             # Push variable / capture
             if
                 current_op.value OpValue::PushVar is
@@ -8130,7 +8433,7 @@ impl TypeChecker {
 
             # Trait-bound method call
             if current_op.value OpValue::TraitMethodCall is then
-                function_opt current_op checker.check_trait_method_call
+                function_opt op_index ops current_op checker.check_trait_method_call = op_index
                 current_op op_index 1 - ops.set
                 continue
             fi
