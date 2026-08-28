@@ -17,6 +17,14 @@ fn identity[T] value:T -> T { value }
 `T` becomes `i64` at the first call and `str` at the second. Repeated uses of
 the same type parameter must resolve to the same type.
 
+Casa checks the generic body once with its declared types and trait bounds.
+The compiler then creates one implementation for each reachable concrete type
+combination. Each implementation uses direct layout, destruction, and trait
+method operations. Generic calls do not pass runtime type or trait metadata.
+
+Recursive generic calls must keep the same type arguments. A call cycle that
+changes them is rejected as polymorphic recursion.
+
 Use more than one type parameter when the types are independent:
 
 ```casa

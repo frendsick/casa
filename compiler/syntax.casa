@@ -1786,11 +1786,8 @@ fn rewrite_operation_constant_parameters
     done
     substitutions operations substitute_ops_types
 }
-# Prepend a hidden parameter for every constant type parameter and return the
-# assignments that bind each one to its source-level name (ADR-0152). A call
-# site pushes the concrete constant, so the body reads it like any other
-# parameter. The caller appends the assignments after the hidden trait-pointer
-# assignments so the pop order matches the parameter order.
+# Register constant parameters as body variables. Concrete specializations
+# replace their reads with literals before bytecode lowering.
 
 fn inject_constant_parameters
     effect:mut$StackEffect
@@ -1802,21 +1799,10 @@ fn inject_constant_parameters
     if 0 constant_parameters.keys.length == then
         assignments return
     fi
-    List[Parameter]::new = new_parameters
     for constant_name in constant_parameters.keys.iter do
         constant_name constant_parameters.get.unwrap Type::Builtin = constant_type
-        constant_name.as_str make_hidden_const_parameter_name constant_type clone_type Parameter::named new_parameters.push
         constant_type clone_type constant_name.clone Variable variables.push
-        location.clone constant_name.clone OpValue::AssignVar Op::new = assignment
-        constant_type clone_type Option::Some assignment Op::set_type_hint
-        assignment assignments.push
     done
-    0 (u64) = parameter_index
-    while parameter_index effect.parameters.length > do
-        parameter_index effect.parameters.get clone_parameter new_parameters.push
-        1 += parameter_index
-    done
-    new_parameters effect StackEffect::set_parameters
     assignments
 }
 
@@ -1919,73 +1905,6 @@ fn parse_stack_effect cursor:mut$TokenCursor state:mut$ParseState -> StackEffect
         fi
     fi
     returns params StackEffect::new
-}
-
-# ============================================================================
-# build_hidden_trait_methods - shared hidden-param construction
-# ============================================================================
-#
-# Walks the given trait bounds and returns a flat list of (var_name, fn_type)
-# pairs describing each hidden `__trait_{type_var}_{method}` parameter that
-# must be injected. The language comparison traits include their defaults so
-# generic operators can call them before their type arguments are known.
-# Used by both parse_function and inject_implementation_parameters.
-# Bounds whose trait is not registered in the store are silently skipped,
-# matching the pre-extraction behavior of both call sites.
-
-fn build_hidden_trait_methods
-    parser:mut$Parser
-    trait_bounds:mut$Map[String List[TraitBound]]
--> List[HiddenTraitMethod] {
-    List[HiddenTraitMethod]::new = result
-    trait_bounds.keys = bound_keys
-    for bound_type_var in bound_keys.iter do
-        Set[String]::new = seen_methods
-        for
-            bound in bound_type_var trait_bounds
-                .get
-                .unwrap
-                .iter
-        do
-            bound TraitBound::name parser
-                .store
-                .traits
-                .get = bound_trait_opt
-            if bound_trait_opt.is_none then
-                continue
-            fi
-            bound_trait_opt.unwrap = bound_trait
-            bound.name.as_str "PartialEq" ==
-            bound.name.as_str "Eq" == ||
-            bound.name.as_str "PartialOrd" == ||
-            bound.name.as_str "Ord" == || = include_defaults
-            # Build substitution map from trait's declared type_params to the
-            # concrete type_args carried on the bound.
-            Map[String Type]::new = bound_subs
-            bound_trait CasaTrait::type_params = bhtm_params: $List[String]
-            bound TraitBound::type_args = bhtm_args: $List[Type]
-            if bhtm_params.length bhtm_args.length == then
-                for pair in bhtm_args.iter bhtm_params.iter.zip do
-                    pair.second clone_type pair.first.clone bound_subs.set
-                done
-            fi
-            bound_trait parser.store collect_trait_methods = bound_methods
-            for bound_method in bound_methods.iter do
-                if
-                    0 bound_method TraitMethod::default_ops.length ==
-                    include_defaults ||
-                    bound_method.name seen_methods.has ! &&
-                then
-                    bound_method.name.clone seen_methods.add
-                    f"__trait_{bound_type_var}_{bound_method TraitMethod::name}" = hidden_name
-                    bound_subs bound_type_var.clone Type::TypeVar bound_method TraitMethod::stack_effect resolve_trait_stack_effect apply_type_subs_to_stack_effect = hidden_stack_effect
-                    hidden_stack_effect stack_effect_to_function_type = hidden_type
-                    hidden_type hidden_name HiddenTraitMethod result.push
-                fi
-            done
-        done
-    done
-    result
 }
 
 # ============================================================================
@@ -2547,6 +2466,7 @@ fn parse_function parser:mut$Parser cursor:mut$TokenCursor -> Function {
 
     # Parse optional type parameters
     List[String]::new = type_vars
+    List[String]::new = generic_params
     Map[String List[TraitBound]]::new = trait_bounds
     Map[String BuiltinType]::new = const_params
     cursor.peek = tvars_opt
@@ -2554,6 +2474,7 @@ fn parse_function parser:mut$Parser cursor:mut$TokenCursor -> Function {
         if "[" tvars Token::value.as_str == then
             cursor parser parse_type_variables = parsed_type_variables
             parsed_type_variables.into_parts = const_params = trait_bounds = all_type_param_names
+            all_type_param_names.clone = generic_params
             # `names` mixes type variables and const parameters; keep only the
             # type variables here (ADR-0152).
             for candidate_name in all_type_param_names.iter do
@@ -2586,32 +2507,8 @@ fn parse_function parser:mut$Parser cursor:mut$TokenCursor -> Function {
 
     const_params effect StackEffect::set_const_params
 
-    # Constant parameters become hidden parameters the call site pushes
-    # (ADR-0152). Prepend them before the trait pointers so the assignment
-    # order below matches the parameter order.
+    # Constant parameters are symbolic while this body is checked.
     name_token Token::location.clone variables effect inject_constant_parameters = constant_assignments
-
-    # Inject hidden __trait_* parameters for trait-bounded type vars
-    if 0 effect StackEffect::trait_bounds.keys.length != then
-        List[Parameter]::new = hidden_params
-        effect StackEffect::trait_bounds parser build_hidden_trait_methods = hidden_methods
-        for hidden in hidden_methods.iter do
-            hidden HiddenTraitMethod::var_name = hidden_name: $String
-            hidden HiddenTraitMethod::fn_type = hidden_type: $Type
-            hidden_name.clone hidden_type clone_type Parameter::named hidden_params.push
-            hidden_type clone_type hidden_name.clone Variable variables.push
-            name_token Token::location hidden_name.clone OpValue::AssignVar Op::new = hidden_assign
-            hidden_type clone_type Option::Some hidden_assign Op::set_type_hint
-            hidden_assign ops.push
-        done
-        # Prepend hidden params to stack effect parameters
-        0 (u64) = effect_param_index
-        while effect_param_index effect StackEffect::parameters.length > do
-            effect_param_index effect StackEffect::parameters.get clone_parameter hidden_params.push
-            1 += effect_param_index
-        done
-        hidden_params effect StackEffect::set_parameters
-    fi
     constant_assignments ops.append
 
     # Register named parameters as variables and generate assign ops
@@ -2636,6 +2533,7 @@ fn parse_function parser:mut$Parser cursor:mut$TokenCursor -> Function {
     fi
 
     effect name_token Token::location.clone ops name_token Token::value.clone Function::with_stack_effect = function
+    generic_params function Function::set_generic_params
     variables function Function::set_variables
     function
 }
@@ -3344,10 +3242,19 @@ fn inject_implementation_parameters
     parser:mut$Parser
     function:mut$Function
     type_vars:$List[String]
+    generic_params:$List[String]
     trait_bounds:$Map[String List[TraitBound]]
     constant_parameters:$Map[String BuiltinType]
 {
     function.stack_effect clone_stack_effect = effect
+    List[String]::new = combined_generic_params
+    for parameter_name in generic_params.iter do
+        parameter_name.clone combined_generic_params.push
+    done
+    for parameter_name in function.generic_params.iter do
+        parameter_name.clone combined_generic_params.push
+    done
+    combined_generic_params function Function::set_generic_params
 
     # Merge the impl block's constant parameters (ADR-0152) and rewrite the
     # method declaration and body so their names read as constants, not type
@@ -3393,37 +3300,14 @@ fn inject_implementation_parameters
         fi
     done
 
-    # Inject hidden __trait_* parameters
-    List[Parameter]::new = hidden_params
     0 (u64) = insert_pos
-    effect.trait_bounds parser build_hidden_trait_methods = hidden_methods
-    for hidden in hidden_methods.iter do
-        hidden HiddenTraitMethod::var_name = hidden_name: $String
-        hidden HiddenTraitMethod::fn_type = hidden_type: $Type
-        hidden_name.clone hidden_type clone_type Parameter::named hidden_params.push
-        hidden_name.as_str Variable::new function.variables.push
-        function.location.clone hidden_name.clone OpValue::AssignVar Op::new = assignment_operation
-        hidden_type clone_type Option::Some assignment_operation Op::set_type_hint
-        insert_pos assignment_operation function.ops.insert
-        1 += insert_pos
-    done
-
-    # Inject hidden parameters for the implementation's constant parameters.
+    # Register the implementation's symbolic constant parameters.
     function.location.clone function.variables effect inject_constant_parameters = constant_assignments
     while 0 constant_assignments.length != do
         constant_assignments.pop = assignment
         insert_pos assignment function.ops.insert
     done
 
-    # Prepend hidden params to existing stack effect parameters
-    if 0 hidden_params.length != then
-        0 (u64) = existing_param_index
-        while existing_param_index effect.parameters.length > do
-            existing_param_index effect.parameters.get clone_parameter hidden_params.push
-            1 += existing_param_index
-        done
-        hidden_params effect StackEffect::set_parameters
-    fi
     effect function Function::set_stack_effect
 }
 
@@ -4377,28 +4261,6 @@ fn make_copy_clone_fallback
 
     List[Op]::new = ops
     List[Variable]::new = variables
-    if
-        0 trait_impl
-            .trait_bounds
-            .keys
-            .length !=
-    then
-        List[Parameter]::new = hidden_parameters
-        trait_impl.trait_bounds parser build_hidden_trait_methods = hidden_methods
-        for hidden in hidden_methods.iter do
-            hidden.var_name.clone hidden.fn_type clone_type Parameter::named hidden_parameters.push
-            hidden.fn_type clone_type hidden.var_name.clone Variable variables.push
-            trait_impl.location.clone hidden.var_name.clone OpValue::AssignVar Op::new = hidden_assign
-            hidden.fn_type clone_type Option::Some hidden_assign Op::set_type_hint
-            hidden_assign ops.push
-        done
-        0 (u64) = visible_param_index
-        while visible_param_index effect.parameters.length > do
-            visible_param_index effect.parameters.get clone_parameter hidden_parameters.push
-            1 += visible_param_index
-        done
-        hidden_parameters effect StackEffect::set_parameters
-    fi
     receiver "self".to_str Variable variables.push
     trait_impl.location.clone "self".to_str OpValue::AssignVar Op::new ops.push
     trait_impl.receiver.match_base = receiver_name
@@ -4590,6 +4452,7 @@ fn parse_impl_block parser:mut$Parser cursor:mut$TokenCursor {
 
     # Parse optional type parameters with trait bounds
     List[String]::new = type_vars
+    List[String]::new = generic_params
     Map[String List[TraitBound]]::new = trait_bounds
     Map[String BuiltinType]::new = const_params
     cursor.peek = tvars_opt
@@ -4597,6 +4460,7 @@ fn parse_impl_block parser:mut$Parser cursor:mut$TokenCursor {
         if "[" tvars Token::value.as_str == then
             cursor parser parse_type_variables = parsed_type_variables
             parsed_type_variables.into_parts = const_params = trait_bounds = all_type_param_names
+            all_type_param_names.clone = generic_params
             # `names` mixes type variables and constant parameters; keep only
             # the type variables here (ADR-0152).
             for candidate_name in all_type_param_names.iter do
@@ -4694,7 +4558,7 @@ fn parse_impl_block parser:mut$Parser cursor:mut$TokenCursor {
         fn_name.clone function Function::set_name
         # Merge inherited type vars, trait bounds, and constant parameters
         if 0 type_vars.length != 0 const_params.keys.length != || then
-            const_params trait_bounds type_vars function parser inject_implementation_parameters
+            const_params trait_bounds generic_params type_vars function parser inject_implementation_parameters
         fi
         if
             fn_name.as_str parser
@@ -6012,6 +5876,25 @@ fn try_parse_explicit_associated_item
         fi
         state cursor parse_type_ast type_args.push
     done
+    if '&' 0 token Token::value.as_str.at == then
+        cursor.peek = suffix_opt
+        if suffix_opt.is_none then
+            token Token::value.as_str 1 token Token::value.length 1 - str::substring = ref_name
+            token Token::location token Token::value.clone OpValue::Identifier Op::new = ref_op
+            type_args ref_name GenericType Type::Generic Option::Some ref_op Op::set_type_hint
+            ref_op ops.push
+            true return
+        fi
+        if suffix_opt Option::Some(suffix) is then
+            if ":" suffix Token::value.as_str != then
+                token Token::value.as_str 1 token Token::value.length 1 - str::substring = ref_name
+                token Token::location token Token::value.clone OpValue::Identifier Op::new = ref_op
+                type_args ref_name GenericType Type::Generic Option::Some ref_op Op::set_type_hint
+                ref_op ops.push
+                true return
+            fi
+        fi
+    fi
     cursor.pop = first_colon
     cursor.pop = second_colon
     cursor.pop = member_opt
@@ -7044,8 +6927,9 @@ fn try_resolve_fn_ref
         ref_type_var.as_str function Function::stack_effect StackEffect::trait_bounds.get_str = ref_bound_opt
         if ref_bound_opt.is_some then
             ref_name.as_str ref_name.as_str "::" str::find 2 + (u64) ref_name.length ref_name.as_str "::" str::find(u64) - 2 - str::substring = ref_trait_method
-            f"__trait_{ref_type_var}_{ref_trait_method}" = ref_hidden
-            ref_hidden OpValue::PushVar op Op::set_value
+            ref_type_var.to_str Type::TypeVar = receiver
+            receiver ref_trait_method DeferredTraitCall::unresolved
+            OpValue::TraitMethodRef op Op::set_value
             true return
         fi
     fi
@@ -7108,8 +6992,7 @@ fn try_resolve_enum_variant_ident
     fi
     true
 }
-# Try resolving `K::method` trait-bound method calls. Returns true if K is
-# a trait-bound type variable on the enclosing function's stack effect.
+# Preserve `K::method` until the checked body has a concrete specialization.
 
 fn try_resolve_trait_method_call function:mut$Function op:mut$Op ident:$str -> bool {
     if ident "::" str::find 0 <= ! then
@@ -7120,11 +7003,8 @@ fn try_resolve_trait_method_call function:mut$Function op:mut$Op ident:$str -> b
         false return
     fi
     ident ident "::" str::find 2 + (u64) ident.length ident "::" str::find(u64) - 2 - str::substring = trait_method
-    f"__trait_{type_var}_{trait_method}" = hidden_var
-    if hidden_var.as_str function Function::variables variable_list_contains ! then
-        hidden_var.as_str Variable::new function Function::variables.push
-    fi
-    hidden_var OpValue::TraitMethodCall op Op::set_value
+    type_var.to_str Type::TypeVar = receiver
+    receiver trait_method DeferredTraitCall::unresolved OpValue::TraitMethodCall op Op::set_value
     true
 }
 
