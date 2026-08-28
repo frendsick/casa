@@ -6,7 +6,8 @@ const LSP_TEST_FILE "/tmp/lsp_test.casa"
 fn lsp_empty_documents -> Map[String AnalyzedDocument] { Map[String AnalyzedDocument]::new }
 
 fn lsp_test_state source:$str -> AnalyzedDocument {
-    lsp_empty_documents source LSP_TEST_FILE compile_document.into_parts = analysis = document
+    lsp_empty_documents source LSP_TEST_FILE compile_document.into_parts = diagnostics = document
+    diagnostics drop
     document
 }
 
@@ -127,9 +128,9 @@ fn test_extract_library_paths_skips_non_string_entries {
 fn test_compile_document_unresolved_module_does_not_crash {
     "compile_document_unresolved_module_does_not_crash" test_start
     lsp_empty_documents "import \"this_module_does_not_exist\"\n42 print" LSP_TEST_FILE compile_document.into_parts
-    = analysis = state
+    = diagnostics = state
     "failed import has no ops" 0 state.ops.length assert_eq
-    "has errors" analysis.diagnostics.has_errors assert_true
+    "has errors" 0 diagnostics.length > assert_true
 }
 
 # ============================================================================
@@ -168,6 +169,20 @@ fn test_ingest_document_mutates_server_state {
     "uri stored" lsp_test_uri state.open_documents.has assert_true
 }
 
+fn test_ingest_document_replaces_previous_state {
+    "ingest_document_replaces_previous_state" test_start
+    LspState::new = state
+    state "42 print" lsp_test_uri.as_str ingest_document drop
+    state "fn latest { 1 print }" lsp_test_uri.as_str ingest_document = diagnostics
+    "replacement has no diagnostics" 0 diagnostics.length assert_eq
+    "one document retained" 1 state.open_documents.length assert_eq
+    "latest source retained" "fn latest { 1 print }" lsp_test_uri state
+        .open_documents
+        .get
+        .unwrap
+        .source assert_str_eq
+}
+
 # ============================================================================
 # Test: compile_document
 # ============================================================================
@@ -184,9 +199,9 @@ fn test_compile_document_returns_document {
 fn test_compile_document_partial_failure_still_returns_ops {
     "compile_document_partial_failure_still_returns_ops" test_start
     lsp_empty_documents "42 print \"hello\" 1 *" LSP_TEST_FILE compile_document.into_parts
-    = analysis = state
+    = diagnostics = state
     "partial failure has ops" 0 state.ops.length > assert_true
-    "partial failure has diagnostics" analysis.diagnostics.has_errors assert_true
+    "partial failure has diagnostics" 0 diagnostics.length > assert_true
     "completed op remains resolved" 1 state
         .ops
         .get
@@ -215,28 +230,16 @@ fn test_compile_document_populates_enums {
 fn test_compile_document_drains_errors_into_result {
     "compile_document_drains_errors_into_result" test_start
     lsp_empty_documents "42 \"hello\" +" LSP_TEST_FILE compile_document = result
-    "result has errors" result
-        .analysis
-        .diagnostics
-        .has_errors assert_true
+    "result has errors" 0 result.diagnostics.length > assert_true
 }
 
 fn test_compile_document_two_calls_isolated {
     "compile_document_two_calls_isolated" test_start
     lsp_empty_documents "42 \"hello\" +" LSP_TEST_FILE compile_document = first_result
-    "first has errors" first_result
-        .analysis
-        .diagnostics
-        .has_errors assert_true
+    "first has errors" 0 first_result.diagnostics.length > assert_true
     lsp_empty_documents "42 print" LSP_TEST_FILE compile_document = second_result
-    "second has no errors" second_result
-        .analysis
-        .diagnostics
-        .has_errors ! assert_true
-    "first result still has errors after second call" first_result
-        .analysis
-        .diagnostics
-        .has_errors assert_true
+    "second has no errors" 0 second_result.diagnostics.length assert_eq
+    "first result still has errors after second call" 0 first_result.diagnostics.length > assert_true
 }
 
 fn test_compile_document_source_store_keyed_by_file_path {
@@ -244,7 +247,7 @@ fn test_compile_document_source_store_keyed_by_file_path {
     "42 print" = main_source
     lsp_empty_documents main_source LSP_TEST_FILE compile_document = result
     "main source matches" main_source LSP_TEST_FILE result
-        .analysis
+        .document
         .sources
         .get
         .unwrap assert_str_eq
@@ -254,12 +257,13 @@ fn test_compile_document_seeds_open_docs_into_source_store {
     "compile_document_seeds_open_docs_into_source_store" test_start
     "/tmp/lsp_peer.casa" = peer_path
     "fn peer_helper { 0 print }" = peer_source
-    lsp_empty_documents peer_source peer_path compile_document.into_parts = peer_analysis = peer_state
+    lsp_empty_documents peer_source peer_path compile_document.into_parts = peer_diagnostics = peer_state
+    peer_diagnostics drop
     Map[String AnalyzedDocument]::new = open_docs
     peer_state peer_path.to_str open_docs.set
     open_docs "42 print" LSP_TEST_FILE compile_document = result
     "peer source matches" peer_source peer_path result
-        .analysis
+        .document
         .sources
         .get
         .unwrap assert_str_eq
@@ -894,11 +898,13 @@ fn test_compute_rename_groups_multi_file_references {
     "compute_rename_groups_multi_file_references" test_start
     "/tmp/lsp_rename_peer.casa" = peer_path
     "fn shared { 0 print }\nshared" = peer_source
-    lsp_empty_documents peer_source peer_path compile_document.into_parts = peer_analysis = peer
+    lsp_empty_documents peer_source peer_path compile_document.into_parts = peer_diagnostics = peer
+    peer_diagnostics drop
     Map[String AnalyzedDocument]::new = open_documents
     peer peer_path.to_str open_documents.set
     open_documents f"import \"{peer_path}\"\nshared".as_str LSP_TEST_FILE compile_document.into_parts
-    = state_analysis = state
+    = state_diagnostics = state
+    state_diagnostics drop
     "renamed" 0 1 state compute_rename = edits
     if edits Option::Some(edit_map) is then
         "has root edits" lsp_test_uri edit_map.has assert_true
@@ -1192,6 +1198,7 @@ test_ingest_document_valid_code_produces_no_diagnostics
 test_ingest_document_invalid_code_produces_error_diagnostics
 test_ingest_document_returns_updated_open_documents
 test_ingest_document_mutates_server_state
+test_ingest_document_replaces_previous_state
 test_compile_document_returns_document
 test_compile_document_partial_failure_still_returns_ops
 test_compile_document_ambiguous_parse_skips_later_phases
