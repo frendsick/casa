@@ -38,7 +38,7 @@ test_category() {
             echo compiler_analysis
             ;;
         test/test_bytecode|test/test_document|test/test_emitter|test/test_error|\
-        test/test_lsp|test/test_selective_import|\
+        test/test_lsp|test/test_modules|test/test_selective_import|\
         test/test_selective_import_closure)
             echo compiler_integration
             ;;

@@ -12,7 +12,7 @@ if [ "$TEST_TOOL_ARG" = true ]; then
     shift
 fi
 
-version=$(sed -n 's/^const CASAC_VERSION "\([^"]*\)"/\1/p' casa.casa)
+version=$(sed -n 's/^pub const CASAC_VERSION "\([^"]*\)"/\1/p' casa.casa)
 expected="casac v$version"
 matched=false
 
