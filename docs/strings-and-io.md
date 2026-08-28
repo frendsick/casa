@@ -3,7 +3,7 @@
 Import `std` for the methods and functions on this page:
 
 ```casa
-import "std"
+import "std" { Bytes Iter List Option String }
 ```
 
 Source files and string literals contain valid UTF-8. `str` is an immutable
