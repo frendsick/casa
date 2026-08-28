@@ -60,7 +60,7 @@ fn fizzbuzz number:i64 {
 
 - **1 blank line** before and after top-level definitions (`fn`, `struct`, `enum`,
   `impl`, `trait`, with an optional `pub` prefix) and import groups.
-- Consecutive plain top-level statements (global assignments, map `.set` chains)
+- Consecutive plain top-level statements (global declarations, assignments, map `.set` chains)
   are grouped **without** blank lines.
 - Consecutive `import` statements are grouped **without** blank lines.
 - **1 blank line** immediately before a section separator comment.

@@ -130,18 +130,32 @@ impl MethodSemantics: std::Clone {
 }
 
 pub struct SemanticStack {
-    pub types:            std::List[common::Type]
-    pub parameters:       std::List[common::Parameter]
-    pub next_parameter:   u64
-    pub branches:         std::List[SemanticBranch]
-    pub variables:        std::Map[std::String common::Type]
-    pub infer_parameters: bool
+    pub types:              std::List[common::Type]
+    pub callables:          std::List[std::Set[std::String]]
+    pub parameters:         std::List[common::Parameter]
+    pub next_parameter:     u64
+    pub branches:           std::List[SemanticBranch]
+    pub variables:          std::Map[std::String common::Type]
+    pub variable_callables: std::Map[std::String std::Set[std::String]]
+    pub infer_parameters:   bool
 }
 
 pub struct SemanticStackSnapshot {
-    pub types:          std::List[common::Type]
-    pub next_parameter: u64
-    pub variables:      std::Map[std::String common::Type]
+    pub types:              std::List[common::Type]
+    pub callables:          std::List[std::Set[std::String]]
+    pub next_parameter:     u64
+    pub variables:          std::Map[std::String common::Type]
+    pub variable_callables: std::Map[std::String std::Set[std::String]]
+}
+
+pub fn clone_variable_callables
+    variable_callables:$std::Map[std::String std::Set[std::String]]
+    variable_name:$str
+-> std::Set[std::String] {
+    if variable_name variable_callables.get_str std::Option::Some(callables) is then
+        callables.clone return
+    fi
+    std::Set[std::String]::new
 }
 
 pub enum SemanticBranchKind {
@@ -264,13 +278,17 @@ pub fn unify_type_t
 impl SemanticStack {
     pub fn new function:mut$common::Function -> SemanticStack {
         std::Map[std::String common::Type]::new = variables
+        std::Map[std::String std::Set[std::String]]::new = variable_callables
         for variable in function.variables.iter do
             variable.typ common::clone_type variable.name.clone variables.set
+            std::Set[std::String]::new variable.name.clone variable_callables.set
         done
         for capture in function.captures.iter do
             capture.typ common::clone_type capture.name.clone variables.set
+            std::Set[std::String]::new capture.name.clone variable_callables.set
         done
         function.stack_effect.needs_inference
+        variable_callables
         variables
         std::List[SemanticBranch]::new
         0
@@ -278,11 +296,65 @@ impl SemanticStack {
             .stack_effect
             .parameters
             .clone
+        std::List[std::Set[std::String]]::new
         std::List[common::Type]::new
         SemanticStack
     }
 
-    pub fn push self:mut$SemanticStack type_value:common::Type { type_value self.types.push }
+    pub fn push self:mut$SemanticStack type_value:common::Type {
+        std::Set[std::String]::new self.callables.push
+        type_value self.types.push
+    }
+
+    pub fn set_top_callable self:mut$SemanticStack function_name:$str {
+        if 0 self.callables.length == then
+            return
+        fi
+        std::Set[std::String]::new = callable
+        function_name callable.add_str
+        callable self.callables.length 1 - self.callables.set
+    }
+
+    pub fn set_top_callables self:mut$SemanticStack callables:std::Set[std::String] {
+        if 0 self.callables.length == then
+            return
+        fi
+        callables self.callables.length 1 - self.callables.set
+    }
+
+    pub fn set_return_callables
+        self:mut$SemanticStack
+        return_callables:$std::List[std::Set[std::String]]
+    {
+        if self.callables.length return_callables.length > then
+            return
+        fi
+        self.callables.length return_callables.length - = start
+        0 = index: u64
+        while index return_callables.length > do
+            index return_callables.get.clone start index + self.callables.set
+            1 += index
+        done
+    }
+
+    pub fn seed_parameter_callables
+        self:mut$SemanticStack
+        argument_callables:$std::Map[std::String std::Set[std::String]]
+    {
+        for pair in argument_callables.iter do
+            pair.second.clone pair.first.clone self.variable_callables.set
+        done
+    }
+
+    pub fn peek_callables self:mut$SemanticStack -> std::Set[std::String] {
+        if 0 self.callables.length == then
+            std::Set[std::String]::new return
+        fi
+        self.callables.length 1 - self
+            .callables
+            .get
+            .clone
+    }
 
     pub fn peek self:mut$SemanticStack -> std::Option[common::Type] {
         if 0 self.types.length != then
@@ -302,6 +374,7 @@ impl SemanticStack {
 
     pub fn pop self:mut$SemanticStack -> std::Option[common::Type] {
         if 0 self.types.length != then
+            self.callables.pop drop
             self.types.pop std::Option::Some return
         fi
         if self.next_parameter self.parameters.length > then
@@ -363,16 +436,73 @@ impl SemanticStack {
     }
 
     pub fn snapshot self:mut$SemanticStack -> SemanticStackSnapshot {
-        self.clone_variables self.next_parameter self.types.clone SemanticStackSnapshot
+        self.variable_callables.clone
+        self.clone_variables
+        self.next_parameter
+        self.callables.clone
+        self.types.clone
+        SemanticStackSnapshot
     }
 
     pub fn restore self:mut$SemanticStack snapshot:$SemanticStackSnapshot {
         snapshot.types.clone = self.types
+        snapshot.callables.clone = self.callables
         snapshot.next_parameter = self.next_parameter
+        snapshot.variable_callables.clone = self.variable_callables
         std::Map[std::String common::Type]::new = self.variables
         for pair in snapshot.variables.iter do
             pair.second common::clone_type pair.first.clone self.variables.set
         done
+    }
+
+    pub fn restore_callable_shuffle
+        self:mut$SemanticStack
+        operation:$common::OpValue
+        before:std::List[std::Set[std::String]]
+    {
+        before = restored
+        if operation common::OpValue::Dup is then
+            if 0 restored.length == then
+                return
+            fi
+            restored.pop = top
+            top.clone restored.push
+            top restored.push
+        elif operation common::OpValue::Copy is then
+            if 0 restored.length == then
+                return
+            fi
+        elif operation common::OpValue::Swap is then
+            if 2 restored.length < then
+                return
+            fi
+            restored.pop = top
+            restored.pop = second
+            top restored.push
+            second restored.push
+        elif operation common::OpValue::Over is then
+            if 2 restored.length < then
+                return
+            fi
+            restored.pop = top
+            restored.pop = second
+            second.clone restored.push
+            top restored.push
+            second restored.push
+        elif operation common::OpValue::Rot is then
+            if 3 restored.length < then
+                return
+            fi
+            restored.pop = top
+            restored.pop = middle
+            restored.pop = bottom
+            middle restored.push
+            top restored.push
+            bottom restored.push
+        else
+            return
+        fi
+        restored = self.callables
     }
 
     pub fn start_branch
@@ -468,6 +598,18 @@ impl SemanticStack {
         if type_result std::Option::Some(type_value) is then
             type_value common::clone_type variable_name.clone self.variables.set_str
         fi
+    }
+
+    pub fn assign_variable_callables
+        self:mut$SemanticStack
+        variable_name:$str
+        callables:std::Set[std::String]
+    {
+        variable_name "." str::split = name_parts
+        if 1 name_parts.length != then
+            return
+        fi
+        callables variable_name.clone self.variable_callables.set_str
     }
 }
 
@@ -2121,8 +2263,80 @@ impl FunctionSemantics {
 
 pub enum SemanticDependency {
     Symbol (std::String)
+    Call (std::String)
+    BoundCall (SemanticBoundCall)
+    DefaultMethodCall (SemanticDefaultMethodCall)
     Type (common::Type)
     Global (SemanticGlobalReference)
+}
+
+pub struct SemanticBoundCall {
+    pub function_name:      std::String
+    pub argument_callables: std::Map[std::String std::Set[std::String]]
+}
+
+pub fn bind_stack_callable_arguments
+    effect:$common::StackEffect
+    stack:$SemanticStack
+    skip_callable:bool
+-> std::Map[std::String std::Set[std::String]] {
+    std::Map[std::String std::Set[std::String]]::new = argument_callables
+    stack.callables.clone = stack_callables
+    if skip_callable 0 stack_callables.length != && then
+        stack_callables.pop drop
+    fi
+    for parameter in effect.parameters.iter do
+        if parameter.name.as_str common::is_hidden_parameter_name then
+            continue
+        fi
+        if 0 stack_callables.length == then
+            break
+        fi
+        stack_callables.pop = callables
+        if "" parameter.name.as_str != then
+            callables parameter.name.clone argument_callables.set
+        fi
+    done
+    argument_callables
+}
+
+pub fn has_callable_arguments
+    argument_callables:$std::Map[std::String std::Set[std::String]]
+-> bool {
+    for callables in argument_callables.values.iter do
+        if callables.is_empty ! then
+            true return
+        fi
+    done
+    false
+}
+
+pub fn make_default_method_function
+    name:std::String
+    ops:std::List[common::Op]
+    effect:common::StackEffect
+-> common::Function {
+    std::List[common::Op]::new = function_ops
+    std::List[common::Variable]::new = variables
+    for parameter in effect.parameters.iter do
+        if "" parameter.name.as_str == parameter.name.as_str common::is_hidden_parameter_name || then
+            continue
+        fi
+        parameter.typ common::clone_type parameter.name.clone common::Variable variables.push
+        common::empty_location parameter.name.clone common::OpValue::AssignVar common::Op::new
+        function_ops.push
+    done
+    ops function_ops.append
+    effect common::empty_location function_ops name common::Function::with_stack_effect = function
+    variables = function.variables
+    function
+}
+
+pub struct SemanticDefaultMethodCall {
+    pub trait_name:         std::String
+    pub method_name:        std::String
+    pub stack_effect:       common::StackEffect
+    pub argument_callables: std::Map[std::String std::Set[std::String]]
 }
 
 pub struct SemanticGlobalReference {
@@ -2136,9 +2350,29 @@ pub struct SemanticAnalysis {
     pub inferred_effects:  mut$std::Map[std::String common::StackEffect]
     pub seen_dependencies: std::Set[std::String]
     pub ordered_facts:     std::List[SemanticDependency]
+    pub active_calls:      std::Set[std::String]
 }
 
 impl SemanticAnalysis {
+    pub fn merge_branch_callables merged:mut$SemanticStackSnapshot current:$SemanticStackSnapshot {
+        if merged.callables.length current.callables.length != then
+            return
+        fi
+        0 = index: u64
+        while index merged.callables.length > do
+            index merged.callables.get_mut = merged_callables
+            for
+                function_name in index current
+                    .callables
+                    .get
+                    .iter
+            do
+                function_name.clone merged_callables.add
+            done
+            1 += index
+        done
+    }
+
     pub fn merge_branch_variable
         self:mut$SemanticAnalysis
         merged:mut$SemanticStackSnapshot
@@ -2154,6 +2388,12 @@ impl SemanticAnalysis {
         if unified std::Option::Some(type_value) is then
             type_value common::clone_type variable_name.clone merged.variables.set_str
         fi
+        variable_name current.variable_callables clone_variable_callables = current_callables
+        variable_name merged.variable_callables clone_variable_callables = merged_callables
+        for function_name in current_callables.iter do
+            function_name.clone merged_callables.add
+        done
+        merged_callables variable_name.clone merged.variable_callables.set_str
     }
 
     pub fn merge_branch_exit self:mut$SemanticAnalysis stack:mut$SemanticStack {
@@ -2174,6 +2414,7 @@ impl SemanticAnalysis {
         branch.after = after: mut$std::Option[SemanticStackSnapshot]
         if after std::Option::Some(merged) is then
             if merged.types.length current.types.length == then
+                current merged SemanticAnalysis::merge_branch_callables
                 0 (u64) = index
                 while index merged.types.length > do
                     self.store index current.types.get index merged.types.get unify_type_t
@@ -2218,6 +2459,7 @@ impl SemanticAnalysis {
         store:mut$common::SymbolStore
         inferred_effects:mut$std::Map[std::String common::StackEffect]
     -> SemanticAnalysis {
+        std::Set[std::String]::new
         std::List[SemanticDependency]::new
         std::Set[std::String]::new
         inferred_effects
@@ -2240,6 +2482,145 @@ impl SemanticAnalysis {
 
     pub fn add_type_dependency self:mut$SemanticAnalysis type_value:common::Type {
         type_value SemanticDependency::Type self.ordered_facts.push
+    }
+
+    pub fn add_call self:mut$SemanticAnalysis function_name:$str {
+        function_name.to_str SemanticDependency::Call self.ordered_facts.push
+    }
+
+    pub fn add_bound_call
+        self:mut$SemanticAnalysis
+        function_name:$str
+        argument_callables:std::Map[std::String std::Set[std::String]]
+    {
+        argument_callables function_name.to_str SemanticBoundCall
+        SemanticDependency::BoundCall self.ordered_facts.push
+    }
+
+    pub fn add_stack_aware_call
+        self:mut$SemanticAnalysis
+        stack:$SemanticStack
+        function_name:$str
+        skip_callable:bool
+    -> std::Map[std::String std::Set[std::String]] {
+        std::Map[std::String std::Set[std::String]]::new = argument_callables
+        if
+            function_name self
+                .store
+                .functions
+                .get_str std::Option::Some(function) is
+        then
+            skip_callable stack function.stack_effect bind_stack_callable_arguments = argument_callables
+        fi
+        if argument_callables has_callable_arguments then
+            argument_callables.clone function_name self.add_bound_call
+        else
+            function_name self.add_call
+        fi
+        argument_callables
+    }
+
+    pub fn collect_call_return_callables
+        self:mut$SemanticAnalysis
+        function_name:$str
+        argument_callables:$std::Map[std::String std::Set[std::String]]
+    -> std::List[std::Set[std::String]] {
+        if function_name self.active_calls.has_str then
+            std::List[std::Set[std::String]]::new return
+        fi
+        std::Option[common::Function]::None = called_function
+        if
+            function_name self
+                .store
+                .functions
+                .get_str std::Option::Some(function) is
+        then
+            function.clone_for_import std::Option::Some = called_function
+        fi
+        if called_function std::Option::None is then
+            std::List[std::Set[std::String]]::new return
+        fi
+        called_function.unwrap = function
+        false = returns_callable
+        for
+            return_type in function
+                .stack_effect
+                .return_types
+                .iter
+        do
+            if return_type common::Type::Function is then
+                true = returns_callable
+                break
+            fi
+        done
+        if returns_callable ! then
+            std::List[std::Set[std::String]]::new return
+        fi
+        function_name self.active_calls.add_str
+        function SemanticStack::new = stack
+        argument_callables stack.seed_parameter_callables
+        function.ops common::clone_ops = operations
+        operations function stack self.collect_operations_with_stack
+        function_name self.active_calls.remove_str
+        stack.callables.clone
+    }
+
+    pub fn collect_default_method_return_callables
+        self:mut$SemanticAnalysis
+        method:$MethodSemantics
+        argument_callables:$std::Map[std::String std::Set[std::String]]
+    -> std::List[std::Set[std::String]] {
+        false = returns_callable
+        for
+            return_type in method
+                .stack_effect
+                .return_types
+                .iter
+        do
+            if return_type common::Type::Function is then
+                true = returns_callable
+                break
+            fi
+        done
+        if returns_callable ! then
+            std::List[std::Set[std::String]]::new return
+        fi
+        f"default:{method.trait_name}:{method.method_name}" = call_key
+        if call_key.as_str self.active_calls.has_str then
+            std::List[std::Set[std::String]]::new return
+        fi
+        std::List[common::Op]::new = default_ops
+        if
+            method.trait_name.as_str self
+                .store
+                .traits
+                .get_str std::Option::Some(casa_trait) is
+        then
+            for trait_method in casa_trait.methods.iter do
+                if trait_method.name.as_str method.method_name.as_str == then
+                    trait_method.default_ops common::clone_ops = default_ops
+                    break
+                fi
+            done
+        fi
+        call_key.clone self.active_calls.add
+        method.stack_effect.clone default_ops call_key make_default_method_function = function
+        function SemanticStack::new = stack
+        argument_callables stack.seed_parameter_callables
+        function.ops common::clone_ops = operations
+        operations function stack self.collect_operations_with_stack
+        function.name.as_str self.active_calls.remove_str
+        stack.callables.clone
+    }
+
+    pub fn add_default_method_call
+        self:mut$SemanticAnalysis
+        method:$MethodSemantics
+        argument_callables:$std::Map[std::String std::Set[std::String]]
+    {
+        argument_callables.clone method.stack_effect.clone method.method_name.clone
+        method.trait_name.clone SemanticDefaultMethodCall
+        SemanticDependency::DefaultMethodCall self.ordered_facts.push
     }
 
     pub fn add_global_reference
@@ -2351,7 +2732,33 @@ impl SemanticAnalysis {
             return_hint common::clone_type self.add_type_dependency
         fi
 
-        if operation_node.value common::OpValue::DeclareGlobal(global_name) is then
+        if operation_node.value common::OpValue::Identifier(name) is then
+            if name.as_str "&" str::starts_with then
+                name.as_str 1 name.length 1 - str::substring = referenced_name
+                if
+                    referenced_name.as_str self
+                        .store
+                        .functions
+                        .has_str
+                then
+                    referenced_name.as_str self.add_dependency
+                fi
+            elif
+                name.as_str self
+                    .store
+                    .functions
+                    .has_str
+            then
+                name.as_str self.add_dependency
+            elif
+                name.as_str self
+                    .store
+                    .variables
+                    .has_str
+            then
+                false operation_node.location.clone name.as_str self.add_global_reference
+            fi
+        elif operation_node.value common::OpValue::DeclareGlobal(global_name) is then
             true operation_node.location.clone global_name.as_str self.add_global_reference
         elif
             operation_node.value common::OpValue::PushVar is
@@ -2654,6 +3061,23 @@ impl SemanticAnalysis {
         semantics match
             SemanticFacts { stack_effect: stack_effect resolved_operation: resolved_operation method: method dependencies: dependencies syscall_argument_count: syscall_argument_count word_parameter_start: word_parameter_start word_parameter_count: word_parameter_count } => stack_effect method
         end = method_opt = effect_opt
+        std::List[std::Set[std::String]]::new = method_return_callables
+        if method_opt std::Option::Some(method) is then
+            std::Map[std::String std::Set[std::String]]::new = argument_callables
+            if method.kind MethodSemanticsKind::DefaultMethod is then
+                false stack method.stack_effect bind_stack_callable_arguments = argument_callables
+            elif 0 method.function_name.length != then
+                false method.function_name.as_str stack self.add_stack_aware_call = argument_callables
+            fi
+            if method.kind MethodSemanticsKind::DefaultMethod is then
+                argument_callables method self.add_default_method_call
+                argument_callables method self.collect_default_method_return_callables
+                = method_return_callables
+            elif 0 method.function_name.length != then
+                argument_callables method.function_name.as_str self.collect_call_return_callables
+                = method_return_callables
+            fi
+        fi
         effect_opt match
             std::Option::Some(effect) => {
                 if operation common::OpValue::FnCall(function_name) is then
@@ -2673,6 +3097,7 @@ impl SemanticAnalysis {
                 fi
                 effect stack.apply_effect_with_bindings = bindings
                 bindings effect self.collect_bound_semantics
+                method_return_callables stack.set_return_callables
                 true return
             }
             std::Option::None => {
@@ -2763,6 +3188,21 @@ impl SemanticAnalysis {
         fi
 
         operation_value match
+            common::OpValue::Identifier(name) => {
+                if name.as_str "&" str::starts_with then
+                    name.as_str 1 name.length 1 - str::substring = referenced_name
+                    if
+                        referenced_name.as_str self
+                            .store
+                            .functions
+                            .get_str std::Option::Some(referenced) is
+                    then
+                        referenced.stack_effect common::stack_effect_to_function_type stack.push
+                    fi
+                else
+                    name.as_str stack function self.push_variable_type
+                fi
+            }
             common::OpValue::PushVar(name) => {
                 name.as_str stack function self.push_variable_type
             }
@@ -2892,15 +3332,26 @@ impl SemanticAnalysis {
                 common::make_bool_type common::clone_type 1 stack.apply_result
             }
             common::OpValue::AssignVar(name) => {
+                stack.peek_callables = callables
+                if
+                    callables.is_empty
+                    0 stack.types.length == &&
+                    stack.next_parameter stack.parameters.length > &&
+                then
+                    name.as_str stack.variable_callables clone_variable_callables = callables
+                fi
                 stack.pop name.as_str stack.assign_variable_type
+                callables name.as_str stack.assign_variable_callables
             }
             common::OpValue::AssignInc(name) => {
                 stack.pop drop
                 common::make_i64_type common::clone_type std::Option::Some name.as_str stack.assign_variable_type
+                std::Set[std::String]::new name.as_str stack.assign_variable_callables
             }
             common::OpValue::AssignDec(name) => {
                 stack.pop drop
                 common::make_i64_type common::clone_type std::Option::Some name.as_str stack.assign_variable_type
+                std::Set[std::String]::new name.as_str stack.assign_variable_callables
             }
             common::OpValue::PushArray(items) => {
                 items function stack self.collect_operations_with_stack
@@ -2923,8 +3374,94 @@ impl SemanticAnalysis {
         operations:$std::List[common::Op]
     {
         for operation_node in operations.iter do
+            stack.callables.clone = callables_before
+            std::Map[std::String std::Set[std::String]]::new = direct_arguments
+            std::List[std::Set[std::String]]::new = indirect_return_callables
+            if operation_node.value common::OpValue::FnCall(function_name) is then
+                false function_name.as_str stack self.add_stack_aware_call = direct_arguments
+            elif operation_node.value common::OpValue::Identifier(function_name) is then
+                if
+                    function_name.as_str self
+                        .store
+                        .functions
+                        .has_str
+                then
+                    false function_name.as_str stack self.add_stack_aware_call = direct_arguments
+                fi
+            elif
+                operation_node.value common::OpValue::FnExec is
+                operation_node.value common::OpValue::FnExecOwned is ||
+            then
+                stack.peek_callables = function_names
+                for function_name in function_names.iter do
+                    true function_name.as_str stack self.add_stack_aware_call = arguments
+                    arguments function_name.as_str self.collect_call_return_callables = returned_callables
+                    if indirect_return_callables.is_empty then
+                        returned_callables = indirect_return_callables
+                    elif indirect_return_callables.length returned_callables.length == then
+                        0 (u64) = return_index
+                        while return_index returned_callables.length > do
+                            return_index indirect_return_callables.get_mut = merged_callables
+                            for returned_name in return_index returned_callables.get.iter do
+                                returned_name.clone merged_callables.add
+                            done
+                            1 += return_index
+                        done
+                    fi
+                done
+            fi
             operation_node function self.collect_operation_facts
             stack operation_node function self.update_type_stack
+            if operation_node.value common::OpValue::FnCall(function_name) is then
+                direct_arguments function_name.as_str self.collect_call_return_callables
+                = return_callables
+                return_callables stack.set_return_callables
+            elif operation_node.value common::OpValue::Identifier(function_name) is then
+                if function_name.as_str "&" str::starts_with then
+                    function_name.as_str 1 function_name.length 1 - str::substring = referenced_name
+                    if
+                        referenced_name.as_str self
+                            .store
+                            .functions
+                            .has_str
+                    then
+                        referenced_name.as_str stack.set_top_callable
+                    fi
+                elif
+                    function_name.as_str self
+                        .store
+                        .functions
+                        .has_str
+                then
+                    direct_arguments function_name.as_str self.collect_call_return_callables
+                    = return_callables
+                    return_callables stack.set_return_callables
+                else
+                    function_name.as_str stack.variable_callables clone_variable_callables
+                    stack.set_top_callables
+                fi
+            elif operation_node.value common::OpValue::FnPush(function_name) is then
+                function_name.as_str stack.set_top_callable
+            elif
+                operation_node.value common::OpValue::FnExec is
+                operation_node.value common::OpValue::FnExecOwned is ||
+            then
+                indirect_return_callables stack.set_return_callables
+            elif operation_node.value common::OpValue::PushVar(name) is then
+                name.as_str stack.variable_callables clone_variable_callables = pushed_callables
+                pushed_callables stack.set_top_callables
+            elif operation_node.value common::OpValue::PushCapture(name) is then
+                name.as_str stack.variable_callables clone_variable_callables = pushed_callables
+                pushed_callables stack.set_top_callables
+            elif
+                operation_node.value common::OpValue::Dup is
+                operation_node.value common::OpValue::Copy is ||
+                operation_node.value common::OpValue::Swap is ||
+                operation_node.value common::OpValue::Over is ||
+                operation_node.value common::OpValue::Rot is ||
+            then
+                callables_before operation_node.value stack.restore_callable_shuffle
+            fi
         done
     }
 
@@ -2940,7 +3477,7 @@ impl SemanticAnalysis {
 }
 
 pub fn analyze_function_semantics
-    function:mut$common::Function
+    function:$common::Function
     inferred_effects:mut$std::Map[std::String common::StackEffect]
     store:mut$common::SymbolStore
 -> FunctionSemantics {
@@ -2948,4 +3485,30 @@ pub fn analyze_function_semantics
     function.clone_declaration = semantic_function
     function.ops semantic_function analysis.collect_operations = inferred_effect
     inferred_effect analysis.finish
+}
+
+pub fn analyze_function_semantics_with_callables
+    function:$common::Function
+    inferred_effects:mut$std::Map[std::String common::StackEffect]
+    store:mut$common::SymbolStore
+    argument_callables:$std::Map[std::String std::Set[std::String]]
+-> FunctionSemantics {
+    inferred_effects store SemanticAnalysis::new = analysis
+    function.clone_declaration = semantic_function
+    semantic_function SemanticStack::new = stack
+    argument_callables stack.seed_parameter_callables
+    function.ops semantic_function stack analysis.collect_operations_with_stack
+    stack.types.clone stack.parameters.clone common::StackEffect::new = inferred_effect
+    inferred_effect analysis.finish
+}
+
+pub fn analyze_global_initializer_semantics
+    operations:$std::List[common::Op]
+    inferred_effects:mut$std::Map[std::String common::StackEffect]
+    store:mut$common::SymbolStore
+-> FunctionSemantics {
+    common::empty_location
+    operations common::clone_ops
+    common::GLOBAL_SCOPE_LABEL.to_str common::Function::new = initializer
+    store inferred_effects initializer analyze_function_semantics
 }

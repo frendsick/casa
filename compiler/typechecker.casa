@@ -195,6 +195,8 @@ pub fn count_variable_uses
             counts items count_variable_uses = counts
         elif op.value common::OpValue::ExprGroup(items) is then
             counts items count_variable_uses = counts
+        elif op.value common::OpValue::InitGlobal(initializer) is then
+            counts initializer.ops count_variable_uses = counts
         elif op.value common::OpValue::MatchArm(arm) is then
             counts arm.guard_ops count_variable_uses = counts
         fi
@@ -863,6 +865,14 @@ impl common::Op {
                 done
                 false
             }
+            common::OpValue::InitGlobal(initializer) => {
+                for item in initializer.ops.iter do
+                    if item.has_numeric_literal then
+                        true return
+                    fi
+                done
+                false
+            }
             _ => false
         end
     }
@@ -984,6 +994,10 @@ pub fn resolve_default_literals ops:mut$std::List[common::Op] diagnostics:mut$er
             items common::clone_ops = owned_items
             diagnostics owned_items resolve_default_literals
             owned_items common::OpValue::ExprGroup op common::Op::set_value
+        elif op_value common::OpValue::InitGlobal(initializer) is then
+            initializer.clone = resolved_initializer
+            diagnostics resolved_initializer.ops resolve_default_literals
+            resolved_initializer common::OpValue::InitGlobal op common::Op::set_value
         elif op_value common::OpValue::MatchArm(arm) is then
             arm.clone = resolved_arm
             diagnostics resolved_arm.guard_ops resolve_default_literals
@@ -1021,6 +1035,10 @@ pub fn apply_resolved_literal_hints
             items common::clone_ops = owned_items
             resolutions owned_items apply_resolved_literal_hints
             owned_items common::OpValue::ExprGroup op common::Op::set_value
+        elif op_value common::OpValue::InitGlobal(initializer) is then
+            initializer.clone = resolved_initializer
+            resolutions resolved_initializer.ops apply_resolved_literal_hints
+            resolved_initializer common::OpValue::InitGlobal op common::Op::set_value
         elif op_value common::OpValue::MatchArm(arm) is then
             arm.clone = resolved_arm
             resolutions resolved_arm.guard_ops apply_resolved_literal_hints
@@ -1597,7 +1615,12 @@ impl TypeChecker {
         if std::Option[common::Function]::None type_value tc.type_is_duplicable then
             type_value tc.stack_push_type return
         fi
-        if in_function then
+        if
+            name tc
+                .store
+                .immutable_globals
+                .has_str in_function ||
+        then
             ValueCapability::Shared
         else
             ValueCapability::Exclusive
@@ -4406,7 +4429,15 @@ impl TypeChecker {
     }
 
     pub fn record_implicit_binding self:mut$TypeChecker var_name:$str op:mut$common::Op {
-        if var_name self.scope.bind ! then
+        if
+            var_name self
+                .store
+                .immutable_globals
+                .has_str
+        then
+            f"Binding `{var_name}` shadows immutable global `{var_name}`; choose a different name" = message
+            op common::Op::location message common::ErrorKind::DuplicateName self.diagnostics.record_error_string
+        elif var_name self.scope.bind ! then
             f"Binding `{var_name}` shadows an existing variable; choose a different name" = message
             op common::Op::location message common::ErrorKind::DuplicateName self.diagnostics.record_error_string
         fi
@@ -6568,6 +6599,85 @@ pub fn check_expression_group
 }
 
 impl TypeChecker {
+    pub fn check_global_initializer self:mut$TypeChecker op:mut$common::Op {
+        if op.value common::OpValue::InitGlobal(initializer) is then
+            initializer.clone = checked_initializer
+            self
+                .stack
+                .values
+                .length = stack_before
+            std::Option[common::Function]::None = root_scope
+            root_scope checked_initializer.ops self.run_type_check_ops
+            self
+                .stack
+                .values
+                .length = stack_after
+            if stack_before 1 + stack_after != then
+                op.location
+                f"Global `{checked_initializer.name}` initializer must produce exactly one value, produced {stack_after stack_before -}"
+                common::ErrorKind::SignatureMismatch self.diagnostics.record_error_string
+                while
+                    self
+                        .stack
+                        .values
+                        .length stack_before >
+                do
+                    self.stack_pop_drop
+                done
+                checked_initializer common::OpValue::InitGlobal op common::Op::set_value
+                return
+            fi
+
+            self.stack_pop_value = value
+            value.type_value resolve_numeric_literal_default = global_type
+            self.literal_resolutions self.diagnostics global_type value.resolve_literals drop
+            if global_type.is_exclusive_borrow then
+                op.location
+                f"Global `{checked_initializer.name}` cannot store an exclusive borrow"
+                common::ErrorKind::InvalidVariable self.diagnostics.record_error_string
+            elif value.capability ValueCapability::Owned is ! global_type.is_borrow ! && then
+                common::SHARED_BORROW_TYPE global_type common::apply_borrow_type = global_type
+            fi
+            checked_initializer.name.clone = initializer_storage
+            if
+                checked_initializer.name.as_str self
+                    .store
+                    .immutable_global_slots
+                    .get_str
+                std::Option::Some(slot) is
+            then
+                slot.clone = initializer_storage
+            fi
+            self
+                .store
+                .immutable_global_slots
+                .iter = global_slots
+            for pair in global_slots do
+                if pair.second.as_str initializer_storage.as_str != then
+                    continue
+                fi
+                pair.first.as_str self
+                    .store
+                    .variables
+                    .remove_str = global_opt
+                global_opt match
+                    std::Option::Some(global_var) => {
+                        global_type common::clone_type global_var common::Variable::set_typ
+                        global_var pair.first.clone self
+                            .store
+                            .variables
+                            .set
+                    }
+                    std::Option::None => {
+                    }
+                end
+            done
+            checked_initializer common::OpValue::InitGlobal op common::Op::set_value
+        fi
+    }
+}
+
+impl TypeChecker {
     pub fn check_literals
         tc:mut$TypeChecker
         op:mut$common::Op
@@ -8620,6 +8730,7 @@ impl TypeChecker {
             common::OpValue::BindTemporary(_) => function_opt current_op self.check_temporary_binding
             common::OpValue::PushVar(_) => function_opt current_op self.check_push_var
             common::OpValue::PushCapture(_) => function_opt current_op self.check_push_var
+            common::OpValue::InitGlobal(_) => current_op self.check_global_initializer
             common::OpValue::IfStart => current_op self.check_if_block
             common::OpValue::IfCondition => current_op self.check_if_block
             common::OpValue::IfElif => current_op self.check_if_block

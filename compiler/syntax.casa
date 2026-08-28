@@ -306,6 +306,35 @@ impl Parser {
             .set
     }
 
+    pub fn put_immutable_global
+        self:mut$Parser
+        name:std::String
+        storage_name:std::String
+        location:$common::Location
+    {
+        self.state.mark_store_mutated
+        name.clone self
+            .store
+            .module_private_symbols
+            .add
+        name.clone self
+            .store
+            .immutable_globals
+            .add
+        location.file.clone name.clone self
+            .store
+            .immutable_global_files
+            .set
+        storage_name name.clone self
+            .store
+            .immutable_global_slots
+            .set
+        name.as_str common::Variable::new name self
+            .store
+            .variables
+            .set
+    }
+
     pub fn put_enum self:mut$Parser name:std::String casa_enum:common::CasaEnum {
         self.state.mark_store_mutated
         name.clone self
@@ -369,6 +398,9 @@ impl common::SymbolStore {
                 .keys
                 .iter
         do
+            name.clone names.add
+        done
+        for name in self.immutable_globals.iter do
             name.clone names.add
         done
         for
@@ -451,6 +483,15 @@ impl common::SymbolStore {
                     .unwrap
                     .clone name.clone self.variables.set
             fi
+        done
+        for name in imported.immutable_globals.iter do
+            name.clone self.immutable_globals.add
+        done
+        for pair in imported.immutable_global_files.iter do
+            pair.second.clone pair.first.clone self.immutable_global_files.set
+        done
+        for pair in imported.immutable_global_slots.iter do
+            pair.second.clone pair.first.clone self.immutable_global_slots.set
         done
         for
             name in imported
@@ -569,6 +610,9 @@ impl common::SymbolStore {
         self.public_symbols.clone = cloned.public_symbols
         self.private_symbols.clone = cloned.private_symbols
         self.module_private_symbols.clone = cloned.module_private_symbols
+        self.immutable_globals.clone = cloned.immutable_globals
+        self.immutable_global_files.clone = cloned.immutable_global_files
+        self.immutable_global_slots.clone = cloned.immutable_global_slots
         cloned
     }
 
@@ -590,12 +634,19 @@ impl common::SymbolStore {
         self.public_symbols.clone = cloned.public_symbols
         self.private_symbols.clone = cloned.private_symbols
         self.module_private_symbols.clone = cloned.module_private_symbols
+        self.immutable_globals.clone = cloned.immutable_globals
+        self.immutable_global_files.clone = cloned.immutable_global_files
+        self.immutable_global_slots.clone = cloned.immutable_global_slots
         cloned
     }
 
     # Cache only declarations owned by one source file. Imported dependencies
     # have their own cache entries and must not be copied into every module.
-    pub fn retain_file_declarations self:mut$common::SymbolStore file:$str {
+    pub fn retain_file_declarations
+        self:mut$common::SymbolStore
+        file:$str
+        ops:$std::List[common::Op]
+    {
         self.functions.keys = function_names
         for name in function_names.iter do
             if
@@ -680,7 +731,37 @@ impl common::SymbolStore {
                 name.as_str self.trait_impls.delete_str
             fi
         done
-        std::Map[std::String common::Variable]::new = self.variables
+        std::Set[std::String]::new = retained_globals
+        for op in ops.iter do
+            if
+                op
+                    .location
+                    .file
+                    .as_str file ==
+                op.value common::OpValue::InitGlobal(initializer) is &&
+            then
+                initializer.name.clone retained_globals.add
+            fi
+        done
+        self.variables.keys = variable_names
+        for name in variable_names.iter do
+            if name.as_str retained_globals.has_str ! then
+                name.as_str self.variables.delete_str
+            fi
+        done
+        self.immutable_global_files.keys = global_file_names
+        for name in global_file_names.iter do
+            if name.as_str retained_globals.has_str ! then
+                name.as_str self.immutable_global_files.delete_str
+            fi
+        done
+        self.immutable_global_slots.keys = global_slot_names
+        for name in global_slot_names.iter do
+            if name.as_str retained_globals.has_str ! then
+                name.as_str self.immutable_global_slots.delete_str
+            fi
+        done
+        retained_globals = self.immutable_globals
 
         self.declaration_names = retained_names
         self.public_symbols.clone = previous_public
@@ -5419,6 +5500,7 @@ pub fn collect_declaration_namespace_name
         "enum" declaration.value.as_str != &&
         "trait" declaration.value.as_str != &&
         "const" declaration.value.as_str != &&
+        "global" declaration.value.as_str != &&
     then
         return
     fi
@@ -5726,10 +5808,21 @@ impl Parser {
     }
 }
 
+pub fn immutable_global_ops ops:$std::List[common::Op] -> std::List[common::Op] {
+    std::List[common::Op]::new = initializers
+    for op in ops.iter do
+        if op.value common::OpValue::InitGlobal is then
+            op.clone initializers.push
+        fi
+    done
+    initializers
+}
+
 pub fn handle_selective_import
     parser:mut$Parser
     selective:common::SelectiveImport
     location:$common::Location
+    expanded:mut$std::List[common::Op]
 {
     selective.path = import_path: $std::String
     selective.namespace = module_namespace: $std::String
@@ -5745,10 +5838,12 @@ pub fn handle_selective_import
     fi
 
     common::symbol_store_new = imported_store
+    std::List[common::Op]::new = initializer_ops
     std::Set[std::String]::new = inherited_symbols
     std::Set[std::String]::new = inherited_impls
     if import_key.as_str parser.selective_import_cache.get_str std::Option::Some(cached_import) is then
         cached_import.store.clone_for_selective_import = imported_store
+        cached_import.ops common::clone_ops = initializer_ops
         cached_import.inherited_symbols.clone = inherited_symbols
         cached_import.inherited_impls.clone = inherited_impls
     else
@@ -5773,13 +5868,14 @@ pub fn handle_selective_import
                     .merge_at_encounter
                 imported_ops_opt match
                     std::Option::Some(imported_ops) => {
+                        imported_ops immutable_global_ops = initializer_ops
                         imported_store_result.clone_for_selective_import = imported_store
                         imported_store_result.clone_for_selective_import = cached_store
-                        import_path.as_str cached_store.retain_file_declarations
+                        imported_ops import_path.as_str cached_store.retain_file_declarations
                         inherited_impls.clone
                         inherited_symbols.clone
                         std::Set[std::String]::new
-                        std::List[common::Op]::new
+                        initializer_ops common::clone_ops
                         cached_store
                         ImportedModule = imported_module
                         imported_ops drop
@@ -5821,6 +5917,7 @@ pub fn handle_selective_import
     imported_store.declaration_names = imported_names
     imported_store.public_symbols.clone = imported_public
     parser.store.declaration_names = existing_names
+    initializer_ops common::clone_ops
     inherited_impls.clone
     inherited_symbols.clone
     location
@@ -5830,6 +5927,20 @@ pub fn handle_selective_import
     selective_import::merge_selective_import_closure_with_inherited = merge_result
     merge_result match
         std::Result::Ok(public_surface_types) => {
+            std::List[common::Op]::new = selected_initializers
+            for op in initializer_ops.iter do
+                if op.value common::OpValue::InitGlobal(initializer) is then
+                    if
+                        initializer.name.as_str parser
+                            .store
+                            .immutable_globals
+                            .has_str
+                    then
+                        op.clone selected_initializers.push
+                    fi
+                fi
+            done
+            selected_initializers = initializer_ops
             parser.store.declaration_names = merged_names
             for name in imported_names.iter do
                 false = is_requested_surface
@@ -5868,6 +5979,16 @@ pub fn handle_selective_import
                         .add
                 fi
             done
+            for requested_symbol in requested_symbols.iter do
+                requested_symbol.as_str parser
+                    .store
+                    .private_symbols
+                    .remove_str
+                requested_symbol.clone parser
+                    .store
+                    .public_symbols
+                    .add
+            done
         }
         std::Result::Error(merge_diagnostics) => {
             location merge_diagnostics parser
@@ -5878,6 +5999,7 @@ pub fn handle_selective_import
             return
         }
     end
+    initializer_ops expanded.append
 }
 
 pub fn handle_full_import
@@ -5905,6 +6027,7 @@ pub fn handle_full_import
         done
         cached_import.store.clone_for_selective_import = cached_store
         cached_store parser.store.merge_import
+        cached_import.ops common::clone_ops expanded.append
         return
     fi
 
@@ -5920,17 +6043,18 @@ pub fn handle_full_import
                 .merge_at_encounter
             import_ops_opt match
                 std::Option::Some(import_ops) => {
+                    import_ops immutable_global_ops = initializer_ops
                     imported_store_result.clone_for_selective_import = cached_store
-                    import_path.as_str cached_store.retain_file_declarations
+                    import_ops import_path.as_str cached_store.retain_file_declarations
                     std::Set[std::String]::new
                     std::Set[std::String]::new
                     std::Set[std::String]::new
-                    std::List[common::Op]::new
+                    initializer_ops common::clone_ops
                     cached_store
                     ImportedModule = imported_module
                     imported_module import_key.clone parser.selective_import_cache.set
                     imported_store_result parser.store.merge_import
-                    import_ops drop
+                    initializer_ops expanded.append
                 }
                 std::Option::None => parser.state.mark_output_unusable
             end
@@ -6117,6 +6241,8 @@ pub fn public_declaration_name
         else
             std::Option[common::Token]::None = name_opt
         fi
+    elif "global" declaration.value.as_str == then
+        cursor.pop = name_opt
     elif
         "fn" declaration.value.as_str ==
         "struct" declaration.value.as_str == ||
@@ -6196,7 +6322,41 @@ impl Parser {
         token common::Token::location "Expected `{` after `move`" common::ErrorKind::Syntax self.state.record_error
         return
     }
-    # global: compile-time declaration that emits DeclareGlobal
+    fn parse_global_initializer
+        self:mut$Parser
+        cursor:mut$TokenCursor
+        token:$common::Token
+    -> std::List[common::Op] {
+        if cursor.peek std::Option::Some(next) is then
+            if "{" next.value.as_str == then
+                common::GLOBAL_SCOPE_LABEL cursor self parse_block_ops return
+            fi
+        fi
+        std::List[common::Op]::new = initializer_ops
+        cursor.pop match
+            std::Option::Some(initializer_token) => {
+                if
+                    common::TokenKind::Newline initializer_token.kind ==
+                    common::TokenKind::Eof initializer_token.kind == ||
+                then
+                    token.location "A global declaration requires an initializer" common::ErrorKind::Syntax self.state.record_error
+                    initializer_ops return
+                fi
+                if common::TokenKind::FstringStart initializer_token.kind == then
+                    initializer_ops common::GLOBAL_SCOPE_LABEL cursor initializer_token self handle_fstring
+                else
+                    initializer_ops common::GLOBAL_SCOPE_LABEL cursor initializer_token self token_to_op
+                fi
+            }
+            std::Option::None => {
+                token.location "A global declaration requires an initializer" common::ErrorKind::Syntax self.state.record_error
+            }
+        end
+        initializer_ops
+    }
+
+    # `global` initializes an immutable place at root scope. The legacy
+    # function form remains until mutable globals are removed by #359.
     fn handle_keyword_global
         self:mut$Parser
         token:$common::Token
@@ -6205,7 +6365,30 @@ impl Parser {
         ops:mut$std::List[common::Op]
     {
         if common::GLOBAL_SCOPE_LABEL function_name == then
-            token common::Token::location "`global` declaration is only valid inside a function body" common::ErrorKind::InvalidScope self.state.record_error
+            fallback_token self.state common::TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
+            name_token.value.clone = global_name
+            self.store.declaration_names = declarations
+            if
+                global_name.as_str declarations.has_str global_name.as_str self
+                    .store
+                    .variables
+                    .has_str ||
+            then
+                name_token.location f"Identifier `{global_name}` is already defined" common::ErrorKind::DuplicateName self.state.record_error_string
+                return
+            fi
+            token cursor self.parse_global_initializer = initializer_ops
+            name_token
+                .location
+                .file
+                .as_str lexer::absolute_normalize_path = global_file
+            f"$global:{global_file}:{name_token
+                .location
+                .span
+                .offset}" = storage_name
+            name_token.location storage_name.clone global_name.clone self.put_immutable_global
+            initializer_ops global_name common::GlobalInitializer = initializer
+            token.location initializer common::OpValue::InitGlobal common::Op::new ops.push
             return
         fi
         if function_name "lambda__" str::starts_with then
@@ -6388,7 +6571,7 @@ pub fn get_op_keyword
         parser token.location "Public declarations" function_name require_global_scope
         parser.state cursor public_declaration_name = public_name_opt
         if public_name_opt.is_none then
-            token.location "`pub` must prefix a function, type, trait, or constant declaration" common::ErrorKind::Syntax parser.state.record_error
+            token.location "`pub` must prefix a function, type, trait, constant, or global declaration" common::ErrorKind::Syntax parser.state.record_error
             return
         fi
         public_name_opt.unwrap.clone = public_name
@@ -7453,7 +7636,7 @@ pub fn expand_imports parser:mut$Parser ops:std::List[common::Op] -> std::List[c
         ops.pop = current_op
         if current_op.value common::OpValue::ImportFileSelective(selective_import) is then
             selective_import common::clone_selective_import = owned_import
-            current_op.location owned_import parser handle_selective_import
+            expanded current_op.location owned_import parser handle_selective_import
             if parser.state.has_usable_output ! then
                 expanded return
             fi
@@ -7473,6 +7656,253 @@ pub fn expand_imports parser:mut$Parser ops:std::List[common::Op] -> std::List[c
     expanded
 }
 
+pub fn order_global_initializers
+    ops:std::List[common::Op]
+    root_file:$str
+    store:$common::SymbolStore
+-> std::List[common::Op] {
+    root_file lexer::absolute_normalize_path = normalized_root
+    std::List[common::Op]::new = dependency_initializers
+    std::List[common::Op]::new = module_initializers
+    std::List[common::Op]::new = root_body
+    std::Set[std::String]::new = initialized_slots
+    for op in ops.iter do
+        if op.value common::OpValue::InitGlobal(initializer) is then
+            initializer.name.clone = storage_name
+            if initializer.name.as_str store.immutable_global_slots.get_str std::Option::Some(slot) is then
+                slot.clone = storage_name
+            fi
+            if storage_name.as_str initialized_slots.has_str then
+                continue
+            fi
+            storage_name initialized_slots.add
+            op
+                .location
+                .file
+                .as_str lexer::absolute_normalize_path = op_file
+            if op_file.as_str normalized_root.as_str == then
+                op.clone module_initializers.push
+            else
+                op.clone dependency_initializers.push
+            fi
+        else
+            op.clone root_body.push
+        fi
+    done
+    module_initializers dependency_initializers.append
+    root_body dependency_initializers.append
+    dependency_initializers
+}
+
+pub fn merge_global_initializer_call_bindings
+    incoming:$std::Map[std::String std::Set[std::String]]
+    merged:mut$std::Map[std::String std::Set[std::String]]
+-> bool {
+    false = changed
+    for pair in incoming.iter do
+        if pair.first.as_str merged.has_str ! then
+            std::Set[std::String]::new pair.first.as_str merged.set_str
+        fi
+        pair.first.as_str merged.get_mut_str.unwrap = known_callables
+        for function_name in pair.second.iter do
+            if function_name.as_str known_callables.has_str ! then
+                function_name.clone known_callables.add
+                true = changed
+            fi
+        done
+    done
+    changed
+}
+
+pub fn validate_global_initializer_function_call
+    function_name:$str
+    argument_callables:$std::Map[std::String std::Set[std::String]]
+    initialized:$std::Set[std::String]
+    visiting:mut$std::Set[std::String]
+    call_bindings:mut$std::Map[std::String std::Map[std::String std::Set[std::String]]]
+    initializer_name:$str
+    inferred_effects:mut$std::Map[std::String common::StackEffect]
+    store:mut$common::SymbolStore
+    diagnostics:mut$error::Diagnostics
+-> bool {
+    if function_name call_bindings.has_str ! then
+        std::Map[std::String std::Set[std::String]]::new function_name.to_str call_bindings.set
+    fi
+    function_name call_bindings.get_mut_str.unwrap = known_bindings
+    known_bindings argument_callables merge_global_initializer_call_bindings = bindings_changed
+    function_name visiting.has_str = already_visiting
+    if already_visiting bindings_changed ! && then
+        true return
+    fi
+    if already_visiting ! then
+        function_name.to_str visiting.add
+    fi
+    std::Option[common::Function]::None = called_function
+    if function_name store.functions.get_str std::Option::Some(function) is then
+        function.clone_for_import std::Option::Some = called_function
+    fi
+    true = valid
+    called_function match
+        std::Option::Some(function) => {
+            function_name call_bindings
+                .get_str
+                .unwrap
+                .clone = accumulated_bindings
+            accumulated_bindings store inferred_effects function
+            semantics::analyze_function_semantics_with_callables = function_semantics
+            diagnostics store inferred_effects initializer_name call_bindings visiting initialized
+            function_semantics.ordered_facts
+            validate_global_initializer_semantics = valid
+        }
+        std::Option::None => {
+        }
+    end
+    if already_visiting ! then
+        function_name visiting.remove_str
+    fi
+    valid
+}
+
+pub fn immutable_global_storage_name name:$str store:$common::SymbolStore -> std::String {
+    if name store.immutable_global_slots.get_str std::Option::Some(storage_name) is then
+        storage_name.clone return
+    fi
+    name.to_str
+}
+
+pub fn validate_global_initializer_default_method_call
+    call:$semantics::SemanticDefaultMethodCall
+    initialized:$std::Set[std::String]
+    visiting:mut$std::Set[std::String]
+    call_bindings:mut$std::Map[std::String std::Map[std::String std::Set[std::String]]]
+    initializer_name:$str
+    inferred_effects:mut$std::Map[std::String common::StackEffect]
+    store:mut$common::SymbolStore
+    diagnostics:mut$error::Diagnostics
+-> bool {
+    f"default:{call.trait_name}:{call.method_name}" = call_key
+    if call_key.as_str visiting.has_str then
+        true return
+    fi
+    call_key.clone visiting.add
+    std::List[common::Op]::new = default_ops
+    if call.trait_name.as_str store.traits.get_str std::Option::Some(casa_trait) is then
+        for method in casa_trait.methods.iter do
+            if method.name.as_str call.method_name.as_str == then
+                method.default_ops common::clone_ops = default_ops
+                break
+            fi
+        done
+    fi
+    call.stack_effect.clone default_ops call_key.clone semantics::make_default_method_function
+    = default_function
+    call.argument_callables store inferred_effects default_function
+    semantics::analyze_function_semantics_with_callables = default_semantics
+    diagnostics store inferred_effects initializer_name call_bindings visiting initialized
+    default_semantics.ordered_facts
+    validate_global_initializer_semantics = valid
+    call_key.as_str visiting.remove_str
+    valid
+}
+
+pub fn validate_global_initializer_semantics
+    facts:$std::List[semantics::SemanticDependency]
+    initialized:$std::Set[std::String]
+    visiting:mut$std::Set[std::String]
+    call_bindings:mut$std::Map[std::String std::Map[std::String std::Set[std::String]]]
+    initializer_name:$str
+    inferred_effects:mut$std::Map[std::String common::StackEffect]
+    store:mut$common::SymbolStore
+    diagnostics:mut$error::Diagnostics
+-> bool {
+    for fact in facts.iter do
+        fact match
+            semantics::SemanticDependency::Global(reference) => {
+                reference.name.as_str "." str::split = parts
+                0 parts.get = root_name
+                store root_name.as_str immutable_global_storage_name = storage_name
+                if
+                    root_name.as_str store.immutable_globals.has_str
+                    storage_name.as_str initialized.has_str ! &&
+                then
+                    reference.location
+                    f"Global `{initializer_name}` reads `{root_name}` before it is initialized"
+                    common::ErrorKind::InvalidVariable diagnostics.record_error_string
+                    false return
+                fi
+            }
+            semantics::SemanticDependency::Call(function_name) => {
+                if
+                    diagnostics store inferred_effects initializer_name call_bindings visiting initialized
+                    std::Map[std::String std::Set[std::String]]::new
+                    function_name.as_str
+                    validate_global_initializer_function_call !
+                then
+                    false return
+                fi
+            }
+            semantics::SemanticDependency::BoundCall(call) => {
+                if
+                    diagnostics store inferred_effects initializer_name call_bindings visiting initialized
+                    call.argument_callables
+                    call.function_name.as_str
+                    validate_global_initializer_function_call !
+                then
+                    false return
+                fi
+            }
+            semantics::SemanticDependency::DefaultMethodCall(call) => {
+                if
+                    diagnostics store inferred_effects initializer_name call_bindings visiting initialized call
+                    validate_global_initializer_default_method_call !
+                then
+                    false return
+                fi
+            }
+            semantics::SemanticDependency::Symbol(_) => {
+            }
+            semantics::SemanticDependency::Type(_) => {
+            }
+        end
+    done
+    true
+}
+
+pub fn validate_global_initializer_ops
+    ops:$std::List[common::Op]
+    initialized:$std::Set[std::String]
+    visiting:mut$std::Set[std::String]
+    call_bindings:mut$std::Map[std::String std::Map[std::String std::Set[std::String]]]
+    initializer_name:$str
+    inferred_effects:mut$std::Map[std::String common::StackEffect]
+    store:mut$common::SymbolStore
+    diagnostics:mut$error::Diagnostics
+-> bool {
+    store inferred_effects ops semantics::analyze_global_initializer_semantics = initializer_semantics
+    diagnostics store inferred_effects initializer_name call_bindings visiting initialized
+    initializer_semantics.ordered_facts
+    validate_global_initializer_semantics
+}
+
+pub fn validate_global_initializer_order
+    ops:$std::List[common::Op]
+    store:mut$common::SymbolStore
+    diagnostics:mut$error::Diagnostics
+{
+    std::Set[std::String]::new = initialized
+    std::Map[std::String common::StackEffect]::new = inferred_effects
+    for op in ops.iter do
+        if op.value common::OpValue::InitGlobal(initializer) is then
+            std::Set[std::String]::new = visiting
+            std::Map[std::String std::Map[std::String std::Set[std::String]]]::new = call_bindings
+            diagnostics store inferred_effects initializer.name.as_str call_bindings visiting initialized
+            initializer.ops
+            validate_global_initializer_ops drop
+            store initializer.name.as_str immutable_global_storage_name initialized.add
+        fi
+    done
+}
+
 pub fn resolve_identifiers_global
     parser:mut$Parser
     ops:std::List[common::Op]
@@ -7481,6 +7911,10 @@ pub fn resolve_identifiers_global
     ops parser expand_imports = expanded_ops
     if parser.state.has_usable_output ! then
         std::List[common::Op]::new return
+    fi
+    if parser.import_stack.is_empty ! then
+        parser.import_stack.length 1 - parser.import_stack.get = root_file
+        parser.store root_file.as_str expanded_ops order_global_initializers = expanded_ops
     fi
     std::Set[std::String]::new = no_type_vars
     no_type_vars expanded_ops common::canonicalize_operation_type_vars
@@ -7499,6 +7933,7 @@ pub fn resolve_identifiers_global
     fi
     common::empty_location std::List[common::Op]::new common::GLOBAL_SCOPE_LABEL.to_str common::Function::new = dummy
     parser.state.diagnostics dummy expanded_ops parser.store resolve_identifiers
+    parser.state.diagnostics parser.store expanded_ops validate_global_initializer_order
     expanded_ops
 }
 
@@ -7511,12 +7946,34 @@ pub fn resolve_identifiers
     0 (u64) = op_index
     std::List[error::CasaError]::new = resolve_errors
     std::Set[std::String]::new = declared_globals
+    if common::GLOBAL_SCOPE_LABEL function.name.as_str != then
+        for variable in function.variables.iter do
+            if variable.name.as_str store.immutable_globals.has_str then
+                function.location.clone
+                f"Binding `{variable.name}` shadows immutable global `{variable.name}`; choose a different name"
+                common::ErrorKind::DuplicateName error::CasaError::new resolve_errors.push
+            fi
+        done
+    fi
     while op_index ops.length > do
         common::empty_location common::OpValue::OwnerCleanup common::Op::new op_index ops.replace = current_op
         1 += op_index
 
+        if current_op.value common::OpValue::InitGlobal(initializer) is then
+            initializer.clone = resolved_initializer
+            diagnostics function resolved_initializer.ops store resolve_identifiers
+            resolved_initializer common::OpValue::InitGlobal current_op common::Op::set_value
+            current_op op_index 1 - ops.set
+            continue
+        fi
+
         if current_op.value common::OpValue::DeclareGlobal(global_name_ref) is then
             global_name_ref.clone = global_name
+            if global_name.as_str store.immutable_globals.has_str then
+                current_op.location.clone
+                f"Immutable global `{global_name}` cannot be declared for assignment"
+                common::ErrorKind::InvalidVariable error::CasaError::new resolve_errors.push
+            fi
             if
                 global_name store
                     .variables
@@ -7544,6 +8001,12 @@ pub fn resolve_identifiers
                 current_op op_index 1 - ops.set
                 continue
             fi
+            if inc_root.as_str store.immutable_globals.has_str then
+                current_op.location.clone f"Cannot assign to immutable global `{inc_root}`"
+                common::ErrorKind::InvalidVariable error::CasaError::new resolve_errors.push
+                current_op op_index 1 - ops.set
+                continue
+            fi
         fi
 
         if current_op.value common::OpValue::AssignDec(dec_name_ref) is then
@@ -7560,6 +8023,12 @@ pub fn resolve_identifiers
                 current_op op_index 1 - ops.set
                 continue
             fi
+            if dec_root.as_str store.immutable_globals.has_str then
+                current_op.location.clone f"Cannot assign to immutable global `{dec_root}`"
+                common::ErrorKind::InvalidVariable error::CasaError::new resolve_errors.push
+                current_op op_index 1 - ops.set
+                continue
+            fi
         fi
 
         if current_op.value common::OpValue::AssignVar(var_name_ref) is then
@@ -7573,6 +8042,19 @@ pub fn resolve_identifiers
                     .is_some
             then
                 current_op common::Op::location.clone f"Cannot assign to constant `{var_root}`" common::ErrorKind::Syntax error::CasaError::new resolve_errors.push
+                current_op op_index 1 - ops.set
+                continue
+            fi
+            if var_root.as_str store.immutable_globals.has_str then
+                if
+                    1 var_parts.length ==
+                    common::GLOBAL_SCOPE_LABEL function.name.as_str != &&
+                then
+                    f"Binding `{var_name}` shadows immutable global `{var_name}`; choose a different name"
+                else
+                    f"Cannot assign to immutable global `{var_root}`"
+                fi = message
+                current_op.location.clone message common::ErrorKind::InvalidVariable error::CasaError::new resolve_errors.push
                 current_op op_index 1 - ops.set
                 continue
             fi
