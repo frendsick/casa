@@ -85,25 +85,25 @@ Spread is the maximum time minus the minimum time.
 
 | Corpus | Main median | Branch median | Branch difference | Main spread | Branch spread |
 |---|---:|---:|---:|---:|---:|
-| Self-compilation | 15.200 s | 20.130 s | +4.930 s, +32.43% | 0.700 s | 0.850 s |
-| Trait-heavy test | 14.850 s | 19.065 s | +4.215 s, +28.38% | 0.430 s | 0.780 s |
-| Iterator-heavy test | 1.330 s | 1.465 s | +0.135 s, +10.15% | 0.130 s | 0.200 s |
+| Self-compilation | 15.255 s | 19.980 s | +4.725 s, +30.97% | 0.770 s | 0.740 s |
+| Trait-heavy test | 14.750 s | 18.855 s | +4.105 s, +27.83% | 0.370 s | 0.490 s |
+| Iterator-heavy test | 1.310 s | 1.450 s | +0.140 s, +10.69% | 0.090 s | 0.190 s |
 
 Produced executable sizes:
 
 | Corpus | Main | Branch | Branch difference |
 |---|---:|---:|---:|
-| Self-compilation | 3,139,480 bytes | 3,526,608 bytes | +387,128 bytes, +12.33% |
-| Trait-heavy test | 2,625,712 bytes | 2,983,624 bytes | +357,912 bytes, +13.63% |
+| Self-compilation | 3,139,488 bytes | 3,526,608 bytes | +387,120 bytes, +12.33% |
+| Trait-heavy test | 2,625,720 bytes | 2,983,632 bytes | +357,912 bytes, +13.63% |
 | Iterator-heavy test | 163,728 bytes | 140,336 bytes | -23,392 bytes, -14.29% |
 
 Raw samples in execution order:
 
 | Corpus | Main samples, seconds | Branch samples, seconds |
 |---|---|---|
-| Self-compilation | 15.29, 15.05, 15.09, 15.40, 15.39, 14.94, 14.86, 15.14, 15.56, 15.26 | 19.74, 19.90, 20.12, 20.47, 19.83, 20.45, 19.62, 20.14, 20.15, 20.17 |
-| Trait-heavy test | 14.86, 14.61, 14.85, 15.00, 14.75, 14.92, 14.57, 14.85, 14.96, 14.82 | 19.05, 19.08, 19.02, 19.45, 19.16, 18.94, 19.11, 18.70, 18.67, 19.39 |
-| Iterator-heavy test | 1.43, 1.32, 1.31, 1.33, 1.32, 1.33, 1.37, 1.34, 1.30, 1.33 | 1.60, 1.41, 1.48, 1.43, 1.45, 1.43, 1.49, 1.40, 1.51, 1.50 |
+| Self-compilation | 15.63, 15.15, 15.21, 14.86, 15.41, 15.18, 15.39, 15.40, 15.30, 14.91 | 20.06, 19.90, 20.45, 19.89, 20.26, 19.76, 19.81, 20.26, 20.10, 19.71 |
+| Trait-heavy test | 14.82, 14.74, 14.76, 14.66, 14.80, 14.58, 14.83, 14.79, 14.46, 14.50 | 18.55, 18.67, 18.99, 18.95, 18.86, 19.04, 18.85, 18.59, 18.77, 19.02 |
+| Iterator-heavy test | 1.39, 1.30, 1.31, 1.30, 1.31, 1.30, 1.31, 1.33, 1.30, 1.38 | 1.59, 1.40, 1.40, 1.41, 1.40, 1.51, 1.50, 1.49, 1.52, 1.40 |
 
 The branch regresses compilation time on all three corpora. It increases the
 self-compiled compiler and trait-heavy executable sizes. It reduces the
