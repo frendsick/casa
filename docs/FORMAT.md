@@ -85,8 +85,8 @@ impl Foo {
 }
 
 Map[str i64]::new = MY_MAP
-1 "a" MY_MAP.set = MY_MAP
-2 "b" MY_MAP.set = MY_MAP
+1 "a" MY_MAP.set
+2 "b" MY_MAP.set
 
 fn bar {
     # first group
