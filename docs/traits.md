@@ -97,14 +97,25 @@ their relationships and language uses.
 |---|---|---|---|
 | `Clone` | `clone self:self -> self` | None | Explicit value duplication |
 | `Copy` | No methods | `Clone` | `dup`, `over`, and `copy` |
-| `Eq` | `eq self:self other:self -> bool` | None | `==` and `!=` |
-| `Ord` | `lt self:self other:self -> bool` | None | `<`, `<=`, `>`, and `>=` |
+| `PartialEq` | `eq self:$self other:$self -> bool` | None | `==` and `!=` |
+| `Eq` | No new methods | `PartialEq` | Total equality |
+| `PartialOrd` | `partial_cmp self:$self other:$self -> Option[Ordering]` | `PartialEq` | `<`, `<=`, `>`, and `>=` |
+| `Ord` | `cmp self:$self other:$self -> Ordering` | `PartialOrd + Eq` | Total ordering |
 | `Word` | No methods | None | Raw memory stores and system calls |
 | `Hashable` | `hash self:self -> i64` | `Eq + Word` | `Map` keys and `Set` elements |
 | `Display` | `to_str self:$self -> String` | `Word` | `print` and string interpolation |
 | `Iterable[T]` | `next self:self -> Option[T]` | None | `for` loops and iterator methods |
 
-`Eq` supplies a default `ne`. `Ord` supplies `le`, `gt`, and `ge` from `lt`.
+`PartialEq` supplies `ne` from `eq`. The `!=` operator calls `ne`, so an
+implementation can replace that default. `PartialOrd` supplies the four
+ordering operator methods from `partial_cmp`. `Ord` supplies `partial_cmp`
+from `cmp`.
+
+`Ordering` has the variants `Less`, `Equal`, and `Greater`. `partial_cmp`
+returns `None` when two values are unordered. The `f32` and `f64` types
+implement `PartialEq` and `PartialOrd`, but not `Eq` or `Ord`. Integer types
+and `char` implement the total traits.
+
 `Iterable[T]` supplies the standard lazy iterator operations. See
 [Collections](collections.md) for those operations.
 
