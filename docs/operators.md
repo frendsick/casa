@@ -87,16 +87,17 @@ Shifts preserve the integer width. A signed right shift preserves the sign.
 
 | Operator | Stack effect | Meaning |
 |---|---|---|
-| `==` | `[T: Eq] T T -> bool` | Equal |
-| `!=` | `[T: Eq] T T -> bool` | Not equal |
-| `<` | `[T: Ord] T T -> bool` | Less than |
-| `<=` | `[T: Ord] T T -> bool` | Less than or equal |
-| `>` | `[T: Ord] T T -> bool` | Greater than |
-| `>=` | `[T: Ord] T T -> bool` | Greater than or equal |
+| `==` | `[T: PartialEq] T T -> bool` | Equal |
+| `!=` | `[T: PartialEq] T T -> bool` | Not equal |
+| `<` | `[T: PartialOrd] T T -> bool` | Less than |
+| `<=` | `[T: PartialOrd] T T -> bool` | Less than or equal |
+| `>` | `[T: PartialOrd] T T -> bool` | Greater than |
+| `>=` | `[T: PartialOrd] T T -> bool` | Greater than or equal |
 
 The operands must have the same type. Strings support `==` and `!=`, which
-compare their contents. Floating-point comparisons follow IEEE behavior. In
-particular, ordered comparisons with NaN are false.
+compare their contents. Floating-point values implement only the partial
+comparison traits. Their operators follow IEEE behavior, so ordered
+comparisons with NaN are false.
 
 See [Traits](traits.md) for comparisons on user-defined types.
 
