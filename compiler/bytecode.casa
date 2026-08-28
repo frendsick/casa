@@ -84,11 +84,12 @@ impl BytecodeCompiler {
     }
 
     fn child self:mut$BytecodeCompiler function:$Function ops:$List[Op] -> BytecodeCompiler {
+        self.state.store function.variables index_local_variable_list = locals_count = local_slots
         Map[String u64]::new
         self.state
-        0
+        locals_count
         function.captures index_variable_list
-        function.variables index_variable_list
+        local_slots
         function.clone_declaration Option::Some
         ops
         BytecodeCompiler
@@ -121,7 +122,9 @@ impl BytecodeCompiler {
             return
         fi
         if compiler.state.store declared_type type_value_representation Option::Some(representation) is then
-            if VALUE_REPR_INDIRECT representation == then
+            if declared_type get_concrete_array_length.is_some then
+                bytecode declared_type compiler.emit_typed_load
+            elif VALUE_REPR_INDIRECT representation == then
                 InstValue::Load64 bytecode.push
             else
                 bytecode declared_type compiler.emit_typed_load
@@ -141,7 +144,9 @@ impl BytecodeCompiler {
             return
         fi
         if compiler.state.store declared_type type_value_representation Option::Some(representation) is then
-            if VALUE_REPR_INDIRECT representation == then
+            if declared_type get_concrete_array_length.is_some then
+                bytecode declared_type compiler.emit_typed_store
+            elif VALUE_REPR_INDIRECT representation == then
                 InstValue::Store64 bytecode.push
             else
                 bytecode declared_type compiler.emit_typed_store
@@ -267,6 +272,28 @@ fn index_variable_list variables:$List[Variable] -> Map[String u64] {
     slots
 }
 
+fn local_variable_slot_width variable:$Variable store:$SymbolStore -> u64 {
+    if variable.typ get_concrete_array_length.is_some then
+        if store variable.typ type_inline_size Option::Some(size) is then
+            size WORD_SIZE (u64) 1 - + WORD_SIZE (u64) / return
+        fi
+    fi
+    1
+}
+
+fn index_local_variable_list variables:$List[Variable] store:$SymbolStore -> Map[String u64] u64 {
+    Map[String u64]::new = slots
+    0 (u64) = next_slot
+    for variable in variables.iter do
+        if variable.name slots.has ! then
+            store variable local_variable_slot_width = width
+            next_slot width + 1 - variable.name.clone slots.set
+            width += next_slot
+        fi
+    done
+    slots next_slot
+}
+
 fn index_variable_map variables:$Map[String Variable] -> Map[String u64] {
     Map[String u64]::new = slots
     variables.keys = names
@@ -279,6 +306,12 @@ fn index_variable_map variables:$Map[String Variable] -> Map[String u64] {
 }
 
 impl BytecodeCompiler {
+    fn allocate_local compiler:mut$BytecodeCompiler -> u64 {
+        compiler.locals_count = local_index
+        1 += compiler.locals_count
+        local_index
+    }
+
     fn resolve_variable compiler:mut$BytecodeCompiler variable_name:$str -> ResolvedVariable {
         if variable_name compiler.local_slots.get_copy_str Option::Some(local_index) is then
             local_index ResolvedVariable::Local return
@@ -299,6 +332,54 @@ impl BytecodeCompiler {
             compiler.record_failure_string
         fi
         0 ResolvedVariable::Local
+    }
+
+    fn local_fixed_array_type compiler:mut$BytecodeCompiler variable_name:$str -> Option[Type] {
+        if compiler.function Option::Some(function) is then
+            for variable in function.variables.iter do
+                if variable.name.as_str variable_name == then
+                    if variable.typ get_concrete_array_length.is_some then
+                        variable.typ clone_type Option::Some return
+                    fi
+                fi
+            done
+        fi
+        Option[Type]::None
+    }
+
+    fn emit_variable_get
+        compiler:mut$BytecodeCompiler
+        variable_name:$str
+        move_owned:bool
+        bytecode:mut$List[InstValue]
+    {
+        variable_name compiler.resolve_variable = resolved
+        if variable_name compiler.local_fixed_array_type Option::Some(array_type) is then
+            if resolved ResolvedVariable::Local(local_index) is then
+                local_index InstValue::LocalAddress bytecode.push
+                if move_owned then
+                    bytecode array_type compiler.emit_typed_load
+                fi
+                return
+            fi
+        fi
+        bytecode resolved.emit_get
+    }
+
+    fn emit_variable_set
+        compiler:mut$BytecodeCompiler
+        variable_name:$str
+        bytecode:mut$List[InstValue]
+    {
+        variable_name compiler.resolve_variable = resolved
+        if variable_name compiler.local_fixed_array_type Option::Some(array_type) is then
+            if resolved ResolvedVariable::Local(local_index) is then
+                local_index InstValue::LocalAddress bytecode.push
+                bytecode array_type compiler.emit_typed_store
+                return
+            fi
+        fi
+        bytecode resolved.emit_set
     }
 }
 
@@ -486,10 +567,8 @@ impl BytecodeCompiler {
         op:$Op
         bytecode:mut$List[InstValue]
     {
-        compiler.locals_count = array_local
-        1 += compiler.locals_count
-        compiler.locals_count = index_local
-        1 += compiler.locals_count
+        compiler.allocate_local = array_local
+        compiler.allocate_local = index_local
         array_local InstValue::LocalSet bytecode.push
         if length.is_symbolic then
             length.name.as_str compiler.resolve_variable = resolved_length
@@ -523,7 +602,6 @@ impl BytecodeCompiler {
         start_label InstValue::Jump bytecode.push
         end_label InstValue::Label bytecode.push
         array_local InstValue::LocalGet bytecode.push
-        InstValue::HeapFree bytecode.push
     }
 
     fn compile_struct_fields
@@ -588,8 +666,7 @@ impl BytecodeCompiler {
         op:$Op
         bytecode:mut$List[InstValue]
     {
-        compiler.locals_count = enum_local
-        1 += compiler.locals_count
+        compiler.allocate_local = enum_local
         enum_local InstValue::LocalSet bytecode.push
         compiler.new_label = end_label
         0 (u64) = variant_index
@@ -628,6 +705,7 @@ impl BytecodeCompiler {
             if ARRAY_TYPE generic.base.as_str == then
                 if destruction_type get_array_length_parameter Option::Some(array_length) is then
                     bytecode op array_length 0 generic.params.get compiler.compile_array_destruction
+                    InstValue::HeapFree bytecode.push
                 else
                     InstValue::Drop bytecode.push
                 fi
@@ -795,8 +873,7 @@ impl BytecodeCompiler {
         if name compiler.owner_flags.get_copy_str Option::Some(flag) is then
             flag return
         fi
-        compiler.locals_count = flag
-        1 += compiler.locals_count
+        compiler.allocate_local = flag
         flag name.clone compiler.owner_flags.set_str
         flag
     }
@@ -810,6 +887,32 @@ impl BytecodeCompiler {
         name compiler.owner_flag = flag
         value (i64) InstValue::Push bytecode.push
         flag InstValue::LocalSet bytecode.push
+    }
+
+    fn compile_variable_destruction
+        compiler:mut$BytecodeCompiler
+        variable_name:$str
+        typ:$Type
+        op:$Op
+        bytecode:mut$List[InstValue]
+    {
+        if variable_name compiler.local_fixed_array_type Option::Some(array_type) is then
+            variable_name compiler.resolve_variable = resolved
+            if resolved ResolvedVariable::Local(local_index) is then
+                local_index InstValue::LocalAddress bytecode.push
+                bytecode op array_type compiler.state.store compiler.compile_drop_hook
+                if array_type get_array_length_parameter Option::Some(array_length) is then
+                    if array_type.array_element_type Option::Some(element_type) is then
+                        bytecode op array_length element_type compiler.compile_array_destruction
+                        InstValue::Drop bytecode.push
+                        return
+                    fi
+                fi
+            fi
+        fi
+        variable_name compiler.resolve_variable = resolved
+        bytecode resolved.emit_get
+        bytecode op typ compiler.compile_destruction
     }
 
     fn compile_active_owner_cleanup
@@ -827,9 +930,7 @@ impl BytecodeCompiler {
         cleanup_label InstValue::JumpNe bytecode.push
         end_label InstValue::Jump bytecode.push
         cleanup_label InstValue::Label bytecode.push
-        event.name.as_str compiler.resolve_variable = resolved
-        bytecode resolved.emit_get
-        bytecode op event.typ compiler.compile_destruction
+        bytecode op event.typ event.name.as_str compiler.compile_variable_destruction
         bytecode 0 event.name.as_str compiler.set_owner_flag
         end_label InstValue::Label bytecode.push
     }
@@ -846,9 +947,7 @@ impl BytecodeCompiler {
         event.generation (i64) InstValue::Push bytecode.push
         InstValue::Eq bytecode.push
         end_label InstValue::JumpNe bytecode.push
-        event.name.as_str compiler.resolve_variable = resolved
-        bytecode resolved.emit_get
-        bytecode op event.typ compiler.compile_destruction
+        bytecode op event.typ event.name.as_str compiler.compile_variable_destruction
         bytecode 0 event.name.as_str compiler.set_owner_flag
         end_label InstValue::Label bytecode.push
     }
@@ -1200,8 +1299,8 @@ impl BytecodeCompiler {
                 bytecode op compiler.emit_integer_normalization
                 bytecode resolved.emit_set
             }
-            OpValue::AssignVar => bytecode resolved.emit_set
-            OpValue::Question(_) => bytecode resolved.emit_set
+            OpValue::AssignVar => bytecode name.as_str compiler.emit_variable_set
+            OpValue::Question(_) => bytecode name.as_str compiler.emit_variable_set
             _ => {
                 "compile_assignment received a non-assignment operation" compiler.record_failure
             }
@@ -1356,8 +1455,7 @@ impl BytecodeCompiler {
                     InstValue::Add bytecode.push
                 fi
                 bytecode member.typ compiler.aggregate_field_load
-                var_name.as_str compiler.resolve_variable = resolved
-                bytecode resolved.emit_set
+                bytecode var_name.as_str compiler.emit_variable_set
             fi
             1 += index
         done
@@ -1489,8 +1587,7 @@ impl BytecodeCompiler {
             InstValue::Add bytecode.push
             bytecode index payload_types.get compiler.aggregate_field_load
             index variant EnumVariant::bindings.get = var_name
-            var_name.as_str compiler.resolve_variable = resolved
-            bytecode resolved.emit_set
+            bytecode var_name.as_str compiler.emit_variable_set
             1 += index
         done
     }
@@ -1640,16 +1737,14 @@ impl BytecodeCompiler {
         List[u64]::new = temps
         0 (u64) = index
         while index inner_count > do
-            compiler.locals_count = local_index
-            1 += compiler.locals_count
+            compiler.allocate_local = local_index
             local_index temps.push
             local_index InstValue::LocalSet bytecode.push
             1 += index
         done
 
         # Allocate heap
-        compiler.locals_count = ptr_local
-        1 += compiler.locals_count
+        compiler.allocate_local = ptr_local
         casa_enum compiler.enum_size i64::try_from.unwrap InstValue::Push bytecode.push
         InstValue::HeapAlloc bytecode.push
         ptr_local InstValue::LocalSet bytecode.push
@@ -1716,8 +1811,7 @@ impl BytecodeCompiler {
             fi
 
             # Data-carrying enum with bindings
-            compiler.locals_count = temp_ptr
-            1 += compiler.locals_count
+            compiler.allocate_local = temp_ptr
 
             compiler.new_label = skip_bindings
 
@@ -1747,8 +1841,7 @@ impl BytecodeCompiler {
                 InstValue::Add bytecode.push
                 bytecode index payload_types.get compiler.aggregate_field_load
                 index variant EnumVariant::bindings.get = var_name
-                var_name.as_str compiler.resolve_variable = resolved
-                bytecode resolved.emit_set
+                bytecode var_name.as_str compiler.emit_variable_set
                 1 += index
             done
 
@@ -1783,8 +1876,7 @@ impl BytecodeCompiler {
             Map[String u64]::new = temp_locals
             while 0 field_index != do
                 1 -= field_index
-                compiler.locals_count = local_index
-                1 += compiler.locals_count
+                compiler.allocate_local = local_index
                 field_index literal StructLiteral::field_order.get = field_name
                 local_index field_name.clone temp_locals.set
                 local_index InstValue::LocalSet bytecode.push
@@ -2042,16 +2134,14 @@ impl BytecodeCompiler {
 
             # An array stores only its elements (ADR-0152), so the allocation
             # is exactly the element storage.
-            compiler.locals_count = list_local
-            1 += compiler.locals_count
+            compiler.allocate_local = list_local
             compiler.state.store element_type type_inline_size.unwrap = element_size
             element_size length get_array_storage_size i64::try_from.unwrap InstValue::Push bytecode.push
             InstValue::HeapAlloc bytecode.push
             list_local InstValue::LocalSet bytecode.push
 
             # Store elements starting at offset 0
-            compiler.locals_count = index_local
-            1 += compiler.locals_count
+            compiler.allocate_local = index_local
             0 InstValue::Push bytecode.push
             index_local InstValue::LocalSet bytecode.push
 
@@ -2261,8 +2351,7 @@ impl BytecodeCompiler {
                                 capture_index InstValue::CaptureFlagClear bytecode.push
                             fi
                         else
-                            capture_name.as_str compiler.resolve_variable = capture_resolved
-                            bytecode capture_resolved.emit_get
+                            bytecode owns_capture capture_name.as_str compiler.emit_variable_get
                             if owns_capture then
                                 if capture_name.as_str compiler.owner_flags.get_copy_str Option::Some(flag) is then
                                     0 InstValue::Push bytecode.push
@@ -2295,8 +2384,7 @@ impl BytecodeCompiler {
         compare_value:InstValue
         bytecode:mut$List[InstValue]
     {
-        compiler.locals_count = local_a
-        1 += compiler.locals_count
+        compiler.allocate_local = local_a
         local_a InstValue::LocalSet bytecode.push
         InstValue::Load64 bytecode.push
         local_a InstValue::LocalGet bytecode.push
@@ -2455,8 +2543,7 @@ impl BytecodeCompiler {
     {
         if compiler.function.is_some then
             if binding.name.as_str compiler.local_slots.has_str ! then
-                compiler.locals_count = local
-                1 += compiler.locals_count
+                compiler.allocate_local = local
                 local binding.name.clone compiler.local_slots.set
             fi
         elif
@@ -2477,8 +2564,7 @@ impl BytecodeCompiler {
         List[u64]::new = spilled
         0 (u64) = depth
         while depth binding.depth > do
-            compiler.locals_count = local
-            1 += compiler.locals_count
+            compiler.allocate_local = local
             local InstValue::LocalSet bytecode.push
             local spilled.push
             1 += depth
@@ -2493,9 +2579,8 @@ impl BytecodeCompiler {
                 bytecode op event compiler.compile_active_owner_cleanup
             done
         fi
-        binding.name.as_str compiler.resolve_variable = resolved
-        bytecode resolved.emit_set
-        bytecode resolved.emit_get
+        bytecode binding.name.as_str compiler.emit_variable_set
+        bytecode false binding.name.as_str compiler.emit_variable_get
         while spilled.is_empty ! do
             spilled.pop InstValue::LocalGet bytecode.push
         done
@@ -2531,8 +2616,7 @@ impl BytecodeCompiler {
             return
         fi
         if op.value OpValue::FnExecOwned is then
-            compiler.locals_count = closure_local
-            1 += compiler.locals_count
+            compiler.allocate_local = closure_local
             InstValue::Dup bytecode.push
             closure_local InstValue::LocalSet bytecode.push
             InstValue::FnExec bytecode.push
@@ -2860,15 +2944,23 @@ impl BytecodeCompiler {
             str_value.as_str compiler.intern_string = string_index
             string_index InstValue::PushStr bytecode.push
         elif op.value OpValue::PushVar(var_name) is then
-            var_name.as_str compiler.resolve_variable = var_resolved
-            bytecode var_resolved.emit_get
+            false = moves_owner
             if
                 op op_identity compiler
                     .state
                     .store
                     .clone_ownership Option::Some(owned_ownership) is
             then
-                if owned_ownership.moves_owner then
+                owned_ownership.moves_owner = moves_owner
+            fi
+            bytecode moves_owner var_name.as_str compiler.emit_variable_get
+            if moves_owner then
+                if
+                    op op_identity compiler
+                        .state
+                        .store
+                        .clone_ownership Option::Some(owned_ownership) is
+                then
                     if var_name compiler.owner_flags.get_copy Option::Some(flag) is then
                         0 InstValue::Push bytecode.push
                         flag InstValue::LocalSet bytecode.push
@@ -2899,12 +2991,6 @@ impl BytecodeCompiler {
 
 impl BytecodeCompiler {
     fn compile_ops compiler:mut$BytecodeCompiler bytecode:mut$List[InstValue] {
-        # Set locals_count from function variables
-        if compiler.function Option::Some(function) is then
-            function Function::variables.length = var_count
-            var_count = compiler.locals_count
-        fi
-
         # Function label
         compiler.new_label = function_label
         function_label InstValue::Label bytecode.push
