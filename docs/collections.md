@@ -285,11 +285,11 @@ Lazy operations return `Iter` and do no work until the result is consumed.
 | Method | Result |
 |---|---|
 | `map self:I transform:fn[T -> U] -> Iter[U]` | Transform each value |
-| `filter self:I predicate:fn[T -> bool] -> Iter[T]` | Keep matching values |
+| `filter self:I predicate:fn[$T -> bool] -> Iter[T]` | Keep matching values |
 | `take self:I count:u64 -> Iter[T]` | Yield at most `count` values |
 | `skip self:I count:u64 -> Iter[T]` | Omit the first `count` values |
-| `take_while self:I predicate:fn[T -> bool] -> Iter[T]` | Yield while the predicate is true |
-| `skip_while self:I predicate:fn[T -> bool] -> Iter[T]` | Omit values while the predicate is true |
+| `take_while self:I predicate:fn[$T -> bool] -> Iter[T]` | Yield while the predicate is true |
+| `skip_while self:I predicate:fn[$T -> bool] -> Iter[T]` | Omit values while the predicate is true |
 | `enumerate self:I -> Iter[Pair[i64 T]]` | Pair each value with its zero-based index |
 | `zip self:I other:Iter[U] -> Iter[Pair[T U]]` | Pair values until either iterator ends |
 | `chain self:I other:Iter[T] -> Iter[T]` | Yield from `self`, then `other` |
@@ -308,13 +308,13 @@ value.
 | `collect self:I -> List[T]` | All remaining values |
 | `fold self:I initial:U combine:fn[U T -> U] -> U` | Reduce from an initial value |
 | `count self:I -> u64` | Number of remaining values |
-| `any self:I predicate:fn[T -> bool] -> bool` | Whether any value matches |
-| `all self:I predicate:fn[T -> bool] -> bool` | Whether every value matches |
-| `find self:I predicate:fn[T -> bool] -> Option[T]` | First matching value |
+| `any self:I predicate:fn[$T -> bool] -> bool` | Whether any value matches |
+| `all self:I predicate:fn[$T -> bool] -> bool` | Whether every value matches |
+| `find self:I predicate:fn[$T -> bool] -> Option[T]` | First matching value |
 | `reduce self:I combine:fn[T T -> T] -> Option[T]` | Reduce from the first value |
-| `min_by self:I compare:fn[T T -> bool] -> Option[T]` | Minimum selected by a callback |
-| `max_by self:I compare:fn[T T -> bool] -> Option[T]` | Maximum selected by a callback |
-| `partition self:I predicate:fn[T -> bool] -> Pair[List[T] List[T]]` | Matching and non-matching lists |
+| `min_by self:I compare:fn[$T $T -> bool] -> Option[T]` | Minimum selected by a callback |
+| `max_by self:I compare:fn[$T $T -> bool] -> Option[T]` | Maximum selected by a callback |
+| `partition self:I predicate:fn[$T -> bool] -> Pair[List[T] List[T]]` | Matching and non-matching lists |
 | `sum self:I -> i64` | Interpret values as `i64` and add them |
 | `min self:Iter[T] -> Option[T]` | Minimum value when `T` implements `Ord` |
 | `max self:Iter[T] -> Option[T]` | Maximum value when `T` implements `Ord` |
@@ -325,7 +325,7 @@ them. Only `collect` runs the pipeline:
 ```casa
 2 [1, 2, 3, 4, 5, 6, 7] (array[i64 7]).iter.skip = rest
 4 rest.take = window
-{ 2 % 0 == } window.filter = even
+{ = value:$i64 value copy 2 % 0 == } window.filter = even
 { = value:$i64 value copy 2 * } even.map.collect = doubled
 ```
 
