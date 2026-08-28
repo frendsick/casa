@@ -363,7 +363,7 @@ fn test_multiple_trait_bounds_parse_and_deduplicate_requirements {
             1 += hidden_count
         fi
     done
-    "compatible method requirement deduplicated" 1 hidden_count assert_eq
+    "bounds add no hidden parameters" 0 hidden_count assert_eq
     diagnostics "compatible bounds accepted" assert_no_errors
 
     Diagnostics::new = generic_diagnostics
@@ -384,153 +384,140 @@ fn test_incompatible_trait_bounds_raise {
 }
 
 # ============================================================================
-# Hidden params for trait bounds
+# Checked trait-bound bodies
 # ============================================================================
 
-fn test_trait_hidden_params_prepended {
+fn test_trait_bound_signature_has_no_hidden_params {
     Diagnostics::new = diagnostics
-    "trait_hidden_params_prepended" test_start
+    "trait_bound_signature_has_no_hidden_params" test_start
     diagnostics "trait Hashable { fn hash self:self -> i64 }\nfn tbtest[K: Hashable] K -> i64 { .hash }" trait_test_parse drop
     "tbtest" TRAIT_TEST_STORE
         .functions
         .get_str
         .unwrap = func
-    0 = hidden_count
-    0 (u64) = index
-    while index func Function::stack_effect StackEffect::parameters.length > do
-        index func Function::stack_effect StackEffect::parameters.get Parameter::name = param_name: $String
-        if param_name.as_str "__trait_" str::starts_with then
-            1 += hidden_count
-        fi
-        1 += index
-    done
-    "one hidden param" 1 hidden_count assert_eq
+    "only the declared parameter" 1 func
+        .stack_effect
+        .parameters
+        .length assert_eq
 }
 
-fn test_trait_hidden_param_name {
+fn test_trait_bound_call_is_deferred_then_specialized {
     Diagnostics::new = diagnostics
-    "trait_hidden_param_name" test_start
-    diagnostics "trait Hashable { fn hash self:self -> i64 }\nfn tbtest[K: Hashable] K -> i64 { .hash }" trait_test_parse drop
-    "tbtest" TRAIT_TEST_STORE
+    "trait_bound_call_is_deferred_then_specialized" test_start
+    diagnostics
+    "trait Hashable { fn hash self:self -> i64 }\nstruct Item { value: i64 }\nimpl Item: Hashable { fn hash self:Item -> i64 { self.value } }\nfn hash_value[T: Hashable] value:T -> i64 { value T::hash }\n1 Item hash_value drop"
+    parse_resolve_test_parts = store = operations
+    store operations type_check = checked
+    checked.diagnostics.clone diagnostics.merge
+    diagnostics "typechecks" assert_no_errors
+
+    "hash_value" checked
+        .store
         .functions
         .get_str
-        .unwrap = func
-    false = found
-    0 (u64) = index
-    while index func Function::stack_effect StackEffect::parameters.length > do
-        if
-            "__trait_K_hash" index func Function::stack_effect StackEffect::parameters.get Parameter::name ==
-        then
-            true = found
+        .unwrap = source
+    false = source_has_deferred
+    for source_op in source.ops.iter do
+        if source_op.value OpValue::TraitMethodCall is then
+            true = source_has_deferred
         fi
-        1 += index
     done
-    "found __trait_K_hash" found assert_true
+    "checked source keeps deferred call" source_has_deferred assert_true
+
+    false = found_specialization
+    false = found_direct_call
+    for
+        function_name in checked
+            .store
+            .functions
+            .keys
+            .iter
+    do
+        if function_name.as_str "hash_value__mono_" str::starts_with then
+            true = found_specialization
+            function_name checked
+                .store
+                .functions
+                .get
+                .unwrap = specialization
+            for specialized_op in specialization.ops.iter do
+                "specialization has no deferred call"
+                specialized_op.value OpValue::TraitMethodCall is ! assert_true
+                if specialized_op.value OpValue::FnCall is then
+                    true = found_direct_call
+                fi
+            done
+        fi
+    done
+    "concrete specialization exists" found_specialization assert_true
+    "trait method is a direct call" found_direct_call assert_true
 }
 
-fn test_trait_hidden_param_type {
+fn test_distinct_generic_uses_create_two_specializations {
     Diagnostics::new = diagnostics
-    "trait_hidden_param_type" test_start
-    diagnostics "trait Hashable { fn hash self:self -> i64 }\nfn tbtest[K: Hashable] K -> i64 { .hash }" trait_test_parse drop
-    "tbtest" TRAIT_TEST_STORE
-        .functions
-        .get_str
-        .unwrap = func
-    0 (u64) = index
-    while index func Function::stack_effect StackEffect::parameters.length > do
-        index func Function::stack_effect StackEffect::parameters.get = param
-        if "__trait_K_hash" param Parameter::name == then
-            "type" "fn[K -> i64]" param Parameter::typ.format assert_str_eq
+    "distinct_generic_uses_create_two_specializations" test_start
+    diagnostics
+    "fn identity[T] value:T -> T { value }\n1 identity drop\n\"text\" identity drop"
+    parse_resolve_test_parts = store = operations
+    store operations type_check = checked
+    checked.diagnostics.clone diagnostics.merge
+    diagnostics "typechecks" assert_no_errors
+    0 = specialization_count
+    for
+        function_name in checked
+            .store
+            .functions
+            .keys
+            .iter
+    do
+        if function_name.as_str "identity__mono_" str::starts_with then
+            1 += specialization_count
         fi
-        1 += index
     done
+    "two specializations" 2 specialization_count assert_eq
 }
 
-fn test_trait_default_method_needs_no_hidden_param {
+fn test_generic_function_reference_specializes {
     Diagnostics::new = diagnostics
-    "trait_two_methods_hidden_params" test_start
-    diagnostics HASHABLE_TRAIT "fn tbtest[K: Hashable] K -> i64 { .hash }" str::concat.as_str trait_test_parse drop
-    "tbtest" TRAIT_TEST_STORE
-        .functions
-        .get_str
-        .unwrap = func
-    0 = hidden_count
-    false = has_hash
-    0 (u64) = index
-    while index func Function::stack_effect StackEffect::parameters.length > do
-        index func Function::stack_effect StackEffect::parameters.get Parameter::name = param_name: $String
-        if param_name.as_str "__trait_" str::starts_with then
-            1 += hidden_count
-            if "__trait_K_hash" param_name == then
-                true = has_hash
+    "generic_function_reference_specializes" test_start
+    diagnostics
+    "fn identity[T] value:T -> T { value }\n&identity[i64] drop"
+    parse_resolve_test_parts = store = operations
+    store operations type_check = checked
+    checked.diagnostics.clone diagnostics.merge
+    diagnostics "typechecks" assert_no_errors
+    false = found_specialized_reference
+    for op in checked.ops.iter do
+        if op.value OpValue::FnPush(function_name) is then
+            if function_name.as_str "identity__mono_" str::starts_with then
+                true = found_specialized_reference
             fi
         fi
-        1 += index
     done
-    "one hidden parameter" 1 hidden_count assert_eq
-    "has hash" has_hash assert_true
+    "reference names a concrete specialization" found_specialized_reference assert_true
 }
 
-fn test_trait_hidden_params_correct_types {
+fn test_generic_function_reference_uses_declaration_order {
     Diagnostics::new = diagnostics
-    "trait_hidden_params_correct_types" test_start
-    diagnostics HASHABLE_TRAIT "fn tbtest[K: Hashable] K -> i64 { .hash }" str::concat.as_str trait_test_parse drop
-    "tbtest" TRAIT_TEST_STORE
-        .functions
-        .get_str
-        .unwrap = func
-    0 (u64) = index
-    while index func Function::stack_effect StackEffect::parameters.length > do
-        index func Function::stack_effect StackEffect::parameters.get = param
-        if "__trait_K_hash" param Parameter::name == then
-            "hash type" "fn[K -> i64]" param Parameter::typ.format assert_str_eq
-        fi
-        if "__trait_K_eq" param Parameter::name == then
-            "eq type" "fn[K K -> bool]" param Parameter::typ.format assert_str_eq
-        fi
-        1 += index
-    done
+    "generic_function_reference_uses_declaration_order" test_start
+    diagnostics
+    "fn pick[const N:u64 T] value:T -> T { value }\n&pick[4 i64] drop"
+    parse_resolve_test_parts = store = operations
+    store operations type_check = checked
+    checked.diagnostics.clone diagnostics.merge
+    diagnostics "typechecks" assert_no_errors
 }
 
-fn test_trait_hidden_params_creates_variables {
+fn test_polymorphic_function_reference_recursion_rejected {
     Diagnostics::new = diagnostics
-    "trait_hidden_params_creates_variables" test_start
-    diagnostics "trait Hashable { fn hash self:self -> i64 }\nfn tbtest[K: Hashable] K -> i64 { .hash }" trait_test_parse drop
-    "tbtest" TRAIT_TEST_STORE
-        .functions
-        .get_str
-        .unwrap = func
-    false = found
-    0 (u64) = index
-    while index func Function::variables.length > do
-        if "__trait_K_hash" index func Function::variables.get Variable::name == then
-            true = found
-        fi
-        1 += index
-    done
-    "found variable" found assert_true
-}
-
-fn test_trait_hidden_params_creates_assign_ops {
-    Diagnostics::new = diagnostics
-    "trait_hidden_params_creates_assign_ops" test_start
-    diagnostics "trait Hashable { fn hash self:self -> i64 }\nfn tbtest[K: Hashable] K -> i64 { .hash }" trait_test_parse drop
-    "tbtest" TRAIT_TEST_STORE
-        .functions
-        .get_str
-        .unwrap = func
-    false = found
-    0 (u64) = index
-    while index func Function::ops.length > do
-        index func Function::ops.get = current_op
-        if current_op.value OpValue::AssignVar(name) is then
-            if "__trait_K_hash" name == then
-                true = found
-            fi
-        fi
-        1 += index
-    done
-    "found assign op" found assert_true
+    "polymorphic_function_reference_recursion_rejected" test_start
+    diagnostics
+    "fn recurse_ref[T U] first:T second:U { &recurse_ref[U T] drop first drop second drop }"
+    parse_resolve_test_parts = store = operations
+    store operations type_check = checked
+    checked.diagnostics.clone diagnostics.merge
+    diagnostics "rejects changed type arguments"
+    "Polymorphic recursion changes the type arguments" assert_error_contains
 }
 
 # ============================================================================
@@ -970,13 +957,13 @@ fn test_k_coloncolon_method_resolved_as_trait_method_call {
         .functions
         .get_str
         .unwrap = func
-    # K::hash resolves to a dedicated trait method call carrying the hidden var.
+    # K::hash keeps the checked trait contract until specialization.
     false = found_trait_call
     0 (u64) = index
     while index func Function::ops.length > do
         index func Function::ops.get = current_op
-        if current_op.value OpValue::TraitMethodCall(name) is then
-            if "__trait_K_hash" name == then
+        if current_op.value OpValue::TraitMethodCall(call) is then
+            if "hash" call.method_name == then
                 true = found_trait_call
             fi
         fi
@@ -985,27 +972,26 @@ fn test_k_coloncolon_method_resolved_as_trait_method_call {
     "found trait method call" found_trait_call assert_true
 }
 
-fn test_ampersand_k_coloncolon_method_resolved_as_push_variable {
+fn test_ampersand_k_coloncolon_method_resolved_as_trait_method_ref {
     Diagnostics::new = diagnostics
-    "ampersand_k_coloncolon_method_resolved_as_push_variable" test_start
+    "ampersand_k_coloncolon_method_resolved_as_trait_method_ref" test_start
     diagnostics HASHABLE_TRAIT "struct MyType { val: i64 }\nimpl MyType: Hashable {\n    fn hash self:MyType -> i64 { self MyType::val }\n    fn eq self:MyType other:MyType -> bool { self MyType::val other MyType::val == }\n}\nfn get_hash_fn[K: Hashable] -> fn[K -> i64] { &K::hash }\n42 MyType = m\nm get_hash_fn drop\n" str::concat.as_str trait_test_typecheck drop
     "get_hash_fn" TRAIT_TEST_STORE
         .functions
         .get_str
         .unwrap = func
-    # &K::hash resolves to OpPushVar as a fn ref.
-    false = found_push_var
+    false = found_trait_ref
     0 (u64) = index
     while index func Function::ops.length > do
         index func Function::ops.get = current_op
-        if current_op.value OpValue::PushVar(name) is then
-            if "__trait_K_hash" name == then
-                true = found_push_var
+        if current_op.value OpValue::TraitMethodRef(call) is then
+            if "hash" call.method_name == then
+                true = found_trait_ref
             fi
         fi
         1 += index
     done
-    "found push_var" found_push_var assert_true
+    "found trait method reference" found_trait_ref assert_true
 }
 
 # ============================================================================
@@ -1085,38 +1071,16 @@ fn test_non_generic_trait_with_args_raises {
     diagnostics "arity" ErrorKind::Syntax assert_error_kind
 }
 
-fn test_generic_trait_bound_concrete_hidden_param_type {
+fn test_generic_trait_bound_concrete_call_site_typechecks {
     Diagnostics::new = diagnostics
-    "generic_trait_bound_concrete_hidden_param_type" test_start
-    diagnostics "trait Carrier[T] { fn get self:self -> T }\nstruct Counter { val: i64 }\nimpl Counter { fn get self:Counter -> i64 { self Counter::val } }\nfn use_carrier[I: Carrier[i64]] i:I -> i64 { i .get }\n" trait_test_typecheck drop
-    "use_carrier" TRAIT_TEST_STORE
-        .functions
-        .get_str
-        .unwrap = func
-    # Find the hidden __trait_I_get parameter and assert its type substituted T with i64.
-    false = found
-    0 (u64) = index
-    while index func Function::stack_effect StackEffect::parameters.length > do
-        index func Function::stack_effect StackEffect::parameters.get = param
-        if "__trait_I_get" param Parameter::name == then
-            true = found
-            "hidden type" "fn[I -> i64]" param Parameter::typ.format assert_str_eq
-        fi
-        1 += index
-    done
-    "hidden param present" found assert_true
-}
-
-fn test_generic_trait_bound_concrete_call_site_injects_fn_ptr {
-    Diagnostics::new = diagnostics
-    "generic_trait_bound_concrete_call_site_injects_fn_ptr" test_start
+    "generic_trait_bound_concrete_call_site_typechecks" test_start
     diagnostics "trait Carrier[T] { fn get self:self -> T }\nstruct Counter { val: i64 }\nimpl Counter: Carrier[i64] { fn get self:Counter -> i64 { self Counter::val } }\nfn use_carrier[I: Carrier[i64]] i:I -> i64 { i .get }\n42 Counter use_carrier drop\n" trait_test_typecheck drop
     diagnostics "no errors" assert_no_errors
 }
 
-fn test_trait_fn_ptr_wraps_generic_layout_arguments {
+fn test_trait_specialization_needs_no_layout_adapter {
     Diagnostics::new = diagnostics
-    "trait_fn_ptr_wraps_generic_layout_arguments" test_start
+    "trait_specialization_needs_no_layout_adapter" test_start
     diagnostics "trait Duplicate { fn duplicate self:$self -> self }\nstruct Wrapper[T] { value: T }\nimpl i64: Duplicate { fn duplicate self:$i64 -> i64 { self copy } }\nimpl[T: Duplicate] Wrapper[T]: Duplicate { fn duplicate self:$Wrapper[T] -> Wrapper[T] { unsafe { self (ptr) ptr::read[T] } T::duplicate Wrapper } }\nfn duplicate_value[T: Duplicate] value:$T -> T { value T::duplicate }\n42 Wrapper = wrapped\nwrapped duplicate_value drop\n" trait_test_typecheck drop
     diagnostics "no errors" assert_no_errors
     false = found_adapter
@@ -1131,7 +1095,7 @@ fn test_trait_fn_ptr_wraps_generic_layout_arguments {
             break
         fi
     done
-    "layout adapter generated" found_adapter assert_true
+    "layout adapter not generated" found_adapter ! assert_true
 }
 
 fn test_generic_trait_bound_default_method_uses_structural_arg {
@@ -1358,12 +1322,12 @@ fn test_dot_eq_on_bounded_type_var {
 }
 
 # ============================================================================
-# Auto-injection of FN_PUSH ops for trait-bounded calls
+# Trait-bounded calls
 # ============================================================================
 
-fn test_calling_trait_bounded_fn_injects_fn_push {
+fn test_calling_trait_bounded_fn_typechecks {
     Diagnostics::new = diagnostics
-    "calling_trait_bounded_fn_injects_fn_push" test_start
+    "calling_trait_bounded_fn_typechecks" test_start
     diagnostics HASHABLE_TRAIT "struct MyType { val: i64 }\nimpl MyType: Hashable {\n    fn hash self:MyType -> i64 { self MyType::val }\n    fn eq self:MyType other:MyType -> bool { self MyType::val other MyType::val == }\n}\nfn get_hash[K: Hashable] k:K -> i64 { k .hash }\n42 MyType = m\nm get_hash\n" str::concat.as_str trait_test_typecheck drop
     "passes" true assert_true
 }
@@ -1409,14 +1373,13 @@ test_trait_bound_multiple_bounded
 test_trait_bound_undefined_raises
 test_multiple_trait_bounds_parse_and_deduplicate_requirements
 test_incompatible_trait_bounds_raise
-# Hidden params
-test_trait_hidden_params_prepended
-test_trait_hidden_param_name
-test_trait_hidden_param_type
-test_trait_default_method_needs_no_hidden_param
-test_trait_hidden_params_correct_types
-test_trait_hidden_params_creates_variables
-test_trait_hidden_params_creates_assign_ops
+# Checked trait-bound bodies
+test_trait_bound_signature_has_no_hidden_params
+test_trait_bound_call_is_deferred_then_specialized
+test_distinct_generic_uses_create_two_specializations
+test_generic_function_reference_specializes
+test_generic_function_reference_uses_declaration_order
+test_polymorphic_function_reference_recursion_rejected
 # Type satisfaction
 test_struct_with_impl_satisfies
 test_struct_without_impl_does_not_satisfy
@@ -1440,8 +1403,8 @@ test_nested_generic_params
 # Trait method calling
 test_dot_hash_on_bounded_type_var
 test_dot_eq_on_bounded_type_var
-# Auto-injection
-test_calling_trait_bounded_fn_injects_fn_push
+# Trait-bounded calls
+test_calling_trait_bounded_fn_typechecks
 # split_type_tokens
 test_stt_simple_types
 test_stt_single_type
@@ -1458,8 +1421,8 @@ test_trait_bounds_default_empty
 test_trait_bounds_preserved_in_stack_effect
 # Trait ref resolution
 test_k_coloncolon_method_resolved_as_trait_method_call
-test_ampersand_k_coloncolon_method_resolved_as_push_variable
-# Auto-injection errors
+test_ampersand_k_coloncolon_method_resolved_as_trait_method_ref
+# Trait-bound errors
 test_trait_bounded_fn_with_non_satisfying_type_raises
 test_trait_bounded_fn_with_conflicting_type_var_raises
 test_generic_trait_bound_compound_type_arg_preserves_space
@@ -1467,9 +1430,8 @@ test_generic_trait_bound_multiple_structural_args
 test_generic_trait_bound_wrong_arity_raises
 test_generic_trait_bound_missing_args_raises
 test_non_generic_trait_with_args_raises
-test_generic_trait_bound_concrete_hidden_param_type
-test_generic_trait_bound_concrete_call_site_injects_fn_ptr
-test_trait_fn_ptr_wraps_generic_layout_arguments
+test_generic_trait_bound_concrete_call_site_typechecks
+test_trait_specialization_needs_no_layout_adapter
 test_generic_trait_bound_default_method_uses_structural_arg
 test_generic_trait_bound_structural_mismatch_raises
 test_type_var_arg_generic_trait_bound_happy_path

@@ -4557,13 +4557,32 @@ impl TypeChecker {
         = semantics
         if semantics.into_method Option::Some(method) is then
             method.stack_effect.clone = effect
+            method.method_name.clone = method_name
+            method.trait_type.clone = trait_type
             method.method_name.as_str receiver_capability effect tc.check_method_receiver_capability
             method.method_name.as_str receiver.make_method_key = method_key
             function_opt op_index ops op 0 effect tc.bind_borrowed_temporaries = bound
             bound += op_index
             function_opt Option[Type]::None method_key.as_str effect tc.apply_stack_effect
+            effect trait_type receiver clone_type method_name DeferredTraitCall::new
+            OpValue::TraitMethodCall op Op::set_value
         fi
         op_index
+    }
+
+    fn check_trait_method_ref tc:mut$TypeChecker op:mut$Op function_opt:mut$Option[Function] {
+        if op.value OpValue::TraitMethodRef(call) is then
+            tc.store function_opt call.receiver make_type_borrow_option op.value analyze_operation
+            = semantics
+            if semantics.into_method Option::Some(method) is then
+                method.stack_effect.clone = effect
+                effect stack_effect_to_function_type tc.stack_push_type
+                effect method.trait_type.clone call.receiver clone_type method.method_name.clone
+                DeferredTraitCall::new OpValue::TraitMethodRef op Op::set_value
+                return
+            fi
+        fi
+        List[Type]::new List[Type]::new FunctionType Type::Function tc.stack_push_type
     }
 }
 
@@ -4894,6 +4913,28 @@ impl TypeChecker {
 # Trait support: bind_generic_params_standalone, type_satisfies_trait, inject_trait_fn_ptrs
 # ============================================================================
 
+fn bind_standalone_type_variable
+    bindings:Map[String Type]
+    name:$String
+    actual:$Type
+    type_vars:$Set[String]
+-> Map[String Type] {
+    if name type_vars.has ! then
+        bindings return
+    fi
+    if name bindings.get Option::Some(existing) is then
+        if
+            existing.is_integer_literal_t actual.is_integer_type_t &&
+            existing.is_float_literal_t actual.is_float_type_t && ||
+        then
+            actual clone_type name.clone bindings.set
+        fi
+    else
+        actual clone_type name.clone bindings.set
+    fi
+    bindings
+}
+
 fn bind_direct_generic_params
     bindings:Map[String Type]
     expected_type:$Type
@@ -4901,10 +4942,7 @@ fn bind_direct_generic_params
     type_vars:$Set[String]
 -> Map[String Type] {
     if expected_type.type_var_name Option::Some(type_var_name) is then
-        if type_var_name type_vars.has type_var_name bindings.get.is_none && then
-            actual_type clone_type type_var_name.clone bindings.set
-        fi
-        bindings return
+        type_vars actual_type type_var_name bindings bind_standalone_type_variable return
     fi
     if expected_type Type::Generic(expected_generic) is then
         if actual_type Type::Generic(actual_generic) is then
@@ -4918,9 +4956,8 @@ fn bind_direct_generic_params
             do
                 index expected_generic.params.get = expected_parameter
                 if expected_parameter.type_var_name Option::Some(type_var_name) is then
-                    if type_var_name type_vars.has type_var_name bindings.get.is_none && then
-                        index actual_generic.params.get clone_type type_var_name.clone bindings.set
-                    fi
+                    type_vars index actual_generic.params.get type_var_name bindings
+                    bind_standalone_type_variable = bindings
                 fi
                 1 += index
             done
@@ -5436,57 +5473,41 @@ fn find_forwarded_layout_argument
     Option[OpValue]::None
 }
 
+fn ensure_function_clone_method store:mut$SymbolStore typ:$Type location:$Location {
+    if typ Type::Function(_) is ! then
+        return
+    fi
+    if "Copy" store.traits.has_str ! "Clone".to_str store.traits.has ! || then
+        return
+    fi
+    "Copy".to_str GenericType::new Type::Generic = copy_type
+    "Clone".to_str GenericType::new Type::Generic = clone_trait_type
+    if store clone_trait_type copy_type trait_type_implies ! then
+        return
+    fi
+
+    "clone" typ.make_method_key = function_name
+    if function_name.as_str store.functions.has_str then
+        return
+    fi
+
+    List[Parameter]::new = parameters
+    "self".to_str typ clone_type Parameter::named parameters.push
+    List[Type]::new = returns
+    typ clone_type returns.push
+    returns parameters StackEffect::new = effect
+
+    List[Op]::new = ops
+    location.clone "self".to_str OpValue::AssignVar Op::new ops.push
+    location.clone "self".to_str OpValue::PushVar Op::new ops.push
+    effect location.clone ops function_name.clone Function::with_stack_effect = function
+    List[Variable]::new = variables
+    typ clone_type "self".to_str Variable variables.push
+    variables function Function::set_variables
+    function function_name store.functions.set
+}
+
 impl TypeChecker {
-    fn ensure_function_clone_method self:mut$TypeChecker typ:$Type location:$Location {
-        if typ Type::Function(_) is ! then
-            return
-        fi
-        if
-            "Copy" self
-                .store
-                .traits
-                .has_str ! "Clone".to_str self
-                .store
-                .traits
-                .has ! ||
-        then
-            return
-        fi
-        "Copy".to_str GenericType::new Type::Generic = copy_type
-        "Clone".to_str GenericType::new Type::Generic = clone_trait_type
-        if self.store clone_trait_type copy_type trait_type_implies ! then
-            return
-        fi
-
-        "clone" typ.make_method_key = function_name
-        if
-            function_name.as_str self
-                .store
-                .functions
-                .has_str
-        then
-            return
-        fi
-
-        List[Parameter]::new = parameters
-        "self".to_str typ clone_type Parameter::named parameters.push
-        List[Type]::new = returns
-        typ clone_type returns.push
-        returns parameters StackEffect::new = effect
-
-        List[Op]::new = ops
-        location.clone "self".to_str OpValue::AssignVar Op::new ops.push
-        location.clone "self".to_str OpValue::PushVar Op::new ops.push
-        effect location.clone ops function_name.clone Function::with_stack_effect = function
-        List[Variable]::new = variables
-        typ clone_type "self".to_str Variable variables.push
-        variables function Function::set_variables
-        function function_name self
-            .store
-            .functions
-            .set
-    }
-
     fn ensure_layout_adapter
         self:mut$TypeChecker
         target_name:$str
@@ -5647,7 +5668,7 @@ impl TypeChecker {
         fi
         method.name.clone seen_methods.add
         if "clone" method.name.as_str == then
-            location concrete_type self.ensure_function_clone_method
+            location concrete_type self.store ensure_function_clone_method
         fi
         if forwarding then
             f"__trait_{concrete_name}_{method.name}" = hidden_variable
@@ -5670,7 +5691,7 @@ impl TypeChecker {
                     target clone_type = default_receiver
                 fi
                 self.diagnostics self.store default_receiver method_semantics.clone
-                    instantiate_default_trait_method = default_name_opt
+                instantiate_default_trait_method = default_name_opt
                 if default_name_opt Option::Some(default_name) is then
                     default_name.clone = function_name
                 fi
@@ -5717,6 +5738,130 @@ impl TypeChecker {
         location.clone f"Cannot determine layout of `{resolved_type.format}`"
         ErrorKind::TypeMismatch self.diagnostics.record_error_string
         Option[Op]::None
+    }
+
+    fn resolve_generic_call_bindings
+        tc:mut$TypeChecker
+        effect:$StackEffect
+        location:$Location
+        function_opt:mut$Option[Function]
+        return_hint:Option[Type]
+    -> Map[String Type] {
+        Map[String Type]::new = bindings
+        List[Parameter]::new = visible_parameters
+        for parameter in effect.parameters.iter do
+            if parameter.name.as_str is_hidden_parameter_name ! then
+                parameter clone_parameter visible_parameters.push
+            fi
+        done
+
+        tc
+            .stack
+            .values
+            .length = depth
+        0 (u64) = index
+        while index visible_parameters.length > do
+            if index depth > then
+                depth 1 - index - = stack_index
+                index visible_parameters.get = parameter
+                location bindings effect stack_index parameter tc.bind_stack_parameter = bindings
+            fi
+            1 += index
+        done
+        0 (u64) = index
+        while index visible_parameters.length > do
+            if index depth > then
+                depth 1 - index - = stack_index
+                index visible_parameters.get = parameter
+                location bindings effect stack_index parameter tc.finalize_stack_parameter_literals
+                = bindings
+            fi
+            1 += index
+        done
+        tc.store bindings function_opt effect method_diff_bind_all
+
+        if return_hint Option::Some(hint) is then
+            for return_type in effect.return_types.iter do
+                effect.type_vars hint return_type bindings bind_generic_params_standalone = bindings
+            done
+        fi
+
+        for
+            constant_name in effect
+                .const_params
+                .keys
+                .iter
+        do
+            if constant_name.as_str bindings clone_type_binding Option::Some(bound) is then
+                bound clone_type = resolved_bound
+                if function_opt Option::Some(caller) is then
+                    caller.stack_effect.const_params resolved_bound rewrite_type_const_params
+                    = resolved_bound
+                fi
+                resolved_bound constant_name.clone bindings.set
+            fi
+        done
+        function_opt location bindings effect tc.validate_generic_bindings
+        bindings
+    }
+
+    fn validate_generic_bindings
+        tc:mut$TypeChecker
+        effect:$StackEffect
+        bindings:mut$Map[String Type]
+        location:$Location
+        function_opt:mut$Option[Function]
+    {
+        for
+            constant_name in effect
+                .const_params
+                .keys
+                .iter
+        do
+            if constant_name.as_str bindings clone_type_binding Option::Some(bound) is then
+                if bound Type::Const is ! then
+                    location f"Constant parameter `{constant_name}` requires a compile-time constant, got `{bound.format}`"
+                    ErrorKind::TypeMismatch tc.diagnostics.record_error_string
+                fi
+            else
+                location f"Cannot determine the value of constant parameter `{constant_name}`"
+                ErrorKind::TypeMismatch tc.diagnostics.record_error_string
+            fi
+        done
+        for
+            type_variable in effect
+                .trait_bounds
+                .keys
+                .iter
+        do
+            type_variable.as_str bindings clone_type_binding = concrete_opt
+            if concrete_opt.is_none then
+                location f"Cannot determine concrete type for type variable `{type_variable}`"
+                ErrorKind::TypeMismatch tc.diagnostics.record_error_string
+                continue
+            fi
+            concrete_opt.unwrap = concrete
+            concrete.format = concrete_name
+            for
+                bound in type_variable effect
+                    .trait_bounds
+                    .get
+                    .unwrap
+                    .iter
+            do
+                bound trait_bound_to_type = trait_type
+                bindings trait_type.substitute_t = resolved_trait
+                tc.store resolved_trait concrete_name.as_str function_opt caller_forwards_trait_bound
+                = forwards_bound
+                if
+                    forwards_bound ! tc.diagnostics tc.store function_opt resolved_trait concrete
+                    type_satisfies_trait ! &&
+                then
+                    location f"Type `{concrete_name}` does not satisfy trait `{resolved_trait.format}`"
+                    ErrorKind::TypeMismatch tc.diagnostics.record_error_string
+                fi
+            done
+        done
     }
 
     fn inject_trait_fn_ptrs
@@ -6364,9 +6509,15 @@ impl TypeChecker {
                         .capability
                     = call_receiver_capability
                 fi
-                if effect needs_hidden_arguments then
-                    op.type_hint.clone function_opt op Op::location op_index ops effect tc.inject_trait_fn_ptrs = injected
-                    injected += op_index
+                if
+                    0 effect.type_vars.length !=
+                    0 effect
+                        .const_params
+                        .keys
+                        .length != ||
+                then
+                    op.type_hint.clone function_opt op.location effect tc.resolve_generic_call_bindings
+                    = op.call_bindings
                 fi
                 function_opt op_index ops op 0 effect tc.bind_borrowed_temporaries = bound
                 bound += op_index
@@ -6454,22 +6605,85 @@ impl TypeChecker {
                 }
             end
             tc.diagnostics tc.store push_name.as_str ensure_typechecked = push_fn_opt
-            if
-                push_name tc
-                    .store
-                    .functions
-                    .get Option::Some(checked_lambda) is
-            then
-                for capture in checked_lambda.captures.iter do
-                    if capture.name.as_str HIDDEN_DROP_PREFIX str::starts_with then
-                        HIDDEN_DROP_PREFIX capture.name.as_str hidden_layout_parameter_type
-                        tc.required_drop_types.push
-                    fi
-                done
-            fi
             if push_fn_opt.is_some then
                 push_fn_opt.unwrap = push_fn
                 push_fn.into_parts = is_unsafe = effect
+                Map[String Type]::new = specialization_bindings
+                if
+                    0 effect.type_vars.length !=
+                    0 effect
+                        .const_params
+                        .keys
+                        .length != ||
+                    push_name.as_str "lambda__" str::starts_with ! &&
+                then
+                    push_name.as_str tc
+                        .store
+                        .functions
+                        .get_str
+                        .unwrap
+                        .generic_params
+                        .clone = parameter_names
+                    if parameter_names.is_empty then
+                        effect.type_vars.to_list = parameter_names
+                        for
+                            constant_name in effect
+                                .const_params
+                                .keys
+                                .iter
+                        do
+                            constant_name.clone parameter_names.push
+                        done
+                    fi
+                    if op.type_hint Option::Some(explicit_specialization) is then
+                        if explicit_specialization Type::Generic(generic_specialization) is then
+                            if generic_specialization.params.length parameter_names.length != then
+                                op.location f"Function `{push_name}` requires {parameter_names.length} type arguments"
+                                ErrorKind::TypeMismatch tc.diagnostics.record_error_string
+                            else
+                                for pair in generic_specialization.params.iter parameter_names.iter.zip do
+                                    pair.second clone_type pair.first.clone specialization_bindings.set
+                                done
+                            fi
+                        fi
+                    else
+                        op.location f"Generic function reference `&{push_name}` requires explicit type arguments"
+                        ErrorKind::TypeMismatch tc.diagnostics.record_error_string
+                    fi
+                    function_opt op.location specialization_bindings effect tc.validate_generic_bindings
+                    specialization_bindings clone_type_bindings = op.call_bindings
+                    specialization_bindings effect apply_type_subs_to_stack_effect = effect
+                elif push_name.as_str "lambda__" str::starts_with then
+                    if function_opt Option::Some(enclosing) is then
+                        for
+                            type_variable in enclosing
+                                .stack_effect
+                                .type_vars
+                                .iter
+                        do
+                            type_variable.clone Type::TypeVar type_variable.clone specialization_bindings.set
+                        done
+                        for
+                            constant_name in enclosing
+                                .stack_effect
+                                .const_params
+                                .keys
+                                .iter
+                        do
+                            constant_name enclosing
+                                .stack_effect
+                                .const_params
+                                .get
+                                .unwrap
+                            constant_name.clone ConstType::symbolic Type::Const
+                            constant_name.clone specialization_bindings.set
+                        done
+                        specialization_bindings clone_type_bindings = op.call_bindings
+                        if 0 specialization_bindings.length != then
+                            specialization_bindings effect apply_type_subs_to_stack_effect = effect
+                        fi
+                    fi
+                fi
                 effect make_function_reference_stack_effect = reference_effect
                 function_opt Option[Type]::None "" reference_effect tc.apply_stack_effect
                 if closure_origins.is_some then
@@ -7448,18 +7662,6 @@ fn instantiate_default_trait_method
                 fi
                 1 += lambda_op_index
             done
-            for
-                type_var_name in resolved_stack_effect
-                    .type_vars
-                    .to_list
-                    .iter
-            do
-                type_var_name.clone Type::TypeVar = type_var
-                type_var make_hidden_drop_parameter_name = hidden_drop
-                if hidden_drop.as_str cloned_lambda.captures variable_list_contains ! then
-                    TYPE_U64_T clone_type hidden_drop Variable cloned_lambda.captures.push
-                fi
-            done
             cloned_lambda cloned_lambda_name.clone store.functions.set
             cloned_lambda_name OpValue::FnPush body_op Op::set_value
             1 += cloned_lambda_index
@@ -7490,13 +7692,13 @@ impl TypeChecker {
         tc.stack_pop_drop
         receiver tc.stack_push_type
         semantics.method_name.as_str receiver.make_method_key = method_key
-        function_opt op_index ops op 0 semantics.stack_effect tc.bind_borrowed_temporaries = bound
+        semantics.stack_effect.clone = effect
+        function_opt op_index ops op 0 effect tc.bind_borrowed_temporaries = bound
         bound += op_index
-        function_opt Option[Type]::None method_key.as_str semantics.stack_effect tc.apply_stack_effect
-        op.location.clone semantics.function_name.clone OpValue::PushVar Op::new = push_op
-        op_index 1 - push_op ops.insert
-        OpValue::FnExec op Op::set_value
-        op_index 1 +
+        function_opt Option[Type]::None method_key.as_str effect tc.apply_stack_effect
+        effect semantics.trait_type.clone receiver clone_type semantics.method_name.clone
+        DeferredTraitCall::new OpValue::TraitMethodCall op Op::set_value
+        op_index
     }
 }
 
@@ -7669,7 +7871,7 @@ impl TypeChecker {
                 fi
             fi
             if "clone" method_name.as_str == then
-                op.location lookup_receiver tc.ensure_function_clone_method
+                op.location lookup_receiver tc.store ensure_function_clone_method
             fi
             if method_value OpValue::MethodCall is then
                 if method_name.as_str op tc.check_float_to_bits then
@@ -7718,9 +7920,14 @@ impl TypeChecker {
                             if is_unsafe then
                                 fn_name.as_str op tc.require_unsafe
                             fi
-                            if effect needs_hidden_arguments then
-                                Option[Type]::None function_opt op Op::location op_index ops effect
-                                tc.inject_trait_fn_ptrs += op_index
+                            if
+                                0 effect.type_vars.length != 0 effect
+                                    .const_params
+                                    .keys
+                                    .length != ||
+                            then
+                                Option[Type]::None function_opt op.location effect
+                                tc.resolve_generic_call_bindings = op.call_bindings
                             fi
                             function_opt op_index ops op 0 effect tc.bind_borrowed_temporaries = bound
                             bound += op_index
@@ -8117,7 +8324,6 @@ fn ensure_typechecked
         function function_name.clone store.functions.set_str
         summary Option::Some return
     fi
-    function prepare_generic_size_queries
     true function Function::set_is_typechecked
     function.split_body = function_ops = function
     function.clone_declaration function_name.clone store.functions.set_str
@@ -8334,6 +8540,11 @@ impl TypeChecker {
             fi
 
             # Function ops
+            if current_op.value OpValue::TraitMethodRef is then
+                function_opt current_op checker.check_trait_method_ref
+                current_op op_index 1 - ops.set
+                continue
+            fi
             if
                 current_op.value OpValue::FnCall is
                 current_op.value OpValue::FnExec is ||
@@ -8745,6 +8956,58 @@ fn add_required_drop_parameters
     done
 }
 
+fn checked_generic_body_type_matches inferred:$Type declared:$Type -> bool {
+    if inferred Type::Generic(inferred_generic) is then
+        if declared Type::Generic(declared_generic) is then
+            if
+                inferred_generic.base declared_generic.base ==
+                0 inferred_generic.params.length == &&
+            then
+                true return
+            fi
+        fi
+    fi
+    inferred declared stack_effect_type_matches
+}
+
+fn checked_generic_body_effect_matches inferred:$StackEffect declared:$StackEffect -> bool {
+    if inferred.parameters.length declared.parameters.length != then
+        false return
+    fi
+    declared.return_types.length = declared_return_count
+    if 1 declared_return_count == then
+        if 0 declared.return_types.get Type::Generic(return_type) is then
+            if "None" return_type.base.as_str == return_type.params.is_empty && then
+                0 (u64) = declared_return_count
+            fi
+        fi
+    fi
+    if inferred.return_types.length declared_return_count != then
+        false return
+    fi
+    for
+        pair in declared.parameters.iter inferred
+            .parameters
+            .iter
+            .zip
+    do
+        if pair.second.typ pair.first.typ checked_generic_body_type_matches ! then
+            false return
+        fi
+    done
+    0 (u64) = return_index
+    while return_index declared_return_count > do
+        if
+            return_index declared.return_types.get return_index inferred.return_types.get
+            checked_generic_body_type_matches !
+        then
+            false return
+        fi
+        1 += return_index
+    done
+    true
+}
+
 fn check_ops
     ops:mut$List[Op]
     function_opt:mut$Option[Function]
@@ -8842,9 +9105,15 @@ fn check_ops
             declared_function Function::stack_effect = declared: $StackEffect
             if
                 declared stack_effect_to_str.as_str "None -> None" !=
-                0 declared StackEffect::type_vars.length == &&
+                0 inferred.return_types.length != checker.has_return_types ! || &&
             then
-                if inferred declared stack_effect_matches ! then
+                false = invalid_effect
+                if 0 declared.type_vars.length != then
+                    declared inferred checked_generic_body_effect_matches ! = invalid_effect
+                else
+                    inferred declared stack_effect_matches ! = invalid_effect
+                fi
+                if invalid_effect then
                     declared_function Function::location f"Invalid stack effect for function `{declared_function Function::name}`: expected `{declared stack_effect_to_str}`, got `{inferred stack_effect_to_str}`" ErrorKind::SignatureMismatch checker.diagnostics.record_error_string
                 fi
             fi
@@ -8855,11 +9124,6 @@ fn check_ops
         fi
     fi
 
-    if function_opt Option::Some(checked_function) is then
-        checker.required_drop_types.clone = forwarded_types
-        forwarded_types checker.store ops checked_function add_required_drop_parameters
-    fi
-
     inferred
 }
 
@@ -8868,19 +9132,7 @@ fn check_ops
 # ============================================================================
 
 fn check_functions store:mut$SymbolStore diagnostics:mut$Diagnostics {
-    # Prepare callees before any caller is checked so their hidden layout
-    # arguments are visible regardless of map iteration order.
     store.functions.keys = function_names
-    for function_name in function_names.iter do
-        function_name store
-            .functions
-            .remove
-            .unwrap = function
-        if function.name.as_str "lambda__" str::starts_with ! function.is_typechecked ! && then
-            function prepare_generic_size_queries
-        fi
-        function function_name.clone store.functions.set
-    done
     for func_name in function_names.iter do
         func_name store
             .functions
@@ -8897,12 +9149,6 @@ fn check_functions store:mut$SymbolStore diagnostics:mut$Diagnostics {
         current_fn.clone_declaration func_name.clone store.functions.set
         current_fn.split_body = current_ops = current_fn
         diagnostics current_fn current_ops store resolve_identifiers
-        # Skip type checking for functions with trait bounds (checked on demand)
-        if 0 current_fn Function::stack_effect StackEffect::trait_bounds.keys.length != then
-            current_ops current_fn Function::set_ops
-            current_fn func_name.clone store.functions.set
-            continue
-        fi
         true current_fn Function::set_is_typechecked
         current_fn.clone_declaration func_name.clone store.functions.set
         diagnostics.error_count = errors_before
@@ -8973,11 +9219,535 @@ fn check_trait_impls store:mut$SymbolStore diagnostics:mut$Diagnostics {
     done
 }
 
+fn generic_binding_key bindings:$Map[String Type] -> String {
+    bindings.keys = names
+    String::new = key
+    for name in names.iter do
+        name.as_str key.append
+        '=' key.push
+        name bindings
+            .get
+            .unwrap
+            .format
+            .as_str key.append
+        ';' key.push
+    done
+    key
+}
+
+fn identity_generic_bindings effect:$StackEffect -> Map[String Type] {
+    Map[String Type]::new = bindings
+    for type_variable in effect.type_vars.iter do
+        type_variable.clone Type::TypeVar type_variable.clone bindings.set
+    done
+    for
+        constant_name in effect
+            .const_params
+            .keys
+            .iter
+    do
+        constant_name effect
+            .const_params
+            .get
+            .unwrap constant_name.clone ConstType::symbolic Type::Const
+        constant_name.clone bindings.set
+    done
+    bindings
+}
+
+fn validate_generic_cycle_call
+    op:$Op
+    substitutions:mut$Map[String Type]
+    active:mut$Map[String String]
+    store:$SymbolStore
+    diagnostics:mut$Diagnostics
+{
+    Option[String]::None = function_name_opt
+    if op.value OpValue::FnCall(function_name) is then
+        function_name.clone Option::Some = function_name_opt
+    elif op.value OpValue::FnPush(function_name) is then
+        function_name.clone Option::Some = function_name_opt
+    fi
+    if function_name_opt.is_none then
+        return
+    fi
+    function_name_opt.unwrap = function_name
+    function_name.as_str store.functions.get_str = callee_opt
+    if callee_opt.is_none then
+        return
+    fi
+    callee_opt.unwrap = callee_ref
+    callee_ref.stack_effect.clone = callee_effect
+    if
+        0 callee_effect.type_vars.length == 0 callee_effect
+            .const_params
+            .keys
+            .length == &&
+    then
+        return
+    fi
+    callee_ref.ops clone_ops = callee_ops
+    Map[String Type]::new = composed
+    for pair in op.call_bindings.iter do
+        substitutions pair.second.substitute_t pair.first.clone composed.set
+    done
+    composed generic_binding_key = key
+    if function_name active.get Option::Some(previous) is then
+        if previous.as_str key.as_str != then
+            op.location f"Polymorphic recursion changes the type arguments of `{function_name}`"
+            ErrorKind::TypeMismatch diagnostics.record_error_string
+        fi
+        return
+    fi
+    key.clone function_name.clone active.set
+    diagnostics store active composed callee_ops validate_generic_cycles_in_ops
+    function_name.as_str active.remove_str drop
+}
+
+fn validate_generic_cycles_in_ops
+    ops:$List[Op]
+    substitutions:mut$Map[String Type]
+    active:mut$Map[String String]
+    store:$SymbolStore
+    diagnostics:mut$Diagnostics
+{
+    for op in ops.iter do
+        diagnostics store active substitutions op validate_generic_cycle_call
+        op.value clone_op_value = value
+        value match
+            OpValue::PushArray(items) => {
+                diagnostics store active substitutions items validate_generic_cycles_in_ops
+            }
+            OpValue::ExprGroup(items) => {
+                diagnostics store active substitutions items validate_generic_cycles_in_ops
+            }
+            OpValue::MatchArm(arm) => {
+                diagnostics store active substitutions arm.guard_ops validate_generic_cycles_in_ops
+            }
+            _ => {
+            }
+        end
+    done
+}
+
+fn validate_generic_cycles store:$SymbolStore diagnostics:mut$Diagnostics {
+    for
+        function_name in store
+            .functions
+            .keys
+            .iter
+    do
+        if function_name.as_str store.functions.get_str Option::Some(function) is then
+            if
+                0 function
+                    .stack_effect
+                    .type_vars
+                    .length == 0 function
+                    .stack_effect
+                    .const_params
+                    .keys
+                    .length == &&
+            then
+                continue
+            fi
+            function.stack_effect identity_generic_bindings = bindings
+            Map[String String]::new = active
+            bindings generic_binding_key function_name.clone active.set
+            diagnostics store active bindings function.ops validate_generic_cycles_in_ops
+        fi
+    done
+}
+
+fn specialize_owner_event event:$OwnerEvent bindings:mut$Map[String Type] -> OwnerEvent {
+    event.generation bindings event.typ.substitute_t event.name.clone OwnerEvent
+}
+
+fn specialize_op_metadata ops:mut$List[Op] bindings:mut$Map[String Type] store:mut$SymbolStore {
+    0 (u64) = index
+    while index ops.length > do
+        index ops.get_mut = op
+        op.id = source_id
+        store.next_op_id = op.id
+        1 += store.next_op_id
+        if source_id store.clone_ownership Option::Some(ownership) is then
+            List[OwnerEvent]::new = assignments
+            for event in ownership.assignments.iter do
+                bindings event specialize_owner_event assignments.push
+            done
+            List[OwnerEvent]::new = cleanups
+            for event in ownership.cleanups.iter do
+                bindings event specialize_owner_event cleanups.push
+            done
+            ownership.moves_owner cleanups assignments OpOwnership = specialized_ownership
+            specialized_ownership op.id store.op_ownership.set
+        fi
+        op.value clone_op_value = value
+        if value OpValue::PushArray(items) is then
+            items clone_ops = nested
+            store bindings nested specialize_op_metadata
+            nested OpValue::PushArray op Op::set_value
+        elif value OpValue::ExprGroup(items) is then
+            items clone_ops = nested
+            store bindings nested specialize_op_metadata
+            nested OpValue::ExprGroup op Op::set_value
+        elif value OpValue::MatchArm(arm) is then
+            arm.clone = specialized_arm
+            store bindings specialized_arm.guard_ops specialize_op_metadata
+            specialized_arm OpValue::MatchArm op Op::set_value
+        fi
+        1 += index
+    done
+}
+
+fn specialize_checked_function
+    source:$Function
+    name:String
+    bindings:mut$Map[String Type]
+    store:mut$SymbolStore
+-> Function {
+    source.clone_for_import = specialized
+    name = specialized.name
+    bindings specialized.ops substitute_ops_types
+    store bindings specialized.ops specialize_op_metadata
+    0 (u64) = variable_index
+    while variable_index specialized.variables.length > do
+        variable_index specialized.variables.get_mut = variable
+        bindings variable.typ.substitute_t variable Variable::set_typ
+        1 += variable_index
+    done
+    0 (u64) = capture_index
+    while capture_index specialized.captures.length > do
+        capture_index specialized.captures.get_mut = capture
+        bindings capture.typ.substitute_t capture Variable::set_typ
+        1 += capture_index
+    done
+    bindings specialized.stack_effect apply_type_subs_to_stack_effect = effect
+    Set[String]::new = effect.type_vars
+    Map[String List[TraitBound]]::new = effect.trait_bounds
+    Map[String BuiltinType]::new = effect.const_params
+    effect = specialized.stack_effect
+    List[String]::new = specialized.generic_params
+    true = specialized.is_typechecked
+    true = specialized.is_used
+    specialized
+}
+
+fn resolve_specialized_trait_operation
+    op:mut$Op
+    as_reference:bool
+    store:mut$SymbolStore
+    diagnostics:mut$Diagnostics
+{
+    Option[DeferredTraitCall]::None = call_opt
+    if op.value OpValue::TraitMethodCall(call) is then
+        call.clone Option::Some = call_opt
+    elif op.value OpValue::TraitMethodRef(call) is then
+        call.clone Option::Some = call_opt
+    fi
+    if call_opt.is_none then
+        return
+    fi
+    call_opt.unwrap = call
+    call.receiver clone_type = lookup_receiver
+    if call.receiver.borrow_target Option::Some(target) is then
+        target clone_type = lookup_receiver
+    fi
+    if "clone" call.method_name.as_str == then
+        op.location lookup_receiver store ensure_function_clone_method
+    fi
+    Option[MethodSemantics]::None = semantics_opt
+    if call.trait_type Option::Some(trait_type) is then
+        store lookup_receiver trait_type call.method_name.as_str resolve_qualified_method_semantics
+        = semantics_opt
+        if
+            semantics_opt.is_none "clone" call.method_name.as_str == lookup_receiver Type::Function is && &&
+        then
+            store Option[Function]::None lookup_receiver call.method_name.as_str resolve_method_semantics
+            = semantics_opt
+        fi
+    else
+        store Option[Function]::None lookup_receiver call.method_name.as_str resolve_method_semantics
+        = semantics_opt
+    fi
+    if semantics_opt.is_none then
+        op.location f"No implementation of trait method `{call.method_name}` exists for `{call.receiver.format}`"
+        ErrorKind::MissingTraitMethod diagnostics.record_error_string
+        return
+    fi
+    semantics_opt.unwrap = semantics
+    semantics.function_name.clone = function_name
+    if semantics.kind MethodSemanticsKind::DefaultMethod is then
+        diagnostics store lookup_receiver semantics instantiate_default_trait_method = default_name_opt
+        if default_name_opt Option::Some(default_name) is then
+            default_name.clone = function_name
+        fi
+    fi
+    diagnostics store function_name.as_str ensure_typechecked drop
+    if function_name.as_str store.functions.get_str Option::Some(implementation) is then
+        call.stack_effect implementation.stack_effect bind_stack_effect_pattern = bindings_opt
+        if bindings_opt Option::Some(bindings) is then
+            bindings clone_type_bindings = op.call_bindings
+        fi
+    fi
+    if as_reference then
+        function_name OpValue::FnPush op Op::set_value
+    else
+        function_name OpValue::FnCall op Op::set_value
+    fi
+}
+
+fn monomorphized_function_name function_name:$str bindings:$Map[String Type] -> String {
+    bindings generic_binding_key = key
+    f"{function_name}__mono_{key.as_str str_hash}"
+}
+
+fn function_receiver_bindings typ:$Type function:$Function -> Map[String Type] {
+    Map[String Type]::new = bindings
+    if
+        0 function
+            .stack_effect
+            .parameters
+            .length ==
+    then
+        bindings return
+    fi
+    0 function
+        .stack_effect
+        .parameters
+        .get
+        .typ clone_type = pattern
+    typ clone_type = actual
+    if pattern.is_shared_borrow then
+        SHARED_BORROW_TYPE actual apply_borrow_type = actual
+    elif pattern.is_exclusive_borrow then
+        EXCLUSIVE_BORROW_TYPE actual apply_borrow_type = actual
+    fi
+    bindings actual pattern bind_trait_impl_type drop
+    bindings
+}
+
+fn monomorphize_function_body
+    function_name:$str
+    processed:mut$Set[String]
+    store:mut$SymbolStore
+    diagnostics:mut$Diagnostics
+{
+    if function_name processed.has_str then
+        return
+    fi
+    if function_name store.functions.get_str Option::Some(source) is then
+        source.clone_for_import = function
+        function_name.to_str processed.add
+        diagnostics store processed function.ops monomorphize_ops
+        function function_name.to_str store.functions.set
+    fi
+}
+
+fn monomorphize_drop_type_inner
+    typ:$Type
+    visiting:mut$Set[String]
+    processed:mut$Set[String]
+    store:mut$SymbolStore
+    diagnostics:mut$Diagnostics
+{
+    if typ.has_unresolved_type_var typ.is_borrow || then
+        return
+    fi
+    typ.format = type_key
+    if type_key.as_str visiting.has_str then
+        return
+    fi
+    type_key.clone visiting.add
+
+    f"{typ.match_base}::drop" = drop_name
+    if drop_name.as_str store.functions.get_str Option::Some(source_ref) is then
+        source_ref.clone_for_import = source
+        if
+            0 source
+                .stack_effect
+                .type_vars
+                .length != 0 source
+                .stack_effect
+                .const_params
+                .keys
+                .length != ||
+        then
+            source typ function_receiver_bindings = bindings
+            bindings drop_name.as_str monomorphized_function_name = specialized_name
+            if specialized_name.as_str store.functions.has_str ! then
+                store bindings specialized_name.clone source specialize_checked_function = specialized
+                specialized specialized_name.clone store.functions.set
+            fi
+            diagnostics store processed specialized_name.as_str monomorphize_function_body
+        else
+            diagnostics store processed drop_name.as_str monomorphize_function_body
+        fi
+    fi
+
+    List[Type]::new = child_types
+    if typ Type::Generic(generic) is then
+        if ARRAY_TYPE generic.base.as_str == then
+            if 0 generic.params.length != then
+                0 generic.params.get clone_type child_types.push
+            fi
+        elif generic.base.as_str store.structs.get_str Option::Some(casa_struct) is then
+            casa_struct.clone = owned_struct
+            owned_struct.type_vars typ aggregate_type_bindings = bindings
+            for member in owned_struct.members.iter do
+                bindings member.typ.substitute_t child_types.push
+            done
+        elif generic.base.as_str store.enums.get_str Option::Some(casa_enum) is then
+            casa_enum.clone = owned_enum
+            owned_enum.type_vars typ aggregate_type_bindings = bindings
+            for pair in owned_enum.variant_types.iter do
+                for payload in pair.second.iter do
+                    bindings payload.substitute_t child_types.push
+                done
+            done
+        fi
+    fi
+    for child_type in child_types.iter do
+        diagnostics store processed visiting child_type monomorphize_drop_type_inner
+    done
+}
+
+fn monomorphize_drop_type
+    typ:$Type
+    processed:mut$Set[String]
+    store:mut$SymbolStore
+    diagnostics:mut$Diagnostics
+{
+    Set[String]::new = visiting
+    diagnostics store processed visiting typ monomorphize_drop_type_inner
+}
+
+fn monomorphize_named_operation
+    op:mut$Op
+    processed:mut$Set[String]
+    store:mut$SymbolStore
+    diagnostics:mut$Diagnostics
+{
+    op.value clone_op_value = value
+    Option[String]::None = function_name_opt
+    false = call_operation
+    if value OpValue::FnCall(function_name) is then
+        true = call_operation
+        function_name.clone Option::Some = function_name_opt
+    elif value OpValue::FnPush(function_name) is then
+        function_name.clone Option::Some = function_name_opt
+    fi
+    if function_name_opt.is_none then
+        return
+    fi
+    function_name_opt.unwrap = function_name
+    function_name.as_str store.functions.get_str = source_opt
+    if source_opt.is_none then
+        return
+    fi
+    source_opt.unwrap = source_ref
+    source_ref.clone_for_import = source
+    op.call_bindings.clone = bindings
+    0 bindings.length != = has_bindings
+    0 source
+        .stack_effect
+        .type_vars
+        .length != 0 source
+        .stack_effect
+        .const_params
+        .keys
+        .length != ||
+    has_bindings ||
+    = generic_source
+    if generic_source ! then
+        diagnostics store processed function_name.as_str monomorphize_function_body
+        return
+    fi
+    if has_bindings ! then
+        op.location f"Cannot monomorphize `{function_name}` without concrete type arguments"
+        ErrorKind::TypeMismatch diagnostics.record_error_string
+        return
+    fi
+    for pair in bindings.iter do
+        if pair.second.has_unresolved_type_var then
+            op.location f"Cannot monomorphize `{function_name}` with unresolved type arguments"
+            ErrorKind::TypeMismatch diagnostics.record_error_string
+            return
+        fi
+    done
+    bindings function_name.as_str monomorphized_function_name = specialized_name
+    if call_operation then
+        specialized_name.clone OpValue::FnCall op Op::set_value
+    else
+        specialized_name.clone OpValue::FnPush op Op::set_value
+    fi
+    if specialized_name.as_str store.functions.has_str ! then
+        store bindings specialized_name.clone source specialize_checked_function = specialized
+        specialized specialized_name.clone store.functions.set
+    fi
+    diagnostics store processed specialized_name.as_str monomorphize_function_body
+}
+
+fn monomorphize_ops
+    ops:mut$List[Op]
+    processed:mut$Set[String]
+    store:mut$SymbolStore
+    diagnostics:mut$Diagnostics
+{
+    0 (u64) = index
+    while index ops.length > do
+        index ops.get_mut = op
+        if op.value OpValue::TraitMethodCall is then
+            diagnostics store false op resolve_specialized_trait_operation
+        elif op.value OpValue::TraitMethodRef is then
+            diagnostics store true op resolve_specialized_trait_operation
+        fi
+        diagnostics store processed op monomorphize_named_operation
+        if op.value OpValue::Drop is then
+            if op.type_hint Option::Some(drop_type) is then
+                diagnostics store processed drop_type monomorphize_drop_type
+            fi
+        fi
+        if op.id store.clone_ownership Option::Some(ownership) is then
+            for event in ownership.cleanups.iter do
+                diagnostics store processed event.typ monomorphize_drop_type
+            done
+        fi
+        op.value clone_op_value = nested_value
+        if nested_value OpValue::PushArray(items) is then
+            items clone_ops = nested
+            diagnostics store processed nested monomorphize_ops
+            nested OpValue::PushArray op Op::set_value
+        elif nested_value OpValue::ExprGroup(items) is then
+            items clone_ops = nested
+            diagnostics store processed nested monomorphize_ops
+            nested OpValue::ExprGroup op Op::set_value
+        elif nested_value OpValue::MatchArm(arm) is then
+            arm.clone = specialized_arm
+            diagnostics store processed specialized_arm.guard_ops monomorphize_ops
+            specialized_arm OpValue::MatchArm op Op::set_value
+        fi
+        1 += index
+    done
+}
+
+fn monomorphize_checked_generics
+    ops:mut$List[Op]
+    store:mut$SymbolStore
+    diagnostics:mut$Diagnostics
+{
+    Set[String]::new = processed
+    diagnostics store processed ops monomorphize_ops
+}
+
 fn type_check ops:List[Op] store:SymbolStore -> TypecheckResult {
     Diagnostics::new = diagnostics
     diagnostics store Option::None ops check_ops = global_stack_effect
     diagnostics store check_functions
     diagnostics store check_trait_impls
+    diagnostics store validate_generic_cycles
+    if diagnostics.has_errors ! then
+        diagnostics store ops monomorphize_checked_generics
+    fi
     diagnostics
     ops
     global_stack_effect
