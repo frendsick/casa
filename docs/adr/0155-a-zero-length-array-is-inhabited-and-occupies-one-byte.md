@@ -12,10 +12,10 @@ size_of[array[T 0]] # 1
 
 The storage holds no elements. The byte gives a materialized value a nonzero
 layout and gives an empty array element a nonzero stride when a generic container
-computes `capacity size_of[T] *`. Array storage is word-granular today, so the
-compiler reserves a word rather than a byte. That is layout, not contract
-(ADR-0127). ADR-0156 makes addresses across independently owned values a
-representation detail.
+computes `capacity size_of[T] *`. A local reserves one machine word because
+local slots are word-sized. An aggregate field uses the one-byte layout
+directly. These placements are not a stable contract (ADR-0127). ADR-0156 makes
+addresses across independently owned values a representation detail.
 
 This supersedes the line in ADR-0152 that gave `array[T 0]` size zero.
 
@@ -37,7 +37,7 @@ This supersedes the line in ADR-0152 that gave `array[T 0]` size zero.
 
 - `size_of[array[T N]]` is `N size_of[T] *` for every `N > 0`, and 1 for `N`
   zero.
-- A materialized `[]` follows the one-byte layout whether its storage is inline,
+- A materialized `[]` follows the one-byte layout whether its storage is local,
   static, or shared.
 - Destruction of an `array[T 0]` visits no elements, which the length in the
   type already states.
