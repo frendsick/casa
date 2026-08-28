@@ -152,11 +152,13 @@ enum Direction derives Copy {
 impl Direction: Copy { }
 ```
 
-Structs, payload enums, and arrays currently use heap-indirect value storage.
-They cannot implement `Copy`, even when every field is Copy, because duplicating
-their handle would alias one allocation. Use `Clone` for explicit independent
-duplication. When `T` implements Clone, calling `.clone` on `$T` or `mut$T`
-calls the borrowed value's implementation and returns an owned `T`.
+Structs and payload enums currently use heap-indirect value storage. They cannot
+implement `Copy`, even when every field is Copy, because duplicating their
+handle would alias one allocation. Fixed arrays store their elements directly,
+but the current array rule also excludes them from `Copy`. Use `Clone` for
+explicit independent duplication. When `T` implements Clone, calling `.clone`
+on `$T` or `mut$T` calls the borrowed value's implementation and returns an
+owned `T`.
 
 Clone is always explicit and can allocate or run user code:
 

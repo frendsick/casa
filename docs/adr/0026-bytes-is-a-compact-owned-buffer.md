@@ -6,8 +6,8 @@
 
 ## Considered options
 
-- Aliasing `Bytes` to `array[u8]` reuses an existing type, but current arrays store every element in one eight-byte word and have different fixed-value semantics.
-- Aliasing `Bytes` to `List[u8]` reuses growth operations, but current lists also store one eight-byte word per element and expose a general collection representation.
+- Aliasing `Bytes` to `array[u8 N]` reuses an existing type, but its length is fixed at compile time and it has different fixed-value semantics.
+- Aliasing `Bytes` to `List[u8]` reuses growth operations, but exposes a general collection representation and API.
 - Making bytes another compiler primitive could guarantee representation, but adds language machinery for an abstraction the standard library can safely encapsulate.
 - A dedicated stdlib buffer provides compact storage and byte-specific operations behind the existing unsafe boundary.
 
