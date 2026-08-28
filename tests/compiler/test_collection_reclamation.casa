@@ -5,6 +5,10 @@ import "helpers.casa"
 const TEXT_HEAP_PROBE_SIZE 497
 const TEXT_STRESS_ITERATIONS 100
 const TEXT_TEST_PATH "/tmp/casa_owned_text_reclamation.txt"
+const BORROWED_OPTION_HEAP_PROBE_SIZE 16
+const OWNED_STORAGE_HEAP_PROBE_SIZE 613
+const OWNED_STORAGE_STRESS_ITERATIONS 20
+const OWNED_STORAGE_WARMUP_ITERATIONS 3
 
 struct Tracked {
     drops: ptr
@@ -21,6 +25,10 @@ struct TrackedShell {
     value: Tracked
 }
 
+struct NestedText {
+    value: String
+}
+
 struct BorrowShell[T] {
     value: $T
 }
@@ -31,6 +39,10 @@ enum CopyChoice {
 
 enum TrackedChoice {
     Value (Tracked)
+}
+
+enum NestedTextChoice {
+    Value (NestedText)
 }
 
 impl Tracked {
@@ -161,6 +173,77 @@ fn test_failed_metadata_lookup_reclaims_buffer {
     unsafe { reused_buffer free }
 }
 
+fn exercise_cstr_temporary {
+    if "a\0b".as_cstr.is_none then
+        return
+    fi
+}
+
+fn exercise_lambda_temporary {
+    { "lambda".as_cstr.is_none } exec drop
+}
+
+fn compare_borrowed_strings first:$String second:$String -> bool { first.as_str second.as_str == }
+
+fn borrowed_string_length value:$String -> u64 { value.as_str.length }
+
+fn exercise_owned_storage_reclamation {
+    "nested".to_str NestedText NestedTextChoice::Value drop
+    "comparison".to_str "comparison" == drop
+    "borrow chain"
+        .to_str
+        .as_str
+        .length drop
+    "right".to_str "left".to_str compare_borrowed_strings drop
+    "exec".to_str &borrowed_string_length exec drop
+
+    List[String]::new = values
+    "collection".to_str values.push
+    values drop
+
+    "closure".to_str = captured
+    move { captured.as_str.length } exec drop
+    exercise_lambda_temporary
+
+    List[String]::new = command
+    "/bin/true".to_str command.push
+    command run_command drop
+}
+
+fn test_owned_storage_stays_bounded {
+    "owned_storage_stays_bounded" test_start
+
+    unsafe { BORROWED_OPTION_HEAP_PROBE_SIZE alloc = available_option }
+    unsafe { available_option free }
+    exercise_cstr_temporary
+    unsafe { BORROWED_OPTION_HEAP_PROBE_SIZE alloc = reused_option }
+    "borrowed Option temporary is reclaimed" available_option reused_option == assert_true
+    unsafe { reused_option free }
+
+    0 (u64) = warmup_iteration
+    while warmup_iteration OWNED_STORAGE_WARMUP_ITERATIONS > do
+        exercise_owned_storage_reclamation
+        1 += warmup_iteration
+    done
+    unsafe { OWNED_STORAGE_HEAP_PROBE_SIZE alloc = first_marker }
+    0 (u64) = iteration
+    while iteration OWNED_STORAGE_STRESS_ITERATIONS > do
+        exercise_owned_storage_reclamation
+        1 += iteration
+    done
+    unsafe { OWNED_STORAGE_HEAP_PROBE_SIZE alloc = second_marker }
+    unsafe { OWNED_STORAGE_HEAP_PROBE_SIZE alloc = third_marker }
+    unsafe {
+        third_marker (u64) second_marker (u64) - = baseline_growth
+        second_marker (u64) first_marker (u64) - = stressed_growth
+        f"strings, closures, aggregates, collections, and process buffers stay bounded (stress {stressed_growth}, baseline {baseline_growth})"
+        stressed_growth baseline_growth == assert_true
+        first_marker free
+        second_marker free
+        third_marker free
+    }
+}
+
 fn get_released_string_data_address -> ptr {
     1024 String::with_capacity = text
     unsafe { text.as_str (ptr) }
@@ -222,5 +305,6 @@ test_static_aggregate_shells_reuse_storage
 test_aggregate_payloads_drop_once
 test_generic_borrow_shell_needs_no_drop_hook
 test_failed_metadata_lookup_reclaims_buffer
+test_owned_storage_stays_bounded
 test_owned_text_reclaims_storage
 test_summary
