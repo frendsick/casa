@@ -4,8 +4,10 @@ set -eu
 . "$(dirname "$0")/test-lib.sh"
 
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd)
-TESTS_DIR="$ROOT_DIR/tests/compiler"
+TESTS_DIR=${CASA_COMPILER_TESTS_DIR:-"$ROOT_DIR/tests/compiler"}
 LIB_DIR="$ROOT_DIR/lib"
+TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/casa_compiler_tests.XXXXXX")
+trap 'rm -rf "$TEST_TMP"' EXIT
 cd "$ROOT_DIR"
 
 select_tool "${CASA_COMPILER:-}" "$ROOT_DIR/casac" "${1:-}"
@@ -103,13 +105,13 @@ for f in "$TESTS_DIR"/test_*.casa; do
     fi
     matched=true
 
-    binary="/tmp/casa_${base}"
+    binary="$TEST_TMP/$base"
 
     printf "Running: %s ... " "$base"
 
-    if ! $COMPILER -L "$LIB_DIR" "$f" -o "$binary" 2>/tmp/casa_compile_err; then
+    if ! $COMPILER -L "$LIB_DIR" "$f" -o "$binary" 2>"$TEST_TMP/compile_err"; then
         printf "${RED}COMPILE FAIL${RESET}\n"
-        cat /tmp/casa_compile_err
+        cat "$TEST_TMP/compile_err"
         fail=$((fail+1))
         rm -f "$binary"
         continue
@@ -148,12 +150,12 @@ for f in "$TESTS_DIR"/errors/*.casa; do
 
     printf "Running: error/%s ... " "$base"
 
-    if $COMPILER -L "$LIB_DIR" "$f" -o /dev/null 2>/tmp/casa_err; then
+    if $COMPILER -L "$LIB_DIR" "$f" -o /dev/null 2>"$TEST_TMP/error"; then
         printf "${RED}EXPECTED COMPILE FAIL${RESET}\n"
         fail=$((fail+1))
-    elif ! grep -q "$expected_tag" /tmp/casa_err; then
+    elif ! grep -q "$expected_tag" "$TEST_TMP/error"; then
         printf "${RED}WRONG ERROR (expected %s)${RESET}\n" "$expected_tag"
-        cat /tmp/casa_err
+        cat "$TEST_TMP/error"
         fail=$((fail+1))
     else
         printf "${GREEN}OK${RESET}\n"
@@ -178,20 +180,20 @@ for f in "$TESTS_DIR"/runtime_errors/*.casa; do
     matched=true
 
     expected_message=$(head -1 "$f" | sed 's/^# expect: //')
-    binary="/tmp/casa_runtime_${base}"
+    binary="$TEST_TMP/runtime_${base}"
 
     printf "Running: runtime_error/%s ... " "$base"
 
-    if ! $COMPILER -L "$LIB_DIR" "$f" -o "$binary" 2>/tmp/casa_compile_err; then
+    if ! $COMPILER -L "$LIB_DIR" "$f" -o "$binary" 2>"$TEST_TMP/compile_err"; then
         printf "${RED}COMPILE FAIL${RESET}\n"
-        cat /tmp/casa_compile_err
+        cat "$TEST_TMP/compile_err"
         fail=$((fail+1))
-    elif "$binary" >/tmp/casa_runtime_out 2>/tmp/casa_runtime_err; then
+    elif "$binary" >"$TEST_TMP/runtime_out" 2>"$TEST_TMP/runtime_err"; then
         printf "${RED}EXPECTED RUNTIME FAIL${RESET}\n"
         fail=$((fail+1))
-    elif ! grep -q "$expected_message" /tmp/casa_runtime_err; then
+    elif ! grep -q "$expected_message" "$TEST_TMP/runtime_err"; then
         printf "${RED}WRONG ERROR (expected %s)${RESET}\n" "$expected_message"
-        cat /tmp/casa_runtime_err
+        cat "$TEST_TMP/runtime_err"
         fail=$((fail+1))
     else
         printf "${GREEN}OK${RESET}\n"

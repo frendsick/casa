@@ -32,43 +32,32 @@ After the implementation is stable:
 
 - **MUST** run focused filters for the changed behavior. Run `test_bootstrap.sh`
   only when the affected path requires bootstrap validation.
-- Full local suites are not required before a pull request. **MUST NOT** run them
-  only to duplicate pull request CI. CI runs:
+- **MUST** run the complete CI suite before opening or updating a pull request:
 
   ```
-  CASA_TEST_CATEGORY=compiler_parsing tests/test_compiler.sh
-  CASA_TEST_CATEGORY=compiler_analysis tests/test_compiler.sh
-  CASA_TEST_CATEGORY=compiler_integration tests/test_compiler.sh
-  CASA_TEST_CATEGORY=types_ownership tests/test_compiler.sh
-  CASA_TEST_CATEGORY=types_generics tests/test_compiler.sh
-  CASA_TEST_CATEGORY=types_traits tests/test_compiler.sh
-  CASA_TEST_CATEGORY=language_memory tests/test_compiler.sh
-  CASA_TEST_CATEGORY=language_control_flow tests/test_compiler.sh
-  CASA_TEST_CATEGORY=language_values tests/test_compiler.sh
-  CASA_TEST_CATEGORY=runtime tests/test_compiler.sh
-  tests/test_cli.sh
-  tests/test_examples.sh
-  tests/test_bootstrap.sh
-  tests/test_formatter.sh
+  tests/test_all.sh
   ```
 
-- All scripts default to `./casac` (or `./casafmt` for formatter tests). Rebuild
-  casac before testing if compiler sources changed:
+- `test_all.sh` builds the branch compiler once, then runs the same 14 shards as
+  CI in parallel. It uses the number of online processors by default. Set
+  `CASA_TEST_JOBS` to limit local parallelism:
 
   ```
-  ./casac -L lib casa.casa -o casac
+  CASA_TEST_JOBS=4 tests/test_all.sh
   ```
 
-- Override the compiler with `CASA_COMPILER`:
+- All scripts default to `./casac` (or `./casafmt` for formatter tests). Override
+  the bootstrap compiler for the complete suite with `CASA_COMPILER`:
 
   ```
-  CASA_COMPILER=./casac_debug tests/test_compiler.sh
+  CASA_COMPILER=./casac_debug tests/test_all.sh
   ```
 
 ## Selective test running
 
-All test scripts accept substring filters as arguments. Only tests whose name
-contains at least one filter run. No filters = full suite.
+The compiler, example, and formatter scripts accept substring filters as
+arguments. Only tests whose name contains at least one filter run. No filters =
+full suite.
 
 ```
 tests/test_compiler.sh lexer              # only test_lexer + any error fixture matching "lexer"
@@ -77,8 +66,7 @@ tests/test_examples.sh fibonacci          # only fibonacci example
 tests/test_formatter.sh indent            # only golden file tests matching "indent"
 ```
 
-Set `CASA_TEST_CATEGORY` to one of the values in the CI list above to run that
-compiler-test category:
+Set `CASA_TEST_CATEGORY` to a compiler-test category to run it directly:
 
 ```
 CASA_TEST_CATEGORY=types_ownership tests/test_compiler.sh
@@ -87,6 +75,13 @@ CASA_TEST_CATEGORY=types_ownership tests/test_compiler.sh
 Category selection and substring filters can be combined. The compiler test
 runner fails when a fixture has no category so category-based CI cannot skip a
 new fixture.
+
+Run one CI shard through the shared dispatcher by passing its name:
+
+```
+tests/test_all.sh types_ownership
+tests/test_all.sh formatter
+```
 
 When `test_formatter.sh` has filters, idempotency and safety tests
 are skipped (they only run in the full suite).

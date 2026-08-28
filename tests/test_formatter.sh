@@ -89,6 +89,38 @@ if matches_filter "filter_notice" "$@"; then
     fi
 fi
 
+# The CI shard dispatcher must preserve the selected shard's status.
+if matches_filter "ci_shard_dispatch" "$@"; then
+    matched=true
+    ci_shard_dispatch_ok=true
+
+    if ! output=$(tests/test_all.sh cli) || \
+        ! printf '%s\n' "$output" | grep -Fx "CLI tests passed" >/dev/null
+    then
+        printf "${RED}[FAIL]${RESET} Failed: ci_shard_dispatch (known shard)\n"
+        printf '%s\n' "$output"
+        ci_shard_dispatch_ok=false
+    fi
+
+    status=0
+    output=$(tests/test_all.sh unknown 2>&1) || status=$?
+    if [ "$status" -ne 2 ] || \
+        ! printf '%s\n' "$output" | \
+            grep -Fx "Unknown test shard: unknown" >/dev/null
+    then
+        printf "${RED}[FAIL]${RESET} Failed: ci_shard_dispatch (unknown shard)\n"
+        printf '%s\n' "$output"
+        ci_shard_dispatch_ok=false
+    fi
+
+    if [ "$ci_shard_dispatch_ok" = true ]; then
+        printf "${GREEN}[OK]${RESET} Passed: ci_shard_dispatch\n"
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1))
+    fi
+fi
+
 # Category-based CI must select known fixtures and reject unknown categories.
 if matches_filter "compiler_categories" "$@"; then
     matched=true
@@ -103,12 +135,16 @@ if matches_filter "compiler_categories" "$@"; then
         compiler_categories_ok=false
     fi
 
-    uncategorized_fixture=$(mktemp \
-        "$ROOT_DIR/tests/compiler/test_uncategorized.XXXXXX.casa")
-    trap 'rm -f "$uncategorized_fixture"' EXIT
+    category_tests_dir=$(mktemp -d \
+        "${TMPDIR:-/tmp}/casa_compiler_categories.XXXXXX")
+    trap 'rm -rf "$category_tests_dir"' EXIT
+    : > "$category_tests_dir/test_lexer.casa"
+    uncategorized_fixture="$category_tests_dir/test_uncategorized.casa"
+    : > "$uncategorized_fixture"
     status=0
-    output=$(tests/test_compiler.sh no-such-test 2>&1) || status=$?
-    rm -f "$uncategorized_fixture"
+    output=$(CASA_COMPILER_TESTS_DIR="$category_tests_dir" \
+        tests/test_compiler.sh no-such-test 2>&1) || status=$?
+    rm -rf "$category_tests_dir"
     trap - EXIT
     if [ "$status" -eq 0 ] || \
         ! printf '%s\n' "$output" | \
