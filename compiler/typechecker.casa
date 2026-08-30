@@ -727,6 +727,8 @@ pub struct TypeChecker {
     pub unsafe_depth:               u64
     pub required_drop_types:        std::List[common::Type]
     pub literal_resolutions:        std::Map[i64 common::Type]
+    pub contextual_parameters:      std::List[common::Type]
+    pub pending_lambdas:            std::Map[i64 std::String]
     pub diagnostics:                mut$error::Diagnostics
 }
 
@@ -783,6 +785,8 @@ pub fn unsafe_operation_name operation:$common::OpValue -> str {
 impl TypeChecker {
     pub fn new store:mut$common::SymbolStore diagnostics:mut$error::Diagnostics -> TypeChecker {
         diagnostics # diagnostics
+        std::Map[i64 std::String]::new # pending_lambdas
+        std::List[common::Type]::new # contextual_parameters
         std::Map[i64 common::Type]::new # literal_resolutions
         std::List[common::Type]::new # required_drop_types
         0 # unsafe_depth
@@ -1054,6 +1058,13 @@ impl TypeChecker {
             cap tc.parameters.length < return
         fi
         true
+    }
+
+    fn get_contextual_parameter self:$TypeChecker -> std::Option[common::Type] {
+        if self.parameters.length self.contextual_parameters.length > then
+            self.parameters.length self.contextual_parameters.get common::clone_type std::Option::Some return
+        fi
+        std::Option[common::Type]::None
     }
 }
 # Raise a TypeMismatch error at the type checker's current location.
@@ -1754,6 +1765,7 @@ impl TypeChecker {
 
 impl TypeChecker {
     pub fn stack_peek_type tc:mut$TypeChecker -> common::Type {
+        std::Option[common::Type]::None tc.materialize_pending_lambda
         if
             0 tc
                 .stack
@@ -1761,6 +1773,9 @@ impl TypeChecker {
                 .length ==
         then
             if tc.within_param_cap then
+                if tc.get_contextual_parameter std::Option::Some(contextual) is then
+                    contextual common::clone_type return
+                fi
                 common::make_unknown_type common::clone_type return
             fi
             tc.stack_underflow_message tc.report_stack_underflow
@@ -1792,6 +1807,7 @@ impl TypeChecker {
 
 impl TypeChecker {
     pub fn stack_pop_value tc:mut$TypeChecker -> TypedValue {
+        std::Option[common::Type]::None tc.materialize_pending_lambda
         if
             0 tc
                 .stack
@@ -1799,10 +1815,14 @@ impl TypeChecker {
                 .length ==
         then
             if tc.within_param_cap then
-                common::make_unknown_type common::Parameter::new tc.parameters.push
+                common::make_unknown_type common::clone_type = parameter_type
+                if tc.get_contextual_parameter std::Option::Some(contextual) is then
+                    contextual common::clone_type = parameter_type
+                fi
+                parameter_type common::clone_type common::Parameter::new tc.parameters.push
                 false std::Option[std::List[std::String]]::None std::Option[i64]::None std::Option[std::String]::None
-                ValueCapability::Owned std::Option[std::String]::None
-                std::List[LiteralRef]::new common::empty_location common::make_unknown_type common::clone_type TypedValue return
+                parameter_type type_capability std::Option[std::String]::None
+                std::List[LiteralRef]::new common::empty_location parameter_type TypedValue return
             fi
             tc.stack_underflow_message tc.report_stack_underflow
             false std::Option[std::List[std::String]]::None std::Option[i64]::None std::Option[std::String]::None
@@ -1830,19 +1850,6 @@ impl TypeChecker {
 
 impl TypeChecker {
     pub fn stack_pop_drop tc:mut$TypeChecker {
-        if
-            0 tc
-                .stack
-                .values
-                .length ==
-        then
-            if tc.within_param_cap then
-                common::make_unknown_type common::Parameter::new tc.parameters.push
-                return
-            fi
-            tc.stack_underflow_message tc.report_stack_underflow
-            return
-        fi
         tc.stack_pop_value = value
         value tc.finish_value_use
     }
@@ -1857,6 +1864,9 @@ impl TypeChecker {
                 .values
                 .length == tc.within_param_cap &&
         then
+            if tc.get_contextual_parameter std::Option::Some(_) is then
+                tc.stack_pop_value return
+            fi
             right.type_value resolve_numeric_literal_default = inferred
             if inferred.is_unknown_placeholder ! inferred common::make_missing_type.eq ! && then
                 tc.literal_resolutions tc.diagnostics inferred right.resolve_literals drop
@@ -1915,6 +1925,7 @@ impl TypeChecker {
     }
 
     pub fn expect_type_t tc:mut$TypeChecker expected:$common::Type {
+        expected common::clone_type std::Option::Some tc.materialize_pending_lambda
         if
             0 tc
                 .stack
@@ -5844,6 +5855,18 @@ impl TypeChecker {
             if index depth > then
                 depth 1 - index - = stack_index
                 index visible_parameters.get = parameter
+                bindings parameter.typ.substitute_t = contextual_type
+                contextual_type common::clone_type std::Option::Some stack_index
+                tc.materialize_pending_lambda_at
+                location bindings effect stack_index parameter tc.bind_stack_parameter = bindings
+            fi
+            1 += index
+        done
+        0 (u64) = index
+        while index visible_parameters.length > do
+            if index depth > then
+                depth 1 - index - = stack_index
+                index visible_parameters.get = parameter
                 location bindings effect stack_index parameter tc.finalize_stack_parameter_literals
                 = bindings
             fi
@@ -5941,6 +5964,75 @@ impl TypeChecker {
 # ============================================================================
 
 impl TypeChecker {
+    fn materialize_named_lambda
+        self:mut$TypeChecker
+        stack_index:u64
+        lambda_name:std::String
+        expected:std::Option[common::Type]
+    {
+        if lambda_name.as_str self.store.functions.remove_str std::Option::Some(lambda) is then
+            lambda.clone = owned_lambda
+            if expected std::Option::Some(expected_type) is then
+                expected_type common::clone_type = callback_type
+                if callback_type.borrow_target std::Option::Some(target) is then
+                    target common::clone_type = callback_type
+                fi
+                if callback_type common::Type::Function(function_type) is then
+                    function_type common::function_type_to_stack_effect = contextual_effect
+                    owned_lambda
+                        .stack_effect
+                        .type_vars
+                        .clone contextual_effect common::StackEffect::set_type_vars
+                    owned_lambda
+                        .stack_effect
+                        .trait_bounds
+                        .clone contextual_effect common::StackEffect::set_trait_bounds
+                    owned_lambda
+                        .stack_effect
+                        .const_params
+                        .clone contextual_effect common::StackEffect::set_const_params
+                    contextual_effect owned_lambda common::Function::set_stack_effect
+                fi
+            fi
+            owned_lambda lambda_name.clone self.store.functions.set
+            if self.diagnostics self.store lambda_name.as_str ensure_typechecked std::Option::Some(checked) is then
+                checked.stack_effect common::stack_effect_to_function_type = lambda_type
+                stack_index self.stack.values.get_mut = value
+                lambda_type common::clone_type = value.type_value
+                lambda_type type_capability = value.capability
+                std::Option[i64]::None = value.source
+            fi
+        fi
+    }
+
+    fn materialize_pending_lambda_at
+        self:mut$TypeChecker
+        stack_index:u64
+        expected:std::Option[common::Type]
+    {
+        stack_index self.stack.values.get = pending_value
+        if pending_value.source.clone std::Option::Some(source) is then
+            if source self.pending_lambdas.remove std::Option::Some(lambda_name) is then
+                expected lambda_name.clone stack_index self.materialize_named_lambda
+            fi
+        fi
+    }
+
+    fn materialize_pending_lambda self:mut$TypeChecker expected:std::Option[common::Type] {
+        if
+            self
+                .stack
+                .values
+                .is_empty
+        then
+            return
+        fi
+        expected self
+            .stack
+            .values
+            .length 1 - self.materialize_pending_lambda_at
+    }
+
     # ADR-0112: a typed borrow reconstructed from a raw address inside `unsafe`
     # is anchored conservatively to every compatible borrowed input of the
     # enclosing function. A shared borrow accepts any borrowed input; an
@@ -6435,6 +6527,24 @@ impl TypeChecker {
                 std::Option::None => {
                 }
             end
+            if push_name.as_str "lambda__" str::starts_with then
+                common::make_unknown_type tc.stack_push_type
+                # The push op id keeps a deferred lambda attached to its stack value.
+                tc
+                    .stack
+                    .values
+                    .length 1 - tc
+                    .stack
+                    .values
+                    .get_mut = pending_value
+                op.id std::Option::Some = pending_value.source
+                push_name.clone op.id tc.pending_lambdas.set
+                if function_opt std::Option::Some(enclosing) is then
+                    enclosing.stack_effect identity_generic_bindings = op.call_bindings
+                fi
+                closure_origins = pending_value.origins
+                op_index return
+            fi
             tc.diagnostics tc.store push_name.as_str ensure_typechecked = push_fn_opt
             if push_fn_opt.is_some then
                 push_fn_opt.unwrap = push_fn
@@ -8537,11 +8647,11 @@ pub fn ensure_typechecked
     diagnostics store active_function function_ops check_ops = inferred_stack_effect
     active_function.unwrap = function
     function_ops function common::Function::set_ops
-    function common::Function::stack_effect common::stack_effect_to_str = effect_text
-    if effect_text.as_str "None -> None" == then
-        if function.name.as_str "lambda__" str::starts_with then
-            inferred_stack_effect function common::Function::set_stack_effect
-        else
+    if function.name.as_str "lambda__" str::starts_with then
+        inferred_stack_effect function common::Function::set_stack_effect
+    else
+        function common::Function::stack_effect common::stack_effect_to_str = effect_text
+        if effect_text.as_str "None -> None" == then
             std::Map[std::String common::StackEffect]::new = inferred_effects
             store inferred_effects function semantics::analyze_function_semantics
             = semantics
@@ -8955,7 +9065,11 @@ pub fn check_ops
         for variable in the_function.variables.iter do
             true variable.name.as_str checker.set_owner_moved
         done
-        if the_function common::Function::name.as_str "lambda__" str::starts_with ! then
+        if the_function common::Function::name.as_str "lambda__" str::starts_with then
+            for parameter in the_function common::Function::stack_effect.parameters.iter do
+                parameter.typ common::clone_type checker.contextual_parameters.push
+            done
+        else
             the_function common::Function::stack_effect common::StackEffect::parameters.length std::Option::Some = budget
         fi
     else
@@ -8996,6 +9110,7 @@ pub fn check_ops
             .values
             .length >
     do
+        std::Option[common::Type]::None stack_index checker.materialize_pending_lambda_at
         stack_index checker
             .stack
             .values
@@ -9037,24 +9152,26 @@ pub fn check_ops
     checker.diagnostics.error_count errors_before_ops < = had_type_errors
     if had_type_errors ! then
         if function_opt std::Option::Some(declared_function) is then
-            declared_function common::Function::stack_effect = declared: $common::StackEffect
-            if
-                declared common::stack_effect_to_str.as_str "None -> None" !=
-                0 inferred.return_types.length != checker.has_return_types ! || &&
-            then
-                false = invalid_effect
-                if 0 declared.type_vars.length != then
-                    declared inferred checked_generic_body_effect_matches ! = invalid_effect
-                else
-                    inferred declared common::stack_effect_matches ! = invalid_effect
+            if declared_function.name.as_str "lambda__" str::starts_with ! then
+                declared_function common::Function::stack_effect = declared: $common::StackEffect
+                if
+                    declared common::stack_effect_to_str.as_str "None -> None" !=
+                    0 inferred.return_types.length != checker.has_return_types ! || &&
+                then
+                    false = invalid_effect
+                    if 0 declared.type_vars.length != then
+                        declared inferred checked_generic_body_effect_matches ! = invalid_effect
+                    else
+                        inferred declared common::stack_effect_matches ! = invalid_effect
+                    fi
+                    if invalid_effect then
+                        declared_function common::Function::location f"Invalid stack effect for function `{declared_function common::Function::name}`: expected `{declared common::stack_effect_to_str}`, got `{inferred common::stack_effect_to_str}`" common::ErrorKind::SignatureMismatch checker.diagnostics.record_error_string
+                    fi
                 fi
-                if invalid_effect then
-                    declared_function common::Function::location f"Invalid stack effect for function `{declared_function common::Function::name}`: expected `{declared common::stack_effect_to_str}`, got `{inferred common::stack_effect_to_str}`" common::ErrorKind::SignatureMismatch checker.diagnostics.record_error_string
+                # Update inferred stack effect with declared return types for type-var functions
+                if 0 declared common::StackEffect::type_vars.length != then
+                    declared.clone = inferred
                 fi
-            fi
-            # Update inferred stack effect with declared return types for type-var functions
-            if 0 declared common::StackEffect::type_vars.length != then
-                declared.clone = inferred
             fi
         fi
     fi
