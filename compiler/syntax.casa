@@ -2980,7 +2980,7 @@ pub fn match_derived_receiver_impl
     end
 }
 
-pub fn derived_function_name receiver:$common::Type method_name:$str -> std::String {
+pub fn make_derived_function_name receiver:$common::Type method_name:$str -> std::String {
     f"{receiver.match_base}::__derived_{method_name}"
 }
 
@@ -3142,7 +3142,7 @@ pub fn find_derived_override
             continue
         fi
         function_name_opt.unwrap = function_name
-        method_name receiver derived_function_name = generated_name
+        method_name receiver make_derived_function_name = generated_name
         if generated_name function_name == then
             continue
         fi
@@ -3641,7 +3641,7 @@ pub fn make_derived_eq_function
     "other".to_str parameter_names.push
     required_type_vars type_vars common::STD_EQ_TRAIT make_derived_trait_bounds = bounds
     location
-    "eq" receiver derived_function_name.as_str
+    "eq" receiver make_derived_function_name.as_str
     ops
     common::make_bool_type
     parameter_names
@@ -3681,7 +3681,7 @@ pub fn make_derived_cmp_function
     required_type_vars type_vars common::STD_ORD_TRAIT make_derived_trait_bounds = bounds
     common::STD_ORDERING_TYPE.to_str common::GenericType::new common::Type::Generic = ordering_type
     location
-    "cmp" receiver derived_function_name.as_str
+    "cmp" receiver make_derived_function_name.as_str
     ops
     ordering_type
     parameter_names
@@ -3719,7 +3719,7 @@ pub fn make_derived_hash_function
     "self".to_str parameter_names.push
     required_type_vars type_vars common::STD_HASHABLE_TRAIT make_derived_trait_bounds = bounds
     location
-    "hash" receiver derived_function_name.as_str
+    "hash" receiver make_derived_function_name.as_str
     ops
     common::make_i64_type
     parameter_names
@@ -3744,7 +3744,7 @@ pub fn make_derived_clone_function
     std::List[common::Type]::new common::STD_CLONE_TRAIT.to_str common::TraitBound
     receiver common::clone_type
     common::TraitImpl = trait_impl
-    "clone" receiver derived_function_name.as_str trait_impl parser make_copy_clone_fallback
+    "clone" receiver make_derived_function_name.as_str trait_impl parser make_copy_clone_fallback
 }
 
 pub fn set_derived_method
@@ -3789,6 +3789,23 @@ pub fn does_derived_clone_type_require_var typ:$common::Type type_var:$str -> bo
     end
 }
 
+pub fn does_type_contain_exclusive_borrow typ:$common::Type -> bool {
+    if typ.is_shared_borrow then
+        false return
+    fi
+    if typ.is_exclusive_borrow then
+        true return
+    fi
+    if typ common::Type::Generic(generic) is then
+        for parameter in generic.params.iter do
+            if parameter does_type_contain_exclusive_borrow then
+                true return
+            fi
+        done
+    fi
+    false
+}
+
 pub fn add_derived_required_type_vars
     typ:$common::Type
     type_vars:$std::List[std::String]
@@ -3820,6 +3837,7 @@ pub fn derive_traits_for_aggregate
     derived_traits:$std::List[std::String]
     required_type_vars:$std::Set[std::String]
     clone_required_type_vars:$std::Set[std::String]
+    has_exclusive_borrow:bool
     location:$common::Location
 {
     false = derives_clone
@@ -3876,6 +3894,12 @@ pub fn derive_traits_for_aggregate
     eq_override.is_none needs_eq && = eq_generated
     hash_override.is_none derives_hashable && = hash_generated
     cmp_override.is_none derives_ord && = cmp_generated
+    if clone_generated has_exclusive_borrow && then
+        location f"Cannot derive `Clone` for `{name}` because exclusive-borrow fields cannot be cloned"
+        common::ErrorKind::TraitSignatureMismatch parser.state.record_error_string
+        false = derives_clone
+        false = clone_generated
+    fi
     if eq_override.is_some then
         if derives_hashable hash_override.is_none && then
             location "A custom derived `eq` method requires an explicit `hash` companion" common::ErrorKind::TraitSignatureMismatch parser.state.record_error
@@ -3891,7 +3915,7 @@ pub fn derive_traits_for_aggregate
     if clone_override std::Option::Some(override_name) is then
         override_name.clone std::Option::Some = clone_function
     elif clone_generated then
-        "clone" receiver derived_function_name = function_name
+        "clone" receiver make_derived_function_name = function_name
         if function_name.as_str parser.store.has_function ! then
             location clone_required_type_vars type_vars receiver parser make_derived_clone_function = function
             function parser.store.set_function
@@ -3903,7 +3927,7 @@ pub fn derive_traits_for_aggregate
     if eq_override std::Option::Some(override_name) is then
         override_name.clone std::Option::Some = eq_function
     elif eq_generated then
-        "eq" receiver derived_function_name = function_name
+        "eq" receiver make_derived_function_name = function_name
         if function_name.as_str parser.store.has_function ! then
             location required_type_vars type_vars receiver parser make_derived_eq_function = function
             function parser.store.set_function
@@ -3915,7 +3939,7 @@ pub fn derive_traits_for_aggregate
     if hash_override std::Option::Some(override_name) is then
         override_name.clone std::Option::Some = hash_function
     elif hash_generated then
-        "hash" receiver derived_function_name = function_name
+        "hash" receiver make_derived_function_name = function_name
         if function_name.as_str parser.store.has_function ! then
             location required_type_vars type_vars receiver parser make_derived_hash_function = function
             function parser.store.set_function
@@ -3928,7 +3952,7 @@ pub fn derive_traits_for_aggregate
         override_name.clone std::Option::Some = cmp_function
     elif cmp_generated then
         if location parser validate_derived_ordering then
-            "cmp" receiver derived_function_name = function_name
+            "cmp" receiver make_derived_function_name = function_name
             if function_name.as_str parser.store.has_function ! then
                 location required_type_vars type_vars receiver parser make_derived_cmp_function = function
                 function parser.store.set_function
@@ -4007,11 +4031,15 @@ pub fn derive_traits_for_aggregates parser:mut$Parser {
     do
         std::Set[std::String]::new = required_type_vars
         std::Set[std::String]::new = clone_required_type_vars
+        false = has_exclusive_borrow
         for member in casa_struct.members.iter do
             required_type_vars casa_struct.type_vars member.typ add_derived_required_type_vars
             clone_required_type_vars casa_struct.type_vars member.typ add_derived_clone_required_type_vars
+            if member.typ does_type_contain_exclusive_borrow then
+                true = has_exclusive_borrow
+            fi
         done
-        casa_struct.location clone_required_type_vars required_type_vars casa_struct.derived_traits casa_struct.type_vars
+        casa_struct.location has_exclusive_borrow clone_required_type_vars required_type_vars casa_struct.derived_traits casa_struct.type_vars
         casa_struct.name.as_str parser derive_traits_for_aggregate
     done
     for
@@ -4023,13 +4051,17 @@ pub fn derive_traits_for_aggregates parser:mut$Parser {
     do
         std::Set[std::String]::new = required_type_vars
         std::Set[std::String]::new = clone_required_type_vars
+        false = has_exclusive_borrow
         for pair in casa_enum.variant_types.iter do
             for payload_type in pair.second.iter do
                 required_type_vars casa_enum.type_vars payload_type add_derived_required_type_vars
                 clone_required_type_vars casa_enum.type_vars payload_type add_derived_clone_required_type_vars
+                if payload_type does_type_contain_exclusive_borrow then
+                    true = has_exclusive_borrow
+                fi
             done
         done
-        casa_enum.location clone_required_type_vars required_type_vars casa_enum.derived_traits casa_enum.type_vars
+        casa_enum.location has_exclusive_borrow clone_required_type_vars required_type_vars casa_enum.derived_traits casa_enum.type_vars
         casa_enum.name.as_str parser derive_traits_for_aggregate
     done
 }
