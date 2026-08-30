@@ -287,14 +287,17 @@ Braces create an anonymous function value:
 The compiler infers a lambda's stack effect from its body and the context in
 which it is used. Here, `increment` has type `fn[i64 -> i64]`.
 
-A generic call checks the inferred lambda against the function type after it
-resolves type variables. Add parameter types when the lambda body does not show
-whether an input is owned or borrowed:
+When a call has an expected function type, the compiler uses its resolved input
+types for unannotated lambda parameters. The body determines the output types:
 
 ```casa
 [1, 2, 3] List::from_array = values
-{ = total:i64 = value:$i64 value copy total + } 0 values.iter.fold print
+{ = total = value value copy total + } 0 values.iter.fold print
 ```
+
+An explicit parameter annotation takes priority and must match the expected
+function type. A lambda that is bound before use has no expected function type,
+so its body alone determines its stack effect.
 
 A lambda can capture bindings from its enclosing scope. Copy values are copied.
 An ordinary lambda borrows a non-Copy owner for the lifetime of the closure:
