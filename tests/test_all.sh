@@ -67,26 +67,25 @@ CASA_COMPILER="$RUN_DIR/casac-stage1"
 export CASA_COMPILER
 
 printf 'Running CI test shards with %s parallel jobs\n' "$jobs"
-if ! printf '%s\n' "$SHARDS" | xargs -n 1 -P "$jobs" sh -c '
+printf '%s\n' "$SHARDS" | xargs -n 1 -P "$jobs" sh -c '
     script=$1
     run_dir=$2
     shard=$3
-    if "$script" "$shard" >"$run_dir/$shard.log" 2>&1; then
-        : >"$run_dir/$shard.pass"
-    else
-        : >"$run_dir/$shard.fail"
-        exit 1
-    fi
-' sh "$ROOT_DIR/tests/test_all.sh" "$RUN_DIR"
-then
-    : # Print every shard log before returning failure.
-fi
+    {
+        if "$script" "$shard"; then
+            : >"$run_dir/$shard.pass"
+        else
+            : >"$run_dir/$shard.fail"
+        fi
+    } 2>&1 | awk -v shard="$shard" '\''
+        { print "[" shard "] " $0; fflush() }
+    '\''
+    [ -f "$run_dir/$shard.pass" ]
+' sh "$ROOT_DIR/tests/test_all.sh" "$RUN_DIR" || :
 
 pass=0
 fail=0
 for shard in $SHARDS; do
-    printf '\n== %s ==\n' "$shard"
-    cat "$RUN_DIR/$shard.log"
     if [ -f "$RUN_DIR/$shard.pass" ]; then
         printf 'Shard passed: %s\n' "$shard"
         pass=$((pass + 1))
