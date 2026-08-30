@@ -129,8 +129,8 @@ See [Derive standard traits](traits.md#derive-standard-traits).
 
 Payload-free enums use a raw representation and can derive `Copy`. Payload
 enums and structs remain non-Copy until their value representation can be
-duplicated without allocation or aliasing. Fixed arrays are also non-Copy under
-the current array rule. See [Copy and Clone](traits.md#copy-and-clone).
+duplicated without allocation or aliasing. Fixed arrays are `Copy` when their
+elements are `Copy`. See [Copy and Clone](traits.md#copy-and-clone).
 
 ## Custom destruction
 

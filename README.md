@@ -14,7 +14,7 @@ Casa is a statically typed, stack-based programming language for Linux.
 
 ## Install
 
-Clone the repository and download the compiler:
+Clone the repository and download the compiler and formatter:
 
 ```sh
 git clone https://github.com/frendsick/casa.git
