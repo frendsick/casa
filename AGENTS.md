@@ -6,6 +6,8 @@ See [README.md](./README.md) for basic info, language docs, and examples.
 
 - The codebase is the source of truth. Verify against current code before asserting.
 - Don't web-search Casa specifics; this repo is the only authoritative source.
+- When workflow goals conflict, prioritize correctness, fewer user
+  interventions, wall-clock time, then token use.
 - When language features or stdlib functions change, update the corresponding
   documentation, examples, and tests.
 - Never mention Claude or AI usage

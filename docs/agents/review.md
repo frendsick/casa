@@ -26,17 +26,18 @@ Casa tests.
 2. Include the `ponytail-review` checks in the Standards axis. Apply the task's
    existing `function-design` analysis to changed non-trivial functions. Do not
    run separate passes for these checks.
-3. For every changed comparison or non-commutative call, translate the Casa
-   expression to conventional notation and confirm its argument order against a
-   focused test.
+3. The Standards reviewer must list every changed comparison and
+   non-commutative call, translate each Casa expression to conventional
+   notation, and confirm its argument order against a focused test.
 4. Give each finding a stable identifier and class. Keep the finding and its
    disposition in the review context for later passes.
 5. **MUST** fix every Must fix finding without pausing. Batch compatible fixes,
    then run focused tests.
-6. Implement an untracked Prerequisite in the current work. For a tracked
-   Prerequisite, keep the pull request in draft and add a native GitHub blocker
-   relationship to the originating issue. If there is no originating issue, add
-   the relationship to the pull request instead. See
+6. Implement a trivial or non-independent Prerequisite in the current work. For
+   a non-trivial Prerequisite that can merge independently, ensure it has an
+   issue, split it from the current work, keep the pull request in draft, and
+   add a native GitHub blocker relationship to the originating issue. If there
+   is no originating issue, add the relationship to the pull request instead. See
    [issue-tracker.md](./issue-tracker.md#blocker-relationships).
 7. Report Non-blocking findings to the user and in the pull request. Do not
    implement them.
@@ -49,9 +50,9 @@ Casa tests.
    an interface or the design, reaches outside the previously affected flow, or
    two incremental passes still produce Must fix or untracked Prerequisite
    findings.
-10. Repeat until no Must fix or untracked Prerequisite findings remain, then run
-   the selected tier's final validation once and open or update the pull
-   request. See [testing.md](./testing.md) and [git.md](./git.md).
+10. Repeat until no Must fix or Prerequisite assigned to the current work
+   remains, then run the selected tier's final validation once and open or
+   update the pull request. See [testing.md](./testing.md) and [git.md](./git.md).
 
 ## Why no pausing
 
