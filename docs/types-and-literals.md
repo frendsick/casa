@@ -118,6 +118,9 @@ type:
 [] = names:array[str 0]
 ```
 
+An `array[T N]` is `Copy` when `T` is `Copy`, including when `N` is zero.
+Arrays with non-`Copy` elements move by default.
+
 The annotation gives an empty array its element type. Use `Bytes` for compact
 binary data. It stores one `u8` per byte and has no byte-literal syntax. Every
 evaluation of an array literal produces an independent owned array that takes
