@@ -53,10 +53,10 @@ resource drop    # error: owner `resource` was already moved
 ```
 
 The array destroys its elements when it goes out of scope. `clone` produces an
-independent array when `T: Clone`. The current language does not make
-`array[T N]` Copy, even when `T` is Copy. Indexing with a constant past the last
-element is a compile-time error. Indexing past it with a runtime value
-terminates the program.
+independent array when `T: Clone`. An array is `Copy` when `T: Copy`, including
+when `N` is zero. Arrays with non-`Copy` elements remain affine. Indexing with a
+constant past the last element is a compile-time error. Indexing past it with a
+runtime value terminates the program.
 
 `nth` and `iter` read through a borrowed array, so they hand back `$T` rather
 than an owned element. The array stays the only owner: an element type with a

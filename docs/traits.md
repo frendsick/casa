@@ -166,8 +166,9 @@ derived `Ord` needs an explicit `cmp`.
 ## Copy and Clone
 
 `Copy` marks values whose representation can be duplicated without allocation
-or user code. Scalars, `str` views, raw pointers, C string pointers, and named
-function references are Copy. `String`, arrays, and collections are not.
+or user code. Scalars, `str` views, raw pointers, C string pointers, named
+function references, and `array[T N]` when `T: Copy` are Copy. `String` and
+dynamic collections are not.
 
 Shared borrows can be duplicated with `dup` and `over`, but `$T` does not
 implement or satisfy `Copy`. An exclusive `mut$T` borrow cannot be duplicated.
@@ -190,11 +191,11 @@ defines its own Clone method.
 
 Structs and payload enums currently use heap-indirect value storage. They cannot
 implement `Copy`, even when every field is Copy, because duplicating their
-handle would alias one allocation. Fixed arrays store their elements directly,
-but the current array rule also excludes them from `Copy`. Use `Clone` for
-explicit independent duplication. When `T` implements Clone, calling `.clone`
-on `$T` or `mut$T` calls the borrowed value's implementation and returns an
-owned `T`.
+handle would alias one allocation. Fixed arrays use direct storage and are Copy
+when their elements are Copy. Arrays with non-Copy elements remain affine. Use
+`Clone` for explicit independent duplication. When `T` implements Clone,
+calling `.clone` on `$T` or `mut$T` calls the borrowed value's implementation
+and returns an owned `T`.
 
 Clone operations are always explicit and can allocate or run user code. A type
 can derive the implementation or define it by hand:

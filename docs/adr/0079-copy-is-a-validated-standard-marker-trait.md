@@ -32,7 +32,9 @@ Both forms run identical validation. `derives Copy` is the colocated shorthand; 
 
 - `[T: Copy]` uses ordinary trait-bound and supertrait machinery. Any additional requirement is visible in the active declaration.
 - Selectively importing Copy also imports any declared supertrait dependencies.
-- Built-in scalars, shared borrows, raw pointers, and named function references receive compiler-provided implementations of the canonical marker.
+- Built-in scalars, shared borrows, raw pointers, named function references,
+  and fixed arrays whose elements are Copy receive compiler-provided
+  implementations of the canonical marker.
 - A freestanding program may supply the canonical Copy declaration in its own
   `std` module, subject to the minimum-contract rule in ADR-0080.
 - The unavoidable compiler integration is limited to eligibility validation and the operations whose semantics depend on bitwise copying.
