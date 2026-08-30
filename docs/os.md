@@ -34,7 +34,7 @@ Prefer the high-level functions:
 
 | Function | Result |
 |---|---|
-| `file::read_all path:$str -> Result[String IoError]` | Entire file contents |
+| `file::read_all path:$str -> Result[Bytes IoError]` | Entire file contents |
 | `file::write_all path:$str content:$str -> Result[bool IoError]` | Create or replace a file |
 | `file::remove path:$str -> Result[bool IoError]` | Remove a file |
 | `file::exists path:$str -> bool` | Whether `stat` can find the path |
@@ -45,7 +45,7 @@ stale before the next file operation:
 
 ```casa
 "notes.txt" file::read_all match
-    Result::Ok(text) => text print
+    Result::Ok(bytes) => bytes.to_str.unwrap print
     Result::Error(error) => f"read failed: {error}\n" eprint
 end
 ```
@@ -69,18 +69,21 @@ and removes a file and directory.
 
 | Function | Result |
 |---|---|
-| `dir::list path:$str -> Result[List[String] IoError]` | Entry names without `.` or `..` |
+| `dir::list path:$str -> Result[List[Bytes] IoError]` | Entry names without `.` or `..` |
 | `dir::create path:$str mode:i64 -> Result[bool IoError]` | Create a directory |
 | `dir::remove path:$str -> Result[bool IoError]` | Remove an empty directory |
 | `dir::exists path:$str -> bool` | Whether the path is a directory |
-| `dir::current -> Result[String IoError]` | Current working directory |
+| `dir::current -> Result[Bytes IoError]` | Current working directory |
 | `dir::change path:$str -> Result[bool IoError]` | Change working directory |
 
 The mode is a Linux permission value. For example, `493` is octal `0755`.
 
 ## Environment and paths
 
-`env::get name:$str -> Option[String]` returns one environment variable.
+`env::get name:$str -> Option[Bytes]` returns one environment variable.
+Environment values and directory names can contain any non-NUL byte. Convert
+them with `Bytes.to_str` only when the caller requires UTF-8 text. Path inputs
+and environment variable names remain `$str`.
 
 | Path function | Result |
 |---|---|
@@ -90,7 +93,7 @@ The mode is a Linux permission value. For example, `493` is octal `0755`.
 | `path::extension path:$str -> String` | Final extension without `.` |
 
 ```casa
-"HOME" env::get .unwrap print
+"HOME" env::get .unwrap.to_str.unwrap print
 "tmp" "report.txt" path::join print    # tmp/report.txt
 "src/main.casa" path::extension print  # casa
 ```
@@ -100,8 +103,9 @@ environment variables, paths, and a child process.
 
 ## Arguments and processes
 
-`argc` is the argument count and `get_arg index:u64 -> String` returns an argument.
-Index `0` is the program name. An invalid index terminates the program.
+`process::args -> List[Bytes]` copies all process arguments. `argc` is the
+argument count and `get_arg index:u64 -> Bytes` copies one argument. Index `0`
+is the program name. An invalid index terminates the program.
 
 `run_command arguments:List[String] -> i64` starts a process and waits for it. The
 first list element is the executable path:

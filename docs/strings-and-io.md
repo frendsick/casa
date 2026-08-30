@@ -134,6 +134,12 @@ bytes.to_str.unwrap = text
 text.as_str print
 ```
 
+Raw external input stays as bytes until a caller validates it as text. This
+includes `file::read_all`, standard-input readers, process arguments,
+environment values, and directory entry names. The conversion is explicit so
+invalid UTF-8 remains available to binary consumers without replacement or
+data loss.
+
 ## Characters
 
 | Method | Result or action |

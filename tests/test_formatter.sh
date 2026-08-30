@@ -318,6 +318,10 @@ check_formatter_case invalid_input 1 \
     $'fn broken {\n' \
     $'fn broken {\n' \
     'UNMATCHED_BLOCK'
+check_formatter_case invalid_utf8 1 \
+    $'\xff' \
+    $'\xff' \
+    'not valid UTF-8 at byte 0'
 check_formatter_case invalid_candidate 1 \
     $'fn foo\n# note\n{\n}\n' \
     $'fn foo\n# note\n{\n}\n' \

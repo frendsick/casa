@@ -55,7 +55,8 @@ ABI format.
 | `argv` | `None -> ptr` | Command-line argument vector |
 | `envp` | `None -> ptr` | Environment vector |
 
-Prefer the standard-library process helpers unless raw startup data is needed.
+Prefer `process::args`, which returns owned `Bytes` values, unless raw startup
+data is needed.
 
 ## Advanced memory access
 
