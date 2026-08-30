@@ -104,7 +104,16 @@ function that returns such an aggregate preserves the same origin.
 ## Copy and Clone
 
 Struct values currently use heap-indirect storage, so they cannot implement
-`Copy`. Use `Clone` when a struct needs explicit independent duplication:
+`Copy`. Derive `Clone` when fieldwise independent duplication is suitable:
+
+```casa
+struct Point derives Clone {
+    x: i64
+    y: i64
+}
+```
+
+Define the method when the generated behavior is not suitable:
 
 ```casa
 impl Point: Clone {
@@ -113,6 +122,10 @@ impl Point: Clone {
     }
 }
 ```
+
+Structs can also derive `Eq`, `Ord`, and `Hashable`. Generated methods process
+fields in declaration order and add the required bounds for generic fields.
+See [Derive standard traits](traits.md#derive-standard-traits).
 
 Payload-free enums use a raw representation and can derive `Copy`. Payload
 enums and structs remain non-Copy until their value representation can be

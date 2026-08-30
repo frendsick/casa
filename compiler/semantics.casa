@@ -107,7 +107,7 @@ pub fn collect_trait_methods
     result
 }
 
-pub enum MethodSemanticsKind derives std::Copy {
+pub enum MethodSemanticsKind derives std::Eq std::Copy {
     Function
     TraitBound
     DefaultMethod
@@ -189,8 +189,17 @@ pub fn unify_generic_type_parameters
     type_b:$common::Type
     store:$common::SymbolStore
 -> std::Option[common::Type] {
-    if type_a.base type_b.base != then
+    type_a.base = base_a
+    type_b.base = base_b
+    if base_a.is_some base_b.is_some != then
         std::Option[common::Type]::None return
+    fi
+    if base_a std::Option::Some(first_base) is then
+        if base_b std::Option::Some(second_base) is then
+            if first_base second_base != then
+                std::Option[common::Type]::None return
+            fi
+        fi
     fi
     type_a.type_params = parameters_a_result
     type_b.type_params = parameters_b_result
@@ -1762,9 +1771,22 @@ pub fn make_method_semantics
     stack_effect method_name trait_type trait_name function_name kind MethodSemantics
 }
 
+pub fn does_trait_bound_match_qualifier
+    bound:$common::TraitBound
+    qualifier:$std::Option[common::Type]
+    store:$common::SymbolStore
+-> bool {
+    if qualifier std::Option::Some(required_trait) is then
+        bound common::trait_bound_to_type = bound_type
+        store required_trait bound_type trait_type_implies return
+    fi
+    true
+}
+
 pub fn resolve_bound_method_semantics
     method_name:$str
     receiver:$common::Type
+    qualifier:$std::Option[common::Type]
     function:$common::Function
     store:$common::SymbolStore
 -> std::Option[MethodSemantics] {
@@ -1777,6 +1799,9 @@ pub fn resolve_bound_method_semantics
                 .get std::Option::Some(bounds) is
         then
             for bound in bounds.iter do
+                if store qualifier bound does_trait_bound_match_qualifier ! then
+                    continue
+                fi
                 if bound.name store.traits.get std::Option::Some(casa_trait) is then
                     store casa_trait method_name find_semantic_trait_method = trait_method_opt
                     if trait_method_opt std::Option::Some(method) is then
@@ -1853,7 +1878,19 @@ pub fn resolve_trait_method_semantics_for
             fi
             continue
         fi
-        if store receiver method_name find_semantic_method_function std::Option::Some(function_name) is then
+        store lookup_trait_type method_name find_trait_default_method = default_opt
+        if
+            default_opt.is_none
+            has_exact ! &&
+            lookup_trait_type trait_type.eq ! &&
+        then
+            store trait_type method_name find_trait_default_method = default_opt
+        fi
+        if
+            qualifier.is_none default_opt.is_none ||
+            store receiver method_name
+            find_semantic_method_function std::Option::Some(function_name) is &&
+        then
             function_name.as_str store
                 .get_function
                 .unwrap
@@ -1869,14 +1906,6 @@ pub fn resolve_trait_method_semantics_for
                 std::Option[MethodSemantics]::None return
             fi
             continue
-        fi
-        store lookup_trait_type method_name find_trait_default_method = default_opt
-        if
-            default_opt.is_none
-            has_exact ! &&
-            lookup_trait_type trait_type.eq ! &&
-        then
-            store trait_type method_name find_trait_default_method = default_opt
         fi
         if default_opt std::Option::Some(default_method) is then
             f"{default_method.trait_type.format}::{method_name}" = identity
@@ -1921,7 +1950,29 @@ pub fn resolve_qualified_method_semantics
     if receiver_type.borrow_target std::Option::Some(target) is then
         target common::clone_type = receiver_type
     fi
-    store qualifier std::Option::Some receiver_type method_name resolve_trait_method_semantics_for
+    qualifier common::clone_type std::Option::Some = qualifier_opt
+    store qualifier_opt receiver_type method_name resolve_trait_method_semantics_for
+}
+
+pub fn resolve_qualified_method_semantics_with_bounds
+    method_name:$str
+    receiver:$common::Type
+    qualifier:$common::Type
+    function_opt:$std::Option[common::Function]
+    store:$common::SymbolStore
+-> std::Option[MethodSemantics] {
+    receiver common::clone_type = receiver_type
+    if receiver_type.borrow_target std::Option::Some(target) is then
+        target common::clone_type = receiver_type
+    fi
+    if function_opt std::Option::Some(function) is then
+        qualifier common::clone_type std::Option::Some = qualifier_opt
+        store function qualifier_opt receiver_type method_name resolve_bound_method_semantics = bound_method_opt
+        if bound_method_opt.is_some then
+            bound_method_opt return
+        fi
+    fi
+    store receiver_type qualifier method_name resolve_qualified_method_semantics
 }
 
 pub fn collect_method_qualifiers
@@ -1965,7 +2016,7 @@ pub fn resolve_method_semantics
         target common::clone_type = receiver_type
     fi
     if function_opt std::Option::Some(function) is then
-        store function receiver_type method_name resolve_bound_method_semantics = bound_method_opt
+        store function std::Option[common::Type]::None receiver_type method_name resolve_bound_method_semantics = bound_method_opt
         bound_method_opt match
             std::Option::Some(method) => method std::Option::Some return
             std::Option::None => {
@@ -2132,7 +2183,8 @@ pub fn analyze_operation
                     store function_opt qualified.qualifier_type qualified.method_name.as_str resolve_method_semantics
                     = method_opt
                 else
-                    store receiver_type qualified.qualifier_type qualified.method_name.as_str resolve_qualified_method_semantics
+                    store function_opt qualified.qualifier_type receiver_type qualified.method_name.as_str
+                    resolve_qualified_method_semantics_with_bounds
                     = method_opt
                 fi
                 method_opt match
@@ -2151,9 +2203,21 @@ pub fn analyze_operation
             fi
         }
         common::OpValue::TraitMethodCall(call) => {
-            store function_opt call.receiver call.method_name.as_str result analyze_method_operation match
+            std::Option[MethodSemantics]::None = method_opt
+            if function_opt std::Option::Some(function) is then
+                store function call.trait_type call.receiver call.method_name.as_str resolve_bound_method_semantics = method_opt
+            fi
+            if method_opt.is_none then
+                if call.trait_type std::Option::Some(trait_type) is then
+                    store call.receiver trait_type call.method_name.as_str resolve_qualified_method_semantics = method_opt
+                else
+                    store function_opt call.receiver call.method_name.as_str resolve_method_semantics = method_opt
+                fi
+            fi
+            method_opt match
                 std::Option::Some(method) => {
                     method.stack_effect.clone std::Option::Some = result.stack_effect
+                    store call.receiver method result add_method_dependencies
                     method std::Option::Some = result.method
                 }
                 std::Option::None => {
@@ -3001,7 +3065,8 @@ impl SemanticAnalysis {
         if receiver std::Option::Some(receiver_type) is then
             receiver_type make_type_borrow_option = receiver_ref
         fi
-        self.store function std::Option::Some receiver_ref operation analyze_operation = semantics
+        function.clone_declaration std::Option::Some = function_opt
+        self.store function_opt receiver_ref operation analyze_operation = semantics
         semantics self.collect_semantic_dependencies
         semantics match
             SemanticFacts { stack_effect: stack_effect resolved_operation: resolved_operation method: method dependencies: dependencies syscall_argument_count: syscall_argument_count word_parameter_start: word_parameter_start word_parameter_count: word_parameter_count } => stack_effect method

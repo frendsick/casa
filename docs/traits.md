@@ -129,10 +129,39 @@ and `char` implement the total traits.
 `Iterable[T]` supplies the standard lazy iterator operations. See
 [Collections](collections.md) for those operations.
 
-Payload-free enums implement `Hashable` automatically. Enums with carried
-values need an explicit implementation.
-
 Primitive comparisons and printing remain available without importing `std`.
+
+## Derive standard traits
+
+Structs and enums can derive `Eq`, `Ord`, `Hashable`, `Clone`, and `Copy`:
+
+```casa
+struct Point derives Eq Ord Hashable Clone {
+    x: i64
+    y: i64
+}
+```
+
+Generated equality, ordering, hashing, and cloning visit struct fields in
+declaration order. Enum equality and hashing include the active variant and
+its payloads. Enum ordering compares the variant declaration order first, then
+the payloads from left to right. Plain enums have no implicit comparison or
+hashing implementation.
+
+A generic derivation adds the corresponding requirement only to type
+parameters used by fields or payloads. For example, `Box[T] derives Clone`
+implements `Clone` when `T: Clone`. Recursive owned types can derive these
+traits. Each operation traverses the finite owned value through the compiler's
+managed indirection.
+
+When `T` occurs only below a stored shared borrow, derived Clone duplicates the
+borrow and does not require `T: Clone`. The duplicate keeps the same loan
+origin. An exclusive-borrow field cannot derive Clone.
+
+An explicit trait method replaces only its generated method. The compiler
+still supplies the other methods and standard defaults. A custom `eq` combined
+with derived `Hashable` needs an explicit `hash`. A custom `eq` combined with
+derived `Ord` needs an explicit `cmp`.
 
 ## Copy and Clone
 
@@ -153,8 +182,11 @@ enum Direction derives Copy {
     South
 }
 
-impl Direction: Copy { }
 ```
+
+The two forms are alternatives. `derives Copy` also supplies fieldwise Clone
+behavior required by the standard `Copy: Clone` relationship, unless the type
+defines its own Clone method.
 
 Structs and payload enums currently use heap-indirect value storage. They cannot
 implement `Copy`, even when every field is Copy, because duplicating their
@@ -164,9 +196,14 @@ explicit independent duplication. When `T` implements Clone, calling `.clone`
 on `$T` or `mut$T` calls the borrowed value's implementation and returns an
 owned `T`.
 
-Clone is always explicit and can allocate or run user code:
+Clone operations are always explicit and can allocate or run user code. A type
+can derive the implementation or define it by hand:
 
 ```casa
+struct Document derives Clone {
+    title: String
+}
+
 impl Document: Clone {
     fn clone self:$Document -> Document {
         self.title.clone Document

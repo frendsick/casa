@@ -67,24 +67,26 @@ for `is`, pattern bindings, guards, and exhaustive `match`.
 
 ## Other enum operations
 
-Enums can be compared when their types match. Variant order follows declaration
-order. Printing an enum writes its zero-based variant number. Using the enum
-name as a value produces its number of variants:
+Enums can derive comparison traits. Variant order follows declaration order,
+and variants with the same tag compare their payloads from left to right.
+Printing an enum writes its zero-based variant number. Using the enum name as a
+value produces its number of variants:
 
 ```casa
-enum Color { Red Green Blue }
+enum Color derives Ord { Red Green Blue }
 
 Color::Red Color::Blue > print    # true, because Blue follows Red
 Color::Blue print                 # 2
 Color print                       # 3
 ```
 
-Payload-free enums automatically implement `Hashable`. See the
-[built-in trait catalog](traits.md#built-in-traits) for use as map keys or set
-elements.
+Use `derives Eq`, `derives Ord`, or `derives Hashable` to opt in. Plain enums
+have no implicit comparison or hashing implementation. See the
+[derivation rules](traits.md#derive-standard-traits).
 
-An enum can `derive Copy` when every carried value is Copy. Clone remains an
-explicit operation and can be customized. See
+Only payload-free enums can currently derive `Copy`. Payload enums use managed
+indirection and can derive `Clone` for explicit independent duplication. Clone
+can be customized. See
 [Copy and Clone](traits.md#copy-and-clone).
 
 See [`examples/enum.casa`](../examples/enum.casa) for more runnable examples.
