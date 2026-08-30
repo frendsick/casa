@@ -13,7 +13,7 @@ operation or binding that uses them.
 | `bool` | `true` or `false` |
 | `char` | One Unicode scalar value |
 | `str` | An immutable UTF-8 text view |
-| `cstr` | A null-terminated C string |
+| `$cstr` | A borrowed NUL-terminated foreign byte string |
 
 An unconstrained integer literal defaults to `i64`. An unconstrained
 floating-point literal defaults to `f64`. A nearby annotation or parameter can
@@ -72,11 +72,12 @@ name.as_str print
 "\u{3BB}" print         # λ
 ```
 
-`cstr` has no literal syntax. Convert a `str` when an operating-system or C
-interface needs a null-terminated string:
+`cstr` is only used through a shared `$cstr` borrow. It has no literal syntax,
+does not own its storage, and does not assume UTF-8. Convert a `str` when an
+operating-system or C interface needs a NUL-terminated byte string:
 
 ```casa
-"hello" .as_cstr.unwrap = message:cstr
+"hello".as_cstr.unwrap = message:$cstr
 ```
 
 See [Text and I/O](strings-and-io.md) for string operations and conversions.

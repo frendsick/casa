@@ -166,8 +166,8 @@ derived `Ord` needs an explicit `cmp`.
 ## Copy and Clone
 
 `Copy` marks values whose representation can be duplicated without allocation
-or user code. Scalars, `str` views, raw pointers, C string pointers, and named
-function references are Copy. `String`, arrays, and collections are not.
+or user code. Scalars, `str` views, raw pointers, and named function references
+are Copy. `String`, arrays, and collections are not.
 
 Shared borrows can be duplicated with `dup` and `over`, but `$T` does not
 implement or satisfy `Copy`. An exclusive `mut$T` borrow cannot be duplicated.
