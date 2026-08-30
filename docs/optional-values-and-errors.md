@@ -44,16 +44,21 @@ end
 
 | Method | Result or action |
 |---|---|
-| `is_some self:Option[T] -> bool` | Whether a value is present |
-| `is_none self:Option[T] -> bool` | Whether no value is present |
-| `is_ok self:Option[T] -> bool` | Alias used by `?` |
+| `is_some self:$Option[T] -> bool` | Whether a value is present |
+| `is_none self:$Option[T] -> bool` | Whether no value is present |
+| `is_ok self:$Option[T] -> bool` | Alias used by `?` |
 | `unwrap self:Option[T] -> T` | Present value, or terminate on `None` |
 | `propagate self:Option[T] -> Option[U]` | Convert `None` for an enclosing `?` return |
 | `unwrap_or self:Option[T] default:T -> T` | Present value or `default` |
 | `map self:Option[T] transform:fn[T -> U] -> Option[U]` | Transform a present value |
 | `and_then self:Option[T] transform:fn[T -> Option[U]] -> Option[U]` | Chain an optional operation |
 | `or_else self:Option[T] fallback:fn[-> Option[T]] -> Option[T]` | Compute a fallback for `None` |
-| `filter self:Option[T] predicate:fn[T -> bool] -> Option[T]` | Keep a present value only if it matches |
+| `filter self:Option[T] predicate:fn[$T -> bool] -> Option[T]` | Keep a present value only if it matches |
+
+The observation methods `is_some`, `is_none`, and `is_ok` borrow the option.
+They leave its owner available. Every other method in the table consumes the
+option. A consuming call moves the owner. It returns the payload or a new
+option, or destroys a payload that it does not return.
 
 Callbacks are pushed before the option receiver:
 
@@ -82,8 +87,8 @@ end
 
 | Method | Result or action |
 |---|---|
-| `is_ok self:Result[T E] -> bool` | Whether the result is successful |
-| `is_error self:Result[T E] -> bool` | Whether the result is an error |
+| `is_ok self:$Result[T E] -> bool` | Whether the result is successful |
+| `is_error self:$Result[T E] -> bool` | Whether the result is an error |
 | `unwrap self:Result[T E] -> T` | Success value, or terminate on `Error` |
 | `unwrap_error self:Result[T E] -> E` | Error value, or terminate on `Ok` |
 | `propagate self:Result[T E] -> Result[U E]` | Preserve `Error` for an enclosing `?` return |
@@ -92,6 +97,11 @@ end
 | `map_error self:Result[T E] transform:fn[E -> F] -> Result[T F]` | Transform an error value |
 | `and_then self:Result[T E] transform:fn[T -> Result[U E]] -> Result[U E]` | Chain a fallible operation |
 | `or_else self:Result[T E] recover:fn[E -> Result[T F]] -> Result[T F]` | Recover from an error |
+
+The observation methods `is_ok` and `is_error` borrow the result. They leave
+its owner available. Every other method in the table consumes the result. A
+consuming call moves the owner and transfers or destroys each owned payload
+exactly once.
 
 ## Propagate with `?`
 
