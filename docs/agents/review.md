@@ -6,10 +6,14 @@ Rules for the pre-PR review loop.
 
 Assign each finding one class:
 
-- **Must fix**: A defect within the requested scope.
-- **Prerequisite**: Work required by the requested behavior, specification, or
-  required checks.
+- **Must fix**: A defect in the current implementation within the requested
+  scope.
+- **Prerequisite**: A separately scoped capability that must exist before the
+  requested behavior or required checks can succeed.
 - **Non-blocking**: Any other improvement.
+
+Keep a trivial prerequisite in the current work. Track and split a non-trivial
+prerequisite when it can merge independently.
 
 ## Review loop
 
@@ -19,30 +23,33 @@ Casa tests.
 
 1. Review the Standards and Spec axes in parallel. The first pass for each axis
    must report all findings from the complete diff.
-2. Include the `ponytail-review` checks in the Standards axis. Review
-   non-trivial functions added or changed with `function-design` in the same
-   axis. Do not run separate passes for these checks.
-3. Give each finding a stable identifier and class. Keep the finding and its
+2. Include the `ponytail-review` checks in the Standards axis. Apply the task's
+   existing `function-design` analysis to changed non-trivial functions. Do not
+   run separate passes for these checks.
+3. For every changed comparison or non-commutative call, translate the Casa
+   expression to conventional notation and confirm its argument order against a
+   focused test.
+4. Give each finding a stable identifier and class. Keep the finding and its
    disposition in the review context for later passes.
-4. **MUST** fix every Must fix finding without pausing. Batch compatible fixes,
+5. **MUST** fix every Must fix finding without pausing. Batch compatible fixes,
    then run focused tests.
-5. Implement an untracked Prerequisite in the current work. For a tracked
+6. Implement an untracked Prerequisite in the current work. For a tracked
    Prerequisite, keep the pull request in draft and add a native GitHub blocker
    relationship to the originating issue. If there is no originating issue, add
    the relationship to the pull request instead. See
    [issue-tracker.md](./issue-tracker.md#blocker-relationships).
-6. Report Non-blocking findings to the user and in the pull request. Do not
+7. Report Non-blocking findings to the user and in the pull request. Do not
    implement them.
-7. Re-review only an axis affected by the fixes. Give the same reviewer its
+8. Re-review only an axis affected by the fixes. Give the same reviewer its
    prior findings and the correction diff. The reviewer must verify each
    disposition and inspect the changed paths and their callers for regressions.
    It must not review unchanged parts of the original diff again or repeat an
    existing Non-blocking finding.
-8. Use a fresh reviewer context to review the complete diff when a fix changes
+9. Use a fresh reviewer context to review the complete diff when a fix changes
    an interface or the design, reaches outside the previously affected flow, or
    two incremental passes still produce Must fix or untracked Prerequisite
    findings.
-9. Repeat until no Must fix or untracked Prerequisite findings remain, then run
+10. Repeat until no Must fix or untracked Prerequisite findings remain, then run
    the selected tier's final validation once and open or update the pull
    request. See [testing.md](./testing.md) and [git.md](./git.md).
 

@@ -2,6 +2,13 @@
 
 Issues and PRDs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
 
+## Before implementation
+
+Read the issue body, comments, labels, and dependency state. Inspect the current
+code before accepting a suggested design. Record newly discovered blockers with
+native relationships and add material findings to the affected existing issue.
+Then follow the preflight in [git.md](./git.md#worktrees).
+
 ## Conventions
 
 - **Create an issue**: `gh issue create --title "..." --body "..."`. Use a heredoc for multi-line bodies.
@@ -25,7 +32,11 @@ gh api --method POST repos/{owner}/{repo}/issues/<blocked>/dependencies/blocked_
 Keep the relationship after the blocker closes so it remains in the issue
 history. Only open blockers prevent completion.
 
-Infer the repo from `git remote -v` — `gh` does this automatically when run inside a clone.
+Inspect current dependencies and related issues before creating a blocker or a
+new issue. Update existing relationships and issue context when they already
+represent the work.
+
+Infer the repo from `git remote -v`. `gh` does this automatically inside a clone.
 
 ## When a skill says "publish to the issue tracker"
 
