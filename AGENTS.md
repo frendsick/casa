@@ -6,6 +6,8 @@ See [README.md](./README.md) for basic info, language docs, and examples.
 
 - The codebase is the source of truth. Verify against current code before asserting.
 - Don't web-search Casa specifics; this repo is the only authoritative source.
+- When workflow goals conflict, prioritize correctness, fewer user
+  interventions, wall-clock time, then token use.
 - When language features or stdlib functions change, update the corresponding
   documentation, examples, and tests.
 - Never mention Claude or AI usage
@@ -40,6 +42,12 @@ See [README.md](./README.md) for basic info, language docs, and examples.
   do not require a release.
 - Create a prerelease compiler only when the user explicitly requests one.
 
+## Progress updates
+
+- For multi-phase work, state the phases before implementation.
+- Report after a commit, validation, review, or blocker. During a multi-minute
+  operation, give only short time-based status updates.
+
 ## Agent documentation
 
 Always load the relevant doc when the matching workflow comes up:
@@ -52,4 +60,5 @@ Always load the relevant doc when the matching workflow comes up:
 - **Triage labels** — `docs/agents/triage-labels.md`
 - **Domain docs** — `docs/agents/domain.md`
 - **Memory efficiency**: `docs/agents/memory.md`
-- **Functions**: use `function-design` when adding, changing, or reviewing non-trivial functions.
+- **Functions**: load `function-design` once per task before adding, changing, or
+  reviewing non-trivial functions. Reuse that analysis during review.

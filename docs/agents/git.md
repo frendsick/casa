@@ -11,14 +11,30 @@ Rules for commits, branches, and pull requests in this repo.
   other tooling references to commit messages, PR descriptions, or branch names.
 - MUST NOT commit Claude-related files (`.claude/`, agent memory, transcripts).
 - MUST NOT commit binary files unless the user explicitly asks for it.
-- MUST keep one commit per functionality. Don't mix unrelated changes.
+- MUST make at least one commit per completed issue. Keep unrelated
+  functionality and issues in separate commits.
 - MUST keep commit messages brief.
 
 ## Branches
 
 - MUST NOT modify `main` directly. All work happens on a feature branch.
 - MUST use conventional prefixes: `feat/`, `refactor/`, `fix/`, etc. This applies
-  to worktree branches too — rename away from the `worktree-` default before pushing.
+  to worktree branches too. Rename away from the `worktree-` default before pushing.
+
+## Worktrees
+
+Before starting new work:
+
+1. Fetch `origin/main`.
+2. Inspect existing worktrees, branches, and open pull requests. Resume matching
+   work instead of creating a duplicate.
+3. Create a new worktree and conventional branch from current `origin/main`.
+4. Run `./install.sh` in the new worktree. It downloads `casac` and `casafmt`
+   from the release named by `casa-release.env`.
+
+Fetch and recheck `origin/main` before final review. Integrate it when it changed.
+After merge, preview cleanup and remove the clean merged worktree and local
+branch. Preserve dirty or unmerged work unless the user approves its removal.
 
 ## Issues
 
@@ -33,17 +49,22 @@ Rules for commits, branches, and pull requests in this repo.
 - A pull request is complete only after all required CI checks pass.
 - Retry a failed CI job only when its log identifies an infrastructure or
   transient failure.
+- The final pull request targeting `main` MUST use `Closes #<issue>` for every
+  completed issue. Propagate closing markers from intermediate stacked pull
+  requests to that final pull request.
+- Monitor required CI after opening or updating a pull request. Report a
+  completion, failure, or unusually long queue instead of narrating each poll.
 
 ## Releases
 
-- The release asset **MUST** be named `casac` (no version suffix, no other name).
-  CI downloads `https://github.com/.../releases/download/${TAG}/casac` — any other
-  asset name causes a 404 and breaks the bootstrap step.
+- Every release **MUST** contain assets named `casac` and `casafmt`, with no
+  version suffixes. CI and new worktrees download those exact names.
+- Build the release `casafmt` with the `casac` uploaded to the same release.
 - Release descriptions must summarize changes without mentioning the compiler's
   bootstrap role.
-- When using `gh release create`, pass the binary as `/path/to/casac` (not
-  `/path/to/casac_v1.13.0_stage2#casac` — the `#label` syntax sets the display
-  label, not the download filename).
+- When using `gh release create`, pass binaries whose filenames are exactly
+  `casac` and `casafmt`. The `#label` syntax changes only the display label, not
+  the download filename.
 
 ## Workflow
 
