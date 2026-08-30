@@ -20,6 +20,163 @@ impl BytecodeFailure {
     pub fn new message:std::String -> BytecodeFailure { message BytecodeFailure }
 }
 
+enum ControlFlowKind derives std::Copy {
+    If
+    While
+    Match
+}
+
+struct ControlFlowTarget {
+    block_start: u64
+    next_branch: u64
+    block_end:   u64
+    parent:      u64
+}
+
+struct ControlFlowTargets {
+    data:   ptr
+    length: u64
+}
+
+impl ControlFlowTargets {
+    fn new length:u64 -> ControlFlowTargets {
+        if 0 length == then
+            unsafe { length 0 (ptr) ControlFlowTargets } return
+        fi
+        size_of[ControlFlowTarget] = stride
+        # SAFETY: The table owns length target slots, which initialize before use.
+        unsafe { length length stride * alloc ControlFlowTargets }
+    }
+
+    fn drop self:mut$ControlFlowTargets {
+        # SAFETY: The table owns the complete allocation until destruction.
+        unsafe { self.data free }
+        unsafe { 0 (ptr) = self.data }
+        0 = self.length
+    }
+
+    fn initialize self:mut$ControlFlowTargets op_index:u64 {
+        ControlFlowTarget {
+            block_start: self.length
+            next_branch: self.length
+            block_end: self.length
+            parent: self.length
+        } = target
+        # SAFETY: The prepass initializes each in-bounds target exactly once.
+        unsafe {
+            target self.data op_index size_of[ControlFlowTarget] * + ptr::write[ControlFlowTarget]
+        }
+    }
+
+    fn get_ref self:$ControlFlowTargets op_index:u64 -> $ControlFlowTarget {
+        # SAFETY: Callers use initialized operation indexes from this sequence.
+        unsafe { self.data op_index size_of[ControlFlowTarget] * + ptr::as_ref[ControlFlowTarget] }
+    }
+
+    fn get_mut self:mut$ControlFlowTargets op_index:u64 -> mut$ControlFlowTarget {
+        # SAFETY: The exclusive table borrow and operation index identify one target.
+        unsafe { self.data op_index size_of[ControlFlowTarget] * + ptr::as_mut[ControlFlowTarget] }
+    }
+
+    fn set_start self:mut$ControlFlowTargets op_index:u64 start:u64 {
+        op_index self.get_mut = target
+        start = target.block_start
+    }
+
+    fn set_next self:mut$ControlFlowTargets op_index:u64 next:u64 {
+        op_index self.get_mut = target
+        next = target.next_branch
+    }
+
+    fn set_end self:mut$ControlFlowTargets start:u64 end_index:u64 {
+        start self.get_mut = target
+        end_index = target.block_end
+    }
+
+    fn set_parent self:mut$ControlFlowTargets op_index:u64 parent:u64 {
+        op_index self.get_mut = target
+        parent = target.parent
+    }
+
+    fn get_parent self:$ControlFlowTargets op_index:u64 -> u64 { op_index self.get_ref.parent }
+
+    fn get_start self:$ControlFlowTargets op_index:u64 -> std::Option[u64] {
+        op_index self.get_ref.block_start = start
+        if start self.length != then
+            start std::Option::Some
+        else
+            std::Option[u64]::None
+        fi
+    }
+
+    fn get_end self:$ControlFlowTargets op_index:u64 -> std::Option[u64] {
+        if op_index self.get_start std::Option::Some(start) is then
+            start self.get_ref.block_end = end_index
+            if end_index self.length != then
+                end_index std::Option::Some return
+            fi
+        fi
+        std::Option[u64]::None
+    }
+
+    fn get_next self:$ControlFlowTargets op_index:u64 -> std::Option[u64] {
+        op_index self.get_ref.next_branch = next
+        if next self.length != then
+            next std::Option::Some
+        else
+            std::Option[u64]::None
+        fi
+    }
+}
+
+struct IfTargetFrame {
+    start:  u64
+    branch: u64
+}
+
+struct WhileTargetFrame {
+    start:               u64
+    first_end_target_op: u64
+}
+
+struct MatchTargetFrame {
+    start: u64
+    arm:   u64
+}
+
+fn make_if_target_frames capacity:u64 -> std::List[IfTargetFrame] {
+    if 0 capacity == then
+        std::List[IfTargetFrame]::new return
+    fi
+    # SAFETY: The list owns capacity frame slots and publishes no initialized elements yet.
+    unsafe {
+        capacity 0 capacity size_of[IfTargetFrame] * alloc std::List
+        (std::List[IfTargetFrame])
+    }
+}
+
+fn make_while_target_frames capacity:u64 -> std::List[WhileTargetFrame] {
+    if 0 capacity == then
+        std::List[WhileTargetFrame]::new return
+    fi
+    # SAFETY: The list owns capacity frame slots and publishes no initialized elements yet.
+    unsafe {
+        capacity 0 capacity size_of[WhileTargetFrame] * alloc std::List
+        (std::List[WhileTargetFrame])
+    }
+}
+
+fn make_match_target_frames capacity:u64 -> std::List[MatchTargetFrame] {
+    if 0 capacity == then
+        std::List[MatchTargetFrame]::new return
+    fi
+    # SAFETY: The list owns capacity frame slots and publishes no initialized elements yet.
+    unsafe {
+        capacity 0 capacity size_of[MatchTargetFrame] * alloc std::List
+        (std::List[MatchTargetFrame])
+    }
+}
+
 pub struct BytecodeState {
     pub store:           $common::SymbolStore
     pub program:         common::Program
@@ -1048,156 +1205,198 @@ impl BytecodeCompiler {
 }
 
 # ============================================================================
-# Block matching (find_matching_label)
+# Control-flow targets
 # ============================================================================
 
-pub fn is_block_start_value op_value:$common::OpValue -> bool {
-    op_value common::OpValue::IfStart is
-    op_value common::OpValue::WhileStart is ||
-    op_value common::OpValue::MatchStart is ||
+fn make_control_flow_failure message:$str -> std::Result[ControlFlowTargets BytecodeFailure] {
+    message.to_str BytecodeFailure::new std::Result::Error
 }
 
-pub fn is_block_end_value op_value:$common::OpValue -> bool {
-    op_value common::OpValue::IfEnd is
-    op_value common::OpValue::WhileEnd is ||
-    op_value common::OpValue::MatchEnd is ||
+fn make_if_end_failure has_open_if:bool -> std::Result[ControlFlowTargets BytecodeFailure] {
+    if has_open_if then
+        "`if` without matching `fi`" make_control_flow_failure return
+    fi
+    "`fi` without parent `if`" make_control_flow_failure
 }
-# Search for matching block label respecting nesting. `backward` = true scans
-# toward index 0, false scans toward ops.length. `boundary_value` is the
-# opening/closing variant at which to give up (end variant going forward,
-# start variant going backward).
 
-pub fn find_matching_identity
+fn make_open_while_failure
     ops:$std::List[common::Op]
-    op_index:u64
-    boundary_value:common::OpValue
-    target_values:std::List[common::OpValue]
-    backward:bool
--> std::Option[i64] {
-    if backward then -1 else 1 fi = step
-    0 step - = neg_step
-    1 = depth
-    op_index (i64) step + = index
-    while
-            if backward then
-                0 index >=
-            else
-                index ops.length (i64) >
-            fi
-    do
-        index (u64) ops.get = other_op
-        if 1 depth <= then
-            if other_op.value target_values op_value_list_contains then
-                other_op common::op_identity = address
-                address std::Option::Some return
-            fi
+    frame:$WhileTargetFrame
+-> std::Result[ControlFlowTargets BytecodeFailure] {
+    if frame.first_end_target_op ops.length != then
+        if frame.first_end_target_op ops.get.value common::OpValue::WhileCondition is then
+            "`do` without matching `done`" make_control_flow_failure return
         fi
-        if other_op.value is_block_start_value then
-            step += depth
-        elif other_op.value is_block_end_value then
-            neg_step += depth
-        fi
-        if 1 depth < then
-            if boundary_value other_op.value == then
-                std::Option::None return
-            fi
-        fi
-        step += index
-    done
-    std::Option::None
+        "`break` without matching `done`" make_control_flow_failure return
+    fi
+    "`while` without matching `done`" make_control_flow_failure
 }
 
-impl BytecodeCompiler {
-    pub fn find_matching_label
-        compiler:mut$BytecodeCompiler
-        ops:$std::List[common::Op]
-        op_index:u64
-        boundary_value:common::OpValue
-        target_values:std::List[common::OpValue]
-        backward:bool
-    -> std::Option[u64] {
-        backward target_values boundary_value op_index ops find_matching_identity
-        = identity
-        if identity std::Option::Some(address) is then
-            address compiler.state.op_identity_to_label std::Option::Some return
-        fi
-        std::Option::None
-    }
+fn is_current_control_flow ops:$std::List[common::Op] op_index:u64 kind:ControlFlowKind -> bool {
+    if op_index ops.length == then
+        false return
+    fi
+    kind match
+        ControlFlowKind::If => op_index ops.get.value common::OpValue::IfStart is
+        ControlFlowKind::While => op_index ops.get.value common::OpValue::WhileStart is
+        ControlFlowKind::Match => op_index ops.get.value common::OpValue::MatchStart is
+    end
 }
-
-pub fn op_value_list_contains items:$std::List[common::OpValue] value:$common::OpValue -> bool {
-    for item in items.iter do
-        if value item == then
-            true return
-        fi
-    done
-    false
-}
-# find_matching_label needs a sentinel value in target_values, but
-# OpValue::MatchArm carries a payload that cannot be constructed bare for
-# tag-only equality. This forward scan tracks depth and returns the label
-# of the next OpMatchArm or None on OpMatchEnd at depth 0.
-
-pub fn find_next_match_arm_or_end_identity
+# Build the target index once before emitting an operation sequence.
+fn precompute_control_flow_targets
     ops:$std::List[common::Op]
-    op_index:u64
--> std::Option[i64] {
-    1 = depth
-    op_index 1 + = index
+-> std::Result[ControlFlowTargets BytecodeFailure] {
+    ops.length ControlFlowTargets::new = targets
+    ops.length make_if_target_frames = if_frames
+    ops.length make_while_target_frames = while_frames
+    ops.length make_match_target_frames = match_frames
+    ops.length = current_block
+
+    0 (u64) = index
     while index ops.length > do
-        index ops.get = other_op
-        if 1 depth <= then
-            if other_op.value common::OpValue::MatchArm is then
-                other_op common::op_identity = address
-                address std::Option::Some return
-            fi
-        fi
-        if other_op.value is_block_start_value then
-            1 += depth
-        elif other_op.value is_block_end_value then
-            -1 += depth
-        fi
-        if 1 depth < then
-            if other_op.value common::OpValue::MatchEnd is then
-                std::Option::None return
-            fi
-        fi
+        index targets.initialize
+        index ops.get.value match
+            common::OpValue::IfStart => {
+                ops.length index IfTargetFrame if_frames.push
+                current_block index targets.set_parent
+                index = current_block
+            }
+            common::OpValue::IfCondition => {
+                if ControlFlowKind::If current_block ops is_current_control_flow ! then
+                    "`then` without matching `if`" make_control_flow_failure return
+                fi
+                if_frames.length 1 - if_frames.get_mut = frame
+                frame.start index targets.set_start
+                index = frame.branch
+            }
+            common::OpValue::IfElif => {
+                if ControlFlowKind::If current_block ops is_current_control_flow ! then
+                    "`elif` without parent `if`" make_control_flow_failure return
+                fi
+                if_frames.length 1 - if_frames.get_mut = frame
+                if frame.branch ops.length != then
+                    index frame.branch targets.set_next
+                fi
+                frame.start index targets.set_start
+                index = frame.branch
+            }
+            common::OpValue::IfElse => {
+                if ControlFlowKind::If current_block ops is_current_control_flow ! then
+                    "`else` without parent `if`" make_control_flow_failure return
+                fi
+                if_frames.length 1 - if_frames.get_mut = frame
+                if frame.branch ops.length != then
+                    index frame.branch targets.set_next
+                fi
+                frame.start index targets.set_start
+                index = frame.branch
+            }
+            common::OpValue::IfEnd => {
+                if ControlFlowKind::If current_block ops is_current_control_flow ! then
+                    if_frames.is_empty ! make_if_end_failure return
+                fi
+                current_block targets.get_parent = current_block
+                if_frames.pop = frame
+                frame.start index targets.set_start
+                index frame.start targets.set_end
+                if frame.branch ops.length != then
+                    index frame.branch targets.set_next
+                fi
+            }
+            common::OpValue::WhileStart => {
+                ops.length index WhileTargetFrame while_frames.push
+                current_block index targets.set_parent
+                index = current_block
+            }
+            common::OpValue::WhileCondition => {
+                if ControlFlowKind::While current_block ops is_current_control_flow ! then
+                    "`do` without parent `while`" make_control_flow_failure return
+                fi
+                while_frames.length 1 - while_frames.get_mut = frame
+                frame.start index targets.set_start
+                if frame.first_end_target_op ops.length == then
+                    index = frame.first_end_target_op
+                fi
+            }
+            common::OpValue::WhileBreak => {
+                if while_frames.is_empty then
+                    "`break` without parent `while`" make_control_flow_failure return
+                fi
+                while_frames.length 1 - while_frames.get_mut = frame
+                frame.start index targets.set_start
+                if frame.first_end_target_op ops.length == then
+                    index = frame.first_end_target_op
+                fi
+            }
+            common::OpValue::WhileContinue => {
+                if while_frames.is_empty then
+                    "`continue` without parent `while`" make_control_flow_failure return
+                fi
+                while_frames.length 1 - while_frames.get.start index targets.set_start
+            }
+            common::OpValue::WhileEnd => {
+                if ControlFlowKind::While current_block ops is_current_control_flow ! then
+                    "`done` without parent `while`" make_control_flow_failure return
+                fi
+                current_block targets.get_parent = current_block
+                while_frames.pop = frame
+                frame.start index targets.set_start
+                index frame.start targets.set_end
+            }
+            common::OpValue::MatchStart => {
+                ops.length index MatchTargetFrame match_frames.push
+                current_block index targets.set_parent
+                index = current_block
+            }
+            common::OpValue::MatchArm(_) => {
+                if ControlFlowKind::Match current_block ops is_current_control_flow ! then
+                    "`match` arm without parent `match`" make_control_flow_failure return
+                fi
+                match_frames.length 1 - match_frames.get_mut = frame
+                if frame.arm ops.length != then
+                    index frame.arm targets.set_next
+                fi
+                frame.start index targets.set_start
+                index = frame.arm
+            }
+            common::OpValue::MatchEnd => {
+                if ControlFlowKind::Match current_block ops is_current_control_flow ! then
+                    "`end` without parent `match`" make_control_flow_failure return
+                fi
+                current_block targets.get_parent = current_block
+                match_frames.pop = frame
+                frame.start index targets.set_start
+                index frame.start targets.set_end
+                if frame.arm ops.length != then
+                    index frame.arm targets.set_next
+                fi
+            }
+            _ => {
+            }
+        end
         1 += index
     done
-    std::Option::None
-}
 
-impl BytecodeCompiler {
-    pub fn find_next_match_arm_or_end
-        self:mut$BytecodeCompiler
-        ops:$std::List[common::Op]
-        op_index:u64
-    -> std::Option[u64] {
-        op_index ops find_next_match_arm_or_end_identity = identity
-        if identity std::Option::Some(address) is then
-            address self.state.op_identity_to_label std::Option::Some return
-        fi
-        std::Option::None
-    }
-}
-
-impl BytecodeCompiler {
-    pub fn require_matching
-        compiler:mut$BytecodeCompiler
-        ops:$std::List[common::Op]
-        op_index:u64
-        boundary_value:common::OpValue
-        target_values:std::List[common::OpValue]
-        message:str
-        backward:bool
-    -> u64 {
-        backward target_values boundary_value op_index ops compiler.find_matching_label = result
-        if result std::Option::Some(label) is then
-            label return
-        fi
-        message compiler.record_failure
-        0
-    }
+    if current_block ops.length != then
+        current_block ops.get.value match
+            common::OpValue::IfStart => {
+                "`if` without matching `fi`" make_control_flow_failure return
+            }
+            common::OpValue::WhileStart => {
+                while_frames.length 1 - while_frames.get = frame
+                frame ops make_open_while_failure return
+            }
+            common::OpValue::MatchStart => {
+                match_frames.length 1 - match_frames.get = frame
+                if frame.arm ops.length != then
+                    "`match` arm without matching `end`" make_control_flow_failure return
+                fi
+                "`match` without matching `end`" make_control_flow_failure return
+            }
+            _ => "Unrecognized open control-flow block" make_control_flow_failure return
+        end
+    fi
+    targets std::Result::Ok
 }
 
 # ============================================================================
@@ -1411,61 +1610,57 @@ impl BytecodeCompiler {
 # ============================================================================
 
 impl BytecodeCompiler {
-    pub fn compile_if_block
-        compiler:mut$BytecodeCompiler
+    fn compile_if_block
+        self:mut$BytecodeCompiler
         ops:$std::List[common::Op]
+        targets:$ControlFlowTargets
         op:$common::Op
         op_index:u64
         bytecode:mut$std::List[common::InstValue]
     {
-        std::List[common::OpValue]::new = start_targets
-        common::OpValue::IfStart start_targets.push
-
-        std::List[common::OpValue]::new = elif_else_end
-        common::OpValue::IfElif elif_else_end.push
-        common::OpValue::IfElse elif_else_end.push
-        common::OpValue::IfEnd elif_else_end.push
-
-        std::List[common::OpValue]::new = end_targets
-        common::OpValue::IfEnd end_targets.push
-
-        std::List[common::OpValue]::new = else_targets
-        common::OpValue::IfElse else_targets.push
-
         op.value match
             common::OpValue::IfCondition => {
-                true "`then` without matching `if`" start_targets common::OpValue::IfStart op_index ops compiler.require_matching drop
-                false "`then` without matching `fi`" elif_else_end common::OpValue::IfEnd op_index ops compiler.require_matching = end_label
-                end_label common::InstValue::JumpNe bytecode.push
+                if op_index targets.get_next std::Option::Some(target_index) is then
+                    target_index ops.get self.op_to_label = end_label
+                    end_label common::InstValue::JumpNe bytecode.push
+                else
+                    "If condition target is missing during bytecode compilation" self.record_failure
+                fi
             }
             common::OpValue::IfElif => {
-                true "`elif` without parent `if`" start_targets common::OpValue::IfStart op_index ops compiler.require_matching drop
-                op_index ops.get compiler.op_to_label = elif_label
-                false "`elif` without matching `fi`" end_targets common::OpValue::IfEnd op_index ops compiler.require_matching = end_label_2
-                bytecode op compiler.compile_owner_cleanups
-                end_label_2 common::InstValue::Jump bytecode.push
-                elif_label common::InstValue::Label bytecode.push
-                bytecode op compiler.compile_owner_cleanups
+                op_index ops.get self.op_to_label = elif_label
+                if op_index targets.get_end std::Option::Some(target_index) is then
+                    target_index ops.get self.op_to_label = end_label_2
+                    bytecode op self.compile_owner_cleanups
+                    end_label_2 common::InstValue::Jump bytecode.push
+                    elif_label common::InstValue::Label bytecode.push
+                    bytecode op self.compile_owner_cleanups
+                else
+                    "Elif end target is missing during bytecode compilation" self.record_failure
+                fi
             }
             common::OpValue::IfElse => {
-                true "`else` without parent `if`" start_targets common::OpValue::IfStart op_index ops compiler.require_matching drop
-                op_index ops.get compiler.op_to_label = else_label
-                false "`else` without matching `fi`" end_targets common::OpValue::IfEnd op_index ops compiler.require_matching = end_label_3
-                bytecode op compiler.compile_owner_cleanups
-                end_label_3 common::InstValue::Jump bytecode.push
-                else_label common::InstValue::Label bytecode.push
-                bytecode op compiler.compile_owner_cleanups
+                op_index ops.get self.op_to_label = else_label
+                if op_index targets.get_end std::Option::Some(target_index) is then
+                    target_index ops.get self.op_to_label = end_label_3
+                    bytecode op self.compile_owner_cleanups
+                    end_label_3 common::InstValue::Jump bytecode.push
+                    else_label common::InstValue::Label bytecode.push
+                    bytecode op self.compile_owner_cleanups
+                else
+                    "Else end target is missing during bytecode compilation" self.record_failure
+                fi
             }
             common::OpValue::IfEnd => {
-                true "`fi` without parent `if`" start_targets common::OpValue::IfStart op_index ops compiler.require_matching drop
-                op_index ops.get compiler.op_to_label = fi_label
-                bytecode op compiler.compile_owner_cleanups
+                op_index ops.get self.op_to_label = fi_label
+                bytecode op self.compile_owner_cleanups
                 fi_label common::InstValue::Label bytecode.push
-                bytecode op compiler.compile_owner_cleanups
+                bytecode op self.compile_owner_cleanups
             }
-            common::OpValue::IfStart => false "`if` without matching `fi`" end_targets common::OpValue::IfEnd op_index ops compiler.require_matching drop
+            common::OpValue::IfStart => {
+            }
             _ => {
-                "compile_if_block received a non-if operation" compiler.record_failure
+                "compile_if_block received a non-if operation" self.record_failure
             }
         end
     }
@@ -1476,48 +1671,57 @@ impl BytecodeCompiler {
 # ============================================================================
 
 impl BytecodeCompiler {
-    pub fn compile_while_block
-        compiler:mut$BytecodeCompiler
+    fn compile_while_block
+        self:mut$BytecodeCompiler
         ops:$std::List[common::Op]
+        targets:$ControlFlowTargets
         op:$common::Op
         op_index:u64
         bytecode:mut$std::List[common::InstValue]
     {
-        std::List[common::OpValue]::new = start_targets
-        common::OpValue::WhileStart start_targets.push
-
-        std::List[common::OpValue]::new = end_targets
-        common::OpValue::WhileEnd end_targets.push
-
         op.value match
             common::OpValue::WhileBreak => {
-                true "`break` without parent `while`" start_targets common::OpValue::WhileStart op_index ops compiler.require_matching drop
-                false "`break` without matching `done`" end_targets common::OpValue::WhileEnd op_index ops compiler.require_matching = end_label
-                end_label common::InstValue::Jump bytecode.push
+                if op_index targets.get_end std::Option::Some(target_index) is then
+                    target_index ops.get self.op_to_label = end_label
+                    end_label common::InstValue::Jump bytecode.push
+                else
+                    "Break target is missing during bytecode compilation" self.record_failure
+                fi
             }
             common::OpValue::WhileCondition => {
-                true "`do` without parent `while`" start_targets common::OpValue::WhileStart op_index ops compiler.require_matching drop
-                false "`do` without matching `done`" end_targets common::OpValue::WhileEnd op_index ops compiler.require_matching = end_label_2
-                end_label_2 common::InstValue::JumpNe bytecode.push
+                if op_index targets.get_end std::Option::Some(target_index) is then
+                    target_index ops.get self.op_to_label = end_label_2
+                    end_label_2 common::InstValue::JumpNe bytecode.push
+                else
+                    "While condition target is missing during bytecode compilation" self.record_failure
+                fi
             }
             common::OpValue::WhileContinue => {
-                true "`continue` without parent `while`" start_targets common::OpValue::WhileStart op_index ops compiler.require_matching = continue_target
-                continue_target common::InstValue::Jump bytecode.push
+                if op_index targets.get_start std::Option::Some(target_index) is then
+                    target_index ops.get self.op_to_label = continue_target
+                    continue_target common::InstValue::Jump bytecode.push
+                else
+                    "Continue target is missing during bytecode compilation" self.record_failure
+                fi
             }
             common::OpValue::WhileEnd => {
-                op_index ops.get compiler.op_to_label = while_label
-                true "`done` without parent `while`" start_targets common::OpValue::WhileStart op_index ops compiler.require_matching = loop_start
-                bytecode op compiler.compile_owner_cleanups
-                loop_start common::InstValue::Jump bytecode.push
-                while_label common::InstValue::Label bytecode.push
-                bytecode op compiler.compile_owner_cleanups
+                op_index ops.get self.op_to_label = while_label
+                if op_index targets.get_start std::Option::Some(target_index) is then
+                    target_index ops.get self.op_to_label = loop_start
+                    bytecode op self.compile_owner_cleanups
+                    loop_start common::InstValue::Jump bytecode.push
+                    while_label common::InstValue::Label bytecode.push
+                    bytecode op self.compile_owner_cleanups
+                else
+                    "While start target is missing during bytecode compilation" self.record_failure
+                fi
             }
             common::OpValue::WhileStart => {
-                op_index ops.get compiler.op_to_label = start_label
+                op_index ops.get self.op_to_label = start_label
                 start_label common::InstValue::Label bytecode.push
             }
             _ => {
-                "compile_while_block received a non-while operation" compiler.record_failure
+                "compile_while_block received a non-while operation" self.record_failure
             }
         end
     }
@@ -1697,93 +1901,102 @@ impl BytecodeCompiler {
 
 impl BytecodeCompiler {
     pub fn compile_match_op
-        compiler:mut$BytecodeCompiler
+        self:mut$BytecodeCompiler
         op:$common::Op
-        is_last:bool
         next_arm:mut$std::Option[u64]
         bytecode:mut$std::List[common::InstValue]
+        is_last:bool
     {
         op common::pattern_value_of match
             common::PatternValue::Struct(struct_pattern) => {
-                bytecode struct_pattern compiler.state.store compiler.emit_struct_arm
+                bytecode struct_pattern self.state.store self.emit_struct_arm
             }
             common::PatternValue::Literal(literal_pattern) => {
-                bytecode next_arm is_last literal_pattern compiler.emit_literal_arm
+                bytecode next_arm is_last literal_pattern self.emit_literal_arm
             }
             common::PatternValue::EnumVariant(variant) => {
                 op pattern::pattern_is_wildcard = is_wildcard
-                bytecode next_arm is_last is_wildcard variant compiler.emit_enum_arm
+                bytecode next_arm is_last is_wildcard variant self.emit_enum_arm
             }
         end
         if op.value common::OpValue::MatchArm(arm) is then
             if arm.guard_ops.length 0 != then
-                0 (u64) = guard_index
-                while guard_index arm.guard_ops.length > do
-                    guard_index arm.guard_ops.get = guard_op
-                    bytecode guard_index guard_op arm.guard_ops compiler.compile_op
-                    1 += guard_index
-                done
+                bytecode arm.guard_ops self.compile_sequence
                 if next_arm std::Option::Some(label) is then
                     label common::InstValue::JumpNe bytecode.push
                 else
-                    "Guarded match arm has no following label during bytecode compilation" compiler.record_failure
+                    "Guarded match arm has no following label during bytecode compilation" self.record_failure
                 fi
             fi
         fi
         if
-            op common::op_identity compiler
+            op common::op_identity self
                 .state
                 .store
                 .clone_ownership std::Option::Some(owned_ownership) is
         then
             for event in owned_ownership.assignments.iter do
-                bytecode event.generation event.name.as_str compiler.set_owner_flag
+                bytecode event.generation event.name.as_str self.set_owner_flag
             done
         fi
-        bytecode op compiler.state.store compiler.compile_match_destruction
+        bytecode op self.state.store self.compile_match_destruction
     }
 }
 
 impl BytecodeCompiler {
-    pub fn compile_match_block
-        compiler:mut$BytecodeCompiler
+    fn compile_match_block
+        self:mut$BytecodeCompiler
         ops:$std::List[common::Op]
+        targets:$ControlFlowTargets
         op:$common::Op
         op_index:u64
         bytecode:mut$std::List[common::InstValue]
     {
         if op.value common::OpValue::MatchArm is then
-            std::List[common::OpValue]::new = end_targets
-            common::OpValue::MatchEnd end_targets.push
+            0 (u64) = end_label
+            if op_index targets.get_end std::Option::Some(target_index) is then
+                target_index ops.get self.op_to_label = end_label
+            else
+                "Match end target is missing during bytecode compilation" self.record_failure
+                return
+            fi
 
-            false "`match` arm without matching `end`" end_targets common::OpValue::MatchEnd op_index ops compiler.require_matching = end_label
-
-            op_index ops.get common::op_identity compiler
+            op_index ops.get common::op_identity self
                 .state
                 .op_label_map
                 .get_copy = existing
             existing.is_some ! = is_first
 
             if is_first ! then
-                bytecode op compiler.compile_owner_cleanups
+                bytecode op self.compile_owner_cleanups
                 end_label common::InstValue::Jump bytecode.push
                 if existing std::Option::Some(label) is then
                     label common::InstValue::Label bytecode.push
-                    bytecode op compiler.compile_owner_cleanups
+                    bytecode op self.compile_owner_cleanups
                 else
-                    "Match arm label is missing during bytecode compilation" compiler.record_failure
+                    "Match arm label is missing during bytecode compilation" self.record_failure
                 fi
             fi
 
-            op_index ops compiler.find_next_match_arm_or_end = next_arm
-            next_arm.is_none = is_last
+            0 (u64) = next_index
+            if op_index targets.get_next std::Option::Some(found_next_index) is then
+                found_next_index = next_index
+            else
+                "Match arm target is missing during bytecode compilation" self.record_failure
+                return
+            fi
+            next_index ops.get.value common::OpValue::MatchEnd is = is_last
+            std::Option[u64]::None = next_arm
+            if is_last ! then
+                next_index ops.get self.op_to_label std::Option::Some = next_arm
+            fi
 
-            bytecode next_arm is_last op compiler.compile_match_op
+            is_last bytecode next_arm op self.compile_match_op
         elif op.value common::OpValue::MatchEnd is then
-            op_index ops.get compiler.op_to_label = end_match_label
-            bytecode op compiler.compile_owner_cleanups
+            op_index ops.get self.op_to_label = end_match_label
+            bytecode op self.compile_owner_cleanups
             end_match_label common::InstValue::Label bytecode.push
-            bytecode op compiler.compile_owner_cleanups
+            bytecode op self.compile_owner_cleanups
         fi
     }
 }
@@ -2219,16 +2432,16 @@ impl BytecodeCompiler {
     }
 
     pub fn compile_push_array
-        compiler:mut$BytecodeCompiler
+        self:mut$BytecodeCompiler
         op:$common::Op
         bytecode:mut$std::List[common::InstValue]
     {
         if op.value common::OpValue::PushArray(items) is then
             items.length = length
 
-            items op compiler.can_emit_static_array = can_emit_static
+            items op self.can_emit_static_array = can_emit_static
             if can_emit_static then
-                bytecode items compiler.compile_static_array return
+                bytecode items self.compile_static_array return
             fi
 
             common::make_unknown_type common::clone_type = element_type
@@ -2237,35 +2450,29 @@ impl BytecodeCompiler {
                     found_element_type typechecker::resolve_numeric_literal_default = element_type
                 else
                     "Array literal has no element type during bytecode compilation"
-                    compiler.record_failure return
+                    self.record_failure return
                 fi
             else
-                "Array literal has no type during bytecode compilation" compiler.record_failure return
+                "Array literal has no type during bytecode compilation" self.record_failure return
             fi
 
-            # Compile items in reverse order
-            length = reverse_index
-            while 0 reverse_index != do
-                1 -= reverse_index
-                reverse_index items.get = item
-                bytecode reverse_index item items compiler.compile_op
-            done
+            bytecode items self.compile_sequence_reversed
 
             # An array stores only its elements (ADR-0152), so the allocation
             # is exactly the element storage.
-            compiler.allocate_local = list_local
-            compiler.state.store element_type common::type_inline_size.unwrap = element_size
+            self.allocate_local = list_local
+            self.state.store element_type common::type_inline_size.unwrap = element_size
             element_size length common::get_array_storage_size i64::try_from.unwrap common::InstValue::Push bytecode.push
             common::InstValue::HeapAlloc bytecode.push
             list_local common::InstValue::LocalSet bytecode.push
 
             # Store elements starting at offset 0
-            compiler.allocate_local = index_local
+            self.allocate_local = index_local
             0 common::InstValue::Push bytecode.push
             index_local common::InstValue::LocalSet bytecode.push
 
-            compiler.new_label = start_label
-            compiler.new_label = end_label
+            self.new_label = start_label
+            self.new_label = end_label
 
             # while index limit > do
             start_label common::InstValue::Label bytecode.push
@@ -2278,7 +2485,7 @@ impl BytecodeCompiler {
             list_local common::InstValue::LocalGet bytecode.push
             index_local common::InstValue::LocalGet bytecode.push
             common::InstValue::Add bytecode.push
-            bytecode element_type compiler.emit_typed_store
+            bytecode element_type self.emit_typed_store
 
             # element_size += index
             index_local common::InstValue::LocalGet bytecode.push
@@ -3074,6 +3281,7 @@ impl BytecodeCompiler {
     fn compile_structural_op
         self:mut$BytecodeCompiler
         ops:$std::List[common::Op]
+        targets:$ControlFlowTargets
         op:$common::Op
         op_index:u64
         type_hint_name:$str
@@ -3081,23 +3289,23 @@ impl BytecodeCompiler {
     -> bool {
         op.value match
             common::OpValue::IfStart => {
-                bytecode op_index op ops self.compile_if_block
+                bytecode op_index op targets ops self.compile_if_block
                 true
             }
             common::OpValue::IfCondition => {
-                bytecode op_index op ops self.compile_if_block
+                bytecode op_index op targets ops self.compile_if_block
                 true
             }
             common::OpValue::IfElif => {
-                bytecode op_index op ops self.compile_if_block
+                bytecode op_index op targets ops self.compile_if_block
                 true
             }
             common::OpValue::IfElse => {
-                bytecode op_index op ops self.compile_if_block
+                bytecode op_index op targets ops self.compile_if_block
                 true
             }
             common::OpValue::IfEnd => {
-                bytecode op_index op ops self.compile_if_block
+                bytecode op_index op targets ops self.compile_if_block
                 true
             }
             common::OpValue::ImportFile(_) => true
@@ -3106,11 +3314,7 @@ impl BytecodeCompiler {
             common::OpValue::PtrIntoRaw => true
             common::OpValue::DeclareGlobal(_) => true
             common::OpValue::InitGlobal(initializer) => {
-                0 = initializer_index: u64
-                while initializer_index initializer.ops.length > do
-                    bytecode initializer_index initializer_index initializer.ops.get initializer.ops self.compile_op
-                    1 += initializer_index
-                done
+                bytecode initializer.ops self.compile_sequence
                 bytecode initializer.name.as_str self.emit_variable_set
                 true
             }
@@ -3139,15 +3343,15 @@ impl BytecodeCompiler {
                 true
             }
             common::OpValue::MatchStart => {
-                bytecode op_index op ops self.compile_match_block
+                bytecode op_index op targets ops self.compile_match_block
                 true
             }
             common::OpValue::MatchArm(_) => {
-                bytecode op_index op ops self.compile_match_block
+                bytecode op_index op targets ops self.compile_match_block
                 true
             }
             common::OpValue::MatchEnd => {
-                bytecode op_index op ops self.compile_match_block
+                bytecode op_index op targets ops self.compile_match_block
                 true
             }
             common::OpValue::Typeof => {
@@ -3192,11 +3396,7 @@ impl BytecodeCompiler {
                 true
             }
             common::OpValue::ExprGroup(group_ops) => {
-                0 (u64) = group_index
-                while group_index group_ops.length > do
-                    bytecode group_index group_index group_ops.get group_ops self.compile_op
-                    1 += group_index
-                done
+                bytecode group_ops self.compile_sequence
                 true
             }
             common::OpValue::StructNew(_) => {
@@ -3208,23 +3408,23 @@ impl BytecodeCompiler {
                 true
             }
             common::OpValue::WhileStart => {
-                bytecode op_index op ops self.compile_while_block
+                bytecode op_index op targets ops self.compile_while_block
                 true
             }
             common::OpValue::WhileCondition => {
-                bytecode op_index op ops self.compile_while_block
+                bytecode op_index op targets ops self.compile_while_block
                 true
             }
             common::OpValue::WhileBreak => {
-                bytecode op_index op ops self.compile_while_block
+                bytecode op_index op targets ops self.compile_while_block
                 true
             }
             common::OpValue::WhileContinue => {
-                bytecode op_index op ops self.compile_while_block
+                bytecode op_index op targets ops self.compile_while_block
                 true
             }
             common::OpValue::WhileEnd => {
-                bytecode op_index op ops self.compile_while_block
+                bytecode op_index op targets ops self.compile_while_block
                 true
             }
             _ => false
@@ -3309,9 +3509,10 @@ impl BytecodeCompiler {
         end
     }
 
-    pub fn compile_op
+    fn compile_op
         self:mut$BytecodeCompiler
         ops:$std::List[common::Op]
+        targets:$ControlFlowTargets
         op:$common::Op
         op_index:u64
         bytecode:mut$std::List[common::InstValue]
@@ -3347,7 +3548,7 @@ impl BytecodeCompiler {
         if bytecode op self.compile_callable_op then
             return
         fi
-        if bytecode type_hint_name.as_str op_index op ops self.compile_structural_op then
+        if bytecode type_hint_name.as_str op_index op targets ops self.compile_structural_op then
             return
         fi
         bytecode type_hint_name.as_str op self.compile_value_op drop
@@ -3359,18 +3560,49 @@ impl BytecodeCompiler {
 # ============================================================================
 
 impl BytecodeCompiler {
-    pub fn compile_ops compiler:mut$BytecodeCompiler bytecode:mut$std::List[common::InstValue] {
+    fn compile_sequence
+        self:mut$BytecodeCompiler
+        ops:$std::List[common::Op]
+        bytecode:mut$std::List[common::InstValue]
+    {
+        ops precompute_control_flow_targets match
+            std::Result::Error(failure) => failure std::Option::Some = self.state.failure
+            std::Result::Ok(targets) => {
+                0 (u64) = index
+                while index ops.length > self.has_failed ! && do
+                    index ops.get = op
+                    bytecode index op targets ops self.compile_op
+                    1 += index
+                done
+            }
+        end
+    }
+
+    fn compile_sequence_reversed
+        self:mut$BytecodeCompiler
+        ops:$std::List[common::Op]
+        bytecode:mut$std::List[common::InstValue]
+    {
+        ops precompute_control_flow_targets match
+            std::Result::Error(failure) => failure std::Option::Some = self.state.failure
+            std::Result::Ok(targets) => {
+                ops.length = index
+                while 0 index != self.has_failed ! && do
+                    1 -= index
+                    index ops.get = op
+                    bytecode index op targets ops self.compile_op
+                done
+            }
+        end
+    }
+
+    pub fn compile_ops self:mut$BytecodeCompiler bytecode:mut$std::List[common::InstValue] {
         # Function label
-        compiler.new_label = function_label
+        self.new_label = function_label
         function_label common::InstValue::Label bytecode.push
 
-        compiler.ops common::clone_ops = ops
-        0 (u64) = index
-        while index ops.length > compiler.has_failed ! && do
-            index ops.get = op
-            bytecode index op ops compiler.compile_op
-            1 += index
-        done
+        self.ops common::clone_ops = ops
+        bytecode ops self.compile_sequence
     }
 }
 
