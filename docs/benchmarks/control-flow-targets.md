@@ -2,7 +2,7 @@
 
 Run date: 2026-08-30
 
-This benchmark compares `origin/main` at `0694ddd` with the control-flow target
+This benchmark compares `origin/main` at `f414a6e` with the control-flow target
 index in this document's commit. The benchmark builds nested `if` operation
 sequences and measures bytecode lowering only. Each result is the median of
 three runs.
@@ -18,7 +18,7 @@ three runs.
 Run these commands from the branch worktree:
 
 ```sh
-git worktree add --detach /tmp/casa-450-main 0694ddd
+git worktree add --detach /tmp/casa-450-main f414a6e
 benchmark_release=$(sed -n 's/^CASAC_RELEASE_TAG=//p' casa-release.env)
 mkdir /tmp/casa-450-release
 gh release download "$benchmark_release" --pattern casac --dir /tmp/casa-450-release
@@ -72,23 +72,23 @@ done
 
 | Nested blocks | Main median | Branch median | Main doubling ratio | Branch doubling ratio |
 |---:|---:|---:|---:|---:|
-| 500 | 0.054 s | 0.003 s | n/a | n/a |
-| 1,000 | 0.210 s | 0.008 s | 3.89 | 2.67 |
-| 2,000 | 0.818 s | 0.015 s | 3.90 | 1.88 |
-| 4,000 | 3.304 s | 0.030 s | 4.04 | 1.58 |
+| 500 | 0.051 s | 0.003 s | n/a | n/a |
+| 1,000 | 0.192 s | 0.007 s | 3.76 | 2.33 |
+| 2,000 | 0.743 s | 0.015 s | 3.87 | 2.14 |
+| 4,000 | 2.980 s | 0.030 s | 4.01 | 2.00 |
 
 The main implementation approaches quadratic growth. The target index keeps
-growth near linear and lowers the 4,000-block case from 3.304 seconds to 0.030
+growth near linear and lowers the 4,000-block case from 2.980 seconds to 0.030
 seconds.
 
 Raw samples in execution order:
 
 | Nested blocks | Main samples, seconds | Branch samples, seconds |
 |---:|---|---|
-| 500 | 0.059, 0.054, 0.051 | 0.003, 0.004, 0.003 |
-| 1,000 | 0.210, 0.210, 0.218 | 0.008, 0.007, 0.009 |
-| 2,000 | 0.818, 0.832, 0.790 | 0.015, 0.014, 0.021 |
-| 4,000 | 3.297, 3.395, 3.304 | 0.030, 0.044, 0.030 |
+| 500 | 0.052, 0.050, 0.051 | 0.003, 0.003, 0.003 |
+| 1,000 | 0.198, 0.191, 0.192 | 0.007, 0.007, 0.008 |
+| 2,000 | 0.751, 0.743, 0.741 | 0.014, 0.015, 0.015 |
+| 4,000 | 2.941, 3.064, 2.980 | 0.028, 0.030, 0.030 |
 
 ## Memory
 
