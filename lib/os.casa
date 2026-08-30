@@ -124,28 +124,43 @@ impl file {
         unsafe { fd 3 syscall1 }
     }
 
-    pub fn read_all path:$str -> std::Result[std::String IoError] {
+    pub fn read_all path:$str -> std::Result[std::Bytes IoError] {
         0 O_RDONLY path file::open = file_fd
         if 0 file_fd < then
             file_fd errno_to_io_error std::Result::Error return
         fi
         # SAFETY: file_fd is open and lseek does not dereference user memory.
         unsafe { 2 0 file_fd 8 syscall3 = file_size }
+        if 0 file_size < then
+            file_fd file::close drop
+            file_size errno_to_io_error std::Result::Error return
+        fi
         # SAFETY: file_fd remains open and lseek does not dereference user memory.
         unsafe { 0 0 file_fd 8 syscall3 drop }
         file_size (u64) = size
-        size std::String::with_capacity = result
-        # SAFETY: result has size writable bytes and file_fd remains open.
-        unsafe { file_size result.data (ptr) 8 + file_fd 0 syscall3 = bytes_read }
-        if 0 bytes_read < then
-            file_fd file::close drop
-            bytes_read errno_to_io_error std::Result::Error return
+        std::Bytes::new = result
+        if 0 size != then
+            size std::RawBuffer::new = read_buffer
+            0 (u64) = total_read
+            while total_read size > do
+                # SAFETY: total_read and size keep the destination inside read_buffer.
+                unsafe { size total_read - read_buffer.data total_read + file_fd 0 syscall3 = bytes_read }
+                if 0 bytes_read < then
+                    file_fd file::close drop
+                    bytes_read errno_to_io_error std::Result::Error return
+                fi
+                if 0 bytes_read == then
+                    break
+                fi
+                bytes_read (u64) += total_read
+            done
+            0 (u64) = index
+            while index total_read > do
+                # SAFETY: read initialized total_read bytes in read_buffer.
+                unsafe { read_buffer.data index + load8 } result.push
+                1 += index
+            done
         fi
-        # SAFETY: read initialized bytes_read bytes within result's allocated capacity.
-        unsafe {
-            bytes_read (u64) result.data (ptr) store64
-            0 result.data (ptr) 8 + bytes_read (u64) + store8
-        }
         file_fd file::close drop
         result std::Result::Ok
     }
@@ -216,7 +231,17 @@ impl file {
 # ---------------------------------------------------------------------------
 
 impl dir {
-    pub fn list path:$str -> std::Result[std::List[std::String] IoError] {
+    fn is_dot_entry name:$std::Bytes -> bool {
+        if 1 name.length == then
+            46 0 name.get.unwrap == return
+        fi
+        if 2 name.length == then
+            46 0 name.get.unwrap == 46 1 name.get.unwrap == && return
+        fi
+        false
+    }
+
+    pub fn list path:$str -> std::Result[std::List[std::Bytes] IoError] {
         path.as_cstr = path_cstr
         if path_cstr.is_none then
             22 IoError::Other std::Result::Error return
@@ -226,7 +251,7 @@ impl dir {
         if 0 dir_fd < then
             dir_fd errno_to_io_error std::Result::Error return
         fi
-        std::List[std::String]::new = entries
+        std::List[std::Bytes]::new = entries
         1024 std::RawBuffer::new = buf
         true = reading
         while reading do
@@ -247,9 +272,9 @@ impl dir {
                     unsafe {
                         buf.data pos (u64) + = entry_ptr
                         entry_ptr 16 + load16 = rec_len
-                        entry_ptr 19 + (ptr) str::from_cstr = name
+                        entry_ptr 19 + (ptr) ($cstr) cstr::to_bytes = name
                     }
-                    if "." name.as_str str::eq ! ".." name.as_str str::eq ! && then
+                    if name dir::is_dot_entry ! then
                         name entries.push
                     fi
                     rec_len (i64) += pos
@@ -302,7 +327,7 @@ impl dir {
         unsafe { stat_buf.data 24 + load32 61440 & 16384 == }
     }
 
-    pub fn current -> std::Result[std::String IoError] {
+    pub fn current -> std::Result[std::Bytes IoError] {
         4096 std::RawBuffer::new = buf
         # SAFETY: buf has 4096 writable bytes for getcwd.
         unsafe { 4096 buf.data 79 syscall2 = result }
@@ -310,7 +335,7 @@ impl dir {
             result errno_to_io_error std::Result::Error return
         fi
         # SAFETY: A successful getcwd writes a NUL-terminated path into buf.
-        unsafe { buf.data str::from_cstr std::Result::Ok }
+        unsafe { buf.data ($cstr) }.to_bytes std::Result::Ok
     }
 
     pub fn change path:$str -> std::Result[bool IoError] {
@@ -332,19 +357,32 @@ impl dir {
 # ---------------------------------------------------------------------------
 
 impl env {
-    pub fn get name:$str -> std::Option[std::String] {
+    unsafe fn value_from_entry entry:ptr name:$str -> std::Option[std::Bytes] {
+        0 (u64) = index
+        while index name.length > do
+            unsafe { entry index + load8 = entry_byte }
+            if 0 entry_byte == index name.at.codepoint (u8) entry_byte != || then
+                std::Option[std::Bytes]::None return
+            fi
+            1 += index
+        done
+        unsafe { entry index + load8 = delimiter }
+        if '='.codepoint (u8) delimiter != then
+            std::Option[std::Bytes]::None return
+        fi
+        unsafe { entry index 1 + + ($cstr) }.to_bytes std::Option::Some
+    }
+
+    pub fn get name:$str -> std::Option[std::Bytes] {
         envp = env_ptr
         0 = offset
         # SAFETY: envp is a process-provided array of 8-byte-aligned pointers; offset steps in 8-byte increments within it.
         unsafe { env_ptr offset (u64) + load64 = entry }
         while 0 entry (i64) != do
-            # SAFETY: a non-null envp entry points to a NUL-terminated string in the process environment.
-            unsafe { entry (ptr) str::from_cstr = entry_str }
-            name "=" str::concat = prefix
-            if entry_str.as_str prefix.as_str str::starts_with then
-                name.length 1 + = val_start
-                entry_str.length val_start - = val_len
-                entry_str.as_str val_start val_len str::substring std::Option::Some return
+            # SAFETY: a non-null envp entry points to a NUL-terminated environment entry.
+            unsafe { name entry (ptr) env::value_from_entry } = value
+            if value.is_some then
+                value return
             fi
             8 += offset
             # SAFETY: envp is a process-provided array of 8-byte-aligned pointers; offset steps in 8-byte increments within it.

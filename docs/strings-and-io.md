@@ -134,6 +134,12 @@ bytes.to_str.unwrap = text
 text.as_str print
 ```
 
+Raw external input stays as bytes until a caller validates it as text. This
+includes `file::read_all`, standard-input readers, process arguments,
+environment values, and directory entry names. The conversion is explicit so
+invalid UTF-8 remains available to binary consumers without replacement or
+data loss.
+
 ## Characters
 
 | Method | Result or action |
@@ -193,14 +199,16 @@ f-strings.
 
 ## C strings and mutable buffers
 
-`as_cstr` checks for interior NUL and returns an optional null-terminated view
-for system interfaces. `to_str` copies a `cstr` into owned Casa text:
+`as_cstr` checks for interior NUL and returns an optional borrowed
+NUL-terminated byte view for system interfaces. `$cstr` does not own or free
+its storage. `to_str` validates UTF-8 and copies the bytes into owned Casa text:
 
 ```casa
-"hello".as_cstr.unwrap = raw:cstr
-raw.to_str print
+"hello".as_cstr.unwrap = raw:$cstr
+raw.to_str.unwrap.as_str print
 ```
 
-Low-level code can use `str::from_cstr pointer:ptr -> String`. It scans until
-the first NUL and copies the bytes. Prefer bounded operating-system wrappers
-when the foreign buffer length is known.
+Constructing `$cstr` from a raw pointer requires `unsafe` code to guarantee an
+accessible NUL terminator and a live origin. Use `to_bytes` when the bytes do
+not have a text guarantee. `$cstr` has no direct comparison, formatting, or
+printing operations.
