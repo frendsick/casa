@@ -19,7 +19,7 @@ import "selective_import" as selective_import
 # spans are produced during normal compilation.
 # ============================================================================
 
-pub enum SyntaxSpanKind derives std::Copy {
+pub enum SyntaxSpanKind derives std::Eq std::Copy {
     Definition
     DelimitedForm
     StructBody
@@ -2899,130 +2899,1002 @@ pub fn parse_enum parser:mut$Parser cursor:mut$TokenCursor -> common::CasaEnum {
     name_token common::Token::value.clone common::CasaEnum
 }
 
-# ============================================================================
-# Auto-derive Hashable for payload-free enums (#141). Skips enums with inner
-# values and any name the user already defined (silent override).
-# ============================================================================
+pub const DERIVED_HASH_SEED 5381
+pub const DERIVED_HASH_SHIFT 5
 
-pub fn synthesize_hashable_for_enum parser:mut$Parser casa_enum:$common::CasaEnum {
-    if casa_enum common::has_inner_values then
-        return
-    fi
-    casa_enum common::CasaEnum::name.clone = enum_name
-    casa_enum common::CasaEnum::location.clone = location
-
-    f"{enum_name}::hash" = hash_name
-    if
-        hash_name.as_str parser
-            .store
-            .get_function
-            .is_none
-    then
-        std::List[common::Op]::new = hash_ops
-        location.clone common::make_i64_type common::clone_type common::OpValue::TypeCast common::Op::new hash_ops.push
-        std::List[common::Parameter]::new = hash_params
-        common::SHARED_BORROW_TYPE enum_name.clone common::GenericType::new common::Type::Generic
-        common::apply_borrow_type common::Parameter::new hash_params.push
-        std::List[common::Type]::new = hash_returns
-        common::make_i64_type common::clone_type hash_returns.push
-        hash_returns hash_params common::StackEffect::new = hash_stack_effect
-        hash_stack_effect location.clone hash_ops hash_name.clone common::Function::with_stack_effect = hash_fn
-        hash_fn hash_name parser.put_function
-    fi
-
-    f"{enum_name}::eq" = eq_name
-    if
-        eq_name.as_str parser
-            .store
-            .get_function
-            .is_none
-    then
-        std::List[common::Op]::new = eq_ops
-        location.clone common::OpValue::Eq common::Op::new eq_ops.push
-        std::List[common::Parameter]::new = eq_params
-        common::SHARED_BORROW_TYPE enum_name.clone common::GenericType::new common::Type::Generic
-        common::apply_borrow_type common::Parameter::new eq_params.push
-        common::SHARED_BORROW_TYPE enum_name.clone common::GenericType::new common::Type::Generic
-        common::apply_borrow_type common::Parameter::new eq_params.push
-        std::List[common::Type]::new = eq_returns
-        common::make_bool_type common::clone_type eq_returns.push
-        eq_returns eq_params common::StackEffect::new = eq_stack_effect
-        eq_stack_effect location.clone eq_ops eq_name.clone common::Function::with_stack_effect = eq_fn
-        eq_fn eq_name parser.put_function
-    fi
-
-    if
-        common::STD_HASHABLE_TRAIT parser
-            .store
-            .traits
-            .has_str
-    then
-        enum_name common::GenericType::new common::Type::Generic = receiver
-        std::List[common::Type]::new common::STD_HASHABLE_TRAIT.to_str common::TraitBound = hashable_bound
-        hashable_bound common::trait_bound_to_type = hashable_type
-        if parser.store hashable_type receiver semantics::type_has_satisfying_trait_impl ! then
-            location
-            std::Map[std::String std::String]::new
-            std::Map[std::String std::List[common::TraitBound]]::new
-            std::List[std::String]::new
-            hashable_bound
-            receiver
-            common::TraitImpl
-            parser register_trait_impl
-        fi
-    fi
-}
-
-pub fn derive_hashable_for_enums parser:mut$Parser {
-    for
-        casa_enum in parser
-            .store
-            .enums
-            .values
-            .iter
-    do
-        casa_enum parser synthesize_hashable_for_enum
-    done
-}
-
-pub fn register_derived_copy
-    parser:mut$Parser
-    name:$str
-    type_vars:$std::List[std::String]
-    required_type_vars:std::Set[std::String]
-    location:$common::Location
-{
+pub fn make_aggregate_receiver name:$str type_vars:$std::List[std::String] -> common::Type {
     std::List[common::Type]::new = arguments
     for type_variable in type_vars.iter do
         type_variable.clone common::Type::TypeVar arguments.push
     done
-    arguments name.to_str common::GenericType common::Type::Generic = receiver
-    std::List[common::Type]::new common::STD_COPY_TRAIT.to_str common::TraitBound = copy_bound
-    if
-        parser.store copy_bound common::trait_bound_to_type receiver semantics::type_has_satisfying_trait_impl
-    then
-        return
-    fi
+    arguments name.to_str common::GenericType common::Type::Generic
+}
+
+pub fn make_derived_trait_bounds
+    trait_name:$str
+    type_vars:$std::List[std::String]
+    required_type_vars:$std::Set[std::String]
+-> std::Map[std::String std::List[common::TraitBound]] {
     std::Map[std::String std::List[common::TraitBound]]::new = trait_bounds
     for type_variable in type_vars.iter do
         if type_variable required_type_vars.has ! then
             continue
         fi
         std::List[common::TraitBound]::new = type_bounds
-        std::List[common::Type]::new common::STD_COPY_TRAIT.to_str common::TraitBound type_bounds.push
+        std::List[common::Type]::new trait_name.to_str common::TraitBound type_bounds.push
         type_bounds type_variable.clone trait_bounds.set
     done
+    trait_bounds
+}
+
+pub fn derived_impl_parameters_match
+    actual:$common::GenericType
+    trait_impl:$common::TraitImpl
+-> bool {
+    std::Set[std::String]::new = seen
+    for parameter in actual.params.iter do
+        if parameter common::Type::TypeVar(type_variable) is then
+            if type_variable.as_str trait_impl.type_vars common::string_list_contains ! then
+                false return
+            fi
+            if type_variable seen.has then
+                false return
+            fi
+            type_variable.clone seen.add
+        else
+            false return
+        fi
+    done
+    true
+}
+
+pub fn derived_generic_receivers_match
+    expected:$common::GenericType
+    actual:$common::GenericType
+    trait_impl:$common::TraitImpl
+    type_vars:$std::List[std::String]
+-> bool {
+    if expected.base actual.base != expected.params.length actual.params.length != || then
+        false return
+    fi
+    if type_vars.length trait_impl.type_vars.length != then
+        false return
+    fi
+    trait_impl actual derived_impl_parameters_match
+}
+
+pub fn derived_receiver_matches_impl
+    receiver:$common::Type
+    type_vars:$std::List[std::String]
+    trait_impl:$common::TraitImpl
+-> bool {
+    receiver match
+        common::Type::Generic(expected) => {
+            trait_impl.receiver match
+                common::Type::Generic(actual) => {
+                    type_vars trait_impl actual expected derived_generic_receivers_match
+                }
+                _ => false
+            end
+        }
+        _ => false
+    end
+}
+
+pub fn derived_function_name receiver:$common::Type method_name:$str -> std::String {
+    f"{receiver.match_base}::__derived_{method_name}"
+}
+
+pub fn merge_derived_override
+    state:mut$ParseState
+    receiver:$common::Type
+    method_name:$str
+    function_name:$std::String
+    location:$common::Location
+    found:std::Option[std::String]
+-> std::Option[std::String] {
+    if found std::Option::Some(existing) is then
+        if existing function_name != then
+            location f"Derived method `{receiver.match_base}::{method_name}` has multiple explicit overrides" common::ErrorKind::DuplicateName state.record_error_string
+        fi
+        found return
+    fi
+    function_name.clone std::Option::Some
+}
+
+pub fn find_derived_override
+    parser:mut$Parser
+    receiver:$common::Type
+    type_vars:$std::List[std::String]
+    method_name:$str
+    location:$common::Location
+-> std::Option[std::String] {
+    std::Option[std::String]::None = found
+    for
+        pair in parser
+            .store
+            .trait_impls
+            .iter
+    do
+        pair.second = trait_impl: $common::TraitImpl
+        if trait_impl type_vars receiver derived_receiver_matches_impl ! then
+            continue
+        fi
+        trait_impl.trait_bound common::trait_bound_to_type = trait_type
+        if parser.store method_name trait_type semantics::trait_type_has_method ! then
+            continue
+        fi
+        if method_name trait_impl.methods.get_str std::Option::Some(function_name) is then
+            method_name receiver derived_function_name = generated_name
+            if generated_name function_name == then
+                continue
+            fi
+            found location function_name method_name receiver parser.state merge_derived_override = found
+        fi
+    done
+    found
+}
+
+pub fn derived_trait_bound_is_satisfied
+    parser:mut$Parser
+    bounds:$std::List[common::TraitBound]
+    required_trait:$str
+-> bool {
+    required_trait.to_str common::GenericType::new common::Type::Generic = required_type
+    for bound in bounds.iter do
+        if parser.store required_type bound common::trait_bound_to_type semantics::trait_type_implies then
+            true return
+        fi
+    done
+    false
+}
+
+pub fn add_derived_bound
+    parser:mut$Parser
+    trait_impl:mut$common::TraitImpl
+    type_variable:$std::String
+    required_trait:$str
+{
+    if type_variable trait_impl.trait_bounds.get std::Option::Some(existing_bounds) is then
+        existing_bounds.clone = bounds
+        if required_trait bounds parser derived_trait_bound_is_satisfied ! then
+            std::List[common::Type]::new required_trait.to_str common::TraitBound bounds.push
+        fi
+        bounds type_variable.clone trait_impl.trait_bounds.set
+        return
+    fi
+    std::List[common::TraitBound]::new = bounds
+    std::List[common::Type]::new required_trait.to_str common::TraitBound bounds.push
+    bounds type_variable.clone trait_impl.trait_bounds.set
+}
+
+pub fn add_derived_bound_at
+    parser:mut$Parser
+    trait_impl:mut$common::TraitImpl
+    receiver:$common::GenericType
+    index:u64
+    required_trait:$str
+{
+    if index receiver.params.length > then
+        if index receiver.params.get common::Type::TypeVar(type_variable) is then
+            required_trait type_variable trait_impl parser add_derived_bound
+        fi
+    fi
+}
+
+pub fn add_named_derived_trait_bounds
+    parser:mut$Parser
+    trait_impl:mut$common::TraitImpl
+    type_vars:$std::List[std::String]
+    required_type_vars:$std::Set[std::String]
+    required_trait:$str
+{
+    trait_impl.receiver.clone = receiver_type
+    if receiver_type common::Type::Generic(receiver) is then
+        0 (u64) = index
+        while index type_vars.length > do
+            index type_vars.get = aggregate_variable
+            if aggregate_variable required_type_vars.has then
+                required_trait index receiver trait_impl parser add_derived_bound_at
+            fi
+            1 += index
+        done
+    fi
+}
+
+pub fn add_derived_trait_bounds
+    parser:mut$Parser
+    trait_impl:mut$common::TraitImpl
+    type_vars:$std::List[std::String]
+    required_type_vars:$std::Set[std::String]
+    required_trait:$std::Option[std::String]
+{
+    if required_trait std::Option::Some(required_trait_name) is then
+        required_trait_name.as_str required_type_vars type_vars trait_impl parser add_named_derived_trait_bounds
+    fi
+}
+
+pub fn install_derived_trait_impl
+    parser:mut$Parser
+    receiver:$common::Type
+    type_vars:$std::List[std::String]
+    required_type_vars:$std::Set[std::String]
+    required_trait:std::Option[std::String]
+    trait_name:$str
+    methods:$std::Map[std::String std::String]
+    location:$common::Location
+{
+    parser
+        .store
+        .trait_impls
+        .keys = trait_impl_keys
+    for trait_impl_key in trait_impl_keys.iter do
+        trait_impl_key parser
+            .store
+            .trait_impls
+            .get
+            .unwrap = existing: $common::TraitImpl
+        if existing.trait_bound.name trait_name != then
+            continue
+        fi
+        if existing type_vars receiver derived_receiver_matches_impl ! then
+            continue
+        fi
+        existing.clone = merged
+        for pair in methods.iter do
+            if pair.first merged.methods.has ! then
+                pair.second.clone pair.first.clone merged.methods.set
+            fi
+        done
+        required_trait required_type_vars type_vars merged parser add_derived_trait_bounds
+        merged trait_impl_key.clone parser
+            .store
+            .trait_impls
+            .set
+        return
+    done
+
+    std::Map[std::String std::List[common::TraitBound]]::new = trait_bounds
+    if required_trait std::Option::Some(required_trait_name) is then
+        required_type_vars type_vars required_trait_name.as_str make_derived_trait_bounds = trait_bounds
+    fi
     location.clone
-    std::Map[std::String std::String]::new
+    methods.clone
     trait_bounds
     type_vars.clone
-    copy_bound
-    receiver
+    std::List[common::Type]::new trait_name.to_str common::TraitBound
+    receiver common::clone_type
     common::TraitImpl
     parser register_trait_impl
 }
 
-pub fn derive_copy_for_aggregates parser:mut$Parser {
+pub fn make_derived_method_call typ:$common::Type method_name:$str -> common::OpValue {
+    if typ.has_unresolved_type_var then
+        typ common::clone_type method_name.to_str common::DeferredTraitCall::unresolved
+        common::OpValue::TraitMethodCall return
+    fi
+    method_name.to_str common::OpValue::MethodCall
+}
+
+pub fn make_derived_enum_arm
+    enum_name:$str
+    variant_name:$str
+    ordinal:i64
+    bindings:std::List[std::String]
+-> common::MatchArm {
+    ordinal std::Option::Some variant_name.to_str enum_name.to_str common::EnumVariant::new = variant
+    bindings variant common::EnumVariant::set_bindings
+    std::List[common::Op]::new variant common::PatternValue::EnumVariant common::MatchArm::new
+}
+
+pub fn make_derived_wildcard_arm -> common::MatchArm {
+    std::Option::None common::MATCH_WILDCARD.to_str "".to_str common::EnumVariant::new = wildcard
+    std::List[common::Op]::new wildcard common::PatternValue::EnumVariant common::MatchArm::new
+}
+
+pub fn append_derived_ordering
+    variant_name:$str
+    ordinal:i64
+    location:$common::Location
+    ops:mut$std::List[common::Op]
+{
+    ordinal std::Option::Some variant_name.to_str common::STD_ORDERING_TYPE.to_str common::EnumVariant::new = variant
+    location.clone variant common::OpValue::PushEnumVariant common::Op::new ops.push
+}
+
+pub fn validate_derived_ordering parser:mut$Parser location:$common::Location -> bool {
+    if
+        common::STD_ORDERING_TYPE parser
+            .store
+            .enums
+            .get_str std::Option::Some(ordering) is
+    then
+        if 3 ordering.variants.length == ordering common::has_inner_values ! && then
+            if
+                "Less" 0 ordering.variants.get ==
+                "Equal" 1 ordering.variants.get == &&
+                "Greater" 2 ordering.variants.get == &&
+            then
+                true return
+            fi
+        fi
+    fi
+    location "Derived `Ord` requires `Ordering` variants `Less`, `Equal`, and `Greater` in that order" common::ErrorKind::TraitSignatureMismatch parser.state.record_error
+    false
+}
+
+pub fn make_derived_borrow_method
+    receiver:$common::Type
+    type_vars:$std::List[std::String]
+    trait_bounds:std::Map[std::String std::List[common::TraitBound]]
+    parameter_names:$std::List[std::String]
+    return_type:$common::Type
+    body_ops:std::List[common::Op]
+    function_name:$str
+    location:$common::Location
+-> common::Function {
+    std::List[common::Parameter]::new = parameters
+    std::List[common::Variable]::new = variables
+    std::List[common::Op]::new = ops
+    common::SHARED_BORROW_TYPE receiver common::clone_type common::apply_borrow_type = borrowed_receiver
+    for parameter_name in parameter_names.iter do
+        parameter_name.clone borrowed_receiver common::clone_type common::Parameter::named parameters.push
+        borrowed_receiver common::clone_type parameter_name.clone common::Variable variables.push
+        location.clone parameter_name.clone common::OpValue::AssignVar common::Op::new ops.push
+    done
+    body_ops ops.append
+    std::List[common::Type]::new = returns
+    return_type common::clone_type returns.push
+    returns parameters common::StackEffect::new = effect
+    type_vars common::string_list_to_set = effect.type_vars
+    trait_bounds effect common::StackEffect::set_trait_bounds
+    effect location.clone ops function_name.to_str common::Function::with_stack_effect = function
+    variables function common::Function::set_variables
+    function
+}
+
+pub fn append_struct_derived_eq_body
+    casa_struct:$common::CasaStruct
+    location:$common::Location
+    ops:mut$std::List[common::Op]
+{
+    location.clone 1 common::OpValue::PushBool common::Op::new ops.push
+    for member in casa_struct.members.iter do
+        location.clone "other".to_str common::OpValue::PushVar common::Op::new ops.push
+        location.clone member.name.clone common::OpValue::MethodCall common::Op::new ops.push
+        location.clone "self".to_str common::OpValue::PushVar common::Op::new ops.push
+        location.clone member.name.clone common::OpValue::MethodCall common::Op::new ops.push
+        location.clone common::OpValue::Eq common::Op::new ops.push
+        location.clone common::OpValue::And common::Op::new ops.push
+    done
+}
+
+pub fn append_enum_derived_eq_body
+    casa_enum:$common::CasaEnum
+    location:$common::Location
+    ops:mut$std::List[common::Op]
+{
+    location.clone "self".to_str common::OpValue::PushVar common::Op::new ops.push
+    location.clone common::OpValue::MatchStart common::Op::new ops.push
+    0 (u64) = variant_index
+    for variant_name in casa_enum.variants.iter do
+        std::List[std::String]::new = self_bindings
+        std::List[std::String]::new = other_bindings
+        variant_name casa_enum
+            .variant_types
+            .get
+            .unwrap
+            .length = payload_count
+        0 (u64) = payload_index
+        while payload_index payload_count > do
+            f"__derived_eq_self_{variant_index}_{payload_index}" self_bindings.push
+            f"__derived_eq_other_{variant_index}_{payload_index}" other_bindings.push
+            1 += payload_index
+        done
+        self_bindings variant_index (i64) variant_name.as_str casa_enum.name.as_str make_derived_enum_arm = self_arm
+        location.clone self_arm common::OpValue::MatchArm common::Op::new ops.push
+        location.clone "other".to_str common::OpValue::PushVar common::Op::new ops.push
+        location.clone common::OpValue::MatchStart common::Op::new ops.push
+        other_bindings variant_index (i64) variant_name.as_str casa_enum.name.as_str make_derived_enum_arm = other_arm
+        location.clone other_arm common::OpValue::MatchArm common::Op::new ops.push
+        location.clone 1 common::OpValue::PushBool common::Op::new ops.push
+        0 (u64) = payload_index
+        while payload_index payload_count > do
+            location.clone f"__derived_eq_other_{variant_index}_{payload_index}" common::OpValue::PushVar common::Op::new ops.push
+            location.clone f"__derived_eq_self_{variant_index}_{payload_index}" common::OpValue::PushVar common::Op::new ops.push
+            location.clone common::OpValue::Eq common::Op::new ops.push
+            location.clone common::OpValue::And common::Op::new ops.push
+            1 += payload_index
+        done
+        make_derived_wildcard_arm = wildcard_arm
+        location.clone wildcard_arm common::OpValue::MatchArm common::Op::new ops.push
+        location.clone 0 common::OpValue::PushBool common::Op::new ops.push
+        location.clone common::OpValue::MatchEnd common::Op::new ops.push
+        1 += variant_index
+    done
+    location.clone common::OpValue::MatchEnd common::Op::new ops.push
+}
+
+pub fn append_derived_cmp_result location:$common::Location ops:mut$std::List[common::Op] {
+    location.clone common::OpValue::MatchStart common::Op::new ops.push
+    std::List[std::String]::new 0 "Less" common::STD_ORDERING_TYPE make_derived_enum_arm = less_arm
+    location.clone less_arm common::OpValue::MatchArm common::Op::new ops.push
+    ops location 0 "Less" append_derived_ordering
+    location.clone common::OpValue::FnReturn common::Op::new ops.push
+    std::List[std::String]::new 1 "Equal" common::STD_ORDERING_TYPE make_derived_enum_arm = equal_arm
+    location.clone equal_arm common::OpValue::MatchArm common::Op::new ops.push
+    std::List[std::String]::new 2 "Greater" common::STD_ORDERING_TYPE make_derived_enum_arm = greater_arm
+    location.clone greater_arm common::OpValue::MatchArm common::Op::new ops.push
+    ops location 2 "Greater" append_derived_ordering
+    location.clone common::OpValue::FnReturn common::Op::new ops.push
+    location.clone common::OpValue::MatchEnd common::Op::new ops.push
+}
+
+pub fn append_struct_derived_cmp_body
+    casa_struct:$common::CasaStruct
+    location:$common::Location
+    ops:mut$std::List[common::Op]
+{
+    for member in casa_struct.members.iter do
+        location.clone "other".to_str common::OpValue::PushVar common::Op::new ops.push
+        location.clone member.name.clone common::OpValue::MethodCall common::Op::new ops.push
+        location.clone "self".to_str common::OpValue::PushVar common::Op::new ops.push
+        location.clone member.name.clone common::OpValue::MethodCall common::Op::new ops.push
+        location.clone "cmp" member.typ make_derived_method_call common::Op::new ops.push
+        ops location append_derived_cmp_result
+    done
+    ops location 1 "Equal" append_derived_ordering
+}
+
+pub fn append_derived_enum_cmp_variant
+    casa_enum:$common::CasaEnum
+    self_variant:$std::String
+    self_index:u64
+    self_payload_count:u64
+    location:$common::Location
+    ops:mut$std::List[common::Op]
+{
+    0 (u64) = other_index
+    for other_variant in casa_enum.variants.iter do
+        std::List[std::String]::new = other_bindings
+        other_variant casa_enum
+            .variant_types
+            .get
+            .unwrap
+            .length = other_payload_count
+        0 (u64) = payload_index
+        while payload_index other_payload_count > do
+            f"__derived_cmp_other_{self_index}_{other_index}_{payload_index}" other_bindings.push
+            1 += payload_index
+        done
+        other_bindings other_index (i64) other_variant.as_str casa_enum.name.as_str make_derived_enum_arm = other_arm
+        location.clone other_arm common::OpValue::MatchArm common::Op::new ops.push
+        if self_index other_index == then
+            self_variant casa_enum
+                .variant_types
+                .get
+                .unwrap = payload_types
+            0 (u64) = payload_index
+            while payload_index self_payload_count > do
+                location.clone f"__derived_cmp_other_{self_index}_{other_index}_{payload_index}" common::OpValue::PushVar common::Op::new ops.push
+                location.clone f"__derived_cmp_self_{self_index}_{payload_index}" common::OpValue::PushVar common::Op::new ops.push
+                location.clone "cmp" payload_index payload_types.get make_derived_method_call common::Op::new ops.push
+                ops location append_derived_cmp_result
+                1 += payload_index
+            done
+            ops location 1 "Equal" append_derived_ordering
+        elif other_index self_index < then
+            ops location 0 "Less" append_derived_ordering
+        else
+            ops location 2 "Greater" append_derived_ordering
+        fi
+        1 += other_index
+    done
+}
+
+pub fn append_enum_derived_cmp_body
+    casa_enum:$common::CasaEnum
+    location:$common::Location
+    ops:mut$std::List[common::Op]
+{
+    location.clone "self".to_str common::OpValue::PushVar common::Op::new ops.push
+    location.clone common::OpValue::MatchStart common::Op::new ops.push
+    0 (u64) = self_index
+    for self_variant in casa_enum.variants.iter do
+        std::List[std::String]::new = self_bindings
+        self_variant casa_enum
+            .variant_types
+            .get
+            .unwrap
+            .length = self_payload_count
+        0 (u64) = payload_index
+        while payload_index self_payload_count > do
+            f"__derived_cmp_self_{self_index}_{payload_index}" self_bindings.push
+            1 += payload_index
+        done
+        self_bindings self_index (i64) self_variant.as_str casa_enum.name.as_str make_derived_enum_arm = self_arm
+        location.clone self_arm common::OpValue::MatchArm common::Op::new ops.push
+        location.clone "other".to_str common::OpValue::PushVar common::Op::new ops.push
+        location.clone common::OpValue::MatchStart common::Op::new ops.push
+        ops location self_payload_count self_index self_variant casa_enum append_derived_enum_cmp_variant
+        location.clone common::OpValue::MatchEnd common::Op::new ops.push
+        1 += self_index
+    done
+    location.clone common::OpValue::MatchEnd common::Op::new ops.push
+}
+
+pub fn append_derived_hash_mix
+    location:$common::Location
+    value_ops:std::List[common::Op]
+    ops:mut$std::List[common::Op]
+{
+    location.clone common::OpValue::Dup common::Op::new ops.push
+    location.clone DERIVED_HASH_SHIFT common::make_integer_op_value common::Op::new ops.push
+    location.clone common::OpValue::Shl common::Op::new ops.push
+    location.clone "wrapping_add".to_str common::OpValue::MethodCall common::Op::new ops.push
+    value_ops ops.append
+    location.clone "wrapping_add".to_str common::OpValue::MethodCall common::Op::new ops.push
+}
+
+pub fn append_struct_derived_hash_body
+    casa_struct:$common::CasaStruct
+    location:$common::Location
+    ops:mut$std::List[common::Op]
+{
+    location.clone DERIVED_HASH_SEED common::make_integer_op_value common::Op::new ops.push
+    for member in casa_struct.members.iter do
+        std::List[common::Op]::new = value_ops
+        location.clone "self".to_str common::OpValue::PushVar common::Op::new value_ops.push
+        location.clone member.name.clone common::OpValue::MethodCall common::Op::new value_ops.push
+        location.clone "hash" member.typ make_derived_method_call common::Op::new value_ops.push
+        ops value_ops location append_derived_hash_mix
+    done
+}
+
+pub fn append_enum_derived_hash_body
+    casa_enum:$common::CasaEnum
+    location:$common::Location
+    ops:mut$std::List[common::Op]
+{
+    location.clone "self".to_str common::OpValue::PushVar common::Op::new ops.push
+    location.clone common::OpValue::MatchStart common::Op::new ops.push
+    0 (u64) = variant_index
+    for variant_name in casa_enum.variants.iter do
+        std::List[std::String]::new = bindings
+        variant_name casa_enum
+            .variant_types
+            .get
+            .unwrap
+            .length = payload_count
+        0 (u64) = payload_index
+        while payload_index payload_count > do
+            f"__derived_hash_{variant_index}_{payload_index}" bindings.push
+            1 += payload_index
+        done
+        bindings variant_index (i64) variant_name.as_str casa_enum.name.as_str make_derived_enum_arm = arm
+        location.clone arm common::OpValue::MatchArm common::Op::new ops.push
+        location.clone DERIVED_HASH_SEED common::make_integer_op_value common::Op::new ops.push
+        std::List[common::Op]::new = tag_ops
+        location.clone variant_index (i64) common::make_integer_op_value common::Op::new tag_ops.push
+        ops tag_ops location append_derived_hash_mix
+        0 (u64) = payload_index
+        while payload_index payload_count > do
+            std::List[common::Op]::new = value_ops
+            location.clone f"__derived_hash_{variant_index}_{payload_index}" common::OpValue::PushVar common::Op::new value_ops.push
+            variant_name casa_enum
+                .variant_types
+                .get
+                .unwrap = payload_types
+            location.clone "hash" payload_index payload_types.get make_derived_method_call common::Op::new value_ops.push
+            ops value_ops location append_derived_hash_mix
+            1 += payload_index
+        done
+        1 += variant_index
+    done
+    location.clone common::OpValue::MatchEnd common::Op::new ops.push
+}
+
+pub fn make_derived_eq_function
+    parser:mut$Parser
+    receiver:$common::Type
+    type_vars:$std::List[std::String]
+    required_type_vars:$std::Set[std::String]
+    location:$common::Location
+-> common::Function {
+    std::List[common::Op]::new = ops
+    receiver.match_base = receiver_name
+    if
+        receiver_name parser
+            .store
+            .structs
+            .get std::Option::Some(casa_struct) is
+    then
+        ops location casa_struct append_struct_derived_eq_body
+    elif
+        receiver_name parser
+            .store
+            .enums
+            .get std::Option::Some(casa_enum) is
+    then
+        ops location casa_enum append_enum_derived_eq_body
+    fi
+    std::List[std::String]::new = parameter_names
+    "self".to_str parameter_names.push
+    "other".to_str parameter_names.push
+    required_type_vars type_vars common::STD_EQ_TRAIT make_derived_trait_bounds = bounds
+    location
+    "eq" receiver derived_function_name.as_str
+    ops
+    common::make_bool_type
+    parameter_names
+    bounds
+    type_vars
+    receiver
+    make_derived_borrow_method
+}
+
+pub fn make_derived_cmp_function
+    parser:mut$Parser
+    receiver:$common::Type
+    type_vars:$std::List[std::String]
+    required_type_vars:$std::Set[std::String]
+    location:$common::Location
+-> common::Function {
+    std::List[common::Op]::new = ops
+    receiver.match_base = receiver_name
+    if
+        receiver_name parser
+            .store
+            .structs
+            .get std::Option::Some(casa_struct) is
+    then
+        ops location casa_struct append_struct_derived_cmp_body
+    elif
+        receiver_name parser
+            .store
+            .enums
+            .get std::Option::Some(casa_enum) is
+    then
+        ops location casa_enum append_enum_derived_cmp_body
+    fi
+    std::List[std::String]::new = parameter_names
+    "self".to_str parameter_names.push
+    "other".to_str parameter_names.push
+    required_type_vars type_vars common::STD_ORD_TRAIT make_derived_trait_bounds = bounds
+    common::STD_ORDERING_TYPE.to_str common::GenericType::new common::Type::Generic = ordering_type
+    location
+    "cmp" receiver derived_function_name.as_str
+    ops
+    ordering_type
+    parameter_names
+    bounds
+    type_vars
+    receiver
+    make_derived_borrow_method
+}
+
+pub fn make_derived_hash_function
+    parser:mut$Parser
+    receiver:$common::Type
+    type_vars:$std::List[std::String]
+    required_type_vars:$std::Set[std::String]
+    location:$common::Location
+-> common::Function {
+    std::List[common::Op]::new = ops
+    receiver.match_base = receiver_name
+    if
+        receiver_name parser
+            .store
+            .structs
+            .get std::Option::Some(casa_struct) is
+    then
+        ops location casa_struct append_struct_derived_hash_body
+    elif
+        receiver_name parser
+            .store
+            .enums
+            .get std::Option::Some(casa_enum) is
+    then
+        ops location casa_enum append_enum_derived_hash_body
+    fi
+    std::List[std::String]::new = parameter_names
+    "self".to_str parameter_names.push
+    required_type_vars type_vars common::STD_HASHABLE_TRAIT make_derived_trait_bounds = bounds
+    location
+    "hash" receiver derived_function_name.as_str
+    ops
+    common::make_i64_type
+    parameter_names
+    bounds
+    type_vars
+    receiver
+    make_derived_borrow_method
+}
+
+pub fn make_derived_clone_function
+    parser:mut$Parser
+    receiver:$common::Type
+    type_vars:$std::List[std::String]
+    required_type_vars:$std::Set[std::String]
+    location:$common::Location
+-> common::Function {
+    required_type_vars type_vars common::STD_CLONE_TRAIT make_derived_trait_bounds = bounds
+    location.clone
+    std::Map[std::String std::String]::new
+    bounds
+    type_vars.clone
+    std::List[common::Type]::new common::STD_CLONE_TRAIT.to_str common::TraitBound
+    receiver common::clone_type
+    common::TraitImpl = trait_impl
+    "clone" receiver derived_function_name.as_str trait_impl parser make_copy_clone_fallback
+}
+
+pub fn set_derived_method
+    methods:mut$std::Map[std::String std::String]
+    method_name:$str
+    function_name:$std::Option[std::String]
+{
+    if function_name std::Option::Some(name) is then
+        name.clone method_name.to_str methods.set
+    fi
+}
+
+pub fn derived_clone_type_requires_var typ:$common::Type type_var:$str -> bool {
+    if typ.is_borrow then
+        false return
+    fi
+    typ match
+        common::Type::TypeVar(name) => name.as_str type_var ==
+        common::Type::Const(const_type) => const_type.is_symbolic const_type.name.as_str type_var == &&
+        common::Type::Generic(generic) => {
+            for parameter in generic.params.iter do
+                if type_var parameter derived_clone_type_requires_var then
+                    true return
+                fi
+            done
+            false
+        }
+        common::Type::Function(function_type) => {
+            for parameter in function_type.parameters.iter do
+                if type_var parameter derived_clone_type_requires_var then
+                    true return
+                fi
+            done
+            for return_type in function_type.return_types.iter do
+                if type_var return_type derived_clone_type_requires_var then
+                    true return
+                fi
+            done
+            false
+        }
+        _ => false
+    end
+}
+
+pub fn add_derived_required_type_vars
+    typ:$common::Type
+    type_vars:$std::List[std::String]
+    required_type_vars:mut$std::Set[std::String]
+{
+    for type_variable in type_vars.iter do
+        if type_variable.as_str typ.type_contains_var then
+            type_variable.clone required_type_vars.add
+        fi
+    done
+}
+
+pub fn add_derived_clone_required_type_vars
+    typ:$common::Type
+    type_vars:$std::List[std::String]
+    required_type_vars:mut$std::Set[std::String]
+{
+    for type_variable in type_vars.iter do
+        if type_variable.as_str typ derived_clone_type_requires_var then
+            type_variable.clone required_type_vars.add
+        fi
+    done
+}
+
+pub fn derive_traits_for_aggregate
+    parser:mut$Parser
+    name:$str
+    type_vars:$std::List[std::String]
+    derived_traits:$std::List[std::String]
+    required_type_vars:$std::Set[std::String]
+    clone_required_type_vars:$std::Set[std::String]
+    location:$common::Location
+{
+    false = derives_clone
+    false = derives_copy
+    false = derives_eq
+    false = derives_hashable
+    false = derives_ord
+    for derived_trait in derived_traits.iter do
+        if common::STD_CLONE_TRAIT derived_trait.as_str == then
+            true = derives_clone
+        elif common::STD_COPY_TRAIT derived_trait.as_str == then
+            true = derives_copy
+        elif common::STD_EQ_TRAIT derived_trait.as_str == then
+            true = derives_eq
+        elif common::STD_HASHABLE_TRAIT derived_trait.as_str == then
+            true = derives_hashable
+        elif common::STD_ORD_TRAIT derived_trait.as_str == then
+            true = derives_ord
+        else
+            location f"Derivation for trait `{derived_trait}` is not supported" common::ErrorKind::InvalidScope parser.state.record_error_string
+        fi
+    done
+
+    type_vars name make_aggregate_receiver = receiver
+    derives_eq derives_hashable || derives_ord || = needs_eq
+    std::Option[std::String]::None = clone_override
+    std::Option[std::String]::None = eq_override
+    std::Option[std::String]::None = hash_override
+    std::Option[std::String]::None = cmp_override
+    if derives_clone then
+        location "clone" type_vars receiver parser find_derived_override = clone_override
+    fi
+    if needs_eq then
+        location "eq" type_vars receiver parser find_derived_override = eq_override
+    fi
+    if derives_hashable then
+        location "hash" type_vars receiver parser find_derived_override = hash_override
+    fi
+    if derives_ord then
+        location "cmp" type_vars receiver parser find_derived_override = cmp_override
+    fi
+
+    clone_override.is_none derives_clone && = clone_generated
+    eq_override.is_none needs_eq && = eq_generated
+    hash_override.is_none derives_hashable && = hash_generated
+    cmp_override.is_none derives_ord && = cmp_generated
+    if eq_override.is_some then
+        if derives_hashable hash_override.is_none && then
+            location "A custom derived `eq` method requires an explicit `hash` companion" common::ErrorKind::TraitSignatureMismatch parser.state.record_error
+            false = hash_generated
+        fi
+        if derives_ord cmp_override.is_none && then
+            location "A custom derived `eq` method requires an explicit `cmp` companion" common::ErrorKind::TraitSignatureMismatch parser.state.record_error
+            false = cmp_generated
+        fi
+    fi
+
+    std::Option[std::String]::None = clone_function
+    if clone_override std::Option::Some(override_name) is then
+        override_name.clone std::Option::Some = clone_function
+    elif clone_generated then
+        "clone" receiver derived_function_name = function_name
+        if function_name.as_str parser.store.has_function ! then
+            location clone_required_type_vars type_vars receiver parser make_derived_clone_function = function
+            function parser.store.set_function
+        fi
+        function_name std::Option::Some = clone_function
+    fi
+
+    std::Option[std::String]::None = eq_function
+    if eq_override std::Option::Some(override_name) is then
+        override_name.clone std::Option::Some = eq_function
+    elif eq_generated then
+        "eq" receiver derived_function_name = function_name
+        if function_name.as_str parser.store.has_function ! then
+            location required_type_vars type_vars receiver parser make_derived_eq_function = function
+            function parser.store.set_function
+        fi
+        function_name std::Option::Some = eq_function
+    fi
+
+    std::Option[std::String]::None = hash_function
+    if hash_override std::Option::Some(override_name) is then
+        override_name.clone std::Option::Some = hash_function
+    elif hash_generated then
+        "hash" receiver derived_function_name = function_name
+        if function_name.as_str parser.store.has_function ! then
+            location required_type_vars type_vars receiver parser make_derived_hash_function = function
+            function parser.store.set_function
+        fi
+        function_name std::Option::Some = hash_function
+    fi
+
+    std::Option[std::String]::None = cmp_function
+    if cmp_override std::Option::Some(override_name) is then
+        override_name.clone std::Option::Some = cmp_function
+    elif cmp_generated then
+        if location parser validate_derived_ordering then
+            "cmp" receiver derived_function_name = function_name
+            if function_name.as_str parser.store.has_function ! then
+                location required_type_vars type_vars receiver parser make_derived_cmp_function = function
+                function parser.store.set_function
+            fi
+            function_name std::Option::Some = cmp_function
+        else
+            false = cmp_generated
+        fi
+    fi
+
+    std::Option[std::String]::None = ne_override
+    std::Option[std::String]::None = partial_cmp_override
+    std::Option[std::String]::None = lt_override
+    std::Option[std::String]::None = le_override
+    std::Option[std::String]::None = gt_override
+    std::Option[std::String]::None = ge_override
+    if needs_eq then
+        location "ne" type_vars receiver parser find_derived_override = ne_override
+    fi
+    if derives_ord then
+        location "partial_cmp" type_vars receiver parser find_derived_override = partial_cmp_override
+        location "lt" type_vars receiver parser find_derived_override = lt_override
+        location "le" type_vars receiver parser find_derived_override = le_override
+        location "gt" type_vars receiver parser find_derived_override = gt_override
+        location "ge" type_vars receiver parser find_derived_override = ge_override
+    fi
+
+    if derives_clone then
+        std::Map[std::String std::String]::new = methods
+        clone_function "clone" methods set_derived_method
+        if clone_generated then
+            common::STD_CLONE_TRAIT.to_str std::Option::Some
+        else
+            std::Option[std::String]::None
+        fi = required_trait
+        location methods common::STD_CLONE_TRAIT required_trait clone_required_type_vars type_vars receiver parser
+        install_derived_trait_impl
+    fi
+    if derives_copy then
+        std::Map[std::String std::String]::new = methods
+        common::STD_COPY_TRAIT.to_str std::Option::Some = required_trait
+        location methods common::STD_COPY_TRAIT required_trait required_type_vars type_vars receiver parser
+        install_derived_trait_impl
+    fi
+    if derives_eq then
+        std::Map[std::String std::String]::new = methods
+        eq_function "eq" methods set_derived_method
+        ne_override "ne" methods set_derived_method
+        if eq_generated then
+            common::STD_EQ_TRAIT.to_str std::Option::Some
+        else
+            std::Option[std::String]::None
+        fi = required_trait
+        location methods common::STD_EQ_TRAIT required_trait required_type_vars type_vars receiver parser
+        install_derived_trait_impl
+    fi
+    if derives_ord then
+        std::Map[std::String std::String]::new = methods
+        eq_function "eq" methods set_derived_method
+        ne_override "ne" methods set_derived_method
+        cmp_function "cmp" methods set_derived_method
+        partial_cmp_override "partial_cmp" methods set_derived_method
+        lt_override "lt" methods set_derived_method
+        le_override "le" methods set_derived_method
+        gt_override "gt" methods set_derived_method
+        ge_override "ge" methods set_derived_method
+        if cmp_generated then
+            common::STD_ORD_TRAIT.to_str std::Option::Some
+        elif eq_generated then
+            common::STD_EQ_TRAIT.to_str std::Option::Some
+        else
+            std::Option[std::String]::None
+        fi = required_trait
+        location methods common::STD_ORD_TRAIT required_trait required_type_vars type_vars receiver parser
+        install_derived_trait_impl
+    fi
+    if derives_hashable then
+        std::Map[std::String std::String]::new = methods
+        eq_function "eq" methods set_derived_method
+        ne_override "ne" methods set_derived_method
+        hash_function "hash" methods set_derived_method
+        if hash_generated then
+            common::STD_HASHABLE_TRAIT.to_str std::Option::Some
+        elif eq_generated then
+            common::STD_EQ_TRAIT.to_str std::Option::Some
+        else
+            std::Option[std::String]::None
+        fi = required_trait
+        location methods common::STD_HASHABLE_TRAIT required_trait required_type_vars type_vars receiver parser
+        install_derived_trait_impl
+    fi
+}
+
+pub fn derive_traits_for_aggregates parser:mut$Parser {
     for
         casa_struct in parser
             .store
@@ -3030,23 +3902,14 @@ pub fn derive_copy_for_aggregates parser:mut$Parser {
             .values
             .iter
     do
-        for derived_trait in casa_struct.derived_traits.iter do
-            if common::STD_COPY_TRAIT derived_trait.as_str == then
-                std::Set[std::String]::new = required_type_vars
-                for type_variable in casa_struct.type_vars.iter do
-                    for member in casa_struct.members.iter do
-                        if type_variable.as_str member.typ.type_contains_var then
-                            type_variable.clone required_type_vars.add
-                            break
-                        fi
-                    done
-                done
-                casa_struct.location required_type_vars casa_struct.type_vars casa_struct.name.as_str parser
-                register_derived_copy
-            else
-                casa_struct.location f"Derivation for trait `{derived_trait}` is not supported" common::ErrorKind::InvalidScope parser.state.record_error_string
-            fi
+        std::Set[std::String]::new = required_type_vars
+        std::Set[std::String]::new = clone_required_type_vars
+        for member in casa_struct.members.iter do
+            required_type_vars casa_struct.type_vars member.typ add_derived_required_type_vars
+            clone_required_type_vars casa_struct.type_vars member.typ add_derived_clone_required_type_vars
         done
+        casa_struct.location clone_required_type_vars required_type_vars casa_struct.derived_traits casa_struct.type_vars
+        casa_struct.name.as_str parser derive_traits_for_aggregate
     done
     for
         casa_enum in parser
@@ -3055,24 +3918,16 @@ pub fn derive_copy_for_aggregates parser:mut$Parser {
             .values
             .iter
     do
-        for derived_trait in casa_enum.derived_traits.iter do
-            if common::STD_COPY_TRAIT derived_trait.as_str == then
-                std::Set[std::String]::new = required_type_vars
-                for type_variable in casa_enum.type_vars.iter do
-                    for pair in casa_enum.variant_types.iter do
-                        for payload_type in pair.second.iter do
-                            if type_variable.as_str payload_type.type_contains_var then
-                                type_variable.clone required_type_vars.add
-                            fi
-                        done
-                    done
-                done
-                casa_enum.location required_type_vars casa_enum.type_vars casa_enum.name.as_str parser
-                register_derived_copy
-            else
-                casa_enum.location f"Derivation for trait `{derived_trait}` is not supported" common::ErrorKind::InvalidScope parser.state.record_error_string
-            fi
+        std::Set[std::String]::new = required_type_vars
+        std::Set[std::String]::new = clone_required_type_vars
+        for pair in casa_enum.variant_types.iter do
+            for payload_type in pair.second.iter do
+                required_type_vars casa_enum.type_vars payload_type add_derived_required_type_vars
+                clone_required_type_vars casa_enum.type_vars payload_type add_derived_clone_required_type_vars
+            done
         done
+        casa_enum.location clone_required_type_vars required_type_vars casa_enum.derived_traits casa_enum.type_vars
+        casa_enum.name.as_str parser derive_traits_for_aggregate
     done
 }
 
@@ -4534,7 +5389,7 @@ pub fn append_struct_copy_clone_body
         location.clone "self".to_str common::OpValue::PushVar common::Op::new ops.push
         location.clone member.name.clone common::OpValue::MethodCall common::Op::new ops.push
         if member.typ.is_shared_borrow ! then
-            location.clone "clone".to_str common::OpValue::MethodCall common::Op::new ops.push
+            location.clone "clone" member.typ make_derived_method_call common::Op::new ops.push
         fi
     done
     location.clone casa_struct.clone common::OpValue::StructNew common::Op::new ops.push
@@ -4571,7 +5426,7 @@ pub fn append_enum_copy_clone_body
                 .get
                 .unwrap = payload_types
             if binding_index payload_types.get.is_shared_borrow ! then
-                location.clone "clone".to_str common::OpValue::MethodCall common::Op::new ops.push
+                location.clone "clone" binding_index payload_types.get make_derived_method_call common::Op::new ops.push
             fi
         done
         variant_index (i64) std::Option::Some variant_name.clone casa_enum.name.clone common::EnumVariant::new = constructor
@@ -7245,7 +8100,6 @@ impl Parser {
             function_ops function.set_ops
             function self.store.restore_function
         done
-        self derive_hashable_for_enums
         if self.state.has_usable_output then
             resolved_ops std::Option::Some
         else
@@ -7834,7 +8688,7 @@ pub fn resolve_identifiers_global
         std::List[common::Op]::new return
     fi
     parser validate_inhabited_aggregates
-    parser derive_copy_for_aggregates
+    parser derive_traits_for_aggregates
     parser register_builtin_copy_impls
     parser validate_drop_methods
     skip_functions parser finalize_trait_impl_methods
