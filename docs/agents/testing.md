@@ -2,7 +2,16 @@
 
 Rules for running and updating tests.
 
-## During development
+## Validation tiers
+
+Use the highest applicable tier:
+
+- **Documentation-only**: run `git diff --check`. Do not run Casa tests.
+- **CI-only**: run `git diff --check` and validate the changed workflow or shell
+  path directly. Do not run the Casa suite.
+- **Code**: use the development and final validation steps below.
+
+## During code development
 
 Trace the affected code paths and add or update one focused regression test for
 changed behavior. Run the matching compiler, example, or formatter filters while
@@ -20,27 +29,29 @@ Rebuild the compiler before testing if compiler sources changed:
 CASA_COMPILER=./casac_new tests/test_compiler.sh array_methods
 ```
 
-## Before opening a PR
+## Final code validation
 
-After the implementation is stable:
+After the implementation and review are stable:
 
 - **MUST** autoformat each changed `.casa` file once with `./casafmt`:
 
   ```
-  ./casafmt < file.casa > tmp && mv tmp file.casa
+  formatted=$(mktemp "${TMPDIR:-/tmp}/casafmt.XXXXXX")
+  ./casafmt < file.casa > "$formatted" && mv "$formatted" file.casa
   ```
 
 - **MUST** run focused filters for the changed behavior. Run `test_bootstrap.sh`
   only when the affected path requires bootstrap validation.
-- **MUST** run the complete CI suite before opening or updating a pull request:
+- **MUST** run the complete CI suite once on the final reviewed code before
+  opening or updating a pull request:
 
   ```
   tests/test_all.sh
   ```
 
 - `test_all.sh` builds the branch compiler once, then runs the same 14 shards as
-  CI in parallel. It uses the number of online processors by default. Set
-  `CASA_TEST_JOBS` to limit local parallelism:
+  CI in parallel. It uses the smaller of four jobs and the number of online
+  processors by default. Set `CASA_TEST_JOBS` to override the limit:
 
   ```
   CASA_TEST_JOBS=4 tests/test_all.sh
@@ -106,6 +117,8 @@ fixed-point tests.
 
 - `casa-release.env` is the single tracked source for the release tag used by CI
   and `install.sh`.
+- The named release must contain `casac` and `casafmt`. `install.sh` downloads
+  both, and the release `casafmt` must be built with that release's `casac`.
 - Consumers must parse and validate `casa-release.env` as data. Do not source it or
   append it directly to `$GITHUB_ENV`.
 - PR CI should use a stable released bootstrap compiler by default.

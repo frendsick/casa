@@ -13,10 +13,9 @@ Assign each finding one class:
 
 ## Review loop
 
-Before opening a pull request:
-
-Do not run focused behavior tests for documentation-only changes. The complete
-pre-PR suite required by [testing.md](./testing.md) still applies.
+Before opening a pull request, select the validation tier in
+[testing.md](./testing.md). Documentation-only and CI-only changes do not run
+Casa tests.
 
 1. Review the Standards and Spec axes in parallel. The first pass for each axis
    must report all findings from the complete diff.
@@ -44,8 +43,8 @@ pre-PR suite required by [testing.md](./testing.md) still applies.
    two incremental passes still produce Must fix or untracked Prerequisite
    findings.
 9. Repeat until no Must fix or untracked Prerequisite findings remain, then run
-   the complete pre-PR suite once and open or update the pull request. See
-   [testing.md](./testing.md) and [git.md](./git.md).
+   the selected tier's final validation once and open or update the pull
+   request. See [testing.md](./testing.md) and [git.md](./git.md).
 
 ## Why no pausing
 

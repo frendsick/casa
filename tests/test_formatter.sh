@@ -147,6 +147,25 @@ EOF
             "$dispatcher_dir/tests/$runner"
         chmod +x "$dispatcher_dir/tests/$runner"
     done
+    cat > "$dispatcher_dir/getconf" <<'EOF'
+#!/usr/bin/env sh
+echo 16
+EOF
+    chmod +x "$dispatcher_dir/getconf"
+
+    : > "$dispatcher_dir/release"
+    PATH="$dispatcher_dir:$PATH" \
+        CASA_COMPILER="$dispatcher_dir/casac" \
+        CASA_TEST_RELEASE="$dispatcher_dir/release" \
+        "$dispatcher_dir/tests/test_all.sh" \
+        > "$dispatcher_dir/default_jobs_output" 2>&1 || :
+    if ! grep -Fx "Running CI test shards with 4 parallel jobs" \
+        "$dispatcher_dir/default_jobs_output" >/dev/null
+    then
+        printf "${RED}[FAIL]${RESET} Failed: ci_shard_dispatch (default jobs)\n"
+        ci_shard_dispatch_ok=false
+    fi
+    rm -f "$dispatcher_dir/release"
 
     CASA_COMPILER="$dispatcher_dir/casac" CASA_TEST_JOBS=14 \
         CASA_TEST_RELEASE="$dispatcher_dir/release" \

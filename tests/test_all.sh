@@ -59,6 +59,9 @@ case "$jobs" in
         exit 2
         ;;
 esac
+if [ -z "${CASA_TEST_JOBS:-}" ] && [ "$jobs" -gt 4 ]; then
+    jobs=4
+fi
 
 # Match CI: build the branch compiler once, then give it to every test shard.
 ${CASA_COMPILER:-"$ROOT_DIR/casac"} -L "$ROOT_DIR/lib" \
