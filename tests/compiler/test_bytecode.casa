@@ -190,6 +190,55 @@ pub fn compare_bytecode
     true
 }
 
+fn append_control_flow_instructions
+    source:$std::List[common::InstValue]
+    target:mut$std::List[common::InstValue]
+{
+    for instruction in source.iter do
+        instruction match
+            common::InstValue::Label(label) => label common::InstValue::Label target.push
+            common::InstValue::Jump(label) => label common::InstValue::Jump target.push
+            common::InstValue::JumpNe(label) => label common::InstValue::JumpNe target.push
+            _ => {
+            }
+        end
+    done
+}
+
+fn label_at instructions:$std::List[common::InstValue] index:u64 -> u64 {
+    if index instructions.get common::InstValue::Label(label) is then
+        label return
+    fi
+    "expected label instruction" false test::assert_true
+    0
+}
+
+fn assert_jump_at instructions:$std::List[common::InstValue] index:u64 target:u64 message:$str {
+    if index instructions.get common::InstValue::Jump(actual) is then
+        message target actual test::assert_eq return
+    fi
+    message false test::assert_true
+}
+
+fn assert_jump_ne_at instructions:$std::List[common::InstValue] index:u64 target:u64 message:$str {
+    if index instructions.get common::InstValue::JumpNe(actual) is then
+        message target actual test::assert_eq return
+    fi
+    message false test::assert_true
+}
+
+fn assert_jump_ne_targets_label
+    instructions:$std::List[common::InstValue]
+    jump_index:u64
+    label_index:u64
+{
+    label_index instructions label_at = label
+    if jump_index instructions.get common::InstValue::JumpNe(target) is then
+        "deep if jump reaches its matching end" label target test::assert_eq return
+    fi
+    "deep if emits a conditional jump" false test::assert_true
+}
+
 pub fn test_invalid_program_stops_before_bytecode {
     "invalid_program_stops_before_bytecode" test::test_start
     "\"bad\" 1 *" typecheck_bytecode_source = result
@@ -620,6 +669,103 @@ pub fn test_compile_while_block {
     "while end label" 4 bytecode.get common::InstValue::Label is test::assert_true
 }
 
+pub fn test_deep_control_flow_targets {
+    "deep_control_flow_targets" test::test_start
+    128 (u64) = depth
+    std::List[common::Op]::new = ops
+    0 (u64) = index
+    while index depth > do
+        common::OpValue::IfStart test_make_op ops.push
+        common::OpValue::IfCondition test_make_op ops.push
+        1 += index
+    done
+    0 (u64) = index
+    while index depth > do
+        common::OpValue::IfEnd test_make_op ops.push
+        1 += index
+    done
+
+    ops TEST_STORE bytecode::compile_bytecode = result
+    "deep nesting compiles" result.is_ok test::assert_true
+    result.unwrap = program
+    "each nested if emits one jump and label" depth 2 * 1 + program.bytecode.length test::assert_eq
+    0 (u64) = index
+    while index depth > do
+        depth 2 * index - index 1 + program.bytecode assert_jump_ne_targets_label
+        1 += index
+    done
+}
+
+pub fn test_mixed_control_flow_targets {
+    "mixed_control_flow_targets" test::test_start
+    "enum Choice { A B } fn mixed choice:Choice flag:bool { while flag do if flag then continue else break fi done choice match Choice::A if flag => { } Choice::A => { } Choice::B => { } end } true Choice::A mixed"
+    typecheck_bytecode_source = result
+    "mixed control flow typechecks" result.diagnostics.has_errors ! test::assert_true
+    result bytecode::compile_typechecked = compiled
+    "mixed control flow compiles" compiled.is_ok test::assert_true
+    compiled.unwrap = program
+    "mixed" program
+        .functions
+        .get_str
+        .unwrap = instructions
+    std::List[common::InstValue]::new = control_flow
+    control_flow instructions append_control_flow_instructions
+    "mixed control-flow instruction count" 19 control_flow.length test::assert_eq
+
+    0 control_flow label_at drop
+    1 control_flow label_at = loop_start
+    6 control_flow label_at = if_else
+    8 control_flow label_at = if_end
+    10 control_flow label_at = loop_end
+    14 control_flow label_at = second_arm
+    17 control_flow label_at = third_arm
+    18 control_flow label_at = match_end
+
+    "while condition reaches loop end" loop_end 2 control_flow assert_jump_ne_at
+    "if condition reaches else" if_else 3 control_flow assert_jump_ne_at
+    "continue reaches loop start" loop_start 4 control_flow assert_jump_at
+    "then branch reaches if end" if_end 5 control_flow assert_jump_at
+    "break reaches loop end" loop_end 7 control_flow assert_jump_at
+    "while end reaches loop start" loop_start 9 control_flow assert_jump_at
+    "first match pattern reaches second arm" second_arm 11 control_flow assert_jump_ne_at
+    "guarded match arm reaches second arm" second_arm 12 control_flow assert_jump_ne_at
+    "first match arm reaches match end" match_end 13 control_flow assert_jump_at
+    "second match pattern reaches third arm" third_arm 15 control_flow assert_jump_ne_at
+    "second match arm reaches match end" match_end 16 control_flow assert_jump_at
+
+    std::List[common::Op]::new = invalid_ops
+    common::OpValue::IfCondition test_make_op invalid_ops.push
+    invalid_ops TEST_STORE bytecode::compile_bytecode = invalid
+    "unmatched control flow fails" invalid.is_error test::assert_true
+    "unmatched control flow keeps its diagnostic" invalid
+        .unwrap_error
+        .message
+        .as_str "`then` without matching `if`" == test::assert_true
+
+    std::List[common::Op]::new = crossed_ops
+    common::OpValue::IfStart test_make_op crossed_ops.push
+    common::OpValue::WhileStart test_make_op crossed_ops.push
+    common::OpValue::IfEnd test_make_op crossed_ops.push
+    common::OpValue::WhileEnd test_make_op crossed_ops.push
+    crossed_ops TEST_STORE bytecode::compile_bytecode = crossed
+    "crossed control flow fails" crossed.is_error test::assert_true
+    "crossed control flow keeps its diagnostic" crossed
+        .unwrap_error
+        .message
+        .as_str "`if` without matching `fi`" == test::assert_true
+
+    std::List[common::Op]::new = nested_invalid_ops
+    common::OpValue::IfStart test_make_op nested_invalid_ops.push
+    common::OpValue::WhileStart test_make_op nested_invalid_ops.push
+    common::OpValue::WhileCondition test_make_op nested_invalid_ops.push
+    nested_invalid_ops TEST_STORE bytecode::compile_bytecode = nested_invalid
+    "innermost unmatched control flow fails" nested_invalid.is_error test::assert_true
+    "innermost unmatched control flow keeps its diagnostic" nested_invalid
+        .unwrap_error
+        .message
+        .as_str "`do` without matching `done`" == test::assert_true
+}
+
 pub fn test_compile_string_eq {
     "compile_string_eq" test::test_start
 
@@ -1013,6 +1159,8 @@ test_compile_import_no_output
 test_op_to_label_identity
 test_compile_if_block
 test_compile_while_block
+test_deep_control_flow_targets
+test_mixed_control_flow_targets
 test_compile_string_eq
 test_compile_string_ne
 test_compile_assign_increment
