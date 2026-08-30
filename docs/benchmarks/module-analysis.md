@@ -442,6 +442,36 @@ therefore measures the process high-water mark, not live declaration bytes.
 The clone profile below supplies logical declaration sizes. No claim about
 retained allocator bytes is possible from this instrumentation.
 
+### Post-implementation measurements (#564)
+
+The #564 implementation was measured with the same generated corpora and
+commands. The compiler was a three-stage fixed point built from `main` at
+`50c7166`. Stage 2 and stage 3 assembly matched. Each corpus had one warm-up.
+The first self-compilation collection had a 7.02-second spread, so it was
+discarded and repeated after the machine load stabilized.
+
+| Corpus | Median wall | Spread | Median peak RSS | Change from baseline | Raw wall samples | Raw RSS samples |
+|---|---:|---:|---:|---:|---|---|
+| Self-compilation | 24.60 s | 0.40 s | 685,032 KiB, 668.98 MiB | wall -11.1%, RSS -8.4% | 24.60, 24.53, 24.93 | 685,032, 685,032, 685,032 |
+| Qualified graph | 0.53 s | 0.04 s | 17,768 KiB, 17.35 MiB | wall -79.5%, RSS -79.6% | 0.52, 0.50, 0.53, 0.54, 0.54 | 17,768, 17,768, 17,768, 17,768, 17,768 |
+| Selective graph | 0.75 s | 0.04 s | 24,680 KiB, 24.10 MiB | wall -72.4%, RSS -68.7% | 0.76, 0.73, 0.75, 0.72, 0.76 | 24,680, 24,680, 24,680, 24,680, 24,680 |
+
+The module analyzer has no `SymbolStore` clone or merge path. Each graph
+analyzed its three imported source identities once, despite repeated aliases.
+The key-only module records do not own declarations.
+
+The final pruned stores contained these declarations:
+
+| Corpus | Functions | Structs | Enums | Traits | Implementations | Constants | Variables |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Self-compilation | 3,420 | 120 | 33 | 10 | 151 | 61 | 1 |
+| Qualified graph | 1,206 | 0 | 0 | 0 | 0 | 0 | 0 |
+| Selective graph | 1,206 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+The graph stores contain one copy of the 1,204-function source module and the
+two wrapper functions. The baseline's largest qualified clone contained 4,818
+functions because alias-keyed cache entries copied the same source.
+
 ### Phase profile
 
 A temporary phase build used `timer::Timer.elapsed_ns` around these existing
