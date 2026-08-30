@@ -113,6 +113,69 @@ if matches_filter "ci_shard_dispatch" "$@"; then
         ci_shard_dispatch_ok=false
     fi
 
+    dispatcher_dir=$(mktemp -d \
+        "${TMPDIR:-/tmp}/casa_shard_dispatch.XXXXXX")
+    trap 'rm -rf "$dispatcher_dir"' EXIT
+    mkdir -p "$dispatcher_dir/tests" "$dispatcher_dir/lib" \
+        "$dispatcher_dir/formatter"
+    cp tests/test_all.sh "$dispatcher_dir/tests/test_all.sh"
+    : > "$dispatcher_dir/casa.casa"
+    : > "$dispatcher_dir/formatter/format.casa"
+    cat > "$dispatcher_dir/casac" <<'EOF'
+#!/usr/bin/env sh
+while [ "$1" != "-o" ]; do shift; done
+shift
+printf '#!/usr/bin/env sh\nexit 0\n' > "$1"
+chmod +x "$1"
+EOF
+    chmod +x "$dispatcher_dir/casac"
+    cat > "$dispatcher_dir/tests/test_compiler.sh" <<'EOF'
+#!/usr/bin/env sh
+if [ "$CASA_TEST_CATEGORY" = runtime ]; then
+    echo "Failed test available"
+    exit 1
+fi
+if [ "$CASA_TEST_CATEGORY" = compiler_parsing ]; then
+    while [ ! -f "$CASA_TEST_RELEASE" ]; do sleep 0.02; done
+fi
+EOF
+    chmod +x "$dispatcher_dir/tests/test_compiler.sh"
+    for runner in test_cli.sh test_examples.sh test_bootstrap.sh \
+        test_formatter.sh
+    do
+        printf '#!/usr/bin/env sh\nexit 0\n' > \
+            "$dispatcher_dir/tests/$runner"
+        chmod +x "$dispatcher_dir/tests/$runner"
+    done
+
+    CASA_COMPILER="$dispatcher_dir/casac" CASA_TEST_JOBS=14 \
+        CASA_TEST_RELEASE="$dispatcher_dir/release" \
+        "$dispatcher_dir/tests/test_all.sh" \
+        > "$dispatcher_dir/output" 2>&1 &
+    dispatcher_pid=$!
+    attempts=0
+    while ! grep -F "[runtime] Failed test available" \
+        "$dispatcher_dir/output" \
+        >/dev/null && [ "$attempts" -lt 100 ]
+    do
+        sleep 0.02
+        attempts=$((attempts + 1))
+    done
+    if ! grep -F "[runtime] Failed test available" \
+        "$dispatcher_dir/output" \
+        >/dev/null || ! kill -0 "$dispatcher_pid" 2>/dev/null
+    then
+        printf "${RED}[FAIL]${RESET} Failed: ci_shard_dispatch (live failure)\n"
+        ci_shard_dispatch_ok=false
+    fi
+    : > "$dispatcher_dir/release"
+    if wait "$dispatcher_pid"; then
+        printf "${RED}[FAIL]${RESET} Failed: ci_shard_dispatch (failure status)\n"
+        ci_shard_dispatch_ok=false
+    fi
+    rm -rf "$dispatcher_dir"
+    trap - EXIT
+
     if [ "$ci_shard_dispatch_ok" = true ]; then
         printf "${GREEN}[OK]${RESET} Passed: ci_shard_dispatch\n"
         pass=$((pass + 1))
