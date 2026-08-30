@@ -7,7 +7,6 @@ set -e
 GITHUB_REPO="frendsick/casa"
 RELEASE_ENV_FILE="casa-release.env"
 RELEASE_ENV_URL="https://raw.githubusercontent.com/$GITHUB_REPO/main/$RELEASE_ENV_FILE"
-CASA_COMPILER="casac"
 
 # List of dependencies
 DEPENDENCIES="as ld"
@@ -41,22 +40,26 @@ main() {
     # Handle each asset from the release
     echo "$release_asset_urls" | while read -r asset_name asset_url; do
 
-        # Download the compiler executable and make it executable
-        if [ "$asset_name" = "$CASA_COMPILER" ]; then
+        # Download the release tools and make them executable
+        case "$asset_name" in
+        casac|casafmt)
             download_asset "$asset_url" "$asset_name"
             chmod +x "$asset_name"
             log "SUCCESS" "Make executable" "$asset_name"
-
-        else
+            ;;
+        *)
             log "INFO" "Skipping asset" "$asset_name"
-        fi
+            ;;
+        esac
     done
 
-    # Verify that the compiler binary was downloaded
-    if [ ! -f "$CASA_COMPILER" ]; then
-        log "ERROR" "Compiler binary not downloaded" "$CASA_COMPILER"
-        exit 1
-    fi
+    # Verify that both release tools were downloaded
+    for casa_tool in casac casafmt; do
+        if [ ! -f "$casa_tool" ]; then
+            log "ERROR" "Release tool not downloaded" "$casa_tool"
+            exit 1
+        fi
+    done
 
     # Offer to install missing dependencies for supported distros
     missing_dependencies=$(get_missing_dependencies)

@@ -36,14 +36,14 @@ Rules for commits, branches, and pull requests in this repo.
 
 ## Releases
 
-- The release asset **MUST** be named `casac` (no version suffix, no other name).
-  CI downloads `https://github.com/.../releases/download/${TAG}/casac` — any other
-  asset name causes a 404 and breaks the bootstrap step.
+- Every release **MUST** contain assets named `casac` and `casafmt`, with no
+  version suffixes. CI and new worktrees download those exact names.
+- Build the release `casafmt` with the `casac` uploaded to the same release.
 - Release descriptions must summarize changes without mentioning the compiler's
   bootstrap role.
-- When using `gh release create`, pass the binary as `/path/to/casac` (not
-  `/path/to/casac_v1.13.0_stage2#casac` — the `#label` syntax sets the display
-  label, not the download filename).
+- When using `gh release create`, pass binaries whose filenames are exactly
+  `casac` and `casafmt`. The `#label` syntax changes only the display label, not
+  the download filename.
 
 ## Workflow
 
