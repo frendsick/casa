@@ -18,22 +18,34 @@ Before opening a pull request:
 Do not run focused behavior tests for documentation-only changes. The complete
 pre-PR suite required by [testing.md](./testing.md) still applies.
 
-1. Run the `ponytail-review` skill on the diff.
-2. Review non-trivial functions added or changed with `function-design` as part
-   of the Standards axis.
-3. Review the Standards and Spec axes.
-4. Classify each finding.
-5. **MUST** fix every Must fix finding without pausing. Run focused tests and
-   review only the affected axis again.
-6. Implement an untracked Prerequisite in the current work. For a tracked
+1. Review the Standards and Spec axes in parallel. The first pass for each axis
+   must report all findings from the complete diff.
+2. Include the `ponytail-review` checks in the Standards axis. Review
+   non-trivial functions added or changed with `function-design` in the same
+   axis. Do not run separate passes for these checks.
+3. Give each finding a stable identifier and class. Keep the finding and its
+   disposition in the review context for later passes.
+4. **MUST** fix every Must fix finding without pausing. Batch compatible fixes,
+   then run focused tests.
+5. Implement an untracked Prerequisite in the current work. For a tracked
    Prerequisite, keep the pull request in draft and add a native GitHub blocker
    relationship to the originating issue. If there is no originating issue, add
    the relationship to the pull request instead. See
    [issue-tracker.md](./issue-tracker.md#blocker-relationships).
-7. Report Non-blocking findings to the user and in the pull request. Do not
+6. Report Non-blocking findings to the user and in the pull request. Do not
    implement them.
-8. Repeat until no Must fix or untracked Prerequisite findings remain, then open
-   or update the pull request. See [git.md](./git.md).
+7. Re-review only an axis affected by the fixes. Give the same reviewer its
+   prior findings and the correction diff. The reviewer must verify each
+   disposition and inspect the changed paths and their callers for regressions.
+   It must not review unchanged parts of the original diff again or repeat an
+   existing Non-blocking finding.
+8. Use a fresh reviewer context to review the complete diff when a fix changes
+   an interface or the design, reaches outside the previously affected flow, or
+   two incremental passes still produce Must fix or untracked Prerequisite
+   findings.
+9. Repeat until no Must fix or untracked Prerequisite findings remain, then run
+   the complete pre-PR suite once and open or update the pull request. See
+   [testing.md](./testing.md) and [git.md](./git.md).
 
 ## Why no pausing
 

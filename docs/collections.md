@@ -325,8 +325,8 @@ them. Only `collect` runs the pipeline:
 ```casa
 2 [1, 2, 3, 4, 5, 6, 7] (array[i64 7]).iter.skip = rest
 4 rest.take = window
-{ = value:$i64 value copy 2 % 0 == } window.filter = even
-{ = value:$i64 value copy 2 * } even.map.collect = doubled
+{ copy 2 % 0 == } window.filter = even
+{ copy 2 * } even.map.collect = doubled
 ```
 
 See [`examples/iterator_combinators.casa`](../examples/iterator_combinators.casa)
