@@ -73,22 +73,22 @@ done
 | Nested blocks | Main median | Branch median | Main doubling ratio | Branch doubling ratio |
 |---:|---:|---:|---:|---:|
 | 500 | 0.051 s | 0.003 s | n/a | n/a |
-| 1,000 | 0.192 s | 0.007 s | 3.76 | 2.33 |
-| 2,000 | 0.743 s | 0.015 s | 3.87 | 2.14 |
-| 4,000 | 2.980 s | 0.030 s | 4.01 | 2.00 |
+| 1,000 | 0.192 s | 0.006 s | 3.76 | 2.00 |
+| 2,000 | 0.743 s | 0.014 s | 3.87 | 2.33 |
+| 4,000 | 2.980 s | 0.031 s | 4.01 | 2.21 |
 
 The main implementation approaches quadratic growth. The target index keeps
-growth near linear and lowers the 4,000-block case from 2.980 seconds to 0.030
+growth near linear and lowers the 4,000-block case from 2.980 seconds to 0.031
 seconds.
 
 Raw samples in execution order:
 
 | Nested blocks | Main samples, seconds | Branch samples, seconds |
 |---:|---|---|
-| 500 | 0.052, 0.050, 0.051 | 0.003, 0.003, 0.003 |
-| 1,000 | 0.198, 0.191, 0.192 | 0.007, 0.007, 0.008 |
-| 2,000 | 0.751, 0.743, 0.741 | 0.014, 0.015, 0.015 |
-| 4,000 | 2.941, 3.064, 2.980 | 0.028, 0.030, 0.030 |
+| 500 | 0.052, 0.050, 0.051 | 0.003, 0.003, 0.004 |
+| 1,000 | 0.198, 0.191, 0.192 | 0.006, 0.006, 0.007 |
+| 2,000 | 0.751, 0.743, 0.741 | 0.014, 0.013, 0.015 |
+| 4,000 | 2.941, 3.064, 2.980 | 0.028, 0.032, 0.031 |
 
 ## Memory
 
@@ -105,10 +105,10 @@ the median of three runs.
 | Completed prepasses | Heap high-water | Reusable bytes | Live or padding bytes | Free blocks | RSS |
 |---:|---:|---:|---:|---:|---:|
 | 0 | 700,536 B | 98,192 B | 602,344 B | 14 | 744 KiB |
-| 1 | 748,616 B | 146,272 B | 602,344 B | 18 | 752 KiB |
-| 10 | 748,616 B | 146,272 B | 602,344 B | 18 | 752 KiB |
-| 100 | 748,616 B | 146,272 B | 602,344 B | 18 | 752 KiB |
+| 1 | 748,656 B | 146,312 B | 602,344 B | 19 | 752 KiB |
+| 10 | 748,656 B | 146,312 B | 602,344 B | 19 | 752 KiB |
+| 100 | 748,656 B | 146,312 B | 602,344 B | 19 | 752 KiB |
 
-The first prepass adds 48,080 bytes to heap high-water. All added bytes are
+The first prepass adds 48,120 bytes to heap high-water. All added bytes are
 reusable after the call. Every allocator and RSS metric then stays fixed
 through 100 completed prepasses, so the target index has a bounded live set.

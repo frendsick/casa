@@ -56,13 +56,15 @@ impl ControlFlowTargets {
     }
 
     fn initialize self:mut$ControlFlowTargets op_index:u64 {
+        ControlFlowTarget {
+            block_start: self.length
+            next_branch: self.length
+            block_end: self.length
+            parent: self.length
+        } = target
         # SAFETY: The prepass initializes each in-bounds target exactly once.
         unsafe {
-            self.data op_index size_of[ControlFlowTarget] * + = address
-            self.length address store64
-            self.length address 8 + store64
-            self.length address 16 + store64
-            self.length address 24 + store64
+            target self.data op_index size_of[ControlFlowTarget] * + ptr::write[ControlFlowTarget]
         }
     }
 
@@ -1217,6 +1219,19 @@ fn make_if_end_failure has_open_if:bool -> std::Result[ControlFlowTargets Byteco
     "`fi` without parent `if`" make_control_flow_failure
 }
 
+fn make_open_while_failure
+    ops:$std::List[common::Op]
+    frame:$WhileTargetFrame
+-> std::Result[ControlFlowTargets BytecodeFailure] {
+    if frame.first_end_target_op ops.length != then
+        if frame.first_end_target_op ops.get.value common::OpValue::WhileCondition is then
+            "`do` without matching `done`" make_control_flow_failure return
+        fi
+        "`break` without matching `done`" make_control_flow_failure return
+    fi
+    "`while` without matching `done`" make_control_flow_failure
+}
+
 fn is_current_control_flow ops:$std::List[common::Op] op_index:u64 kind:ControlFlowKind -> bool {
     if op_index ops.length == then
         false return
@@ -1369,13 +1384,7 @@ fn precompute_control_flow_targets
             }
             common::OpValue::WhileStart => {
                 while_frames.length 1 - while_frames.get = frame
-                if frame.first_end_target_op ops.length != then
-                    if frame.first_end_target_op ops.get.value common::OpValue::WhileCondition is then
-                        "`do` without matching `done`" make_control_flow_failure return
-                    fi
-                    "`break` without matching `done`" make_control_flow_failure return
-                fi
-                "`while` without matching `done`" make_control_flow_failure return
+                frame ops make_open_while_failure return
             }
             common::OpValue::MatchStart => {
                 match_frames.length 1 - match_frames.get = frame
@@ -1601,7 +1610,7 @@ impl BytecodeCompiler {
 # ============================================================================
 
 impl BytecodeCompiler {
-    pub fn compile_if_block
+    fn compile_if_block
         self:mut$BytecodeCompiler
         ops:$std::List[common::Op]
         targets:$ControlFlowTargets
@@ -1662,7 +1671,7 @@ impl BytecodeCompiler {
 # ============================================================================
 
 impl BytecodeCompiler {
-    pub fn compile_while_block
+    fn compile_while_block
         self:mut$BytecodeCompiler
         ops:$std::List[common::Op]
         targets:$ControlFlowTargets
@@ -1892,50 +1901,50 @@ impl BytecodeCompiler {
 
 impl BytecodeCompiler {
     pub fn compile_match_op
-        compiler:mut$BytecodeCompiler
+        self:mut$BytecodeCompiler
         op:$common::Op
-        is_last:bool
         next_arm:mut$std::Option[u64]
         bytecode:mut$std::List[common::InstValue]
+        is_last:bool
     {
         op common::pattern_value_of match
             common::PatternValue::Struct(struct_pattern) => {
-                bytecode struct_pattern compiler.state.store compiler.emit_struct_arm
+                bytecode struct_pattern self.state.store self.emit_struct_arm
             }
             common::PatternValue::Literal(literal_pattern) => {
-                bytecode next_arm is_last literal_pattern compiler.emit_literal_arm
+                bytecode next_arm is_last literal_pattern self.emit_literal_arm
             }
             common::PatternValue::EnumVariant(variant) => {
                 op pattern::pattern_is_wildcard = is_wildcard
-                bytecode next_arm is_last is_wildcard variant compiler.emit_enum_arm
+                bytecode next_arm is_last is_wildcard variant self.emit_enum_arm
             }
         end
         if op.value common::OpValue::MatchArm(arm) is then
             if arm.guard_ops.length 0 != then
-                bytecode arm.guard_ops compiler.compile_sequence
+                bytecode arm.guard_ops self.compile_sequence
                 if next_arm std::Option::Some(label) is then
                     label common::InstValue::JumpNe bytecode.push
                 else
-                    "Guarded match arm has no following label during bytecode compilation" compiler.record_failure
+                    "Guarded match arm has no following label during bytecode compilation" self.record_failure
                 fi
             fi
         fi
         if
-            op common::op_identity compiler
+            op common::op_identity self
                 .state
                 .store
                 .clone_ownership std::Option::Some(owned_ownership) is
         then
             for event in owned_ownership.assignments.iter do
-                bytecode event.generation event.name.as_str compiler.set_owner_flag
+                bytecode event.generation event.name.as_str self.set_owner_flag
             done
         fi
-        bytecode op compiler.state.store compiler.compile_match_destruction
+        bytecode op self.state.store self.compile_match_destruction
     }
 }
 
 impl BytecodeCompiler {
-    pub fn compile_match_block
+    fn compile_match_block
         self:mut$BytecodeCompiler
         ops:$std::List[common::Op]
         targets:$ControlFlowTargets
@@ -1982,7 +1991,7 @@ impl BytecodeCompiler {
                 next_index ops.get self.op_to_label std::Option::Some = next_arm
             fi
 
-            bytecode next_arm is_last op self.compile_match_op
+            is_last bytecode next_arm op self.compile_match_op
         elif op.value common::OpValue::MatchEnd is then
             op_index ops.get self.op_to_label = end_match_label
             bytecode op self.compile_owner_cleanups
@@ -2423,16 +2432,16 @@ impl BytecodeCompiler {
     }
 
     pub fn compile_push_array
-        compiler:mut$BytecodeCompiler
+        self:mut$BytecodeCompiler
         op:$common::Op
         bytecode:mut$std::List[common::InstValue]
     {
         if op.value common::OpValue::PushArray(items) is then
             items.length = length
 
-            items op compiler.can_emit_static_array = can_emit_static
+            items op self.can_emit_static_array = can_emit_static
             if can_emit_static then
-                bytecode items compiler.compile_static_array return
+                bytecode items self.compile_static_array return
             fi
 
             common::make_unknown_type common::clone_type = element_type
@@ -2441,29 +2450,29 @@ impl BytecodeCompiler {
                     found_element_type typechecker::resolve_numeric_literal_default = element_type
                 else
                     "Array literal has no element type during bytecode compilation"
-                    compiler.record_failure return
+                    self.record_failure return
                 fi
             else
-                "Array literal has no type during bytecode compilation" compiler.record_failure return
+                "Array literal has no type during bytecode compilation" self.record_failure return
             fi
 
-            bytecode items compiler.compile_sequence_reversed
+            bytecode items self.compile_sequence_reversed
 
             # An array stores only its elements (ADR-0152), so the allocation
             # is exactly the element storage.
-            compiler.allocate_local = list_local
-            compiler.state.store element_type common::type_inline_size.unwrap = element_size
+            self.allocate_local = list_local
+            self.state.store element_type common::type_inline_size.unwrap = element_size
             element_size length common::get_array_storage_size i64::try_from.unwrap common::InstValue::Push bytecode.push
             common::InstValue::HeapAlloc bytecode.push
             list_local common::InstValue::LocalSet bytecode.push
 
             # Store elements starting at offset 0
-            compiler.allocate_local = index_local
+            self.allocate_local = index_local
             0 common::InstValue::Push bytecode.push
             index_local common::InstValue::LocalSet bytecode.push
 
-            compiler.new_label = start_label
-            compiler.new_label = end_label
+            self.new_label = start_label
+            self.new_label = end_label
 
             # while index limit > do
             start_label common::InstValue::Label bytecode.push
@@ -2476,7 +2485,7 @@ impl BytecodeCompiler {
             list_local common::InstValue::LocalGet bytecode.push
             index_local common::InstValue::LocalGet bytecode.push
             common::InstValue::Add bytecode.push
-            bytecode element_type compiler.emit_typed_store
+            bytecode element_type self.emit_typed_store
 
             # element_size += index
             index_local common::InstValue::LocalGet bytecode.push
@@ -3500,7 +3509,7 @@ impl BytecodeCompiler {
         end
     }
 
-    pub fn compile_op
+    fn compile_op
         self:mut$BytecodeCompiler
         ops:$std::List[common::Op]
         targets:$ControlFlowTargets
