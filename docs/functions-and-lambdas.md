@@ -292,7 +292,8 @@ types for unannotated lambda parameters. The body determines the output types:
 
 ```casa
 [1, 2, 3] List::from_array = values
-{ = total = value value copy total + } 0 values.iter.fold print
+0 = initial_total:i64
+{ = total copy total + } initial_total values.iter.fold print
 ```
 
 An explicit parameter annotation takes priority and must match the expected
