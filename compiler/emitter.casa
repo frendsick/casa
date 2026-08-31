@@ -9,8 +9,11 @@ pub const INT32_MAX 2147483647
 pub const INT32_MIN -2147483648
 pub const RETURN_STACK_SIZE 1048576
 pub const SMALL_ALLOC_LIMIT 512
-# Keep enough headroom for the compiler and its largest test programs.
-pub const HEAP_SIZE 12884901888
+pub const HEAP_CHUNK_HEADER_SIZE 16
+pub const HEAP_GROWTH_SIZE 67108864
+pub const MMAP_SYSCALL 9
+pub const MMAP_PROT_READ_WRITE 3
+pub const MMAP_PRIVATE_ANONYMOUS 34
 
 # ============================================================================
 # Emitter state
@@ -163,14 +166,15 @@ impl Emitter {
         "env_sp: .skip 8" self.line
         "current_env: .skip 8" self.line
         ".align 16" self.line
+        "heap_chunks: .skip 8" self.line
         "heap_ptr: .skip 8" self.line
+        "heap_end: .skip 8" self.line
         "free_list: .skip 8" self.line
         f"small_free_lists: .skip {SMALL_ALLOC_LIMIT}" self.line_string
         "__argc: .skip 8" self.line
         "__argv: .skip 8" self.line
         "__envp: .skip 8" self.line
         "print_buf: .skip 32" self.line
-        f"heap: .skip {HEAP_SIZE}" self.line_string
         "" self.line
     }
 
@@ -302,9 +306,10 @@ impl Emitter {
     # Helper subroutines
     # ============================================================================
 
+    # Each mmap chunk starts with the previous chunk and its end address.
     # Small blocks use exact-size bins. Larger blocks keep first-fit reuse.
     # ponytail: large blocks are not split or coalesced; add both if large-block
-    # fragmentation becomes measurable before the fixed heap is exhausted.
+    # fragmentation becomes measurable.
     pub fn emit_heap_helpers self:mut$Emitter {
         # heap_alloc: requested byte count in %rdi, pushes an aligned pointer.
         "heap_alloc:" self.line
@@ -351,6 +356,8 @@ impl Emitter {
         "jmp .Lheap_alloc_return" self.indent
         ".Lheap_alloc_bump:" self.line
         "movq heap_ptr(%rip), %rcx" self.indent
+        "testq %rcx, %rcx" self.indent
+        "jz .Lheap_alloc_map" self.indent
         "addq $7, %rcx" self.indent
         "andq $-8, %rcx" self.indent
         "movq %rax, %r8" self.indent
@@ -358,11 +365,49 @@ impl Emitter {
         "jc .Lheap_alloc_oom" self.indent
         "addq %rcx, %r8" self.indent
         "jc .Lheap_alloc_oom" self.indent
-        f"movq ${HEAP_SIZE}, %r9" self.indent_string
-        "cmpq %r9, %r8" self.indent
-        "ja .Lheap_alloc_oom" self.indent
-        "leaq heap(%rip), %r9" self.indent
-        "leaq (%r9,%rcx), %rcx" self.indent
+        "cmpq heap_end(%rip), %r8" self.indent
+        "jbe .Lheap_alloc_commit" self.indent
+        ".Lheap_alloc_map:" self.line
+        "pushq %rsi" self.indent
+        "pushq %r10" self.indent
+        "pushq %r11" self.indent
+        "pushq %rax" self.indent
+        "movq %rax, %rsi" self.indent
+        f"addq ${HEAP_CHUNK_HEADER_SIZE 8 +}, %rsi" self.indent_string
+        "jc .Lheap_alloc_oom" self.indent
+        f"cmpq ${HEAP_GROWTH_SIZE}, %rsi" self.indent_string
+        "jae .Lheap_alloc_map_size_ready" self.indent
+        f"movq ${HEAP_GROWTH_SIZE}, %rsi" self.indent_string
+        ".Lheap_alloc_map_size_ready:" self.line
+        "xorq %rdi, %rdi" self.indent
+        f"movq ${MMAP_PROT_READ_WRITE}, %rdx" self.indent_string
+        f"movq ${MMAP_PRIVATE_ANONYMOUS}, %r10" self.indent_string
+        "movq $-1, %r8" self.indent
+        "xorq %r9, %r9" self.indent
+        f"movq ${MMAP_SYSCALL}, %rax" self.indent_string
+        "syscall" self.indent
+        "popq %rdx" self.indent
+        "testq %rax, %rax" self.indent
+        "jz .Lheap_alloc_oom" self.indent
+        "cmpq $-4095, %rax" self.indent
+        "jae .Lheap_alloc_oom" self.indent
+        "movq heap_chunks(%rip), %r8" self.indent
+        "movq %r8, (%rax)" self.indent
+        "movq %rax, %rcx" self.indent
+        "addq %rsi, %rcx" self.indent
+        "jc .Lheap_alloc_oom" self.indent
+        "movq %rcx, 8(%rax)" self.indent
+        "movq %rax, heap_chunks(%rip)" self.indent
+        "movq %rcx, heap_end(%rip)" self.indent
+        f"leaq {HEAP_CHUNK_HEADER_SIZE}(%rax), %rcx" self.indent_string
+        "movq %rdx, %rax" self.indent
+        "popq %r11" self.indent
+        "popq %r10" self.indent
+        "popq %rsi" self.indent
+        "movq %rax, %r8" self.indent
+        "addq $8, %r8" self.indent
+        "addq %rcx, %r8" self.indent
+        ".Lheap_alloc_commit:" self.line
         "movq %rax, (%rcx)" self.indent
         "movq %r8, heap_ptr(%rip)" self.indent
         "leaq 8(%rcx), %rax" self.indent
@@ -1039,13 +1084,20 @@ impl Emitter {
     pub fn emit_heap_free_if_allocated self:mut$Emitter {
         self.emit_uid = uid
         "popq %rdi" self.indent
-        "leaq heap(%rip), %rax" self.indent
-        "cmpq %rax, %rdi" self.indent
-        f"jb .Lheap_free_if_allocated_done_{uid}" self.indent_string
-        f"movabsq ${HEAP_SIZE}, %rcx" self.indent_string
-        "addq %rax, %rcx" self.indent
+        "movq heap_chunks(%rip), %rax" self.indent
+        f".Lheap_free_if_allocated_search_{uid}:" self.line_string
+        "testq %rax, %rax" self.indent
+        f"jz .Lheap_free_if_allocated_done_{uid}" self.indent_string
+        f"leaq {HEAP_CHUNK_HEADER_SIZE}(%rax), %rcx" self.indent_string
         "cmpq %rcx, %rdi" self.indent
-        f"jae .Lheap_free_if_allocated_done_{uid}" self.indent_string
+        f"jb .Lheap_free_if_allocated_next_{uid}" self.indent_string
+        "movq 8(%rax), %rcx" self.indent
+        "cmpq %rcx, %rdi" self.indent
+        f"jb .Lheap_free_if_allocated_found_{uid}" self.indent_string
+        f".Lheap_free_if_allocated_next_{uid}:" self.line_string
+        "movq (%rax), %rax" self.indent
+        f"jmp .Lheap_free_if_allocated_search_{uid}" self.indent_string
+        f".Lheap_free_if_allocated_found_{uid}:" self.line_string
         "heap_free_if_allocated_return" "heap_free" self.emit_call_via_return_stack
         f".Lheap_free_if_allocated_done_{uid}:" self.line_string
     }
