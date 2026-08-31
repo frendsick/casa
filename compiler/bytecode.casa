@@ -3,6 +3,7 @@
 # Translates high-level Ops (produced by the parser/typechecker) into
 # low-level instructions suitable for code generation.
 import "std" as std
+import "abi" as abi
 import "common" as common
 import "error" as error
 import "pattern" as pattern
@@ -478,8 +479,23 @@ fn index_variable_list variables:$std::List[common::Variable] -> std::Map[std::S
     slots
 }
 
+fn has_copy_aggregate_storage typ:$common::Type store:$common::SymbolStore -> bool {
+    if
+        typ common::get_concrete_array_length.is_none
+        store typ common::type_is_extern_struct ! &&
+    then
+        false return
+    fi
+    common::STD_COPY_TRAIT.to_str common::GenericType::new common::Type::Generic = copy_type
+    store copy_type typ semantics::type_has_satisfying_trait_impl
+}
+
+fn uses_inline_local_storage typ:$common::Type store:$common::SymbolStore -> bool {
+    typ common::get_concrete_array_length.is_some store typ has_copy_aggregate_storage ||
+}
+
 fn local_variable_slot_width variable:$common::Variable store:$common::SymbolStore -> u64 {
-    if variable.typ common::get_concrete_array_length.is_some then
+    if store variable.typ uses_inline_local_storage then
         if store variable.typ common::type_inline_size std::Option::Some(size) is then
             size common::WORD_SIZE u64::try_from.unwrap 1 - +
             common::WORD_SIZE u64::try_from.unwrap / return
@@ -592,14 +608,14 @@ impl BytecodeCompiler {
         0 common::ResolvedVariable::Local
     }
 
-    fn local_fixed_array_type
-        compiler:mut$BytecodeCompiler
+    fn find_local_inline_aggregate_type
+        self:mut$BytecodeCompiler
         variable_name:$str
     -> std::Option[common::Type] {
-        if compiler.function std::Option::Some(function) is then
+        if self.function std::Option::Some(function) is then
             for variable in function.variables.iter do
                 if variable.name.as_str variable_name == then
-                    if variable.typ common::get_concrete_array_length.is_some then
+                    if self.state.store variable.typ uses_inline_local_storage then
                         variable.typ.clone std::Option::Some return
                     fi
                 fi
@@ -615,11 +631,13 @@ impl BytecodeCompiler {
         bytecode:mut$std::List[common::InstValue]
     {
         variable_name compiler.resolve_variable = resolved
-        if variable_name compiler.local_fixed_array_type std::Option::Some(array_type) is then
+        if variable_name compiler.find_local_inline_aggregate_type
+            std::Option::Some(aggregate_type) is
+        then
             if resolved common::ResolvedVariable::Local(local_index) is then
                 local_index common::InstValue::LocalAddress bytecode.push
                 if move_owned then
-                    bytecode array_type compiler.emit_typed_load
+                    bytecode aggregate_type compiler.emit_typed_load
                 fi
                 return
             fi
@@ -633,10 +651,12 @@ impl BytecodeCompiler {
         bytecode:mut$std::List[common::InstValue]
     {
         variable_name compiler.resolve_variable = resolved
-        if variable_name compiler.local_fixed_array_type std::Option::Some(array_type) is then
+        if variable_name compiler.find_local_inline_aggregate_type
+            std::Option::Some(aggregate_type) is
+        then
             if resolved common::ResolvedVariable::Local(local_index) is then
                 local_index common::InstValue::LocalAddress bytecode.push
-                bytecode array_type compiler.emit_typed_store
+                bytecode aggregate_type compiler.emit_typed_store
                 return
             fi
         fi
@@ -649,12 +669,8 @@ impl BytecodeCompiler {
 # ============================================================================
 
 impl BytecodeCompiler {
-    fn type_is_copy_array compiler:$BytecodeCompiler typ:$common::Type -> bool {
-        if typ.array_element_type.is_none then
-            false return
-        fi
-        common::STD_COPY_TRAIT.to_str common::GenericType::new common::Type::Generic = copy_type
-        compiler.state.store copy_type typ semantics::type_has_satisfying_trait_impl
+    fn is_copy_aggregate self:$BytecodeCompiler typ:$common::Type -> bool {
+        self.state.store typ has_copy_aggregate_storage
     }
 
     fn compile_drop_hook
@@ -823,7 +839,7 @@ impl BytecodeCompiler {
         if typ common::Type::Function(_) is then
             common::InstValue::ClosureDrop bytecode.push return
         fi
-        if typ compiler.type_is_copy_array then
+        if typ compiler.is_copy_aggregate then
             common::InstValue::HeapFreeIfAllocated bytecode.push return
         fi
         bytecode op typ compiler.state.store compiler.compile_drop_hook
@@ -1006,18 +1022,22 @@ impl BytecodeCompiler {
         op:$common::Op
         bytecode:mut$std::List[common::InstValue]
     {
-        if variable_name compiler.local_fixed_array_type std::Option::Some(array_type) is then
+        if variable_name compiler.find_local_inline_aggregate_type
+            std::Option::Some(aggregate_type) is
+        then
             variable_name compiler.resolve_variable = resolved
             if resolved common::ResolvedVariable::Local(local_index) is then
                 local_index common::InstValue::LocalAddress bytecode.push
-                bytecode op array_type compiler.state.store compiler.compile_drop_hook
-                if array_type common::get_array_length_parameter std::Option::Some(array_length) is then
-                    if array_type.array_element_type std::Option::Some(element_type) is then
+                bytecode op aggregate_type compiler.state.store compiler.compile_drop_hook
+                if aggregate_type common::get_array_length_parameter std::Option::Some(array_length) is then
+                    if aggregate_type.array_element_type std::Option::Some(element_type) is then
                         bytecode op array_length element_type compiler.compile_array_destruction
                         common::InstValue::Drop bytecode.push
                         return
                     fi
                 fi
+                common::InstValue::Drop bytecode.push
+                return
             fi
         fi
         variable_name compiler.resolve_variable = resolved
@@ -1421,7 +1441,7 @@ impl BytecodeCompiler {
                     bytecode op capture_type compiler.compile_destruction
                     inactive_label common::InstValue::Label bytecode.push
                 fi
-                if owns_capture capture_type compiler.type_is_copy_array && then
+                if owns_capture capture_type compiler.is_copy_aggregate && then
                     common::InstValue::Dup bytecode.push
                     bytecode capture_type compiler.emit_typed_load
                     common::InstValue::Swap bytecode.push
@@ -2383,6 +2403,54 @@ impl BytecodeCompiler {
 # ============================================================================
 
 impl BytecodeCompiler {
+    fn lower_extern_call
+        self:mut$BytecodeCompiler
+        function:$common::Function
+        symbol:std::String
+    -> std::Option[common::ExternCall] {
+        std::List[common::ExternAbiType]::new = parameters
+        for
+            parameter in function
+                .stack_effect
+                .parameters
+                .iter
+        do
+            if
+                self.state.store parameter.typ abi::classify_extern_type
+                std::Option::Some(classification) is
+            then
+                classification.clone parameters.push
+            else
+                f"Extern parameter `{parameter.typ.format}` has no ABI classification"
+                self.record_failure_string
+                std::Option[common::ExternCall]::None return
+            fi
+        done
+        std::Option[common::ExternAbiType]::None = return_type
+        if
+            function
+                .stack_effect
+                .return_types
+                .is_empty !
+        then
+            0 function
+                .stack_effect
+                .return_types
+                .get = declared_return
+            if
+                self.state.store declared_return abi::classify_extern_type
+                std::Option::Some(classification) is
+            then
+                classification.clone std::Option::Some = return_type
+            else
+                f"Extern return `{declared_return.format}` has no ABI classification"
+                self.record_failure_string
+                std::Option[common::ExternCall]::None return
+            fi
+        fi
+        return_type.clone parameters symbol common::ExternCall::new std::Option::Some
+    }
+
     fn compile_named_function compiler:mut$BytecodeCompiler name:$str op:$common::Op -> bool {
         if
             name compiler
@@ -2530,8 +2598,13 @@ impl BytecodeCompiler {
                     name.as_str store.get_function.unwrap = called_function
                     called_function.extern_symbol match
                         std::Option::Some(symbol) => {
-                            called_function.stack_effect.clone symbol.clone common::ExternCall::new
-                            common::InstValue::ExternCall bytecode.push
+                            symbol.clone called_function compiler.lower_extern_call match
+                                std::Option::Some(call) => {
+                                    call common::InstValue::ExternCall bytecode.push
+                                }
+                                std::Option::None => {
+                                }
+                            end
                         }
                         std::Option::None => name common::InstValue::FnCall bytecode.push
                     end
@@ -2557,17 +2630,18 @@ impl BytecodeCompiler {
                     for capture in captures.iter do
                         capture common::Variable::name.as_str = capture_name: $str
                         capture_name.as_str lambda.owned_captures common::string_list_contains = owns_capture
-                        owns_capture capture.typ compiler.type_is_copy_array && = copies_array
+                        owns_capture capture.typ compiler.is_copy_aggregate && = copies_aggregate
                         if capture_name.as_str compiler.capture_slots.get_copy_str std::Option::Some(capture_index) is then
                             capture_index common::InstValue::CaptureLoad bytecode.push
-                            if copies_array then
+                            if copies_aggregate then
                                 bytecode capture.typ compiler.emit_typed_load
                             elif owns_capture then
                                 capture_index common::InstValue::CaptureFlagClear bytecode.push
                             fi
                         else
-                            bytecode owns_capture copies_array ! && capture_name.as_str compiler.emit_variable_get
-                            if copies_array then
+                            bytecode owns_capture copies_aggregate ! && capture_name.as_str
+                            compiler.emit_variable_get
+                            if copies_aggregate then
                                 bytecode capture.typ compiler.emit_typed_load
                             elif owns_capture then
                                 if capture_name.as_str compiler.owner_flags.get_copy_str std::Option::Some(flag) is then
@@ -2692,8 +2766,8 @@ impl BytecodeCompiler {
         target:$common::Type
         bytecode:mut$std::List[common::InstValue]
     {
-        if target common::get_concrete_array_length.is_some then
-            bytecode target compiler.emit_fixed_array_copy return
+        if target compiler.is_copy_aggregate then
+            bytecode target compiler.emit_inline_copy return
         fi
         if
             compiler.state.store target common::type_value_representation std::Option::Some(representation) is
@@ -2706,17 +2780,17 @@ impl BytecodeCompiler {
         fi
     }
 
-    fn emit_fixed_array_copy
-        compiler:mut$BytecodeCompiler
+    fn emit_inline_copy
+        self:mut$BytecodeCompiler
         target:$common::Type
         bytecode:mut$std::List[common::InstValue]
     {
-        compiler.state.store target common::type_inline_size.unwrap = size
+        self.state.store target common::type_inline_size.unwrap = size
         size common::WORD_SIZE u64::try_from.unwrap 1 - +
         common::WORD_SIZE u64::try_from.unwrap / = width
         0 = copy_local: u64
         while 0 width != do
-            compiler.allocate_local = copy_local
+            self.allocate_local = copy_local
             1 -= width
         done
         copy_local common::InstValue::LocalAddress bytecode.push
@@ -2724,20 +2798,20 @@ impl BytecodeCompiler {
         copy_local common::InstValue::LocalAddress bytecode.push
     }
 
-    fn emit_array_copy_for_op
-        compiler:mut$BytecodeCompiler
+    fn emit_copy_aggregate_for_op
+        self:mut$BytecodeCompiler
         target:$common::Type
         op:$common::Op
         bytecode:mut$std::List[common::InstValue]
     {
-        op common::op_identity compiler
+        op common::op_identity self
             .state
             .store
             .does_op_move_owner = materialize_owner
         if materialize_owner then
-            bytecode target compiler.emit_typed_load
+            bytecode target self.emit_typed_load
         else
-            bytecode target compiler.emit_fixed_array_copy
+            bytecode target self.emit_inline_copy
         fi
     }
 
@@ -2832,14 +2906,14 @@ impl BytecodeCompiler {
         bytecode:mut$std::List[common::InstValue]
     -> bool {
         if op.type_hint std::Option::Some(copied_type) is then
-            if copied_type common::get_concrete_array_length.is_some then
+            if copied_type self.is_copy_aggregate then
                 if op.value common::OpValue::Dup is then
                     common::InstValue::Dup bytecode.push
-                    bytecode op copied_type self.emit_array_copy_for_op
+                    bytecode op copied_type self.emit_copy_aggregate_for_op
                     true return
                 elif op.value common::OpValue::Over is then
                     common::InstValue::Over bytecode.push
-                    bytecode op copied_type self.emit_array_copy_for_op
+                    bytecode op copied_type self.emit_copy_aggregate_for_op
                     true return
                 fi
             fi
@@ -3123,8 +3197,8 @@ impl BytecodeCompiler {
             }
             common::OpValue::Copy => {
                 if op.type_hint std::Option::Some(copied_type) is then
-                    if copied_type common::get_concrete_array_length.is_some then
-                        bytecode op copied_type self.emit_array_copy_for_op
+                    if copied_type self.is_copy_aggregate then
+                        bytecode op copied_type self.emit_copy_aggregate_for_op
                     else
                         bytecode copied_type self.emit_typed_copy
                     fi
@@ -3350,7 +3424,7 @@ impl BytecodeCompiler {
             }
             common::OpValue::PushCapture(name) => {
                 false = is_global_capture
-                std::Option[common::Type]::None = copied_array_type
+                std::Option[common::Type]::None = copied_aggregate_type
                 if self.function.is_none then
                     f"Capture `{name}` reached global bytecode compilation"
                     self.record_failure_string
@@ -3358,13 +3432,13 @@ impl BytecodeCompiler {
                     if self.function std::Option::Some(function) is then
                         name.as_str function.global_captures common::string_list_contains = is_global_capture
                         capture_index function.captures.get = capture
-                        if capture.typ self.type_is_copy_array then
-                            capture.typ.clone std::Option::Some = copied_array_type
+                        if capture.typ self.is_copy_aggregate then
+                            capture.typ.clone std::Option::Some = copied_aggregate_type
                         fi
                     fi
                     capture_index common::InstValue::CaptureLoad bytecode.push
-                    if copied_array_type std::Option::Some(copied_type) is then
-                        bytecode op copied_type self.emit_array_copy_for_op
+                    if copied_aggregate_type std::Option::Some(copied_type) is then
+                        bytecode op copied_type self.emit_copy_aggregate_for_op
                     fi
                     if
                         op common::op_identity self
@@ -3372,7 +3446,7 @@ impl BytecodeCompiler {
                             .store
                             .does_op_move_owner
                         is_global_capture ! &&
-                        copied_array_type.is_none &&
+                        copied_aggregate_type.is_none &&
                     then
                         capture_index common::InstValue::CaptureFlagClear bytecode.push
                     fi
@@ -3405,17 +3479,17 @@ impl BytecodeCompiler {
                     .store
                     .does_op_move_owner = moves_owner
                 name.as_str self.resolve_variable = resolved
-                false = copied_global_array
+                false = copied_global_aggregate
                 if resolved common::ResolvedVariable::Global(_) is then
                     if op.type_hint std::Option::Some(copied_type) is then
-                        if copied_type common::get_concrete_array_length.is_some then
+                        if copied_type self.is_copy_aggregate then
                             bytecode resolved.emit_get
-                            bytecode op copied_type self.emit_array_copy_for_op
-                            true = copied_global_array
+                            bytecode op copied_type self.emit_copy_aggregate_for_op
+                            true = copied_global_aggregate
                         fi
                     fi
                 fi
-                if copied_global_array ! then
+                if copied_global_aggregate ! then
                     bytecode moves_owner name.as_str self.emit_variable_get
                 fi
                 if moves_owner then

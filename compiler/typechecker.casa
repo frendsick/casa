@@ -3,6 +3,7 @@
 # Maintains a virtual stack of types and validates that operations
 # are type-safe.
 import "std" as std
+import "abi" as abi
 import "common" as common
 import "error" as error
 import "syntax" as syntax
@@ -1436,6 +1437,16 @@ impl TypeChecker {
         is_copy
     }
 
+    pub fn uses_copy_storage self:mut$TypeChecker typ:$common::Type -> bool {
+        if
+            typ common::get_concrete_array_length.is_none
+            self.store typ common::type_is_extern_struct ! &&
+        then
+            false return
+        fi
+        std::Option[common::Function]::None typ self.type_is_duplicable
+    }
+
     pub fn record_owner_assignment
         tc:mut$TypeChecker
         op:mut$common::Op
@@ -1563,7 +1574,7 @@ impl TypeChecker {
                 fi
                 name.to_str std::Option::Some = binding
                 op.id std::Option::Some = source
-            elif type_value common::get_concrete_array_length.is_some then
+            elif type_value tc.uses_copy_storage then
                 op.id std::Option::Some = source
             fi
         fi
@@ -1619,7 +1630,7 @@ impl TypeChecker {
     {
         if std::Option[common::Function]::None type_value tc.type_is_duplicable then
             type_value tc.stack_push_type
-            if type_value common::get_concrete_array_length.is_some then
+            if type_value tc.uses_copy_storage then
                 type_value.clone std::Option::Some op common::Op::set_type_hint
                 tc
                     .stack
@@ -1765,8 +1776,8 @@ impl TypeChecker {
         fi
     }
 
-    pub fn materialize_array_escape self:mut$TypeChecker value:$TypedValue {
-        if value.type_value common::get_concrete_array_length.is_some then
+    pub fn materialize_copy_escape self:mut$TypeChecker value:$TypedValue {
+        if value.type_value self.uses_copy_storage then
             if value.source std::Option::Some(source_op) is then
                 source_op self.store common::set_moves_owner
             fi
@@ -4093,7 +4104,7 @@ impl TypeChecker {
                     .values
                     .get = source_value
                 source_value.capability ValueCapability::Owned is = source_is_owned
-                source_value tc.materialize_array_escape
+                source_value tc.materialize_copy_escape
             fi
             if source_is_owned then
                 if tc.store source_type common::type_value_representation std::Option::Some(representation) is then
@@ -6303,7 +6314,7 @@ impl TypeChecker {
             fi
             if function_opt capture_type tc.type_is_duplicable then
                 captured_value tc.release_value
-                if capture_type common::get_concrete_array_length.is_some then
+                if capture_type tc.uses_copy_storage then
                     capture_name.to_str owned_captures.push
                 fi
                 1 += capture_index
@@ -6659,7 +6670,7 @@ impl TypeChecker {
                     .values
                     .get
                     .clone = return_value
-                return_value tc.materialize_array_escape
+                return_value tc.materialize_copy_escape
                 return_value tc.finish_value_use
                 1 += return_index
             done
@@ -8712,30 +8723,9 @@ pub fn ensure_typechecked
     summary std::Option::Some
 }
 
-pub fn is_extern_abi_scalar typ:$common::Type -> bool {
-    if typ common::Type::Builtin(builtin) is then
-        builtin.is_integer
-        builtin.is_float ||
-        builtin common::BuiltinType::Bool == ||
-        builtin common::BuiltinType::Ptr == || return
-    fi
-    false
-}
-
-pub fn is_extern_abi_parameter typ:$common::Type store:$common::SymbolStore -> bool {
-    if typ is_extern_abi_scalar then
-        true return
-    fi
-    if typ.borrow_target std::Option::Some(target) is then
-        if typ.is_shared_borrow target common::Type::Builtin(common::BuiltinType::Cstr) is && then
-            true return
-        fi
-        if target is_extern_abi_scalar then
-            true return
-        fi
-        store target common::type_is_extern_struct return
-    fi
-    false
+pub fn implements_copy typ:$common::Type store:$common::SymbolStore -> bool {
+    common::STD_COPY_TRAIT.to_str common::GenericType::new common::Type::Generic = copy_type
+    store copy_type typ semantics::type_has_satisfying_trait_impl
 }
 
 pub fn validate_extern_structs store:$common::SymbolStore diagnostics:mut$error::Diagnostics {
@@ -8778,10 +8768,28 @@ pub fn validate_extern_functions store:mut$common::SymbolStore diagnostics:mut$e
                 .parameters
                 .iter
         do
-            if store parameter.typ is_extern_abi_parameter ! then
+            store parameter.typ abi::classify_extern_type = classification
+            if classification.is_none then
                 function.location f"Extern parameter type `{parameter.typ.format}` is not C-ABI safe"
                 common::ErrorKind::TypeMismatch diagnostics.record_error_string
+                continue
             fi
+            classification.unwrap.passing match
+                common::ExternAbiPassing::Scalar(_) => {
+                }
+                common::ExternAbiPassing::Registers(_) => {
+                    if store parameter.typ implements_copy ! then
+                        function.location
+                        f"Extern parameter type `{parameter.typ.format}` must implement `Copy` for by-value passing"
+                        common::ErrorKind::TypeMismatch diagnostics.record_error_string
+                    fi
+                }
+                common::ExternAbiPassing::Memory => {
+                    function.location
+                    f"Extern parameter type `{parameter.typ.format}` is not C-ABI safe"
+                    common::ErrorKind::TypeMismatch diagnostics.record_error_string
+                }
+            end
         done
         for
             return_type in function
@@ -8789,7 +8797,18 @@ pub fn validate_extern_functions store:mut$common::SymbolStore diagnostics:mut$e
                 .return_types
                 .iter
         do
-            if return_type is_extern_abi_scalar ! then
+            if return_type.is_borrow then
+                function.location f"Extern return type `{return_type.format}` is not C-ABI safe"
+                common::ErrorKind::TypeMismatch diagnostics.record_error_string
+                continue
+            fi
+            store return_type abi::classify_extern_type = classification
+            if classification.is_none then
+                function.location f"Extern return type `{return_type.format}` is not C-ABI safe"
+                common::ErrorKind::TypeMismatch diagnostics.record_error_string
+                continue
+            fi
+            if classification.unwrap.passing common::ExternAbiPassing::Memory is then
                 function.location f"Extern return type `{return_type.format}` is not C-ABI safe"
                 common::ErrorKind::TypeMismatch diagnostics.record_error_string
             fi
@@ -9213,7 +9232,7 @@ pub fn check_ops
             .values
             .get
             .clone = stack_value
-        stack_value checker.materialize_array_escape
+        stack_value checker.materialize_copy_escape
         stack_value checker.finish_value_use
         stack_value.type_value resolve_numeric_literal_default = final_type
         checker.literal_resolutions checker.diagnostics final_type stack_value.resolve_literals drop

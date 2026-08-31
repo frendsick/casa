@@ -118,7 +118,8 @@ _Avoid_: Unknown type, type placeholder (which means `TYPE_UNKNOWN_T`)
 
 **Extern struct**:
 An aggregate declared with `extern struct` whose field order, alignment, padding,
-and size follow the x86-64 System V C ABI.
+and size follow the x86-64 System V C ABI. A small extern struct can cross an
+extern call by value. Parameters require `Copy`, and returns are owned values.
 _Avoid_: repr(C) struct, ordinary struct, packed struct
 
 **Ordinary struct**:
@@ -290,7 +291,7 @@ _Avoid_: Release lint, tag lint
 - A trait implementation may be declared only by the module defining the type or the trait; duplicate and overlapping implementations are rejected without specialization.
 - First-class function values are monomorphic. A generic named function reference supplies all type arguments explicitly, such as `&id[i64]`; direct generic calls still infer them.
 - Every closure is repeatable. Invoking it may consume explicit arguments but may not leave a captured non-`Copy` owner consumed; Casa has no single-use function type.
-- Standard `Copy` is a methodless marker extending Clone; it may be used implicitly and never allocates or calls user code. `derives Copy` and `impl Type: Copy { }` establish the same compiler-validated implementation and supply missing fieldwise Clone behavior. A freestanding Copy declaration may omit that supertrait and relationship.
+- Standard `Copy` is a methodless marker extending Clone; it may be used implicitly and never allocates or calls user code. `derives Copy` and `impl Type: Copy { }` establish the same compiler-validated implementation and supply missing fieldwise Clone behavior. Fixed arrays and extern structs copy their inline bodies into destination storage. A freestanding Copy declaration may omit that supertrait and relationship.
 - A Copy type may provide a customized Clone implementation, which takes precedence over the fieldwise fallback. Generated aggregate Clone calls field Clone methods and preserves stored shared borrows with their origins, while implicit Copy remains allocation-free. The implementation author controls explicit Clone cost and semantics.
 - Reserved language-integrated traits use minimum compiler-validated **Language trait method** contracts while allowing additional default methods and supertraits. Primitive operations remain available without importing those declarations.
 - `!=` lowers to the active equality trait's `ne` operator method. The standard default negates `eq`; overrides must preserve that semantic inverse.

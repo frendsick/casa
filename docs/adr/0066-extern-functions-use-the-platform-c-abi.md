@@ -15,6 +15,12 @@ Compiler paths use the conventional native-toolchain split:
 -l name / --link-library name  native library to link
 ```
 
+Small extern structs that classify into one or two System V eightbytes can pass
+and return by value. Parameters require `Copy`. The classifier assigns
+`INTEGER` and `SSE` classes before lowering, and assembly emission consumes that
+classification. Register exhaustion moves the complete aggregate to the native
+stack. Memory-class aggregates remain excluded.
+
 The existing Casa `-L` / `--library-path` module option does not change.
 Repeated native libraries are passed to the linker in command-line order.
 Casa adds no `-I` alias, native link search option, or source-level link

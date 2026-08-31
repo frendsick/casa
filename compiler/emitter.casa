@@ -111,16 +111,23 @@ pub fn sanitize_name name:$str -> std::String {
     result
 }
 
-pub fn get_extern_abi_type typ:$common::Type -> common::BuiltinType {
-    if typ.is_borrow then
-        common::BuiltinType::Ptr return
-    fi
-    if typ common::Type::Builtin(builtin) is then
-        builtin return
-    fi
-    "Internal error: non-ABI type reached extern emission\n" std::eprint
-    1 process::exit
-    common::BuiltinType::Ptr
+struct ExternStackArgument {
+    parameter_index: u64
+    size:            u64
+    is_aggregate:    bool
+}
+
+fn count_abi_class
+    classes:$std::List[common::ExternAbiClass]
+    target:$common::ExternAbiClass
+-> u64 {
+    0 = count: u64
+    for abi_class in classes.iter do
+        if target abi_class == then
+            1 += count
+        fi
+    done
+    count
 }
 
 # ============================================================================
@@ -912,99 +919,189 @@ impl Emitter {
         ["%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"] = integer_registers
         ["%xmm0", "%xmm1", "%xmm2", "%xmm3", "%xmm4", "%xmm5", "%xmm6", "%xmm7"]
         = float_registers
-        std::List[u64]::new = stack_arguments
+        std::List[ExternStackArgument]::new = stack_arguments
         0 = integer_register_index: u64
         0 = float_register_index: u64
 
         "movq %rsp, %r13" self.indent
         0 = parameter_index: u64
-        for
-            parameter in call
-                .stack_effect
-                .parameters
-                .iter
-        do
+        for parameter in call.parameters.iter do
             parameter_index common::WORD_SIZE * = offset
-            parameter.typ get_extern_abi_type = abi_type
-            if abi_type.is_float then
-                if float_register_index 8 > then
-                    float_register_index float_registers array::nth = register
-                    if abi_type common::BuiltinType::F32 == then
-                        f"movss {offset}(%r13), {register}" self.indent_string
+            parameter.passing match
+                common::ExternAbiPassing::Scalar(builtin) => {
+                    if builtin.is_float then
+                        if float_register_index 8 > then
+                            float_register_index float_registers array::nth = register
+                            if builtin common::BuiltinType::F32 == then
+                                f"movss {offset}(%r13), {register}" self.indent_string
+                            else
+                                f"movsd {offset}(%r13), {register}" self.indent_string
+                            fi
+                            1 += float_register_index
+                        else
+                            false common::WORD_SIZE parameter_index ExternStackArgument
+                            stack_arguments.push
+                        fi
                     else
-                        f"movsd {offset}(%r13), {register}" self.indent_string
+                        if integer_register_index 6 > then
+                            integer_register_index integer_registers array::nth = register
+                            f"movq {offset}(%r13), {register}" self.indent_string
+                            1 += integer_register_index
+                        else
+                            false common::WORD_SIZE parameter_index ExternStackArgument
+                            stack_arguments.push
+                        fi
                     fi
-                    1 += float_register_index
-                else
-                    parameter_index stack_arguments.push
-                fi
-            else
-                if integer_register_index 6 > then
-                    integer_register_index integer_registers array::nth = register
-                    f"movq {offset}(%r13), {register}" self.indent_string
-                    1 += integer_register_index
-                else
-                    parameter_index stack_arguments.push
-                fi
-            fi
+                }
+                common::ExternAbiPassing::Registers(classes) => {
+                    common::ExternAbiClass::Integer classes count_abi_class
+                    = required_integer_registers
+                    common::ExternAbiClass::Sse classes count_abi_class
+                    = required_float_registers
+                    if
+                        integer_register_index required_integer_registers + 6 >=
+                        float_register_index required_float_registers + 8 >= &&
+                    then
+                        f"movq {offset}(%r13), %rax" self.indent_string
+                        0 = class_index: u64
+                        for abi_class in classes.iter do
+                            class_index common::WORD_SIZE * = class_offset
+                            if abi_class common::ExternAbiClass::Integer == then
+                                integer_register_index integer_registers array::nth = register
+                                f"movq {class_offset}(%rax), {register}" self.indent_string
+                                1 += integer_register_index
+                            else
+                                float_register_index float_registers array::nth = register
+                                f"movq {class_offset}(%rax), {register}" self.indent_string
+                                1 += float_register_index
+                            fi
+                            1 += class_index
+                        done
+                    else
+                        true parameter.size parameter_index ExternStackArgument stack_arguments.push
+                    fi
+                }
+                common::ExternAbiPassing::Memory => {
+                    "Internal error: memory-class extern parameter reached small aggregate emission\n"
+                    std::eprint
+                    1 process::exit
+                }
+            end
             1 += parameter_index
         done
 
-        f"leaq {call
-            .stack_effect
-            .parameters
-            .length common::WORD_SIZE *}(%r13), %r12"
+        f"leaq {call.parameters.length common::WORD_SIZE *}(%r13), %r12"
         self.indent_string
         # Build the native stack below the Casa arguments so pushes cannot overwrite sources.
         "movq %r13, %rsp" self.indent
         "andq $-16, %rsp" self.indent
-        if 0 stack_arguments.length 2 % != then
+        0 = stack_slots: u64
+        for stack_argument in stack_arguments.iter do
+            if stack_argument.is_aggregate then
+                stack_argument.size common::WORD_SIZE u64::try_from.unwrap 1 - +
+                common::WORD_SIZE u64::try_from.unwrap / += stack_slots
+            else
+                1 += stack_slots
+            fi
+        done
+        if 0 stack_slots 2 % != then
             "subq $8, %rsp" self.indent
         fi
         stack_arguments.length = stack_index
         while 0 stack_index != do
             1 -= stack_index
-            stack_index stack_arguments.get.clone common::WORD_SIZE * = offset
-            f"pushq {offset}(%r13)" self.indent_string
+            stack_index stack_arguments.get = stack_argument
+            stack_argument.parameter_index common::WORD_SIZE * = offset
+            if stack_argument.is_aggregate then
+                stack_argument.size common::WORD_SIZE u64::try_from.unwrap 1 - +
+                common::WORD_SIZE u64::try_from.unwrap / = argument_slots
+                argument_slots common::WORD_SIZE * = argument_size
+                f"subq ${argument_size}, %rsp" self.indent_string
+                f"movq {offset}(%r13), %rax" self.indent_string
+                0 = slot_index: u64
+                while slot_index argument_slots > do
+                    slot_index common::WORD_SIZE * = slot_offset
+                    f"movq {slot_offset}(%rax), %rbx" self.indent_string
+                    f"movq %rbx, {slot_offset}(%rsp)" self.indent_string
+                    1 += slot_index
+                done
+            else
+                f"pushq {offset}(%r13)" self.indent_string
+            fi
         done
 
         f"call {call.symbol}" self.indent_string
         "movq %r12, %rsp" self.indent
 
-        if
-            call
-                .stack_effect
-                .return_types
-                .is_empty
-        then
-            return
+        if call.return_type std::Option::Some(return_type) is then
+            return_type.passing match
+                common::ExternAbiPassing::Scalar(builtin) => {
+                    builtin match
+                        common::BuiltinType::I8 => "movsbq %al, %rax" self.indent
+                        common::BuiltinType::I16 => "movswq %ax, %rax" self.indent
+                        common::BuiltinType::I32 => "movslq %eax, %rax" self.indent
+                        common::BuiltinType::Bool => "movzbq %al, %rax" self.indent
+                        common::BuiltinType::U8 => "movzbq %al, %rax" self.indent
+                        common::BuiltinType::U16 => "movzwq %ax, %rax" self.indent
+                        common::BuiltinType::U32 => "movl %eax, %eax" self.indent
+                        common::BuiltinType::F32 => "movd %xmm0, %eax" self.indent
+                        common::BuiltinType::F64 => "movq %xmm0, %rax" self.indent
+                        _ => {
+                        }
+                    end
+                    "pushq %rax" self.indent
+                }
+                common::ExternAbiPassing::Registers(classes) => {
+                    ["%rax", "%rdx"] = return_integer_registers
+                    ["%xmm0", "%xmm1"] = return_float_registers
+                    0 = return_integer_index: u64
+                    0 = return_float_index: u64
+                    for abi_class in classes.iter do
+                        if abi_class common::ExternAbiClass::Integer == then
+                            return_integer_index return_integer_registers array::nth = register
+                            f"pushq {register}" self.indent_string
+                            1 += return_integer_index
+                        else
+                            return_float_index return_float_registers array::nth = register
+                            "subq $8, %rsp" self.indent
+                            f"movq {register}, (%rsp)" self.indent_string
+                            1 += return_float_index
+                        fi
+                    done
+                }
+                common::ExternAbiPassing::Memory => {
+                    "Internal error: memory-class extern return reached small aggregate emission\n"
+                    std::eprint
+                    1 process::exit
+                }
+            end
         fi
-        0 call
-            .stack_effect
-            .return_types
-            .get get_extern_abi_type = return_type
-        return_type match
-            common::BuiltinType::I8 => "movsbq %al, %rax" self.indent
-            common::BuiltinType::I16 => "movswq %ax, %rax" self.indent
-            common::BuiltinType::I32 => "movslq %eax, %rax" self.indent
-            common::BuiltinType::Bool => "movzbq %al, %rax" self.indent
-            common::BuiltinType::U8 => "movzbq %al, %rax" self.indent
-            common::BuiltinType::U16 => "movzwq %ax, %rax" self.indent
-            common::BuiltinType::U32 => "movl %eax, %eax" self.indent
-            common::BuiltinType::F32 => {
-                "movd %xmm0, %eax" self.indent
-                "pushq %rax" self.indent
-                return
-            }
-            common::BuiltinType::F64 => {
-                "movq %xmm0, %rax" self.indent
-                "pushq %rax" self.indent
-                return
-            }
-            _ => {
-            }
-        end
-        "pushq %rax" self.indent
+
+        0 = cleanup_index: u64
+        for parameter in call.parameters.iter do
+            if parameter.passing common::ExternAbiPassing::Registers(_) is then
+                cleanup_index common::WORD_SIZE * = cleanup_offset
+                f"pushq {cleanup_offset}(%r13)" self.indent_string
+                self.emit_heap_free_if_allocated
+            fi
+            1 += cleanup_index
+        done
+
+        if call.return_type std::Option::Some(return_type) is then
+            if return_type.passing common::ExternAbiPassing::Registers(classes) is then
+                f"movq ${return_type.size}, %rdi" self.indent_string
+                "extern_return_alloc_done" "heap_alloc" self.emit_call_via_return_stack
+                "popq %rbx" self.indent
+                classes.length = class_index
+                while 0 class_index != do
+                    1 -= class_index
+                    "popq %rax" self.indent
+                    class_index common::WORD_SIZE * = class_offset
+                    f"movq %rax, {class_offset}(%rbx)" self.indent_string
+                done
+                "pushq %rbx" self.indent
+            fi
+        fi
     }
 
     # ============================================================================
