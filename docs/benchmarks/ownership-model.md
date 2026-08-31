@@ -46,7 +46,12 @@ records only the completed model's rejection cost.
 
 The recursive-owner workload builds an `Option[Node]` chain in a loop, then
 destroys it. The source depth is changed mechanically to find the practical
-call-stack limit of generated recursive destruction.
+call-stack limit of generated recursive destruction. An internal monotonic
+timer starts after construction and stops after destruction.
+
+The large inline `Copy` workload copies a 2,048-byte nested fixed array five
+million times. A mechanically generated control binary runs the same loop with
+the copy disabled. This separates 10.24 GB of copying from loop overhead.
 
 ## Fixed-point build
 
@@ -153,6 +158,41 @@ Raw runtime samples:
 | Pre-migration | 0.09, 0.10, 0.10, 0.09, 0.10, 0.09, 0.11, 0.10, 0.09, 0.10 | 19712-19840 |
 | Completed model | 0.10, 0.07, 0.07, 0.08, 0.09, 0.10, 0.10, 0.08, 0.07, 0.11 | 136 for every run |
 
+## Large inline Copy cost
+
+The 2,048-byte copy loop has a 0.23-second median. The control loop has a
+0.01-second median. Subtracting loop overhead gives 0.22 seconds for 10.24 GB,
+or 46.5 GB/s. Peak RSS is 136 KiB in every run for both binaries.
+
+| Workload | Wall-time median | Spread | Heap allocation calls |
+|---|---:|---:|---:|
+| Copy disabled | 0.01 s | 0.01-0.01 s | 2 |
+| 5,000,000 copies | 0.23 s | 0.22-0.25 s | 2 |
+
+The two allocation calls construct the nested array before the measured loop.
+GDB breaks on `heap_alloc` for the complete process. The unchanged call count
+confirms that five million `copy` operations introduce no allocation.
+
+```sh
+sed 's/^const COPY_VALUES true/const COPY_VALUES false/' \
+    docs/benchmarks/ownership-copy.casa \
+    > "$benchmark/ownership-copy-empty.casa"
+"$benchmark/after-stage3" -L lib docs/benchmarks/ownership-copy.casa \
+    -o "$benchmark/ownership-copy" --keep-asm
+"$benchmark/after-stage3" -L lib "$benchmark/ownership-copy-empty.casa" \
+    -o "$benchmark/ownership-copy-empty" --keep-asm
+
+for run in 1 2 3 4 5 6 7 8 9 10; do
+    /usr/bin/time -f '%e %M' "$benchmark/ownership-copy-empty"
+    /usr/bin/time -f '%e %M' "$benchmark/ownership-copy"
+done
+
+gdb -q -batch -x docs/benchmarks/ownership-copy.gdb \
+    --args "$benchmark/ownership-copy-empty"
+gdb -q -batch -x docs/benchmarks/ownership-copy.gdb \
+    --args "$benchmark/ownership-copy"
+```
+
 ## Diagnostics
 
 The three complete diagnostic workload runs took 8.28, 8.51, and 8.61 seconds.
@@ -188,17 +228,31 @@ implementation is practical for the tested 128-level repository cases. An
 iterative implementation is required if valid programs need chains near 86,000
 levels on this stack configuration.
 
+The source prints nanoseconds measured only around `next drop`. Construction and
+allocation finish before the timer starts. Each successful result is the median
+of three runs.
+
+| Chain depth | Destruction median |
+|---:|---:|
+| 1,000 | 25,372 ns |
+| 10,000 | 367,344 ns |
+| 40,000 | 1,412,579 ns |
+| 80,000 | 2,553,463 ns |
+| 86,250 | 2,982,542 ns |
+| 87,500 | `SIGSEGV` |
+
 ```sh
 ulimit -c 0
-for depth in 80000 85000 86250 87500; do
+for depth in 1000 10000 40000 80000 86250 87500; do
     sed "s/^const DEPTH .*/const DEPTH $depth/" \
         docs/benchmarks/ownership-recursion.casa \
         > "$benchmark/ownership-recursion-$depth.casa"
     "$benchmark/after-stage3" -L lib \
         "$benchmark/ownership-recursion-$depth.casa" \
         -o "$benchmark/ownership-recursion-$depth"
-    /usr/bin/time -f "depth=$depth status=%x time=%e rss=%M" \
+    for run in 1 2 3; do
         "$benchmark/ownership-recursion-$depth"
+    done
 done
 ```
 
