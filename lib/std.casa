@@ -3139,8 +3139,20 @@ impl Set[String] {
     pub fn remove_str self:mut$Set[String] key:$str { key self.map.delete_str }
 }
 
-impl List[String] {
-    pub fn push_str self:mut$List[String] value:$str { value.to_str self.push }
+trait PushStringStr {
+    fn push_str self:mut$self value:$str
+}
+
+trait PushBytesStr {
+    fn push_str self:mut$self value:$str
+}
+
+impl List[String]: PushStringStr {
+    fn push_str self:mut$List[String] value:$str { value.to_str self.push }
+}
+
+impl List[Bytes]: PushBytesStr {
+    fn push_str self:mut$List[Bytes] value:$str { value Bytes::from_str self.push }
 }
 
 impl[K: Hashable + Clone] Set[K] {
@@ -3234,8 +3246,25 @@ pub struct Bytes {
 
 impl Bytes {
     pub fn new -> Bytes {
-        # SAFETY: The allocation creates the initial byte slots with no initialized values.
-        unsafe { BYTES_INITIAL_CAPACITY 0 BYTES_INITIAL_CAPACITY alloc Bytes }
+        # SAFETY: The allocation includes one trailing NUL slot outside the logical capacity.
+        unsafe {
+            BYTES_INITIAL_CAPACITY = storage_capacity: u64
+            storage_capacity 1 + alloc = data
+            0 data store8
+            storage_capacity 0 data Bytes
+        }
+    }
+
+    pub fn from_str source:$str -> Bytes {
+        Bytes::new = result
+        source.length result.ensure_capacity
+        # SAFETY: source contains source.length readable bytes, and result has matching capacity.
+        unsafe {
+            source.length source ptr::from_ref 8 + result.data memcpy
+            source.length = result.size
+            0 result.data result.size + store8
+        }
+        result
     }
 
     pub fn length self:$Bytes -> u64 { self.size }
@@ -3250,10 +3279,11 @@ impl Bytes {
         if required new_capacity < then
             required = new_capacity
         fi
-        # SAFETY: The replacement has room for every initialized byte, which is copied once.
+        # SAFETY: The replacement has room for every initialized byte and a trailing NUL.
         unsafe {
-            new_capacity alloc = new_data
+            new_capacity 1 + alloc = new_data
             self.size self.data new_data memcpy
+            0 new_data self.size + store8
             self.data free
             new_data = self.data
             new_capacity = self.storage_capacity
@@ -3262,16 +3292,22 @@ impl Bytes {
 
     pub fn push self:mut$Bytes byte:u8 {
         self.size 1 + self.ensure_capacity
-        # SAFETY: ensure_capacity provides one writable byte after the initialized range.
-        unsafe { byte self.data self.size + store8 }
-        1 += self.size
+        # SAFETY: ensure_capacity provides one writable byte and the trailing NUL slot.
+        unsafe {
+            byte self.data self.size + store8
+            1 += self.size
+            0 self.data self.size + store8
+        }
     }
 
     pub fn append self:mut$Bytes source:$Bytes {
         self.size source.size + self.ensure_capacity
         # SAFETY: source is initialized and ensure_capacity provides a disjoint destination.
-        unsafe { source.size source.data self.data self.size + memcpy }
-        source.size += self.size
+        unsafe {
+            source.size source.data self.data self.size + memcpy
+            source.size += self.size
+            0 self.data self.size + store8
+        }
     }
 
     pub fn get self:$Bytes index:u64 -> Option[u8] {
@@ -3301,6 +3337,24 @@ impl Bytes {
         } Iter
     }
 
+    pub fn as_cstr self:$Bytes -> Option[$cstr] {
+        0 = index: u64
+        true = valid
+        while index self.size > do
+            if 0 index self.get.unwrap == then
+                false = valid
+                break
+            fi
+            1 += index
+        done
+        if valid then
+            # SAFETY: Bytes storage has a trailing NUL and the scan rejected interior NUL bytes.
+            unsafe { self.data ptr::as_ref[cstr] } Option::Some
+        else
+            Option[$cstr]::None
+        fi
+    }
+
     pub fn drop self:mut$Bytes {
         # SAFETY: Bytes exclusively owns data until drop releases the allocation.
         unsafe {
@@ -3317,6 +3371,38 @@ impl Bytes: Clone {
         Bytes::new = result
         self result.append
         result
+    }
+}
+
+impl Bytes: Hashable {
+    pub fn eq self:$Bytes other:$Bytes -> bool {
+        if self.size other.size != then
+            false return
+        fi
+        0 = index: u64
+        while index self.size > do
+            if index self.get.unwrap index other.get.unwrap != then
+                false return
+            fi
+            1 += index
+        done
+        true
+    }
+
+    pub fn hash self:$Bytes -> i64 {
+        5381 = hash
+        for byte in self.iter do
+            hash 5 << = shifted
+            shifted hash.wrapping_add = hash
+            byte i64::from hash.wrapping_add = hash
+        done
+        if 0 hash < then
+            hash 0.wrapping_sub = hash
+            if 0 hash < then
+                0 = hash
+            fi
+        fi
+        hash
     }
 }
 
@@ -3546,14 +3632,9 @@ impl Bytes {
 # Process execution
 # ---------------------------------------------------------------------------
 
-pub fn run_command args:List[String] -> i64 {
+pub fn run_command args:List[Bytes] -> i64 {
     for argument in args.iter do
-        if
-            argument
-                .as_str
-                .as_cstr
-                .is_none
-        then
+        if argument.as_cstr.is_none then
             0 22 - return
         fi
     done
@@ -3573,7 +3654,6 @@ pub fn run_command args:List[String] -> i64 {
             unsafe {
                 argv_index args
                     .get
-                    .as_str
                     .as_cstr
                     .unwrap ptr::from_ref
                 argv_buf.data argv_index 8 * + ptr::write[ptr]

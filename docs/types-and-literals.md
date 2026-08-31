@@ -73,11 +73,14 @@ name.as_str print
 ```
 
 `cstr` is only used through a shared `$cstr` borrow. It has no literal syntax,
-does not own its storage, and does not assume UTF-8. Convert a `str` when an
-operating-system or C interface needs a NUL-terminated byte string:
+does not own its storage, and does not assume UTF-8. Convert a `str` or `Bytes`
+value when an operating-system or C interface needs a NUL-terminated byte
+string:
 
 ```casa
 "hello".as_cstr.unwrap = message:$cstr
+"raw" Bytes::from_str = raw_bytes
+raw_bytes.as_cstr.unwrap = raw_message:$cstr
 ```
 
 See [Text and I/O](strings-and-io.md) for string operations and conversions.
