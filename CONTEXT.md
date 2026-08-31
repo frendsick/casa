@@ -305,6 +305,7 @@ _Avoid_: Release lint, tag lint
 - Method availability follows receiver capability uniformly: `self` requires ownership, `$self` accepts owned/shared/exclusive access, and `mut$self` accepts owned/exclusive access.
 - `mut$T` is affine and not Copy. When `T: Clone`, `mut$T.clone` calls the **Borrowed value** implementation through a temporary shared reborrow and returns an owned `T`.
 - `ptr::from_ref` safely obtains `ptr` from `$T`; owned and exclusive values may reborrow, and no separate `from_mut` exists because raw pointers have no mutability.
+- Unsafe `ptr::into_raw` transfers a heap-indirect owner to its allocation address, and `ptr::from_raw[T]` reconstructs that owner when the caller proves the address is the complete live allocation and has no other owner.
 - Unsafe `ptr::read[T]` and `ptr::write[T]` move ownership out of and into initialized generic storage; their caller maintains validity and initialization state.
 - Unsafe raw storage uses `u64 alloc -> ptr` and `ptr free -> None`; `free` releases bytes only and never replaces typed destruction.
 - `0 alloc` returns `ptr::null`, `ptr::null free` is a no-op, and every positive allocation returns non-null or terminates.

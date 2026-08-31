@@ -180,10 +180,9 @@ Use these operations for numeric conversion. Convert characters with
 `char::from_codepoint_unchecked` primitive. Representation casts to or from
 `char` are compile-time errors.
 
-`(Type)` only changes the
-compiler's interpretation of the top stack value. It performs no runtime
-conversion or check. This makes casts useful for low-level memory and system
-interfaces, but unsafe for general conversion.
+Casa has no general `(Type)` cast. Use a typed binding when a literal or generic
+construction needs context. Use the named raw pointer and typed-memory
+operations for representation boundaries.
 
 ## Comments
 

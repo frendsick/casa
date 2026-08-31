@@ -330,7 +330,7 @@ without a type-name prefix is acceptable.
   x u8::try_from = maybe_byte
 
   # Raw representation boundary
-  unsafe { x (u64) buf (ptr) store64 }
+  unsafe { x u64::wrapping_from buf store64 }
   ```
 
 ---

@@ -61,8 +61,9 @@ data is needed.
 ## Advanced memory access
 
 These operations expose raw byte-addressed memory. Prefer standard-library
-collections and strings for application code. Each operation must be inside
-an `unsafe` block.
+collections and strings for application code. Raw allocation, access, owner
+conversion, and pointer arithmetic must be inside an `unsafe` block.
+`ptr::null`, `ptr::from_ref`, and pointer comparison are safe.
 
 Comparing raw pointers is safe, but an address identifies storage rather than
 an owner. Raw addresses obtained from independently owned values may compare
@@ -77,9 +78,12 @@ either result as owner identity.
 | `load16` | `ptr -> u16` | Load an unsigned 16-bit value |
 | `load32` | `ptr -> u32` | Load an unsigned 32-bit value |
 | `load64` | `ptr -> u64` | Load an unsigned 64-bit value |
+| `ptr::null` | `None -> ptr` | Produce the canonical null pointer |
+| `ptr::from_ref` | `$T -> ptr` | Get the raw address of a live borrow |
 | `ptr::as_ref[T]` | `ptr -> $T` | Form a shared borrow of typed storage |
 | `ptr::as_mut[T]` | `ptr -> mut$T` | Form an exclusive borrow of typed storage |
 | `ptr::into_raw` | `T -> ptr` | Transfer a heap-indirect owner without destruction |
+| `ptr::from_raw[T]` | `ptr -> T` | Reconstruct a heap-indirect owner from its allocation address |
 | `ptr::read[T]` | `ptr -> T` | Move an initialized `T` out of typed storage |
 | `store8` | `ptr u8 -> None` | Store an 8-bit value |
 | `store16` | `ptr u16 -> None` | Store a 16-bit value |
@@ -93,8 +97,8 @@ before the destination pointer at a store call:
 ```casa
 unsafe {
     16 alloc = buffer
-    42 buffer (ptr) store64
-    buffer (ptr) load64 print    # 42
+    42 buffer store64
+    buffer load64 print    # 42
 }
 ```
 
@@ -108,8 +112,10 @@ uninitialized destination storage. The caller must track each moved owner
 exactly once.
 
 `ptr::into_raw` consumes a heap-indirect owner and returns its allocation
-address without running its destructor. The caller must transfer the allocation
-to another owner or destroy its contents and call `free`.
+address without running its destructor. `ptr::from_raw[T]` performs the reverse
+operation. Its caller must provide the complete live allocation for a
+heap-indirect `T`, and no other owner may retain responsibility for it. The
+caller must reconstruct an owner or destroy its contents and call `free`.
 
 `0 alloc` returns null, and `free` does nothing when given null. A positive
 allocation is non-null. Double free, use after free, and freeing an interior or
@@ -126,7 +132,7 @@ has no live input origin`.
 
 ```casa
 fn nth [T const N:u64] array:$array[T N] index:u64 -> $T {
-    unsafe { array (ptr) index size_of[T] * + ptr::as_ref[T] }
+    unsafe { array ptr::from_ref index size_of[T] * + ptr::as_ref[T] }
 }
 ```
 
