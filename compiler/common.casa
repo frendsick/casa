@@ -831,9 +831,9 @@ pub struct StructLiteral derives std::Clone {
     pub field_order: std::List[std::String]
 }
 
-# Generated extern-struct accessors resolve offsets after all imports and
+# Generated struct accessors resolve field storage after all imports and
 # forward declarations are available.
-pub struct StructMemberOffset derives std::Clone {
+pub struct StructMemberAccess derives std::Clone {
     pub struct_name:  std::String
     pub member_index: u64
 }
@@ -1016,7 +1016,8 @@ pub enum OpValue derives std::Clone {
     Store32
     Store64
     PtrWrite (Type)
-    StructMemberOffset (StructMemberOffset)
+    StructMemberProject (StructMemberAccess)
+    StructMemberStore (StructMemberAccess)
     # Syscalls
     Syscall0
     Syscall1
@@ -3717,6 +3718,13 @@ pub struct TypeLayout {
     pub alignment: u64
 }
 
+pub struct FieldStoragePlan derives std::Clone {
+    pub size:          u64
+    pub alignment:     u64
+    pub offset:        u64
+    pub stores_inline: bool
+}
+
 pub fn align_up value:u64 alignment:u64 -> u64 { value alignment 1 - + alignment / alignment * }
 
 pub fn builtin_type_layout builtin:$BuiltinType -> TypeLayout {
@@ -3733,27 +3741,48 @@ pub fn builtin_type_layout builtin:$BuiltinType -> TypeLayout {
         _ => WORD_SIZE WORD_SIZE TypeLayout
     end
 }
+
+fn make_field_storage_plan layout:$TypeLayout offset:u64 stores_inline:bool -> FieldStoragePlan {
+    layout.alignment offset align_up = aligned_offset
+    stores_inline aligned_offset layout.alignment layout.size FieldStoragePlan
+}
 # Fixed arrays use their complete direct layout in aggregate fields. Other
 # nested aggregates keep the language's one-word indirect representation.
 # Generic fields also use one word because their layout is not yet concrete.
 
-pub fn aggregate_field_layout
+fn plan_aggregate_field_storage
     typ:$Type
+    offset:u64
     store:$SymbolStore
     visiting:mut$std::Set[std::String]
--> std::Option[TypeLayout] {
+-> std::Option[FieldStoragePlan] {
     if typ.has_unresolved_type_var then
-        WORD_SIZE WORD_SIZE TypeLayout std::Option::Some return
+        WORD_SIZE WORD_SIZE TypeLayout = layout
+        false offset layout make_field_storage_plan
+        std::Option::Some return
     fi
     if typ get_concrete_array_length.is_some then
-        visiting store typ type_layout return
+        if visiting store typ type_layout std::Option::Some(layout) is then
+            true offset layout make_field_storage_plan
+            std::Option::Some
+        else
+            std::Option[FieldStoragePlan]::None
+        fi
+        return
     fi
     if store typ type_value_representation std::Option::Some(representation) is then
         if VALUE_REPR_INDIRECT representation == then
-            WORD_SIZE WORD_SIZE TypeLayout std::Option::Some return
+            WORD_SIZE WORD_SIZE TypeLayout = layout
+            false offset layout make_field_storage_plan
+            std::Option::Some return
         fi
     fi
-    visiting store typ type_layout
+    if visiting store typ type_layout std::Option::Some(layout) is then
+        true offset layout make_field_storage_plan
+        std::Option::Some
+    else
+        std::Option[FieldStoragePlan]::None
+    fi
 }
 
 pub fn type_is_extern_struct typ:$Type store:$SymbolStore -> bool {
@@ -3768,7 +3797,11 @@ pub fn type_is_extern_struct typ:$Type store:$SymbolStore -> bool {
     false
 }
 
-pub fn type_is_extern_struct_field typ:$Type store:$SymbolStore -> bool {
+fn check_extern_struct_field
+    typ:$Type
+    store:$SymbolStore
+    visiting:mut$std::Set[std::String]
+-> bool {
     if typ.is_borrow then
         false return
     fi
@@ -3788,64 +3821,56 @@ pub fn type_is_extern_struct_field typ:$Type store:$SymbolStore -> bool {
                     if 0 length == then
                         false return
                     fi
-                    store 0 generic.params.get type_is_extern_struct_field return
+                    visiting store 0 generic.params.get check_extern_struct_field return
                 fi
                 false return
             fi
-            store typ type_is_extern_struct
+            if store typ type_is_extern_struct ! then
+                false return
+            fi
+            typ.format = type_name
+            if type_name visiting.has then
+                false return
+            fi
+            type_name.clone visiting.add
+            generic.base store
+                .structs
+                .get
+                .unwrap = casa_struct
+            for member in casa_struct.members.iter do
+                if visiting store member.typ check_extern_struct_field ! then
+                    type_name visiting.remove
+                    false return
+                fi
+            done
+            type_name visiting.remove
+            true
         }
         _ => false
     end
 }
 
-pub fn extern_struct_field_layout
-    typ:$Type
-    store:$SymbolStore
-    visiting:mut$std::Set[std::String]
--> std::Option[TypeLayout] {
-    if store typ type_is_extern_struct_field ! then
-        std::Option[TypeLayout]::None return
-    fi
-    typ match
-        Type::Builtin(builtin) => builtin builtin_type_layout std::Option::Some
-        Type::Generic(generic) => {
-            if ARRAY_TYPE generic.base.as_str == then
-                typ get_concrete_array_length.unwrap = length
-                if
-                    visiting store 0 generic.params.get extern_struct_field_layout
-                    std::Option::Some(element) is
-                then
-                    element.alignment length element.size * TypeLayout std::Option::Some
-                else
-                    std::Option[TypeLayout]::None
-                fi
-            elif generic.base store.structs.get std::Option::Some(casa_struct) is then
-                typ.format = type_name
-                if type_name visiting.has then
-                    std::Option[TypeLayout]::None return
-                fi
-                type_name.clone visiting.add
-                visiting store casa_struct typ struct_type_layout = result
-                type_name visiting.remove
-                result
-            else
-                std::Option[TypeLayout]::None
-            fi
-        }
-        _ => std::Option[TypeLayout]::None
-    end
+pub fn type_is_extern_struct_field typ:$Type store:$SymbolStore -> bool {
+    std::Set[std::String]::new = visiting
+    visiting store typ check_extern_struct_field
 }
 
-pub fn struct_field_layout
+fn plan_struct_field_storage
     typ:$Type
+    offset:u64
     casa_struct:$CasaStruct
     store:$SymbolStore
     visiting:mut$std::Set[std::String]
--> std::Option[TypeLayout] {
+-> std::Option[FieldStoragePlan] {
     if casa_struct.is_extern then
-        visiting store typ extern_struct_field_layout
+        if visiting store typ type_layout std::Option::Some(layout) is then
+            true offset layout make_field_storage_plan
+            std::Option::Some
+        else
+            std::Option[FieldStoragePlan]::None
+        fi
     else
-        visiting store typ aggregate_field_layout
+        visiting store offset typ plan_aggregate_field_storage
     fi
 }
 
@@ -3859,13 +3884,12 @@ pub fn struct_type_layout
     1 = alignment: u64
     for member in casa_struct.members.iter do
         if
-            visiting store casa_struct member.typ struct_field_layout
-            std::Option::Some(member_layout) is
+            visiting store casa_struct size member.typ plan_struct_field_storage
+            std::Option::Some(plan) is
         then
-            member_layout.alignment size align_up = size
-            member_layout.size += size
-            if alignment member_layout.alignment > then
-                member_layout.alignment = alignment
+            plan.offset plan.size + = size
+            if alignment plan.alignment > then
+                plan.alignment = alignment
             fi
         else
             std::Option[TypeLayout]::None return
@@ -3889,11 +3913,13 @@ pub fn enum_type_layout
     for pair in casa_enum.variant_types.iter do
         WORD_SIZE = variant_size: u64
         for payload_type in pair.second.iter do
-            if visiting store payload_type aggregate_field_layout std::Option::Some(payload_layout) is then
-                payload_layout.alignment variant_size align_up = variant_size
-                payload_layout.size += variant_size
-                if alignment payload_layout.alignment > then
-                    payload_layout.alignment = alignment
+            if
+                visiting store variant_size payload_type plan_aggregate_field_storage
+                std::Option::Some(plan) is
+            then
+                plan.offset plan.size + = variant_size
+                if alignment plan.alignment > then
+                    plan.alignment = alignment
                 fi
             else
                 std::Option[TypeLayout]::None return
@@ -3907,62 +3933,53 @@ pub fn enum_type_layout
     alignment size TypeLayout std::Option::Some
 }
 
-pub fn struct_member_offset
+pub fn plan_struct_member_storage
     casa_struct:$CasaStruct
     member_index:u64
     store:$SymbolStore
--> std::Option[u64] {
+-> std::Option[FieldStoragePlan] {
     std::Set[std::String]::new = visiting
     0 = offset: u64
     0 = index: u64
     while index casa_struct.members.length > do
         index casa_struct.members.get = member
-        if visiting store casa_struct member.typ struct_field_layout std::Option::Some(layout) is then
-            layout.alignment offset align_up = offset
+        if
+            visiting store casa_struct offset member.typ plan_struct_field_storage
+            std::Option::Some(plan) is
+        then
             if index member_index == then
-                offset std::Option::Some return
+                plan.clone std::Option::Some return
             fi
-            layout.size += offset
+            plan.offset plan.size + = offset
         else
-            std::Option[u64]::None return
+            std::Option[FieldStoragePlan]::None return
         fi
         1 += index
     done
-    std::Option[u64]::None
+    std::Option[FieldStoragePlan]::None
 }
 
-pub fn next_struct_member_offset
-    prior_members:$std::List[Member]
-    member_type:$Type
+pub fn struct_member_offset
+    casa_struct:$CasaStruct
+    member_index:u64
     store:$SymbolStore
 -> std::Option[u64] {
-    std::Set[std::String]::new = visiting
-    0 = offset: u64
-    for member in prior_members.iter do
-        WORD_SIZE WORD_SIZE TypeLayout = layout
-        if visiting store member.typ aggregate_field_layout std::Option::Some(found_layout) is then
-            found_layout.alignment found_layout.size TypeLayout = layout
-        fi
-        layout.alignment offset align_up layout.size + = offset
-    done
-    # An imported or forward aggregate can be absent while its accessors are
-    # parsed. Aggregate fields always use one indirect word in that case.
-    WORD_SIZE WORD_SIZE TypeLayout = member_layout
-    if visiting store member_type aggregate_field_layout std::Option::Some(found_member_layout) is then
-        found_member_layout.alignment found_member_layout.size TypeLayout = member_layout
+    if store member_index casa_struct plan_struct_member_storage std::Option::Some(plan) is then
+        plan.offset std::Option::Some
+    else
+        std::Option[u64]::None
     fi
-    member_layout.alignment offset align_up std::Option::Some
 }
 
-pub fn enum_payload_offset
+pub fn plan_enum_payload_storage
     casa_enum:$CasaEnum
     variant_name:$str
     payload_index:u64
     store:$SymbolStore
--> std::Option[u64] {
+-> std::Option[FieldStoragePlan] {
     variant_name casa_enum.variant_types.get_str = payload_types_opt
     if payload_types_opt.is_none then
-        std::Option[u64]::None return
+        std::Option[FieldStoragePlan]::None return
     fi
     payload_types_opt.unwrap = payload_types
     std::Set[std::String]::new = visiting
@@ -3970,18 +3987,20 @@ pub fn enum_payload_offset
     0 = index: u64
     while index payload_types.length > do
         index payload_types.get = payload_type
-        if visiting store payload_type aggregate_field_layout std::Option::Some(layout) is then
-            layout.alignment offset align_up = offset
+        if
+            visiting store offset payload_type plan_aggregate_field_storage
+            std::Option::Some(plan) is
+        then
             if index payload_index == then
-                offset std::Option::Some return
+                plan.clone std::Option::Some return
             fi
-            layout.size += offset
+            plan.offset plan.size + = offset
         else
-            std::Option[u64]::None return
+            std::Option[FieldStoragePlan]::None return
         fi
         1 += index
     done
-    std::Option[u64]::None
+    std::Option[FieldStoragePlan]::None
 }
 
 pub fn array_type_layout

@@ -201,6 +201,33 @@ struct BytecodeCompiler {
     owner_flags:   std::Map[std::String u64]
 }
 
+struct ResolvedStructField {
+    storage: common::FieldStoragePlan
+    typ:     common::Type
+}
+
+fn resolve_struct_field
+    member:$common::StructMemberAccess
+    store:$common::SymbolStore
+-> std::Option[ResolvedStructField] {
+    if member.struct_name store.structs.get std::Option::Some(casa_struct) is then
+        if member.member_index casa_struct.members.length > then
+            if
+                store member.member_index casa_struct common::plan_struct_member_storage
+                std::Option::Some(storage) is
+            then
+                member.member_index casa_struct
+                    .members
+                    .get
+                    .typ
+                    .clone = typ
+                typ storage.clone ResolvedStructField std::Option::Some return
+            fi
+        fi
+    fi
+    std::Option[ResolvedStructField]::None
+}
+
 impl BytecodeState {
     fn new store:$common::SymbolStore -> BytecodeState {
         std::Map[i64 u64]::new
@@ -282,23 +309,33 @@ impl BytecodeCompiler {
             .is_some
     }
 
-    fn aggregate_field_load
+    fn emit_field_load
         compiler:mut$BytecodeCompiler
         declared_type:$common::Type
+        plan:$common::FieldStoragePlan
         bytecode:mut$std::List[common::InstValue]
     {
-        if declared_type.has_unresolved_type_var then
+        if plan.stores_inline then
+            bytecode declared_type compiler.emit_typed_load
+        else
+            common::InstValue::Load64 bytecode.push
+        fi
+    }
+
+    fn emit_field_projection
+        compiler:mut$BytecodeCompiler
+        declared_type:$common::Type
+        plan:$common::FieldStoragePlan
+        bytecode:mut$std::List[common::InstValue]
+    {
+        if plan.stores_inline ! then
             common::InstValue::Load64 bytecode.push
             return
         fi
         if
             compiler.state.store declared_type common::type_value_representation std::Option::Some(representation) is
         then
-            if declared_type common::get_concrete_array_length.is_some then
-                bytecode declared_type compiler.emit_typed_load
-            elif common::VALUE_REPR_INDIRECT representation == then
-                common::InstValue::Load64 bytecode.push
-            else
+            if common::VALUE_REPR_INDIRECT representation != then
                 bytecode declared_type compiler.emit_typed_load
             fi
         else
@@ -306,54 +343,33 @@ impl BytecodeCompiler {
         fi
     }
 
-    fn aggregate_field_store
+    fn emit_field_store
         compiler:mut$BytecodeCompiler
         declared_type:$common::Type
+        plan:$common::FieldStoragePlan
         bytecode:mut$std::List[common::InstValue]
     {
-        if declared_type.has_unresolved_type_var then
-            common::InstValue::Store64 bytecode.push
-            return
-        fi
-        if
-            compiler.state.store declared_type common::type_value_representation std::Option::Some(representation) is
-        then
-            if declared_type common::get_concrete_array_length.is_some then
-                bytecode declared_type compiler.emit_typed_store
-            elif common::VALUE_REPR_INDIRECT representation == then
-                common::InstValue::Store64 bytecode.push
-            else
-                bytecode declared_type compiler.emit_typed_store
-            fi
-        else
-            f"Cannot determine field representation of `{declared_type.format}`" compiler.record_failure_string
-        fi
-    }
-
-    fn struct_field_load
-        compiler:mut$BytecodeCompiler
-        casa_struct:$common::CasaStruct
-        declared_type:$common::Type
-        bytecode:mut$std::List[common::InstValue]
-    {
-        if casa_struct.is_extern then
-            bytecode declared_type compiler.emit_typed_load
-        else
-            bytecode declared_type compiler.aggregate_field_load
-        fi
-    }
-
-    fn struct_field_store
-        compiler:mut$BytecodeCompiler
-        casa_struct:$common::CasaStruct
-        declared_type:$common::Type
-        bytecode:mut$std::List[common::InstValue]
-    {
-        if casa_struct.is_extern then
+        if plan.stores_inline then
             bytecode declared_type compiler.emit_typed_store
         else
-            bytecode declared_type compiler.aggregate_field_store
+            common::InstValue::Store64 bytecode.push
         fi
+    }
+
+    fn get_struct_field_plan
+        compiler:mut$BytecodeCompiler
+        casa_struct:$common::CasaStruct
+        member_index:u64
+    -> common::FieldStoragePlan {
+        if
+            compiler.state.store member_index casa_struct common::plan_struct_member_storage
+            std::Option::Some(plan) is
+        then
+            plan.clone return
+        fi
+        f"Cannot determine member {member_index} storage of struct `{casa_struct.name}`"
+        compiler.record_failure_string
+        false 0 1 0 common::FieldStoragePlan
     }
 
     fn struct_size compiler:mut$BytecodeCompiler casa_struct:$common::CasaStruct -> u64 {
@@ -365,19 +381,21 @@ impl BytecodeCompiler {
         0
     }
 
-    fn struct_offset
+    fn get_enum_field_plan
         compiler:mut$BytecodeCompiler
-        casa_struct:$common::CasaStruct
-        member_index:u64
-    -> u64 {
+        casa_enum:$common::CasaEnum
+        variant_name:$str
+        payload_index:u64
+    -> common::FieldStoragePlan {
         if
-            compiler.state.store member_index casa_struct common::struct_member_offset std::Option::Some(offset) is
+            compiler.state.store payload_index variant_name casa_enum
+            common::plan_enum_payload_storage std::Option::Some(plan) is
         then
-            offset return
+            plan.clone return
         fi
-        f"Cannot determine member {member_index} layout of struct `{casa_struct.name}`"
+        f"Cannot determine payload {payload_index} storage of `{casa_enum.name}::{variant_name}`"
         compiler.record_failure_string
-        0
+        false 0 1 0 common::FieldStoragePlan
     }
 
     fn enum_size compiler:mut$BytecodeCompiler casa_enum:$common::CasaEnum -> u64 {
@@ -386,23 +404,6 @@ impl BytecodeCompiler {
             size return
         fi
         f"Cannot determine layout of enum `{casa_enum.name}`" compiler.record_failure_string
-        0
-    }
-
-    fn enum_offset
-        compiler:mut$BytecodeCompiler
-        casa_enum:$common::CasaEnum
-        variant_name:$str
-        payload_index:u64
-    -> u64 {
-        if
-            compiler.state.store payload_index variant_name casa_enum
-            common::enum_payload_offset std::Option::Some(offset) is
-        then
-            offset return
-        fi
-        f"Cannot determine payload {payload_index} layout of `{casa_enum.name}::{variant_name}`"
-        compiler.record_failure_string
         0
     }
 }
@@ -746,12 +747,12 @@ impl BytecodeCompiler {
             fi
             substitutions member.typ.substitute_t = member_type
             common::InstValue::Dup bytecode.push
-            member_index casa_struct compiler.struct_offset = offset
-            if 0 offset != then
-                offset i64::try_from.unwrap common::InstValue::Push bytecode.push
+            member_index casa_struct compiler.get_struct_field_plan = plan
+            if 0 plan.offset != then
+                plan.offset i64::try_from.unwrap common::InstValue::Push bytecode.push
                 common::InstValue::Add bytecode.push
             fi
-            bytecode member.typ casa_struct compiler.struct_field_load
+            bytecode plan member.typ compiler.emit_field_load
             bytecode op member_type compiler.compile_destruction
         done
         common::InstValue::HeapFree bytecode.push
@@ -773,10 +774,11 @@ impl BytecodeCompiler {
                 1 -= payload_index
                 substitutions payload_index payload_types.get.substitute_t = payload_type
                 common::InstValue::Dup bytecode.push
-                payload_index variant_name casa_enum compiler.enum_offset i64::try_from.unwrap
+                payload_index variant_name casa_enum compiler.get_enum_field_plan = plan
+                plan.offset i64::try_from.unwrap
                 common::InstValue::Push bytecode.push
                 common::InstValue::Add bytecode.push
-                bytecode payload_index payload_types.get compiler.aggregate_field_load
+                bytecode plan payload_index payload_types.get compiler.emit_field_load
                 bytecode op payload_type compiler.compile_destruction
             done
         fi
@@ -1656,16 +1658,16 @@ impl BytecodeCompiler {
         while index casa_struct common::CasaStruct::members.length > do
             index casa_struct common::CasaStruct::members.get = member
             member common::Member::name.as_str = field_name: $str
-            index casa_struct compiler.struct_offset = offset
+            index casa_struct compiler.get_struct_field_plan = plan
             if
                 field_name struct_pattern common::StructPattern::bindings.get_str std::Option::Some(var_name) is
             then
                 common::InstValue::Dup bytecode.push
-                if 0 offset > then
-                    offset i64::try_from.unwrap common::InstValue::Push bytecode.push
+                if 0 plan.offset > then
+                    plan.offset i64::try_from.unwrap common::InstValue::Push bytecode.push
                     common::InstValue::Add bytecode.push
                 fi
-                bytecode member.typ casa_struct compiler.struct_field_load
+                bytecode plan member.typ compiler.emit_field_load
                 bytecode var_name.as_str compiler.emit_variable_set
             fi
             1 += index
@@ -1793,11 +1795,11 @@ impl BytecodeCompiler {
             .unwrap = payload_types
         0 = index: u64
         while index variant common::EnumVariant::bindings.length > do
-            index variant.variant_name.as_str casa_enum compiler.enum_offset = offset
+            index variant.variant_name.as_str casa_enum compiler.get_enum_field_plan = plan
             common::InstValue::Dup bytecode.push
-            offset i64::try_from.unwrap common::InstValue::Push bytecode.push
+            plan.offset i64::try_from.unwrap common::InstValue::Push bytecode.push
             common::InstValue::Add bytecode.push
-            bytecode index payload_types.get compiler.aggregate_field_load
+            bytecode plan index payload_types.get compiler.emit_field_load
             index variant common::EnumVariant::bindings.get = var_name
             bytecode var_name.as_str compiler.emit_variable_set
             1 += index
@@ -1922,13 +1924,13 @@ impl BytecodeCompiler {
             while index count > do
                 common::InstValue::Swap bytecode.push
                 common::InstValue::Over bytecode.push
-                index casa_struct compiler.struct_offset = offset
-                if 0 offset > then
-                    offset i64::try_from.unwrap common::InstValue::Push bytecode.push
+                index casa_struct compiler.get_struct_field_plan = plan
+                if 0 plan.offset > then
+                    plan.offset i64::try_from.unwrap common::InstValue::Push bytecode.push
                     common::InstValue::Add bytecode.push
                 fi
                 index casa_struct.members.get = member
-                bytecode member.typ casa_struct compiler.struct_field_store
+                bytecode plan member.typ compiler.emit_field_store
                 1 += index
             done
         fi
@@ -1980,14 +1982,14 @@ impl BytecodeCompiler {
         # Store inner values at their padded payload offsets.
         0 = inner_index: u64
         while inner_index inner_count > do
-            inner_index variant_name.as_str casa_enum compiler.enum_offset = offset
+            inner_index variant_name.as_str casa_enum compiler.get_enum_field_plan = plan
             ptr_local common::InstValue::LocalGet bytecode.push
-            offset i64::try_from.unwrap common::InstValue::Push bytecode.push
+            plan.offset i64::try_from.unwrap common::InstValue::Push bytecode.push
             common::InstValue::Add bytecode.push
             inner_index temps.get copy = temp_local
             temp_local common::InstValue::LocalGet bytecode.push
             common::InstValue::Swap bytecode.push
-            bytecode inner_index types.get compiler.aggregate_field_store
+            bytecode plan inner_index types.get compiler.emit_field_store
             1 += inner_index
         done
 
@@ -2056,11 +2058,11 @@ impl BytecodeCompiler {
                 .unwrap = payload_types
             0 = index: u64
             while index variant common::EnumVariant::bindings.length > do
-                index variant.variant_name.as_str casa_enum compiler.enum_offset = offset
+                index variant.variant_name.as_str casa_enum compiler.get_enum_field_plan = plan
                 temp_ptr common::InstValue::LocalGet bytecode.push
-                offset i64::try_from.unwrap common::InstValue::Push bytecode.push
+                plan.offset i64::try_from.unwrap common::InstValue::Push bytecode.push
                 common::InstValue::Add bytecode.push
-                bytecode index payload_types.get compiler.aggregate_field_load
+                bytecode plan index payload_types.get compiler.emit_field_load
                 index variant common::EnumVariant::bindings.get = var_name
                 bytecode var_name.as_str compiler.emit_variable_set
                 1 += index
@@ -2128,10 +2130,10 @@ impl BytecodeCompiler {
             while member_index casa_struct common::CasaStruct::members.length > do
                 member_index casa_struct common::CasaStruct::members.get = member
                 member common::Member::name.as_str = member_name: $str
-                member_index casa_struct compiler.struct_offset = member_offset
+                member_index casa_struct compiler.get_struct_field_plan = plan
                 common::InstValue::Dup bytecode.push
-                if 0 member_offset > then
-                    member_offset i64::try_from.unwrap common::InstValue::Push bytecode.push
+                if 0 plan.offset > then
+                    plan.offset i64::try_from.unwrap common::InstValue::Push bytecode.push
                     common::InstValue::Add bytecode.push
                 fi
                 if member_name temp_locals.get_copy_str std::Option::Some(temp_local) is then
@@ -2141,7 +2143,7 @@ impl BytecodeCompiler {
                     return
                 fi
                 common::InstValue::Swap bytecode.push
-                bytecode member.typ casa_struct compiler.struct_field_store
+                bytecode plan member.typ compiler.emit_field_store
                 1 += member_index
             done
         fi
@@ -3299,18 +3301,36 @@ impl BytecodeCompiler {
                 fi
                 true
             }
-            common::OpValue::StructMemberOffset(member) => {
+            common::OpValue::StructMemberProject(member) => {
                 if
-                    member.struct_name self
-                        .state
-                        .store
-                        .structs
-                        .get std::Option::Some(casa_struct) is
+                    self.state.store member resolve_struct_field
+                    std::Option::Some(field) is
                 then
-                    member.member_index casa_struct self.struct_offset = offset
-                    offset i64::try_from.unwrap common::InstValue::Push bytecode.push
+                    if 0 field.storage.offset != then
+                        field.storage.offset i64::try_from.unwrap common::InstValue::Push
+                        bytecode.push
+                        common::InstValue::Add bytecode.push
+                    fi
+                    bytecode field.storage field.typ self.emit_field_projection
                 else
-                    f"Struct `{member.struct_name}` is missing during bytecode compilation"
+                    f"Cannot determine member {member.member_index} storage of struct `{member.struct_name}`"
+                    self.record_failure_string
+                fi
+                true
+            }
+            common::OpValue::StructMemberStore(member) => {
+                if
+                    self.state.store member resolve_struct_field
+                    std::Option::Some(field) is
+                then
+                    if 0 field.storage.offset != then
+                        field.storage.offset i64::try_from.unwrap common::InstValue::Push
+                        bytecode.push
+                        common::InstValue::Add bytecode.push
+                    fi
+                    bytecode field.storage field.typ self.emit_field_store
+                else
+                    f"Cannot determine member {member.member_index} storage of struct `{member.struct_name}`"
                     self.record_failure_string
                 fi
                 true

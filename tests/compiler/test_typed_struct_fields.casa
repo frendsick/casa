@@ -1,8 +1,10 @@
+import "std" as std
 import "../../compiler/common.casa" as common
 import "../../compiler/error.casa" as error
 import "../../compiler/lexer.casa" as lexer
 import "../../compiler/syntax.casa" as syntax
 import "../../lib/test.casa" as test
+import "fixtures/extern_struct_types.casa" as fixture
 
 # Regression test for issue #128: structs as direct fields of other structs.
 
@@ -20,6 +22,53 @@ pub struct Owner {
     pub node: Node
 }
 
+pub extern struct ExternalValue {
+    pub first:  u64
+    pub second: u64
+    pub third:  u64
+    pub fourth: u64
+}
+
+pub struct ExternalHolder {
+    pub prefix:   u8
+    pub external: ExternalValue
+    pub suffix:   u8
+}
+
+pub struct ImportedExternalHolder {
+    pub prefix:   u8
+    pub external: fixture::Tiny
+    pub suffix:   u8
+}
+
+pub struct ForwardEnumHolder {
+    pub prefix: u8
+    pub state:  ForwardState
+    pub suffix: u8
+}
+
+pub enum ForwardState derives std::Copy {
+    Off
+    On
+}
+
+pub struct FixedArrayHolder {
+    pub values: array[u16 3]
+}
+
+pub struct GenericHolder[T] {
+    pub value: T
+}
+
+pub struct BorrowedHolder {
+    pub value: $i64
+}
+
+pub struct RecursiveNode {
+    pub value: i64
+    pub next:  std::Option[RecursiveNode]
+}
+
 pub fn make_tail value:i64 -> Tail { value Tail }
 
 pub fn make_node value:i64 next:Tail -> Node { next value Node }
@@ -28,6 +77,21 @@ pub fn make_owner name:str node:Node -> Owner { node name Owner }
 
 pub fn make_value_setter node:mut$Node -> fn[i64] {
     { = node.value }
+}
+
+pub fn move_through_raw [T] value:T -> T {
+    unsafe { size_of[T] alloc } = storage
+    unsafe { value storage ptr::write[T] }
+    unsafe { storage ptr::read[T] } = moved
+    unsafe { storage free }
+    moved
+}
+
+pub fn check_state_is_on state:ForwardState -> bool {
+    state match
+        ForwardState::Off => false
+        ForwardState::On => true
+    end
 }
 
 pub fn test_direct_typed_field_read {
@@ -70,9 +134,118 @@ pub fn test_captured_field_assignment {
     8 setter exec
     "captured field value" 8 node Node::value test::assert_eq
 }
+
+pub fn test_ordinary_extern_field_lifecycle {
+    "ordinary_extern_field_lifecycle" test::test_start
+    ExternalHolder {
+        prefix: 1
+        external: ExternalValue { first: 11 second: 22 third: 33 fourth: 44 }
+        suffix: 2
+    } move_through_raw = holder
+    holder.external ptr::from_ref = external_address
+    "extern field read" 11 holder.external.first test::assert_eq
+    55 = holder.external.second
+    "extern field mutation" 55 holder.external.second test::assert_eq
+
+    holder match
+        ExternalHolder { external: moved } => {
+            "extern field move" 33 moved.third test::assert_eq
+            moved drop
+            ExternalValue {
+                first: 1 second: 2 third: 3 fourth: 4
+            } = recycled
+            "extern field storage reclaimed" external_address recycled ptr::from_ref ==
+            test::assert_true
+        }
+    end
+}
+
+pub fn test_fixed_array_field_storage {
+    "fixed_array_field_storage" test::test_start
+    [1, 2, 3] FixedArrayHolder = holder
+    "fixed array read" 2 1 holder
+        .values
+        .nth
+        .clone test::assert_eq
+    [4, 5, 6] = holder.values
+    "fixed array replacement" 6 2 holder
+        .values
+        .nth
+        .clone test::assert_eq
+}
+
+pub fn test_imported_extern_field_storage {
+    "imported_extern_field_storage" test::test_start
+    true 77 fixture::Tiny = external
+    ImportedExternalHolder {
+        prefix: 1
+        external: external
+        suffix: 2
+    } = holder
+    "imported extern read" 77 holder.external.value i64::from test::assert_eq
+    false = holder.external.flag
+    "imported extern mutation" holder.external.flag test::assert_false
+}
+
+pub fn test_forward_field_storage {
+    "forward_field_storage" test::test_start
+    ForwardEnumHolder { prefix: 1 state: ForwardState::Off suffix: 2 } = holder
+    "forward field read" holder.state check_state_is_on ! test::assert_true
+    ForwardState::On = holder.state
+    "forward field mutation" holder.state check_state_is_on test::assert_true
+}
+
+pub fn test_generic_and_owned_field_storage {
+    "generic_and_owned_field_storage" test::test_start
+    41 GenericHolder = scalar
+    "specialized scalar" 41 scalar.value test::assert_eq
+    42 = scalar.value
+    "mutated specialized scalar" 42 scalar.value test::assert_eq
+
+    7 make_tail 9 make_node GenericHolder = owned
+    "specialized owner" 9 owned.value.value test::assert_eq
+    10 = owned.value.value
+    "mutated specialized owner" 10 owned.value.value test::assert_eq
+}
+
+pub fn test_borrowed_and_recursive_field_storage {
+    "borrowed_and_recursive_field_storage" test::test_start
+    17 = owner
+    owner BorrowedHolder = borrowed
+    "borrowed field" 17 borrowed.value test::assert_eq
+
+    std::Option[RecursiveNode]::None = next
+    0 = value
+    while value 8 > do
+        next value RecursiveNode std::Option::Some = next
+        1 += value
+    done
+    next drop
+    "borrow owner remains live" 17 owner test::assert_eq
+}
+
+pub fn test_field_layouts_remain_stable {
+    "field_layouts_remain_stable" test::test_start
+    "ordinary extern field is indirect" 24 size_of[ExternalHolder] test::assert_eq
+    "imported extern field is indirect" 24 size_of[ImportedExternalHolder] test::assert_eq
+    "forward enum field remains inline" 24 size_of[ForwardEnumHolder] test::assert_eq
+    "extern field body remains inline" 32 size_of[ExternalValue] test::assert_eq
+    "fixed array field remains inline" 6 size_of[FixedArrayHolder] test::assert_eq
+    "nested ordinary field remains indirect" 16 size_of[Node] test::assert_eq
+    "generic field remains one word" 8 size_of[GenericHolder[u8]] test::assert_eq
+    "borrowed field remains one word" 8 size_of[BorrowedHolder] test::assert_eq
+    "recursive edge remains indirect" 16 size_of[RecursiveNode] test::assert_eq
+}
 test_direct_typed_field_read
 test_direct_typed_field_assignment
 test_cross_struct_field_read
 test_nested_field_assignment
 test_captured_field_assignment
+test_ordinary_extern_field_lifecycle
+test_fixed_array_field_storage
+test_imported_extern_field_storage
+test_forward_field_storage
+test_generic_and_owned_field_storage
+test_borrowed_and_recursive_field_storage
+test_field_layouts_remain_stable
 test::test_summary
