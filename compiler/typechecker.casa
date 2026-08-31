@@ -142,50 +142,59 @@ pub fn has_origin_descendant origin:$str origins:$std::List[std::String] -> bool
     false
 }
 
-pub fn count_variable_uses
-    ops:$std::List[common::Op]
-    counts:std::Map[std::String u64]
--> std::Map[std::String u64] {
-    for op in ops.iter do
-        if op.value common::OpValue::PushVar(name) is then
-            0 = count: u64
-            if name counts.get_copy std::Option::Some(found) is then
-                found = count
-            fi
-            count 1 + name.clone counts.set
-        fi
-        if op.value common::OpValue::PushArray(items) is then
-            counts items count_variable_uses = counts
-        elif op.value common::OpValue::ExprGroup(items) is then
-            counts items count_variable_uses = counts
-        elif op.value common::OpValue::InitGlobal(initializer) is then
-            counts initializer.ops count_variable_uses = counts
-        elif op.value common::OpValue::MatchArm(arm) is then
-            counts arm.guard_ops count_variable_uses = counts
-        fi
-    done
-    counts
+pub struct VariableUses {
+    pub counts:         std::Map[std::String u64]
+    pub last_locations: std::Map[std::String common::Location]
 }
 
-pub fn collect_last_variable_uses
-    ops:$std::List[common::Op]
-    locations:std::Map[std::String common::Location]
--> std::Map[std::String common::Location] {
+impl VariableUses {
+    pub fn new -> VariableUses {
+        std::Map[std::String common::Location]::new std::Map[std::String u64]::new VariableUses
+    }
+
+    fn record self:mut$VariableUses name:$str location:$common::Location occurrences:u64 {
+        0 = count: u64
+        if name self.counts.get_copy_str std::Option::Some(found) is then
+            found = count
+        fi
+        count occurrences + name self.counts.set_str
+        location.clone name self.last_locations.set_str
+    }
+}
+
+pub fn collect_variable_uses ops:$std::List[common::Op] uses:VariableUses -> VariableUses {
     for op in ops.iter do
         if op.value common::OpValue::PushVar(name) is then
-            op.location.clone name.clone locations.set
+            1 op.location name.as_str uses.record
+        elif
+            op.value common::OpValue::AssignVar is
+            op.value common::OpValue::AssignInc is ||
+            op.value common::OpValue::AssignDec is ||
+        then
+            op common::op_str_value = target
+            target.as_str "." str::split = parts
+            if parts.length 1 < then
+                1 = occurrences: u64
+                if
+                    op.value common::OpValue::AssignInc is
+                    op.value common::OpValue::AssignDec is ||
+                then
+                    1 += occurrences
+                fi
+                occurrences op.location 0 parts.get.as_str uses.record
+            fi
         fi
         if op.value common::OpValue::PushArray(items) is then
-            locations items collect_last_variable_uses = locations
+            uses items collect_variable_uses = uses
         elif op.value common::OpValue::ExprGroup(items) is then
-            locations items collect_last_variable_uses = locations
+            uses items collect_variable_uses = uses
         elif op.value common::OpValue::InitGlobal(initializer) is then
-            locations initializer.ops collect_last_variable_uses = locations
+            uses initializer.ops collect_variable_uses = uses
         elif op.value common::OpValue::MatchArm(arm) is then
-            locations arm.guard_ops collect_last_variable_uses = locations
+            uses arm.guard_ops collect_variable_uses = uses
         fi
     done
-    locations
+    uses
 }
 
 pub fn type_capability typ:$common::Type -> ValueCapability {
@@ -5005,7 +5014,7 @@ impl TypeChecker {
         capability:$ValueCapability
         method_name:$str
         receiver_type:$common::Type
-    {
+    -> bool {
         effect method_receiver_type = expected_receiver_opt
         if expected_receiver_opt std::Option::Some(expected_receiver) is then
             if expected_receiver capability capability_matches_receiver ! then
@@ -5079,8 +5088,10 @@ impl TypeChecker {
                     expected_receiver.clone = stored_receiver.type_value
                     expected_receiver type_capability = stored_receiver.capability
                 fi
+                true return
             fi
         fi
+        false
     }
 
     pub fn check_trait_method_call
@@ -5116,7 +5127,7 @@ impl TypeChecker {
             method.method_name.clone = method_name
             method.trait_type.clone = trait_type
             receiver method.method_name.as_str receiver_capability effect
-            tc.check_method_receiver_capability
+            tc.check_method_receiver_capability drop
             method.method_name.as_str receiver.make_method_key = method_key
             if
                 0 effect.type_vars.length !=
@@ -7838,9 +7849,9 @@ impl TypeChecker {
                 self.current_trait_bounds.clone = guard_checker.current_trait_bounds
                 guard_scope = guard_checker.scope
                 guard_flow guard_checker.restore_ownership_flow
-                std::Map[std::String u64]::new guard_ops count_variable_uses = guard_checker.remaining_uses
-                std::Map[std::String common::Location]::new guard_ops collect_last_variable_uses
-                = guard_checker.last_use_locations
+                VariableUses::new guard_ops collect_variable_uses = variable_uses
+                variable_uses.counts.clone = guard_checker.remaining_uses
+                variable_uses.last_locations.clone = guard_checker.last_use_locations
                 function_opt guard_ops guard_checker.run_type_check_ops
                 if guard_checker.path_continues then
                     for name in guard_checker.moved_owners.iter do
@@ -8682,8 +8693,6 @@ impl TypeChecker {
         emitted_ops:mut$std::List[common::Op]
         function_opt:mut$std::Option[common::Function]
     {
-        tc.stack_pop_drop
-        receiver tc.stack_push_type
         semantics.method_name.as_str receiver.make_method_key = method_key
         semantics.stack_effect.clone = effect
         function_opt emitted_ops op 0 effect tc.bind_borrowed_temporaries
@@ -8908,8 +8917,12 @@ impl TypeChecker {
             semantics.into_method match
                 std::Option::Some(method_semantics) => {
                     receiver method_name.as_str receiver_capability method_semantics.stack_effect
-                    tc.check_method_receiver_capability
+                    tc.check_method_receiver_capability = receiver_recovered
                     if method_semantics.kind semantics::MethodSemanticsKind::TraitBound is then
+                        if receiver_recovered ! then
+                            tc.stack_pop_drop
+                            receiver tc.stack_push_type
+                        fi
                         function_opt emitted_ops op receiver method_semantics
                         tc.apply_trait_bound_method_semantics
                         return
@@ -9594,9 +9607,9 @@ pub fn check_ops
         done
     fi
     budget = checker.param_cap
-    std::Map[std::String u64]::new ops count_variable_uses = checker.remaining_uses
-    std::Map[std::String common::Location]::new ops collect_last_variable_uses
-    = checker.last_use_locations
+    VariableUses::new ops collect_variable_uses = variable_uses
+    variable_uses.counts.clone = checker.remaining_uses
+    variable_uses.last_locations.clone = checker.last_use_locations
     checker.diagnostics.error_count = errors_before_ops
     function_opt ops checker.run_type_check_ops
 
