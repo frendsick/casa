@@ -248,8 +248,11 @@ without a type-name prefix is acceptable.
 
 ## `match` for enum dispatch
 
-- **MUST** use `match` for dispatching on enum variants. Avoid `if/elif` chains
-  that check the same enum value repeatedly:
+- **MUST** use `if … is` when control flow checks one enum variant, with an
+  optional `else` for the remaining values.
+- **MUST** use `match` when control flow checks multiple variants. Prefer it
+  for exhaustive or near-exhaustive enum dispatch. Avoid `if/elif` chains that
+  check the same enum value repeatedly:
 
   ```casa
   # MUST
