@@ -121,6 +121,12 @@ An aggregate declared with `extern struct` whose field order, alignment, padding
 and size follow the x86-64 System V C ABI.
 _Avoid_: repr(C) struct, ordinary struct, packed struct
 
+**Ordinary struct**:
+An aggregate declared with `struct`. Its layout and storage are compiler-owned
+and can change between compiler versions. A physical match with a C declaration
+in one build is not an ABI contract.
+_Avoid_: native struct, internal struct, C-layout struct
+
 ### Documentation terminology
 
 **Documentation glossary**:
