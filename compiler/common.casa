@@ -824,6 +824,13 @@ pub struct StructLiteral derives std::Clone {
     pub field_order: std::List[std::String]
 }
 
+# Generated extern-struct accessors resolve offsets after all imports and
+# forward declarations are available.
+pub struct StructMemberOffset derives std::Clone {
+    pub struct_name:  std::String
+    pub member_index: u64
+}
+
 pub struct StructPattern derives std::Clone {
     pub struct_name: std::String
     pub bindings:    std::Map[std::String std::String]
@@ -1002,6 +1009,7 @@ pub enum OpValue derives std::Clone {
     Store32
     Store64
     PtrWrite (Type)
+    StructMemberOffset (StructMemberOffset)
     # Syscalls
     Syscall0
     Syscall1
@@ -1343,6 +1351,7 @@ pub struct CasaStruct derives std::Clone {
     pub location:       Location
     pub type_vars:      std::List[std::String]
     pub derived_traits: std::List[std::String]
+    pub is_extern:      bool
 }
 
 # ============================================================================
@@ -3834,6 +3843,99 @@ pub fn aggregate_field_layout
     visiting store typ type_layout
 }
 
+pub fn type_is_extern_struct typ:$Type store:$SymbolStore -> bool {
+    if typ Type::Generic(generic) is then
+        if 0 generic.params.length != then
+            false return
+        fi
+        if generic.base store.structs.get std::Option::Some(casa_struct) is then
+            casa_struct.is_extern return
+        fi
+    fi
+    false
+}
+
+pub fn type_is_extern_struct_field typ:$Type store:$SymbolStore -> bool {
+    if typ.is_borrow then
+        false return
+    fi
+    typ match
+        Type::Builtin(builtin) => {
+            builtin.is_integer
+            builtin.is_float ||
+            builtin BuiltinType::Bool == ||
+            builtin BuiltinType::Ptr == ||
+        }
+        Type::Generic(generic) => {
+            if ARRAY_TYPE generic.base.as_str == then
+                if 2 generic.params.length != then
+                    false return
+                fi
+                if typ get_concrete_array_length std::Option::Some(length) is then
+                    if 0 length == then
+                        false return
+                    fi
+                    store 0 generic.params.get type_is_extern_struct_field return
+                fi
+                false return
+            fi
+            store typ type_is_extern_struct
+        }
+        _ => false
+    end
+}
+
+pub fn extern_struct_field_layout
+    typ:$Type
+    store:$SymbolStore
+    visiting:mut$std::Set[std::String]
+-> std::Option[TypeLayout] {
+    if store typ type_is_extern_struct_field ! then
+        std::Option[TypeLayout]::None return
+    fi
+    typ match
+        Type::Builtin(builtin) => builtin builtin_type_layout std::Option::Some
+        Type::Generic(generic) => {
+            if ARRAY_TYPE generic.base.as_str == then
+                typ get_concrete_array_length.unwrap = length
+                if
+                    visiting store 0 generic.params.get extern_struct_field_layout
+                    std::Option::Some(element) is
+                then
+                    element.alignment length element.size * TypeLayout std::Option::Some
+                else
+                    std::Option[TypeLayout]::None
+                fi
+            elif generic.base store.structs.get std::Option::Some(casa_struct) is then
+                typ.format = type_name
+                if type_name visiting.has then
+                    std::Option[TypeLayout]::None return
+                fi
+                type_name.clone visiting.add
+                visiting store casa_struct typ struct_type_layout = result
+                type_name visiting.remove
+                result
+            else
+                std::Option[TypeLayout]::None
+            fi
+        }
+        _ => std::Option[TypeLayout]::None
+    end
+}
+
+pub fn struct_field_layout
+    typ:$Type
+    casa_struct:$CasaStruct
+    store:$SymbolStore
+    visiting:mut$std::Set[std::String]
+-> std::Option[TypeLayout] {
+    if casa_struct.is_extern then
+        visiting store typ extern_struct_field_layout
+    else
+        visiting store typ aggregate_field_layout
+    fi
+}
+
 pub fn struct_type_layout
     typ:$Type
     casa_struct:$CasaStruct
@@ -3843,7 +3945,10 @@ pub fn struct_type_layout
     0 = size: u64
     1 = alignment: u64
     for member in casa_struct.members.iter do
-        if visiting store member.typ aggregate_field_layout std::Option::Some(member_layout) is then
+        if
+            visiting store casa_struct member.typ struct_field_layout
+            std::Option::Some(member_layout) is
+        then
             member_layout.alignment size align_up = size
             member_layout.size += size
             if alignment member_layout.alignment > then
@@ -3899,7 +4004,7 @@ pub fn struct_member_offset
     0 = index: u64
     while index casa_struct.members.length > do
         index casa_struct.members.get = member
-        if visiting store member.typ aggregate_field_layout std::Option::Some(layout) is then
+        if visiting store casa_struct member.typ struct_field_layout std::Option::Some(layout) is then
             layout.alignment offset align_up = offset
             if index member_index == then
                 offset std::Option::Some return
