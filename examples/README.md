@@ -16,7 +16,7 @@ The examples are ordered from introductory programs to low-level system code.
 | 4 | [`euler01.casa`](euler01.casa) | Constants and an arithmetic algorithm |
 | 5 | [`struct.casa`](struct.casa) | A struct literal, method, field update, and destructuring |
 | 6 | [`destruction.casa`](destruction.casa) | Deterministic cleanup in reverse acquisition order |
-| 7 | [`enum.casa`](enum.casa) | Payload variants, exhaustive matching, and guards |
+| 7 | [`enum.casa`](enum.casa) | Payload variants, recursive ownership, exhaustive matching, and guards |
 | 8 | [`generics.casa`](generics.casa) | A trait-bound generic function with two implementations |
 | 9 | [`for_loop.casa`](for_loop.casa) | A custom iterator used by a `for` loop |
 | 10 | [`iterator_combinators.casa`](iterator_combinators.casa) | A lazy filter and map pipeline with terminal operations |
