@@ -120,12 +120,14 @@ rounds to the nearest value of the target width, with ties rounded to even.
 "1.5e3".to_f64 .unwrap print
 ```
 
-## Convert bytes to text
+## Convert text and bytes
 
 `Bytes.to_str self:$Bytes -> Result[String Utf8Error]` validates UTF-8 and
 copies valid bytes into an owned `String`. It borrows the byte buffer, so the
 source remains available after conversion. Invalid UTF-8 returns `Utf8Error`.
-Casa does not provide a consuming `into_str` conversion.
+`Bytes::from_str source:$str -> Bytes` copies the text's UTF-8 bytes.
+Casa does not provide a consuming `into_str` conversion or an implicit
+conversion in either direction.
 
 ```casa
 Bytes::new = bytes
@@ -200,13 +202,16 @@ f-strings.
 
 ## C strings and mutable buffers
 
-`as_cstr` checks for interior NUL and returns an optional borrowed
-NUL-terminated byte view for system interfaces. `$cstr` does not own or free
-its storage. `to_str` validates UTF-8 and copies the bytes into owned Casa text:
+`str.as_cstr` and `Bytes.as_cstr` check for interior NUL and return an optional
+borrowed NUL-terminated byte view for system interfaces. `$cstr` does not own
+or free its storage. `to_str` validates UTF-8 and copies the bytes into owned
+Casa text:
 
 ```casa
 "hello".as_cstr.unwrap = raw:$cstr
 raw.to_str.unwrap.as_str print
+"path" Bytes::from_str = byte_path
+byte_path.as_cstr.unwrap = byte_raw:$cstr
 ```
 
 Constructing `$cstr` from a raw pointer requires `unsafe` code to guarantee an

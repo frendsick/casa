@@ -123,6 +123,7 @@ numbers.sort
 | `contains self:$List[str] needle:$str -> bool` | Whether a string list contains `needle` |
 | `join_strings self:$List[String] separator:$str -> String` | Join owned strings |
 | `push_str self:mut$List[String] value:$str` | Copy and append one text view |
+| `push_str self:mut$List[Bytes] value:$str` | Copy text bytes and append one buffer |
 
 `get`, `get_ref`, and `iter` borrow elements in place, so the list stays their
 owner. Use `get_mut` for exclusive access. Use `.clone` when an owned value is
@@ -143,17 +144,21 @@ reversing.
 | Method | Result or action |
 |---|---|
 | `Bytes::new -> Bytes` | Empty byte buffer |
+| `Bytes::from_str source:$str -> Bytes` | Copy the text's UTF-8 bytes |
 | `length self:$Bytes -> u64` | Number of initialized bytes |
 | `capacity self:$Bytes -> u64` | Number of bytes available before growth |
 | `push self:mut$Bytes byte:u8` | Add one byte |
 | `append self:mut$Bytes source:$Bytes` | Copy the source bytes onto the end |
 | `get self:$Bytes index:u64 -> Option[u8]` | Copy one byte if the index is in range |
 | `iter self:$Bytes -> Iter[u8]` | Iterator that copies each byte |
+| `as_cstr self:$Bytes -> Option[$cstr]` | Borrow a NUL-terminated view if no byte is NUL |
 | `clone self:$Bytes -> Bytes` | Independent byte buffer |
 | `to_str self:$Bytes -> Result[String Utf8Error]` | Validate and copy UTF-8 text |
 
 `to_str` borrows the buffer and keeps it unchanged. Invalid UTF-8 returns
-`Utf8Error`. There is no consuming `into_str` conversion.
+`Utf8Error`. There is no consuming `into_str` conversion. `Bytes` implements
+`Eq` and `Hashable`, but not `Display`. Its storage keeps a trailing NUL outside
+the logical length so `as_cstr` does not allocate.
 
 See [`examples/bytes.casa`](../examples/bytes.casa) for a runnable example.
 

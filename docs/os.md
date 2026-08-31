@@ -4,7 +4,7 @@ Import the Linux operating-system module with a library path that contains
 `os.casa`:
 
 ```casa
-import "std" { Result eprint }
+import "std" { Bytes List Result eprint run_command }
 import "os"
 ```
 
@@ -34,17 +34,17 @@ Prefer the high-level functions:
 
 | Function | Result |
 |---|---|
-| `file::read_all path:$str -> Result[Bytes IoError]` | Entire file contents |
-| `file::write_all path:$str content:$str -> Result[bool IoError]` | Create or replace a file |
-| `file::remove path:$str -> Result[bool IoError]` | Remove a file |
-| `file::exists path:$str -> bool` | Whether `stat` can find the path |
-| `file::stat path:$str -> Result[FileStat IoError]` | File metadata |
+| `file::read_all path:$cstr -> Result[Bytes IoError]` | Entire file contents |
+| `file::write_all path:$cstr content:$Bytes -> Result[bool IoError]` | Create or replace a file |
+| `file::remove path:$cstr -> Result[bool IoError]` | Remove a file |
+| `file::exists path:$cstr -> bool` | Whether `stat` can find the path |
+| `file::stat path:$cstr -> Result[FileStat IoError]` | File metadata |
 
 Handle the operation result directly. A separate existence check can become
 stale before the next file operation:
 
 ```casa
-"notes.txt" file::read_all match
+"notes.txt".as_cstr.unwrap file::read_all match
     Result::Ok(bytes) => bytes.to_str.unwrap print
     Result::Error(error) => f"read failed: {error}\n" eprint
 end
@@ -69,12 +69,12 @@ and removes a file and directory.
 
 | Function | Result |
 |---|---|
-| `dir::list path:$str -> Result[List[Bytes] IoError]` | Entry names without `.` or `..` |
-| `dir::create path:$str mode:i64 -> Result[bool IoError]` | Create a directory |
-| `dir::remove path:$str -> Result[bool IoError]` | Remove an empty directory |
-| `dir::exists path:$str -> bool` | Whether the path is a directory |
+| `dir::list path:$cstr -> Result[List[Bytes] IoError]` | Entry names without `.` or `..` |
+| `dir::create path:$cstr mode:i64 -> Result[bool IoError]` | Create a directory |
+| `dir::remove path:$cstr -> Result[bool IoError]` | Remove an empty directory |
+| `dir::exists path:$cstr -> bool` | Whether the path is a directory |
 | `dir::current -> Result[Bytes IoError]` | Current working directory |
-| `dir::change path:$str -> Result[bool IoError]` | Change working directory |
+| `dir::change path:$cstr -> Result[bool IoError]` | Change working directory |
 
 The mode is a Linux permission value. For example, `493` is octal `0755`.
 
@@ -82,8 +82,9 @@ The mode is a Linux permission value. For example, `493` is octal `0755`.
 
 `env::get name:$str -> Option[Bytes]` returns one environment variable.
 Environment values and directory names can contain any non-NUL byte. Convert
-them with `Bytes.to_str` only when the caller requires UTF-8 text. Path inputs
-and environment variable names remain `$str`.
+them with `Bytes.to_str` only when the caller requires UTF-8 text. Filesystem
+operations accept `$cstr`, so both text paths and byte paths use `as_cstr`.
+Environment variable names and text path utilities remain `$str`.
 
 | Path function | Result |
 |---|---|
@@ -107,11 +108,11 @@ environment variables, paths, and a child process.
 argument count and `get_arg index:u64 -> Bytes` copies one argument. Index `0`
 is the program name. An invalid index terminates the program.
 
-`run_command arguments:List[String] -> i64` starts a process and waits for it. The
+`run_command arguments:List[Bytes] -> i64` starts a process and waits for it. The
 first list element is the executable path:
 
 ```casa
-List[String]::new = command
+List[Bytes]::new = command
 "/bin/echo" command.push_str
 "hello" command.push_str
 command run_command = exit_code
@@ -127,9 +128,9 @@ The module also exposes direct Linux file-descriptor operations:
 
 | Function | Result |
 |---|---|
-| `file::open path:str flags:i64 mode:i64 -> i64` | File descriptor or negative error |
+| `file::open path:$cstr flags:i64 mode:i64 -> i64` | File descriptor or negative error |
 | `file::read fd:i64 buffer:ptr size:u64 -> i64` | Bytes read or negative error |
-| `file::write fd:i64 data:str -> i64` | Bytes written or negative error |
+| `file::write fd:i64 data:$Bytes -> i64` | Bytes written or negative error |
 | `file::close fd:i64 -> i64` | Zero or negative error |
 | `errno_to_io_error result:i64 -> IoError` | Convert a negative result |
 
