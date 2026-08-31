@@ -116,6 +116,11 @@ _Avoid_: Raw type, unparameterized generic
 A `Type::TypeVar` node in the **Type AST** that has not yet been bound to a concrete type during type inference. The type unifier treats types containing unresolved type variables as flexible; fully resolved types must match structurally.
 _Avoid_: Unknown type, type placeholder (which means `TYPE_UNKNOWN_T`)
 
+**Extern struct**:
+An aggregate declared with `extern struct` whose field order, alignment, padding,
+and size follow the x86-64 System V C ABI.
+_Avoid_: repr(C) struct, ordinary struct, packed struct
+
 ### Documentation terminology
 
 **Documentation glossary**:
