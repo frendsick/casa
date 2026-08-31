@@ -273,6 +273,8 @@ _Avoid_: Release lint, tag lint
 - Structs and enums may opt into generated explicit duplication with `derives Clone`; derivation is conditional on every owned field or payload implementing `Clone` and never implies `Copy`.
 - Derived trait methods are fallbacks: one handwritten customization block may override generated methods and merge into the same trait implementation. Multiple handwritten implementations remain errors, and source order has no effect.
 - Custom `eq` requires explicit `hash` when Hashable is derived and explicit `cmp` when Ord is derived; compiler generation cannot infer those consistency laws.
+- A lawful Hashable implementation gives equal values the same hash and returns the same hash while equality-relevant state is unchanged. Unequal values may collide, and exact hash values have no stability guarantee across processes, builds, releases, or targets.
+- Map and Set preserve correctness under hash collisions by comparing keys with Eq. Their traversal order is unspecified, and the unkeyed standard hashes do not provide adversarial collision resistance.
 - Finite recursive owned types may derive Clone. Trait implementation checking resolves recursive obligations as one dependency cycle; runtime cloning traverses and may allocate for the complete structure.
 - Finite recursive owned types may also derive Eq, Ord, and Hashable through cycle-aware trait implementation checking. Generated operations recursively traverse finite payloads.
 - Recursive destruction initially uses call-stack recursion and preserves the order of the **Compiler-called cleanup method** and reverse-field destruction. Deep-chain tests and benchmarks report the practical stack limit before iterative lowering is considered.

@@ -131,6 +131,18 @@ and `char` implement the total traits.
 
 Primitive comparisons and printing remain available without importing `std`.
 
+### Hashable contract
+
+`Hashable` extends `Eq`. Values that compare equal must have the same hash, and
+repeated calls must return the same hash while equality-relevant state is
+unchanged. Unequal values can have the same hash. The compiler checks the
+method's stack effect but cannot prove these laws for an explicit
+implementation.
+
+Hash values are valid only as runtime lookup aids. Their exact values are not
+stable across processes, builds, releases, or target platforms. Do not use them
+as persistent identifiers, checksums, or protocol values.
+
 ## Derive standard traits
 
 Structs and enums can derive `Eq`, `Ord`, `Hashable`, `Clone`, and `Copy`:
