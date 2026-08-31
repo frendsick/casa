@@ -311,3 +311,10 @@ value Second::render
 Use `&T::method` to get a trait method as a function value. When a type
 implements several versions of a generic trait, include the receiver and full
 trait type, for example `&Token::Convert[i64]::convert`.
+
+A trait implementation can also target a concrete generic receiver, such as
+`impl Box[i64]: Describe`. Separate concrete receivers can provide different
+implementations of the same trait method. Casa uses the exact receiver method
+before a generic receiver method or a trait default. Use the full receiver for
+qualified calls and references to its inherent method alias, such as
+`Box[i64]::describe` and `&Box[i64]::describe`.
