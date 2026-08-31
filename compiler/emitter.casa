@@ -129,7 +129,7 @@ pub fn escape_string s:$str -> std::String {
         elif '\t' byte == then
             "\\t" builder.append
         elif '\0' byte == then
-            "\\0" builder.append
+            "\\000" builder.append
         elif '\r' byte == then
             "\\r" builder.append
         elif
@@ -419,11 +419,10 @@ impl Emitter {
         "subq $8, %r14" self.indent
         "jmpq *(%r14)" self.indent
         ".Lheap_alloc_oom:" self.line
-        "movq $1, %rax" self.indent
         "movq $2, %rdi" self.indent
         "leaq allocation_failure_msg(%rip), %rsi" self.indent
         "movq $allocation_failure_msg_len, %rdx" self.indent
-        "syscall" self.indent
+        "allocation_failure_write_done" "write_all" self.emit_call_via_return_stack
         "movq $60, %rax" self.indent
         "movq $1, %rdi" self.indent
         "syscall" self.indent
@@ -453,8 +452,35 @@ impl Emitter {
         "" self.line
     }
 
+    # write_all: fd in %rdi, buffer in %rsi, byte length in %rdx, returns via r14.
+    # Output operations cannot report errors, so an unrecoverable write exits unsuccessfully.
+    pub fn emit_write_helper self:mut$Emitter {
+        "write_all:" self.line
+        ".Lwrite_all_next:" self.line
+        "testq %rdx, %rdx" self.indent
+        "jz .Lwrite_all_return" self.indent
+        "movq $1, %rax" self.indent
+        "syscall" self.indent
+        "cmpq $-4, %rax" self.indent
+        "je .Lwrite_all_next" self.indent
+        "testq %rax, %rax" self.indent
+        "jle .Lwrite_all_fail" self.indent
+        "addq %rax, %rsi" self.indent
+        "subq %rax, %rdx" self.indent
+        "jmp .Lwrite_all_next" self.indent
+        ".Lwrite_all_return:" self.line
+        "subq $8, %r14" self.indent
+        "jmpq *(%r14)" self.indent
+        ".Lwrite_all_fail:" self.line
+        "movq $60, %rax" self.indent
+        "movq $1, %rdi" self.indent
+        "syscall" self.indent
+        "" self.line
+    }
+
     pub fn emit_helpers self:mut$Emitter {
         self.emit_heap_helpers
+        self.emit_write_helper
 
         # print_int: value in %rdi, returns via r14
         "print_int:" self.line
@@ -486,9 +512,8 @@ impl Emitter {
         ".Lpi_write:" self.line
         "leaq print_buf+32(%rip), %rdx" self.indent
         "subq %rsi, %rdx" self.indent
-        "movq $1, %rax" self.indent
         "movq $1, %rdi" self.indent
-        "syscall" self.indent
+        "print_int_write_done" "write_all" self.emit_call_via_return_stack
         "subq $8, %r14" self.indent
         "jmpq *(%r14)" self.indent
         "" self.line
@@ -514,9 +539,8 @@ impl Emitter {
         ".Lpui_write:" self.line
         "leaq print_buf+32(%rip), %rdx" self.indent
         "subq %rsi, %rdx" self.indent
-        "movq $1, %rax" self.indent
         "movq $1, %rdi" self.indent
-        "syscall" self.indent
+        "print_uint_write_done" "write_all" self.emit_call_via_return_stack
         "subq $8, %r14" self.indent
         "jmpq *(%r14)" self.indent
         "" self.line
@@ -526,8 +550,7 @@ impl Emitter {
         "movq (%rdi), %rdx" self.indent
         "leaq 8(%rdi), %rsi" self.indent
         "movq $1, %rdi" self.indent
-        "movq $1, %rax" self.indent
-        "syscall" self.indent
+        "print_str_write_done" "write_all" self.emit_call_via_return_stack
         "subq $8, %r14" self.indent
         "jmpq *(%r14)" self.indent
         "" self.line
@@ -756,8 +779,7 @@ impl Emitter {
         "leaq arithmetic_error_msg(%rip), %rsi" self.indent
         "movq $arithmetic_error_msg_len, %rdx" self.indent
         "movq $2, %rdi" self.indent
-        "movq $1, %rax" self.indent
-        "syscall" self.indent
+        "arithmetic_error_write_done" "write_all" self.emit_call_via_return_stack
         "movq $1, %rdi" self.indent
         "movq $60, %rax" self.indent
         "syscall" self.indent
@@ -768,8 +790,7 @@ impl Emitter {
         "leaq env_stack_overflow_msg(%rip), %rsi" self.indent
         "movq $env_stack_overflow_msg_len, %rdx" self.indent
         "movq $2, %rdi" self.indent
-        "movq $1, %rax" self.indent
-        "syscall" self.indent
+        "env_stack_overflow_write_done" "write_all" self.emit_call_via_return_stack
         "movq $1, %rdi" self.indent
         "movq $60, %rax" self.indent
         "syscall" self.indent
@@ -1759,22 +1780,109 @@ impl Emitter {
     }
 
     pub fn emit_float_round self:mut$Emitter rounding:$common::FloatRound {
-        rounding.method.as_str match
-            "__float_floor" => 1
-            "__float_ceil" => 2
-            "__float_trunc" => 3
-            _ => 0
-        end = mode
+        self.emit_uid = uid
+        f".Lfloat_round_result_{uid}" = result_label
+        f".Lfloat_round_store_{uid}" = store_label
+        f".Lfloat_round_done_{uid}" = done_label
+
+        # Values at or above the significand limit are already integral. This
+        # also preserves infinities and NaNs without requiring SSE4.1.
         if rounding.target common::BuiltinType::F32 == then
             "movss (%rsp), %xmm0" self.indent
-            f"roundss ${mode}, %xmm0, %xmm0" self.indent_string
             "movd %xmm0, %eax" self.indent
-            "movq %rax, (%rsp)" self.indent
+            "movl %eax, %ecx" self.indent
+            "andl $0x7fffffff, %ecx" self.indent
+            "cmpl $0x4b000000, %ecx" self.indent
+            f"jae {done_label}" self.indent_string
+            "cvttss2siq %xmm0, %rax" self.indent
+            "cvtsi2ssq %rax, %xmm1" self.indent
         else
             "movsd (%rsp), %xmm0" self.indent
-            f"roundsd ${mode}, %xmm0, %xmm0" self.indent_string
-            "movq %xmm0, (%rsp)" self.indent
+            "movq %xmm0, %rax" self.indent
+            "movq %rax, %rcx" self.indent
+            "btrq $63, %rcx" self.indent
+            "movabsq $0x4330000000000000, %rdx" self.indent
+            "cmpq %rdx, %rcx" self.indent
+            f"jae {done_label}" self.indent_string
+            "cvttsd2siq %xmm0, %rax" self.indent
+            "cvtsi2sdq %rax, %xmm1" self.indent
         fi
+
+        rounding.method.as_str match
+            "__float_floor" => {
+                if rounding.target common::BuiltinType::F32 == then
+                    "ucomiss %xmm1, %xmm0" self.indent
+                else
+                    "ucomisd %xmm1, %xmm0" self.indent
+                fi
+                f"jae {result_label}" self.indent_string
+                "decq %rax" self.indent
+            }
+            "__float_ceil" => {
+                if rounding.target common::BuiltinType::F32 == then
+                    "ucomiss %xmm1, %xmm0" self.indent
+                else
+                    "ucomisd %xmm1, %xmm0" self.indent
+                fi
+                f"jbe {result_label}" self.indent_string
+                "incq %rax" self.indent
+            }
+            "__float_trunc" => {
+            }
+            _ => {
+                f".Lfloat_round_adjust_{uid}" = adjust_label
+                f".Lfloat_round_negative_{uid}" = negative_label
+                if rounding.target common::BuiltinType::F32 == then
+                    "movaps %xmm0, %xmm2" self.indent
+                    "subss %xmm1, %xmm2" self.indent
+                    "movd %xmm2, %ecx" self.indent
+                    "andl $0x7fffffff, %ecx" self.indent
+                    "cmpl $0x3f000000, %ecx" self.indent
+                else
+                    "movapd %xmm0, %xmm2" self.indent
+                    "subsd %xmm1, %xmm2" self.indent
+                    "movq %xmm2, %rcx" self.indent
+                    "btrq $63, %rcx" self.indent
+                    "movabsq $0x3fe0000000000000, %rdx" self.indent
+                    "cmpq %rdx, %rcx" self.indent
+                fi
+                f"jb {result_label}" self.indent_string
+                f"ja {adjust_label}" self.indent_string
+                "testq $1, %rax" self.indent
+                f"jz {result_label}" self.indent_string
+                f"{adjust_label}:" self.line_string
+                if rounding.target common::BuiltinType::F32 == then
+                    "cmpl $0, (%rsp)" self.indent
+                else
+                    "cmpq $0, (%rsp)" self.indent
+                fi
+                f"js {negative_label}" self.indent_string
+                "incq %rax" self.indent
+                f"jmp {result_label}" self.indent_string
+                f"{negative_label}:" self.line_string
+                "decq %rax" self.indent
+            }
+        end
+
+        f"{result_label}:" self.line_string
+        if rounding.target common::BuiltinType::F32 == then
+            "cvtsi2ssq %rax, %xmm0" self.indent
+            "movd %xmm0, %eax" self.indent
+            "cmpl $0, (%rsp)" self.indent
+            f"jns {store_label}" self.indent_string
+            "btsl $31, %eax" self.indent
+            f"{store_label}:" self.line_string
+            "movq %rax, (%rsp)" self.indent
+        else
+            "cvtsi2sdq %rax, %xmm0" self.indent
+            "movq %xmm0, %rax" self.indent
+            "cmpq $0, (%rsp)" self.indent
+            f"jns {store_label}" self.indent_string
+            "btsq $63, %rax" self.indent
+            f"{store_label}:" self.line_string
+            "movq %rax, (%rsp)" self.indent
+        fi
+        f"{done_label}:" self.line_string
     }
 
     pub fn emit_integer_try self:mut$Emitter integer_try:$common::IntegerTry {
@@ -2077,8 +2185,7 @@ impl Emitter {
                 "movq (%rdi), %rdx" self.indent
                 "leaq 8(%rdi), %rsi" self.indent
                 "movq $2, %rdi" self.indent
-                "movq $1, %rax" self.indent
-                "syscall" self.indent
+                "panic_write_done" "write_all" self.emit_call_via_return_stack
                 "movq $60, %rax" self.indent
                 "movq $1, %rdi" self.indent
                 "syscall" self.indent
@@ -2160,8 +2267,7 @@ impl Emitter {
                 "movq $5, %rdx" self.indent
                 f".Lpb_write_{uid}:" self.line_string
                 "movq $1, %rdi" self.indent
-                "movq $1, %rax" self.indent
-                "syscall" self.indent
+                "print_bool_write_done" "write_all" self.emit_call_via_return_stack
             }
             common::InstValue::PrintStr => {
                 "popq %rdi" self.indent
@@ -2180,8 +2286,7 @@ impl Emitter {
                 "popq %rdi" self.indent
                 "print_char_encoded" "encode_char" self.emit_call_via_return_stack
                 "movq $1, %rdi" self.indent
-                "movq $1, %rax" self.indent
-                "syscall" self.indent
+                "print_char_write_done" "write_all" self.emit_call_via_return_stack
             }
             common::InstValue::PrintCstr => {
                 self.emit_uid = uid
@@ -2197,8 +2302,7 @@ impl Emitter {
                 "subq %rdi, %rdx" self.indent
                 "movq %rdi, %rsi" self.indent
                 "movq $1, %rdi" self.indent
-                "movq $1, %rax" self.indent
-                "syscall" self.indent
+                "print_cstr_write_done" "write_all" self.emit_call_via_return_stack
             }
             common::InstValue::FstringConcat(fstring_count) => {
                 f"movq ${fstring_count}, %rdi" self.indent_string

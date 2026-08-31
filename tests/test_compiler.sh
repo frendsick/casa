@@ -292,6 +292,56 @@ if [ "$TEST_CATEGORY" = all ] || [ "$TEST_CATEGORY" = compiler_integration ]; th
     fi
 fi
 
+if [ "$TEST_CATEGORY" = all ] || [ "$TEST_CATEGORY" = runtime ]; then
+    if matches_filter "runtime_output" "$@"; then
+        matched=true
+        output_binary="$TEST_TMP/runtime_output"
+
+        printf "Running: runtime/output ... "
+        if ! "$COMPILER" -L "$LIB_DIR" "$TESTS_DIR/fixtures/runtime_output.casa" \
+            -o "$output_binary" 2>"$TEST_TMP/runtime_output_compile_err"
+        then
+            printf "${RED}COMPILE FAIL${RESET}\n"
+            cat "$TEST_TMP/runtime_output_compile_err"
+            fail=$((fail+1))
+        else
+            output_failed=false
+            output_count=$("$output_binary" | wc -c | tr -d ' ')
+            if [ "$output_count" -ne 1048577 ]; then
+                printf "${RED}SHORT PIPE OUTPUT${RESET} (got %s bytes)\n" "$output_count"
+                output_failed=true
+            fi
+
+            if command -v strace >/dev/null 2>&1; then
+                interrupted_count=$(strace -qq -e trace=write \
+                    -e inject=write:error=EINTR:when=1 "$output_binary" 2>/dev/null | \
+                    wc -c | tr -d ' ')
+                if [ "$interrupted_count" -ne 1048577 ]; then
+                    printf "${RED}SHORT INTERRUPTED OUTPUT${RESET} (got %s bytes)\n" \
+                        "$interrupted_count"
+                    output_failed=true
+                fi
+            fi
+
+            set +e
+            "$output_binary" >/dev/full 2>/dev/null
+            output_status=$?
+            set -e
+            if [ "$output_status" -eq 0 ]; then
+                printf "${RED}WRITE ERROR REPORTED SUCCESS${RESET}\n"
+                output_failed=true
+            fi
+
+            if [ "$output_failed" = true ]; then
+                fail=$((fail+1))
+            else
+                printf "${GREEN}OK${RESET}\n"
+                pass=$((pass+1))
+            fi
+        fi
+    fi
+fi
+
 report_no_matches "$matched" "$@"
 echo
 echo "Summary: $pass passed, $fail failed"
