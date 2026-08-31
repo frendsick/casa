@@ -1,5 +1,5 @@
 # Affine ownership with automatic storage placement
-status: amended by [ADR-0150](0150-shared-borrow-duplication-is-not-copy-conformance.md) and [ADR-0158](0158-copy-requires-a-raw-value-representation.md)
+status: amended by [ADR-0027](0027-patterns-follow-subject-ownership.md), [ADR-0150](0150-shared-borrow-duplication-is-not-copy-conformance.md), and [ADR-0158](0158-copy-requires-a-raw-value-representation.md)
 related issue: #314
 
 Casa will use affine ownership with compiler-checked borrowing and deterministic destruction. It will not use tracing garbage collection or automatic reference counting. Memory ownership is visible in function contracts, but allocator and arena selection are not part of ordinary source code.
@@ -25,7 +25,7 @@ Higher-order function contracts reuse the same qualifiers instead of introducing
 - Collection observation preserves ownership: `get` returns `Option[$T]`, `get_mut` returns `Option[mut$T]`, and `remove` returns `Option[T]`. Generic wrappers such as `Option` may temporarily carry an inferred borrow without introducing named lifetime syntax.
 - Collection iteration has three explicit modes: `iter` borrows and yields `$T`, `iter_mut` exclusively borrows and yields `mut$T`, and `into_iter` consumes and yields `T`. No mode implicitly duplicates elements.
 - The stateful cursor trait is named `Iterator[T]`, not `Iterable[T]`; its required `next` method takes `mut$self` and returns `Option[T]`. A separate collection-to-iterator trait remains deferred.
-- Field access copies `Copy` fields and borrows non-`Copy` fields. Partial moves are initially forbidden: an owned `match` consumes the complete subject, moves selected non-`Copy` fields, and destroys fields omitted by a partial pattern. Observational `is` patterns borrow instead.
+- Field access copies `Copy` fields and borrows non-`Copy` fields. Partial moves are initially forbidden: an owned `match` consumes the complete subject, moves selected non-`Copy` fields, and destroys fields omitted by a partial pattern. A successful `is` pattern conditionally consumes an owned subject when it binds a non-`Copy` payload. Borrowed subjects bind payload borrows with the same capability.
 - Observational trait methods borrow their receivers: comparison, hashing, and display take shared borrows. Operators and method calls borrow automatically, so observing an owned value does not consume it.
 - Scope exit, early return, and explicit `drop` destroy each owner exactly once through the same lowering. A custom `fn drop mut$self` runs first, followed by fields in reverse declaration order; its mutable borrow prevents moving fields out during cleanup. A terminating panic does not unwind or run cleanup.
 - The compiler may place non-escaping values on the stack or in internal scoped regions and uses a reclaimable heap when values escape or analysis is uncertain.
