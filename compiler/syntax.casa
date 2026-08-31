@@ -4093,20 +4093,32 @@ pub fn create_member_accessor
     prior_members:$std::List[common::Member]
     location:$common::Location
     type_vars:$std::List[std::String]
+    is_extern:bool
 {
-    if
-        parser.store member_type prior_members common::next_struct_member_offset std::Option::Some(found_offset) is
-    then
-        found_offset
-    else
-        prior_members.length common::WORD_SIZE *
+    0 = offset: u64
+    if is_extern ! then
+        if
+            parser.store member_type prior_members common::next_struct_member_offset
+            std::Option::Some(found_offset) is
+        then
+            found_offset = offset
+        else
+            prior_members.length common::WORD_SIZE * = offset
+        fi
     fi
-    = offset
 
     member_type common::get_concrete_array_length.is_some = is_fixed_array
+    parser.store member_type common::type_is_extern_struct = is_inline_extern_struct
+    if is_extern is_inline_extern_struct ! && then
+        if member_type common::Type::Generic(_) is then
+            true = is_inline_extern_struct
+        fi
+    fi
     false = stores_inline
-    if member_type.has_unresolved_type_var ! then
-        if is_fixed_array then
+    if is_extern then
+        true = stores_inline
+    elif member_type.has_unresolved_type_var ! then
+        if is_fixed_array is_inline_extern_struct || then
             true = stores_inline
         elif
             parser.store member_type common::type_value_representation std::Option::Some(representation) is
@@ -4127,12 +4139,18 @@ pub fn create_member_accessor
     std::List[common::Op]::new = getter_ops
     location.clone common::OpValue::UnsafeStart common::Op::new getter_ops.push
     location.clone common::OpValue::PtrFromRef common::Op::new getter_ops.push
-    location.clone offset i64::try_from.unwrap common::make_integer_op_value common::Op::new getter_ops.push
+    if is_extern then
+        prior_members.length struct_name.to_str common::StructMemberOffset
+        common::OpValue::StructMemberOffset = offset_op
+        location.clone offset_op common::Op::new getter_ops.push
+    else
+        location.clone offset i64::try_from.unwrap common::make_integer_op_value common::Op::new getter_ops.push
+    fi
     location.clone common::OpValue::Add common::Op::new getter_ops.push
     if stores_inline ! then
         location.clone common::make_ptr_type.clone common::OpValue::PtrRead common::Op::new getter_ops.push
         location.clone member_type.clone common::OpValue::PtrFromRaw common::Op::new getter_ops.push
-    elif is_fixed_array then
+    elif is_fixed_array is_inline_extern_struct || then
         location.clone member_type.clone common::OpValue::PtrAsRef common::Op::new getter_ops.push
     else
         location.clone member_type.clone common::OpValue::PtrRead common::Op::new getter_ops.push
@@ -4165,7 +4183,13 @@ pub fn create_member_accessor
     std::List[common::Op]::new = setter_ops
     location.clone common::OpValue::UnsafeStart common::Op::new setter_ops.push
     location.clone common::OpValue::PtrFromRef common::Op::new setter_ops.push
-    location.clone offset i64::try_from.unwrap common::make_integer_op_value common::Op::new setter_ops.push
+    if is_extern then
+        prior_members.length struct_name.to_str common::StructMemberOffset
+        common::OpValue::StructMemberOffset = offset_op
+        location.clone offset_op common::Op::new setter_ops.push
+    else
+        location.clone offset i64::try_from.unwrap common::make_integer_op_value common::Op::new setter_ops.push
+    fi
     location.clone common::OpValue::Add common::Op::new setter_ops.push
     if stores_inline ! then
         location.clone common::OpValue::Swap common::Op::new setter_ops.push
@@ -4203,7 +4227,10 @@ pub fn create_member_accessor
 # parse_struct - parse struct definition
 # ============================================================================
 
-pub fn parse_struct parser:mut$Parser cursor:mut$TokenCursor -> common::CasaStruct {
+pub fn parse_struct parser:mut$Parser cursor:mut$TokenCursor is_extern:bool -> common::CasaStruct {
+    if is_extern then
+        fallback_token parser.state "extern" cursor expect_token_value.unwrap_or drop
+    fi
     fallback_token parser.state "struct" cursor expect_token_value.unwrap_or drop
     fallback_token parser.state common::TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
 
@@ -4250,7 +4277,9 @@ pub fn parse_struct parser:mut$Parser cursor:mut$TokenCursor -> common::CasaStru
         parser.state cursor parse_type_ast = member_type
         struct_type_vars member_type common::canonicalize_type_var = member_type
 
-        type_vars member_token common::Token::location members member_type member_token common::Token::value.as_str name_token common::Token::value.as_str parser create_member_accessor
+        is_extern type_vars member_token common::Token::location members member_type
+        member_token common::Token::value.as_str name_token common::Token::value.as_str parser
+        create_member_accessor
         if member_is_public then
             f"{name_token.value}::{member_token.value}" = getter_name
             f"{name_token.value}::set_{member_token.value}" = setter_name
@@ -4274,7 +4303,8 @@ pub fn parse_struct parser:mut$Parser cursor:mut$TokenCursor -> common::CasaStru
         member_type member_token common::Token::value.clone common::Member members.push
     done
 
-    derived_traits type_vars name_token common::Token::location.clone members name_token common::Token::value.clone common::CasaStruct
+    is_extern derived_traits type_vars name_token common::Token::location.clone members
+    name_token common::Token::value.clone common::CasaStruct
 }
 
 # ============================================================================
@@ -7723,20 +7753,34 @@ pub fn get_op_keyword
     fi
 
     if common::KeywordKind::Extern keyword == then
-        parser token.location "Extern functions" function_name require_global_scope
-        cursor.retreat
-        cursor parser parse_extern_function = function
-        if
-            function.name.as_str parser
-                .store
-                .get_function
-                .is_some
-        then
-            function.location f"Identifier `{function.name}` is already defined"
-            common::ErrorKind::DuplicateName parser.state.record_error_string
+        parser token.location "Extern declarations" function_name require_global_scope
+        if cursor.peek std::Option::Some(declaration) is then
+            if "fn" declaration.value.as_str == then
+                cursor.retreat
+                cursor parser parse_extern_function = function
+                if
+                    function.name.as_str parser
+                        .store
+                        .get_function
+                        .is_some
+                then
+                    function.location f"Identifier `{function.name}` is already defined"
+                    common::ErrorKind::DuplicateName parser.state.record_error_string
+                fi
+                function.name.clone = extern_function_name
+                function extern_function_name parser.put_function
+                return
+            fi
+            if "struct" declaration.value.as_str == then
+                cursor.retreat
+                true cursor parser parse_struct = casa_struct
+                casa_struct.name.clone = extern_struct_name
+                casa_struct extern_struct_name parser.put_struct
+                return
+            fi
         fi
-        function.name.clone = extern_function_name
-        function extern_function_name parser.put_function
+        token.location "Expected `fn` or `struct` after `extern`" common::ErrorKind::Syntax
+        parser.state.record_error
         return
     fi
 
@@ -7840,7 +7884,7 @@ pub fn get_op_keyword
     if common::KeywordKind::StructKw keyword == then
         parser token common::Token::location "Structs" function_name require_global_scope
         cursor.retreat
-        cursor parser parse_struct = casa_struct
+        false cursor parser parse_struct = casa_struct
         casa_struct common::CasaStruct::name.clone = parsed_struct_name
         casa_struct parsed_struct_name parser.put_struct
         return

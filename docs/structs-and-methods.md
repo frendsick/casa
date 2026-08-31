@@ -95,6 +95,16 @@ Box[T]`. Use the full receiver in a qualified call or function reference, such
 as `box Box[i64]::label` or `&Box[i64]::label`. Method visibility is unchanged.
 A private concrete method is available only in its defining module.
 
+## C-layout extern structs
+
+Use `extern struct` only when a struct field layout is part of a C ABI contract.
+Extern structs keep normal Casa construction, fields, imports, visibility, and
+methods. Their allowed field types and native pointer use are documented under
+[Extern functions](./functions-and-lambdas.md#extern-functions).
+
+Ordinary `struct` declarations keep a compiler-owned layout that can change
+between compiler versions.
+
 The declared receiver controls which values can call a method:
 
 | Receiver | Owned `T` | Shared `$T` | Exclusive `mut$T` |
