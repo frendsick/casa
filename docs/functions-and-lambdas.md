@@ -214,13 +214,14 @@ visibility, imports, and methods. An extern function can take `$T` or `mut$T`
 when `T` is an extern struct. The borrow lowers to one native pointer and keeps
 the normal Casa lifetime and exclusivity rules.
 
-An extern struct that implements `Copy` can be passed by value when its C layout
-fits in one or two System V eightbytes. The call copies its representation, so
-Casa keeps the original value. The supported register classes are `INTEGER`,
-`SSE`, and mixtures of both. If the complete aggregate cannot use the remaining
-argument registers, it moves to one aligned native stack argument. A small extern
-struct return becomes an owned Casa value. Larger memory-class aggregates are
-not supported yet.
+An extern struct that implements `Copy` can be passed by value. The call copies
+its representation, so Casa keeps the original value. Aggregates that fit in one
+or two System V eightbytes use `INTEGER`, `SSE`, or mixed register classes. If
+the complete aggregate cannot use the remaining argument registers, or if it is
+classified as `MEMORY`, it moves to an aligned native stack argument. A
+memory-class return uses caller-owned hidden return storage and consumes the
+first integer argument register. Every extern struct return becomes an owned
+Casa value.
 
 An extern call is always unsafe. The caller must meet the native function's
 contract. An extern function cannot be used as a function value. A safe Casa
@@ -235,15 +236,14 @@ Extern parameters can use these C ABI types:
 - Raw pointers: `ptr`.
 - Shared or exclusive borrows of an ABI scalar, such as `$i32` or `mut$f64`.
 - Shared or exclusive borrows of an extern struct.
-- A `Copy` extern struct that fits in one or two System V eightbytes.
+- A `Copy` extern struct.
 - `$cstr` for a borrowed NUL-terminated byte string.
 
 An extern declaration has zero or one return value. A return can be a
-fixed-width integer, `f32`, `f64`, `bool`, `ptr`, or an extern struct that fits
-in one or two System V eightbytes. Casa sends `bool` parameters as 0 or 1 and
-normalizes each C `_Bool` return before use. Borrowed returns, `char`, `str`,
-owned `cstr`, memory-class aggregates, variadic arguments, callbacks, generic
-type parameters, and symbol aliases are not supported.
+fixed-width integer, `f32`, `f64`, `bool`, `ptr`, or an extern struct. Casa sends
+`bool` parameters as 0 or 1 and normalizes each C `_Bool` return before use.
+Borrowed returns, `char`, `str`, owned `cstr`, variadic arguments, callbacks,
+generic type parameters, and symbol aliases are not supported.
 
 Casa keeps ownership of every argument. A by-value extern struct copies its C
 representation. A borrowed scalar, extern struct, or `$cstr` is passed as a
