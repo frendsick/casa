@@ -94,6 +94,18 @@ pub fn sanitize_name name:$str -> std::String {
     result
 }
 
+pub fn get_extern_abi_type typ:$common::Type -> common::BuiltinType {
+    if typ.is_borrow then
+        common::BuiltinType::Ptr return
+    fi
+    if typ common::Type::Builtin(builtin) is then
+        builtin return
+    fi
+    "Internal error: non-ABI type reached extern emission\n" std::eprint
+    1 std::exit
+    common::BuiltinType::Ptr
+}
+
 # ============================================================================
 # escape_string: escape special chars for assembly string literals
 # ============================================================================
@@ -799,6 +811,103 @@ impl Emitter {
             1 += index
         done
         "syscall" self.indent
+        "pushq %rax" self.indent
+    }
+
+    pub fn emit_extern_call self:mut$Emitter call:$common::ExternCall {
+        ["%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"] = integer_registers
+        ["%xmm0", "%xmm1", "%xmm2", "%xmm3", "%xmm4", "%xmm5", "%xmm6", "%xmm7"]
+        = float_registers
+        std::List[u64]::new = stack_arguments
+        0 (u64) = integer_register_index
+        0 (u64) = float_register_index
+
+        "movq %rsp, %r13" self.indent
+        0 (u64) = parameter_index
+        for
+            parameter in call
+                .stack_effect
+                .parameters
+                .iter
+        do
+            parameter_index common::WORD_SIZE * = offset
+            parameter.typ get_extern_abi_type = abi_type
+            if abi_type.is_float then
+                if float_register_index 8 > then
+                    float_register_index float_registers array::nth = register
+                    if abi_type common::BuiltinType::F32 == then
+                        f"movss {offset}(%r13), {register}" self.indent_string
+                    else
+                        f"movsd {offset}(%r13), {register}" self.indent_string
+                    fi
+                    1 += float_register_index
+                else
+                    parameter_index stack_arguments.push
+                fi
+            else
+                if integer_register_index 6 > then
+                    integer_register_index integer_registers array::nth = register
+                    f"movq {offset}(%r13), {register}" self.indent_string
+                    1 += integer_register_index
+                else
+                    parameter_index stack_arguments.push
+                fi
+            fi
+            1 += parameter_index
+        done
+
+        f"leaq {call
+            .stack_effect
+            .parameters
+            .length common::WORD_SIZE *}(%r13), %r12"
+        self.indent_string
+        "movq %r12, %rsp" self.indent
+        "andq $-16, %rsp" self.indent
+        if 0 stack_arguments.length 2 % != then
+            "subq $8, %rsp" self.indent
+        fi
+        stack_arguments.length = stack_index
+        while 0 stack_index != do
+            1 -= stack_index
+            stack_index stack_arguments.get.clone common::WORD_SIZE * = offset
+            f"pushq {offset}(%r13)" self.indent_string
+        done
+
+        f"call {call.symbol}" self.indent_string
+        "movq %r12, %rsp" self.indent
+
+        if
+            call
+                .stack_effect
+                .return_types
+                .is_empty
+        then
+            return
+        fi
+        0 call
+            .stack_effect
+            .return_types
+            .get get_extern_abi_type = return_type
+        return_type match
+            common::BuiltinType::I8 => "movsbq %al, %rax" self.indent
+            common::BuiltinType::I16 => "movswq %ax, %rax" self.indent
+            common::BuiltinType::I32 => "movslq %eax, %rax" self.indent
+            common::BuiltinType::U8 => "movzbq %al, %rax" self.indent
+            common::BuiltinType::U16 => "movzwq %ax, %rax" self.indent
+            common::BuiltinType::U32 => "movl %eax, %eax" self.indent
+            common::BuiltinType::F32 => {
+                "movd %xmm0, %eax" self.indent
+                "pushq %rax" self.indent
+                return
+            }
+            common::BuiltinType::F64 => {
+                "movq %xmm0, %rax" self.indent
+                "pushq %rax" self.indent
+                return
+            }
+            _ => {
+            }
+        end
         "pushq %rax" self.indent
     }
 
@@ -1790,6 +1899,7 @@ impl Emitter {
                 f"fn_{fn_label}" = jump_target
                 "ret" jump_target.as_str self.emit_call_via_return_stack
             }
+            common::InstValue::ExternCall(call) => call self.emit_extern_call
             common::InstValue::FnExec => {
                 self.emit_uid = uid
                 # Save the caller's active closure env on the env stack and switch
@@ -2202,6 +2312,7 @@ impl Emitter {
             common::InstValue::ClosureDrop => is_global inst self.emit_control_flow
             common::InstValue::ClosureRecord => is_global inst self.emit_control_flow
             common::InstValue::FnCall => is_global inst self.emit_control_flow
+            common::InstValue::ExternCall => is_global inst self.emit_control_flow
             common::InstValue::FnExec => is_global inst self.emit_control_flow
             common::InstValue::FnPush => is_global inst self.emit_control_flow
             common::InstValue::FnPushStatic => is_global inst self.emit_control_flow

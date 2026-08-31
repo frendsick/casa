@@ -54,7 +54,11 @@ for f in "$EXAMPLES_DIR"/*.casa; do
     fi
 
     # Compile
-    "$COMPILER" -L "$ROOT_DIR/lib" "$f" -o "$binary"
+    if [ "$base" = foreign_function ]; then
+        "$COMPILER" -L "$ROOT_DIR/lib" -l c "$f" -o "$binary"
+    else
+        "$COMPILER" -L "$ROOT_DIR/lib" "$f" -o "$binary"
+    fi
 
     # Run and capture output (1s timeout for interactive examples)
     output=$(timeout 1 "$binary") || true

@@ -145,6 +145,52 @@ function must establish its own proof and cannot rely on its caller to do so.
 Unsafe functions cannot be used as function values. Put the unsafe call in a
 safe wrapper when the wrapper can validate and preserve a safe contract.
 
+## Extern functions
+
+A bodyless `extern fn` declaration names a function provided by a native
+library. Casa calls it with the x86-64 System V C ABI:
+
+```casa
+extern fn strlen text:$cstr -> u64
+
+"Casa".as_cstr.unwrap = text
+# SAFETY: `text` is a live NUL-terminated string for the duration of `strlen`.
+unsafe { text strlen } print
+```
+
+An extern call is always unsafe. The caller must meet the native function's
+contract. An extern function cannot be used as a function value. A safe Casa
+wrapper can check the inputs and contain the unsafe call.
+
+Extern parameters can use these C ABI types:
+
+- Fixed-width integers: `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, and
+  `u64`.
+- Floating-point values: `f32` and `f64`.
+- Raw pointers: `ptr`.
+- Shared or exclusive borrows of an ABI scalar, such as `$i32` or `mut$f64`.
+- `$cstr` for a borrowed NUL-terminated byte string.
+
+An extern declaration has zero or one return value. A return can be a
+fixed-width integer, `f32`, `f64`, or `ptr`. Borrowed returns, `bool`, `char`,
+`str`, owned `cstr`, aggregates, variadic arguments, callbacks, generic type
+parameters, and symbol aliases are not supported.
+
+Casa keeps ownership of every argument. A borrowed scalar or `$cstr` is passed
+as a native pointer. The pointer is valid only while the Casa borrow is live.
+The native function must not retain it after the call unless a separate API
+contract keeps the storage alive.
+
+Use `-l` / `--link-library` to link each required native library. The option is
+repeatable and preserves command-line order:
+
+```sh
+casac -L lib -l c program.casa
+```
+
+`-L` / `--library-path` remains the Casa module search path. Casa does not use
+`-I` and does not provide a native library search-path option.
+
 ## Bindings
 
 `= name` pops the top value and binds it. The first assignment fixes the

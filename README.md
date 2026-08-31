@@ -9,8 +9,9 @@ Casa is a statically typed, stack-based programming language for Linux.
 ## Requirements
 
 - Linux on x86-64
-- GNU assembler (`as`) and linker (`ld`)
-  - For example, on Ubuntu, install the `binutils` package.
+- GNU assembler (`as`) and a C compiler driver (`cc`)
+  - For example, on Ubuntu, install the `binutils` and `build-essential`
+    packages.
 
 ## Install
 
@@ -49,6 +50,7 @@ Common compiler options:
 |---|---|
 | `-o`, `--output` | Set the output binary name |
 | `-L`, `--library-path` | Add a module search directory |
+| `-l`, `--link-library` | Link a native library |
 | `-r`, `--run` | Run the program after compilation |
 | `--keep-asm` | Keep the generated assembly file |
 | `-v`, `--version` | Print the compiler version |
