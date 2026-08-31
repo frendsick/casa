@@ -89,7 +89,6 @@ remaining error in your code.
 | `SYNTAX` | Invalid source form or unsupported construct |
 | `UNEXPECTED_TOKEN` | A different token was required |
 | `UNDEFINED_NAME` | A name cannot be resolved |
-| `UNDEFINED_GLOBAL` | A `global` declaration does not name a global binding |
 | `DUPLICATE_NAME` | A name or declaration is repeated |
 | `INVALID_SCOPE` | A construct appears in a scope where it is not allowed |
 | `TYPE_MISMATCH` | A value has the wrong type |

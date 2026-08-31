@@ -2157,9 +2157,6 @@ pub fn validate_const_fn_body function:mut$common::Function diagnostics:mut$erro
         if v common::OpValue::WhileStart is then
             op common::Op::location "Control flow (`while`) is not allowed in const fn" common::ErrorKind::Syntax diagnostics.record_error
         fi
-        if v common::OpValue::DeclareGlobal is then
-            op common::Op::location "Global access is not allowed in const fn" common::ErrorKind::Syntax diagnostics.record_error
-        fi
     done
 }
 
@@ -7439,8 +7436,7 @@ impl Parser {
         initializer_ops
     }
 
-    # `global` initializes an immutable place at root scope. The legacy
-    # function form remains until mutable globals are removed by #359.
+    # `global` initializes an immutable place at root scope.
     fn handle_keyword_global
         self:mut$Parser
         token:$common::Token
@@ -7448,47 +7444,38 @@ impl Parser {
         function_name:$str
         ops:mut$std::List[common::Op]
     {
-        if common::GLOBAL_SCOPE_LABEL function_name == then
-            fallback_token self.state common::TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
-            name_token.value.clone = global_name
-            self.store.declaration_names = declarations
-            if
-                global_name.as_str declarations.has_str global_name.as_str self
-                    .store
-                    .variables
-                    .has_str ||
-            then
-                name_token.location f"Identifier `{global_name}` is already defined" common::ErrorKind::DuplicateName self.state.record_error_string
-                return
-            fi
-            token cursor self.parse_global_initializer = initializer_ops
-            name_token
-                .location
-                .file
-                .as_str lexer::absolute_normalize_path = global_file
-            f"$global:{global_file}:{name_token
-                .location
-                .span
-                .offset}" = storage_name
-            name_token.location storage_name.clone global_name.clone self.put_immutable_global
-            initializer_ops global_name common::GlobalInitializer = initializer
-            token.location initializer common::OpValue::InitGlobal common::Op::new ops.push
+        if common::GLOBAL_SCOPE_LABEL function_name != then
+            fallback_token self.state common::TokenKind::Identifier cursor expect_token_kind drop
+            token.location
+            "`global` declarations are only valid at the top level; pass mutable state as a parameter"
+            common::ErrorKind::InvalidScope
+            self.state.record_error
             return
         fi
-        if function_name "lambda__" str::starts_with then
-            token common::Token::location "`global` declaration is not allowed inside a lambda" common::ErrorKind::InvalidScope self.state.record_error
-            return
-        fi
-        # Placement check: all ops so far must be DeclareGlobal
-        for existing_op in ops.iter do
-            if existing_op.value common::OpValue::DeclareGlobal is ! then
-                token common::Token::location "`global` declaration must appear before any other statement in the function body" common::ErrorKind::Syntax self.state.record_error
-                return
-            fi
-        done
         fallback_token self.state common::TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
-        token common::Token::location name_token common::Token::value.clone common::OpValue::DeclareGlobal common::Op::new ops.push
-        return
+        name_token.value.clone = global_name
+        self.store.declaration_names = declarations
+        if
+            global_name.as_str declarations.has_str global_name.as_str self
+                .store
+                .variables
+                .has_str ||
+        then
+            name_token.location f"Identifier `{global_name}` is already defined" common::ErrorKind::DuplicateName self.state.record_error_string
+            return
+        fi
+        token cursor self.parse_global_initializer = initializer_ops
+        name_token
+            .location
+            .file
+            .as_str lexer::absolute_normalize_path = global_file
+        f"$global:{global_file}:{name_token
+            .location
+            .span
+            .offset}" = storage_name
+        name_token.location storage_name.clone global_name.clone self.put_immutable_global
+        initializer_ops global_name common::GlobalInitializer = initializer
+        token.location initializer common::OpValue::InitGlobal common::Op::new ops.push
     }
     # const
     fn handle_keyword_const
@@ -7809,7 +7796,7 @@ pub fn get_op_keyword
         token common::Token::location "`in` is only valid inside a `for` loop header" common::ErrorKind::Syntax parser.state.record_error
     fi
 
-    # global — compile-time declaration; emits DeclareGlobal op
+    # global — immutable top-level runtime value
     if common::KeywordKind::Global keyword == then
         ops function_name cursor token parser.handle_keyword_global
         return
@@ -8413,7 +8400,7 @@ impl Parser {
                     std::List[common::Op]::new
                     f"{trait_name}::{method.name}"
                     semantics::make_default_method_function = function
-                    self.state.diagnostics function resolved_ops self.store resolve_identifiers
+                    self.state.diagnostics false function resolved_ops self.store resolve_identifiers
                     method.type_vars.clone true function.variables.clone resolved_ops method.stack_effect.clone method.name.clone
                     common::TraitMethod = resolved_method
                     resolved_method method_index casa_trait.methods.set
@@ -8462,7 +8449,7 @@ impl Parser {
                 .take_function_for_update
                 .unwrap = function
             function.split_body = function_ops = function
-            self.state.diagnostics function function_ops self.store resolve_identifiers
+            self.state.diagnostics false function function_ops self.store resolve_identifiers
             true = function.is_resolved
             function_ops function.set_ops
             function self.store.restore_function
@@ -8525,6 +8512,7 @@ pub fn gather_captures
     store:mut$common::SymbolStore
     lambda_function:mut$common::Function
     function:mut$common::Function
+    allow_root_local_capture:bool
 {
     for op in lambda_function common::Function::ops.iter do
         std::Option[std::String]::None = name_opt
@@ -8574,12 +8562,14 @@ pub fn gather_captures
             fi
 
             if captured ! then
-                # Check global variables
+                # Check module-level variables.
                 name.as_str store.variables.get_str = global_var_opt
                 if global_var_opt std::Option::Some(global_var) is then
-                    if name.as_str lambda_function.captures common::variable_list_contains ! then
-                        global_var common::clone_variable lambda_function common::Function::captures.push
-                        name.clone lambda_function.global_captures.push
+                    if name.as_str store.immutable_globals.has_str allow_root_local_capture || then
+                        if name.as_str lambda_function.captures common::variable_list_contains ! then
+                            global_var common::clone_variable lambda_function common::Function::captures.push
+                            name.clone lambda_function.global_captures.push
+                        fi
                     fi
                 fi
             fi
@@ -8605,11 +8595,41 @@ pub fn gather_captures
         fi
     done
 }
+# Root closures may capture root locals. Other functions must receive root-owned
+# state through explicit parameters.
+fn reject_root_local_capture
+    name:$str
+    function:$common::Function
+    store:$common::SymbolStore
+    location:$common::Location
+    allow_root_local_capture:bool
+    errors:mut$std::List[error::CasaError]
+-> bool {
+    if allow_root_local_capture then
+        false return
+    fi
+    if
+        name function.variables common::variable_list_contains
+        name function.captures common::variable_list_contains ||
+    then
+        false return
+    fi
+    if name store.variables.has_str ! name store.immutable_globals.has_str || then
+        false return
+    fi
+    location.clone
+    f"Named functions cannot capture root local `{name}`; pass it as a parameter"
+    common::ErrorKind::InvalidScope
+    error::CasaError::new
+    errors.push
+    true
+}
 
 pub fn resolve_array_identifiers
     store:mut$common::SymbolStore
     items:mut$std::List[common::Op]
     function:mut$common::Function
+    allow_root_local_capture:bool
     errors:mut$std::List[error::CasaError]
     diagnostics:mut$error::Diagnostics
 {
@@ -8619,11 +8639,11 @@ pub fn resolve_array_identifiers
         rai_item.value common::clone_op_value = rai_value
         if rai_value common::OpValue::PushArray(inner_items) is then
             inner_items common::clone_ops = owned_inner_items
-            diagnostics errors function owned_inner_items store resolve_array_identifiers
+            diagnostics errors allow_root_local_capture function owned_inner_items store resolve_array_identifiers
             owned_inner_items common::OpValue::PushArray rai_item common::Op::set_value
         elif rai_value common::OpValue::ExprGroup(group_inner) is then
             group_inner common::clone_ops = owned_group_inner
-            diagnostics function owned_group_inner store resolve_identifiers
+            diagnostics allow_root_local_capture function owned_group_inner store resolve_identifiers
             owned_group_inner common::OpValue::ExprGroup rai_item common::Op::set_value
         elif rai_value common::OpValue::Identifier(rai_name_ref) is then
             rai_name_ref.clone = rai_name
@@ -8631,6 +8651,10 @@ pub fn resolve_array_identifiers
                 rai_name.clone common::OpValue::PushVar rai_item common::Op::set_value
             elif rai_name.as_str function common::Function::captures common::variable_list_contains then
                 rai_name.clone common::OpValue::PushCapture rai_item common::Op::set_value
+            elif
+                errors allow_root_local_capture rai_item.location store function rai_name.as_str
+                reject_root_local_capture
+            then
             elif
                 rai_name.as_str store
                     .variables
@@ -9131,7 +9155,7 @@ pub fn resolve_identifiers_global
         std::List[common::Op]::new return
     fi
     common::empty_location std::List[common::Op]::new common::GLOBAL_SCOPE_LABEL.to_str common::Function::new = dummy
-    parser.state.diagnostics dummy expanded_ops parser.store resolve_identifiers
+    parser.state.diagnostics true dummy expanded_ops parser.store resolve_identifiers
     parser.state.diagnostics parser.store expanded_ops validate_global_initializer_order
     expanded_ops
 }
@@ -9140,11 +9164,11 @@ pub fn resolve_identifiers
     store:mut$common::SymbolStore
     ops:mut$std::List[common::Op]
     function:mut$common::Function
+    allow_root_local_capture:bool
     diagnostics:mut$error::Diagnostics
 {
     0 = op_index: u64
     std::List[error::CasaError]::new = resolve_errors
-    std::Set[std::String]::new = declared_globals
     if common::GLOBAL_SCOPE_LABEL function.name.as_str != then
         for variable in function.variables.iter do
             if variable.name.as_str store.immutable_globals.has_str then
@@ -9160,28 +9184,8 @@ pub fn resolve_identifiers
 
         if current_op.value common::OpValue::InitGlobal(initializer) is then
             initializer.clone = resolved_initializer
-            diagnostics function resolved_initializer.ops store resolve_identifiers
+            diagnostics allow_root_local_capture function resolved_initializer.ops store resolve_identifiers
             resolved_initializer common::OpValue::InitGlobal current_op common::Op::set_value
-            current_op op_index 1 - ops.set
-            continue
-        fi
-
-        if current_op.value common::OpValue::DeclareGlobal(global_name_ref) is then
-            global_name_ref.clone = global_name
-            if global_name.as_str store.immutable_globals.has_str then
-                current_op.location.clone
-                f"Immutable global `{global_name}` cannot be declared for assignment"
-                common::ErrorKind::InvalidVariable error::CasaError::new resolve_errors.push
-            fi
-            if
-                global_name store
-                    .variables
-                    .get
-                    .is_none
-            then
-                current_op common::Op::location.clone f"`{global_name}` is not a global variable" common::ErrorKind::UndefinedGlobal error::CasaError::new resolve_errors.push
-            fi
-            global_name.clone declared_globals.add
             current_op op_index 1 - ops.set
             continue
         fi
@@ -9206,6 +9210,13 @@ pub fn resolve_identifiers
                 current_op op_index 1 - ops.set
                 continue
             fi
+            if
+                resolve_errors allow_root_local_capture current_op.location store function inc_root.as_str
+                reject_root_local_capture
+            then
+                current_op op_index 1 - ops.set
+                continue
+            fi
         fi
 
         if current_op.value common::OpValue::AssignDec(dec_name_ref) is then
@@ -9225,6 +9236,13 @@ pub fn resolve_identifiers
             if dec_root.as_str store.immutable_globals.has_str then
                 current_op.location.clone f"Cannot assign to immutable global `{dec_root}`"
                 common::ErrorKind::InvalidVariable error::CasaError::new resolve_errors.push
+                current_op op_index 1 - ops.set
+                continue
+            fi
+            if
+                resolve_errors allow_root_local_capture current_op.location store function dec_root.as_str
+                reject_root_local_capture
+            then
                 current_op op_index 1 - ops.set
                 continue
             fi
@@ -9258,6 +9276,13 @@ pub fn resolve_identifiers
                 continue
             fi
             if var_parts.length 1 < then
+                if
+                    resolve_errors allow_root_local_capture current_op.location store function var_root.as_str
+                    reject_root_local_capture
+                then
+                    current_op op_index 1 - ops.set
+                    continue
+                fi
                 current_op op_index 1 - ops.set
                 continue
             fi
@@ -9270,10 +9295,7 @@ pub fn resolve_identifiers
                 continue
             fi
             if var_name.as_str function common::Function::variables common::variable_list_contains ! then
-                if
-                    var_name.as_str declared_globals.has_str !
-                    var_name.as_str function common::Function::captures common::variable_list_contains ! &&
-                then
+                if var_name.as_str function common::Function::captures common::variable_list_contains ! then
                     variable function common::Function::variables.push
                 fi
             fi
@@ -9286,9 +9308,9 @@ pub fn resolve_identifiers
             fn_name.as_str store.take_function_for_update = lambda_opt
             lambda_opt match
                 std::Option::Some(lambda) => {
-                    function lambda store gather_captures
+                    allow_root_local_capture function lambda store gather_captures
                     lambda.split_body = lambda_ops = lambda
-                    diagnostics lambda lambda_ops store resolve_identifiers
+                    diagnostics allow_root_local_capture lambda lambda_ops store resolve_identifiers
                     true = lambda.is_resolved
                     lambda_ops lambda common::Function::set_ops
                     lambda store.restore_function
@@ -9302,7 +9324,7 @@ pub fn resolve_identifiers
 
         if current_op.value common::OpValue::PushArray(items_inner) is then
             items_inner common::clone_ops = owned_items_inner
-            diagnostics resolve_errors function owned_items_inner store resolve_array_identifiers
+            diagnostics resolve_errors allow_root_local_capture function owned_items_inner store resolve_array_identifiers
             owned_items_inner common::OpValue::PushArray current_op common::Op::set_value
             current_op op_index 1 - ops.set
             continue
@@ -9310,7 +9332,7 @@ pub fn resolve_identifiers
 
         if current_op.value common::OpValue::ExprGroup(group_inner) is then
             group_inner common::clone_ops = owned_group_inner
-            diagnostics function owned_group_inner store resolve_identifiers
+            diagnostics allow_root_local_capture function owned_group_inner store resolve_identifiers
             owned_group_inner common::OpValue::ExprGroup current_op common::Op::set_value
             current_op op_index 1 - ops.set
             continue
@@ -9352,7 +9374,7 @@ pub fn resolve_identifiers
                 current_op op_index 1 - ops.set
                 continue
             fi
-            resolve_errors ident.as_str current_op function store resolve_plain_identifier
+            resolve_errors allow_root_local_capture ident.as_str current_op function store resolve_plain_identifier
             if current_op.value common::OpValue::FnCall(resolved_fn_name) is then
                 current_op.location.clone = fold_location
                 resolved_fn_name.clone = fold_function_name
@@ -9365,7 +9387,7 @@ pub fn resolve_identifiers
         fi
 
         if current_op.value common::OpValue::MatchArm is then
-            diagnostics resolve_errors current_op function store resolve_match_op
+            diagnostics resolve_errors allow_root_local_capture current_op function store resolve_match_op
             current_op op_index 1 - ops.set
             continue
         fi
@@ -9448,6 +9470,7 @@ pub fn resolve_match_op
     store:mut$common::SymbolStore
     function:mut$common::Function
     op:mut$common::Op
+    allow_root_local_capture:bool
     errors:mut$std::List[error::CasaError]
     diagnostics:mut$error::Diagnostics
 {
@@ -9472,7 +9495,7 @@ pub fn resolve_match_op
     if op.value common::OpValue::MatchArm(arm) is then
         if arm.guard_ops.length 0 != then
             arm.clone = resolved_arm
-            diagnostics function resolved_arm.guard_ops store resolve_identifiers
+            diagnostics allow_root_local_capture function resolved_arm.guard_ops store resolve_identifiers
             resolved_arm common::OpValue::MatchArm op common::Op::set_value
         fi
     fi
@@ -9669,6 +9692,7 @@ pub fn resolve_plain_identifier
     function:mut$common::Function
     op:mut$common::Op
     ident:$str
+    allow_root_local_capture:bool
     resolve_errors:mut$std::List[error::CasaError]
 {
     ident "::" str::split = identifier_parts
@@ -9690,6 +9714,13 @@ pub fn resolve_plain_identifier
 
     if ident function common::Function::captures common::variable_list_contains then
         ident.to_str common::OpValue::PushCapture op common::Op::set_value
+        return
+    fi
+
+    if
+        resolve_errors allow_root_local_capture op.location store function ident
+        reject_root_local_capture
+    then
         return
     fi
 

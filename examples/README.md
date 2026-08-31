@@ -26,8 +26,8 @@ The examples are ordered from introductory programs to low-level system code.
 | 14 | [`argparse.casa`](argparse.casa) | A command-line interface with options and help |
 | 15 | [`parser.casa`](parser.casa) | A complete parser built from `Cursor` operations |
 | 16 | [`os_interaction.casa`](os_interaction.casa) | Files, directories, paths, environment, and processes |
-| 17 | [`log.casa`](log.casa) | Configurable logging |
-| 18 | [`timer.casa`](timer.casa) | Local and global timers |
+| 17 | [`log.casa`](log.casa) | Logging with explicit root-owned level state |
+| 18 | [`timer.casa`](timer.casa) | A root-owned monotonic timer |
 | 19 | [`freestanding_primitives.casa`](freestanding_primitives.casa) | Primitive operations without the standard library |
 | 20 | [`sized_memory.casa`](sized_memory.casa) | Unsafe allocation and sized memory access |
 | 21 | [`unicode.casa`](unicode.casa) | Direct Unicode, Unicode escapes, and code-point conversion |

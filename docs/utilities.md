@@ -16,20 +16,23 @@ Compile module-style imports with a library path such as `casac -L lib`.
 ```casa
 import "log"
 
-log::LogLevel::Info log::log_set_level
-"server started" log::log_info
+log::Logger::new = logger
+log::LogLevel::Info logger.configure
+logger "server started" log::log_info
 ```
 
-The default level is `Warning`. A selected level includes less verbose levels.
+The program owns a `Logger` and passes a shared borrow to each log operation.
+A selected level includes less verbose levels.
 
 | API | Action |
 |---|---|
 | `LogLevel::Error`, `Warning`, `Info`, `Debug` | Available levels |
-| `log_set_level level:LogLevel` | Set the active level |
-| `log_error message:str` | Log an error |
-| `log_warning message:str` | Log a warning |
-| `log_info message:str` | Log information |
-| `log_debug message:str` | Log debugging detail |
+| `Logger::new -> Logger` | Create logger state at `Warning` |
+| `configure self:mut$Logger level:LogLevel` | Change the owned level |
+| `log_error message:str logger:$Logger` | Log an error |
+| `log_warning message:str logger:$Logger` | Log a warning |
+| `log_info message:str logger:$Logger` | Log information |
+| `log_debug message:str logger:$Logger` | Log debugging detail |
 
 ## Timing
 
