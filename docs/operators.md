@@ -63,11 +63,11 @@ After `import "std"`, these `i64` helpers are available:
 ```casa
 unsafe {
     16 alloc = buffer
-    42 buffer (ptr) 8 + store64
+    42 buffer 8 + store64
 }
 ```
 
-Pointer arithmetic and pointer casts require an `unsafe` block.
+Pointer arithmetic requires an `unsafe` block.
 
 ## Bit operations
 

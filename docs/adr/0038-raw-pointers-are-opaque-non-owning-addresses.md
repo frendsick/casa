@@ -6,6 +6,8 @@ Casa keeps the existing standalone `load8`, `load16`, `load32`, `load64`, `store
 
 `ptr::as_ref[T]` produces `$T`; `ptr::as_mut[T]` produces `mut$T`. The caller must establish that the address is non-null, correctly aligned, points to a valid live `T` for the complete inferred borrow, and, for `as_mut`, is exclusively accessible. These operations do not create ownership or copy the borrowed value. ADR-0121 adds the safe reverse operation `ptr::from_ref`, which obtains the raw address of either borrow kind without preserving its lifetime.
 
+`ptr::into_raw` transfers a heap-indirect owner into its complete allocation address without destruction. Unsafe `ptr::from_raw[T]` reconstructs that owner when `T` is heap-indirect. The caller must prove that the pointer names the complete live allocation for a valid `T` and that no other owner remains.
+
 ## Considered options
 
 - A typed `ptr[T]` catches some mismatched foreign pointers, but still cannot prove validity, lifetime, alignment, or exclusivity and adds another generic pointer family before concrete FFI needs justify it.
@@ -19,7 +21,7 @@ Casa keeps the existing standalone `load8`, `load16`, `load32`, `load64`, `store
 - `ptr::null` is the canonical null value. Pointer equality is safe; null testing needs no separate intrinsic.
 - Existing loads, stores, and pointer arithmetic are retained but become unsafe operations.
 - Pointer-pointer subtraction is not provided; raw `+` and `-` use `u64` byte offsets and remain within one allocation or its one-past address.
-- Raw pointers never free storage and cannot be implicitly converted to or from `$T`, `mut$T`, `$cstr`, or an owned value. `ptr::from_ref`, `ptr::as_ref[T]`, and `ptr::as_mut[T]` are explicit named operations.
+- Raw pointers never free storage and cannot be implicitly converted to or from `$T`, `mut$T`, `$cstr`, or an owned value. `ptr::from_ref`, `ptr::as_ref[T]`, `ptr::as_mut[T]`, `ptr::into_raw`, and `ptr::from_raw[T]` are explicit named operations.
 - Generic raw `read[T]` and `write[T]` move valid initialized values under explicit unsafe preconditions; they never bless arbitrary bits or copy an owning representation.
 - Integer-address conversion and typed raw pointers remain deferred until a concrete syscall or foreign interface requires them.
 - Safe wrappers validate external conditions once and expose borrows tied to an existing owner or copy validated data into an owned Casa value.

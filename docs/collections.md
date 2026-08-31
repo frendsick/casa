@@ -34,7 +34,7 @@ A function that accepts arrays of any length takes a constant length parameter:
 
 ```casa
 fn total [const N:u64] values:$array[i64 N] -> i64 {
-    0 (i64) = sum
+    0 = sum:i64
     for value in values.iter do
         value += sum
     done
@@ -315,7 +315,7 @@ value.
 | `min_by self:I compare:fn[$T $T -> bool] -> Option[T]` | Minimum selected by a callback |
 | `max_by self:I compare:fn[$T $T -> bool] -> Option[T]` | Maximum selected by a callback |
 | `partition self:I predicate:fn[$T -> bool] -> Pair[List[T] List[T]]` | Matching and non-matching lists |
-| `sum self:I -> i64` | Interpret values as `i64` and add them |
+| `sum self:Iter[i64] -> i64` | Add owned `i64` values |
 | `min self:Iter[T] -> Option[T]` | Minimum value when `T` implements `Ord` |
 | `max self:Iter[T] -> Option[T]` | Maximum value when `T` implements `Ord` |
 
@@ -323,7 +323,8 @@ This pipeline skips two values, takes four, keeps even values, and doubles
 them. Only `collect` runs the pipeline:
 
 ```casa
-2 [1, 2, 3, 4, 5, 6, 7] (array[i64 7]).iter.skip = rest
+[1, 2, 3, 4, 5, 6, 7] = values:array[i64 7]
+2 values.iter.skip = rest
 4 rest.take = window
 { copy 2 % 0 == } window.filter = even
 { copy 2 * } even.map.collect = doubled
