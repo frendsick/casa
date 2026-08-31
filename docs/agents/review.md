@@ -50,9 +50,14 @@ Casa tests.
    an interface or the design, reaches outside the previously affected flow, or
    two incremental passes still produce Must fix or untracked Prerequisite
    findings.
-10. Repeat until no Must fix or Prerequisite assigned to the current work
-   remains, then run the selected tier's final validation once and open or
-   update the pull request. See [testing.md](./testing.md) and [git.md](./git.md).
+10. Record each round's separate Standards and Spec results in the task
+    conversation. Record elapsed time from the first axis dispatch until both
+    axis results arrive. Mark repeated findings, fresh-review reasons, and user
+    decisions. A combined self-review or an unrecorded axis does not complete a
+    round.
+11. Repeat until no Must fix or Prerequisite assigned to the current work
+    remains, then run the selected tier's final validation once and open or
+    update the pull request. See [testing.md](./testing.md) and [git.md](./git.md).
 
 ## Why no pausing
 
