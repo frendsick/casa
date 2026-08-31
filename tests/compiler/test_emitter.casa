@@ -196,6 +196,8 @@ pub fn test_emit_fn_call {
     program emitter::emit = result
     "has jmp fn_my_func" result "jmp fn_my_func" assert_contains
     "has fn_my_func label" result "fn_my_func:" assert_contains
+    f"ja return_stack_overflow\n    addq ${common::WORD_SIZE}, %r14\n    leaq .Lret_" = check
+    "checks return address before call" result check.as_str assert_contains
 }
 
 pub fn test_emit_fn_call_sanitized {
@@ -228,6 +230,14 @@ pub fn test_emit_helpers_present {
     "has print_int" result "print_int:" assert_contains
     "has print_str" result "print_str:" assert_contains
     "has str_concat" result "str_concat:" assert_contains
+}
+
+pub fn test_emit_oversized_return_stack_reservation {
+    "emit_oversized_return_stack_reservation" test::test_start
+    make_empty_program emitter::Emitter::new = emitter
+    emitter::RETURN_STACK_SIZE u64::try_from.unwrap 1 + emitter.emit_return_stack_reservation
+    emitter.into_asm = result
+    "rejects reservation larger than the stack" result "jmp return_stack_overflow" assert_contains
 }
 
 pub fn test_emit_comparison {
@@ -278,8 +288,13 @@ pub fn test_emit_local_ops {
     common::Program = program
 
     program emitter::emit = result
+    3 common::WORD_SIZE * = reservation_size
     "has locals init count" result "movq $3, %rcx" assert_contains
-    "has locals init add" result "addq $24, %r14" assert_contains
+    f"addq ${reservation_size}, %r14" = reservation
+    "has locals init add" result reservation.as_str assert_contains
+    emitter::RETURN_STACK_SIZE reservation_size - = maximum_offset
+    f"leaq return_stack+{maximum_offset}(%rip), %rcx" = check
+    "checks complete locals range" result check.as_str assert_contains
     "has local get offset" result "movq -8(%r14), %rax" assert_contains
     "has local set offset" result "movq %rax, -16(%r14)" assert_contains
     "has locals uninit" result "subq $24, %r14" assert_contains
@@ -1009,16 +1024,28 @@ pub fn test_emit_fn_return {
 
 pub fn test_emit_fn_exec {
     "emit_fn_exec" test::test_start
-    std::List[common::InstValue]::new = bytecode
-    common::InstValue::FnExec bytecode.push
-
-    0 0 std::List[common::StaticStruct]::new std::List[common::StaticArray]::new std::List[std::String]::new
-    std::Map[std::String std::List[common::InstValue]]::new
-    bytecode
-    common::Program = program
-
-    program emitter::emit = result
+    make_empty_program emitter::Emitter::new = emitter
+    false common::InstValue::FnExec emitter.emit_control_flow
+    emitter.into_asm = result
+    emitter::RETURN_STACK_SIZE common::WORD_SIZE - = maximum_offset
+    f"leaq return_stack+{maximum_offset}(%rip), %rcx\n    cmpq %rcx, %r14\n    ja return_stack_overflow\n    addq ${common::WORD_SIZE}, %r14" = check
+    "checks closure return address" result check.as_str assert_contains
+    f"movq %rcx, -{common::WORD_SIZE}(%r14)" = write
+    "writes closure return address in reserved slot" result write.as_str assert_contains
     "has jmpq *%rax" result "jmpq *%rax" assert_contains
+}
+
+pub fn test_emit_closure_drop {
+    "emit_closure_drop" test::test_start
+    make_empty_program emitter::Emitter::new = emitter
+    false common::InstValue::ClosureDrop emitter.emit_control_flow
+    emitter.into_asm = result
+    emitter::RETURN_STACK_SIZE common::WORD_SIZE - = maximum_offset
+    f"leaq return_stack+{maximum_offset}(%rip), %rcx\n    cmpq %rcx, %r14\n    ja return_stack_overflow\n    addq ${common::WORD_SIZE}, %r14" = check
+    "checks destruction return address" result check.as_str assert_contains
+    f"movq %rcx, -{common::WORD_SIZE}(%r14)" = write
+    "writes destruction return address in reserved slot" result write.as_str assert_contains
+    "has destruction jump" result "jmpq *%rdx" assert_contains
 }
 
 pub fn test_emit_fn_push {
@@ -1470,6 +1497,7 @@ test_emit_fn_call
 test_emit_fn_call_sanitized
 test_emit_start_section
 test_emit_helpers_present
+test_emit_oversized_return_stack_reservation
 test_emit_comparison
 test_emit_syscall
 test_emit_local_ops
@@ -1518,6 +1546,7 @@ test_emit_syscall5
 test_emit_syscall6
 test_emit_fn_return
 test_emit_fn_exec
+test_emit_closure_drop
 test_emit_fn_push
 test_emit_print_int
 test_emit_print_str

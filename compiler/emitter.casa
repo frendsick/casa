@@ -207,6 +207,8 @@ impl Emitter {
         "float_decimal_ten: .long 10" self.line
         "arithmetic_error_msg: .ascii \"error: integer arithmetic failed\\n\"" self.line
         ".equ arithmetic_error_msg_len, . - arithmetic_error_msg" self.line
+        "return_stack_overflow_msg: .ascii \"error: return stack overflow\\n\"" self.line
+        ".equ return_stack_overflow_msg_len, . - return_stack_overflow_msg" self.line
         "env_stack_overflow_msg: .ascii \"error: env stack overflow\\n\"" self.line
         ".equ env_stack_overflow_msg_len, . - env_stack_overflow_msg" self.line
         "allocation_failure_msg: .ascii \"fatal: allocation failed\\n\"" self.line
@@ -763,6 +765,18 @@ impl Emitter {
         "syscall" self.indent
         "" self.line
 
+        # Return stack overflow handler: write error to fd 2 and exit(1).
+        "return_stack_overflow:" self.line
+        "leaq return_stack_overflow_msg(%rip), %rsi" self.indent
+        "movq $return_stack_overflow_msg_len, %rdx" self.indent
+        "movq $2, %rdi" self.indent
+        "movq $1, %rax" self.indent
+        "syscall" self.indent
+        "movq $1, %rdi" self.indent
+        "movq $60, %rax" self.indent
+        "syscall" self.indent
+        "" self.line
+
         # env_stack overflow handler: write error to fd 2 and exit(1).
         "env_stack_overflow:" self.line
         "leaq env_stack_overflow_msg(%rip), %rsi" self.indent
@@ -958,16 +972,29 @@ impl Emitter {
     }
 
     # ============================================================================
-    # Emit call-via-return-stack: push a return address onto r14, jump to target,
-    # then emit the return label. Shared by FnCall, PrintInt, PrintStr, and
-    # FstringConcat (all of which funnel into a shared asm subroutine).
+    # Reserve a checked range on the fixed return and local stack. The caller
+    # writes only after this advances r14 successfully.
     # ============================================================================
 
+    pub fn emit_return_stack_reservation self:mut$Emitter byte_count:u64 {
+        if RETURN_STACK_SIZE byte_count > then
+            "jmp return_stack_overflow" self.indent
+            return
+        fi
+        RETURN_STACK_SIZE byte_count - = maximum_offset
+        f"leaq return_stack+{maximum_offset}(%rip), %rcx" self.indent_string
+        "cmpq %rcx, %r14" self.indent
+        "ja return_stack_overflow" self.indent
+        f"addq ${byte_count}, %r14" self.indent_string
+    }
+
+    # Emit call-via-return-stack: reserve a return address, write it, jump to
+    # the target, then emit the return label.
     pub fn emit_call_via_return_stack self:mut$Emitter jump_target:$str label_prefix:$str {
         self.emit_uid = uid
+        common::WORD_SIZE self.emit_return_stack_reservation
         f"leaq .L{label_prefix}_{uid}(%rip), %rax" self.indent_string
-        "movq %rax, (%r14)" self.indent
-        "addq $8, %r14" self.indent
+        f"movq %rax, -{common::WORD_SIZE}(%r14)" self.indent_string
         f"jmp {jump_target}" self.indent_string
         f".L{label_prefix}_{uid}:" self.line_string
     }
@@ -1910,11 +1937,12 @@ impl Emitter {
             }
             common::InstValue::LocalsInit(count) => {
                 if 0 count != then
+                    count common::WORD_SIZE * = byte_count
                     "movq %r14, %rdi" self.indent
+                    byte_count self.emit_return_stack_reservation
                     f"movq ${count}, %rcx" self.indent_string
                     "xorq %rax, %rax" self.indent
                     "rep stosq" self.indent
-                    f"addq ${count common::WORD_SIZE *}, %r14" self.indent_string
                 fi
             }
             common::InstValue::LocalsUninit(count) => {
@@ -1955,6 +1983,7 @@ impl Emitter {
             common::InstValue::ExternCall(call) => call self.emit_extern_call
             common::InstValue::FnExec => {
                 self.emit_uid = uid
+                common::WORD_SIZE self.emit_return_stack_reservation
                 # Save the caller's active closure env on the env stack and switch
                 # current_env to the popped closure record so its body can access
                 # captured values via InstCaptureLoad. After the callee returns,
@@ -1969,8 +1998,7 @@ impl Emitter {
                 "movq %rcx, env_sp(%rip)" self.indent
                 "movq %rax, current_env(%rip)" self.indent
                 f"leaq .Lret_{uid}(%rip), %rcx" self.indent_string
-                "movq %rcx, (%r14)" self.indent
-                "addq $8, %r14" self.indent
+                f"movq %rcx, -{common::WORD_SIZE}(%r14)" self.indent_string
                 "movq (%rax), %rax" self.indent
                 "jmpq *%rax" self.indent
                 f".Lret_{uid}:" self.line_string
@@ -2041,6 +2069,7 @@ impl Emitter {
                 "movq 8(%rax), %rdx" self.indent
                 "testq %rdx, %rdx" self.indent
                 f"jz .Lclosure_drop_done_{uid}" self.indent_string
+                common::WORD_SIZE self.emit_return_stack_reservation
                 "movq current_env(%rip), %rbx" self.indent
                 "movq env_sp(%rip), %rcx" self.indent
                 f"cmpq ${RETURN_STACK_SIZE}, %rcx" self.indent_string
@@ -2051,8 +2080,7 @@ impl Emitter {
                 "movq %rax, current_env(%rip)" self.indent
                 "pushq %rax" self.indent
                 f"leaq .Lclosure_drop_return_{uid}(%rip), %rcx" self.indent_string
-                "movq %rcx, (%r14)" self.indent
-                "addq $8, %r14" self.indent
+                f"movq %rcx, -{common::WORD_SIZE}(%r14)" self.indent_string
                 "jmpq *%rdx" self.indent
                 f".Lclosure_drop_return_{uid}:" self.line_string
                 "movq env_sp(%rip), %rcx" self.indent
