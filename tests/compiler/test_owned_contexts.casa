@@ -3,7 +3,7 @@ import "../../lib/test.casa" as test
 import "../../compiler/typechecker.casa" as typechecker
 import "helpers.casa" as helpers
 
-pub const OWNED_CONTEXT_TYPES "trait __casa_std__Clone { fn clone self:$self -> self } trait __casa_std__Copy: __casa_std__Clone { } struct Resource { id: i64 } impl Resource: __casa_std__Clone { fn clone self:$Resource -> Resource { self.id Resource } } enum CopyResource derives __casa_std__Copy { One Two } struct Holder { value: Resource } struct CopyHolder { value: CopyResource } struct Box[T] { value: T } struct SharedBox { value: $Resource } struct ExclusiveBox { value: mut$Resource } enum Maybe[T] { Some(T) } "
+pub const OWNED_CONTEXT_TYPES "trait __casa_std__Clone { fn clone self:$self -> self } trait __casa_std__Copy: __casa_std__Clone { } struct Resource { id: i64 } impl Resource: __casa_std__Clone { fn clone self:$Resource -> Resource { self.id Resource } } enum CopyResource derives __casa_std__Copy { One Two } struct Holder { value: Resource } struct CopyHolder { value: CopyResource } struct Box[T] { value: T } struct BoxHolder { value: Box[Resource] } struct SharedBox { value: $Resource } struct ExclusiveBox { value: mut$Resource } enum Maybe[T] { Some(T) } "
 
 pub fn check_source diagnostics:mut$error::Diagnostics source:$str {
     diagnostics source helpers::typecheck_test_source = checked
@@ -174,15 +174,52 @@ pub fn test_non_clone_borrowed_parameter_omits_clone_advice {
 pub fn test_shared_receiver_diagnostic_shows_contract_once {
     "shared_receiver_diagnostic_shows_contract_once" test::test_start
     error::Diagnostics::new = diagnostics
-    "struct Counter { value: i64 } impl Counter { fn bump self:mut$Counter { } } fn invalid counter:$Counter { counter.bump }"
+    "struct Counter { value: i64 } struct Machine { counter: Counter } impl Counter { fn bump self:mut$Counter { } } fn invalid machine:$Machine { machine.counter.bump }"
     diagnostics check_source
     diagnostics "one receiver diagnostic" 1 helpers::assert_error_count
     diagnostics
     "names receiver and method"
-    "Method `bump` needs exclusive access to `Counter`, but `counter` is shared"
+    "Method `bump` needs exclusive access to `Counter`, but `machine.counter` is shared"
     helpers::assert_error_contains
     diagnostics "shows receiver contract" "exclusive receiver: mut$Counter" helpers::assert_error_contains
     diagnostics "shows available receiver" "shared receiver: $Counter" helpers::assert_error_contains
+}
+
+pub fn test_generic_aggregate_parameter_diagnostic_has_context {
+    "generic_aggregate_parameter_diagnostic_has_context" test::test_start
+    error::Diagnostics::new = diagnostics
+    OWNED_CONTEXT_TYPES
+    "fn take_box[T] value:Box[T] { } fn invalid holder:$BoxHolder { holder.value take_box }"
+    str::concat.as_str diagnostics check_source
+    diagnostics "one aggregate ownership diagnostic" 1 helpers::assert_error_count
+    diagnostics
+    "names generic operation and parameter"
+    "Cannot pass borrowed `holder.value` to consuming parameter `value` of `take_box`"
+    helpers::assert_error_contains
+    diagnostics "shows aggregate contract" "owned value: Box[Resource]" helpers::assert_error_contains
+    diagnostics "shows aggregate access" "shared access: $Box[Resource]" helpers::assert_error_contains
+}
+
+pub fn test_incompatible_borrow_reports_type_mismatch {
+    "incompatible_borrow_reports_type_mismatch" test::test_start
+    error::Diagnostics::new = diagnostics
+    OWNED_CONTEXT_TYPES
+    "struct Other { id: i64 } fn take_other value:Other { } fn invalid holder:$Holder { holder.value take_other }"
+    str::concat.as_str diagnostics check_source
+    diagnostics "one type mismatch" 1 helpers::assert_error_count
+    diagnostics "reports the incompatible types" "Type mismatch" helpers::assert_error_contains
+    diagnostics "does not report ownership" "Cannot pass borrowed" helpers::assert_error_not_contains
+    diagnostics "does not suggest an invalid clone" "clone it first" helpers::assert_error_not_contains
+}
+
+pub fn test_clone_bound_enables_clone_advice {
+    "clone_bound_enables_clone_advice" test::test_start
+    error::Diagnostics::new = diagnostics
+    OWNED_CONTEXT_TYPES
+    "fn take[T] value:T { } fn invalid[T: __casa_std__Clone] value:$T { value take }"
+    str::concat.as_str diagnostics check_source
+    diagnostics "one generic ownership diagnostic" 1 helpers::assert_error_count
+    diagnostics "Clone bound gets advice" "clone it first" helpers::assert_error_contains
 }
 
 pub fn test_live_loan_diagnostic_has_related_locations {
@@ -198,6 +235,17 @@ pub fn test_live_loan_diagnostic_has_related_locations {
     "loan later-use note"
     "later use of `view` keeps this loan active"
     helpers::assert_error_note_contains
+}
+
+pub fn test_control_flow_preserves_loan_origin_location {
+    "control_flow_preserves_loan_origin_location" test::test_start
+    error::Diagnostics::new = diagnostics
+    OWNED_CONTEXT_TYPES
+    "fn borrow value:$Resource -> $Resource { value } fn invalid flag:bool { 1 Resource Holder = owner owner.value borrow = view if flag then 1 drop else 2 drop fi owner drop view.id drop }"
+    str::concat.as_str diagnostics check_source
+    diagnostics "one joined-flow conflict" 1 helpers::assert_error_count
+    diagnostics "joined flow retains both notes" 2 helpers::assert_error_note_count
+    diagnostics "joined flow retains loan origin" "loan starts here" helpers::assert_error_note_contains
 }
 
 pub fn test_overlapping_exclusive_arguments_name_parameters {
@@ -229,6 +277,10 @@ test_raw_owner_conversion_rejects_unresolved_types
 test_borrowed_parameter_diagnostic_shows_contract
 test_non_clone_borrowed_parameter_omits_clone_advice
 test_shared_receiver_diagnostic_shows_contract_once
+test_generic_aggregate_parameter_diagnostic_has_context
+test_incompatible_borrow_reports_type_mismatch
+test_clone_bound_enables_clone_advice
 test_live_loan_diagnostic_has_related_locations
+test_control_flow_preserves_loan_origin_location
 test_overlapping_exclusive_arguments_name_parameters
 test::test_summary
