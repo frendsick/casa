@@ -112,7 +112,8 @@ message.as_str print
 
 Malformed input returns `Option::None`. Integer parsing does not ignore
 whitespace, so call `trim` first when needed. Floating-point parsing accepts
-decimal exponents, signed zero, `inf`, `-inf`, and `NaN`.
+decimal exponents, signed zero, `inf`, `-inf`, and `NaN`. Finite decimal text
+rounds to the nearest value of the target width, with ties rounded to even.
 
 ```casa
 " -42 ".trim.to_int .unwrap print
