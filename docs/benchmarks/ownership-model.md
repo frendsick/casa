@@ -4,9 +4,9 @@ Run date: 2026-08-31
 
 This benchmark compares the compiler before affine ownership at `17eede0` with
 the completed ownership model at `82720ba`. The earlier revision is the first
-parent of the #337 merge. The current revision includes affine values, borrow
-tracking, deterministic destruction, closure ownership, ownership-sensitive
-patterns, and recursive owners.
+parent of the #337 merge. The completed-model revision includes affine values,
+borrow tracking, deterministic destruction, closure ownership,
+ownership-sensitive patterns, and recursive owners.
 
 Both measured compilers are self-compiled fixed points. Stage 2 and stage 3
 produce identical assembly. The benchmark records wall time and peak resident
@@ -60,12 +60,19 @@ Run these commands from the benchmark branch:
 ```sh
 git worktree add --detach /tmp/casa-362-before \
     17eede0d6ed09e605eace93f1c05d1727328c6af
+git worktree add --detach /tmp/casa-362-after \
+    82720ba65b65462bbac7450110c5581c4f1cbc17
 mkdir -p /tmp/casa-362-benchmark/release-v1.18.0
+mkdir -p /tmp/casa-362-benchmark/release-v1.45.0
 gh release download v1.18.0 --pattern casac \
     --dir /tmp/casa-362-benchmark/release-v1.18.0
-chmod u+x /tmp/casa-362-benchmark/release-v1.18.0/casac
+gh release download v1.45.0 --pattern casac \
+    --dir /tmp/casa-362-benchmark/release-v1.45.0
+chmod u+x /tmp/casa-362-benchmark/release-v1.18.0/casac \
+    /tmp/casa-362-benchmark/release-v1.45.0/casac
 
 before=/tmp/casa-362-before
+after=/tmp/casa-362-after
 branch=$PWD
 benchmark=/tmp/casa-362-benchmark
 
@@ -77,11 +84,11 @@ benchmark=/tmp/casa-362-benchmark
     -o "$benchmark/before-stage3" --keep-asm
 diff -q "$benchmark/before-stage2.s" "$benchmark/before-stage3.s"
 
-./install.sh
-./casac -L lib casa.casa -o "$benchmark/after-stage1" --keep-asm
-"$benchmark/after-stage1" -L lib casa.casa \
+"$benchmark/release-v1.45.0/casac" -L "$after/lib" \
+    "$after/casa.casa" -o "$benchmark/after-stage1" --keep-asm
+"$benchmark/after-stage1" -L "$after/lib" "$after/casa.casa" \
     -o "$benchmark/after-stage2" --keep-asm
-"$benchmark/after-stage2" -L lib casa.casa \
+"$benchmark/after-stage2" -L "$after/lib" "$after/casa.casa" \
     -o "$benchmark/after-stage3" --keep-asm
 diff -q "$benchmark/after-stage2.s" "$benchmark/after-stage3.s"
 ```
@@ -125,7 +132,7 @@ and library:
 "$benchmark/before-stage3" -L "$before/lib" \
     "$branch/docs/benchmarks/ownership-model-before.casa" \
     -o "$benchmark/ownership-before"
-"$benchmark/after-stage3" -L "$branch/lib" \
+"$benchmark/after-stage3" -L "$after/lib" \
     "$branch/docs/benchmarks/ownership-model-after.casa" \
     -o "$benchmark/ownership-after"
 ```
@@ -177,9 +184,11 @@ confirms that five million `copy` operations introduce no allocation.
 sed 's/^const COPY_VALUES true/const COPY_VALUES false/' \
     docs/benchmarks/ownership-copy.casa \
     > "$benchmark/ownership-copy-empty.casa"
-"$benchmark/after-stage3" -L lib docs/benchmarks/ownership-copy.casa \
+"$benchmark/after-stage3" -L "$after/lib" \
+    "$branch/docs/benchmarks/ownership-copy.casa" \
     -o "$benchmark/ownership-copy" --keep-asm
-"$benchmark/after-stage3" -L lib "$benchmark/ownership-copy-empty.casa" \
+"$benchmark/after-stage3" -L "$after/lib" \
+    "$benchmark/ownership-copy-empty.casa" \
     -o "$benchmark/ownership-copy-empty" --keep-asm
 
 for run in 1 2 3 4 5 6 7 8 9 10; do
@@ -212,8 +221,9 @@ slice_keeps_list_borrowed'
 for run in 1 2 3; do
     for name in $diagnostics; do
         /usr/bin/time -f "$run $name %e %M" \
-            "$benchmark/after-stage3" -L lib \
-            "tests/compiler/errors/$name.casa" -o "$benchmark/error-output"
+            "$benchmark/after-stage3" -L "$after/lib" \
+            "$after/tests/compiler/errors/$name.casa" \
+            -o "$benchmark/error-output"
         test "$?" -ne 0
     done
 done
@@ -247,7 +257,7 @@ for depth in 1000 10000 40000 80000 86250 87500; do
     sed "s/^const DEPTH .*/const DEPTH $depth/" \
         docs/benchmarks/ownership-recursion.casa \
         > "$benchmark/ownership-recursion-$depth.casa"
-    "$benchmark/after-stage3" -L lib \
+    "$benchmark/after-stage3" -L "$after/lib" \
         "$benchmark/ownership-recursion-$depth.casa" \
         -o "$benchmark/ownership-recursion-$depth"
     for run in 1 2 3; do
@@ -259,10 +269,12 @@ done
 ## Design decision
 
 The memory and runtime results support deterministic destruction and reusable
-storage. The compile-time and binary-size regressions are not accepted by this
-report. Issue #588 records the measured costs and requests an explicit budget or
-a reduction. It is a native blocker of #362 so the regression cannot be closed
-without a decision.
+storage. Issue #588 and PR #598 profiled the material compile-time and
+binary-size regressions, removed avoidable full-copy paths, and recorded final
+measurements and an accepted budget in the
+[ownership analysis cost benchmark](ownership-analysis-cost.md). The original
+fixed-point results in this report remain the historical comparison that
+triggered that work.
 
 The comparison spans 319 commits and includes source growth and language work
 beyond ownership. It does not attribute the complete regression to ownership.
