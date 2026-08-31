@@ -43,6 +43,12 @@ pub struct TypedValue derives std::Clone {
     pub is_literal_constant: bool
 }
 
+pub struct LoanConflict derives std::Clone {
+    pub binding:   std::Option[std::String]
+    pub origin:    std::Option[common::Location]
+    pub later_use: std::Option[common::Location]
+}
+
 pub fn origin_is_exclusive origin:$str -> bool { origin "!" str::starts_with }
 
 pub fn origin_place origin:$str -> std::String {
@@ -161,6 +167,27 @@ pub fn count_variable_uses
     counts
 }
 
+pub fn collect_last_variable_uses
+    ops:$std::List[common::Op]
+    locations:std::Map[std::String common::Location]
+-> std::Map[std::String common::Location] {
+    for op in ops.iter do
+        if op.value common::OpValue::PushVar(name) is then
+            op.location.clone name.clone locations.set
+        fi
+        if op.value common::OpValue::PushArray(items) is then
+            locations items collect_last_variable_uses = locations
+        elif op.value common::OpValue::ExprGroup(items) is then
+            locations items collect_last_variable_uses = locations
+        elif op.value common::OpValue::InitGlobal(initializer) is then
+            locations initializer.ops collect_last_variable_uses = locations
+        elif op.value common::OpValue::MatchArm(arm) is then
+            locations arm.guard_ops collect_last_variable_uses = locations
+        fi
+    done
+    locations
+}
+
 pub fn type_capability typ:$common::Type -> ValueCapability {
     if typ.is_shared_borrow then
         ValueCapability::Shared return
@@ -169,6 +196,36 @@ pub fn type_capability typ:$common::Type -> ValueCapability {
         ValueCapability::Exclusive return
     fi
     ValueCapability::Owned
+}
+
+fn capability_name capability:$ValueCapability -> str {
+    capability match
+        ValueCapability::Owned => "owned"
+        ValueCapability::Shared => "shared"
+        ValueCapability::Exclusive => "exclusive"
+    end
+}
+
+fn value_owned_type value:$TypedValue -> common::Type {
+    if value.type_value.borrow_target std::Option::Some(target) is then
+        target.clone return
+    fi
+    value.type_value.clone
+}
+
+fn value_access_type value:$TypedValue -> common::Type {
+    if value.type_value.is_borrow then
+        value.type_value.clone return
+    fi
+    value.capability match
+        ValueCapability::Shared => {
+            common::SHARED_BORROW_TYPE value.type_value.clone common::apply_borrow_type
+        }
+        ValueCapability::Exclusive => {
+            common::EXCLUSIVE_BORROW_TYPE value.type_value.clone common::apply_borrow_type
+        }
+        ValueCapability::Owned => value.type_value.clone
+    end
 }
 
 pub fn type_contains_borrow
@@ -685,7 +742,9 @@ pub struct TypeChecker {
     pub owner_events:               std::List[common::OwnerEvent]
     pub next_owner_generation:      u64
     pub binding_origins:            std::Map[std::String std::List[std::String]]
+    pub binding_origin_locations:   std::Map[std::String common::Location]
     pub remaining_uses:             std::Map[std::String u64]
+    pub last_use_locations:         std::Map[std::String common::Location]
     pub unsafe_depth:               u64
     pub literal_resolutions:        std::Map[i64 common::Type]
     pub contextual_parameters:      std::List[common::Type]
@@ -753,7 +812,9 @@ impl TypeChecker {
         std::List[common::Type]::new # contextual_parameters
         std::Map[i64 common::Type]::new # literal_resolutions
         0 # unsafe_depth
+        std::Map[std::String common::Location]::new # last_use_locations
         std::Map[std::String u64]::new # remaining_uses
+        std::Map[std::String common::Location]::new # binding_origin_locations
         std::Map[std::String std::List[std::String]]::new # binding_origins
         0 # next_owner_generation
         std::List[common::OwnerEvent]::new # owner_events
@@ -1143,6 +1204,9 @@ impl TypeChecker {
             pair.second.clone pair.first.clone loans.set
         done
         loans = tc.binding_origins
+        # A merged branch can have more than one loan origin. Omit a location
+        # instead of attaching a note to one arbitrary branch.
+        std::Map[std::String common::Location]::new = tc.binding_origin_locations
     }
 
     pub fn remove_flow_names tc:mut$TypeChecker names:$std::List[std::String] {
@@ -1150,6 +1214,9 @@ impl TypeChecker {
             false name.as_str tc.set_owner_moved
             if name.as_str tc.binding_origins.has_str then
                 name.as_str tc.binding_origins.delete_str
+            fi
+            if name.as_str tc.binding_origin_locations.has_str then
+                name.as_str tc.binding_origin_locations.delete_str
             fi
         done
     }
@@ -1266,7 +1333,7 @@ impl TypeChecker {
         fi
     }
 
-    pub fn binding_is_live tc:mut$TypeChecker name:$str -> bool {
+    pub fn binding_is_live tc:$TypeChecker name:$str -> bool {
         if name tc.remaining_uses.get_str std::Option::Some(count) is then
             0 count != return
         fi
@@ -1280,8 +1347,12 @@ impl TypeChecker {
     {
         if origins std::Option::Some(items) is then
             items.clone name.clone tc.binding_origins.set_str
+            tc.current_location.clone name.clone tc.binding_origin_locations.set_str
         elif name tc.binding_origins.has_str then
             name tc.binding_origins.delete_str
+            if name tc.binding_origin_locations.has_str then
+                name tc.binding_origin_locations.delete_str
+            fi
         fi
     }
 
@@ -1302,18 +1373,49 @@ impl TypeChecker {
         done
     }
 
-    pub fn place_has_conflicting_loan
+    fn make_loan_conflict
+        self:$TypeChecker
+        binding:std::Option[std::String]
+        fallback_origin:$common::Location
+    -> LoanConflict {
+        fallback_origin.clone std::Option::Some = origin
+        std::Option[common::Location]::None = later_use
+        if binding std::Option::Some(name) is then
+            if name.as_str self.binding_origin_locations.get_str std::Option::Some(location) is then
+                location.clone std::Option::Some = origin
+            fi
+            if name.as_str self.binding_is_live then
+                if name.as_str self.last_use_locations.get_str std::Option::Some(location) is then
+                    location.clone std::Option::Some = later_use
+                fi
+            fi
+        fi
+        later_use origin binding LoanConflict
+    }
+
+    fn loan_binding_for_value self:$TypeChecker value:$TypedValue -> std::Option[std::String] {
+        if value.place std::Option::Some(value_place) is then
+            value_place.as_str get_place_root = root
+            if root.as_str self.binding_origins.has_str then
+                root std::Option::Some return
+            fi
+        fi
+        std::Option[std::String]::None
+    }
+
+    pub fn find_conflicting_loan
         self:mut$TypeChecker
         place:$str
         stack_depth:u64
         exclusive:bool
-    -> bool {
+    -> std::Option[LoanConflict] {
         0 = index: u64
         while index stack_depth > do
             index self
                 .stack
                 .values
-                .get_mut = value
+                .get
+                .clone = value
             if value.binding std::Option::Some(binding_name) is then
                 if place binding_name.as_str == then
                     1 += index continue
@@ -1331,7 +1433,8 @@ impl TypeChecker {
                         place value_place.as_str origin_matches_place
                         value.capability ValueCapability::Exclusive is exclusive || &&
                     then
-                        true return
+                        value self.loan_binding_for_value = binding
+                        value.origin binding self.make_loan_conflict std::Option::Some return
                     fi
                 fi
             fi
@@ -1341,7 +1444,8 @@ impl TypeChecker {
                         place origin.as_str origin_matches_place
                         origin.as_str origin_is_exclusive exclusive || &&
                     then
-                        true return
+                        value self.loan_binding_for_value = binding
+                        value.origin binding self.make_loan_conflict std::Option::Some return
                     fi
                 done
             fi
@@ -1369,7 +1473,8 @@ impl TypeChecker {
                         place origin.as_str origin_matches_place
                         origin.as_str origin_is_exclusive exclusive || &&
                     then
-                        true return
+                        common::empty_location binding_name.clone std::Option::Some self.make_loan_conflict
+                        std::Option::Some return
                     fi
                 done
             fi
@@ -1396,12 +1501,25 @@ impl TypeChecker {
                             place origin.as_str origin_matches_place
                             origin.as_str origin_is_exclusive exclusive || &&
                         then
-                            true return
+                            common::empty_location pair.first.clone std::Option::Some self.make_loan_conflict
+                            std::Option::Some return
                         fi
                     done
                 done
             fi
         done
+        std::Option[LoanConflict]::None
+    }
+
+    pub fn place_has_conflicting_loan
+        self:mut$TypeChecker
+        place:$str
+        stack_depth:u64
+        exclusive:bool
+    -> bool {
+        if exclusive stack_depth place self.find_conflicting_loan std::Option::Some(_) is then
+            true return
+        fi
         false
     }
 
@@ -1469,6 +1587,15 @@ impl TypeChecker {
             false return
         fi
         std::Option[common::Function]::None typ self.type_is_duplicable
+    }
+
+    pub fn type_implements_clone tc:mut$TypeChecker typ:$common::Type -> bool {
+        common::STD_CLONE_TRAIT.to_str common::GenericType::new common::Type::Generic = clone_type
+        std::Option[common::Function]::None = function_opt
+        if tc.store function_opt clone_type typ matches_trait_bound then
+            true return
+        fi
+        tc.store clone_type typ semantics::type_has_satisfying_trait_impl
     }
 
     pub fn record_owner_assignment
@@ -1748,14 +1875,85 @@ pub fn stack_effect_may_return_nested_borrow effect:$common::StackEffect -> bool
 }
 
 impl TypeChecker {
+    fn clone_hint self:mut$TypeChecker value:$TypedValue -> str {
+        value value_owned_type = owned_type
+        if owned_type self.type_implements_clone then
+            "; clone it first" return
+        fi
+        ""
+    }
+
+    fn report_borrowed_to_owned self:mut$TypeChecker expected:$common::Type value:$TypedValue {
+        if value.place std::Option::Some(place) is then
+            if "" self.current_expect_ctx.as_str != then
+                f"Cannot pass borrowed `{place}` to consuming {self.current_expect_ctx}"
+            else
+                f"Cannot move borrowed value `{place}`"
+            fi
+        else
+            if "" self.current_expect_ctx.as_str != then
+                f"Cannot pass a borrowed value to consuming {self.current_expect_ctx}"
+            else
+                "Cannot move a borrowed value".to_str
+            fi
+        fi = message
+        value self.clone_hint = hint
+        f"{message}{hint}" = message
+
+        self
+            .current_location
+            .file
+            .as_str expected self.store.format_type_for_source = expected_name
+        value value_access_type = access_type
+        self
+            .current_location
+            .file
+            .as_str access_type self.store.format_type_for_source = access_name
+        value.capability capability_name = access
+        f"owned value: {expected_name}" = expected_contract
+        f"{access} access: {access_name}" = available_contract
+        available_contract expected_contract self.current_location.clone message
+        common::ErrorKind::InvalidVariable error::CasaError::with_expected = diagnostic
+        "Available".to_str = diagnostic.got_label
+        diagnostic self.diagnostics.push_error
+    }
+
+    fn report_loan_conflict self:mut$TypeChecker message:std::String conflict:$LoanConflict {
+        self.current_location.clone message common::ErrorKind::InvalidVariable error::CasaError::new
+        = diagnostic
+        if conflict.origin std::Option::Some(location) is then
+            if "" location.file.as_str != then
+                location.clone "loan starts here".to_str error::CasaNote = note
+                note diagnostic.notes.push
+            fi
+        fi
+        if conflict.later_use std::Option::Some(location) is then
+            if "" location.file.as_str != then
+                if conflict.binding std::Option::Some(binding) is then
+                    f"later use of `{binding}` keeps this loan active"
+                else
+                    "later use keeps this loan active".to_str
+                fi = note_message
+                location.clone note_message error::CasaNote = note
+                note diagnostic.notes.push
+            fi
+        fi
+        diagnostic self.diagnostics.push_error
+    }
+
     pub fn consume_value tc:mut$TypeChecker value:$TypedValue {
         if value.capability ValueCapability::Owned is ! then
+            value tc.clone_hint = hint
+            tc
+                .current_location
+                .file
+                .as_str value.type_value tc.store.format_type_for_source = type_name
             if value.place std::Option::Some(place) is then
-                tc.current_location f"Cannot move borrowed value `{place}` of type `{value.type_value.format}` in `{tc.current_op_context}`; clone it first"
+                tc.current_location f"Cannot move borrowed value `{place}` of type `{type_name}`{hint}"
                 common::ErrorKind::InvalidVariable tc.diagnostics.record_error_string
             else
-                tc.current_location "Cannot move a borrowed value; clone it first"
-                common::ErrorKind::InvalidVariable tc.diagnostics.record_error
+                tc.current_location f"Cannot move a borrowed value of type `{type_name}`{hint}"
+                common::ErrorKind::InvalidVariable tc.diagnostics.record_error_string
             fi
             return
         fi
@@ -1766,13 +1964,12 @@ impl TypeChecker {
                 return
             fi
             if
-                tc
+                true tc
                     .stack
                     .values
-                    .length name.as_str tc.has_active_owner_loan
+                    .length name.as_str tc.find_conflicting_loan std::Option::Some(conflict) is
             then
-                tc.current_location f"Cannot move owner `{name}` while it is borrowed"
-                common::ErrorKind::InvalidVariable tc.diagnostics.record_error_string
+                conflict f"Cannot move owner `{name}` while it is borrowed" tc.report_loan_conflict
                 return
             fi
             true name.as_str tc.set_owner_moved
@@ -1953,6 +2150,10 @@ impl TypeChecker {
             et_value self.release_value
         elif et_value.type_value expected self borrowed_copy_argument_matches then
             et_value self.release_value
+        elif et_value.capability ValueCapability::Owned is ! then
+            et_value expected self.report_borrowed_to_owned
+            et_value self.release_value
+            return
         else
             et_value self.consume_value
         fi
@@ -2679,8 +2880,11 @@ impl TypeChecker {
         tc:mut$TypeChecker
         first_type:$common::Type
         first_value:$TypedValue
+        first_parameter:$common::Parameter
         second_type:$common::Type
         second_value:$TypedValue
+        second_parameter:$common::Parameter
+        operation:$str
     {
         if second_type.is_borrow ! then
             return
@@ -2704,6 +2908,20 @@ impl TypeChecker {
                 else
                     f"Cannot borrow overlapping places `{first_name}` and `{second_name}` while one is exclusive"
                 fi = message
+                if
+                    "" first_parameter.name.as_str !=
+                    "" second_parameter.name.as_str != &&
+                then
+                    tc
+                        .current_location
+                        .file
+                        .as_str operation tc.store.format_name_for_source = source_operation
+                    if "" source_operation.as_str != then
+                        f"{message} for parameters `{first_parameter.name}` and `{second_parameter.name}` of `{source_operation}`"
+                    else
+                        f"{message} for parameters `{first_parameter.name}` and `{second_parameter.name}`"
+                    fi = message
+                fi
                 tc.current_location message common::ErrorKind::InvalidVariable tc.diagnostics.record_error_string
             fi
         fi
@@ -2713,6 +2931,7 @@ impl TypeChecker {
         tc:mut$TypeChecker
         effect:$common::StackEffect
         bindings:mut$std::Map[std::String common::Type]
+        operation:$str
     {
         tc
             .stack
@@ -2720,10 +2939,8 @@ impl TypeChecker {
             .length = depth
         0 = first_index: u64
         while first_index effect.parameters.length > first_index depth > && do
-            first_index effect
-                .parameters
-                .get
-                .typ = declared_first_type: $common::Type
+            first_index effect.parameters.get = first_parameter
+            first_parameter.typ = declared_first_type: $common::Type
             bindings declared_first_type.substitute_t = first_type
             if first_type.is_borrow then
                 depth 1 - first_index - tc
@@ -2733,17 +2950,16 @@ impl TypeChecker {
                     .clone = first_value
                 first_index 1 + = second_index
                 while second_index effect.parameters.length > second_index depth > && do
-                    second_index effect
-                        .parameters
-                        .get
-                        .typ = declared_second_type: $common::Type
+                    second_index effect.parameters.get = second_parameter
+                    second_parameter.typ = declared_second_type: $common::Type
                     bindings declared_second_type.substitute_t = second_type
                     depth 1 - second_index - tc
                         .stack
                         .values
                         .get
                         .clone = second_value
-                    second_value second_type first_value first_type tc.check_call_borrow_pair
+                    operation second_parameter second_value second_type first_parameter first_value first_type
+                    tc.check_call_borrow_pair
                     1 += second_index
                 done
             fi
@@ -2781,11 +2997,11 @@ impl TypeChecker {
                 if argument.place std::Option::Some(place) is then
                     if
                         parameter_type.is_exclusive_borrow before_arguments place.as_str
-                        tc.place_has_conflicting_loan
+                        tc.find_conflicting_loan std::Option::Some(conflict) is
                     then
                         if parameter_type.is_exclusive_borrow then " exclusively" else "" fi = qualifier
-                        tc.current_location f"Cannot borrow `{place}`{qualifier} while it is borrowed"
-                        common::ErrorKind::InvalidVariable tc.diagnostics.record_error_string
+                        conflict f"Cannot borrow `{place}`{qualifier} while it is borrowed"
+                        tc.report_loan_conflict
                     fi
                 fi
             fi
@@ -3209,6 +3425,27 @@ impl TypeChecker {
         has_nested_borrow
     }
 
+    fn set_parameter_context
+        self:mut$TypeChecker
+        operation:$str
+        parameter:$common::Parameter
+        index:u64
+    {
+        if "" operation != then
+            self
+                .current_location
+                .file
+                .as_str operation self.store.format_name_for_source = source_operation
+            if "" parameter.name.as_str != then
+                f"parameter `{parameter.name}` of `{source_operation}`" = self.current_expect_ctx
+            else
+                f"parameter {index 1 +} of `{source_operation}`" = self.current_expect_ctx
+            fi
+        elif "" parameter.name.as_str != then
+            parameter.name.clone = self.current_expect_ctx
+        fi
+    }
+
     pub fn apply_stack_effect
         tc:mut$TypeChecker
         effect:$common::StackEffect
@@ -3273,7 +3510,7 @@ impl TypeChecker {
             bindings effect tc.should_preserve_contained_call_origins = prefer_contained_origins
             prefer_contained_origins false bindings effect tc.call_origins = shared_origins
             prefer_contained_origins true bindings effect tc.call_origins = exclusive_origins
-            bindings effect tc.check_call_borrow_conflicts
+            name bindings effect tc.check_call_borrow_conflicts
             bindings effect tc.check_live_borrow_conflicts
         elif effect stack_effect_may_return_nested_borrow then
             false false bindings effect tc.call_origins = nested_shared_origins
@@ -3290,11 +3527,7 @@ impl TypeChecker {
             0 = index: u64
             while index effect common::StackEffect::parameters.length > do
                 index effect common::StackEffect::parameters.get = parameter
-                if "" name != then
-                    f"parameter {index 1 +} of `{name}`" = tc.current_expect_ctx
-                elif "" parameter.name.as_str != then
-                    parameter.name.clone = tc.current_expect_ctx
-                fi
+                index parameter name tc.set_parameter_context
                 parameter.typ tc.expect_type_t
                 1 += index
             done
@@ -3323,12 +3556,7 @@ impl TypeChecker {
         0 = index: u64
         while index effect.parameters.length > do
             index effect.parameters.get = parameter
-
-            if "" name != then
-                f"parameter {index 1 +} of `{name}`" = tc.current_expect_ctx
-            elif "" parameter.name.as_str != then
-                parameter.name.clone = tc.current_expect_ctx
-            fi
+            index parameter name tc.set_parameter_context
 
             if bindings parameter tc.bind_borrow_parameter then
                 1 += index
@@ -4731,19 +4959,80 @@ impl TypeChecker {
         effect:$common::StackEffect
         capability:$ValueCapability
         method_name:$str
+        receiver_type:$common::Type
     {
         effect method_receiver_type = expected_receiver_opt
         if expected_receiver_opt std::Option::Some(expected_receiver) is then
             if expected_receiver capability capability_matches_receiver ! then
-                if expected_receiver.is_exclusive_borrow then
-                    "exclusive"
-                else
-                    "owned"
+                receiver_type.clone = receiver_target
+                if receiver_type.borrow_target std::Option::Some(target) is then
+                    target.clone = receiver_target
                 fi
-                = requirement
-                tc.current_location
-                f"Method `{method_name}` requires an {requirement} receiver"
-                common::ErrorKind::TypeMismatch tc.diagnostics.record_error_string
+                tc
+                    .current_location
+                    .file
+                    .as_str receiver_target tc.store.format_type_for_source
+                = receiver_type_name
+                tc
+                    .current_location
+                    .file
+                    .as_str expected_receiver tc.store.format_type_for_source
+                = expected_name
+                tc
+                    .current_location
+                    .file
+                    .as_str receiver_type tc.store.format_type_for_source
+                = available_name
+                capability capability_name = available_access
+                "the receiver".to_str = receiver_label
+                if
+                    0 tc
+                        .stack
+                        .values
+                        .length !=
+                then
+                    tc
+                        .stack
+                        .values
+                        .length 1 - tc
+                        .stack
+                        .values
+                        .get = receiver_value
+                    if receiver_value.place std::Option::Some(place) is then
+                        f"`{place}`" = receiver_label
+                    fi
+                fi
+                if expected_receiver.is_exclusive_borrow then
+                    f"Method `{method_name}` needs exclusive access to `{receiver_type_name}`, but {receiver_label} is {available_access}"
+                    f"exclusive receiver: {expected_name}"
+                else
+                    f"Method `{method_name}` needs ownership of `{receiver_type_name}`, but {receiver_label} is {available_access}"
+                    f"owned receiver: {expected_name}"
+                fi = expected_contract = message
+                f"{available_access} receiver: {available_name}" = available_contract
+                available_contract expected_contract tc.current_location.clone message
+                common::ErrorKind::TypeMismatch error::CasaError::with_expected = diagnostic
+                "Available".to_str = diagnostic.got_label
+                diagnostic tc.diagnostics.push_error
+
+                # Recover with the required receiver type so this one conflict
+                # does not produce a follow-on generic type mismatch.
+                if
+                    0 tc
+                        .stack
+                        .values
+                        .length !=
+                then
+                    tc
+                        .stack
+                        .values
+                        .length 1 - tc
+                        .stack
+                        .values
+                        .get_mut = stored_receiver
+                    expected_receiver.clone = stored_receiver.type_value
+                    expected_receiver type_capability = stored_receiver.capability
+                fi
             fi
         fi
     }
@@ -4780,7 +5069,8 @@ impl TypeChecker {
             method.stack_effect.clone = effect
             method.method_name.clone = method_name
             method.trait_type.clone = trait_type
-            method.method_name.as_str receiver_capability effect tc.check_method_receiver_capability
+            receiver method.method_name.as_str receiver_capability effect
+            tc.check_method_receiver_capability
             method.method_name.as_str receiver.make_method_key = method_key
             if
                 0 effect.type_vars.length !=
@@ -6200,8 +6490,9 @@ impl TypeChecker {
                 .get
                 .clone = value
             if return_type.is_borrow ! value.capability ValueCapability::Owned is ! && then
-                self.current_location "Cannot return a borrowed value as owned; clone it first"
-                common::ErrorKind::InvalidVariable self.diagnostics.record_error
+                value self.clone_hint = hint
+                self.current_location f"Cannot return a borrowed value as owned{hint}"
+                common::ErrorKind::InvalidVariable self.diagnostics.record_error_string
                 1 += index
                 continue
             fi
@@ -6353,10 +6644,10 @@ impl TypeChecker {
                 capture_exclusive tc
                     .stack
                     .values
-                    .length capture_name.as_str tc.place_has_conflicting_loan &&
+                    .length capture_name.as_str tc.find_conflicting_loan std::Option::Some(conflict) is &&
             then
-                op.location f"Cannot capture owner `{capture_name}` while it is borrowed"
-                common::ErrorKind::InvalidVariable tc.diagnostics.record_error_string
+                conflict f"Cannot capture owner `{capture_name}` while it is borrowed"
+                tc.report_loan_conflict
             fi
             captured_value tc.release_value
             capture_exclusive capture_name.as_str closure_origins add_origin = closure_origins
@@ -6416,13 +6707,14 @@ impl TypeChecker {
                 return
             fi
             if
-                checker
+                true checker
                     .stack
                     .values
-                    .length hidden_name.as_str checker.has_active_owner_loan
+                    .length hidden_name.as_str checker.find_conflicting_loan
+                std::Option::Some(conflict) is
             then
-                op.location "Question-mark payload cannot borrow from its consumed source"
-                common::ErrorKind::InvalidVariable checker.diagnostics.record_error
+                conflict "Question-mark payload cannot borrow from its consumed source".to_str
+                checker.report_loan_conflict
                 return
             fi
             true hidden_name.as_str checker.set_owner_moved
@@ -7500,6 +7792,8 @@ impl TypeChecker {
                 guard_scope = guard_checker.scope
                 guard_flow guard_checker.restore_ownership_flow
                 std::Map[std::String u64]::new guard_ops count_variable_uses = guard_checker.remaining_uses
+                std::Map[std::String common::Location]::new guard_ops collect_last_variable_uses
+                = guard_checker.last_use_locations
                 function_opt guard_ops guard_checker.run_type_check_ops
                 if guard_checker.path_continues then
                     for name in guard_checker.moved_owners.iter do
@@ -8566,7 +8860,7 @@ impl TypeChecker {
             semantics::analyze_operation = semantics
             semantics.into_method match
                 std::Option::Some(method_semantics) => {
-                    method_name.as_str receiver_capability method_semantics.stack_effect
+                    receiver method_name.as_str receiver_capability method_semantics.stack_effect
                     tc.check_method_receiver_capability
                     if method_semantics.kind semantics::MethodSemanticsKind::TraitBound is then
                         function_opt emitted_ops op receiver method_semantics
@@ -9250,6 +9544,8 @@ pub fn check_ops
     fi
     budget = checker.param_cap
     std::Map[std::String u64]::new ops count_variable_uses = checker.remaining_uses
+    std::Map[std::String common::Location]::new ops collect_last_variable_uses
+    = checker.last_use_locations
     checker.diagnostics.error_count = errors_before_ops
     function_opt ops checker.run_type_check_ops
 
