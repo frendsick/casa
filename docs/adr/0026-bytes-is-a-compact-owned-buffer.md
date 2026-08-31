@@ -1,4 +1,5 @@
 # Bytes is a compact owned buffer
+status: amended by [ADR-0160](0160-os-byte-round-trips-use-bytes-and-cstr.md)
 
 `Bytes` is a distinct standard-library type for arbitrary binary data. It owns a compact growable buffer with one `u8` per byte, is non-`Copy`, moves by default, and is observed through `$Bytes`. Safe mutation requires `mut$Bytes`; ADR-0076 later gives it an explicit allocating `Clone` implementation.
 

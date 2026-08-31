@@ -1,4 +1,5 @@
 # Linux OS strings are Bytes
+status: amended by [ADR-0160](0160-os-byte-round-trips-use-bytes-and-cstr.md)
 
 On Casa's Linux target, process arguments, environment values, directory entry names, and similar OS-provided strings without a UTF-8 guarantee enter safe code as owned `Bytes`. Callers use `to_str` to validate and create an owned `String` when their domain expects text. Casa does not add `OsString` or `OsStr`; on Linux those types would wrap the same arbitrary byte sequences without adding a new invariant.
 

@@ -4,6 +4,22 @@ Casa is a self-hosted programming language and compiler. Its glossary captures p
 
 ## Standard library
 
+**OS byte value**:
+An owned `Bytes` value from a Linux interface that does not guarantee UTF-8. It
+preserves the exact bytes until code validates them as text or borrows them as a
+**C string view**.
+_Avoid_: OS string, native string, OsString
+
+**C string view**:
+A `$cstr` is a non-owning, lifetime-bound view of NUL-terminated bytes for
+foreign calls and Linux system calls. It makes no UTF-8 claim.
+_Avoid_: C text, owned C string
+
+**Linux path argument**:
+A **C string view** supplied to a filesystem operation. Validated text and
+NUL-free **OS byte values** can both provide the view.
+_Avoid_: Path, OsString, raw path
+
 **IoError**:
 The single error enum for all fallible OS syscall operations (file, directory, environment). Wraps errno values into named variants (`NotFound`, `PermissionDenied`, `AlreadyExists`, `IsDirectory`, `NotDirectory`, `BadFd`, `NotEmpty`, `Other(i64)`).
 _Avoid_: FileError, DirError, OsError
@@ -210,6 +226,9 @@ _Avoid_: Release lint, tag lint
 
 ## Relationships
 
+- An **OS byte value** becomes owned text only through explicit UTF-8 validation and copying.
+- Filesystem operations accept one **Linux path argument** representation. Text
+  and byte storage lend that **C string view** only after interior-NUL validation.
 - **Source type syntax** is parsed into the **Type AST** before compiler analysis.
 - Compiler analysis should operate on the **Type AST**, not reparsed or reformatted type strings.
 - Generic types must be **Fully parameterized types** at all compiler boundaries; bare generic names are not valid type expressions.
