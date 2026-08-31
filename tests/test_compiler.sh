@@ -252,6 +252,48 @@ if [ "$TEST_CATEGORY" = all ] || [ "$TEST_CATEGORY" = compiler_integration ]; th
         fi
     fi
 
+    if matches_filter "extern_stack_native" "$@"; then
+        matched=true
+        native_object="$TEST_TMP/extern_stack.o"
+        native_library="$TEST_TMP/libcasa_extern_stack_fixture.a"
+        native_binary="$TEST_TMP/extern_stack_native"
+
+        printf "Running: native/extern_stack ... "
+        if ! cc -std=c11 -Wall -Wextra -Werror \
+            -c "$TESTS_DIR/fixtures/extern_stack.c" -o "$native_object" \
+            2>"$TEST_TMP/native_c_err"
+        then
+            printf "${RED}C FIXTURE COMPILE FAIL${RESET}\n"
+            cat "$TEST_TMP/native_c_err"
+            fail=$((fail+1))
+        elif ! ar rcs "$native_library" "$native_object"; then
+            printf "${RED}C FIXTURE ARCHIVE FAIL${RESET}\n"
+            fail=$((fail+1))
+        elif ! LIBRARY_PATH="$TEST_TMP${LIBRARY_PATH:+:$LIBRARY_PATH}" \
+            "$COMPILER" -L "$LIB_DIR" -l casa_extern_stack_fixture \
+            "$TESTS_DIR/fixtures/extern_stack.casa" -o "$native_binary" \
+            2>"$TEST_TMP/native_casa_err"
+        then
+            printf "${RED}CASA COMPILE FAIL${RESET}\n"
+            cat "$TEST_TMP/native_casa_err"
+            fail=$((fail+1))
+        elif ! output=$("$native_binary" 2>&1 < /dev/null); then
+            printf "${RED}RUNTIME FAIL${RESET}\n"
+            echo "$output"
+            fail=$((fail+1))
+        elif [ "$output" != "87654321
+87654321
+1
+1" ]; then
+            printf "${RED}WRONG OUTPUT${RESET}\n"
+            echo "$output"
+            fail=$((fail+1))
+        else
+            printf "${GREEN}OK${RESET}\n"
+            pass=$((pass+1))
+        fi
+    fi
+
     if matches_filter "extern_struct_native" "$@"; then
         matched=true
         native_object="$TEST_TMP/extern_struct.o"
