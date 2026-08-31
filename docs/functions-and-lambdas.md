@@ -202,20 +202,25 @@ binding's type:
 count print
 ```
 
-A binding inside a function is local, even when a global has the same name.
-Declare a global at the start of a function before you assign it:
+A binding inside a function is local. A top-level binding belongs to the root
+entry-point scope. Named functions cannot capture root locals. Pass mutable
+state as an exclusive parameter:
 
 ```casa
-0 = COUNTER
-
-fn increment_counter {
-    global COUNTER
-    1 += COUNTER
+struct Counter {
+    value: i64
 }
+
+fn increment_counter counter:mut$Counter { 1 += counter.value }
+
+0 Counter = counter
+counter increment_counter
 ```
 
-`global NAME` must appear before other statements. The global must already
-exist. Lambdas cannot declare globals.
+Lexical closures in the root body can capture root locals.
+
+`global` is valid only at the top level and always requires an initializer. It
+does not declare access inside a function.
 
 Declare an immutable runtime global at the top level with an initializer:
 
