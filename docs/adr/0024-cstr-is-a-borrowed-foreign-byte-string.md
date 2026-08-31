@@ -1,4 +1,5 @@
 # cstr is a borrowed foreign byte string
+status: amended by [ADR-0160](0160-os-byte-round-trips-use-bytes-and-cstr.md)
 
 Casa represents a NUL-terminated C byte string as `$cstr`: an immutable, lifetime-bound view that neither owns its storage nor claims that its bytes are valid UTF-8. The borrowed `cstr` value is opaque to safe code. A safe `str.as_cstr -> Option[$cstr]` borrows the source `str`, rejecting interior NUL, and `cstr.to_str $self -> Result[String Utf8Error]` validates and copies foreign bytes into owned Casa text.
 
