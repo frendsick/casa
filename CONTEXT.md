@@ -285,6 +285,7 @@ _Avoid_: Release lint, tag lint
 - Generic bounds appear before the **Stack effect**, such as `[T: Display] T -> None`; bounds are constraints, not stack values.
 - Multiple bounds on one type variable use `+`, such as `[T: Copy + Display]`; every listed bound is required and their order has no semantic meaning.
 - An owned binding is definitely available at a control-flow join only when every continuing incoming path owns or reinitialized it; terminating paths do not participate.
+- Pattern payload bindings follow the subject capability. A successful `if … is` conditionally moves non-`Copy` payloads from an owned subject, while shared and exclusive subjects produce matching borrows. Failed checks retain the complete subject, and `Copy` payload bindings do not consume it.
 - `ptr` is a nullable, non-owning, `Copy` raw address. Existing load/store intrinsics and pointer arithmetic require `unsafe`; only explicit `ptr::as_ref[T]` and `ptr::as_mut[T]` form typed borrows.
 - An inherent method wins over defaults from explicitly implemented traits. Without one, more than one applicable default-method declaration is a compile-time ambiguity rather than a declaration-order choice.
 - A trait implementation may be declared only by the module defining the type or the trait; duplicate and overlapping implementations are rejected without specialization.
