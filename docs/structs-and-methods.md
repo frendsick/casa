@@ -77,6 +77,24 @@ person Person::description print
 A type can have more than one `impl` block. Built-in types can also have
 methods.
 
+An `impl` block can target one concrete generic type. Concrete impls can use
+the same method name because each full receiver type has a separate method:
+
+```casa
+impl Box[i64] {
+    fn label self:$Box[i64] -> str { "integer" }
+}
+
+impl Box[bool] {
+    fn label self:$Box[bool] -> str { "boolean" }
+}
+```
+
+Casa checks the concrete receiver before a generic impl such as `impl[T]
+Box[T]`. Use the full receiver in a qualified call or function reference, such
+as `box Box[i64]::label` or `&Box[i64]::label`. Method visibility is unchanged.
+A private concrete method is available only in its defining module.
+
 The declared receiver controls which values can call a method:
 
 | Receiver | Owned `T` | Shared `$T` | Exclusive `mut$T` |

@@ -5350,7 +5350,7 @@ pub fn copy_representation_is_eligible
             false
         }
         common::Type::Generic(generic) => {
-            if f"{generic.base}::drop".as_str store.has_function then
+            if store typ common::find_drop_function_name.is_some then
                 false return
             fi
             if generic.base visiting.has then
@@ -5452,7 +5452,8 @@ pub fn validate_drop_methods parser:mut$Parser {
             0 effect.parameters.get = receiver
             if "self" receiver.name.as_str == receiver.typ.is_exclusive_borrow && then
                 if receiver.typ.borrow_target std::Option::Some(target) is then
-                    if 0 name_parts.get target.match_base == then
+                    target implementation_receiver_name = receiver_name
+                    if 0 name_parts.get receiver_name.as_str == then
                         true = valid
                     fi
                 fi
@@ -5612,6 +5613,15 @@ pub fn make_copy_clone_fallback
     variables function common::Function::set_variables
     function
 }
+# Generic impls share the base receiver identity. Fully concrete impls use the
+# formatted receiver so their methods can coexist with other specializations.
+pub fn implementation_receiver_name receiver:$common::Type -> std::String {
+    if receiver.has_unresolved_type_var then
+        receiver.match_base.to_str
+    else
+        receiver.format
+    fi
+}
 
 pub fn synthesize_copy_clone_fallbacks parser:mut$Parser {
     if
@@ -5647,7 +5657,8 @@ pub fn synthesize_copy_clone_fallbacks parser:mut$Parser {
             trait_impl parser.store.set_trait_impl
             continue
         fi
-        f"{trait_impl.receiver.match_base}::{common::STD_COPY_TRAIT}::clone" = function_name
+        trait_impl.receiver implementation_receiver_name = receiver_name
+        f"{receiver_name}::{common::STD_COPY_TRAIT}::clone" = function_name
         if function_name.as_str parser.store.has_function ! then
             function_name.as_str trait_impl parser make_copy_clone_fallback = function
             function parser.store.set_function
@@ -5726,16 +5737,28 @@ pub fn finalize_trait_impl_methods parser:mut$Parser skip_functions:$std::Set[st
                 function_name.clone method_name.clone trait_methods.set
                 continue
             fi
-            f"{trait_impl.receiver.match_base}::{method_name}" = inherent_name
+            trait_impl.receiver implementation_receiver_name = receiver_name
+            f"{receiver_name}::{method_name}" = inherent_name
             if inherent_name.as_str parser.store.has_function ! then
                 if function_name.as_str parser.store.get_function std::Option::Some(function) is then
                     function.clone_for_import = inherent_function
                     inherent_name.clone inherent_function common::Function::set_name
-                    inherent_function parser.store.set_function
-                    inherent_name.clone parser
-                        .current_module_mut
-                        .declared_names
-                        .add
+                    inherent_function inherent_name.clone parser.put_function
+                    if
+                        function_name.as_str parser
+                            .store
+                            .public_symbols
+                            .has_str
+                    then
+                        inherent_name.as_str parser
+                            .store
+                            .module_private_symbols
+                            .remove_str
+                        inherent_name.clone parser
+                            .store
+                            .public_symbols
+                            .add
+                    fi
                 fi
             fi
         done
@@ -5779,11 +5802,7 @@ pub fn parse_impl_block parser:mut$Parser cursor:mut$TokenCursor {
 
     # Get base type name (without type params)
     impl_type.match_base = base_type
-    if impl_type.has_unresolved_type_var then
-        base_type.clone
-    else
-        impl_type.format
-    fi = impl_name
+    impl_type implementation_receiver_name = impl_name
 
     std::List[common::TraitBound]::new = implemented_traits
     std::Map[std::String std::String]::new = trait_impl_methods
@@ -8110,7 +8129,12 @@ pub fn try_parse_explicit_associated_item
                     member_token common::Token::value.clone = member
                     token common::Token::value.clone = base
                     token common::Token::location f"{base}::{member}" common::OpValue::Identifier common::Op::new = associated_op
-                    type_args base common::GenericType common::Type::Generic = result_type
+                    base.clone = receiver_base
+                    if '&' 0 receiver_base.as_str.at == then
+                        receiver_base.as_str 1 receiver_base.length 1 -
+                        str::substring = receiver_base
+                    fi
+                    type_args receiver_base common::GenericType common::Type::Generic = result_type
                     result_type std::Option::Some associated_op common::Op::set_type_hint
                     associated_op ops.push
                     true return
@@ -9386,12 +9410,12 @@ pub fn resolve_identifiers
         if current_op.value common::OpValue::Identifier(ident_ref) is then
             ident_ref.clone = ident
             if
-                current_op
-                    .location
-                    .file
-                    .as_str ident.as_str store.is_private_from
+                ident.as_str current_op store is_private_identifier_or_receiver
+                ident.as_str current_op store can_defer_private_method_check !
+                &&
             then
-                current_op.location.clone f"Declaration `{ident}` is private" common::ErrorKind::InvalidScope error::CasaError::new resolve_errors.push
+                current_op.location.clone f"Declaration `{ident}` is private"
+                common::ErrorKind::InvalidScope error::CasaError::new resolve_errors.push
                 current_op op_index 1 - ops.set
                 continue
             fi
@@ -9416,6 +9440,17 @@ pub fn resolve_identifiers
                 continue
             fi
             if ident.as_str current_op store try_resolve_type_qualified_method then
+                current_op op_index 1 - ops.set
+                continue
+            fi
+            if
+                current_op
+                    .location
+                    .file
+                    .as_str ident.as_str store.is_private_from
+            then
+                current_op.location.clone f"Declaration `{ident}` is private"
+                common::ErrorKind::InvalidScope error::CasaError::new resolve_errors.push
                 current_op op_index 1 - ops.set
                 continue
             fi
@@ -9451,6 +9486,57 @@ pub fn resolve_identifiers
     while resolve_errors.is_empty ! do
         resolve_errors.pop diagnostics.push_error
     done
+}
+# Generic associated-item syntax erases type arguments from the identifier.
+# Check both that identifier and the receiver which remains in the type hint.
+
+fn is_private_identifier_or_receiver store:$common::SymbolStore op:$common::Op ident:$str -> bool {
+    op
+        .location
+        .file
+        .as_str = source_file
+    if source_file ident store.is_private_from then
+        true return
+    fi
+    if op.type_hint std::Option::Some(receiver_type) is then
+        receiver_type.match_base = receiver_name
+        source_file receiver_name.as_str store.is_private_from return
+    fi
+    false
+}
+# A concrete method can be visible even when its erased generic fallback is
+# private. Other hinted associated items must pass the normal privacy check.
+
+fn can_defer_private_method_check store:$common::SymbolStore op:$common::Op ident:$str -> bool {
+    if op.type_hint std::Option::Some(receiver_type) is then
+        if ident "::" str::find 0 <= ! then
+            false return
+        fi
+        ident "::" str::split = parts
+        parts.length 1 - parts.get = method_name
+        receiver_type.match_base = receiver_base
+        if
+            op
+                .location
+                .file
+                .as_str receiver_base.as_str store.is_private_from
+        then
+            false return
+        fi
+        if receiver_base.as_str store.enums.get_str std::Option::Some(casa_enum) is then
+            if method_name.as_str casa_enum common::CasaEnum::variants common::string_list_contains then
+                false return
+            fi
+        fi
+        f"{receiver_type.format}::{method_name}" = exact_name
+        if exact_name.as_str store.has_function then
+            op
+                .location
+                .file
+                .as_str exact_name.as_str store.is_private_from ! return
+        fi
+    fi
+    false
 }
 # Try resolving compiler-owned numeric associated conversion calls.
 
@@ -9573,15 +9659,35 @@ pub fn try_resolve_fn_ref
         0 ref_parts.get.as_str common::parse_type_str = receiver_type
         1 ref_parts.get.clone common::GenericType::new common::Type::Generic = qualifier_type
         if op.type_hint std::Option::Some(hint) is then
-            if hint.type_params std::Option::Some(type_arguments) is then
+            hint.match_base = hint_base
+            if 0 ref_parts.get.as_str hint_base.as_str == then
+                hint.clone = receiver_type
+            elif hint.type_params std::Option::Some(type_arguments) is then
                 type_arguments.clone 1 ref_parts.get.clone common::GenericType common::Type::Generic = qualifier_type
             fi
         fi
         2 ref_parts.get = method_name
         store receiver_type qualifier_type method_name.as_str semantics::resolve_qualified_method_semantics
         = method_opt
+        if method_opt.is_none then
+            if op.type_hint std::Option::Some(hint) is then
+                store std::Option[common::Function]::None hint method_name.as_str
+                semantics::resolve_method_semantics
+                = method_opt
+            fi
+        fi
         if method_opt std::Option::Some(method) is then
             if method.function_name.as_str store.is_function_unsafe std::Option::Some(is_unsafe) is then
+                if
+                    op
+                        .location
+                        .file
+                        .as_str method.function_name.as_str store.is_private_from
+                then
+                    op common::Op::location.clone f"Function `{method.function_name}` is private"
+                    common::ErrorKind::InvalidScope error::CasaError::new resolve_errors.push
+                    true return
+                fi
                 if is_unsafe then
                     op common::Op::location.clone f"Unsafe function `{method.function_name}` cannot be referenced" common::ErrorKind::InvalidScope error::CasaError::new resolve_errors.push
                     true return
@@ -9606,11 +9712,24 @@ pub fn try_resolve_fn_ref
     fi
     if 2 ref_parts.length == then
         0 ref_parts.get.as_str common::parse_type_str = receiver_type
+        if op.type_hint std::Option::Some(hint) is then
+            hint.clone = receiver_type
+        fi
         1 ref_parts.get = method_name
         store std::Option[common::Function]::None receiver_type method_name.as_str semantics::resolve_method_semantics
         = method_opt
         if method_opt std::Option::Some(method) is then
             if method.function_name.as_str store.is_function_unsafe std::Option::Some(is_unsafe) is then
+                if
+                    op
+                        .location
+                        .file
+                        .as_str method.function_name.as_str store.is_private_from
+                then
+                    op common::Op::location.clone f"Function `{method.function_name}` is private"
+                    common::ErrorKind::InvalidScope error::CasaError::new resolve_errors.push
+                    true return
+                fi
                 if is_unsafe then
                     op common::Op::location.clone f"Unsafe function `{method.function_name}` cannot be referenced" common::ErrorKind::InvalidScope error::CasaError::new resolve_errors.push
                     true return
@@ -9712,15 +9831,29 @@ pub fn try_resolve_type_qualified_method
     op:mut$common::Op
     ident:$str
 -> bool {
-    if ident store.get_function.is_some then
-        false return
-    fi
     ident "::" str::split = parts
-    if 2 parts.length != then
-        false return
+    common::make_unknown_type = receiver_type
+    if op.type_hint std::Option::Some(hint) is then
+        hint.clone = receiver_type
+        if 2 parts.length != 3 parts.length != && then
+            false return
+        fi
+    else
+        if ident store.get_function.is_some then
+            false return
+        fi
+        if 2 parts.length != then
+            false return
+        fi
+        0 parts.get.as_str common::parse_type_str = receiver_type
     fi
-    0 parts.get.as_str common::parse_type_str = receiver_type
-    1 parts.get = method_name
+    parts.length 1 - parts.get = method_name
+    if op.type_hint.is_some then
+        f"{receiver_type.format}::{method_name}" = exact_name
+        if exact_name.as_str store.has_function ! ident store.get_function.is_some && then
+            false return
+        fi
+    fi
     store std::Option[common::Function]::None receiver_type method_name.as_str semantics::resolve_method_semantics = method_opt
     if method_opt.is_none then
         false return
