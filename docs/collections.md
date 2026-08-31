@@ -190,8 +190,19 @@ end
 | `clone self:$Map[K V] -> Map[K V]` | Independent map when `K: Clone` and `V: Clone` |
 
 `get` and `iter` keep the map as owner. `set` destroys a replaced value.
-`delete` destroys a removed value. `remove` moves it out. Iteration order is
-not specified.
+`delete` destroys a removed value. `remove` moves it out.
+
+Hash collisions do not merge unequal keys. `Map` compares same-hash keys with
+`Eq`, so lookup, replacement, and removal remain correct. Heavy collisions can
+make an operation linear in the number of entries.
+
+Iteration order is not specified. It can change after insertion, removal, or
+resizing, and between processes, builds, releases, and targets. `keys` and
+`values` also have unspecified order.
+
+Standard hashes are unkeyed. `Map` does not defend against adversarial
+collisions. Bound or validate untrusted key sets, or use a specialized
+collection.
 
 `Map[String V]` also accepts borrowed text keys without allocating a temporary
 owner:
@@ -232,6 +243,7 @@ Set[str]::new = names
 | `clone self:$Set[K] -> Set[K]` | Independent set when `K: Clone` |
 
 `iter` keeps the set as owner. `to_list` and `clone` require `K: Clone`.
+Collisions, traversal order, and untrusted-key behavior match `Map`.
 
 `Set[String]` provides `add_str`, `has_str`, and `remove_str` for borrowed
 `$str` values. `add_str` copies the key. Lookup and removal do not allocate.
