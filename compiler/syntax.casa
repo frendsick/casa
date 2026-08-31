@@ -415,12 +415,10 @@ impl Parser {
             .set
     }
 
-    pub fn put_trait_impl self:mut$Parser name:std::String trait_impl:common::TraitImpl {
+    pub fn put_trait_impl self:mut$Parser trait_impl:common::TraitImpl {
+        trait_impl common::trait_impl_key = name
         name.as_str self.register_declaration
-        trait_impl name self
-            .store
-            .trait_impls
-            .set
+        trait_impl self.store.set_trait_impl
         std::Map[std::String bool]::new = self.store.copy_types
     }
 }
@@ -565,18 +563,12 @@ impl common::SymbolStore {
                     .clone name.clone self.traits.set
             fi
         done
-        for
-            name in imported
-                .trait_impls
-                .keys
-                .iter
-        do
-            if name self.trait_impls.has ! then
-                name imported
-                    .trait_impls
-                    .get
+        for name in imported.get_trait_impl_names.iter do
+            if name.as_str self.has_trait_impl ! then
+                name.as_str imported
+                    .get_trait_impl
                     .unwrap
-                    .clone name.clone self.trait_impls.set
+                    .clone self.set_trait_impl
             fi
         done
     }
@@ -3095,13 +3087,7 @@ pub fn find_derived_override
 -> std::Option[std::String] {
     std::Option[std::String]::None = found
     std::Option[std::String]::None = rejected
-    for
-        pair in parser
-            .store
-            .trait_impls
-            .iter
-    do
-        pair.second = trait_impl: $common::TraitImpl
+    for trait_impl in receiver parser.store.get_trait_impl_candidates_for_receiver do
         if trait_impl type_vars receiver match_derived_receiver_impl ! then
             continue
         fi
@@ -3217,22 +3203,19 @@ pub fn install_derived_trait_impl
     methods:$std::Map[std::String std::String]
     location:$common::Location
 {
-    parser
-        .store
-        .trait_impls
-        .keys = trait_impl_keys
-    for trait_impl_key in trait_impl_keys.iter do
-        trait_impl_key parser
+    std::Option[common::TraitImpl]::None = existing_opt
+    for
+        existing in trait_name receiver parser
             .store
-            .trait_impls
-            .get
-            .unwrap = existing: $common::TraitImpl
-        if existing.trait_bound.name trait_name != then
-            continue
-        fi
+            .get_trait_impl_candidates_for_receiver_and_trait
+    do
         if existing type_vars receiver match_derived_receiver_impl ! then
             continue
         fi
+        existing.clone std::Option::Some = existing_opt
+        break
+    done
+    if existing_opt std::Option::Some(existing) is then
         if
             existing required_trait required_type_vars receiver parser.store does_derived_override_cover_domain !
         then
@@ -3246,12 +3229,9 @@ pub fn install_derived_trait_impl
             fi
         done
         required_trait required_type_vars type_vars merged parser add_named_derived_trait_bounds
-        merged trait_impl_key.clone parser
-            .store
-            .trait_impls
-            .set
+        merged parser.store.set_trait_impl
         return
-    done
+    fi
 
     required_type_vars type_vars required_trait make_derived_trait_bounds = trait_bounds
     location.clone
@@ -4766,19 +4746,19 @@ pub fn receiver_is_local
 
 pub fn register_trait_impl parser:mut$Parser trait_impl:common::TraitImpl {
     for
-        pair in parser
+        existing in trait_impl
+            .trait_bound
+            .name
+            .as_str trait_impl.receiver parser
             .store
-            .trait_impls
-            .iter
+            .get_trait_impl_candidates_for_receiver_and_trait
     do
-        pair.second = existing: $common::TraitImpl
         if trait_impl existing trait_impls_overlap then
             trait_impl.location f"Trait implementation `{trait_impl common::trait_impl_key}` overlaps an existing implementation in `{existing.location.file}`" common::ErrorKind::DuplicateName parser.state.record_error_string
             return
         fi
     done
-    trait_impl common::trait_impl_key = key
-    trait_impl key parser.put_trait_impl
+    trait_impl parser.put_trait_impl
 }
 
 pub fn normalize_trait_method_effect
@@ -5633,15 +5613,11 @@ pub fn synthesize_copy_clone_fallbacks parser:mut$Parser {
     if parser.store clone_trait_type copy_type semantics::trait_type_implies ! then
         return
     fi
-    parser
-        .store
-        .trait_impls
-        .keys = copy_trait_impl_keys
+    parser.store.get_trait_impl_names = copy_trait_impl_keys
     for copy_impl_key in copy_trait_impl_keys.iter do
-        copy_impl_key parser
+        copy_impl_key.as_str parser
             .store
-            .trait_impls
-            .get
+            .get_trait_impl
             .unwrap common::clone_trait_impl = trait_impl
         trait_impl.trait_bound common::trait_bound_to_type = implemented_trait
         if parser.store copy_type implemented_trait semantics::trait_type_implies ! then
@@ -5650,10 +5626,7 @@ pub fn synthesize_copy_clone_fallbacks parser:mut$Parser {
         parser.store clone_trait_type common::clone_type std::Option::Some trait_impl.receiver "clone" semantics::resolve_trait_method_semantics_for = clone_method
         if clone_method std::Option::Some(method) is then
             method.function_name.clone "clone".to_str trait_impl.methods.set
-            trait_impl copy_impl_key.clone parser
-                .store
-                .trait_impls
-                .set
+            trait_impl parser.store.set_trait_impl
             continue
         fi
         f"{trait_impl.receiver.match_base}::{common::STD_COPY_TRAIT}::clone" = function_name
@@ -5666,10 +5639,7 @@ pub fn synthesize_copy_clone_fallbacks parser:mut$Parser {
                 .add
         fi
         function_name.clone "clone".to_str trait_impl.methods.set
-        trait_impl copy_impl_key.clone parser
-            .store
-            .trait_impls
-            .set
+        trait_impl parser.store.set_trait_impl
     done
 }
 
@@ -5677,8 +5647,7 @@ pub fn validate_trait_impls parser:mut$Parser {
     for
         trait_impl in parser
             .store
-            .trait_impls
-            .values
+            .clone_trait_impls
             .iter
     do
         if trait_impl.receiver common::Type::TypeVar(_) is then
@@ -5719,15 +5688,11 @@ pub fn validate_trait_impls parser:mut$Parser {
 }
 
 pub fn finalize_trait_impl_methods parser:mut$Parser skip_functions:$std::Set[std::String] {
-    parser
-        .store
-        .trait_impls
-        .keys = trait_impl_keys
+    parser.store.get_trait_impl_names = trait_impl_keys
     for common::trait_impl_key in trait_impl_keys.iter do
-        common::trait_impl_key parser
+        common::trait_impl_key.as_str parser
             .store
-            .trait_impls
-            .get
+            .get_trait_impl
             .unwrap common::clone_trait_impl = trait_impl
         trait_impl.trait_bound common::trait_bound_to_type = trait_type
         std::Map[std::String std::String]::new = trait_methods
@@ -5756,10 +5721,7 @@ pub fn finalize_trait_impl_methods parser:mut$Parser skip_functions:$std::Set[st
             fi
         done
         trait_methods trait_impl common::TraitImpl::set_methods
-        trait_impl common::trait_impl_key.clone parser
-            .store
-            .trait_impls
-            .set
+        trait_impl parser.store.set_trait_impl
     done
 }
 

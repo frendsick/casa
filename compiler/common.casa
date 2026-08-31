@@ -3888,7 +3888,9 @@ pub struct SymbolStore {
     pub enums:                  std::Map[std::String CasaEnum]
     pub structs:                std::Map[std::String CasaStruct]
     pub traits:                 std::Map[std::String CasaTrait]
-    pub trait_impls:            std::Map[std::String TraitImpl]
+    trait_impls:                std::Map[std::String TraitImpl]
+    trait_impls_by_receiver:    std::Map[std::String std::List[std::String]]
+    trait_impls_by_pair:        std::Map[std::String std::List[std::String]]
     pub builtins:               std::Set[std::String]
     pub copy_types:             std::Map[std::String bool]
     pub borrow_shapes:          std::Map[std::String bool]
@@ -3917,6 +3919,67 @@ fn retain_set_names values:mut$std::Set[std::String] retained:$std::Set[std::Str
             name.as_str values.remove_str
         fi
     done
+}
+
+fn clear_map [V] values:mut$std::Map[std::String V] {
+    values.keys = names
+    for name in names.iter do
+        name.as_str values.delete_str
+    done
+}
+
+fn append_trait_impl_index
+    index:mut$std::Map[std::String std::List[std::String]]
+    index_key:$str
+    impl_name:std::String
+{
+    index_key index.get_mut_str = impl_names_opt
+    impl_names_opt match
+        std::Option::Some(impl_names) => impl_name impl_names.push
+        std::Option::None => {
+            std::List[std::String]::new = impl_names
+            impl_name impl_names.push
+            impl_names index_key.to_str index.set
+        }
+    end
+}
+
+fn make_trait_impl_receiver_index_key receiver:$Type -> std::String {
+    if receiver Type::Function(_) is then
+        "function".to_str return
+    fi
+    receiver.match_base
+}
+
+fn make_trait_impl_pair_index_key receiver:$Type trait_name:$str -> std::String {
+    receiver make_trait_impl_receiver_index_key = receiver_key
+    f"{receiver_key}: {trait_name}"
+}
+
+pub struct TraitImplCandidates {
+    trait_impls:  $std::Map[std::String TraitImpl]
+    index:        $std::Map[std::String std::List[std::String]]
+    index_key:    std::String
+    impl_index:   u64
+    current_name: std::String
+}
+
+impl TraitImplCandidates: std::Iterable[$TraitImpl] {
+    pub fn next self:mut$TraitImplCandidates -> std::Option[$TraitImpl] {
+        self.impl_index = impl_index
+        1 += self.impl_index
+        if
+            self.index_key.as_str self
+                .index
+                .get_str std::Option::Some(impl_names) is
+        then
+            if impl_index impl_names.length > then
+                impl_index impl_names.get.clone = self.current_name
+                self.current_name.as_str self.trait_impls.get_str return
+            fi
+        fi
+        std::Option[$TraitImpl]::None
+    }
 }
 
 impl SymbolStore {
@@ -3965,6 +4028,69 @@ impl SymbolStore {
 
     pub fn restore_function self:mut$SymbolStore function:Function { function self.set_function }
 
+    pub fn get_trait_impl self:$SymbolStore name:$str -> std::Option[$TraitImpl] {
+        name self.trait_impls.get_str
+    }
+
+    pub fn has_trait_impl self:$SymbolStore name:$str -> bool { name self.trait_impls.has_str }
+
+    pub fn get_trait_impl_names self:$SymbolStore -> std::List[std::String] {
+        self.trait_impls.keys
+    }
+
+    pub fn clone_trait_impls self:$SymbolStore -> std::List[TraitImpl] { self.trait_impls.values }
+
+    # Insertions extend both indexes. Replacements keep the same derived key.
+    pub fn set_trait_impl self:mut$SymbolStore trait_impl:TraitImpl {
+        trait_impl trait_impl_key = name
+        name.as_str self.trait_impls.has_str ! = is_new
+        trait_impl.receiver make_trait_impl_receiver_index_key = receiver_key
+        trait_impl
+            .trait_bound
+            .name
+            .as_str trait_impl.receiver make_trait_impl_pair_index_key = pair_key
+        trait_impl name.clone self.trait_impls.set
+        if is_new then
+            name.clone receiver_key.as_str self.trait_impls_by_receiver append_trait_impl_index
+            name.clone pair_key.as_str self.trait_impls_by_pair append_trait_impl_index
+        fi
+    }
+
+    pub fn get_trait_impl_candidates_for_receiver
+        self:$SymbolStore
+        receiver:$Type
+    -> TraitImplCandidates {
+        receiver make_trait_impl_receiver_index_key = receiver_key
+        std::String::new
+        0 receiver_key self.trait_impls_by_receiver self.trait_impls TraitImplCandidates
+    }
+
+    pub fn get_trait_impl_candidates_for_receiver_and_trait
+        self:$SymbolStore
+        receiver:$Type
+        trait_name:$str
+    -> TraitImplCandidates {
+        trait_name receiver make_trait_impl_pair_index_key = pair_key
+        std::String::new
+        0 pair_key self.trait_impls_by_pair self.trait_impls TraitImplCandidates
+    }
+
+    fn rebuild_trait_impl_indexes self:mut$SymbolStore {
+        self.trait_impls_by_receiver clear_map
+        self.trait_impls_by_pair clear_map
+        for pair in self.trait_impls.iter do
+            pair.second.receiver make_trait_impl_receiver_index_key = receiver_key
+            pair
+                .second
+                .trait_bound
+                .name
+                .as_str pair.second.receiver make_trait_impl_pair_index_key
+            = pair_key
+            pair.first.clone receiver_key.as_str self.trait_impls_by_receiver append_trait_impl_index
+            pair.first.clone pair_key.as_str self.trait_impls_by_pair append_trait_impl_index
+        done
+    }
+
     pub fn retain_file_functions self:mut$SymbolStore file:$str {
         self.functions.keys = function_names
         for name in function_names.iter do
@@ -3990,6 +4116,7 @@ impl SymbolStore {
         retained self.structs retain_map_names
         retained self.traits retain_map_names
         retained self.trait_impls retain_map_names
+        self.rebuild_trait_impl_indexes
         retained self.immutable_globals retain_set_names
         retained self.immutable_global_files retain_map_names
         retained self.immutable_global_slots retain_map_names
@@ -4093,6 +4220,8 @@ pub fn symbol_store_new -> SymbolStore {
     std::Map[std::String bool]::new
     std::Map[std::String bool]::new
     builtins
+    std::Map[std::String std::List[std::String]]::new
+    std::Map[std::String std::List[std::String]]::new
     std::Map[std::String TraitImpl]::new
     std::Map[std::String CasaTrait]::new
     std::Map[std::String CasaStruct]::new
