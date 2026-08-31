@@ -102,3 +102,6 @@ Repeatable. Adds a directory to the module search path:
 casac -L lib program.casa
 casac -L lib -L vendor program.casa
 ```
+
+This option does not add a native linker search path. Use `-l` /
+`--link-library` to name a native library.

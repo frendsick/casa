@@ -1,0 +1,164 @@
+import "std" as std
+import "../../compiler/analysis.casa" as analysis
+import "../../compiler/bytecode.casa" as bytecode
+import "../../compiler/common.casa" as common
+import "../../compiler/emitter.casa" as emitter
+import "../../compiler/error.casa" as error
+import "../../compiler/typechecker.casa" as typechecker
+import "../../lib/test.casa" as test
+import "helpers.casa" as helpers
+
+pub fn assert_contains needle:$str haystack:$std::String message:$str {
+    message haystack.as_str needle str::find 0 <= test::assert_true
+}
+
+pub fn typecheck_extern_source
+    code:$str
+    parse_diagnostics:mut$error::Diagnostics
+-> typechecker::TypecheckResult {
+    parse_diagnostics code helpers::typecheck_test_source
+}
+
+pub fn test_extern_declaration_and_call_lowering {
+    "extern_declaration_and_call_lowering" test::test_start
+    error::Diagnostics::new = parse_diagnostics
+    parse_diagnostics
+    "extern fn abs value:i32 -> i32\nunsafe { -7 = value:i32 value abs drop }"
+    typecheck_extern_source = result
+    parse_diagnostics "extern syntax" helpers::assert_no_errors
+    result.diagnostics "extern call typechecks" helpers::assert_no_errors
+
+    "abs" result
+        .store
+        .get_function
+        .unwrap = function
+    "extern is unsafe" function.is_unsafe test::assert_true
+    "extern symbol" "abs" function
+        .extern_symbol
+        .clone
+        .unwrap
+        .as_str test::assert_str_eq
+
+    result bytecode::compile_typechecked.unwrap = program
+    false = found_call
+    for instruction in program.bytecode.iter do
+        if instruction common::InstValue::ExternCall(call) is then
+            "bytecode symbol" "abs" call.symbol.as_str test::assert_str_eq
+            true = found_call
+        fi
+    done
+    "extern bytecode" found_call test::assert_true
+
+    program emitter::emit = assembly
+    "first integer argument" assembly "movq 0(%r13), %rdi" assert_contains
+    "C symbol call" assembly "call abs" assert_contains
+    "i32 return extension" assembly "movslq %eax, %rax" assert_contains
+}
+
+pub fn test_extern_abi_type_whitelist {
+    "extern_abi_type_whitelist" test::test_start
+    error::Diagnostics::new = valid_parse_diagnostics
+    valid_parse_diagnostics
+    "extern fn accepted a:i8 b:u16 c:i32 d:u64 e:f32 f:f64 p:ptr text:$cstr value:mut$i32 -> ptr"
+    typecheck_extern_source = valid
+    valid_parse_diagnostics "valid extern syntax" helpers::assert_no_errors
+    valid.diagnostics "valid extern ABI types" helpers::assert_no_errors
+
+    error::Diagnostics::new = invalid_parse_diagnostics
+    invalid_parse_diagnostics
+    "extern fn bad_bool value:bool\nextern fn bad_str value:str\nextern fn bad_return -> $i32"
+    typecheck_extern_source = invalid
+    invalid_parse_diagnostics "invalid declarations parse" helpers::assert_no_errors
+    invalid.diagnostics "bool rejection" "Extern parameter type `bool` is not C-ABI safe"
+    helpers::assert_error_contains
+    invalid.diagnostics "str rejection" "Extern parameter type `str` is not C-ABI safe"
+    helpers::assert_error_contains
+    invalid.diagnostics "borrowed return rejection" "Extern return type `$i32` is not C-ABI safe"
+    helpers::assert_error_contains
+}
+
+pub fn test_extern_calls_require_unsafe {
+    "extern_calls_require_unsafe" test::test_start
+    error::Diagnostics::new = call_parse_diagnostics
+    call_parse_diagnostics
+    "extern fn abs value:i32 -> i32\n-7 = value:i32 value abs drop"
+    typecheck_extern_source = call_result
+    call_result.diagnostics "unsafe call" "Unsafe operation `abs`" helpers::assert_error_contains
+
+    error::Diagnostics::new = reference_parse_diagnostics
+    reference_parse_diagnostics "extern fn abs value:i32 -> i32\n&abs drop"
+    typecheck_extern_source = reference_result
+    reference_result drop
+    reference_parse_diagnostics "unsafe reference" "Unsafe function `abs` cannot be referenced"
+    helpers::assert_error_contains
+}
+
+pub fn test_extern_declaration_shape_errors {
+    "extern_declaration_shape_errors" test::test_start
+    error::Diagnostics::new = body_diagnostics
+    body_diagnostics "extern fn invalid { 1 drop }" helpers::parse_resolve_test_source drop
+    body_diagnostics "body rejection" "Extern function declarations cannot have a body"
+    helpers::assert_error_contains
+
+    error::Diagnostics::new = return_diagnostics
+    return_diagnostics "extern fn invalid -> i32 i64" helpers::parse_resolve_test_source drop
+    return_diagnostics "return arity" "Extern functions can return at most one value"
+    helpers::assert_error_contains
+
+    error::Diagnostics::new = multiline_body_diagnostics
+    multiline_body_diagnostics "extern fn invalid\n{ 1 drop }" helpers::parse_resolve_test_source drop
+    multiline_body_diagnostics "multiline body rejection"
+    "Extern function declarations cannot have a body" helpers::assert_error_contains
+}
+
+pub fn test_imported_extern_preserves_native_symbol {
+    "imported_extern_preserves_native_symbol" test::test_start
+    "import \"/tmp/casa_extern_import.casa\" as native\nunsafe { -7 = value:i32 value native::abs drop }".to_str
+    "/tmp/casa_extern_root.casa".to_str analysis::AnalysisInput::new = input
+    "pub extern fn abs value:i32 -> i32".to_str
+    "/tmp/casa_extern_import.casa".to_str input.source_overrides.set
+    input analysis::analyze.into_parts = typechecked = sources = diagnostics
+    sources drop
+    "imported extern analysis" diagnostics.has_errors ! test::assert_true
+    typechecked.unwrap bytecode::compile_typechecked.unwrap emitter::emit = assembly
+    "native symbol is not namespaced" assembly "call abs" assert_contains
+}
+
+pub fn test_extern_register_and_stack_arguments {
+    "extern_register_and_stack_arguments" test::test_start
+    std::List[common::Parameter]::new = parameters
+    0 (u64) = integer_index
+    while integer_index 7 > do
+        "i64" common::parse_type_str common::Parameter::new parameters.push
+        1 += integer_index
+    done
+    0 (u64) = float_index
+    while float_index 9 > do
+        "f64" common::parse_type_str common::Parameter::new parameters.push
+        1 += float_index
+    done
+    std::List[common::Type]::new = return_types
+    return_types parameters common::StackEffect::new "mixed".to_str common::ExternCall::new
+    common::InstValue::ExternCall = extern_call
+    std::List[common::InstValue]::new = instructions
+    extern_call instructions.push
+    0 0
+    std::List[common::StaticStruct]::new
+    std::List[common::StaticArray]::new
+    std::List[std::String]::new
+    std::Map[std::String std::List[common::InstValue]]::new
+    instructions
+    common::Program emitter::emit = assembly
+
+    "sixth integer register" assembly "movq 40(%r13), %r9" assert_contains
+    "eighth float register" assembly "movsd 112(%r13), %xmm7" assert_contains
+    "later stack argument first" assembly "pushq 120(%r13)" assert_contains
+    "earlier stack argument second" assembly "pushq 48(%r13)" assert_contains
+}
+test_extern_declaration_and_call_lowering
+test_extern_abi_type_whitelist
+test_extern_calls_require_unsafe
+test_extern_declaration_shape_errors
+test_imported_extern_preserves_native_symbol
+test_extern_register_and_stack_arguments
+test::test_summary

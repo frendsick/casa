@@ -259,6 +259,8 @@ fn fizzbuzz number:i64 {
 fn add a:i64 b:i64 -> i64 {
     a b +
 }
+
+extern fn strlen text:$cstr -> u64
 ```
 
 ### Inline definitions
@@ -286,7 +288,7 @@ not apply to lambdas or match-arm blocks.
 ### Wrapped form
 
 When the function declaration would exceed 100 characters, wrap as follows.
-Keep `pub` and `unsafe` before `fn` on the first line.
+Keep `pub`, `unsafe`, or `extern` before `fn` on the first line.
 
 - `fn name` alone on the first line
 - Each parameter on its own line, indented 4 spaces, `name:type` compact
@@ -322,6 +324,16 @@ applies to the wrapped form, whose first line is `unsafe fn name`:
 unsafe fn read_word address:ptr -> u64 {
     unsafe { address load64 }
 }
+```
+
+An extern function prefixes the bodyless declaration with `extern`. A wrapped
+extern declaration ends after its return type and has no opening brace:
+
+```casa
+extern fn native_operation
+    address:ptr
+    value:i64
+-> i32
 ```
 
 ---

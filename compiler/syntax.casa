@@ -751,6 +751,7 @@ pub fn is_parser_synchronization_token token:$common::Token -> bool {
     fi
     token.value.as_str = value: $str
     "fn" value ==
+    "extern" value == ||
     "enum" value == ||
     "struct" value == ||
     "trait" value == ||
@@ -2639,6 +2640,124 @@ pub fn parse_function parser:mut$Parser cursor:mut$TokenCursor -> common::Functi
     effect name_token common::Token::location.clone ops name_token common::Token::value.clone common::Function::with_stack_effect = function
     generic_params function common::Function::set_generic_params
     variables function common::Function::set_variables
+    function
+}
+
+pub fn extern_declaration_ends_before parser:$Parser token:$common::Token -> bool {
+    if common::TokenKind::Eof token.kind == then
+        true return
+    fi
+    if "->" token.value.as_str == then
+        false return
+    fi
+    token
+        .location
+        .span
+        .offset token
+        .location
+        .file
+        .as_str parser.sources.convert_offset_to_position match
+        std::Option::Some(position) => 1 position.column ==
+        std::Option::None => false
+    end
+}
+
+pub fn original_token_value parser:$Parser token:$common::Token -> std::String {
+    token
+        .location
+        .file
+        .as_str parser.sources.get match
+        std::Option::Some(source) => {
+            source.as_str token
+                .location
+                .span
+                .offset token
+                .location
+                .span
+                .length str::substring
+        }
+        std::Option::None => token.value.clone
+    end
+}
+
+pub fn parse_extern_function parser:mut$Parser cursor:mut$TokenCursor -> common::Function {
+    fallback_token parser.state "extern" cursor expect_token_value.unwrap_or drop
+    fallback_token parser.state "fn" cursor expect_token_value.unwrap_or drop
+    parser.state cursor expect_function_name = name_token
+
+    if cursor.peek std::Option::Some(next) is then
+        if "[" next.value.as_str == then
+            next.location "Extern functions cannot have type parameters" common::ErrorKind::Syntax
+            parser.state.record_error
+            cursor parser parse_type_variables drop
+        fi
+    fi
+
+    std::List[common::Parameter]::new = parameters
+    false = has_body
+    while true do
+        cursor.peek = token_opt
+        if token_opt.is_none then
+            break
+        fi
+        token_opt.unwrap = token
+        if "{" token.value.as_str == then
+            token.location "Extern function declarations cannot have a body"
+            common::ErrorKind::Syntax parser.state.record_error
+            name_token.value.as_str cursor parser parse_block_ops drop
+            true = has_body
+            break
+        fi
+        if token parser extern_declaration_ends_before then
+            break
+        fi
+        if "->" token.value.as_str == then
+            break
+        fi
+        cursor.pop drop
+        if common::TokenKind::Identifier token.kind != "fn" token.value.as_str != && then
+            token.location "Unexpected token in extern parameter list"
+            common::ErrorKind::UnexpectedToken parser.state.record_error
+        fi
+        parser.state token cursor parse_parameter_maybe_named parameters.push
+    done
+
+    std::List[common::Type]::new = return_types
+    if has_body ! then
+        if cursor.peek std::Option::Some(arrow) is then
+            if "->" arrow.value.as_str == then
+                cursor.pop drop
+                while true do
+                    cursor.peek = return_token_opt
+                    if return_token_opt.is_none then
+                        break
+                    fi
+                    return_token_opt.unwrap = return_token
+                    if "{" return_token.value.as_str == then
+                        return_token.location "Extern function declarations cannot have a body"
+                        common::ErrorKind::Syntax parser.state.record_error
+                        name_token.value.as_str cursor parser parse_block_ops drop
+                        break
+                    fi
+                    if return_token parser extern_declaration_ends_before then
+                        break
+                    fi
+                    parser.state cursor parse_type_ast return_types.push
+                done
+            fi
+        fi
+    fi
+    if 1 return_types.length > then
+        name_token.location "Extern functions can return at most one value"
+        common::ErrorKind::Syntax parser.state.record_error
+    fi
+
+    return_types parameters common::StackEffect::new = effect
+    effect name_token.location.clone std::List[common::Op]::new name_token.value.clone
+    common::Function::with_stack_effect = function
+    true = function.is_unsafe
+    name_token parser original_token_value std::Option::Some = function.extern_symbol
+
     function
 }
 
@@ -7237,7 +7356,7 @@ pub fn public_declaration_name
     fi
     declaration_opt.unwrap = declaration
     std::Option[common::Token]::None = name_opt
-    if "unsafe" declaration.value.as_str == then
+    if "unsafe" declaration.value.as_str == "extern" declaration.value.as_str == || then
         cursor.pop drop
         cursor.pop = name_opt
     elif "const" declaration.value.as_str == then
@@ -7596,6 +7715,24 @@ pub fn get_op_keyword
 
     if common::KeywordKind::As keyword == then
         token.location "`as` is only valid in an import declaration" common::ErrorKind::Syntax parser.state.record_error
+        return
+    fi
+
+    if common::KeywordKind::Extern keyword == then
+        parser token.location "Extern functions" function_name require_global_scope
+        cursor.retreat
+        cursor parser parse_extern_function = function
+        if
+            function.name.as_str parser
+                .store
+                .get_function
+                .is_some
+        then
+            function.location f"Identifier `{function.name}` is already defined"
+            common::ErrorKind::DuplicateName parser.state.record_error_string
+        fi
+        function.name.clone = extern_function_name
+        function extern_function_name parser.put_function
         return
     fi
 

@@ -11,9 +11,11 @@ An extern function returns zero or one ABI value; it cannot directly produce Cas
 Compiler paths use the conventional native-toolchain split:
 
 ```text
--I path / --module-path path   Casa module lookup
--L path / --link-search path   native-library lookup
+-L path / --library-path path  Casa module lookup
 -l name / --link-library name  native library to link
 ```
 
-The current Casa `-L` / `--library-path` module option migrates to `-I` / `--module-path`. Repeated native search paths and libraries are passed to the linker in command-line order; Casa adds no source-level link attributes initially.
+The existing Casa `-L` / `--library-path` module option does not change.
+Repeated native libraries are passed to the linker in command-line order.
+Casa adds no `-I` alias, native link search option, or source-level link
+attribute initially.
