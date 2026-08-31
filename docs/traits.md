@@ -201,13 +201,13 @@ The two forms are alternatives. `derives Copy` also supplies fieldwise Clone
 behavior required by the standard `Copy: Clone` relationship, unless the type
 defines its own Clone method.
 
-Structs and payload enums currently use heap-indirect value storage. They cannot
+Ordinary structs and payload enums use heap-indirect value storage. They cannot
 implement `Copy`, even when every field is Copy, because duplicating their
-handle would alias one allocation. Fixed arrays use direct storage and are Copy
-when their elements are Copy. Arrays with non-Copy elements remain affine. Use
-`Clone` for explicit independent duplication. When `T` implements Clone,
-calling `.clone` on `$T` or `mut$T` calls the borrowed value's implementation
-and returns an owned `T`.
+handle would alias one allocation. Extern structs and fixed arrays have fixed
+inline bodies and can implement `Copy` when their fields or elements are Copy.
+Arrays with non-Copy elements remain affine. Use `Clone` for explicit
+independent duplication. When `T` implements Clone, calling `.clone` on `$T` or
+`mut$T` calls the borrowed value's implementation and returns an owned `T`.
 
 Clone operations are always explicit and can allocate or run user code. A type
 can derive the implementation or define it by hand:

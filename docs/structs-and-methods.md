@@ -131,7 +131,7 @@ function that returns such an aggregate preserves the same origin.
 
 ## Copy and Clone
 
-Struct values currently use heap-indirect storage, so they cannot implement
+Ordinary struct values use heap-indirect storage, so they cannot implement
 `Copy`. Derive `Clone` when fieldwise independent duplication is suitable:
 
 ```casa
@@ -155,10 +155,12 @@ Structs can also derive `Eq`, `Ord`, and `Hashable`. Generated methods process
 fields in declaration order and add the required bounds for generic fields.
 See [Derive standard traits](traits.md#derive-standard-traits).
 
+An extern struct can implement `Copy` when each field implements `Copy`. Its
+fixed C-layout body uses the same direct-copy storage model as a fixed array.
 Payload-free enums use a raw representation and can derive `Copy`. Payload
-enums and structs remain non-Copy until their value representation can be
-duplicated without allocation or aliasing. Fixed arrays are `Copy` when their
-elements are `Copy`. See [Copy and Clone](traits.md#copy-and-clone).
+enums and ordinary structs remain non-Copy until their value representation can
+be duplicated without allocation or aliasing. Fixed arrays are `Copy` when
+their elements are `Copy`. See [Copy and Clone](traits.md#copy-and-clone).
 
 ## Custom destruction
 

@@ -5,12 +5,18 @@ related issue: #478
 create aliases or require allocation. The compiler checks the value
 representation before it checks fields and trait bounds.
 
-Casa currently represents structs and enums with payloads through an owned heap
+Casa represents ordinary structs and enums with payloads through an owned heap
 pointer. These types cannot implement `Copy`, even when their fields are Copy.
 Duplicating the pointer would create two apparent owners of one allocation.
 Payload-free enums use a raw tag and remain eligible. Fixed arrays store their
 elements directly and implement `Copy` when their element type implements
 `Copy`.
+
+Extern structs have a fixed C-layout body. An extern struct can implement
+`Copy` when all fields implement `Copy`. The compiler copies the body into
+automatic destination storage instead of duplicating its temporary carrier
+pointer. Escaping values receive ordinary owned storage as part of destination
+placement.
 
 Explicit `Clone` remains available for independent aggregate duplication. A
 future direct representation for structs and payload enums can restore their
@@ -21,7 +27,8 @@ weaken the allocation-free Copy contract.
 
 - `derives Copy` and explicit Copy implementations use the same representation
   check.
-- Structs with only scalar fields and empty structs are currently non-Copy.
+- Ordinary structs with only scalar fields and empty structs are non-Copy.
+- Extern structs are Copy-eligible when every field is Copy.
 - Enums with no payload can be Copy. Enums with any payload are non-Copy.
 - Fixed arrays are conditionally Copy, including zero-length arrays.
 - Compiler-internal aggregate values use explicit Clone when they need an

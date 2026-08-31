@@ -35,7 +35,7 @@ The examples are ordered from introductory programs to low-level system code.
 | 23 | [`bytes.casa`](bytes.casa) | Compact binary storage, iteration, and validated text conversion |
 | 24 | [`game_of_life.casa`](game_of_life.casa) | An interactive terminal program with raw Linux calls |
 | 25 | [`immutable_global.casa`](immutable_global.casa) | Eager immutable globals with `Copy` and borrowed reads |
-| 26 | [`foreign_function.casa`](foreign_function.casa) | A C ABI declaration, borrowed C string, and native library link |
+| 26 | [`foreign_function.casa`](foreign_function.casa) | C ABI scalars, an aggregate return, and native library linking |
 
 `game_of_life.casa` needs an interactive terminal. Stop it with Ctrl+C.
 

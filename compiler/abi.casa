@@ -1,0 +1,156 @@
+# x86-64 System V classification for verified extern types.
+import "std" as std
+import "common" as common
+
+pub fn classify_extern_scalar typ:$common::Type -> std::Option[common::BuiltinType] {
+    if typ common::Type::Builtin(builtin) is then
+        if
+            builtin.is_integer
+            builtin.is_float ||
+            builtin common::BuiltinType::Bool == ||
+            builtin common::BuiltinType::Ptr == ||
+        then
+            builtin copy std::Option::Some return
+        fi
+    fi
+    std::Option[common::BuiltinType]::None
+}
+
+fn merge_class
+    abi_class:common::ExternAbiClass
+    offset:u64
+    classes:mut$std::List[std::Option[common::ExternAbiClass]]
+{
+    offset common::WORD_SIZE / = index
+    if classes.length index >= then
+        return
+    fi
+    if index classes.get std::Option::Some(existing) is then
+        if
+            existing common::ExternAbiClass::Integer ==
+            abi_class common::ExternAbiClass::Integer == ||
+        then
+            common::ExternAbiClass::Integer std::Option::Some index classes.set
+        fi
+    else
+        abi_class std::Option::Some index classes.set
+    fi
+}
+
+fn classify_fields
+    typ:$common::Type
+    store:$common::SymbolStore
+    base_offset:u64
+    classes:mut$std::List[std::Option[common::ExternAbiClass]]
+-> bool {
+    if typ common::Type::Builtin(builtin) is then
+        if typ classify_extern_scalar.is_none then
+            false return
+        fi
+        if builtin.is_float then
+            classes base_offset common::ExternAbiClass::Sse merge_class
+        else
+            classes base_offset common::ExternAbiClass::Integer merge_class
+        fi
+        true return
+    fi
+    if typ common::Type::Generic(generic) is then
+        if common::ARRAY_TYPE generic.base.as_str == then
+            if typ common::get_concrete_array_length std::Option::Some(length) is then
+                0 generic.params.get = element_type
+                if store element_type common::type_inline_size std::Option::Some(element_size) is then
+                    0 = index: u64
+                    while index length > do
+                        classes index element_size * base_offset + store element_type classify_fields !
+                        if then
+                            false return
+                        fi
+                        1 += index
+                    done
+                    true return
+                fi
+            fi
+            false return
+        fi
+        if generic.base store.structs.get std::Option::Some(casa_struct) is then
+            if casa_struct.is_extern ! then
+                false return
+            fi
+            0 = member_index: u64
+            while member_index casa_struct.members.length > do
+                if
+                    store member_index casa_struct common::struct_member_offset
+                    std::Option::Some(member_offset) is
+                then
+                    member_index casa_struct.members.get = member
+                    classes member_offset base_offset + store member.typ classify_fields !
+                    if then
+                        false return
+                    fi
+                else
+                    false return
+                fi
+                1 += member_index
+            done
+            true return
+        fi
+    fi
+    false
+}
+
+pub fn classify_extern_type
+    typ:$common::Type
+    store:$common::SymbolStore
+-> std::Option[common::ExternAbiType] {
+    if typ.borrow_target std::Option::Some(target) is then
+        if
+            typ.is_shared_borrow target common::Type::Builtin(common::BuiltinType::Cstr) is &&
+            target classify_extern_scalar.is_some ||
+            store target common::type_is_extern_struct ||
+        then
+            common::BuiltinType::Ptr common::builtin_type_layout = layout
+            layout.size common::BuiltinType::Ptr common::ExternAbiPassing::Scalar
+            common::ExternAbiType::new std::Option::Some return
+        fi
+        std::Option[common::ExternAbiType]::None return
+    fi
+    if typ classify_extern_scalar std::Option::Some(builtin) is then
+        builtin common::builtin_type_layout = layout
+        layout.size builtin copy common::ExternAbiPassing::Scalar common::ExternAbiType::new
+        std::Option::Some return
+    fi
+    if store typ common::type_is_extern_struct ! then
+        std::Option[common::ExternAbiType]::None return
+    fi
+    if store typ common::type_inline_size.is_none then
+        std::Option[common::ExternAbiType]::None return
+    fi
+    std::Set[std::String]::new = visiting
+    if visiting store typ common::type_layout std::Option::Some(layout) is then
+        if 16 layout.size > then
+            layout.size common::ExternAbiPassing::Memory common::ExternAbiType::new
+            std::Option::Some return
+        fi
+        std::List[std::Option[common::ExternAbiClass]]::new = pending_classes
+        layout.size common::WORD_SIZE u64::try_from.unwrap 1 - +
+        common::WORD_SIZE u64::try_from.unwrap / = class_count
+        0 = index: u64
+        while index class_count > do
+            std::Option[common::ExternAbiClass]::None pending_classes.push
+            1 += index
+        done
+        if pending_classes 0 store typ classify_fields ! then
+            std::Option[common::ExternAbiType]::None return
+        fi
+        std::List[common::ExternAbiClass]::new = classes
+        for pending in pending_classes.iter do
+            pending match
+                std::Option::Some(abi_class) => abi_class copy classes.push
+                std::Option::None => common::ExternAbiClass::Integer classes.push
+            end
+        done
+        layout.size classes common::ExternAbiPassing::Registers common::ExternAbiType::new
+        std::Option::Some return
+    fi
+    std::Option[common::ExternAbiType]::None
+}
