@@ -127,6 +127,7 @@ pub struct SemanticStack {
     pub variables:          std::Map[std::String common::Type]
     pub variable_callables: std::Map[std::String std::Set[std::String]]
     pub infer_parameters:   bool
+    pub path_continues:     bool
 }
 
 pub struct SemanticStackSnapshot {
@@ -135,6 +136,7 @@ pub struct SemanticStackSnapshot {
     pub next_parameter:     u64
     pub variables:          std::Map[std::String common::Type]
     pub variable_callables: std::Map[std::String std::Set[std::String]]
+    pub path_continues:     bool
 }
 
 pub fn clone_variable_callables
@@ -285,6 +287,7 @@ impl SemanticStack {
             capture.typ.clone capture.name.clone variables.set
             std::Set[std::String]::new capture.name.clone variable_callables.set
         done
+        true
         function.stack_effect.needs_inference
         variable_callables
         variables
@@ -436,6 +439,7 @@ impl SemanticStack {
     }
 
     pub fn snapshot self:mut$SemanticStack -> SemanticStackSnapshot {
+        self.path_continues
         self.variable_callables.clone
         self.clone_variables
         self.next_parameter
@@ -449,6 +453,7 @@ impl SemanticStack {
         snapshot.callables.clone = self.callables
         snapshot.next_parameter = self.next_parameter
         snapshot.variable_callables.clone = self.variable_callables
+        snapshot.path_continues = self.path_continues
         std::Map[std::String common::Type]::new = self.variables
         for pair in snapshot.variables.iter do
             pair.second.clone pair.first.clone self.variables.set
@@ -553,6 +558,9 @@ impl SemanticStack {
         if branch.kind SemanticBranchKind::While is then
             if branch.before std::Option::Some(before) is then
                 before self.restore
+            fi
+            if branch.active ! then
+                false = self.path_continues
             fi
         fi
     }
@@ -993,6 +1001,10 @@ pub fn fixed_operation_stack_effect operation:$common::OpValue -> std::Option[co
         }
         common::OpValue::PrintString => {
             common::make_string_type parameter_types add_parameter true = handled
+        }
+        common::OpValue::Panic => {
+            common::SHARED_BORROW_TYPE common::make_str_type common::apply_borrow_type
+            parameter_types add_parameter true = handled
         }
         common::OpValue::FstringToStr => {
             type_t parameter_types add_parameter
@@ -2464,6 +2476,10 @@ impl SemanticAnalysis {
             branch stack.branches.push
             return
         fi
+        if stack.path_continues ! then
+            branch stack.branches.push
+            return
+        fi
         stack.snapshot = current
         if branch.after std::Option::None is then
             current std::Option::Some = branch.after
@@ -2511,6 +2527,8 @@ impl SemanticAnalysis {
         fi
         if branch.after std::Option::Some(after) is then
             after stack.restore
+        else
+            false = stack.path_continues
         fi
     }
 
@@ -3118,6 +3136,15 @@ impl SemanticAnalysis {
                 effect stack.apply_effect_with_bindings = bindings
                 bindings effect self.collect_bound_semantics
                 method_return_callables stack.set_return_callables
+                if operation common::OpValue::Panic is then
+                    false = stack.path_continues
+                elif operation common::OpValue::FnCall(function_name) is then
+                    if function_name.as_str self.store.get_function std::Option::Some(callee) is then
+                        if callee.is_non_returning then
+                            false = stack.path_continues
+                        fi
+                    fi
+                fi
                 true return
             }
             std::Option::None => {
@@ -3275,10 +3302,15 @@ impl SemanticAnalysis {
                 stack.start_branch
             }
             common::OpValue::IfCondition => {
-                stack.pop drop
+                if stack.path_continues then
+                    stack.pop drop
+                fi
                 stack.capture_branch_entry
                 if 0 stack.branches.length != then
                     stack.branches.length 1 - stack.branches.get_mut = branch
+                    if stack.path_continues ! then
+                        stack.snapshot std::Option::Some = branch.before
+                    fi
                     true = branch.active
                 fi
             }
@@ -3311,7 +3343,14 @@ impl SemanticAnalysis {
                 stack.start_branch
             }
             common::OpValue::WhileCondition => {
-                stack.pop drop
+                if stack.path_continues then
+                    stack.pop drop
+                fi
+                if 0 stack.branches.length != then
+                    stack.path_continues = condition_continues
+                    stack.branches.length 1 - stack.branches.get_mut = branch
+                    condition_continues = branch.active
+                fi
             }
             common::OpValue::WhileEnd => {
                 stack.end_loop
@@ -3319,7 +3358,11 @@ impl SemanticAnalysis {
             common::OpValue::MatchStart => {
                 true
                 SemanticBranchKind::Match
-                stack.pop
+                if stack.path_continues then
+                    stack.pop
+                else
+                    std::Option[common::Type]::None
+                fi
                 stack.start_branch
             }
             common::OpValue::MatchArm(arm) => {
@@ -3332,12 +3375,15 @@ impl SemanticAnalysis {
                 arm.pattern_value.clone stack.get_branch_subject stack
                 self.assign_pattern_bindings
                 arm.guard_ops function stack self.collect_operations_with_stack
-                if 0 arm.guard_ops.length != then
+                if 0 arm.guard_ops.length != stack.path_continues && then
                     stack.pop drop
                 fi
             }
             common::OpValue::MatchEnd => {
                 false stack self.finish_branch
+            }
+            common::OpValue::FnReturn => {
+                false = stack.path_continues
             }
             common::OpValue::IsCheck(variant) => {
                 variant stack.peek stack self.assign_enum_pattern_bindings

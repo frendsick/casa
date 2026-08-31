@@ -39,6 +39,31 @@ early. Every exit path must produce the declared outputs.
 
 See [Generics and Traits](traits.md) for type parameters and trait bounds.
 
+## Root and termination contracts
+
+Operations outside declarations form the executable root body. Casa does not
+reserve or automatically call a function named `main`. The root must leave an
+empty value stack when it completes. `return` is not valid in the root body.
+Root owners are destroyed on normal completion.
+
+`panic` and `process::exit` terminate without unwinding or cleanup. A direct
+call to a named function is also non-returning when every reachable path in its
+implementation terminates. These paths do not participate in branch stack or
+ownership joins. Function values called with `exec` are assumed to return, so
+`fn[...]` types do not expose a termination effect.
+
+```casa
+fn require_positive value:i64 -> i64 {
+    if 0 value > then
+        value
+    else
+        "value must be positive" panic
+    fi
+}
+
+5 require_positive print
+```
+
 ## Function values
 
 `&name` pushes a named function as a value. `exec` calls the function value on

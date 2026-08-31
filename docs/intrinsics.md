@@ -47,6 +47,19 @@ empty struct and `array[T 0]` therefore each have size 1. The result describes
 only the current compiler's x86-64 layout. It is not a stable file or foreign
 ABI format.
 
+## Termination
+
+| Intrinsic | Stack effect | Action |
+|---|---|---|
+| `panic` | `$str -> None` | Write the message to standard error and terminate with status 1 |
+
+`panic` does not allocate, unwind, or run cleanup. The compiler treats its path
+as non-returning when it checks branch stack effects and ownership joins.
+
+```casa
+"invalid parser state" panic
+```
+
 ## Process values
 
 | Intrinsic | Stack effect | Value |
