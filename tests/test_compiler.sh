@@ -202,6 +202,47 @@ for f in "$TESTS_DIR"/runtime_errors/*.casa; do
     rm -f "$binary"
 done
 
+if [ "$TEST_CATEGORY" = all ] || [ "$TEST_CATEGORY" = compiler_integration ]; then
+    if matches_filter "extern_bool_native" "$@"; then
+        matched=true
+        native_object="$TEST_TMP/extern_bool.o"
+        native_library="$TEST_TMP/libcasa_extern_bool_fixture.a"
+        native_binary="$TEST_TMP/extern_bool_native"
+
+        printf "Running: native/extern_bool ... "
+        if ! cc -std=gnu11 -Wall -Wextra -Werror \
+            -c "$TESTS_DIR/fixtures/extern_bool.c" -o "$native_object" \
+            2>"$TEST_TMP/native_c_err"
+        then
+            printf "${RED}C FIXTURE COMPILE FAIL${RESET}\n"
+            cat "$TEST_TMP/native_c_err"
+            fail=$((fail+1))
+        elif ! ar rcs "$native_library" "$native_object"; then
+            printf "${RED}C FIXTURE ARCHIVE FAIL${RESET}\n"
+            fail=$((fail+1))
+        elif ! LIBRARY_PATH="$TEST_TMP${LIBRARY_PATH:+:$LIBRARY_PATH}" \
+            "$COMPILER" -L "$LIB_DIR" -l casa_extern_bool_fixture \
+            "$TESTS_DIR/fixtures/extern_bool.casa" -o "$native_binary" \
+            2>"$TEST_TMP/native_casa_err"
+        then
+            printf "${RED}CASA COMPILE FAIL${RESET}\n"
+            cat "$TEST_TMP/native_casa_err"
+            fail=$((fail+1))
+        elif ! output=$("$native_binary" 2>&1 < /dev/null); then
+            printf "${RED}RUNTIME FAIL${RESET}\n"
+            echo "$output"
+            fail=$((fail+1))
+        elif [ "$output" != "extern bool ok" ]; then
+            printf "${RED}WRONG OUTPUT${RESET}\n"
+            echo "$output"
+            fail=$((fail+1))
+        else
+            printf "${GREEN}OK${RESET}\n"
+            pass=$((pass+1))
+        fi
+    fi
+fi
+
 report_no_matches "$matched" "$@"
 echo
 echo "Summary: $pass passed, $fail failed"

@@ -167,14 +167,16 @@ Extern parameters can use these C ABI types:
 - Fixed-width integers: `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, and
   `u64`.
 - Floating-point values: `f32` and `f64`.
+- C boolean values: `bool`, represented as C `_Bool`.
 - Raw pointers: `ptr`.
 - Shared or exclusive borrows of an ABI scalar, such as `$i32` or `mut$f64`.
 - `$cstr` for a borrowed NUL-terminated byte string.
 
 An extern declaration has zero or one return value. A return can be a
-fixed-width integer, `f32`, `f64`, or `ptr`. Borrowed returns, `bool`, `char`,
-`str`, owned `cstr`, aggregates, variadic arguments, callbacks, generic type
-parameters, and symbol aliases are not supported.
+fixed-width integer, `f32`, `f64`, `bool`, or `ptr`. Casa sends `bool`
+parameters as 0 or 1 and normalizes each C `_Bool` return before use. Borrowed
+returns, `char`, `str`, owned `cstr`, aggregates, variadic arguments, callbacks,
+generic type parameters, and symbol aliases are not supported.
 
 Casa keeps ownership of every argument. A borrowed scalar or `$cstr` is passed
 as a native pointer. The pointer is valid only while the Casa borrow is live.
