@@ -82,7 +82,7 @@ and the [`Iterable` trait](traits.md#built-in-traits) for custom iterators.
 
 ## Test and bind an enum variant
 
-`is` consumes an enum value and reports whether it has a given variant:
+`is` reports whether an enum value has a given variant:
 
 ```casa
 enum Shape {
@@ -108,6 +108,16 @@ fi
 These bindings exist only in the branch whose pattern created them. They
 cannot shadow an accessible local binding. A binding pattern is not valid
 outside an `if` or `elif` condition.
+
+The payload binding follows the subject capability. An owned subject gives an
+owned binding for a non-`Copy` payload and is consumed only when the check
+succeeds. A `$T` subject gives a shared payload borrow. A `mut$T` subject gives
+an exclusive payload borrow. A `Copy` payload is copied and does not consume
+the subject.
+
+The original owner stays available in `else` and on other unmatched paths. It
+is unavailable after `fi` if a continuing matched path moved its payload. A
+matched path that returns does not affect the ownership join.
 
 ## Match a value
 
