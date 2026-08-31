@@ -6,7 +6,7 @@ An `extern struct` is the explicit C layout boundary for aggregates. It is non-g
 
 Casa `str`, `String`, `Bytes`, C string views, collections, function values, borrowed fields, ordinary structs, and enums are rejected as extern struct fields. Foreign pointer and string results use `ptr`. Borrowed return types are rejected because foreign code supplies no compiler-verifiable origin.
 
-An extern struct that classifies into one or two System V eightbytes can cross a
-native call by value with `INTEGER`, `SSE`, or mixed register classes. A
+An extern struct can cross a native call by value. One- or two-eightbyte values
+use `INTEGER`, `SSE`, or mixed register classes. `MEMORY` parameters use aligned
+native stack arguments, and `MEMORY` returns use caller-owned hidden storage. A
 by-value parameter must implement `Copy`. A return becomes an owned Casa value.
-Memory-class aggregates remain rejected.

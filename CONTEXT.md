@@ -118,8 +118,8 @@ _Avoid_: Unknown type, type placeholder (which means `TYPE_UNKNOWN_T`)
 
 **Extern struct**:
 An aggregate declared with `extern struct` whose field order, alignment, padding,
-and size follow the x86-64 System V C ABI. A small extern struct can cross an
-extern call by value. Parameters require `Copy`, and returns are owned values.
+and size follow the x86-64 System V C ABI. It can cross an extern call by value.
+Parameters require `Copy`, and returns are owned values.
 _Avoid_: repr(C) struct, ordinary struct, packed struct
 
 **Ordinary struct**:
