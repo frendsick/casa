@@ -31,6 +31,11 @@ pub enum ValueCapability derives std::Eq std::Copy {
     Exclusive
 }
 
+pub struct LoanSpan derives std::Clone {
+    pub origin:    common::Location
+    pub later_use: common::Location
+}
+
 pub struct TypedValue derives std::Clone {
     pub type_value:          common::Type
     pub origin:              common::Location
@@ -40,7 +45,7 @@ pub struct TypedValue derives std::Clone {
     pub binding:             std::Option[std::String]
     pub source:              std::Option[i64]
     pub origins:             std::Option[std::List[std::String]]
-    pub loan_origin:         std::Option[common::Location]
+    pub loan_spans:          std::Map[std::String std::Option[LoanSpan]]
     pub is_literal_constant: bool
 }
 
@@ -377,6 +382,17 @@ pub fn contains_literal literals:$std::List[LiteralRef] candidate:$LiteralRef ->
     false
 }
 
+fn locations_equal left:$common::Location right:$common::Location -> bool {
+    left.file right.file ==
+    left.span.offset right.span.offset == &&
+    left.span.length right.span.length == &&
+}
+
+fn loan_spans_equal left:$LoanSpan right:$LoanSpan -> bool {
+    right.origin left.origin locations_equal
+    right.later_use left.later_use locations_equal &&
+}
+
 impl TypedValue {
     pub fn same_owner_source self:$TypedValue other:$TypedValue -> bool {
         if self.binding std::Option::Some(name) is then
@@ -461,7 +477,7 @@ impl TypedStack {
         0 = index: u64
         while index self.values.length > do
             index self.values.get_mut = value
-            value.is_literal_constant value.loan_origin.clone value.origins.clone
+            value.is_literal_constant value.loan_spans.clone value.origins.clone
             value.source.clone value.binding.clone value.capability value.place.clone
             value.literals.clone value.origin.clone
             index types.get.clone TypedValue index self.values.set
@@ -506,6 +522,21 @@ impl TypedStack {
             value.origins.clone = merged_origins
             candidate_value.origins merged_origins merge_origins = merged_origins
             merged_origins = value.origins
+            for pair in candidate_value.loan_spans.iter do
+                if pair.first value.loan_spans.get std::Option::Some(existing) is then
+                    if existing std::Option::Some(existing_span) is then
+                        if pair.second std::Option::Some(candidate_span) is then
+                            if candidate_span existing_span loan_spans_equal ! then
+                                std::Option[LoanSpan]::None pair.first.clone value.loan_spans.set
+                            fi
+                        else
+                            std::Option[LoanSpan]::None pair.first.clone value.loan_spans.set
+                        fi
+                    fi
+                else
+                    pair.second.clone pair.first.clone value.loan_spans.set
+                fi
+            done
             0 = literal_index: u64
             while literal_index candidate_value.literals.length > do
                 literal_index candidate_value.literals.get = candidate_literal
@@ -1431,14 +1462,29 @@ impl TypeChecker {
         later_use origin binding LoanConflict
     }
 
-    fn make_stacked_loan_conflict self:$TypeChecker value:$TypedValue -> LoanConflict {
+    fn make_stacked_loan_conflict
+        self:$TypeChecker
+        value:$TypedValue
+        matched_origin:$str
+    -> LoanConflict {
         value self.loan_binding_for_value = binding
-        value.loan_origin.clone = origin
+        std::Option[common::Location]::None = origin
         std::Option[common::Location]::None = later_use
-        if origin.is_none then
+        false = has_tracked_origin
+        if matched_origin.length 0 != then
+            if
+                matched_origin value.loan_spans.get_str
+                std::Option::Some(tracked_span) is
+            then
+                true = has_tracked_origin
+                if tracked_span std::Option::Some(span) is then
+                    span.origin.clone std::Option::Some = origin
+                    span.later_use.clone std::Option::Some = later_use
+                fi
+            fi
+        fi
+        if has_tracked_origin ! then
             value.origin.clone std::Option::Some = origin
-        elif binding.is_some then
-            value.origin.clone std::Option::Some = later_use
         fi
         later_use origin binding LoanConflict
     }
@@ -1446,7 +1492,7 @@ impl TypeChecker {
     fn loan_binding_for_value self:$TypeChecker value:$TypedValue -> std::Option[std::String] {
         if value.place std::Option::Some(value_place) is then
             value_place.as_str get_place_root = root
-            if value.loan_origin.is_some root.as_str self.binding_origins.has_str || then
+            if value.loan_spans.is_empty ! root.as_str self.binding_origins.has_str || then
                 root std::Option::Some return
             fi
         fi
@@ -1466,7 +1512,6 @@ impl TypeChecker {
                 .values
                 .get
                 .clone = value
-            value self.make_stacked_loan_conflict = stacked_conflict
             if value.binding std::Option::Some(binding_name) is then
                 if place binding_name.as_str == then
                     1 += index continue
@@ -1484,18 +1529,18 @@ impl TypeChecker {
                         place value_place.as_str origin_matches_place
                         value.capability ValueCapability::Exclusive is exclusive || &&
                     then
-                        stacked_conflict.clone
+                        "" value self.make_stacked_loan_conflict
                         std::Option::Some return
                     fi
                 fi
             fi
-            if value.origins std::Option::Some(origins) is then
+            if value.origins.clone std::Option::Some(origins) is then
                 for origin in origins.iter do
                     if
                         place origin.as_str origin_matches_place
                         origin.as_str origin_is_exclusive exclusive || &&
                     then
-                        stacked_conflict.clone
+                        origin.as_str value self.make_stacked_loan_conflict
                         std::Option::Some return
                     fi
                 done
@@ -1740,7 +1785,8 @@ impl TypeChecker {
     }
 
     pub fn stack_push_type tc:mut$TypeChecker type_value:$common::Type {
-        false std::Option[common::Location]::None std::Option[std::List[std::String]]::None
+        false std::Map[std::String std::Option[LoanSpan]]::new
+        std::Option[std::List[std::String]]::None
         std::Option[i64]::None std::Option[std::String]::None
         type_value type_capability std::Option[std::String]::None
         std::List[LiteralRef]::new tc.current_location.clone type_value.clone TypedValue
@@ -1785,11 +1831,14 @@ impl TypeChecker {
         fi
         name.to_str std::Option::Some = place
         std::Option[std::List[std::String]]::None = origins
-        std::Option[common::Location]::None = loan_origin
+        std::Map[std::String std::Option[LoanSpan]]::new = loan_spans
         if name tc.binding_origins.get_str std::Option::Some(stored) is then
             stored.clone std::Option::Some = origins
             if name tc.binding_origin_locations.get_str std::Option::Some(location) is then
-                location.clone std::Option::Some = loan_origin
+                for origin in stored.iter do
+                    tc.current_location.clone location.clone LoanSpan
+                    std::Option::Some origin.clone loan_spans.set
+                done
             fi
             if tc.store type_value type_has_borrow ! then
                 ValueCapability::Shared = capability
@@ -1803,7 +1852,7 @@ impl TypeChecker {
                 std::Option[i64]::None = source
             fi
         fi
-        false loan_origin origins source binding capability place
+        false loan_spans origins source binding capability place
         std::List[LiteralRef]::new tc.current_location.clone stack_type
         TypedValue
         tc
@@ -1821,7 +1870,8 @@ impl TypeChecker {
         fi
         std::List[LiteralRef]::new = literals
         is_integer integer_value op.id LiteralRef literals.push
-        true std::Option[common::Location]::None std::Option[std::List[std::String]]::None
+        true std::Map[std::String std::Option[LoanSpan]]::new
+        std::Option[std::List[std::String]]::None
         std::Option[i64]::None std::Option[std::String]::None
         ValueCapability::Owned std::Option[std::String]::None literals
         tc.current_location.clone type_value.clone TypedValue
@@ -1866,7 +1916,8 @@ impl TypeChecker {
         if type_value.is_borrow then
             type_value type_capability = capability
         fi
-        false std::Option[common::Location]::None std::Option[std::List[std::String]]::None
+        false std::Map[std::String std::Option[LoanSpan]]::new
+        std::Option[std::List[std::String]]::None
         std::Option[i64]::None std::Option[std::String]::None
         capability name.to_str std::Option::Some std::List[LiteralRef]::new
         tc.current_location.clone type_value.clone TypedValue tc
@@ -2175,13 +2226,15 @@ impl TypeChecker {
                     contextual.clone = parameter_type
                 fi
                 parameter_type.clone common::Parameter::new tc.parameters.push
-                false std::Option[common::Location]::None std::Option[std::List[std::String]]::None
+                false std::Map[std::String std::Option[LoanSpan]]::new
+                std::Option[std::List[std::String]]::None
                 std::Option[i64]::None std::Option[std::String]::None
                 parameter_type type_capability std::Option[std::String]::None
                 std::List[LiteralRef]::new common::empty_location parameter_type TypedValue return
             fi
             tc.stack_underflow_message tc.report_stack_underflow
-            false std::Option[common::Location]::None std::Option[std::List[std::String]]::None
+            false std::Map[std::String std::Option[LoanSpan]]::new
+            std::Option[std::List[std::String]]::None
             std::Option[i64]::None std::Option[std::String]::None
             ValueCapability::Owned std::Option[std::String]::None
             std::List[LiteralRef]::new common::empty_location common::make_missing_type.clone TypedValue return
@@ -2228,7 +2281,8 @@ impl TypeChecker {
             if inferred.is_unknown_placeholder ! inferred common::make_missing_type.eq ! && then
                 tc.literal_resolutions tc.diagnostics inferred right.resolve_literals drop
                 inferred common::Parameter::new tc.parameters.push
-                false std::Option[common::Location]::None std::Option[std::List[std::String]]::None
+                false std::Map[std::String std::Option[LoanSpan]]::new
+                std::Option[std::List[std::String]]::None
                 std::Option[i64]::None std::Option[std::String]::None
                 ValueCapability::Owned std::Option[std::String]::None
                 std::List[LiteralRef]::new common::empty_location inferred TypedValue return
@@ -2614,7 +2668,8 @@ impl TypeChecker {
         return_type bindings resolve_return_type_t = resolved
         if return_type.type_var_name std::Option::Some(type_variable) is then
             if type_variable.as_str literal_bindings.get_str std::Option::Some(literals) is then
-                false std::Option[common::Location]::None std::Option[std::List[std::String]]::None
+                false std::Map[std::String std::Option[LoanSpan]]::new
+                std::Option[std::List[std::String]]::None
                 std::Option[i64]::None std::Option[std::String]::None
                 resolved type_capability std::Option[std::String]::None
                 literals.clone tc.current_location.clone resolved TypedValue
