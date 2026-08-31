@@ -399,6 +399,25 @@ pub struct RoundedFloatParts {
     pub significand: u64
 }
 
+struct ExactDecimal {
+    digits:   String
+    exponent: i64
+}
+
+struct BinaryFloatParts {
+    exponent:    i64
+    significand: u64
+}
+
+struct FloatFormat {
+    max_finite_bits:    u64
+    mantissa_mask:      u64
+    hidden_bit:         u64
+    mantissa_bits:      u64
+    exponent_bias:      i64
+    subnormal_exponent: i64
+}
+
 pub fn parse_float_text text:$str -> Option[ParsedFloatText] {
     if 0 text.length == then
         Option::None return
@@ -446,6 +465,7 @@ pub fn parse_float_text text:$str -> Option[ParsedFloatText] {
     fi
 
     0 = explicit_exponent
+    fractional_digits 2000 + = exponent_limit
     if index text.length > then
         index text.at = marker
         if 'e' marker != 'E' marker != && then
@@ -468,10 +488,10 @@ pub fn parse_float_text text:$str -> Option[ParsedFloatText] {
             if character.is_digit ! then
                 Option::None return
             fi
-            if explicit_exponent 1000 <= then
-                Option::None return
+            if exponent_limit explicit_exponent < then
+                10 explicit_exponent * character.codepoint i64::from '0'.codepoint i64::from - +
+                = explicit_exponent
             fi
-            10 explicit_exponent * character.codepoint i64::from '0'.codepoint i64::from - + = explicit_exponent
             1 += index
         done
         if exponent_negative then
@@ -512,6 +532,191 @@ pub fn rounded_float_parts parsed:$ParsedFloatText precision:u64 -> RoundedFloat
         significant_digits i64::try_from.unwrap precision i64::try_from.unwrap - = skipped
     fi
     significand parsed.exponent skipped + RoundedFloatParts
+}
+
+fn multiply_decimal_small digits:$String factor:u64 -> String {
+    String::new = reversed
+    digits.length = index
+    0 = carry: u64
+    while 0 index != do
+        1 -= index
+        index digits
+            .as_str
+            .at
+            .codepoint u64::from '0'.codepoint u64::from - = digit
+        carry factor digit * + = product
+        product 10 % '0'.codepoint u64::from + u32::try_from.unwrap
+        char::from_codepoint.unwrap reversed.push
+        product 10 / = carry
+    done
+    while 0 carry != do
+        carry 10 % '0'.codepoint u64::from + u32::try_from.unwrap
+        char::from_codepoint.unwrap reversed.push
+        carry 10 / = carry
+    done
+    reversed.as_str.reverse
+}
+
+fn make_exact_binary_decimal significand:u64 exponent:i64 -> ExactDecimal {
+    significand.to_str = digits
+    exponent = remaining
+    if 0 remaining < then
+        while 0 remaining != do
+            5 digits multiply_decimal_small = digits
+            1 += remaining
+        done
+        exponent digits ExactDecimal
+    else
+        while 0 remaining != do
+            2 digits multiply_decimal_small = digits
+            1 -= remaining
+        done
+        0 digits ExactDecimal
+    fi
+}
+
+fn decode_binary_float bits:u64 format:$FloatFormat -> BinaryFloatParts {
+    bits format.mantissa_mask & = significand
+    bits format.mantissa_bits >> = exponent_field
+    if 0 exponent_field == then
+        significand format.subnormal_exponent BinaryFloatParts
+    else
+        format.hidden_bit significand +
+        exponent_field i64::try_from.unwrap format.exponent_bias -
+        format.mantissa_bits i64::try_from.unwrap -
+        BinaryFloatParts
+    fi
+}
+
+fn make_float_boundary_decimal lower_bits:u64 upper_bits:u64 format:$FloatFormat -> ExactDecimal {
+    format lower_bits decode_binary_float = lower
+    format upper_bits decode_binary_float = upper
+    0 = common_exponent
+    if lower.exponent upper.exponent < then
+        upper.exponent = common_exponent
+    else
+        lower.exponent = common_exponent
+    fi
+    lower.significand lower.exponent common_exponent - u64::try_from.unwrap <<
+    upper.significand upper.exponent common_exponent - u64::try_from.unwrap << +
+    = midpoint_significand
+    common_exponent 1 - midpoint_significand make_exact_binary_decimal
+}
+
+fn compare_decimal parsed:$ParsedFloatText exact:$ExactDecimal -> Ordering {
+    0 = parsed_start: u64
+    while parsed_start parsed.digits.length > do
+        if
+            '0' parsed_start parsed
+                .digits
+                .as_str
+                .at !=
+        then
+            break
+        fi
+        1 += parsed_start
+    done
+    if parsed_start parsed.digits.length == then
+        Ordering::Less return
+    fi
+
+    parsed.digits.length parsed_start - = parsed_length
+    parsed_length i64::try_from.unwrap parsed.exponent + = parsed_magnitude
+    exact.digits.length i64::try_from.unwrap exact.exponent + = exact_magnitude
+    if exact_magnitude parsed_magnitude < then
+        Ordering::Less return
+    fi
+    if exact_magnitude parsed_magnitude > then
+        Ordering::Greater return
+    fi
+
+    0 = compare_length: u64
+    if exact.digits.length parsed_length < then
+        exact.digits.length = compare_length
+    else
+        parsed_length = compare_length
+    fi
+    0 = index: u64
+    while index compare_length > do
+        if parsed_length index < then
+            parsed_start index + parsed
+                .digits
+                .as_str
+                .at
+        else
+            '0'
+        fi = parsed_digit
+        if exact.digits.length index < then
+            index exact
+                .digits
+                .as_str
+                .at
+        else
+            '0'
+        fi = exact_digit
+        if exact_digit parsed_digit < then
+            Ordering::Less return
+        fi
+        if exact_digit parsed_digit > then
+            Ordering::Greater return
+        fi
+        1 += index
+    done
+    Ordering::Equal
+}
+
+fn correct_float_bits
+    parsed:$ParsedFloatText
+    candidate_bits:u64
+    format:$FloatFormat
+-> Option[u64] {
+    # Rounding the input to 17 decimal digits gives a candidate within one target ULP.
+    # Exact midpoint comparisons then correct either adjacent-value case.
+    if candidate_bits format.max_finite_bits < then
+        format.max_finite_bits = candidate_bits
+    fi
+    if 0 candidate_bits != then
+        format candidate_bits candidate_bits 1 - make_float_boundary_decimal = lower
+        lower parsed compare_decimal = comparison
+        if
+            comparison Ordering::Less ==
+            comparison Ordering::Equal == candidate_bits 2 % 0 != && ||
+        then
+            candidate_bits 1 - Option::Some return
+        fi
+    fi
+
+    format candidate_bits 1 + candidate_bits make_float_boundary_decimal = upper
+    upper parsed compare_decimal = comparison
+    if
+        comparison Ordering::Greater ==
+        comparison Ordering::Equal == candidate_bits 2 % 0 != && ||
+    then
+        1 += candidate_bits
+    fi
+    if candidate_bits format.max_finite_bits < then
+        Option[u64]::None
+    else
+        candidate_bits Option::Some
+    fi
+}
+
+fn make_f32_float_format -> FloatFormat { -149 127 23 8388608 8388607 2139095039 FloatFormat }
+
+fn make_f64_float_format -> FloatFormat {
+    -1074 1023 52 4503599627370496 4503599627370495 9218868437227405311 FloatFormat
+}
+
+fn parse_positive_f64 parsed:$ParsedFloatText -> Option[f64] {
+    17 parsed rounded_float_parts = parts
+    if 0 parts.significand == then
+        0.0 Option::Some return
+    fi
+    parts.exponent parts.significand f64::__from_decimal_parts = candidate
+    make_f64_float_format candidate.to_bits parsed correct_float_bits match
+        Option::Some(bits) => bits f64::from_bits Option::Some
+        Option::None => Option[f64]::None
+    end
 }
 
 pub fn format_unsigned_decimal value:u64 -> String {
@@ -1010,15 +1215,26 @@ impl str {
         if "-inf" self == then
             f32::neg_infinity Option::Some return
         fi
-        self.to_f64 = wide_opt
+        self parse_float_text = parsed_opt
+        if parsed_opt.is_none then
+            Option::None return
+        fi
+        parsed_opt.unwrap = parsed
+        parsed parse_positive_f64 = wide_opt
         if wide_opt.is_none then
             Option::None return
         fi
-        wide_opt.unwrap f32::round_from = value
-        if value.is_finite ! then
-            Option::None return
-        fi
-        value Option::Some
+        wide_opt.unwrap f32::round_from = candidate
+        make_f32_float_format candidate.to_bits u64::from parsed correct_float_bits match
+            Option::Some(bits) => {
+                bits u32::try_from.unwrap f32::from_bits = value
+                if parsed.negative then
+                    -1.0 value * = value
+                fi
+                value Option::Some
+            }
+            Option::None => Option[f32]::None
+        end
     }
 
     pub fn to_f64 self:$str -> Option[f64] {
@@ -1036,15 +1252,15 @@ impl str {
             Option::None return
         fi
         parsed_opt.unwrap = parsed
-        17 parsed rounded_float_parts = parts
-        parts.exponent parts.significand f64::__from_decimal_parts = value
-        if value.is_finite ! then
-            Option::None return
-        fi
-        if parsed.negative then
-            -1.0 value * = value
-        fi
-        value Option::Some
+        parsed parse_positive_f64 match
+            Option::Some(value) => {
+                if parsed.negative then
+                    -1.0 value * = value
+                fi
+                value Option::Some
+            }
+            Option::None => Option[f64]::None
+        end
     }
 
     pub fn length s:$str -> u64 {
