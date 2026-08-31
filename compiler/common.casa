@@ -44,6 +44,7 @@ pub enum IntrinsicKind derives std::Eq std::Copy {
     Store32
     Store64
     Print
+    Panic
     Typeof
     SizeOf
     Exec
@@ -230,6 +231,7 @@ pub enum InstValue {
     PrintUint
     PrintStr
     PrintString
+    Panic
     # Memory
     HeapAlloc
     HeapFree
@@ -1049,6 +1051,7 @@ pub enum OpValue derives std::Clone {
     FnExecOwned
     FnPush (std::String)
     FnReturn
+    Panic
     DestructionFn (Type)
     Question (std::String)
     QuestionMove (std::String)
@@ -1156,7 +1159,7 @@ pub fn op_str_value op:$Op -> std::String {
         value.clone return
     fi
     "Internal error: op_str_value called on non-str op\n" std::eprint
-    1 std::exit
+    1 process::exit
     std::String::new
 }
 
@@ -1174,7 +1177,7 @@ pub fn op_int_value op:$Op -> i64 {
         value i64::try_from.unwrap return
     fi
     "Internal error: op_int_value called on non-i64 op\n" std::eprint
-    1 std::exit
+    1 process::exit
     0
 }
 
@@ -1269,7 +1272,7 @@ pub fn enum_variant_of op:Op -> EnumVariant {
         variant.clone return
     fi
     "Internal error: enum_variant_of called on non-EnumVariant op\n" std::eprint
-    1 std::exit
+    1 process::exit
     std::Option[i64]::None "".to_str "".to_str EnumVariant::new
 }
 # MatchArm — wrapper stored on OpValue::MatchArm. Carries the pattern payload
@@ -1294,7 +1297,7 @@ pub fn pattern_value_of op:$Op -> PatternValue {
         arm.pattern_value.clone return
     fi
     "Internal error: pattern_value_of called on non-MatchArm op\n" std::eprint
-    1 std::exit
+    1 process::exit
     "".to_str 0 IntegerLiteral::from_int LiteralValue::Int LiteralPattern PatternValue::Literal
 }
 
@@ -1303,7 +1306,7 @@ pub fn pattern_guard_ops op:$Op -> std::List[Op] {
         arm.guard_ops.clone return
     fi
     "Internal error: pattern_guard_ops called on non-MatchArm op\n" std::eprint
-    1 std::exit
+    1 process::exit
     std::List[Op]::new
 }
 
@@ -1444,13 +1447,14 @@ pub struct Function derives std::Clone {
     pub captures_shared:  bool
     pub is_const_fn:      bool
     pub is_unsafe:        bool
+    pub is_non_returning: bool
     pub extern_symbol:    std::Option[std::String]
     pub generic_params:   std::List[std::String]
 }
 
 impl Function {
     pub fn new name:std::String ops:std::List[Op] location:Location -> Function {
-        std::List[std::String]::new std::Option[std::String]::None false false false false std::List[std::String]::new std::List[std::String]::new std::List[Variable]::new std::List[Variable]::new false false empty_stack_effect location ops name Function
+        std::List[std::String]::new std::Option[std::String]::None false false false false false std::List[std::String]::new std::List[std::String]::new std::List[Variable]::new std::List[Variable]::new false false empty_stack_effect location ops name Function
     }
 
     pub fn with_stack_effect
@@ -1459,12 +1463,13 @@ impl Function {
         location:Location
         effect:StackEffect
     -> Function {
-        std::List[std::String]::new std::Option[std::String]::None false false false false std::List[std::String]::new std::List[std::String]::new std::List[Variable]::new std::List[Variable]::new false false effect location ops name Function
+        std::List[std::String]::new std::Option[std::String]::None false false false false false std::List[std::String]::new std::List[std::String]::new std::List[Variable]::new std::List[Variable]::new false false effect location ops name Function
     }
 
     pub fn clone_for_import self:$Function -> Function {
         self.generic_params.clone
         self.extern_symbol.clone
+        self.is_non_returning
         self.is_unsafe
         self.is_const_fn
         self.captures_shared
@@ -1486,6 +1491,7 @@ impl Function {
     pub fn clone_declaration self:$Function -> Function {
         self.generic_params.clone
         self.extern_symbol.clone
+        self.is_non_returning
         self.is_unsafe
         self.is_const_fn
         self.captures_shared
@@ -1506,9 +1512,9 @@ impl Function {
     # Split an owned function into its declaration and body.
     pub fn split_body self:Function -> Function std::List[Op] {
         self match
-            Function { name: name ops: ops location: location stack_effect: stack_effect is_resolved: is_resolved is_typechecked: is_typechecked variables: variables captures: captures global_captures: global_captures owned_captures: owned_captures captures_by_move: captures_by_move captures_shared: captures_shared is_const_fn: is_const_fn is_unsafe: is_unsafe extern_symbol: extern_symbol generic_params: generic_params } => {
+            Function { name: name ops: ops location: location stack_effect: stack_effect is_resolved: is_resolved is_typechecked: is_typechecked variables: variables captures: captures global_captures: global_captures owned_captures: owned_captures captures_by_move: captures_by_move captures_shared: captures_shared is_const_fn: is_const_fn is_unsafe: is_unsafe is_non_returning: is_non_returning extern_symbol: extern_symbol generic_params: generic_params } => {
                 generic_params extern_symbol
-                is_unsafe is_const_fn captures_shared captures_by_move
+                is_non_returning is_unsafe is_const_fn captures_shared captures_by_move
                 owned_captures global_captures captures variables is_typechecked is_resolved
                 stack_effect location std::List[Op]::new name Function
                 ops
@@ -3123,6 +3129,7 @@ impl IntrinsicKind {
             IntrinsicKind::Store32 => "store32"
             IntrinsicKind::Store64 => "store64"
             IntrinsicKind::Print => "print"
+            IntrinsicKind::Panic => "panic"
             IntrinsicKind::Typeof => "typeof"
             IntrinsicKind::SizeOf => "size_of"
             IntrinsicKind::Exec => "exec"
@@ -3159,6 +3166,7 @@ pub fn intrinsic_from_str value:$str -> std::Option[IntrinsicKind] {
         "store32" => IntrinsicKind::Store32 std::Option::Some return
         "store64" => IntrinsicKind::Store64 std::Option::Some return
         "print" => IntrinsicKind::Print std::Option::Some return
+        "panic" => IntrinsicKind::Panic std::Option::Some return
         "typeof" => IntrinsicKind::Typeof std::Option::Some return
         "size_of" => IntrinsicKind::SizeOf std::Option::Some return
         "exec" => IntrinsicKind::Exec std::Option::Some return
@@ -3297,6 +3305,7 @@ pub fn intrinsic_to_op_value intrinsic_kind:IntrinsicKind -> std::Option[OpValue
         IntrinsicKind::Load64 => OpValue::Load64 std::Option::Some
         IntrinsicKind::Over => OpValue::Over std::Option::Some
         IntrinsicKind::Print => OpValue::Print std::Option::Some
+        IntrinsicKind::Panic => OpValue::Panic std::Option::Some
         IntrinsicKind::Rot => OpValue::Rot std::Option::Some
         IntrinsicKind::Store8 => OpValue::Store8 std::Option::Some
         IntrinsicKind::Store16 => OpValue::Store16 std::Option::Some
@@ -3352,6 +3361,7 @@ pub fn direct_op_to_inst value:$OpValue -> std::Option[InstValue] {
         OpValue::Not => InstValue::Not std::Option::Some
         OpValue::Or => InstValue::Or std::Option::Some
         OpValue::Over => InstValue::Over std::Option::Some
+        OpValue::Panic => InstValue::Panic std::Option::Some
         OpValue::PrintBool => InstValue::PrintBool std::Option::Some
         OpValue::PrintChar => InstValue::PrintChar std::Option::Some
         OpValue::PrintCstr => InstValue::PrintCstr std::Option::Some

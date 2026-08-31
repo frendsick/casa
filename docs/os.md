@@ -108,6 +108,13 @@ environment variables, paths, and a child process.
 argument count and `get_arg index:u64 -> Bytes` copies one argument. Index `0`
 is the program name. An invalid index terminates the program.
 
+`process::exit status:u8` terminates immediately with the supplied status. It
+does not unwind or run cleanup. Normal root completion exits with status zero.
+
+```casa
+2 process::exit
+```
+
 `run_command arguments:List[Bytes] -> i64` starts a process and waits for it. The
 first list element is the executable path:
 

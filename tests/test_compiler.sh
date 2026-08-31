@@ -180,6 +180,7 @@ for f in "$TESTS_DIR"/runtime_errors/*.casa; do
     matched=true
 
     expected_message=$(head -1 "$f" | sed 's/^# expect: //')
+    expected_status=$(sed -n 's/^# status: //p' "$f")
     binary="$TEST_TMP/runtime_${base}"
 
     printf "Running: runtime_error/%s ... " "$base"
@@ -188,16 +189,25 @@ for f in "$TESTS_DIR"/runtime_errors/*.casa; do
         printf "${RED}COMPILE FAIL${RESET}\n"
         cat "$TEST_TMP/compile_err"
         fail=$((fail+1))
-    elif "$binary" >"$TEST_TMP/runtime_out" 2>"$TEST_TMP/runtime_err"; then
-        printf "${RED}EXPECTED RUNTIME FAIL${RESET}\n"
-        fail=$((fail+1))
-    elif ! grep -q "$expected_message" "$TEST_TMP/runtime_err"; then
-        printf "${RED}WRONG ERROR (expected %s)${RESET}\n" "$expected_message"
-        cat "$TEST_TMP/runtime_err"
-        fail=$((fail+1))
     else
-        printf "${GREEN}OK${RESET}\n"
-        pass=$((pass+1))
+        set +e
+        "$binary" >"$TEST_TMP/runtime_out" 2>"$TEST_TMP/runtime_err"
+        actual_status=$?
+        set -e
+        if [ "$actual_status" -eq 0 ]; then
+            printf "${RED}EXPECTED RUNTIME FAIL${RESET}\n"
+            fail=$((fail+1))
+        elif [ -n "$expected_status" ] && [ "$actual_status" -ne "$expected_status" ]; then
+            printf "${RED}WRONG STATUS (expected %s, got %s)${RESET}\n" "$expected_status" "$actual_status"
+            fail=$((fail+1))
+        elif ! grep -q "$expected_message" "$TEST_TMP/runtime_err"; then
+            printf "${RED}WRONG ERROR (expected %s)${RESET}\n" "$expected_message"
+            cat "$TEST_TMP/runtime_err"
+            fail=$((fail+1))
+        else
+            printf "${GREEN}OK${RESET}\n"
+            pass=$((pass+1))
+        fi
     fi
     rm -f "$binary"
 done

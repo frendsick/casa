@@ -576,7 +576,7 @@ impl BranchFrame {
             BranchFrame::BranchIf(context) => context
             _ => {
                 "Internal error: expected if branch frame\n" std::eprint
-                1 std::exit
+                1 process::exit
                 IfContext::new
             }
         end
@@ -587,7 +587,7 @@ impl BranchFrame {
             BranchFrame::BranchWhile(context) => context
             _ => {
                 "Internal error: expected while branch frame\n" std::eprint
-                1 std::exit
+                1 process::exit
                 0 WhileContext::new
             }
         end
@@ -598,7 +598,7 @@ impl BranchFrame {
             BranchFrame::BranchMatch(context) => context
             _ => {
                 "Internal error: expected match branch frame\n" std::eprint
-                1 std::exit
+                1 process::exit
                 common::make_unknown_type.clone MatchContext::new
             }
         end
@@ -770,6 +770,29 @@ impl TypeChecker {
     pub fn assign_op_id self:mut$TypeChecker op:mut$common::Op {
         self.store.next_op_id = op.id
         1 += self.store.next_op_id
+    }
+
+    # End one control-flow path and restore the enclosing branch entry so the
+    # next branch can be checked independently.
+    pub fn end_path self:mut$TypeChecker {
+        false = self.path_continues
+        if 0 self.branched_stacks.length == then
+            return
+        fi
+        self.branched_stacks.pop = top_frame
+        if top_frame BranchFrame::BranchIf(if_ctx) is then
+            if self.in_branch_condition ! then
+                if_ctx.before self.stack.restore
+                if_ctx.flow_before self.restore_ownership_flow
+            fi
+        elif top_frame BranchFrame::BranchWhile(while_ctx) is then
+            while_ctx.before self.stack.restore
+            while_ctx.flow_before self.restore_ownership_flow
+        elif top_frame BranchFrame::BranchMatch(match_ctx) is then
+            match_ctx.before self.stack.restore
+            match_ctx.flow_before self.restore_ownership_flow
+        fi
+        top_frame self.branched_stacks.push
     }
 }
 
@@ -4886,21 +4909,31 @@ impl TypeChecker {
         op common::Op::location.clone if_ctx IfContext::set_current_branch_location
         if_ctx IfContext::before = if_before: mut$TypedStack
         if_ctx IfContext::after = if_after: mut$TypedStack
-        if if_before self.stack.equals if_after if_before.equals && then
+        if self.path_continues ! then
+            if_before self.stack.restore
+            return
+        fi
+        if if_ctx.has_continuing_branch ! then
+            self.stack if_after.restore
+            if_before self.stack.restore
+            return
+        fi
+        if if_after self.stack.equals then
+            self.stack if_after.merge_literals
+            if_after.mark_literals_runtime
+            if_before self.stack.restore
             return
         fi
         self.store if_after self.stack.unify_types = unified
-        if 0 unified.length != if_after if_before.equals ! && then
+        if 0 unified.length != then
             self.stack if_after.merge_literals
             if_after.mark_literals_runtime
             unified if_after.set_types
             if_before self.stack.restore
-        elif if_after if_before.equals then
-            self.stack if_after.restore
-            if_before self.stack.restore
         else
             op common::Op::location "Branches have incompatible stack effects"
             common::ErrorKind::StackMismatch self.diagnostics.record_error
+            if_before self.stack.restore
         fi
     }
 
@@ -4918,7 +4951,9 @@ impl TypeChecker {
             true = tc.in_branch_condition
         elif if_value common::OpValue::IfCondition is then
             false = tc.in_branch_condition
-            common::make_bool_type tc.expect_type_t
+            if tc.path_continues then
+                common::make_bool_type tc.expect_type_t
+            fi
             if 0 tc.branched_stacks.length == then
                 return
             fi
@@ -4932,6 +4967,9 @@ impl TypeChecker {
                 tc.stack if_ctx IfContext::before.restore
                 tc.stack if_ctx IfContext::after.restore
                 "if".to_str if_ctx IfContext::set_current_branch_label
+            fi
+            if tc.path_continues ! then
+                false = if_ctx.entry_continues
             fi
             if_ctx BranchFrame::BranchIf tc.branched_stacks.push
         elif
@@ -4955,6 +4993,7 @@ impl TypeChecker {
             tc.scope.enter
             if_ctx.flow_after tc.merge_current_ownership_flow
             if tc.path_continues then
+                if_ctx op tc.merge_if_branch_stack
                 true = if_ctx.has_continuing_branch
             fi
             if_ctx.flow_before tc.restore_ownership_flow
@@ -4965,7 +5004,6 @@ impl TypeChecker {
             else
                 true = tc.in_branch_condition
             fi
-            if_ctx op tc.merge_if_branch_stack
             if_ctx BranchFrame::BranchIf tc.branched_stacks.push
         elif if_value common::OpValue::IfEnd is then
             tc
@@ -4980,39 +5018,23 @@ impl TypeChecker {
             tc.scope.exit
             if_ctx.flow_after tc.merge_current_ownership_flow
             if tc.path_continues then
+                if_ctx op tc.merge_if_branch_stack
                 true = if_ctx.has_continuing_branch
             fi
             if if_ctx.default_present ! if_ctx.entry_continues && then
                 if_ctx.flow_before if_ctx.flow_after.merge
+                if_ctx.entry_continues = tc.path_continues
+                if_ctx op tc.merge_if_branch_stack
                 true = if_ctx.has_continuing_branch
             fi
             if if_ctx.has_continuing_branch then
                 if_ctx.flow_after tc.restore_ownership_flow
+                if_ctx.after tc.stack.restore
             else
                 if_ctx.flow_before tc.restore_ownership_flow
+                if_ctx.before tc.stack.restore
             fi
             if_ctx.has_continuing_branch = tc.path_continues
-            if_ctx IfContext::before = if_before: mut$TypedStack
-            if_ctx IfContext::after = if_after: mut$TypedStack
-            if if_before tc.stack.equals if_after if_before.equals && then
-                return
-            fi
-            tc.store if_after tc.stack.unify_types = unified
-            if 0 unified.length != if_ctx IfContext::default_present && then
-                tc.stack if_after.merge_literals
-                if_after.mark_literals_runtime
-                if_after tc.stack.restore
-                unified tc.stack.set_types
-                return
-            fi
-            tc.store if_before tc.stack.unify_types = unified_before
-            if 0 unified_before.length != if_ctx IfContext::default_present ! && then
-                tc.stack if_before.merge_literals
-                if_before tc.stack.restore
-                unified_before tc.stack.set_types
-                return
-            fi
-            op common::Op::location "Branches have incompatible stack effects" common::ErrorKind::StackMismatch tc.diagnostics.record_error
         fi
     }
 }
@@ -5048,7 +5070,9 @@ impl TypeChecker {
             while_frame tc.branched_stacks.push
             tc.scope.enter
         elif while_value common::OpValue::WhileCondition is then
-            common::make_bool_type tc.expect_type_t
+            if tc.path_continues then
+                common::make_bool_type tc.expect_type_t
+            fi
             if 0 tc.branched_stacks.length == then
                 return
             fi
@@ -6413,6 +6437,7 @@ impl TypeChecker {
             tc.diagnostics tc.store fn_name.as_str ensure_typechecked = fn_opt
             if fn_opt.is_some then
                 fn_opt.unwrap = function
+                function.is_non_returning = is_non_returning
                 function.into_parts = is_unsafe = effect
                 if is_unsafe then
                     fn_name.as_str op tc.require_unsafe
@@ -6475,6 +6500,9 @@ impl TypeChecker {
                     else
                         op.location f"Explicit type `{explicit_type.format}` does not match `{fn_name}`" common::ErrorKind::TypeMismatch tc.diagnostics.record_error_string
                     fi
+                fi
+                if is_non_returning then
+                    tc.end_path
                 fi
             fi
         elif fn_value common::OpValue::FnExec is fn_value common::OpValue::FnExecOwned is || then
@@ -6639,6 +6667,12 @@ impl TypeChecker {
                 std::List[common::Type]::new std::List[common::Type]::new common::FunctionType common::Type::Function tc.stack_push_type
             fi
         elif fn_value common::OpValue::FnReturn is then
+            if function_opt.is_none then
+                op.location "`return` is only allowed in a function"
+                common::ErrorKind::InvalidScope tc.diagnostics.record_error
+                op_index return
+            fi
+            tc.path_continues = return_reachable
             if function_opt std::Option::Some(function) is then
                 function tc.resolve_declared_return_borrow_capabilities
                 function tc.validate_borrow_returns
@@ -6660,27 +6694,24 @@ impl TypeChecker {
                 1 += return_index
             done
             op tc.attach_all_owner_cleanups
-            false = tc.path_continues
-            if tc.has_return_types ! then
+            if return_reachable tc.has_return_types ! && then
                 true = tc.has_return_types
                 tc.stack tc.return_types.restore
             fi
-            if 0 tc.branched_stacks.length != then
-                tc.branched_stacks.pop = top_frame
-                if top_frame BranchFrame::BranchIf(if_ctx) is then
-                    if_ctx IfContext::before tc.stack.restore
-                    if_ctx.flow_before tc.restore_ownership_flow
-                elif top_frame BranchFrame::BranchWhile(while_ctx) is then
-                    while_ctx WhileContext::before tc.stack.restore
-                    while_ctx.flow_before tc.restore_ownership_flow
-                elif top_frame BranchFrame::BranchMatch(match_ctx) is then
-                    match_ctx MatchContext::before tc.stack.restore
-                    match_ctx.flow_before tc.restore_ownership_flow
-                fi
-                top_frame tc.branched_stacks.push
-            fi
+            tc.end_path
         fi
         op_index
+    }
+}
+
+# ============================================================================
+# Check panic
+# ============================================================================
+
+impl TypeChecker {
+    pub fn check_panic self:mut$TypeChecker {
+        common::SHARED_BORROW_TYPE common::make_str_type common::apply_borrow_type self.expect_type_t
+        self.end_path
     }
 }
 
@@ -7088,20 +7119,28 @@ impl TypeChecker {
         fi
         match_ctx MatchContext::before = match_before: mut$TypedStack
         match_ctx MatchContext::after = match_after: mut$TypedStack
-        if
-            match_before self.stack.equals
-            match_after match_before.equals && !
-        then
-            self.store match_after self.stack.unify_types = unified
-            if 0 unified.length != match_after match_before.equals ! && then
-                self.stack match_after.merge_literals
-                match_after.mark_literals_runtime
-                unified match_after.set_types
-            elif match_after match_before.equals then
-                self.stack match_after.restore
-            else
-                op common::Op::location "Match arms have incompatible stack effects" common::ErrorKind::StackMismatch self.diagnostics.record_error
-            fi
+        if self.path_continues ! then
+            match_before self.stack.restore
+            return
+        fi
+        if match_ctx.has_continuing_arm ! then
+            self.stack match_after.restore
+            match_before self.stack.restore
+            return
+        fi
+        if match_after self.stack.equals then
+            self.stack match_after.merge_literals
+            match_after.mark_literals_runtime
+            match_before self.stack.restore
+            return
+        fi
+        self.store match_after self.stack.unify_types = unified
+        if 0 unified.length != then
+            self.stack match_after.merge_literals
+            match_after.mark_literals_runtime
+            unified match_after.set_types
+        else
+            op common::Op::location "Match arms have incompatible stack effects" common::ErrorKind::StackMismatch self.diagnostics.record_error
         fi
         match_before self.stack.restore
     }
@@ -7434,6 +7473,7 @@ impl TypeChecker {
                     match_ctx.before self.materialize_branch_results
                 fi
                 match_ctx.flow_after self.merge_current_ownership_flow
+                op match_ctx self.unify_arm_stacks
                 if self.path_continues then
                     true = match_ctx.has_continuing_arm
                 fi
@@ -7463,9 +7503,7 @@ impl TypeChecker {
 
             covered_key.as_str op match_ctx self.detect_duplicate_arm
 
-            if match_ctx MatchContext::condition_present then
-                op match_ctx self.unify_arm_stacks
-            else
+            if match_ctx MatchContext::condition_present ! then
                 true match_ctx MatchContext::set_condition_present
                 self.stack match_ctx MatchContext::before.restore
                 self.stack match_ctx MatchContext::after.restore
@@ -7504,22 +7542,26 @@ impl TypeChecker {
                 guard_flow guard_checker.restore_ownership_flow
                 std::Map[std::String u64]::new guard_ops count_variable_uses = guard_checker.remaining_uses
                 function_opt guard_ops guard_checker.run_type_check_ops
-                for name in guard_checker.moved_owners.iter do
-                    if name.as_str self.moved_owners common::string_list_contains ! then
-                        op.location f"Match guard cannot move owner `{name}`"
-                        common::ErrorKind::InvalidVariable guard_checker.diagnostics.record_error_string
+                if guard_checker.path_continues then
+                    for name in guard_checker.moved_owners.iter do
+                        if name.as_str self.moved_owners common::string_list_contains ! then
+                            op.location f"Match guard cannot move owner `{name}`"
+                            common::ErrorKind::InvalidVariable guard_checker.diagnostics.record_error_string
+                        fi
+                    done
+                    guard_checker.stack.get_types = guard_stack
+                    false = guard_ok
+                    if 1 guard_stack.length == then
+                        0 guard_stack.get.format = guard_type
+                        if "bool" guard_type.as_str == then
+                            true = guard_ok
+                        fi
                     fi
-                done
-                guard_checker.stack.get_types = guard_stack
-                false = guard_ok
-                if 1 guard_stack.length == then
-                    0 guard_stack.get.format = guard_type
-                    if "bool" guard_type.as_str == then
-                        true = guard_ok
+                    if guard_ok ! then
+                        op common::Op::location "Guard expression must leave a single `bool` on the stack" common::ErrorKind::TypeMismatch guard_checker.diagnostics.record_error
                     fi
-                fi
-                if guard_ok ! then
-                    op common::Op::location "Guard expression must leave a single `bool` on the stack" common::ErrorKind::TypeMismatch guard_checker.diagnostics.record_error
+                else
+                    false = self.path_continues
                 fi
             fi
 
@@ -7666,49 +7708,52 @@ impl TypeChecker {
     {
         std::Option[std::List[std::String]]::None = match_origins
         std::Option[std::String]::None = match_place
-        if
+        common::make_unknown_type.clone = match_type
+        if self.path_continues then
+            if
+                0 self
+                    .stack
+                    .values
+                    .length ==
+            then
+                self.within_param_cap = inferring_stack_effect
+                if function_opt std::Option::Some(function) is then
+                    if function common::Function::name.as_str "lambda__" str::starts_with ! then
+                        false = inferring_stack_effect
+                    fi
+                else
+                    false = inferring_stack_effect
+                fi
+                if inferring_stack_effect ! then
+                    op common::Op::location "`match` requires a subject value on the stack" common::ErrorKind::StackUnderflow self.diagnostics.record_error
+                    true = self.underflow_reported_this_op
+                fi
+            fi
             0 self
                 .stack
                 .values
-                .length ==
-        then
-            self.within_param_cap = inferring_stack_effect
-            if function_opt std::Option::Some(function) is then
-                if function common::Function::name.as_str "lambda__" str::starts_with ! then
-                    false = inferring_stack_effect
+                .length != = has_match_subject
+            self.stack_pop_value = match_subject
+            match_subject.type_value.clone = match_type
+            if 0 match_subject.literals.length != then
+                match_type resolve_numeric_literal_default = match_type
+                self.literal_resolutions self.diagnostics match_type match_subject.resolve_literals drop
+            fi
+            if has_match_subject then
+                match_subject.origins.clone = match_origins
+                if match_subject.place std::Option::Some(place) is then
+                    place.clone std::Option::Some = match_place
                 fi
-            else
-                false = inferring_stack_effect
-            fi
-            if inferring_stack_effect ! then
-                op common::Op::location "`match` requires a subject value on the stack" common::ErrorKind::StackUnderflow self.diagnostics.record_error
-                true = self.underflow_reported_this_op
-            fi
-        fi
-        0 self
-            .stack
-            .values
-            .length != = has_match_subject
-        self.stack_pop_value = match_subject
-        match_subject.type_value.clone = match_type
-        if 0 match_subject.literals.length != then
-            match_type resolve_numeric_literal_default = match_type
-            self.literal_resolutions self.diagnostics match_type match_subject.resolve_literals drop
-        fi
-        if has_match_subject then
-            match_subject.origins.clone = match_origins
-            if match_subject.place std::Option::Some(place) is then
-                place.clone std::Option::Some = match_place
-            fi
-            match_subject self.finish_value_use
-            if match_subject.capability ValueCapability::Owned is ! then
-                if match_type.is_borrow ! then
-                    if match_subject.capability ValueCapability::Shared is then
-                        common::SHARED_BORROW_TYPE
-                    else
-                        common::EXCLUSIVE_BORROW_TYPE
+                match_subject self.finish_value_use
+                if match_subject.capability ValueCapability::Owned is ! then
+                    if match_type.is_borrow ! then
+                        if match_subject.capability ValueCapability::Shared is then
+                            common::SHARED_BORROW_TYPE
+                        else
+                            common::EXCLUSIVE_BORROW_TYPE
+                        fi
+                        match_type common::apply_borrow_type = match_type
                     fi
-                    match_type common::apply_borrow_type = match_type
                 fi
             fi
         fi
@@ -7846,6 +7891,9 @@ impl TypeChecker {
             self.scope.exit
         fi
         match_ctx.flow_after self.merge_current_ownership_flow
+        if match_ctx MatchContext::condition_present then
+            op match_ctx self.unify_arm_stacks
+        fi
         if self.path_continues then
             true = match_ctx.has_continuing_arm
         fi
@@ -7855,9 +7903,6 @@ impl TypeChecker {
             match_ctx.flow_before self.restore_ownership_flow
         fi
         match_ctx.has_continuing_arm = self.path_continues
-        if match_ctx MatchContext::condition_present then
-            op match_ctx self.unify_arm_stacks
-        fi
 
         match_ctx op self.check_match_exhaustiveness
         match_ctx op self.apply_match_result_stack
@@ -8526,6 +8571,7 @@ impl TypeChecker {
                     tc.diagnostics tc.store fn_name.as_str ensure_typechecked = checked_function_opt
                     checked_function_opt match
                         std::Option::Some(function) => {
+                            function.is_non_returning = is_non_returning
                             function.into_parts = is_unsafe = effect
                             if is_unsafe then
                                 fn_name.as_str op tc.require_unsafe
@@ -8545,6 +8591,9 @@ impl TypeChecker {
                             tc.apply_stack_effect
                             receiver_capability fn_name.as_str tc.mark_struct_getter_borrow
                             fn_name common::OpValue::FnCall op common::Op::set_value
+                            if is_non_returning then
+                                tc.end_path
+                            fi
                             op_index return
                         }
                         std::Option::None => {
@@ -8646,8 +8695,9 @@ impl TypeChecker {
 # ============================================================================
 
 pub struct CheckedFunction {
-    pub stack_effect: common::StackEffect
-    pub is_unsafe:    bool
+    pub stack_effect:     common::StackEffect
+    pub is_unsafe:        bool
+    pub is_non_returning: bool
 }
 
 impl CheckedFunction {
@@ -8659,7 +8709,7 @@ impl CheckedFunction {
 }
 
 pub fn checked_function_summary function:$common::Function -> CheckedFunction {
-    CheckedFunction { stack_effect: function.stack_effect.clone is_unsafe: function.is_unsafe }
+    CheckedFunction { stack_effect: function.stack_effect.clone is_unsafe: function.is_unsafe is_non_returning: function.is_non_returning }
 }
 
 pub fn ensure_typechecked
@@ -8679,7 +8729,7 @@ pub fn ensure_typechecked
     function_opt.unwrap = function
     function.split_body = function_ops = function
     function std::Option::Some = active_function
-    diagnostics store active_function function_ops check_ops = inferred_stack_effect
+    false diagnostics store active_function function_ops check_ops = inferred_stack_effect
     active_function.unwrap = function
     function_ops function common::Function::set_ops
     if function.name.as_str "lambda__" str::starts_with then
@@ -8905,6 +8955,7 @@ impl TypeChecker {
             common::OpValue::PushArray(_) => function_opt current_op self.check_literals
             common::OpValue::ExprGroup(_) => function_opt current_op self.check_literals
             common::OpValue::Print => function_opt op_index ops current_op self.check_io = op_index
+            common::OpValue::Panic => self.check_panic
             common::OpValue::Typeof => current_op self.check_typeof
             common::OpValue::SizeOf(target_type) => function_opt target_type current_op self.check_size_of
             common::OpValue::Syscall0 => function_opt current_op self.check_syscalls
@@ -9105,6 +9156,7 @@ pub fn check_ops
     function_opt:mut$std::Option[common::Function]
     store:mut$common::SymbolStore
     diagnostics:mut$error::Diagnostics
+    require_empty_final_stack:bool
 -> common::StackEffect {
     diagnostics store TypeChecker::new = checker
     std::Option[u64]::None = budget
@@ -9136,6 +9188,7 @@ pub fn check_ops
     function_opt ops checker.run_type_check_ops
 
     if function_opt std::Option::Some(checked_function) is then
+        checker.path_continues ! checker.has_return_types ! && = checked_function.is_non_returning
         checked_function checker.resolve_declared_return_borrow_capabilities
         if checker.has_return_types ! then
             checked_function checker.validate_borrow_returns
@@ -9200,21 +9253,31 @@ pub fn check_ops
     # Verify against declared stack effect if function has one
     checker.diagnostics.error_count errors_before_ops < = had_type_errors
     if had_type_errors ! then
-        if function_opt std::Option::Some(declared_function) is then
+        if
+            require_empty_final_stack
+            checker.path_continues &&
+            0 inferred.return_types.length != &&
+        then
+            checker.current_location
+            f"Root body must leave an empty stack, got `{inferred common::stack_effect_to_str}`"
+            common::ErrorKind::StackMismatch checker.diagnostics.record_error_string
+        elif function_opt std::Option::Some(declared_function) is then
             if declared_function.name.as_str "lambda__" str::starts_with ! then
                 declared_function common::Function::stack_effect = declared: $common::StackEffect
-                if
-                    declared common::stack_effect_to_str.as_str "None -> None" !=
-                    0 inferred.return_types.length != checker.has_return_types ! || &&
-                then
-                    false = invalid_effect
-                    if 0 declared.type_vars.length != then
-                        declared inferred checked_generic_body_effect_matches ! = invalid_effect
-                    else
-                        inferred declared common::stack_effect_matches ! = invalid_effect
-                    fi
-                    if invalid_effect then
-                        declared_function common::Function::location f"Invalid stack effect for function `{declared_function common::Function::name}`: expected `{declared common::stack_effect_to_str}`, got `{inferred common::stack_effect_to_str}`" common::ErrorKind::SignatureMismatch checker.diagnostics.record_error_string
+                if declared_function.is_non_returning ! then
+                    if
+                        declared common::stack_effect_to_str.as_str "None -> None" !=
+                        0 inferred.return_types.length != checker.has_return_types ! || &&
+                    then
+                        false = invalid_effect
+                        if 0 declared.type_vars.length != then
+                            declared inferred checked_generic_body_effect_matches ! = invalid_effect
+                        else
+                            inferred declared common::stack_effect_matches ! = invalid_effect
+                        fi
+                        if invalid_effect then
+                            declared_function common::Function::location f"Invalid stack effect for function `{declared_function common::Function::name}`: expected `{declared common::stack_effect_to_str}`, got `{inferred common::stack_effect_to_str}`" common::ErrorKind::SignatureMismatch checker.diagnostics.record_error_string
+                        fi
                     fi
                 fi
                 # Update inferred stack effect with declared return types for type-var functions
@@ -9249,7 +9312,7 @@ pub fn check_functions store:mut$common::SymbolStore diagnostics:mut$error::Diag
         current_fn.split_body = current_ops = current_fn
         diagnostics.error_count = errors_before
         current_fn std::Option::Some = current_fn_opt
-        diagnostics store current_fn_opt current_ops check_ops = inferred_stack_effect
+        false diagnostics store current_fn_opt current_ops check_ops = inferred_stack_effect
         current_fn_opt.unwrap = current_fn
         current_ops current_fn common::Function::set_ops
         diagnostics.error_count errors_before < = had_errors
@@ -9850,7 +9913,7 @@ pub fn monomorphize_checked_generics
 pub fn type_check ops:std::List[common::Op] store:common::SymbolStore -> TypecheckResult {
     error::Diagnostics::new = diagnostics
     diagnostics store validate_extern_functions
-    diagnostics store std::Option::None ops check_ops = global_stack_effect
+    true diagnostics store std::Option::None ops check_ops = global_stack_effect
     diagnostics store check_functions
     diagnostics store check_trait_impls
     diagnostics store validate_generic_cycles
