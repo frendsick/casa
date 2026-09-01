@@ -28,6 +28,11 @@ matched=false
 for f in "$EXAMPLES_DIR"/*.casa; do
     base=$(basename "$f" .casa)
 
+    # Raylib is an optional graphical system dependency validated separately.
+    if [ "$base" = raylib ]; then
+        continue
+    fi
+
     if ! matches_filter "$base" "$@"; then
         continue
     fi
