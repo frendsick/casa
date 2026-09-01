@@ -1,0 +1,1942 @@
+# Shared type and dispatch rules for operation semantics.
+import "std" as std
+import "common" as common
+
+pub fn rewrite_type_const_params
+    typ:$common::Type
+    const_params:$std::Map[std::String common::BuiltinType]
+-> common::Type {
+    typ match
+        common::Type::TypeVar(name) => {
+            if name const_params.get_copy std::Option::Some(type_var_builtin) is then
+                type_var_builtin name.clone common::ConstType::symbolic common::Type::Const
+            else
+                typ.clone
+            fi
+        }
+        common::Type::Generic(generic) => {
+            if 0 generic.params.length == then
+                if generic.base const_params.get_copy std::Option::Some(bare_builtin) is then
+                    bare_builtin generic.base.clone common::ConstType::symbolic common::Type::Const return
+                fi
+                typ.clone return
+            fi
+            std::List[common::Type]::new = new_params
+            for param in generic.params.iter do
+                const_params param rewrite_type_const_params new_params.push
+            done
+            new_params generic.base.clone common::GenericType common::Type::Generic
+        }
+        common::Type::Function(fn_type) => {
+            std::List[common::Type]::new = new_params
+            for param in fn_type.parameters.iter do
+                const_params param rewrite_type_const_params new_params.push
+            done
+            std::List[common::Type]::new = new_returns
+            for return_type in fn_type.return_types.iter do
+                const_params return_type rewrite_type_const_params new_returns.push
+            done
+            new_returns new_params common::FunctionType common::Type::Function
+        }
+        _ => typ.clone
+    end
+}
+
+pub struct TraitMethodCandidate derives std::Clone {
+    pub method:     common::TraitMethod
+    pub trait_type: common::Type
+    pub effect:     common::StackEffect
+}
+
+pub fn collect_trait_method_candidates_into
+    seen:std::Set[std::String]
+    result:mut$std::List[TraitMethodCandidate]
+    store:$common::SymbolStore
+    trait_type:$common::Type
+-> std::Set[std::String] {
+    trait_type.match_base = trait_name
+    trait_name.as_str store.traits.get_str = trait_opt
+    if trait_opt.is_none then
+        seen return
+    fi
+    trait_opt.unwrap = trait_def
+    std::Map[std::String common::Type]::new = substitutions
+    if trait_type.type_params std::Option::Some(arguments) is then
+        for
+            pair in arguments.iter trait_def
+                .type_params
+                .iter
+                .zip
+        do
+            pair.second.clone pair.first.clone substitutions.set
+        done
+    fi
+    for method in trait_def.methods.iter do
+        f"{trait_type.format}::{method.name}" = identity
+        if identity.as_str seen.has_str ! then
+            identity seen.add
+            substitutions method.stack_effect common::apply_type_subs_to_stack_effect = resolved_effect
+            resolved_effect trait_type.clone method.clone TraitMethodCandidate result.push
+        fi
+    done
+    for supertrait in trait_def.supertraits.iter do
+        substitutions supertrait common::trait_bound_to_type.substitute_t = resolved_supertrait
+        resolved_supertrait store result seen collect_trait_method_candidates_into = seen
+    done
+    seen
+}
+
+pub fn collect_trait_method_candidates
+    store:$common::SymbolStore
+    trait_type:$common::Type
+-> std::List[TraitMethodCandidate] {
+    std::List[TraitMethodCandidate]::new = result
+    std::Set[std::String]::new = seen
+    trait_type store result seen collect_trait_method_candidates_into drop
+    result
+}
+
+pub fn trait_definition_type trait_def:$common::CasaTrait -> common::Type {
+    std::List[common::Type]::new = type_arguments
+    for type_parameter in trait_def.type_params.iter do
+        type_parameter.clone common::Type::TypeVar type_arguments.push
+    done
+    type_arguments trait_def.name.clone common::GenericType common::Type::Generic
+}
+
+pub fn collect_trait_methods_into
+    seen:std::Set[std::String]
+    result:mut$std::List[common::TraitMethod]
+    store:$common::SymbolStore
+    trait_def:$common::CasaTrait
+-> std::Set[std::String] {
+    0 = method_index: u64
+    while method_index trait_def.methods.length > do
+        method_index trait_def
+            .methods
+            .get_ref
+            .name = method_name: $std::String
+        if method_name.as_str seen.has_str ! then
+            method_name.clone seen.add
+            method_index trait_def
+                .methods
+                .get
+                .clone result.push
+        fi
+        1 += method_index
+    done
+    for supertrait in trait_def.supertraits.iter do
+        if supertrait.name.as_str store.traits.get_str std::Option::Some(supertrait_def) is then
+            supertrait_def store result seen collect_trait_methods_into = seen
+        fi
+    done
+    seen
+}
+
+pub fn collect_trait_methods
+    store:$common::SymbolStore
+    trait_def:$common::CasaTrait
+-> std::List[common::TraitMethod] {
+    std::List[common::TraitMethod]::new = result
+    std::Set[std::String]::new = seen
+    trait_def store result seen collect_trait_methods_into drop
+    result
+}
+
+pub enum MethodSemanticsKind derives std::Eq std::Copy {
+    Function
+    TraitBound
+    DefaultMethod
+}
+
+pub struct MethodSemantics derives std::Clone {
+    pub kind:          MethodSemanticsKind
+    pub function_name: std::String
+    pub trait_name:    std::String
+    pub trait_type:    std::Option[common::Type]
+    pub method_name:   std::String
+    pub stack_effect:  common::StackEffect
+}
+
+impl common::StackEffect {
+    pub fn needs_inference self:$common::StackEffect -> bool {
+        0 self.parameters.length == 0 self.return_types.length == &&
+    }
+}
+
+pub fn unify_generic_type_parameters
+    type_a:$common::Type
+    type_b:$common::Type
+    store:$common::SymbolStore
+-> std::Option[common::Type] {
+    type_a.base = base_a
+    type_b.base = base_b
+    if base_a.is_some base_b.is_some != then
+        std::Option[common::Type]::None return
+    fi
+    if base_a std::Option::Some(first_base) is then
+        if base_b std::Option::Some(second_base) is then
+            if first_base second_base != then
+                std::Option[common::Type]::None return
+            fi
+        fi
+    fi
+    type_a.type_params = parameters_a_result
+    type_b.type_params = parameters_b_result
+    if parameters_a_result.is_none then
+        type_b.clone std::Option::Some return
+    fi
+    if parameters_b_result.is_none then
+        type_a.clone std::Option::Some return
+    fi
+    parameters_a_result.unwrap = parameters_a
+    parameters_b_result.unwrap = parameters_b
+    if parameters_a.length parameters_b.length != then
+        std::Option[common::Type]::None return
+    fi
+    std::List[common::Type]::new = unified
+    for pair in parameters_b.iter parameters_a.iter.zip do
+        store pair.second pair.first unify_type_t match
+            std::Option::Some(value) => value unified.push
+            std::Option::None => {
+                std::Option[common::Type]::None return
+            }
+        end
+    done
+    type_a.base = base_result
+    if base_result.is_none then
+        std::Option[common::Type]::None return
+    fi
+    base_result.unwrap = base
+    unified base common::GenericType common::Type::Generic std::Option::Some
+}
+
+pub fn unify_type_t
+    type_a:$common::Type
+    type_b:$common::Type
+    store:$common::SymbolStore
+-> std::Option[common::Type] {
+    if type_a type_b.eq then
+        type_a.clone std::Option::Some return
+    fi
+    if type_a.is_integer_literal_t type_b.is_integer_type_t && then
+        type_b.clone std::Option::Some return
+    fi
+    if type_b.is_integer_literal_t type_a.is_integer_type_t && then
+        type_a.clone std::Option::Some return
+    fi
+    if type_a.is_float_literal_t type_b.is_float_type_t && then
+        type_b.clone std::Option::Some return
+    fi
+    if type_b.is_float_literal_t type_a.is_float_type_t && then
+        type_a.clone std::Option::Some return
+    fi
+    if type_a.is_unknown_placeholder then
+        type_b.clone std::Option::Some return
+    fi
+    if type_b.is_unknown_placeholder then
+        type_a.clone std::Option::Some return
+    fi
+    if type_a.has_unresolved_type_var then
+        type_b.clone std::Option::Some return
+    fi
+    if type_b.has_unresolved_type_var then
+        type_a.clone std::Option::Some return
+    fi
+    type_a.base = base_a
+    type_b.base = base_b
+    if base_a.is_some base_b.is_some && then
+        store type_b type_a unify_generic_type_parameters = generic_result
+        if generic_result.is_some then
+            generic_result return
+        fi
+    fi
+    if base_a std::Option::Some(first_base_name) is then
+        if first_base_name type_b.format == then
+            type_a.clone std::Option::Some return
+        fi
+    fi
+    if base_b std::Option::Some(second_base_name) is then
+        if second_base_name type_a.format == then
+            type_b.clone std::Option::Some return
+        fi
+    fi
+    std::Option[common::Type]::None
+}
+
+pub struct SemanticFacts {
+    pub stack_effect:           std::Option[common::StackEffect]
+    pub resolved_operation:     std::Option[common::OpValue]
+    pub method:                 std::Option[MethodSemantics]
+    pub dependencies:           std::List[std::String]
+    pub syscall_argument_count: std::Option[u64]
+    pub word_parameter_start:   u64
+    pub word_parameter_count:   u64
+}
+
+impl SemanticFacts {
+    pub fn new -> SemanticFacts {
+        0
+        0
+        std::Option[u64]::None
+        std::List[std::String]::new
+        std::Option[MethodSemantics]::None
+        std::Option[common::OpValue]::None
+        std::Option[common::StackEffect]::None
+        SemanticFacts
+    }
+
+    pub fn into_stack_effect self:SemanticFacts -> std::Option[common::StackEffect] {
+        self match
+            SemanticFacts { stack_effect: stack_effect resolved_operation: resolved_operation method: method dependencies: dependencies syscall_argument_count: syscall_argument_count word_parameter_start: word_parameter_start word_parameter_count: word_parameter_count } => stack_effect
+        end
+    }
+
+    pub fn into_method self:SemanticFacts -> std::Option[MethodSemantics] {
+        self match
+            SemanticFacts { stack_effect: stack_effect resolved_operation: resolved_operation method: method dependencies: dependencies syscall_argument_count: syscall_argument_count word_parameter_start: word_parameter_start word_parameter_count: word_parameter_count } => method
+        end
+    }
+}
+
+pub fn make_operation_stack_effect
+    parameters:std::List[common::Parameter]
+    return_types:std::List[common::Type]
+    type_variables:$std::List[std::String]
+-> common::StackEffect {
+    return_types parameters common::StackEffect::new = effect
+    for type_variable in type_variables.iter do
+        type_variable.clone effect.type_vars.add
+    done
+    effect
+}
+
+pub fn add_parameter parameters:mut$std::List[common::Parameter] typ:$common::Type {
+    typ.clone common::Parameter::new parameters.push
+}
+
+pub fn add_named_parameter parameters:mut$std::List[common::Parameter] typ:$common::Type name:$str {
+    name.to_str typ.clone common::Parameter::named parameters.push
+}
+
+pub fn operation_is_comparison operation:$common::OpValue -> bool {
+    operation match
+        common::OpValue::Eq => true
+        common::OpValue::Ne => true
+        common::OpValue::Lt => true
+        common::OpValue::Le => true
+        common::OpValue::Gt => true
+        common::OpValue::Ge => true
+        _ => false
+    end
+}
+
+pub fn operation_is_load operation:$common::OpValue -> bool {
+    operation match
+        common::OpValue::Load8 => true
+        common::OpValue::Load16 => true
+        common::OpValue::Load32 => true
+        common::OpValue::Load64 => true
+        _ => false
+    end
+}
+
+pub fn operation_is_store operation:$common::OpValue -> bool {
+    operation match
+        common::OpValue::Store8 => true
+        common::OpValue::Store16 => true
+        common::OpValue::Store32 => true
+        common::OpValue::Store64 => true
+        _ => false
+    end
+}
+
+pub fn operation_is_memory operation:$common::OpValue -> bool {
+    if operation operation_is_load then
+        true return
+    fi
+    if operation operation_is_store then
+        true return
+    fi
+    operation common::OpValue::HeapAlloc is
+    operation common::OpValue::HeapFree is ||
+    operation common::OpValue::PtrAsRef is ||
+    operation common::OpValue::PtrAsMut is ||
+    operation common::OpValue::PtrFromRaw is ||
+    operation common::OpValue::PtrFromRef is ||
+    operation common::OpValue::PtrIntoRaw is ||
+    operation common::OpValue::PtrNull is ||
+    operation common::OpValue::PtrRead is ||
+    operation common::OpValue::PtrWrite is ||
+}
+
+pub fn fixed_operation_stack_effect operation:$common::OpValue -> std::Option[common::StackEffect] {
+    std::List[common::Type]::new = return_types
+    std::List[common::Parameter]::new = parameter_types
+    std::List[std::String]::new = type_variables
+    "T".to_str common::Type::TypeVar = type_t
+    "U".to_str common::Type::TypeVar = type_u
+    false = handled
+    common::make_u64_type.clone = memory_integer_type
+    if operation common::OpValue::Load8 is operation common::OpValue::Store8 is || then
+        common::make_u8_type.clone = memory_integer_type
+    elif operation common::OpValue::Load16 is operation common::OpValue::Store16 is || then
+        common::make_u16_type.clone = memory_integer_type
+    elif operation common::OpValue::Load32 is operation common::OpValue::Store32 is || then
+        common::make_u32_type.clone = memory_integer_type
+    fi
+
+    if operation operation_is_comparison then
+        type_t parameter_types add_parameter
+        type_t parameter_types add_parameter
+        common::make_bool_type.clone return_types.push
+        "T".to_str type_variables.push
+        type_variables return_types parameter_types make_operation_stack_effect std::Option::Some
+        return
+    fi
+    if operation operation_is_load then
+        common::make_ptr_type parameter_types add_parameter
+        memory_integer_type.clone return_types.push
+        type_variables return_types parameter_types make_operation_stack_effect std::Option::Some
+        return
+    fi
+    if operation operation_is_store then
+        common::make_ptr_type parameter_types add_parameter
+        memory_integer_type parameter_types add_parameter
+        type_variables return_types parameter_types make_operation_stack_effect std::Option::Some
+        return
+    fi
+    if operation common::OpValue::PtrRead(target_type) is then
+        common::make_ptr_type parameter_types add_parameter
+        target_type.clone return_types.push
+        type_variables return_types parameter_types make_operation_stack_effect std::Option::Some
+        return
+    fi
+    if operation common::OpValue::PtrIntoRaw is then
+        type_t parameter_types add_parameter
+        common::make_ptr_type.clone return_types.push
+        "T".to_str type_variables.push
+        type_variables return_types parameter_types make_operation_stack_effect std::Option::Some
+        return
+    fi
+    if operation common::OpValue::PtrFromRef is then
+        "" common::SHARED_BORROW_TYPE type_t.clone common::apply_borrow_type
+        parameter_types add_parameter
+        common::make_ptr_type.clone return_types.push
+        "T".to_str type_variables.push
+        type_variables return_types parameter_types make_operation_stack_effect std::Option::Some
+        return
+    fi
+    if operation common::OpValue::PtrFromRaw(target_type) is then
+        common::make_ptr_type parameter_types add_parameter
+        target_type.clone return_types.push
+        type_variables return_types parameter_types make_operation_stack_effect std::Option::Some
+        return
+    fi
+    if operation common::OpValue::PtrNull is then
+        common::make_ptr_type.clone return_types.push
+        type_variables return_types parameter_types make_operation_stack_effect std::Option::Some
+        return
+    fi
+    if operation common::OpValue::PtrAsRef(target_type) is then
+        common::make_ptr_type parameter_types add_parameter
+        "" common::SHARED_BORROW_TYPE target_type.clone common::apply_borrow_type return_types.push
+        type_variables return_types parameter_types make_operation_stack_effect std::Option::Some
+        return
+    fi
+    if operation common::OpValue::PtrAsMut(target_type) is then
+        common::make_ptr_type parameter_types add_parameter
+        "" common::EXCLUSIVE_BORROW_TYPE target_type.clone common::apply_borrow_type return_types.push
+        type_variables return_types parameter_types make_operation_stack_effect std::Option::Some
+        return
+    fi
+    if operation common::OpValue::PtrWrite(target_type) is then
+        common::make_ptr_type parameter_types add_parameter
+        target_type parameter_types add_parameter
+        type_variables return_types parameter_types make_operation_stack_effect std::Option::Some
+        return
+    fi
+
+    operation match
+        common::OpValue::PushInt(_) => {
+            common::make_i64_type.clone return_types.push true = handled
+        }
+        common::OpValue::PushFloat(_) => {
+            common::make_f64_type.clone return_types.push true = handled
+        }
+        common::OpValue::PushStr(_) => {
+            common::make_str_type.clone return_types.push true = handled
+        }
+        common::OpValue::PushBool(_) => {
+            common::make_bool_type.clone return_types.push true = handled
+        }
+        common::OpValue::PushChar(_) => {
+            common::make_char_type.clone return_types.push true = handled
+        }
+        common::OpValue::Argc => {
+            common::make_u64_type.clone return_types.push true = handled
+        }
+        common::OpValue::Argv => {
+            common::make_ptr_type.clone return_types.push true = handled
+        }
+        common::OpValue::Envp => {
+            common::make_ptr_type.clone return_types.push true = handled
+        }
+        common::OpValue::Mul => {
+            common::make_i64_type parameter_types add_parameter
+            common::make_i64_type parameter_types add_parameter
+            common::make_i64_type.clone return_types.push
+            true = handled
+        }
+        common::OpValue::Div => {
+            common::make_i64_type parameter_types add_parameter
+            common::make_i64_type parameter_types add_parameter
+            common::make_i64_type.clone return_types.push
+            true = handled
+        }
+        common::OpValue::Mod => {
+            common::make_i64_type parameter_types add_parameter
+            common::make_i64_type parameter_types add_parameter
+            common::make_i64_type.clone return_types.push
+            true = handled
+        }
+        common::OpValue::BitAnd => {
+            common::make_i64_type parameter_types add_parameter
+            common::make_i64_type parameter_types add_parameter
+            common::make_i64_type.clone return_types.push
+            true = handled
+        }
+        common::OpValue::BitOr => {
+            common::make_i64_type parameter_types add_parameter
+            common::make_i64_type parameter_types add_parameter
+            common::make_i64_type.clone return_types.push
+            true = handled
+        }
+        common::OpValue::BitXor => {
+            common::make_i64_type parameter_types add_parameter
+            common::make_i64_type parameter_types add_parameter
+            common::make_i64_type.clone return_types.push
+            true = handled
+        }
+        common::OpValue::Add => {
+            common::make_i64_type parameter_types add_parameter
+            type_t parameter_types add_parameter
+            type_t return_types.push
+            "T".to_str type_variables.push
+            true = handled
+        }
+        common::OpValue::Sub => {
+            common::make_i64_type parameter_types add_parameter
+            type_t parameter_types add_parameter
+            type_t return_types.push
+            "T".to_str type_variables.push
+            true = handled
+        }
+        common::OpValue::Shl => {
+            common::make_i64_type parameter_types add_parameter
+            type_t parameter_types add_parameter
+            type_t return_types.push
+            "T".to_str type_variables.push
+            true = handled
+        }
+        common::OpValue::Shr => {
+            common::make_i64_type parameter_types add_parameter
+            type_t parameter_types add_parameter
+            type_t return_types.push
+            "T".to_str type_variables.push
+            true = handled
+        }
+        common::OpValue::And => {
+            type_t parameter_types add_parameter
+            type_u parameter_types add_parameter
+            common::make_bool_type.clone return_types.push
+            "T".to_str type_variables.push
+            "U".to_str type_variables.push
+            true = handled
+        }
+        common::OpValue::Or => {
+            type_t parameter_types add_parameter
+            type_u parameter_types add_parameter
+            common::make_bool_type.clone return_types.push
+            "T".to_str type_variables.push
+            "U".to_str type_variables.push
+            true = handled
+        }
+        common::OpValue::Not => {
+            type_t parameter_types add_parameter
+            common::make_bool_type.clone return_types.push
+            "T".to_str type_variables.push
+            true = handled
+        }
+        common::OpValue::BitNot => {
+            common::make_i64_type parameter_types add_parameter
+            common::make_i64_type.clone return_types.push
+            true = handled
+        }
+        common::OpValue::Drop => {
+            "value for `drop`" type_t parameter_types add_named_parameter
+            "T".to_str type_variables.push
+            true = handled
+        }
+        common::OpValue::Dup => {
+            "value for `dup`" type_t parameter_types add_named_parameter
+            type_t.clone return_types.push
+            type_t.clone return_types.push
+            "T".to_str type_variables.push
+            true = handled
+        }
+        common::OpValue::Copy => {
+            common::SHARED_BORROW_TYPE type_t.clone common::apply_borrow_type
+            = borrowed_type
+            "value for `copy`" borrowed_type parameter_types add_named_parameter
+            type_t.clone return_types.push
+            "T".to_str type_variables.push
+            true = handled
+        }
+        common::OpValue::Swap => {
+            "argument 1 of `swap`" type_t parameter_types add_named_parameter
+            "argument 2 of `swap`" type_u parameter_types add_named_parameter
+            type_t.clone return_types.push
+            type_u.clone return_types.push
+            "T".to_str type_variables.push
+            "U".to_str type_variables.push
+            true = handled
+        }
+        common::OpValue::Over => {
+            "argument 1 of `over`" type_t parameter_types add_named_parameter
+            "argument 2 of `over`" type_u parameter_types add_named_parameter
+            type_u.clone return_types.push
+            type_t.clone return_types.push
+            type_u.clone return_types.push
+            "T".to_str type_variables.push
+            "U".to_str type_variables.push
+            true = handled
+        }
+        common::OpValue::Rot => {
+            "V".to_str common::Type::TypeVar = type_v
+            "argument 1 of `rot`" type_t parameter_types add_named_parameter
+            "argument 2 of `rot`" type_u parameter_types add_named_parameter
+            "argument 3 of `rot`" type_v parameter_types add_named_parameter
+            type_u return_types.push
+            type_t return_types.push
+            type_v return_types.push
+            "T".to_str type_variables.push
+            "U".to_str type_variables.push
+            "V".to_str type_variables.push
+            true = handled
+        }
+        common::OpValue::Print => {
+            type_t parameter_types add_parameter
+            "T".to_str type_variables.push
+            true = handled
+        }
+        common::OpValue::PrintBool => {
+            common::make_bool_type parameter_types add_parameter true = handled
+        }
+        common::OpValue::PrintChar => {
+            common::make_char_type parameter_types add_parameter true = handled
+        }
+        common::OpValue::PrintInt => {
+            common::make_i64_type parameter_types add_parameter true = handled
+        }
+        common::OpValue::PrintStr => {
+            common::make_str_type parameter_types add_parameter true = handled
+        }
+        common::OpValue::PrintString => {
+            common::make_string_type parameter_types add_parameter true = handled
+        }
+        common::OpValue::Panic => {
+            common::SHARED_BORROW_TYPE common::make_str_type common::apply_borrow_type
+            parameter_types add_parameter true = handled
+        }
+        common::OpValue::FstringToStr => {
+            type_t parameter_types add_parameter
+            common::make_string_type.clone return_types.push
+            "T".to_str type_variables.push
+            true = handled
+        }
+        common::OpValue::PrimitiveToStr(builtin) => {
+            builtin copy common::Type::Builtin parameter_types add_parameter
+            common::make_string_type.clone return_types.push
+            true = handled
+        }
+        common::OpValue::FstringConcat(count) => {
+            0 = index: u64
+            while index count > do
+                common::make_string_type parameter_types add_parameter
+                1 += index
+            done
+            common::make_string_type.clone return_types.push
+            true = handled
+        }
+        common::OpValue::Typeof => {
+            type_t parameter_types add_parameter
+            common::make_str_type.clone return_types.push
+            "T".to_str type_variables.push
+            true = handled
+        }
+        common::OpValue::SizeOf(_) => {
+            common::make_u64_type.clone return_types.push
+            true = handled
+        }
+        common::OpValue::HeapAlloc => {
+            common::make_u64_type parameter_types add_parameter
+            common::make_ptr_type.clone return_types.push
+            true = handled
+        }
+        common::OpValue::HeapFree => {
+            common::make_ptr_type parameter_types add_parameter true = handled
+        }
+        _ => {
+        }
+    end
+
+    if handled ! then
+        std::Option[common::StackEffect]::None return
+    fi
+    type_variables return_types parameter_types make_operation_stack_effect = effect
+    "" = copy_type_variable
+    if operation common::OpValue::Dup is operation common::OpValue::Copy is || then
+        "T" = copy_type_variable
+    elif operation common::OpValue::Over is then
+        "U" = copy_type_variable
+    fi
+    if "" copy_type_variable != then
+        std::List[common::TraitBound]::new = copy_bounds
+        std::List[common::Type]::new common::STD_COPY_TRAIT.to_str common::TraitBound copy_bounds.push
+        copy_bounds copy_type_variable effect.trait_bounds.set_str
+    fi
+    effect std::Option::Some
+}
+
+pub fn operation_uses_fixed_typecheck_effect operation:$common::OpValue -> bool {
+    operation match
+        common::OpValue::PushStr(_) => true
+        common::OpValue::PushBool(_) => true
+        common::OpValue::PushChar(_) => true
+        common::OpValue::Argc => true
+        common::OpValue::Argv => true
+        common::OpValue::Envp => true
+        common::OpValue::And => true
+        common::OpValue::Or => true
+        common::OpValue::Not => true
+        common::OpValue::Drop => true
+        common::OpValue::Dup => true
+        common::OpValue::Copy => true
+        common::OpValue::Swap => true
+        common::OpValue::Over => true
+        common::OpValue::Rot => true
+        common::OpValue::FstringConcat(_) => true
+        _ => false
+    end
+}
+# Build the canonical control-flow rewrite for a resolved `?` operation.
+
+pub fn lower_question_operations
+    ops:mut$std::List[common::Op]
+    location:common::Location
+    hidden_name:std::String
+    return_type:common::Type
+{
+    location.clone common::OpValue::IfStart common::Op::new = injected
+    injected ops.push
+    location.clone hidden_name.clone common::OpValue::PushVar common::Op::new = injected
+    injected ops.push
+    location.clone "is_ok".to_str common::OpValue::MethodCall common::Op::new = injected
+    injected ops.push
+    location.clone common::OpValue::Not common::Op::new = injected
+    injected ops.push
+    location.clone common::OpValue::IfCondition common::Op::new = injected
+    injected ops.push
+    location.clone hidden_name.clone common::OpValue::PushVar common::Op::new = injected
+    injected ops.push
+    location.clone "propagate".to_str common::OpValue::MethodCall common::Op::new = propagate
+    return_type std::Option::Some propagate common::Op::set_type_hint
+    propagate ops.push
+    location.clone hidden_name.clone common::OpValue::QuestionMove common::Op::new = injected
+    injected ops.push
+    location.clone common::OpValue::FnReturn common::Op::new = injected
+    injected ops.push
+    location.clone common::OpValue::IfEnd common::Op::new = injected
+    injected ops.push
+    location.clone hidden_name.clone common::OpValue::PushVar common::Op::new = injected
+    injected ops.push
+    location.clone "unwrap".to_str common::OpValue::MethodCall common::Op::new = injected
+    injected ops.push
+    location hidden_name common::OpValue::QuestionMove common::Op::new = injected
+    injected ops.push
+}
+
+pub fn operation_syscall_argument_count operation:$common::OpValue -> std::Option[u64] {
+    operation match
+        common::OpValue::Syscall0 => 0 u64::try_from.unwrap std::Option::Some
+        common::OpValue::Syscall1 => 1 u64::try_from.unwrap std::Option::Some
+        common::OpValue::Syscall2 => 2 u64::try_from.unwrap std::Option::Some
+        common::OpValue::Syscall3 => 3 u64::try_from.unwrap std::Option::Some
+        common::OpValue::Syscall4 => 4 u64::try_from.unwrap std::Option::Some
+        common::OpValue::Syscall5 => 5 u64::try_from.unwrap std::Option::Some
+        common::OpValue::Syscall6 => 6 u64::try_from.unwrap std::Option::Some
+        _ => std::Option[u64]::None
+    end
+}
+
+pub fn make_syscall_stack_effect argument_count:u64 -> common::StackEffect {
+    std::List[common::Type]::new = return_types
+    std::List[common::Parameter]::new = parameter_types
+    common::make_i64_type parameter_types add_parameter
+    0 = index: u64
+    while index argument_count > do
+        common::make_unknown_type parameter_types add_parameter
+        1 += index
+    done
+    common::make_i64_type.clone return_types.push
+    std::List[std::String]::new return_types parameter_types make_operation_stack_effect
+}
+
+pub fn make_function_reference_stack_effect effect:$common::StackEffect -> common::StackEffect {
+    std::List[common::Type]::new = return_types
+    effect common::stack_effect_to_function_type return_types.push
+    std::List[std::String]::new return_types std::List[common::Parameter]::new
+    make_operation_stack_effect
+}
+
+impl common::Type {
+    pub fn make_method_key self:$common::Type method_name:$str -> std::String {
+        f"{self.format}::{method_name}"
+    }
+
+    pub fn make_base_method_key self:$common::Type method_name:$str -> std::Option[std::String] {
+        if self.base std::Option::Some(base) is then
+            f"{base}::{method_name}" std::Option::Some return
+        fi
+        std::Option[std::String]::None
+    }
+}
+
+pub fn find_semantic_method_function
+    method_name:$str
+    receiver:$common::Type
+    store:$common::SymbolStore
+-> std::Option[std::String] {
+    receiver.clone = receiver_type
+    method_name receiver_type.make_method_key = exact_name
+    if exact_name.as_str store.get_function std::Option::Some(function) is then
+        function.name.clone std::Option::Some return
+    fi
+    if receiver.borrow_target std::Option::Some(target) is then
+        target.clone = receiver_type
+    fi
+    method_name receiver_type.make_method_key = function_name
+    if function_name.as_str store.get_function std::Option::Some(function) is then
+        function.name.clone std::Option::Some return
+    fi
+    if method_name receiver_type.make_base_method_key std::Option::Some(base_name) is then
+        if base_name.as_str store.get_function std::Option::Some(function) is then
+            function.name.clone std::Option::Some return
+        fi
+    fi
+    std::Option[std::String]::None
+}
+
+pub fn find_semantic_trait_method
+    method_name:$str
+    casa_trait:$common::CasaTrait
+    store:$common::SymbolStore
+-> std::Option[common::TraitMethod] {
+    casa_trait store collect_trait_methods = methods
+    for method in methods.iter do
+        if method_name method.name.as_str == then
+            method.clone std::Option::Some return
+        fi
+    done
+    std::Option[common::TraitMethod]::None
+}
+
+pub fn type_has_semantic_trait_shape
+    receiver:$common::Type
+    trait_type:$common::Type
+    store:$common::SymbolStore
+-> bool {
+    trait_type store collect_trait_method_candidates = candidates
+    for candidate in candidates.iter do
+        if
+            0 candidate
+                .method
+                .default_ops
+                .length ==
+        then
+            store receiver trait_type candidate
+                .method
+                .name
+                .as_str resolve_qualified_method_semantics
+            = method_opt
+            if method_opt.is_none then
+                false return
+            fi
+        fi
+    done
+    true
+}
+
+pub fn bind_semantic_type_arguments
+    expected:$common::Type
+    actual:$common::Type
+    bindings:mut$std::Map[std::String common::Type]
+{
+    expected match
+        common::Type::TypeVar(type_variable) => {
+            if type_variable bindings.has ! then
+                actual.clone type_variable.clone bindings.set
+            fi
+        }
+        common::Type::Const(expected_const) => {
+            if expected_const.is_symbolic expected_const.name bindings.has ! && then
+                actual.clone expected_const.name.clone bindings.set
+            fi
+        }
+        common::Type::Generic(expected_generic) => {
+            if actual common::Type::Generic(actual_generic) is then
+                if expected_generic.base actual_generic.base == then
+                    for
+                        pair in actual_generic.params.iter expected_generic
+                            .params
+                            .iter
+                            .zip
+                    do
+                        bindings pair.second pair.first bind_semantic_type_arguments
+                    done
+                fi
+            fi
+        }
+        common::Type::Function(expected_function) => {
+            if actual common::Type::Function(actual_function) is then
+                for
+                    pair in actual_function.parameters.iter expected_function
+                        .parameters
+                        .iter
+                        .zip
+                do
+                    bindings pair.second pair.first bind_semantic_type_arguments
+                done
+                actual_function.return_types.iter expected_function
+                    .return_types
+                    .iter
+                    .zip
+                = return_type_pairs
+                for pair in return_type_pairs do
+                    bindings pair.second pair.first bind_semantic_type_arguments
+                done
+            fi
+        }
+        _ => {
+        }
+    end
+}
+
+pub fn make_bound_substitutions
+    bound:$common::TraitBound
+    casa_trait:$common::CasaTrait
+-> std::Map[std::String common::Type] {
+    std::Map[std::String common::Type]::new = substitutions
+    if bound.type_args.length casa_trait.type_params.length == then
+        for
+            pair in bound.type_args.iter casa_trait
+                .type_params
+                .iter
+                .zip
+        do
+            pair.second.clone pair.first.clone substitutions.set
+        done
+    fi
+    substitutions
+}
+
+pub fn bind_trait_impl_type
+    pattern:$common::Type
+    actual:$common::Type
+    bindings:mut$std::Map[std::String common::Type]
+-> bool {
+    # A symbolic constant parameter binds the argument in that position the way
+    # a type variable binds a type (ADR-0152).
+    if pattern common::Type::Const(pattern_const) is then
+        if pattern_const.is_symbolic then
+            if pattern_const.name bindings.get std::Option::Some(bound_const) is then
+                actual bound_const.eq return
+            fi
+            actual.clone pattern_const.name.clone bindings.set
+            true return
+        fi
+        pattern actual.eq return
+    fi
+    if pattern common::Type::TypeVar(type_variable) is then
+        if type_variable bindings.get std::Option::Some(bound_type) is then
+            actual bound_type.eq return
+        fi
+        actual.clone type_variable.clone bindings.set
+        true return
+    fi
+    if pattern common::Type::Generic(pattern_generic) is then
+        if actual common::Type::Generic(actual_generic) is then
+            if pattern_generic.base actual_generic.base != then
+                false return
+            fi
+            if pattern_generic.params.length actual_generic.params.length != then
+                false return
+            fi
+            for
+                pair in actual_generic.params.iter pattern_generic
+                    .params
+                    .iter
+                    .zip
+            do
+                if bindings pair.second pair.first bind_trait_impl_type ! then
+                    false return
+                fi
+            done
+            true return
+        fi
+        false return
+    fi
+    if pattern common::Type::Function(pattern_function) is then
+        if actual common::Type::Function(actual_function) is then
+            if pattern_function.parameters.length actual_function.parameters.length != then
+                false return
+            fi
+            if pattern_function.return_types.length actual_function.return_types.length != then
+                false return
+            fi
+            for
+                pair in actual_function.parameters.iter pattern_function
+                    .parameters
+                    .iter
+                    .zip
+            do
+                if bindings pair.second pair.first bind_trait_impl_type ! then
+                    false return
+                fi
+            done
+            for
+                pair in actual_function.return_types.iter pattern_function
+                    .return_types
+                    .iter
+                    .zip
+            do
+                if bindings pair.second pair.first bind_trait_impl_type ! then
+                    false return
+                fi
+            done
+            true return
+        fi
+        false return
+    fi
+    pattern actual.eq
+}
+
+pub fn resolve_trait_impl_bound
+    bound:$common::TraitBound
+    bindings:$std::Map[std::String common::Type]
+-> common::Type {
+    bindings bound common::trait_bound_to_type.substitute_t
+}
+
+pub fn trait_impl_receiver_may_match pattern:$common::Type actual:$common::Type -> bool {
+    if pattern common::Type::TypeVar(_) is then
+        true return
+    fi
+    if pattern common::Type::Generic(pattern_generic) is then
+        if actual common::Type::Generic(actual_generic) is then
+            pattern_generic.base actual_generic.base == return
+        fi
+        false return
+    fi
+    if pattern common::Type::Builtin(pattern_builtin) is then
+        if actual common::Type::Builtin(actual_builtin) is then
+            pattern_builtin actual_builtin == return
+        fi
+        false return
+    fi
+    if pattern common::Type::Function(pattern_function) is then
+        if actual common::Type::Function(actual_function) is then
+            true return
+        fi
+    fi
+    false
+}
+
+pub fn trait_type_implies
+    direct:$common::Type
+    target:$common::Type
+    store:$common::SymbolStore
+-> bool {
+    if direct target.eq then
+        true return
+    fi
+    direct.match_base store.traits.get = direct_trait_opt
+    if direct_trait_opt.is_none then
+        false return
+    fi
+    direct_trait_opt.unwrap = direct_trait
+    std::Map[std::String common::Type]::new = substitutions
+    if direct.type_params std::Option::Some(direct_arguments) is then
+        for
+            pair in direct_arguments.iter direct_trait
+                .type_params
+                .iter
+                .zip
+        do
+            pair.second.clone pair.first.clone substitutions.set
+        done
+    fi
+    for supertrait in direct_trait.supertraits.iter do
+        substitutions supertrait common::trait_bound_to_type.substitute_t = resolved_supertrait
+        if store target resolved_supertrait trait_type_implies then
+            true return
+        fi
+    done
+    false
+}
+
+pub fn trait_impl_constraints_hold
+    trait_impl:$common::TraitImpl
+    bindings:mut$std::Map[std::String common::Type]
+    store:$common::SymbolStore
+-> bool {
+    for
+        type_variable in trait_impl
+            .trait_bounds
+            .keys
+            .iter
+    do
+        if type_variable bindings.remove std::Option::Some(concrete_type) is then
+            for
+                bound in type_variable trait_impl
+                    .trait_bounds
+                    .get
+                    .unwrap
+                    .iter
+            do
+                bindings bound resolve_trait_impl_bound = resolved_bound
+                if store resolved_bound concrete_type type_has_satisfying_trait_impl ! then
+                    concrete_type.clone type_variable.clone bindings.set
+                    false return
+                fi
+            done
+            concrete_type.clone type_variable.clone bindings.set
+        else
+            false return
+        fi
+    done
+    true
+}
+
+pub fn resolve_applicable_trait_impl
+    receiver:$common::Type
+    trait_impl:$common::TraitImpl
+    store:$common::SymbolStore
+-> std::Option[common::Type] {
+    std::Map[std::String common::Type]::new = bindings
+    if bindings receiver trait_impl.receiver bind_trait_impl_type ! then
+        std::Option[common::Type]::None return
+    fi
+    if store bindings trait_impl trait_impl_constraints_hold ! then
+        std::Option[common::Type]::None return
+    fi
+    bindings trait_impl.trait_bound resolve_trait_impl_bound std::Option::Some
+}
+
+pub fn trait_type_has_method
+    trait_type:$common::Type
+    method_name:$str
+    store:$common::SymbolStore
+-> bool {
+    trait_type store collect_trait_method_candidates = candidates
+    for candidate in candidates.iter do
+        if
+            method_name candidate
+                .method
+                .name
+                .as_str ==
+        then
+            true return
+        fi
+    done
+    false
+}
+
+pub fn find_trait_default_method
+    method_name:$str
+    trait_type:$common::Type
+    store:$common::SymbolStore
+-> std::Option[TraitMethodCandidate] {
+    std::Option[TraitMethodCandidate]::None = found
+    false = has_direct_declaration
+    trait_type store collect_trait_method_candidates = candidates
+    0 = candidate_index: u64
+    while candidate_index candidates.length > do
+        candidate_index candidates.get_ref = candidate
+        1 += candidate_index
+        if
+            method_name candidate
+                .method
+                .name
+                .as_str !=
+        then
+            continue
+        fi
+        if candidate.trait_type trait_type.eq ! then
+            continue
+        fi
+        true = has_direct_declaration
+        if
+            0 candidate
+                .method
+                .default_ops
+                .length !=
+        then
+            candidate_index 1 - candidates.get.clone std::Option::Some = found
+        fi
+    done
+    if has_direct_declaration then
+        found return
+    fi
+    0 = default_index: u64
+    while default_index candidates.length > do
+        default_index candidates.get_ref = candidate
+        1 += default_index
+        if
+            method_name candidate
+                .method
+                .name
+                .as_str ==
+            0 candidate
+                .method
+                .default_ops
+                .length != &&
+        then
+            if found.is_some then
+                std::Option[TraitMethodCandidate]::None return
+            fi
+            default_index 1 - candidates.get.clone std::Option::Some = found
+        fi
+    done
+    found
+}
+
+pub fn type_has_satisfying_trait_impl
+    receiver:$common::Type
+    trait_type:$common::Type
+    store:$common::SymbolStore
+-> bool {
+    if receiver.is_borrow then
+        if
+            common::STD_COPY_TRAIT trait_type.match_base.as_str ==
+            common::STD_CLONE_TRAIT trait_type.match_base.as_str == ||
+        then
+            false return
+        fi
+    fi
+    if common::STD_COPY_TRAIT trait_type.match_base.as_str == then
+        if receiver common::Type::Builtin(builtin) is then
+            if
+                builtin common::BuiltinType::Str !=
+                builtin common::BuiltinType::Cstr != &&
+            then
+                true return
+            fi
+        elif receiver common::Type::Function(_) is then
+            true return
+        fi
+        if receiver.array_element_type std::Option::Some(element_type) is then
+            store trait_type element_type type_has_satisfying_trait_impl return
+        fi
+    fi
+    if
+        common::STD_CLONE_TRAIT trait_type.match_base.as_str == receiver common::Type::Function(_) is &&
+    then
+        common::STD_COPY_TRAIT.to_str common::GenericType::new common::Type::Generic = copy_type
+        if store trait_type copy_type trait_type_implies then
+            true return
+        fi
+    fi
+    for trait_impl in receiver store.get_trait_impl_candidates_for_receiver do
+        if trait_impl.receiver receiver trait_impl_receiver_may_match ! then
+            continue
+        fi
+        std::Map[std::String common::Type]::new = bindings
+        if bindings receiver trait_impl.receiver bind_trait_impl_type ! then
+            continue
+        fi
+        bindings trait_impl.trait_bound resolve_trait_impl_bound = implemented_trait
+        if store trait_type implemented_trait trait_type_implies ! then
+            continue
+        fi
+        if store bindings trait_impl trait_impl_constraints_hold then
+            true return
+        fi
+    done
+    false
+}
+
+pub fn find_implied_trait_type
+    direct:$common::Type
+    trait_name:$str
+    store:$common::SymbolStore
+-> std::Option[common::Type] {
+    if direct.match_base.as_str trait_name == then
+        direct.clone std::Option::Some return
+    fi
+    direct.match_base store.traits.get match
+        std::Option::Some(direct_trait) => {
+            std::Map[std::String common::Type]::new = substitutions
+            if direct.type_params std::Option::Some(direct_arguments) is then
+                for
+                    pair in direct_arguments.iter direct_trait
+                        .type_params
+                        .iter
+                        .zip
+                do
+                    pair.second.clone pair.first.clone substitutions.set
+                done
+            fi
+            for supertrait in direct_trait.supertraits.iter do
+                substitutions supertrait common::trait_bound_to_type.substitute_t = resolved_supertrait
+                store trait_name resolved_supertrait find_implied_trait_type match
+                    std::Option::Some(value) => value std::Option::Some return
+                    std::Option::None => {
+                    }
+                end
+            done
+            std::Option[common::Type]::None
+        }
+        std::Option::None => std::Option[common::Type]::None
+    end
+}
+
+pub fn find_satisfying_trait_type
+    receiver:$common::Type
+    trait_name:$str
+    store:$common::SymbolStore
+-> std::Option[common::Type] {
+    for trait_impl in receiver store.get_trait_impl_candidates_for_receiver do
+        std::Map[std::String common::Type]::new = bindings
+        if bindings receiver trait_impl.receiver bind_trait_impl_type ! then
+            continue
+        fi
+        if store bindings trait_impl trait_impl_constraints_hold ! then
+            continue
+        fi
+        bindings trait_impl.trait_bound resolve_trait_impl_bound = implemented_trait
+        store trait_name implemented_trait find_implied_trait_type = found
+        found match
+            std::Option::Some(value) => value std::Option::Some return
+            std::Option::None => {
+            }
+        end
+    done
+    std::Option[common::Type]::None
+}
+
+pub fn collect_trait_implementation_dependencies
+    receiver:$common::Type
+    casa_trait:$common::CasaTrait
+    store:$common::SymbolStore
+-> std::List[std::String] {
+    std::List[std::String]::new = dependencies
+    casa_trait store collect_trait_methods = methods
+    for method in methods.iter do
+        if 0 method.default_ops.length != then
+            continue
+        fi
+        casa_trait trait_definition_type std::Option::Some = qualifier
+        store qualifier receiver method.name.as_str resolve_trait_method_semantics_for = method_opt
+        if method_opt std::Option::Some(resolved) is then
+            resolved.function_name.clone dependencies.push
+        fi
+    done
+    dependencies
+}
+
+pub fn collect_bound_semantic_dependencies
+    effect:$common::StackEffect
+    bindings:mut$std::Map[std::String common::Type]
+    store:$common::SymbolStore
+-> std::List[std::String] {
+    std::List[std::String]::new = dependencies
+    for
+        type_variable in effect
+            .trait_bounds
+            .keys
+            .iter
+    do
+        if type_variable bindings.get std::Option::Some(receiver) is then
+            for
+                bound in type_variable effect
+                    .trait_bounds
+                    .get
+                    .unwrap
+                    .iter
+            do
+                if bound.name store.traits.get std::Option::Some(casa_trait) is then
+                    bound.name.clone dependencies.push
+                    store casa_trait receiver collect_trait_implementation_dependencies
+                    = implementations
+                    implementations dependencies.append
+                fi
+            done
+        fi
+    done
+    dependencies
+}
+
+pub fn make_method_semantics
+    kind:MethodSemanticsKind
+    function_name:std::String
+    trait_name:std::String
+    trait_type:std::Option[common::Type]
+    method_name:std::String
+    stack_effect:common::StackEffect
+-> MethodSemantics {
+    stack_effect method_name trait_type trait_name function_name kind MethodSemantics
+}
+
+pub fn does_trait_bound_match_qualifier
+    bound:$common::TraitBound
+    qualifier:$std::Option[common::Type]
+    store:$common::SymbolStore
+-> bool {
+    if qualifier std::Option::Some(required_trait) is then
+        bound common::trait_bound_to_type = bound_type
+        store required_trait bound_type trait_type_implies return
+    fi
+    true
+}
+
+pub fn resolve_bound_method_semantics
+    method_name:$str
+    receiver:$common::Type
+    qualifier:$std::Option[common::Type]
+    function:$common::Function
+    store:$common::SymbolStore
+-> std::Option[MethodSemantics] {
+    receiver.clone = receiver_pattern
+    if receiver_pattern common::Type::TypeVar(type_variable) is then
+        if
+            type_variable function
+                .stack_effect
+                .trait_bounds
+                .get std::Option::Some(bounds) is
+        then
+            for bound in bounds.iter do
+                if store qualifier bound does_trait_bound_match_qualifier ! then
+                    continue
+                fi
+                if bound.name store.traits.get std::Option::Some(casa_trait) is then
+                    store casa_trait method_name find_semantic_trait_method = trait_method_opt
+                    if trait_method_opt std::Option::Some(method) is then
+                        casa_trait bound make_bound_substitutions = substitutions
+                        receiver method.stack_effect common::resolve_trait_stack_effect = resolved_effect
+                        substitutions resolved_effect common::apply_type_subs_to_stack_effect = resolved_effect
+                        resolved_effect method_name.to_str bound common::trait_bound_to_type std::Option::Some bound.name.clone std::String::new
+                        MethodSemanticsKind::TraitBound
+                        make_method_semantics std::Option::Some return
+                    fi
+                fi
+            done
+        fi
+    fi
+    std::Option[MethodSemantics]::None
+}
+
+pub fn resolve_trait_method_semantics_for
+    method_name:$str
+    receiver:$common::Type
+    qualifier:$std::Option[common::Type]
+    store:$common::SymbolStore
+-> std::Option[MethodSemantics] {
+    std::Option[MethodSemantics]::None = found
+    std::String::new = found_identity
+    false = has_exact
+    if qualifier std::Option::Some(required_trait) is then
+        for
+            trait_impl in required_trait
+                .match_base
+                .as_str receiver store.get_trait_impl_candidates_for_receiver_and_trait
+        do
+            store trait_impl receiver resolve_applicable_trait_impl = direct_opt
+            if direct_opt std::Option::Some(direct_trait) is then
+                if direct_trait required_trait.eq then
+                    true = has_exact
+                fi
+            fi
+        done
+    fi
+    for trait_impl in receiver store.get_trait_impl_candidates_for_receiver do
+        store trait_impl receiver resolve_applicable_trait_impl = trait_type_opt
+        if trait_type_opt.is_none then
+            continue
+        fi
+        trait_type_opt.unwrap = trait_type
+        if qualifier std::Option::Some(required_trait) is then
+            if has_exact trait_type required_trait.eq ! && then
+                continue
+            fi
+            if store required_trait trait_type trait_type_implies ! then
+                continue
+            fi
+        fi
+        trait_type.clone = lookup_trait_type
+        if qualifier std::Option::Some(required_trait) is then
+            required_trait.clone = lookup_trait_type
+        fi
+        if store method_name lookup_trait_type trait_type_has_method ! then
+            continue
+        fi
+        if method_name trait_impl.methods.get_str std::Option::Some(function_name) is then
+            function_name.as_str store
+                .get_function
+                .unwrap
+                .stack_effect
+                .clone = effect
+            trait_type.match_base = trait_name
+            effect method_name.to_str trait_type.clone std::Option::Some trait_name function_name.clone
+            MethodSemanticsKind::Function make_method_semantics = candidate
+            if "" found_identity.as_str == then
+                function_name.clone = found_identity
+                candidate std::Option::Some = found
+            elif function_name.as_str found_identity.as_str != then
+                std::Option[MethodSemantics]::None return
+            fi
+            continue
+        fi
+        store lookup_trait_type method_name find_trait_default_method = default_opt
+        if
+            default_opt.is_none
+            has_exact ! &&
+            lookup_trait_type trait_type.eq ! &&
+        then
+            store trait_type method_name find_trait_default_method = default_opt
+        fi
+        if
+            qualifier.is_none default_opt.is_none ||
+            store receiver method_name
+            find_semantic_method_function std::Option::Some(function_name) is &&
+        then
+            function_name.as_str store
+                .get_function
+                .unwrap
+                .stack_effect
+                .clone = effect
+            trait_type.match_base = trait_name
+            effect method_name.to_str trait_type.clone std::Option::Some trait_name function_name.clone
+            MethodSemanticsKind::Function make_method_semantics = candidate
+            if "" found_identity.as_str == then
+                function_name.clone = found_identity
+                candidate std::Option::Some = found
+            elif function_name.as_str found_identity.as_str != then
+                std::Option[MethodSemantics]::None return
+            fi
+            continue
+        fi
+        if default_opt std::Option::Some(default_method) is then
+            f"{default_method.trait_type.format}::{method_name}" = identity
+            receiver default_method.effect common::resolve_trait_stack_effect = resolved_effect
+            default_method.trait_type.format = trait_text
+            trait_text.as_str std::str_hash = trait_hash
+            receiver.format = receiver_text
+            receiver_text.as_str std::str_hash = receiver_hash
+            f"{receiver.match_base}::{method_name}__default_{receiver_hash}_{trait_hash}"
+            = function_name
+            default_method.trait_type.clone std::Option::Some = default_trait_type
+            default_method.trait_type.match_base = default_trait_name
+            resolved_effect method_name.to_str default_trait_type
+            default_trait_name function_name
+            MethodSemanticsKind::DefaultMethod make_method_semantics = candidate
+            if "" found_identity.as_str == then
+                identity = found_identity
+                candidate std::Option::Some = found
+            elif identity.as_str found_identity.as_str != then
+                std::Option[MethodSemantics]::None return
+            fi
+        fi
+    done
+    found
+}
+
+pub fn resolve_default_method_semantics
+    method_name:$str
+    receiver:$common::Type
+    store:$common::SymbolStore
+-> std::Option[MethodSemantics] {
+    store std::Option[common::Type]::None receiver method_name resolve_trait_method_semantics_for
+}
+
+pub fn resolve_qualified_method_semantics
+    method_name:$str
+    qualifier:$common::Type
+    receiver:$common::Type
+    store:$common::SymbolStore
+-> std::Option[MethodSemantics] {
+    receiver.clone = receiver_type
+    if receiver_type.borrow_target std::Option::Some(target) is then
+        target.clone = receiver_type
+    fi
+    qualifier.clone std::Option::Some = qualifier_opt
+    store qualifier_opt receiver_type method_name resolve_trait_method_semantics_for
+}
+
+pub fn resolve_qualified_method_semantics_with_bounds
+    method_name:$str
+    receiver:$common::Type
+    qualifier:$common::Type
+    function_opt:$std::Option[common::Function]
+    store:$common::SymbolStore
+-> std::Option[MethodSemantics] {
+    receiver.clone = receiver_type
+    if receiver_type.borrow_target std::Option::Some(target) is then
+        target.clone = receiver_type
+    fi
+    if function_opt std::Option::Some(function) is then
+        qualifier.clone std::Option::Some = qualifier_opt
+        store function qualifier_opt receiver_type method_name resolve_bound_method_semantics = bound_method_opt
+        if bound_method_opt.is_some then
+            bound_method_opt return
+        fi
+    fi
+    store receiver_type qualifier method_name resolve_qualified_method_semantics
+}
+
+pub fn collect_method_qualifiers
+    method_name:$str
+    receiver:$common::Type
+    store:$common::SymbolStore
+-> std::List[std::String] {
+    receiver.clone = receiver_type
+    if receiver.borrow_target std::Option::Some(target) is then
+        target.clone = receiver_type
+    fi
+    std::List[std::String]::new = result
+    std::Set[std::String]::new = seen
+    for trait_impl in receiver_type store.get_trait_impl_candidates_for_receiver do
+        store trait_impl receiver_type resolve_applicable_trait_impl = trait_type_opt
+        if trait_type_opt.is_none then
+            continue
+        fi
+        trait_type_opt.unwrap = trait_type
+        if store method_name trait_type trait_type_has_method ! then
+            continue
+        fi
+        trait_type.format = qualifier
+        if qualifier seen.has ! then
+            qualifier.clone seen.add
+            qualifier result.push
+        fi
+    done
+    result
+}
+
+pub fn resolve_method_semantics
+    method_name:$str
+    receiver:$common::Type
+    function_opt:$std::Option[common::Function]
+    store:$common::SymbolStore
+-> std::Option[MethodSemantics] {
+    receiver.clone = receiver_type
+    if receiver.borrow_target std::Option::Some(target) is then
+        target.clone = receiver_type
+    fi
+    if function_opt std::Option::Some(function) is then
+        store function std::Option[common::Type]::None receiver_type method_name resolve_bound_method_semantics = bound_method_opt
+        bound_method_opt match
+            std::Option::Some(method) => method std::Option::Some return
+            std::Option::None => {
+            }
+        end
+    fi
+    if store receiver method_name find_semantic_method_function std::Option::Some(function_name) is then
+        function_name.as_str store.get_function.unwrap = resolved_function: $common::Function
+        resolved_function common::Function::stack_effect = stored_effect: $common::StackEffect
+        stored_effect.clone = effect
+        effect method_name.to_str std::Option[common::Type]::None "".to_str function_name.clone MethodSemanticsKind::Function
+        make_method_semantics std::Option::Some return
+    fi
+    store receiver_type method_name resolve_default_method_semantics
+}
+
+pub fn primitive_print_operation receiver:$common::Type -> std::Option[common::OpValue] {
+    if receiver.is_integer_type_t then
+        common::OpValue::PrintInt std::Option::Some return
+    fi
+    receiver.format = receiver_name
+    if common::STD_STRING_TYPE receiver_name.as_str == then
+        common::OpValue::PrintString std::Option::Some return
+    fi
+    receiver_name.as_str match
+        "str" => common::OpValue::PrintStr std::Option::Some
+        "bool" => common::OpValue::PrintBool std::Option::Some
+        "char" => common::OpValue::PrintChar std::Option::Some
+        _ => std::Option[common::OpValue]::None
+    end
+}
+
+pub fn comparison_method_name operation:$common::OpValue -> str {
+    operation match
+        common::OpValue::Eq => "eq"
+        common::OpValue::Ne => "ne"
+        common::OpValue::Lt => "lt"
+        common::OpValue::Le => "le"
+        common::OpValue::Gt => "gt"
+        _ => "ge"
+    end
+}
+
+pub fn comparison_trait_name operation:$common::OpValue -> str {
+    operation match
+        common::OpValue::Eq => common::STD_PARTIAL_EQ_TRAIT
+        common::OpValue::Ne => common::STD_PARTIAL_EQ_TRAIT
+        _ => common::STD_PARTIAL_ORD_TRAIT
+    end
+}
+
+pub fn comparison_uses_method receiver:$common::Type store:$common::SymbolStore -> bool {
+    if receiver.is_unknown_placeholder then
+        false return
+    fi
+    if common::make_str_type receiver.eq then
+        false return
+    fi
+    if receiver.is_primitive_compare_type_t then
+        false return
+    fi
+    receiver match
+        common::Type::TypeVar(_) => true
+        common::Type::Generic(generic) => generic.base.as_str store.structs.has_str
+        _ => false
+    end
+}
+
+pub fn add_method_dependencies
+    result:mut$SemanticFacts
+    method:mut$MethodSemantics
+    receiver:$common::Type
+    store:$common::SymbolStore
+{
+    if "" method.trait_name.as_str != then
+        method.trait_name.clone result.dependencies.push
+    fi
+    if method.kind MethodSemanticsKind::Function is then
+        method.function_name.clone result.dependencies.push
+    elif method.kind MethodSemanticsKind::DefaultMethod is then
+        if method.trait_name.as_str store.traits.get_str std::Option::Some(casa_trait) is then
+            store casa_trait receiver collect_trait_implementation_dependencies = implementations
+            implementations result.dependencies.append
+        fi
+    fi
+}
+
+pub fn analyze_method_operation
+    result:mut$SemanticFacts
+    method_name:$str
+    receiver:$common::Type
+    function_opt:$std::Option[common::Function]
+    store:$common::SymbolStore
+-> std::Option[MethodSemantics] {
+    store function_opt receiver method_name resolve_method_semantics = method_opt
+    method_opt match
+        std::Option::Some(method) => {
+            store receiver method result add_method_dependencies
+            method std::Option::Some
+        }
+        std::Option::None => std::Option[MethodSemantics]::None
+    end
+}
+
+pub fn analyze_operation
+    operation:$common::OpValue
+    receiver:std::Option[common::Type]
+    function_opt:$std::Option[common::Function]
+    store:$common::SymbolStore
+-> SemanticFacts {
+    SemanticFacts::new = result
+    operation fixed_operation_stack_effect = result.stack_effect
+    operation operation_syscall_argument_count = result.syscall_argument_count
+    if result.syscall_argument_count std::Option::Some(argument_count) is then
+        argument_count make_syscall_stack_effect std::Option::Some = result.stack_effect
+        argument_count = result.word_parameter_count
+        1 = result.word_parameter_start
+    fi
+    operation match
+        common::OpValue::FnCall(function_name) => {
+            function_name.clone result.dependencies.push
+            if function_name.as_str store.get_function std::Option::Some(function) is then
+                function.stack_effect.clone std::Option::Some = result.stack_effect
+            fi
+        }
+        common::OpValue::FnPush(function_name) => {
+            function_name.clone result.dependencies.push
+            if function_name.as_str store.get_function std::Option::Some(function) is then
+                function.stack_effect.clone make_function_reference_stack_effect std::Option::Some
+                = result.stack_effect
+            fi
+        }
+        common::OpValue::FnExec => {
+            if receiver.clone std::Option::Some(receiver_type) is then
+                if receiver_type common::Type::Function(function_type) is then
+                    function_type common::function_type_to_stack_effect std::Option::Some = result.stack_effect
+                fi
+            fi
+        }
+        common::OpValue::FnExecOwned => {
+            if receiver.clone std::Option::Some(receiver_type) is then
+                if receiver_type common::Type::Function(function_type) is then
+                    function_type common::function_type_to_stack_effect std::Option::Some = result.stack_effect
+                fi
+            fi
+        }
+        common::OpValue::MethodCall(method_name) => {
+            if receiver.clone std::Option::Some(receiver_type) is then
+                store function_opt receiver_type method_name.as_str result analyze_method_operation match
+                    std::Option::Some(method) => {
+                        method.stack_effect.clone std::Option::Some = result.stack_effect
+                        method std::Option::Some = result.method
+                    }
+                    std::Option::None => {
+                    }
+                end
+            fi
+        }
+        common::OpValue::QualifiedMethodCall(qualified) => {
+            if receiver.clone std::Option::Some(receiver_type) is then
+                std::Option[MethodSemantics]::None = method_opt
+                if qualified.type_qualified then
+                    store function_opt qualified.qualifier_type qualified.method_name.as_str resolve_method_semantics
+                    = method_opt
+                else
+                    store function_opt qualified.qualifier_type receiver_type qualified.method_name.as_str
+                    resolve_qualified_method_semantics_with_bounds
+                    = method_opt
+                fi
+                method_opt match
+                    std::Option::Some(method) => {
+                        method.stack_effect.clone std::Option::Some = result.stack_effect
+                        if qualified.type_qualified then
+                            store qualified.qualifier_type method result add_method_dependencies
+                        else
+                            store receiver_type method result add_method_dependencies
+                        fi
+                        method std::Option::Some = result.method
+                    }
+                    std::Option::None => {
+                    }
+                end
+            fi
+        }
+        common::OpValue::TraitMethodCall(call) => {
+            std::Option[MethodSemantics]::None = method_opt
+            if function_opt std::Option::Some(function) is then
+                store function call.trait_type call.receiver call.method_name.as_str resolve_bound_method_semantics = method_opt
+            fi
+            if method_opt.is_none then
+                if call.trait_type std::Option::Some(trait_type) is then
+                    store call.receiver trait_type call.method_name.as_str resolve_qualified_method_semantics = method_opt
+                else
+                    store function_opt call.receiver call.method_name.as_str resolve_method_semantics = method_opt
+                fi
+            fi
+            method_opt match
+                std::Option::Some(method) => {
+                    method.stack_effect.clone std::Option::Some = result.stack_effect
+                    store call.receiver method result add_method_dependencies
+                    method std::Option::Some = result.method
+                }
+                std::Option::None => {
+                }
+            end
+        }
+        common::OpValue::TraitMethodRef(call) => {
+            store function_opt call.receiver call.method_name.as_str result analyze_method_operation match
+                std::Option::Some(method) => {
+                    method.stack_effect.clone make_function_reference_stack_effect std::Option::Some
+                    = result.stack_effect
+                    method std::Option::Some = result.method
+                }
+                std::Option::None => {
+                }
+            end
+        }
+        common::OpValue::Print => {
+            if receiver.clone std::Option::Some(receiver_type) is then
+                receiver_type primitive_print_operation = result.resolved_operation
+                if result.resolved_operation.is_none receiver_type.is_unknown_placeholder ! && then
+                    common::STD_DISPLAY_TRAIT.to_str result.dependencies.push
+                    store function_opt receiver_type "to_str" result analyze_method_operation = method_opt
+                    method_opt match
+                        std::Option::Some(method) => method std::Option::Some = result.method
+                        std::Option::None => {
+                        }
+                    end
+                fi
+            fi
+        }
+        common::OpValue::FstringToStr => {
+            if receiver.clone std::Option::Some(receiver_type) is then
+                if common::make_str_type receiver_type.eq ! receiver_type.is_unknown_placeholder ! && then
+                    common::STD_DISPLAY_TRAIT.to_str result.dependencies.push
+                    store function_opt receiver_type "to_str" result analyze_method_operation = method_opt
+                    method_opt match
+                        std::Option::Some(method) => method std::Option::Some = result.method
+                        std::Option::None => {
+                        }
+                    end
+                fi
+            fi
+        }
+        common::OpValue::PrimitiveToStr => {
+        }
+        _ => {
+        }
+    end
+    if operation operation_is_comparison then
+        if receiver.clone std::Option::Some(receiver_type) is then
+            if store receiver_type comparison_uses_method then
+                operation comparison_trait_name result.dependencies.push_str
+                operation comparison_method_name = method_name
+                store function_opt receiver_type method_name result analyze_method_operation = method_opt
+                method_opt match
+                    std::Option::Some(method) => method std::Option::Some = result.method
+                    std::Option::None => {
+                    }
+                end
+            fi
+        fi
+    fi
+    result
+}
+
+pub fn make_type_borrow_option value:$common::Type -> std::Option[common::Type] {
+    value.clone std::Option::Some = result: std::Option[common::Type]
+    result
+}
+# Pattern payloads follow the subject capability. Copy payloads remain values.
+pub fn pattern_binding_type
+    subject_type:$common::Type
+    binding_type:common::Type
+    binding_is_copy:bool
+-> common::Type {
+    if subject_type.is_borrow ! binding_is_copy || then
+        binding_type return
+    fi
+    binding_type.clone = target
+    subject_type.is_shared_borrow = shared
+    if binding_type.borrow_target std::Option::Some(borrowed_target) is then
+        borrowed_target.clone = target
+        if binding_type.is_shared_borrow then
+            true = shared
+        fi
+    fi
+    if shared then
+        common::SHARED_BORROW_TYPE
+    else
+        common::EXCLUSIVE_BORROW_TYPE
+    fi
+    target common::apply_borrow_type
+}
