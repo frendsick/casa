@@ -3,7 +3,7 @@ import "../../lib/test.casa" as test
 import "../../compiler/typechecker.casa" as typechecker
 import "helpers.casa" as helpers
 
-pub const OWNED_CONTEXT_TYPES "trait __casa_std__Clone { fn clone self:$self -> self } trait __casa_std__Copy: __casa_std__Clone { } struct Resource { id: i64 } impl Resource: __casa_std__Clone { fn clone self:$Resource -> Resource { self.id Resource } } enum CopyResource derives __casa_std__Copy { One Two } struct Holder { value: Resource } struct CopyHolder { value: CopyResource } struct Box[T] { value: T } struct SharedBox { value: $Resource } struct ExclusiveBox { value: mut$Resource } enum Maybe[T] { Some(T) } "
+pub const OWNED_CONTEXT_TYPES "trait __casa_std__Clone { fn clone self:$self -> self } trait __casa_std__Copy: __casa_std__Clone { } struct Resource { id: i64 } impl Resource: __casa_std__Clone { fn clone self:$Resource -> Resource { self.id Resource } } enum CopyResource derives __casa_std__Copy { One Two } struct Holder { value: Resource } struct CopyHolder { value: CopyResource } struct Box[T] { value: T } struct BoxHolder { value: Box[Resource] } struct SharedBox { value: $Resource } struct ExclusiveBox { value: mut$Resource } enum Maybe[T] { Some(T) } "
 
 pub fn check_source diagnostics:mut$error::Diagnostics source:$str {
     diagnostics source helpers::typecheck_test_source = checked
@@ -17,7 +17,7 @@ pub fn test_owned_parameters_reject_borrowed_values {
     "fn take value:Resource { } fn invalid_shared holder:$Holder { holder.value take } fn invalid_exclusive holder:mut$Holder { holder.value take }"
     str::concat.as_str diagnostics check_source
     diagnostics "shared and exclusive projections are rejected" 2 helpers::assert_error_count
-    diagnostics "borrowed value diagnostic" "Cannot move borrowed value" helpers::assert_error_contains
+    diagnostics "borrowed value diagnostic" "Cannot pass borrowed" helpers::assert_error_contains
 }
 
 pub fn test_borrowed_aggregate_rejects_owned_borrow_container {
@@ -26,8 +26,10 @@ pub fn test_borrowed_aggregate_rejects_owned_borrow_container {
     OWNED_CONTEXT_TYPES
     "fn take value:Option[$Resource] { } fn invalid value:$Option[Resource] { value take }"
     str::concat.as_str diagnostics check_source
-    diagnostics "borrowed option cannot become an owned option" 2 helpers::assert_error_count
-    diagnostics "outer borrow diagnostic" "Cannot move borrowed value" helpers::assert_error_contains
+    diagnostics "borrowed option cannot become an owned option" 1 helpers::assert_error_count
+    diagnostics "nested borrow mismatch" "Type mismatch" helpers::assert_error_contains
+    diagnostics "does not hide nested mismatch" "Cannot pass borrowed" helpers::assert_error_not_contains
+    diagnostics "does not suggest an unusable clone" "clone it first" helpers::assert_error_not_contains
 }
 
 pub fn test_generic_owned_parameters_reject_after_resolution {
@@ -37,7 +39,7 @@ pub fn test_generic_owned_parameters_reject_after_resolution {
     "fn take[T] value:T { } fn invalid holder:$Holder { holder.value take }"
     str::concat.as_str diagnostics check_source
     diagnostics "resolved generic owner is rejected" 1 helpers::assert_error_count
-    diagnostics "generic owner diagnostic" "Cannot move borrowed value" helpers::assert_error_contains
+    diagnostics "generic owner diagnostic" "Cannot pass borrowed" helpers::assert_error_contains
 }
 
 pub fn test_shared_values_reject_exclusive_destinations {
@@ -57,7 +59,7 @@ pub fn test_owned_aggregates_reject_after_resolution {
     "fn invalid holder:$Holder { holder.value Box drop Box { value: holder.value } drop holder.value Maybe::Some drop }"
     str::concat.as_str diagnostics check_source
     diagnostics "all generic aggregate forms reject borrowed owners" 3 helpers::assert_error_count
-    diagnostics "aggregate owner diagnostic" "Cannot move borrowed value" helpers::assert_error_contains
+    diagnostics "aggregate owner diagnostic" "Cannot move borrowed" helpers::assert_error_contains
 }
 
 pub fn test_owned_returns_reject_borrowed_values {
@@ -86,7 +88,7 @@ pub fn test_owned_parameters_reject_noncopy_globals {
     "global VALUE { 1 Resource } fn take value:Resource { } fn invalid { VALUE take } invalid"
     str::concat.as_str diagnostics check_source
     diagnostics "non-Copy global is rejected" 1 helpers::assert_error_count
-    diagnostics "global owner diagnostic" "Cannot move borrowed value `VALUE`" helpers::assert_error_contains
+    diagnostics "global owner diagnostic" "Cannot pass borrowed `VALUE`" helpers::assert_error_contains
 }
 
 pub fn test_copy_and_cloned_globals_are_owned {
@@ -144,6 +146,246 @@ pub fn test_raw_owner_conversion_rejects_unresolved_types {
     diagnostics "both generic conversions are rejected" 2 helpers::assert_error_count
     diagnostics "generic representation diagnostic" "Cannot determine representation of `T`" helpers::assert_error_contains
 }
+
+pub fn test_borrowed_parameter_diagnostic_shows_contract {
+    "borrowed_parameter_diagnostic_shows_contract" test::test_start
+    error::Diagnostics::new = diagnostics
+    OWNED_CONTEXT_TYPES
+    "fn take value:Resource { } fn invalid holder:$Holder { holder.value take }"
+    str::concat.as_str diagnostics check_source
+    diagnostics "one ownership diagnostic" 1 helpers::assert_error_count
+    diagnostics
+    "names operation and parameter"
+    "Cannot pass borrowed `holder.value` to consuming parameter `value` of `take`"
+    helpers::assert_error_contains
+    diagnostics "shows owned contract" "owned value: Resource" helpers::assert_error_contains
+    diagnostics "shows shared access" "shared access: $Resource" helpers::assert_error_contains
+    diagnostics "Clone value gets advice" "clone it first" helpers::assert_error_contains
+}
+
+pub fn test_non_clone_borrowed_parameter_omits_clone_advice {
+    "non_clone_borrowed_parameter_omits_clone_advice" test::test_start
+    error::Diagnostics::new = diagnostics
+    OWNED_CONTEXT_TYPES
+    "struct PlainResource { id: i64 } struct PlainHolder { value: PlainResource } fn take_plain value:PlainResource { } fn invalid holder:$PlainHolder { holder.value take_plain }"
+    str::concat.as_str diagnostics check_source
+    diagnostics "one ownership diagnostic" 1 helpers::assert_error_count
+    diagnostics "non-Clone value gets no advice" "clone it first" helpers::assert_error_not_contains
+}
+
+pub fn test_shared_receiver_diagnostic_shows_contract_once {
+    "shared_receiver_diagnostic_shows_contract_once" test::test_start
+    error::Diagnostics::new = diagnostics
+    "struct Counter { value: i64 } struct Machine { counter: Counter } impl Counter { fn bump self:mut$Counter { } } fn invalid machine:$Machine { machine.counter.bump }"
+    diagnostics check_source
+    diagnostics "one receiver diagnostic" 1 helpers::assert_error_count
+    diagnostics
+    "names receiver and method"
+    "Method `bump` needs exclusive access to `Counter`, but `machine.counter` is shared"
+    helpers::assert_error_contains
+    diagnostics "shows receiver contract" "exclusive receiver: mut$Counter" helpers::assert_error_contains
+    diagnostics "shows available receiver" "shared receiver: $Counter" helpers::assert_error_contains
+}
+
+pub fn test_trait_bound_receiver_diagnostic_has_no_follow_on {
+    "trait_bound_receiver_diagnostic_has_no_follow_on" test::test_start
+    error::Diagnostics::new = diagnostics
+    "trait Mutate { fn bump self:mut$self } fn invalid[T: Mutate] value:$T { value.bump }"
+    diagnostics check_source
+    diagnostics "one trait-bound receiver diagnostic" 1 helpers::assert_error_count
+    diagnostics
+    "trait-bound receiver contract"
+    "Method `bump` needs exclusive access to `T`, but `value` is shared"
+    helpers::assert_error_contains
+    diagnostics "shows required trait-bound receiver" "exclusive receiver: mut$T"
+    helpers::assert_error_contains
+    diagnostics "shows available trait-bound receiver" "shared receiver: $T"
+    helpers::assert_error_contains
+}
+
+pub fn test_generic_aggregate_parameter_diagnostic_has_context {
+    "generic_aggregate_parameter_diagnostic_has_context" test::test_start
+    error::Diagnostics::new = diagnostics
+    OWNED_CONTEXT_TYPES
+    "fn take_box[T] value:Box[T] { } fn invalid holder:$BoxHolder { holder.value take_box }"
+    str::concat.as_str diagnostics check_source
+    diagnostics "one aggregate ownership diagnostic" 1 helpers::assert_error_count
+    diagnostics
+    "names generic operation and parameter"
+    "Cannot pass borrowed `holder.value` to consuming parameter `value` of `take_box`"
+    helpers::assert_error_contains
+    diagnostics "shows aggregate contract" "owned value: Box[Resource]" helpers::assert_error_contains
+    diagnostics "shows aggregate access" "shared access: $Box[Resource]" helpers::assert_error_contains
+}
+
+pub fn test_incompatible_borrow_reports_type_mismatch {
+    "incompatible_borrow_reports_type_mismatch" test::test_start
+    error::Diagnostics::new = diagnostics
+    OWNED_CONTEXT_TYPES
+    "struct Other { id: i64 } fn take_other value:Other { } fn invalid holder:$Holder { holder.value take_other }"
+    str::concat.as_str diagnostics check_source
+    diagnostics "one type mismatch" 1 helpers::assert_error_count
+    diagnostics "reports the incompatible types" "Type mismatch" helpers::assert_error_contains
+    diagnostics "does not report ownership" "Cannot pass borrowed" helpers::assert_error_not_contains
+    diagnostics "does not suggest an invalid clone" "clone it first" helpers::assert_error_not_contains
+}
+
+pub fn test_clone_bound_enables_clone_advice {
+    "clone_bound_enables_clone_advice" test::test_start
+    error::Diagnostics::new = diagnostics
+    OWNED_CONTEXT_TYPES
+    "fn take[T] value:T { } fn invalid[T: __casa_std__Clone] value:$T { value take }"
+    str::concat.as_str diagnostics check_source
+    diagnostics "one generic ownership diagnostic" 1 helpers::assert_error_count
+    diagnostics "Clone bound gets advice" "clone it first" helpers::assert_error_contains
+}
+
+pub fn test_live_loan_diagnostic_has_related_locations {
+    "live_loan_diagnostic_has_related_locations" test::test_start
+    error::Diagnostics::new = diagnostics
+    OWNED_CONTEXT_TYPES
+    "fn borrow value:$Resource -> $Resource { value } fn invalid { 1 Resource Holder = owner owner.value borrow = view owner drop view.id drop }"
+    str::concat.as_str diagnostics check_source
+    diagnostics "one live-loan diagnostic" 1 helpers::assert_error_count
+    diagnostics "loan origin and later use" 2 helpers::assert_error_note_count
+    diagnostics "loan origin note" "loan starts here" helpers::assert_error_note_contains
+    diagnostics
+    "loan later-use note"
+    "later use of `view` keeps this loan active"
+    helpers::assert_error_note_contains
+}
+
+pub fn test_control_flow_preserves_loan_origin_location {
+    "control_flow_preserves_loan_origin_location" test::test_start
+    error::Diagnostics::new = diagnostics
+    OWNED_CONTEXT_TYPES
+    "fn borrow value:$Resource -> $Resource { value } fn invalid flag:bool { 1 Resource Holder = owner owner.value borrow = view if flag then 1 drop else 2 drop fi owner drop view.id drop }"
+    str::concat.as_str diagnostics check_source
+    diagnostics "one joined-flow conflict" 1 helpers::assert_error_count
+    diagnostics "joined flow retains both notes" 2 helpers::assert_error_note_count
+    diagnostics "joined flow retains loan origin" "loan starts here" helpers::assert_error_note_contains
+}
+
+pub fn test_reassigned_borrow_notes_match_conflicting_loan {
+    "reassigned_borrow_notes_match_conflicting_loan" test::test_start
+    error::Diagnostics::new = diagnostics
+    OWNED_CONTEXT_TYPES
+    "fn borrow value:$Resource -> $Resource { value } fn invalid { 1 Resource = owner1 2 Resource = owner2 owner1 borrow = view view owner2 borrow = view owner1 drop view.id drop }"
+    str::concat = source
+    source.as_str diagnostics check_source
+    diagnostics "one reassigned-binding conflict" 1 helpers::assert_error_count
+    diagnostics "original loan retains both notes" 2 helpers::assert_error_note_count
+    source.as_str "owner2 borrow = view" str::find u64::try_from.unwrap = replacement_offset
+    diagnostics
+    "loan note predates replacement binding"
+    "loan starts here"
+    replacement_offset
+    helpers::assert_error_note_before
+}
+
+pub fn test_dead_same_origin_binding_does_not_replace_loan_note {
+    "dead_same_origin_binding_does_not_replace_loan_note" test::test_start
+    error::Diagnostics::new = diagnostics
+    OWNED_CONTEXT_TYPES
+    "fn borrow value:$Resource -> $Resource { value } fn invalid { 1 Resource = owner1 2 Resource = owner2 owner1 borrow = view view owner1 borrow = view owner1 drop owner2 borrow = view view.id drop drop }"
+    str::concat = source
+    source.as_str diagnostics check_source
+    diagnostics "one same-origin conflict" 1 helpers::assert_error_count
+    diagnostics "original stacked loan retains both notes" 2 helpers::assert_error_note_count
+    source.as_str "owner1 borrow = view owner1 drop" str::find u64::try_from.unwrap = replacement_offset
+    diagnostics
+    "dead replacement does not replace stacked-loan note"
+    "loan starts here"
+    replacement_offset
+    helpers::assert_error_note_before
+    diagnostics
+    "later generation use does not replace stacked-loan use"
+    "later use of `view` keeps this loan active"
+    replacement_offset
+    helpers::assert_error_note_before
+}
+
+pub fn test_loop_loan_note_uses_saved_origin {
+    "loop_loan_note_uses_saved_origin" test::test_start
+    error::Diagnostics::new = diagnostics
+    OWNED_CONTEXT_TYPES
+    "fn borrow value:$Resource -> $Resource { value } fn invalid { 1 Resource = owner owner borrow = view while true do owner borrow = view owner drop break done }"
+    str::concat = source
+    source.as_str diagnostics check_source
+    diagnostics "one loop loan conflict" 1 helpers::assert_error_count
+    source.as_str "owner borrow = view owner drop" str::find u64::try_from.unwrap = replacement_offset
+    diagnostics
+    "loop note uses saved outer origin"
+    "loan starts here"
+    replacement_offset
+    helpers::assert_error_note_before
+}
+
+pub fn test_joined_stack_loan_notes_match_origin {
+    "joined_stack_loan_notes_match_origin" test::test_start
+    error::Diagnostics::new = diagnostics
+    OWNED_CONTEXT_TYPES
+    "fn borrow value:$Resource -> $Resource { value } fn invalid flag:bool { 1 Resource = owner1 2 Resource = owner2 if flag then owner1 borrow = view view else owner2 borrow = view view fi owner2 drop drop }"
+    str::concat = source
+    source.as_str diagnostics check_source
+    diagnostics "one joined-stack conflict" 1 helpers::assert_error_count
+    diagnostics "joined stack retains both owner2 notes" 2 helpers::assert_error_note_count
+    source.as_str "else owner2" str::find u64::try_from.unwrap = else_offset
+    diagnostics
+    "joined-stack origin comes from owner2 branch"
+    "loan starts here"
+    else_offset
+    helpers::assert_error_note_after
+    diagnostics
+    "joined-stack use comes from owner2 branch"
+    "later use of `view` keeps this loan active"
+    else_offset
+    helpers::assert_error_note_after
+}
+
+pub fn test_mixed_span_joins_omit_ambiguous_notes {
+    "mixed_span_joins_omit_ambiguous_notes" test::test_start
+    error::Diagnostics::new = repeated_diagnostics
+    OWNED_CONTEXT_TYPES
+    "fn borrow value:$Resource -> $Resource { value } fn invalid first:bool second:bool { 1 Resource = owner if first then owner borrow elif second then owner borrow = view view else owner borrow fi owner drop drop }"
+    str::concat.as_str repeated_diagnostics check_source
+    repeated_diagnostics "one repeated mixed-join conflict" 1 helpers::assert_error_count
+    repeated_diagnostics "repeated mixed join has no false note" 0 helpers::assert_error_note_count
+
+    error::Diagnostics::new = distinct_diagnostics
+    OWNED_CONTEXT_TYPES
+    "fn borrow value:$Resource -> $Resource { value } fn invalid flag:bool { 1 Resource = owner1 2 Resource = owner2 if flag then owner1 borrow = view view else owner2 borrow fi owner2 drop drop }"
+    str::concat.as_str distinct_diagnostics check_source
+    distinct_diagnostics "one distinct mixed-join conflict" 1 helpers::assert_error_count
+    distinct_diagnostics "distinct mixed join has no false note" 0 helpers::assert_error_note_count
+}
+
+pub fn test_lowered_field_assignment_keeps_loan_live {
+    "lowered_field_assignment_keeps_loan_live" test::test_start
+    error::Diagnostics::new = diagnostics
+    OWNED_CONTEXT_TYPES
+    "struct Item { value: i64 } struct ItemOwner { item: Item } fn borrow value:mut$Item -> mut$Item { value } fn invalid { 1 Item ItemOwner = owner owner.item borrow = view owner drop 2 = view.value }"
+    str::concat.as_str diagnostics check_source
+    diagnostics "one lowered-assignment loan conflict" 1 helpers::assert_error_count
+    diagnostics "lowered assignment keeps the loan live" "Cannot move owner `owner` while it is borrowed"
+    helpers::assert_error_contains
+    diagnostics "lowered assignment has both notes" 2 helpers::assert_error_note_count
+    diagnostics "lowered assignment later use" "later use of `view` keeps this loan active"
+    helpers::assert_error_note_contains
+}
+
+pub fn test_overlapping_exclusive_arguments_name_parameters {
+    "overlapping_exclusive_arguments_name_parameters" test::test_start
+    error::Diagnostics::new = diagnostics
+    OWNED_CONTEXT_TYPES
+    "fn write_both left:mut$Resource right:mut$Resource { } fn invalid item:Resource { item item write_both }"
+    str::concat.as_str diagnostics check_source
+    diagnostics "one overlap diagnostic" 1 helpers::assert_error_count
+    diagnostics
+    "overlap maps arguments to parameters"
+    "Cannot borrow `item` exclusively more than once in one call for parameters `left` and `right` of `write_both`"
+    helpers::assert_error_contains
+}
 test_owned_parameters_reject_borrowed_values
 test_borrowed_aggregate_rejects_owned_borrow_container
 test_generic_owned_parameters_reject_after_resolution
@@ -158,4 +400,20 @@ test_valid_owned_and_borrowed_values
 test_literal_can_bind_to_borrowed_parameter
 test_into_raw_requires_heap_owner
 test_raw_owner_conversion_rejects_unresolved_types
+test_borrowed_parameter_diagnostic_shows_contract
+test_non_clone_borrowed_parameter_omits_clone_advice
+test_shared_receiver_diagnostic_shows_contract_once
+test_trait_bound_receiver_diagnostic_has_no_follow_on
+test_generic_aggregate_parameter_diagnostic_has_context
+test_incompatible_borrow_reports_type_mismatch
+test_clone_bound_enables_clone_advice
+test_live_loan_diagnostic_has_related_locations
+test_control_flow_preserves_loan_origin_location
+test_reassigned_borrow_notes_match_conflicting_loan
+test_dead_same_origin_binding_does_not_replace_loan_note
+test_loop_loan_note_uses_saved_origin
+test_joined_stack_loan_notes_match_origin
+test_mixed_span_joins_omit_ambiguous_notes
+test_lowered_field_assignment_keeps_loan_live
+test_overlapping_exclusive_arguments_name_parameters
 test::test_summary
