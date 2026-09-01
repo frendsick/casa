@@ -28,11 +28,6 @@ matched=false
 for f in "$EXAMPLES_DIR"/*.casa; do
     base=$(basename "$f" .casa)
 
-    # Raylib is an optional graphical system dependency validated separately.
-    if [ "$base" = raylib ]; then
-        continue
-    fi
-
     if ! matches_filter "$base" "$@"; then
         continue
     fi
@@ -61,6 +56,16 @@ for f in "$EXAMPLES_DIR"/*.casa; do
     # Compile
     if [ "$base" = foreign_function ]; then
         "$COMPILER" -L "$ROOT_DIR/lib" -l c "$f" -o "$binary"
+    elif [ "$base" = raylib ]; then
+        raylib_object="/tmp/casa_test_raylib_$$.o"
+        raylib_library_name="casa_raylib_fixture_$$"
+        raylib_library="/tmp/lib$raylib_library_name.a"
+        cc -std=c11 -Wall -Wextra -Werror \
+            -c "$ROOT_DIR/tests/examples/raylib.c" -o "$raylib_object"
+        ar rcs "$raylib_library" "$raylib_object"
+        LIBRARY_PATH="/tmp${LIBRARY_PATH:+:$LIBRARY_PATH}" \
+            "$COMPILER" -L "$ROOT_DIR/lib" -l "$raylib_library_name" -l c \
+            "$f" -o "$binary"
     else
         "$COMPILER" -L "$ROOT_DIR/lib" "$f" -o "$binary"
     fi
@@ -70,6 +75,9 @@ for f in "$EXAMPLES_DIR"/*.casa; do
 
     # Clean up binary
     rm -f "$binary"
+    if [ "$base" = raylib ]; then
+        rm -f "$raylib_object" "$raylib_library"
+    fi
 
     if [ -f "$out_file" ]; then
         if echo "$output" | diff -u - "$out_file"; then

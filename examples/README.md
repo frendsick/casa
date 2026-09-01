@@ -57,5 +57,5 @@ then compile and run the example with the standard Linux link libraries:
     examples/raylib.casa -r
 ```
 
-The default test suite skips this example because CI does not provide raylib or
-a graphical session.
+The default test suite links a checked-in raylib-shaped fixture, so CI does not
+require raylib or a graphical session.
