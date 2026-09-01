@@ -2,6 +2,7 @@ import "std" as std
 import "../../compiler/common.casa" as common
 import "../../compiler/error.casa" as error
 import "../../lib/test.casa" as test
+import "../../compiler/semantic_rules.casa" as rules
 import "../../compiler/semantics.casa" as semantics
 import "helpers.casa" as helpers
 
@@ -10,12 +11,12 @@ pub fn analyze_test_operation
     function_opt:mut$std::Option[common::Function]
     receiver:mut$std::Option[common::Type]
     operation:mut$common::OpValue
--> semantics::SemanticFacts {
-    std::Option[$common::Type]::None = receiver_ref
+-> rules::SemanticFacts {
+    std::Option[common::Type]::None = receiver_ref
     if receiver std::Option::Some(receiver_type) is then
-        receiver_type semantics::make_type_borrow_option = receiver_ref
+        receiver_type rules::make_type_borrow_option = receiver_ref
     fi
-    store function_opt receiver_ref operation semantics::analyze_operation
+    store function_opt receiver_ref operation rules::analyze_operation
 }
 
 pub fn test_generic_type_unification_keeps_matching_bases {
@@ -26,7 +27,7 @@ pub fn test_generic_type_unification_keeps_matching_bases {
     unknown_parameters "Box".to_str common::GenericType common::Type::Generic = unknown_box
     "Box[i64]" common::parse_type_str = integer_box
 
-    store integer_box unknown_box semantics::unify_generic_type_parameters = unified
+    store integer_box unknown_box rules::unify_generic_type_parameters = unified
     "matching generic bases unify" unified.is_some test::assert_true
     "matching generic parameters unify" "Box[i64]" unified.unwrap.format test::assert_str_eq
 }
@@ -196,7 +197,7 @@ pub fn test_method_kinds_share_targets_and_dependencies {
         .method
         .clone
         .unwrap
-        .kind semantics::MethodSemanticsKind::DefaultMethod is
+        .kind rules::MethodSemanticsKind::DefaultMethod is
     test::assert_true
     "default trait dependency" "Step" default_method.dependencies common::string_list_contains test::assert_true
     "default implementation dependency"
@@ -211,7 +212,7 @@ pub fn test_method_kinds_share_targets_and_dependencies {
         .method
         .clone
         .unwrap
-        .kind semantics::MethodSemanticsKind::TraitBound is
+        .kind rules::MethodSemanticsKind::TraitBound is
     test::assert_true
     "bound trait dependency" "Step" bound_method.dependencies common::string_list_contains test::assert_true
 }
@@ -228,13 +229,142 @@ pub fn test_function_semantics_own_control_flow_and_bindings {
         .get_function
         .unwrap
         .clone = root
-    std::Map[std::String common::StackEffect]::new = inferred_effects
-    parsed.store inferred_effects root semantics::analyze_function_semantics = semantics
+    parsed.store root semantics::analyze_function_semantics = semantics
     "call dependency" "helper" semantics.has_symbol_dependency test::assert_true
     "assignment preserves receiver"
     "i64::picked" semantics.has_symbol_dependency
     test::assert_true
     "function effect" "None -> i64" semantics.inferred_effect common::stack_effect_to_str test::assert_str_eq
+}
+
+pub fn test_callable_return_recursion_terminates {
+    "callable_return_recursion_terminates" test::test_start
+    error::Diagnostics::new = diagnostics
+    diagnostics
+    "fn recurse -> fn[-> i64] { recurse } fn left -> fn[-> i64] { right } fn right -> fn[-> i64] { left } trait Pick[T] { fn choose self:self -> T { self .choose } } impl i64: Pick[fn[-> i64]] { }"
+    helpers::parse_resolve_test_source = parsed
+    diagnostics "source parses" helpers::assert_no_errors
+
+    "recurse" parsed
+        .store
+        .get_function
+        .unwrap = recurse
+    parsed.store recurse semantics::analyze_function_semantics = direct
+    direct.diagnostics.clone diagnostics.merge
+
+    "left" parsed
+        .store
+        .get_function
+        .unwrap = left
+    parsed.store left semantics::analyze_function_semantics = mutual
+    mutual.diagnostics.clone diagnostics.merge
+
+    common::empty_location
+    std::List[common::Op]::new
+    "default_root".to_str common::Function::new = default_root
+    common::empty_location 1 common::make_integer_op_value common::Op::new default_root.ops.push
+    common::empty_location "choose".to_str common::OpValue::MethodCall common::Op::new default_root.ops.push
+    parsed.store default_root semantics::analyze_function_semantics = default_method
+    default_method.diagnostics.clone diagnostics.merge
+    diagnostics "recursive callable analysis terminates" helpers::assert_no_errors
+}
+
+pub fn test_unnamed_effect_parameter_uses_function_variable_name {
+    "unnamed_effect_parameter_uses_function_variable_name" test::test_start
+    error::Diagnostics::new = diagnostics
+    diagnostics
+    "fn late -> i64 { 1 } fn apply callback:fn[-> i64] -> i64 { callback exec } fn root -> i64 { &late apply }"
+    helpers::parse_resolve_test_source = parsed
+    diagnostics "source parses" helpers::assert_no_errors
+    "apply" parsed
+        .store
+        .take_function_for_update
+        .unwrap = apply
+    0 apply
+        .stack_effect
+        .parameters
+        .get_mut = parameter
+    "".to_str = parameter.name
+    apply parsed.store.restore_function
+    "root" parsed
+        .store
+        .get_function
+        .unwrap = root
+    parsed.store semantics::SemanticSession::new = semantic_session
+    semantic_session root semantics::analyze_function_semantics_in_session = analysis
+    false = found_binding
+    for fact in analysis.ordered_facts.iter do
+        if fact semantics::SemanticDependency::BoundCall(call) is then
+            if "apply" call.function_name.as_str == then
+                if "callback" call.argument_callables.get_str std::Option::Some(callables) is then
+                    "late" callables.has_str = found_binding
+                fi
+            fi
+        fi
+    done
+    "fallback binding uses declared variable" found_binding test::assert_true
+}
+
+pub fn test_semantics_snapshot_isolated_from_source_store {
+    "semantics_snapshot_isolated_from_source_store" test::test_start
+    error::Diagnostics::new = diagnostics
+    diagnostics "fn root -> i64 { 1 }" helpers::parse_resolve_test_source = parsed
+    diagnostics "source parses" helpers::assert_no_errors
+    parsed.store.next_op_id = source_next_op_id
+    "root" parsed
+        .store
+        .get_function
+        .unwrap = root
+    parsed.store semantics::SemanticSession::new = semantic_session
+    semantic_session root semantics::analyze_function_semantics_in_session drop
+    "source function remains unchecked" "root" parsed
+        .store
+        .get_function
+        .unwrap
+        .is_typechecked ! test::assert_true
+    "source operation counter is unchanged" source_next_op_id parsed.store.next_op_id test::assert_eq
+    "snapshot contains checked function" "root" semantic_session
+        .clone_function
+        .unwrap
+        .is_typechecked test::assert_true
+}
+
+pub fn test_semantics_snapshot_preserves_source_names {
+    "semantics_snapshot_preserves_source_names" test::test_start
+    error::Diagnostics::new = diagnostics
+    diagnostics
+    "struct internal__Item { value: i64 } struct internal__Box[T] { value: T } fn take value:internal__Box[internal__Item] { } fn root value:$internal__Box[internal__Item] { value take }"
+    helpers::parse_resolve_test_source = parsed
+    diagnostics "source parses" helpers::assert_no_errors
+    common::symbol_store_new = semantic_store
+    for
+        function_name in parsed
+            .store
+            .get_function_names
+            .iter
+    do
+        function_name.as_str parsed
+            .store
+            .get_function
+            .unwrap
+            .clone semantic_store.set_function
+    done
+    std::Map[std::String std::String]::new = names
+    "internal__".to_str "alias".to_str names.set
+    "test" names semantic_store.record_source_names
+    "internal__Box[internal__Item]" common::parse_type_str = internal_type
+    "test" internal_type semantic_store.format_type_for_source = source_type
+    "source store has imported name" "alias::Box[alias::Item]" source_type.as_str
+    test::assert_str_eq
+    "root" semantic_store.get_function.unwrap = root
+    semantic_store semantics::SemanticSession::new = semantic_session
+    semantic_session root semantics::analyze_function_semantics_in_session = analysis
+    analysis.diagnostics "source-facing owned type" "owned value: alias::Box[alias::Item]"
+    helpers::assert_error_contains
+    analysis.diagnostics "source-facing borrowed type" "shared access: $alias::Box[alias::Item]"
+    helpers::assert_error_contains
+    analysis.diagnostics "internal type is hidden" "internal__Box"
+    helpers::assert_error_not_contains
 }
 test_generic_type_unification_keeps_matching_bases
 test_pattern_bindings_follow_subject_capability
@@ -242,4 +372,8 @@ test_fixed_stack_effects_are_canonical
 test_dispatch_and_dependencies_are_canonical
 test_method_kinds_share_targets_and_dependencies
 test_function_semantics_own_control_flow_and_bindings
+test_callable_return_recursion_terminates
+test_unnamed_effect_parameter_uses_function_variable_name
+test_semantics_snapshot_isolated_from_source_store
+test_semantics_snapshot_preserves_source_names
 test::test_summary

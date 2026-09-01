@@ -35,7 +35,7 @@ test_category() {
             echo compiler_parsing
             ;;
         test/test_analysis|test/test_block_scope|test/test_common|\
-        test/test_const|test/test_semantics|test/test_type_annotations|\
+        test/test_const|test/test_semantics|test/test_semantics_operations|test/test_type_annotations|\
         test/test_typechecker|test/test_underflow_messages|error/*)
             echo compiler_analysis
             ;;
