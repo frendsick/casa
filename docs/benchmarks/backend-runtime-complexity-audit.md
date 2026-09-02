@@ -14,9 +14,9 @@ Related issue: #641.
 Most backend complexity comes from weak phase boundaries, not from x86-64
 instruction encoding. The typechecker returns a public, mutable operation list.
 Bytecode lowering rechecks semantic facts, makes storage and ABI decisions, and
-accepts frontend-only operations. The emitter then dispatches the resulting 151
-instruction variants twice. Tests depend on internal emitter methods and
-construct the seven-field `Program` value directly.
+accepts frontend-only operations. The emitter routes 123 of the resulting 136
+instruction variants through a second family match. Tests use eight additional
+emitter functions and construct the seven-field `Program` value directly.
 
 The later architecture synthesis should first compare two small models:
 
@@ -29,10 +29,12 @@ This audit does not choose between those models. It establishes the evidence
 that the current `Op` to `InstValue` to assembly pipeline is not a deep module.
 Keeping direct x86-64 emission is compatible with either model.
 
-The conservative, non-overlapping simplification estimate is about 1,800 source
-lines. A further 500 lines of fixed runtime emission can move from compiler logic
-to a static assembly asset or object without changing runtime behavior. No major
-dependency is needed.
+The directly evidenced, model-independent deletion and shrink candidates total
+about 500 source lines. Checked-input, storage, and ABI changes can remove more,
+but those estimates depend on the later prototype and are not part of this
+total. A further 500 lines of fixed runtime emission can move from compiler
+logic to a static assembly asset or object without changing runtime behavior.
+No major dependency is needed.
 
 ## Scope and baseline
 
@@ -50,12 +52,13 @@ The focused test surface has 3,537 lines in
 `tests/compiler/test_extern.casa`, and `tests/test_compiler.sh`.
 
 The current public surface has one bytecode entry point, two ABI entry points,
-one build entry point, and 61 emitter functions. Of the emitter functions, 60
-exist to construct, inspect, or test the emitter rather than to compile a
-program. Production callers use `emitter::emit`.
+one build entry point, and 61 emitter functions. Production code outside
+`emitter.casa` calls only `emitter::emit`. `test_emitter.casa` also uses two
+top-level text helpers and six instance functions. At least 52 public emitter
+functions have no caller outside their own module.
 
 [`Program` has seven public fields](https://github.com/frendsick/casa/blob/bb6ffa784afe7a0a86fa68014c2773e0d6a114e1/compiler/common.casa#L1574-L1582).
-[`InstValue` is a 151-variant enum](https://github.com/frendsick/casa/blob/bb6ffa784afe7a0a86fa68014c2773e0d6a114e1/compiler/common.casa#L241-L474).
+[`InstValue` is a 136-variant enum](https://github.com/frendsick/casa/blob/bb6ffa784afe7a0a86fa68014c2773e0d6a114e1/compiler/common.casa#L241-L396).
 [`OpValue` has 128 variants](https://github.com/frendsick/casa/blob/bb6ffa784afe7a0a86fa68014c2773e0d6a114e1/compiler/common.casa#L1009-L1161).
 
 ### Self-compilation baseline
@@ -104,16 +107,25 @@ fields](https://github.com/frendsick/casa/blob/bb6ffa784afe7a0a86fa68014c2773e0d
 does not prove that typechecking succeeded. Unit tests construct error-free
 results from arbitrary `Op` sequences.
 
-This weak boundary causes bytecode lowering to contain 68 calls that record a
-failure. Fifty-eight occur in the lowering body after setup. They include:
+Bytecode lowering contains 66 calls that record a failure. They have three
+different causes:
 
-- malformed `if`, `while`, and `match` sequences
-- missing variables, functions, structs, enums, fields, and local slots
-- unresolved identifiers and generic print operations
-- method calls not lowered by typechecking
-- trait operations not specialized by monomorphization
-- missing type hints, layouts, and value representations
-- helpers called with an operation from the wrong family
+- Backend input can contain malformed `if`, `while`, and `match` sequences,
+  unresolved identifiers, generic print operations, unlowered method calls,
+  unspecialized trait operations, and unspecialized numeric conversions
+  ([control-flow validation](https://github.com/frendsick/casa/blob/bb6ffa784afe7a0a86fa68014c2773e0d6a114e1/compiler/bytecode.casa#L1137-L1325),
+  [frontend-only operations](https://github.com/frendsick/casa/blob/bb6ffa784afe7a0a86fa68014c2773e0d6a114e1/compiler/bytecode.casa#L3094-L3100),
+  [unlowered calls and identifiers](https://github.com/frendsick/casa/blob/bb6ffa784afe7a0a86fa68014c2773e0d6a114e1/compiler/bytecode.casa#L3237-L3280)).
+- Internal helpers guard against receiving an operation from the wrong family.
+  These are local contract assertions, not invalid backend input
+  ([assignment and block helpers](https://github.com/frendsick/casa/blob/bb6ffa784afe7a0a86fa68014c2773e0d6a114e1/compiler/bytecode.casa#L1490-L1658),
+  [static helpers](https://github.com/frendsick/casa/blob/bb6ffa784afe7a0a86fa68014c2773e0d6a114e1/compiler/bytecode.casa#L2218-L2295),
+  [function helper](https://github.com/frendsick/casa/blob/bb6ffa784afe7a0a86fa68014c2773e0d6a114e1/compiler/bytecode.casa#L2685-L2712)).
+- Backend planning can fail to find a symbol, type hint, layout, field plan, or
+  value representation. These failures show repeated planning after analysis,
+  but an opaque input alone does not remove them
+  ([field and layout planning](https://github.com/frendsick/casa/blob/bb6ffa784afe7a0a86fa68014c2773e0d6a114e1/compiler/bytecode.casa#L320-L410),
+  [typed storage operations](https://github.com/frendsick/casa/blob/bb6ffa784afe7a0a86fa68014c2773e0d6a114e1/compiler/bytecode.casa#L2740-L2900)).
 
 The bytecode phase also has a raw control-flow target allocation and a 160-line
 prepass that validates flat frontend control flow. Parser and semantic passes
@@ -128,14 +140,16 @@ or blocks. Invalid source still needs frontend diagnostics. Impossible backend
 states should become construction errors or one internal assertion, not normal
 branches throughout lowering.
 
-Estimated effect: remove or relocate 250 to 400 production lines, plus tests
-that manufacture malformed checked input.
+The control-flow table and validation prepass alone occupy about 250 lines.
+A structured checked input can remove or relocate that work. Other failure
+categories are not included in this estimate.
 
 ### 2. `[yagni]` Stress-test the bytecode layer as a phase boundary
 
 Bytecode has one producer and one consumer. The consumer does not gain a small
-interface. [`emit_inst` restates every instruction family](https://github.com/frendsick/casa/blob/bb6ffa784afe7a0a86fa68014c2773e0d6a114e1/compiler/emitter.casa#L2477-L2642),
-then delegates to helpers that match the same enum again. Five public family
+interface. [`emit_inst` routes 123 variants to helpers that match the same enum
+again](https://github.com/frendsick/casa/blob/bb6ffa784afe7a0a86fa68014c2773e0d6a114e1/compiler/emitter.casa#L2477-L2642).
+It handles the other 13 variants directly. Five public family
 helpers terminate the process if they receive a variant outside their family
 ([stack](https://github.com/frendsick/casa/blob/bb6ffa784afe7a0a86fa68014c2773e0d6a114e1/compiler/emitter.casa#L1224-L1295),
 [arithmetic](https://github.com/frendsick/casa/blob/bb6ffa784afe7a0a86fa68014c2773e0d6a114e1/compiler/emitter.casa#L1302-L1452),
@@ -159,7 +173,7 @@ requirements:
 - storage and ABI plans are inputs to emission, not queries made during it
 - one compile entry point hides instruction-family helpers
 
-Estimated direct effect: remove the 166-line routing match and 50 to 100 lines
+Estimated direct effect: remove the 166-line routing match and 20 to 50 lines
 of family guards and adapters. Removing the persistent bytecode representation
 could save more, but this audit does not count that unproven result.
 
@@ -269,8 +283,9 @@ interface improvement, not a net repository line reduction.
 
 `test_emitter.casa` has 89 tests. It constructs `Program` directly about 80
 times, although the file already has `make_empty_program` and
-`make_simple_program`. Most tests call an emitter helper and assert one assembly
-substring. This test shape requires the emitter to expose 60 internal methods.
+`make_simple_program`. Seventy-nine tests call `emitter::emit`. Four unique
+emission helpers are called directly. The tests also use `Emitter::new`,
+`Emitter::into_asm`, `sanitize_name`, and `escape_string`.
 
 `test_bytecode.casa` has 40 tests and often asserts exact instruction positions
 and sequences. The combined 2,852 lines protect the current representation
@@ -289,9 +304,10 @@ The three native extern blocks in `tests/test_compiler.sh` also repeat the same
 compile, archive, link, run, and expected-output flow across 122 lines
 ([native extern tests](https://github.com/frendsick/casa/blob/bb6ffa784afe7a0a86fa68014c2773e0d6a114e1/tests/test_compiler.sh#L215-L336)).
 
-Estimated effect: remove or replace 1,100 to 1,400 focused test lines. A small
-immediate helper extraction can remove 150 to 250 lines without changing test
-coverage.
+The selected backend seam determines which representation tests remain and what
+replaces them. No architecture-dependent test deletion is included in the
+reduction total. A model-independent fixture extraction can remove 150 to 250
+lines without changing test coverage.
 
 ### 8. `[native]` Let the C compiler driver assemble and link
 
@@ -364,23 +380,30 @@ analysis, or another major dependency. Reject a model that only renames
 `InstValue` while preserving the duplicate semantic decisions and broad public
 test surface.
 
-## Conservative reduction ledger
+## Reduction ledger
 
-The figures below avoid counting the same lines in more than one finding.
+The first table contains only changes that do not depend on the selected
+backend model. The figures avoid counting the same lines twice.
 
-| Change | Production | Tests | Relocated | Dependencies |
+| Model-independent change | Production | Tests | Relocated | Dependencies |
 |---|---:|---:|---:|---:|
-| Checked backend input and control-flow invariants | -300 | -100 | 0 | 0 |
-| Single exhaustive instruction selection path | -200 | 0 | 0 | 0 |
-| Complete storage and ABI plans | -150 | 0 | 150 | 0 |
+| Single exhaustive instruction selection path | -180 | 0 | 0 | 0 |
 | Dead static struct path | -120 | 0 | 0 | 0 |
-| Contract-focused backend tests and shared fixtures | 0 | -900 | 0 | 0 |
+| Shared emitter test fixtures | 0 | -150 | 0 | 0 |
 | One compiler-driver build command | -20 | 0 | 0 | 0 |
-| Small runtime and float consolidation | -40 | 0 | 0 | 0 |
+| Small runtime and float consolidation | -30 | 0 | 0 | 0 |
 | Fixed runtime asset | 0 | 0 | 500 | 0 |
-| **Conservative total** | **-830** | **-1,000** | **650** | **0** |
+| **Model-independent total** | **-350** | **-150** | **500** | **0** |
+
+The prototype-dependent opportunities are not part of the net figure:
+
+| Prototype-dependent change | Potential reduction | Potential relocation |
+|---|---:|---:|
+| Structured checked input and control-flow invariants | about 250 | 0 |
+| Complete storage and ABI plans | 100 to 200 | about 150 |
+| Replacement of representation-coupled tests | not yet estimated | not yet estimated |
 
 The estimates are architecture inputs, not acceptance targets. Validate them
 against the selected prototype before implementation tickets use them.
 
-net: -1,800 lines, -0 deps possible.
+net: -500 lines, -0 deps possible.
