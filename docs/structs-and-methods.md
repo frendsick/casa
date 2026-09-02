@@ -127,7 +127,9 @@ implementations.
 
 A struct or enum can contain a borrow, including through a generic field. The
 aggregate keeps the borrowed owner loaned until the aggregate's last use. A
-function that returns such an aggregate preserves the same origin.
+function that returns such an aggregate preserves the same origin. Destruction
+counts as a use when custom cleanup on the aggregate or one of its owned fields
+can observe the borrow.
 
 ## Copy and Clone
 
