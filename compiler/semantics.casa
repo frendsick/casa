@@ -238,6 +238,16 @@ pub fn merge_origins
     fi
     target
 }
+
+fn should_preserve_contained_origin origin:$str place:$std::Option[std::String] -> bool {
+    if origin parse_origin_dependency.exact_origins then
+        true return
+    fi
+    if place std::Option::Some(container_place) is then
+        origin origin_place container_place.as_str != return
+    fi
+    true
+}
 # Ignore the loan used to access a container while preserving origins stored in it.
 fn merge_contained_origins
     target:std::Option[std::List[std::String]]
@@ -247,11 +257,8 @@ fn merge_contained_origins
     if source std::Option::Some(items) is then
         for origin in items.iter do
             origin.as_str origin_place = origin_path
-            true = is_contained
-            if place std::Option::Some(container_place) is then
-                origin_path.as_str container_place.as_str != = is_contained
-            fi
-            if is_contained then
+            place origin.as_str should_preserve_contained_origin = preserve
+            if preserve then
                 origin.as_str origin_is_exclusive origin_path.as_str target add_origin = target
             fi
         done
@@ -271,6 +278,22 @@ fn merge_type_variable_origins
     items std::Option::Some = merged
     source merged merge_origins = merged
     merged.unwrap name.to_str collected.set
+}
+
+fn promote_callable_return_origins
+    parameter_type:$common::Type
+    type_variable:$str
+    origins:$std::Option[std::List[std::String]]
+    cleanup_origins:std::Option[std::List[std::String]]
+-> std::Option[std::List[std::String]] {
+    if parameter_type.clone common::Type::Function(function_type) is then
+        for return_type in function_type.return_types.iter do
+            if type_variable return_type.type_contains_var then
+                origins cleanup_origins merge_origins return
+            fi
+        done
+    fi
+    cleanup_origins
 }
 
 fn clone_nonempty_origins
@@ -3797,6 +3820,7 @@ impl TypeChecker {
     -> std::Map[std::String std::List[std::String]] std::Map[std::String std::List[std::String]] {
         std::Map[std::String std::List[std::String]]::new = collected
         std::Map[std::String std::List[std::String]]::new = cleanup_collected
+        effect stack_effect_type_variables = tracked_type_variables
         tc
             .stack
             .values
@@ -3824,10 +3848,12 @@ impl TypeChecker {
             std::Option[std::List[std::String]]::None = contained_cleanup_origins
             argument.place argument.cleanup_origins contained_cleanup_origins
             merge_contained_origins = contained_cleanup_origins
-            for type_variable in effect.type_vars.iter do
+            for type_variable in tracked_type_variables.iter do
                 if type_variable.as_str parameter_type.type_contains_var then
+                    contained_cleanup_origins.clone argument.origins type_variable.as_str
+                    parameter_type promote_callable_return_origins = variable_cleanup_origins
                     contained_origins type_variable.as_str collected merge_type_variable_origins
-                    contained_cleanup_origins type_variable.as_str cleanup_collected
+                    variable_cleanup_origins type_variable.as_str cleanup_collected
                     merge_type_variable_origins
                 fi
             done
@@ -4445,6 +4471,29 @@ impl TypeChecker {
         fi
     }
 
+    fn classify_type_variable_return_origins
+        tc:mut$TypeChecker
+        resolved_return:$common::Type
+        origins:std::Option[std::List[std::String]]
+        cleanup_origins:std::Option[std::List[std::String]]
+    -> std::Option[std::List[std::String]] std::Option[std::List[std::String]] {
+        if
+            resolved_return.has_unresolved_type_var
+            resolved_return.clone common::Type::Function(_) is ||
+        then
+            origins cleanup_origins return
+        fi
+        if tc.store resolved_return type_has_borrow ! then
+            std::Option[std::List[std::String]]::None
+            std::Option[std::List[std::String]]::None return
+        fi
+        std::List[std::String]::new = visiting
+        if visiting tc.store resolved_return does_cleanup_observe_borrow ! then
+            std::Option[std::List[std::String]]::None = cleanup_origins
+        fi
+        origins cleanup_origins
+    }
+
     fn select_generic_return_origins
         tc:mut$TypeChecker
         sources:$ReturnOriginSources
@@ -4452,14 +4501,31 @@ impl TypeChecker {
         return_type_variable:$std::Option[std::String]
     -> std::Option[std::List[std::String]] std::Option[std::List[std::String]] ReturnCleanupMode {
         if return_type_variable.clone std::Option::Some(type_variable) is then
-            if type_variable.as_str sources.type_variables.has_str then
+            if
+                type_variable.as_str sources.type_variables.has_str
+                type_variable.as_str sources.type_variable_cleanup.has_str ||
+            then
                 type_variable.as_str sources.type_variables clone_nonempty_origins = origins
                 type_variable.as_str sources.type_variable_cleanup clone_nonempty_origins
                 = cleanup_origins
-                cleanup_origins resolved_return tc.filter_return_cleanup_origins
-                = cleanup_origins
+                cleanup_origins origins resolved_return tc.classify_type_variable_return_origins
+                = cleanup_origins = origins
                 origins cleanup_origins ReturnCleanupMode::Exact return
             fi
+        fi
+
+        if resolved_return.has_unresolved_type_var then
+            std::Option[std::List[std::String]]::None = origins
+            std::Option[std::List[std::String]]::None = cleanup_origins
+            std::Set[std::String]::new = type_variables
+            type_variables resolved_return common::collect_stack_effect_type_vars
+            for type_variable in type_variables.iter do
+                type_variable.as_str sources.type_variables clone_nonempty_origins
+                origins merge_origins = origins
+                type_variable.as_str sources.type_variable_cleanup clone_nonempty_origins
+                cleanup_origins merge_origins = cleanup_origins
+            done
+            origins cleanup_origins ReturnCleanupMode::Exact return
         fi
 
         std::Option[std::List[std::String]]::None = origins
@@ -4478,21 +4544,6 @@ impl TypeChecker {
             origins std::Option[std::List[std::String]]::None ReturnCleanupMode::AllOrigins return
         fi
         origins std::Option[std::List[std::String]]::None ReturnCleanupMode::NoCleanup
-    }
-
-    fn filter_return_cleanup_origins
-        tc:mut$TypeChecker
-        resolved_return:$common::Type
-        cleanup_origins:std::Option[std::List[std::String]]
-    -> std::Option[std::List[std::String]] {
-        if resolved_return.clone common::Type::Function(_) is then
-            cleanup_origins return
-        fi
-        std::List[std::String]::new = visiting
-        if visiting tc.store resolved_return does_cleanup_observe_borrow then
-            cleanup_origins return
-        fi
-        std::Option[std::List[std::String]]::None
     }
 
     pub fn apply_stack_effect
@@ -4564,13 +4615,17 @@ impl TypeChecker {
             .length != || = has_generic_parameters
         false = returns_borrow
         false = returns_callable
+        false = returns_unresolved_type
         for return_type in effect.return_types.iter do
             bindings return_type.substitute_t = resolved_return
             if tc.store resolved_return type_has_borrow then
                 true = returns_borrow
             fi
-            if resolved_return common::Type::Function(_) is then
+            if resolved_return.clone common::Type::Function(_) is then
                 true = returns_callable
+            fi
+            if resolved_return.has_unresolved_type_var then
+                true = returns_unresolved_type
             fi
         done
         if effect stack_effect_may_borrow then
@@ -4594,7 +4649,7 @@ impl TypeChecker {
             CallOriginMode::Exclusive bindings effect tc.collect_call_origins
             = exclusive_origins
         fi
-        if has_generic_parameters then
+        if has_generic_parameters returns_unresolved_type || then
             effect tc.collect_type_variable_argument_origins
             = type_variable_cleanup_origins = type_variable_origins
         fi
@@ -4602,6 +4657,14 @@ impl TypeChecker {
             bindings effect tc.collect_argument_origins
             = callable_cleanup_origins = callable_origins
         fi
+        ReturnOriginSources {
+            shared: shared_origins.clone
+            exclusive: exclusive_origins.clone
+            callable: callable_origins.clone
+            callable_cleanup: callable_cleanup_origins.clone
+            type_variables: type_variable_origins.clone
+            type_variable_cleanup: type_variable_cleanup_origins.clone
+        } = return_origin_sources
         # Simple case: no type or constant parameters
         if has_generic_parameters ! then
             0 = index: u64
@@ -4613,7 +4676,24 @@ impl TypeChecker {
             done
             "".to_str = tc.current_expect_ctx
             for return_type in effect common::StackEffect::return_types.iter do
-                if tc.store return_type type_has_borrow then
+                if return_type common::Type::Function(_) is then
+                    callable_cleanup_origins.clone callable_origins.clone return_type
+                    tc.push_value_origins
+                elif return_type.has_unresolved_type_var then
+                    return_type tc.stack_push_type
+                    return_type.type_var_name = return_type_variable
+                    return_type_variable return_type return_origin_sources
+                    tc.select_generic_return_origins
+                    = cleanup_mode = cleanup_origins = origins
+                    tc
+                        .stack
+                        .values
+                        .length 1 - tc
+                        .stack
+                        .values
+                        .get_mut = value
+                    cleanup_mode cleanup_origins origins value.apply_return_origins
+                elif tc.store return_type type_has_borrow then
                     std::Option[std::List[std::String]]::None = origins
                     if tc.store return_type type_has_shared_borrow then
                         shared_origins origins merge_origins = origins
@@ -4622,9 +4702,6 @@ impl TypeChecker {
                         exclusive_origins origins merge_origins = origins
                     fi
                     origins return_type tc.stack_push_origins
-                elif return_type common::Type::Function(_) is then
-                    callable_cleanup_origins.clone callable_origins.clone return_type
-                    tc.push_value_origins
                 else
                     return_type tc.stack_push_type
                 fi
@@ -4673,15 +4750,6 @@ impl TypeChecker {
         for dependency in bound_dependencies.iter do
             dependency.as_str tc.add_symbol_dependency
         done
-        ReturnOriginSources {
-            shared: shared_origins.clone
-            exclusive: exclusive_origins.clone
-            callable: callable_origins
-            callable_cleanup: callable_cleanup_origins
-            type_variables: type_variable_origins
-            type_variable_cleanup: type_variable_cleanup_origins
-        } = return_origin_sources
-
         # Push resolved return types
         for return_type in effect common::StackEffect::return_types.iter do
             return_type bindings resolve_return_type_t = resolved_return
