@@ -192,6 +192,10 @@ call the struct name:
 36 "Ada" Person = person
 ```
 
+Named and positional construction outside the defining module require every
+field to be public. Use a public factory method to expose construction while
+keeping fields private.
+
 The named literal is easier to read when a struct has several fields.
 
 ## Struct patterns
