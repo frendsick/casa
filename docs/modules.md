@@ -86,6 +86,8 @@ impl Counter {
 
 Private declarations remain available to code in the same module. Imports do not re-export their dependencies.
 
+Code outside the defining module can construct a struct only when every field is public. A public struct with private fields must provide a public factory function or method.
+
 ### Import failures
 
 An imported file must lex, parse, and resolve successfully before its declarations are added to the importing file. A failed full or selective import reports the imported file's diagnostics at the import position and stops further import expansion and identifier resolution.
