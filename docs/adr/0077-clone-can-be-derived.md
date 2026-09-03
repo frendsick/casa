@@ -1,5 +1,5 @@
 # Clone can be derived
-status: amended by [ADR-0150](0150-shared-borrow-duplication-is-not-copy-conformance.md)
+status: amended by [ADR-0150](0150-shared-borrow-duplication-is-not-copy-conformance.md) and [ADR-0163](0163-standard-trait-derivation-is-a-complete-implementation.md)
 related issue: #314
 
 Structs and enums may request `Clone` in the existing inline `derives` clause:

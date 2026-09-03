@@ -1,5 +1,5 @@
 # Copy is a validated marker bound
-status: amended by [ADR-0158](0158-copy-requires-a-raw-value-representation.md)
+status: amended by [ADR-0158](0158-copy-requires-a-raw-value-representation.md) and [ADR-0163](0163-standard-trait-derivation-is-a-complete-implementation.md)
 
 Generic declarations express representation-safe duplication with the ordinary bound syntax `[T: Copy]`. Copy is a methodless standard-library marker trait with compiler-validated implementations. Built-in implementation is automatic, and user-defined structs and enums request it with `derives Copy` or an equivalent validated empty implementation. The intrinsic stack effects of `dup` and `over` require the canonical Copy trait on the value they duplicate.
 

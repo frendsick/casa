@@ -1,4 +1,5 @@
 # Copy-provided Clone composes field Clone
+status: amended by [ADR-0163](0163-standard-trait-derivation-is-a-complete-implementation.md)
 
 When the standard Copy implementation must satisfy its Clone supertrait, the generated aggregate Clone implementation clones each field or active enum payload through its Clone method. It does not raw-copy the complete aggregate representation.
 

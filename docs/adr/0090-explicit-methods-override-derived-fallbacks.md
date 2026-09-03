@@ -1,4 +1,5 @@
 # Explicit methods override derived fallbacks
+status: superseded by [ADR-0163](0163-standard-trait-derivation-is-a-complete-implementation.md)
 
 Derivation supplies fallback methods and a trait implementation. A handwritten method with the same trait method and exact stack effect takes precedence, and the compiler generates only the missing methods:
 

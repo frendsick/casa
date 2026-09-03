@@ -1,4 +1,5 @@
 # Standard Copy extends Clone
+status: amended by [ADR-0163](0163-standard-trait-derivation-is-a-complete-implementation.md)
 
 The standard library declares Copy as a Clone subtrait:
 

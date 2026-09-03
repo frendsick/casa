@@ -1,4 +1,5 @@
 # Copy types may customize Clone
+status: superseded by [ADR-0163](0163-standard-trait-derivation-is-a-complete-implementation.md)
 
 A type that implements standard Copy may provide its own ordinary Clone implementation. The Copy implementation supplies fieldwise Clone behavior only as a fallback when no explicit implementation exists; an explicit implementation takes precedence and is not a duplicate-implementation error.
 

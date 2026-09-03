@@ -1,4 +1,5 @@
 # Custom equality requires derived companions
+status: superseded by [ADR-0163](0163-standard-trait-derivation-is-a-complete-implementation.md)
 
 When a type customizes `eq`, the compiler cannot independently derive field-based behavior whose correctness depends on the equality relation. If the same type requests derived Hashable or Ord, it must also provide the corresponding `hash` or `cmp` method explicitly.
 

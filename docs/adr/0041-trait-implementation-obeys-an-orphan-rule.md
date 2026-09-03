@@ -1,4 +1,5 @@
 # Trait implementation obeys an orphan rule
+status: amended by [ADR-0163](0163-standard-trait-derivation-is-a-complete-implementation.md)
 
 An explicit `impl Type: Trait` implementation may be declared only in a module that defines the receiver type or the trait. A third module that owns neither side cannot connect two imported declarations.
 

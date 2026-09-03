@@ -1,4 +1,5 @@
 # Copy requires a raw value representation
+status: amended by [ADR-0163](0163-standard-trait-derivation-is-a-complete-implementation.md)
 related issue: #478
 
 `Copy` is accepted only when duplicating the complete runtime value cannot
