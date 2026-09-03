@@ -795,11 +795,14 @@
             "-> Option[$String]",
           internalInterface:
             "pub fn parse_and_resolve input:CompilationInput sources:CompilerSourceStore\n" +
-            "-> ParseResolveResult\n\n" +
+            "-> Result[ParseResolveResult InternalCompilerError]\n\n" +
             "pub fn summarize_for_import roots:$List[SymbolId] program:$ResolvedProgram\n" +
             "-> DependencySummary\n\n" +
             "pub fn type_check program:ResolvedProgram\n" +
-            "-> TypecheckResult\n\n" +
+            "-> Result[TypecheckResult InternalCompilerError]\n\n" +
+            "pub fn into_checked_parts program:CheckedProgram\n" +
+            "-> CheckedBlock Map[FunctionId CheckedFunction]\n" +
+            "    Map[TypeId ValuePlan] Map[CallId ExternCallPlan]\n\n" +
             "pub fn emit program:CheckedProgram\n" +
             "-> Result[String InternalCompilerError]",
           dataModel:
@@ -860,11 +863,10 @@
             "    Checked (Diagnostics EditorIndex CheckedProgram)\n" +
             "}\n\n" +
             "pub struct CheckedProgram {\n" +
-            "    pub root: CheckedBlock\n" +
-            "    pub functions: Map[FunctionId CheckedFunction]\n" +
-            "    pub values: Map[TypeId ValuePlan]\n" +
-            "    pub extern_calls: Map[CallId ExternCallPlan]\n" +
-            "    seal: bool\n" +
+            "    root: CheckedBlock\n" +
+            "    functions: Map[FunctionId CheckedFunction]\n" +
+            "    values: Map[TypeId ValuePlan]\n" +
+            "    extern_calls: Map[CallId ExternCallPlan]\n" +
             "}\n\n" +
             "pub struct InternalCompilerError {\n" +
             "    pub phase: CompilerPhase\n" +
@@ -891,7 +893,15 @@
           ],
           errorFlow: "Syntax can be usable or unusable. Typechecking returns Rejected with editor facts or Checked with a CheckedProgram. InternalCompilerError is reserved for violated compiler invariants. Native process failures remain in build::compile_binary.",
           testSeam: "Test compiler::run for syntax, analysis, and assembly jobs. Test query for editor behavior. Keep small private ValuePlan and ExternCallPlan tables. Delete direct Parser, Op, InstValue, Program, clone, commit, and operation-ID protocol tests.",
-          behaviorIsolation: "Selective imports, compile-time evaluation, generated trait implementations, trait defaults, ownership guarantees, one-body generic checking followed by specialization, and eager immutable-global initialization keep their current behavior inside the owning implementation.",
+          behaviorIsolation: [
+            "Selective imports: parse_and_resolve keeps unqualified access, private dependency retention, and selected initializer closure behavior.",
+            "Compile-time evaluation: front-end elaboration retains const fn, const blocks, constant type parameters, values, and diagnostics.",
+            "Generated trait implementations: front-end elaboration retains Clone, Copy, Eq, Ord, and Hashable derivation, conditional bounds, and overrides.",
+            "Trait default methods: semantic checking retains direct and inherited defaults, generic substitution, ambiguity rules, and diagnostics.",
+            "Ownership guarantees: the semantic module retains moves, borrows, returned origins, field sensitivity, closure captures, destruction, and unsafe obligations.",
+            "Generic checking and specialization: type_check checks each generic body once; private specialization retains bounds, binding, cycle, diagnostic, and layout-sensitive behavior.",
+            "Immutable-global initialization: parse_and_resolve retains dependency-before-root order, source order within each group, selective retention, and exactly-once eager execution."
+          ],
           adrImpact: "Keeps ADR-0008's single Operation semantics principle while narrowing its interface. Uses ADR-0162's complete field storage plan. It changes representation ownership, not language behavior.",
           dependencyDirection:
             "CLI, LSP, formatter -> compiler\n" +
@@ -950,7 +960,7 @@
           metrics: {
             cliCalls: "1",
             publicIntent: "3 operations",
-            internalSeams: "4 principal pass seams",
+            internalSeams: "4 principal pass seams + 1 consuming product view",
             persistentIr: "Checked tree only",
             invalid: "0 of 8 external",
             classifications: "1 semantic + 1 backend-kind render",
@@ -960,7 +970,7 @@
             time: "32.0 to 34.8 s hypothesis",
             memory: "700,000 to 780,000 KiB hypothesis",
             coupling: "High, staged replacement",
-            interfaceSize: "3 calls, 10 envelopes, 7 public envelope fields, 5 failures",
+            interfaceSize: "3 external calls, 5 internal calls, 0 public checked-product fields, 5 failures",
             depth: "Very high external leverage, coarse private module",
             locality: "Meaning, target plans, editor facts, and emission each have one owner",
             seamPlacement: "User intent outside, resolved and checked products inside",
@@ -999,7 +1009,7 @@
             {
               name: "CheckedProgram",
               owner: "semantic module",
-              seam: "type_check consumes ResolvedProgram",
+              seam: "type_check consumes the sealed ResolvedAnalysis envelope",
               guarantee: "Every node contains complete Operation semantics and no error node.",
               factKeys: ["semantic", "ownership", "editor"]
             },
@@ -1036,22 +1046,58 @@
           },
           externalInterface:
             "pub fn analysis::analyze input:AnalysisInput\n" +
-            "-> AnalysisResult\n\n" +
+            "-> Result[AnalysisResult AnalysisFailureReport]\n\n" +
+            "pub fn analysis::into_parts result:AnalysisResult\n" +
+            "-> CompilerSourceStore Diagnostics EditorProduct AnalysisProduct\n\n" +
+            "pub fn analysis::into_failure_parts report:AnalysisFailureReport\n" +
+            "-> CompilerSourceStore Diagnostics InternalFailure\n\n" +
+            "pub fn failure_parts failure:InternalFailure\n" +
+            "-> CompilerPhase String Option[NodeOrigin]\n\n" +
             "pub fn codegen::emit checked:CheckedProgram\n" +
             "-> Result[AssemblySource InternalFailure]\n\n" +
             "pub fn syntax::analyze_syntax source:$str file:$str\n" +
             "-> SyntaxResult",
           internalInterface:
             "pub fn frontend::parse_and_resolve input:AnalysisInput\n" +
-            "-> ParseResolveResult\n\n" +
-            "pub fn semantics::type_check program:ResolvedProgram\n" +
-            "-> TypecheckProduct\n\n" +
+            "-> Result[ParseResolveResult AnalysisFailureReport]\n\n" +
+            "pub fn frontend::into_resolved_parts analysis:ResolvedAnalysis\n" +
+            "-> CompilerSourceStore ResolvedProgram Diagnostics EditorProduct\n\n" +
+            "pub fn frontend::into_program_parts program:ResolvedProgram\n" +
+            "-> ResolvedDeclarations ResolvedBlock Map[FunctionId ResolvedFunction]\n\n" +
+            "pub fn semantics::type_check analysis:ResolvedAnalysis\n" +
+            "-> Result[TypecheckResult AnalysisFailureReport]\n\n" +
+            "pub fn semantics::into_typecheck_parts result:TypecheckResult\n" +
+            "-> CompilerSourceStore Diagnostics EditorProduct TypecheckProduct\n\n" +
+            "pub fn semantics::into_checked_parts program:CheckedProgram\n" +
+            "-> CheckedDeclarations CheckedBlock Map[FunctionId CheckedFunction]\n" +
+            "    Map[GenericFunctionId CheckedTemplate]\n\n" +
+            "pub fn semantics::into_checked_block_parts block:CheckedBlock\n" +
+            "-> StackShape List[CheckedNode] FlowExit\n\n" +
+            "pub fn semantics::into_operation_parts semantics:OperationSemantics\n" +
+            "-> StackEffect CheckedOperation List[SemanticDependency]\n" +
+            "    OwnershipActions EditorMeaning\n\n" +
             "pub fn specialize program:CheckedProgram\n" +
             "-> Result[SpecializedProgram InternalFailure]\n\n" +
+            "pub fn into_specialized_parts program:SpecializedProgram\n" +
+            "-> SpecializedBlock Map[MonoFunctionId SpecializedFunction]\n\n" +
+            "pub fn into_specialized_block_parts block:SpecializedBlock\n" +
+            "-> StackShape List[SpecializedNode] FlowExit\n\n" +
+            "pub fn into_specialized_function_parts function:SpecializedFunction\n" +
+            "-> MonoFunctionId StackEffect SpecializedBlock\n\n" +
             "pub fn plan_x86_64_sysv program:SpecializedProgram\n" +
             "-> Result[PlannedProgram InternalFailure]\n\n" +
+            "pub fn into_planned_parts program:PlannedProgram\n" +
+            "-> PlannedBlock Map[MonoFunctionId PlannedFunction]\n" +
+            "    Map[TypeId ValuePlan] Map[CallId AbiCallPlan]\n\n" +
+            "pub fn into_value_plan_parts plan:ValuePlan\n" +
+            "-> ValueRepresentation TypeLayout CopyPlan MovePlan DropPlan\n\n" +
+            "pub fn into_abi_call_parts plan:AbiCallPlan\n" +
+            "-> List[AbiValuePlan] Option[AbiValuePlan] u64 u64\n\n" +
             "pub fn lower program:PlannedProgram\n" +
             "-> Result[MachineProgram InternalFailure]\n\n" +
+            "pub fn into_machine_parts program:MachineProgram\n" +
+            "-> MachineSections List[MachineInst]\n" +
+            "    Map[MonoFunctionId List[MachineInst]] SourceMap\n\n" +
             "pub fn emit program:MachineProgram -> AssemblySource",
           dataModel:
             "pub enum AnalysisProduct {\n" +
@@ -1061,62 +1107,81 @@
             "    Checked (CheckedProgram)\n" +
             "}\n\n" +
             "pub struct AnalysisResult {\n" +
-            "    pub sources: CompilerSourceStore\n" +
-            "    pub diagnostics: Diagnostics\n" +
-            "    pub editor: EditorProduct\n" +
-            "    pub product: AnalysisProduct\n" +
-            "    seal: bool\n" +
+            "    sources: CompilerSourceStore\n" +
+            "    diagnostics: Diagnostics\n" +
+            "    editor: EditorProduct\n" +
+            "    product: AnalysisProduct\n" +
+            "}\n\n" +
+            "pub struct AnalysisFailureReport {\n" +
+            "    sources: CompilerSourceStore\n" +
+            "    diagnostics: Diagnostics\n" +
+            "    failure: InternalFailure\n" +
             "}\n\n" +
             "pub enum TypecheckProduct {\n" +
             "    Partial (TypedProgram)\n" +
             "    Complete (CheckedProgram)\n" +
             "}\n\n" +
+            "pub struct TypecheckResult {\n" +
+            "    sources: CompilerSourceStore\n" +
+            "    diagnostics: Diagnostics\n" +
+            "    editor: EditorProduct\n" +
+            "    product: TypecheckProduct\n" +
+            "}\n\n" +
             "pub struct SyntaxProduct {\n" +
-            "    pub modules: List[SyntaxModule]\n" +
-            "    pub facts: SyntaxFacts\n" +
-            "    seal: bool\n" +
+            "    modules: List[SyntaxModule]\n" +
+            "    facts: SyntaxFacts\n" +
             "}\n\n" +
             "pub enum ParseResolveResult {\n" +
-            "    Rejected (SyntaxProduct Diagnostics EditorProduct)\n" +
-            "    Resolved (ResolvedProgram Diagnostics EditorProduct)\n" +
+            "    Rejected (AnalysisResult)\n" +
+            "    Resolved (ResolvedAnalysis)\n" +
+            "}\n\n" +
+            "pub struct ResolvedAnalysis {\n" +
+            "    sources: CompilerSourceStore\n" +
+            "    program: ResolvedProgram\n" +
+            "    diagnostics: Diagnostics\n" +
+            "    editor: EditorProduct\n" +
             "}\n\n" +
             "pub struct ResolvedProgram {\n" +
-            "    pub declarations: ResolvedDeclarations\n" +
-            "    pub root: ResolvedBlock\n" +
-            "    pub functions: Map[FunctionId ResolvedFunction]\n" +
-            "    seal: bool\n" +
+            "    declarations: ResolvedDeclarations\n" +
+            "    root: ResolvedBlock\n" +
+            "    functions: Map[FunctionId ResolvedFunction]\n" +
             "}\n\n" +
             "pub struct TypedProgram {\n" +
-            "    pub declarations: TypedDeclarations\n" +
-            "    pub root: PartialBlock\n" +
-            "    pub functions: Map[FunctionId PartialFunction]\n" +
-            "    seal: bool\n" +
+            "    declarations: TypedDeclarations\n" +
+            "    root: PartialBlock\n" +
+            "    functions: Map[FunctionId PartialFunction]\n" +
             "}\n\n" +
             "pub struct CheckedProgram {\n" +
-            "    pub declarations: CheckedDeclarations\n" +
-            "    pub root: CheckedBlock\n" +
-            "    pub functions: Map[FunctionId CheckedFunction]\n" +
-            "    pub generic_templates: Map[GenericFunctionId CheckedTemplate]\n" +
-            "    seal: bool\n" +
+            "    declarations: CheckedDeclarations\n" +
+            "    root: CheckedBlock\n" +
+            "    functions: Map[FunctionId CheckedFunction]\n" +
+            "    generic_templates: Map[GenericFunctionId CheckedTemplate]\n" +
             "}\n\n" +
             "pub struct SpecializedProgram {\n" +
-            "    pub root: CheckedBlock\n" +
-            "    pub functions: Map[MonoFunctionId CheckedFunction]\n" +
-            "    seal: bool\n" +
+            "    root: SpecializedBlock\n" +
+            "    functions: Map[MonoFunctionId SpecializedFunction]\n" +
+            "}\n\n" +
+            "pub struct SpecializedBlock {\n" +
+            "    entry: StackShape\n" +
+            "    nodes: List[SpecializedNode]\n" +
+            "    exit: FlowExit\n" +
+            "}\n\n" +
+            "pub struct SpecializedFunction {\n" +
+            "    id: MonoFunctionId\n" +
+            "    stack_effect: StackEffect\n" +
+            "    body: SpecializedBlock\n" +
             "}\n\n" +
             "pub struct PlannedProgram {\n" +
-            "    pub root: PlannedBlock\n" +
-            "    pub functions: Map[MonoFunctionId PlannedFunction]\n" +
-            "    pub values: Map[TypeId ValuePlan]\n" +
-            "    pub extern_calls: Map[CallId AbiCallPlan]\n" +
-            "    seal: bool\n" +
+            "    root: PlannedBlock\n" +
+            "    functions: Map[MonoFunctionId PlannedFunction]\n" +
+            "    values: Map[TypeId ValuePlan]\n" +
+            "    extern_calls: Map[CallId AbiCallPlan]\n" +
             "}\n\n" +
             "pub struct MachineProgram {\n" +
-            "    pub sections: MachineSections\n" +
-            "    pub root: List[MachineInst]\n" +
-            "    pub functions: Map[MonoFunctionId List[MachineInst]]\n" +
-            "    pub source_map: SourceMap\n" +
-            "    seal: bool\n" +
+            "    sections: MachineSections\n" +
+            "    root: List[MachineInst]\n" +
+            "    functions: Map[MonoFunctionId List[MachineInst]]\n" +
+            "    source_map: SourceMap\n" +
             "}\n\n" +
             "pub enum FlowExit {\n" +
             "    Continues (StackShape)\n" +
@@ -1128,42 +1193,45 @@
             "    pub location: Location\n" +
             "}\n\n" +
             "pub struct OperationSemantics {\n" +
-            "    pub effect: StackEffect\n" +
-            "    pub operation: CheckedOperation\n" +
-            "    pub dependencies: List[SemanticDependency]\n" +
-            "    pub ownership: OwnershipActions\n" +
-            "    pub editor: EditorMeaning\n" +
+            "    effect: StackEffect\n" +
+            "    operation: CheckedOperation\n" +
+            "    dependencies: List[SemanticDependency]\n" +
+            "    ownership: OwnershipActions\n" +
+            "    editor: EditorMeaning\n" +
             "}\n\n" +
             "pub struct CheckedBlock {\n" +
-            "    pub entry: StackShape\n" +
-            "    pub nodes: List[CheckedNode]\n" +
-            "    pub exit: FlowExit\n" +
+            "    entry: StackShape\n" +
+            "    nodes: List[CheckedNode]\n" +
+            "    exit: FlowExit\n" +
             "}\n\n" +
             "pub struct ValuePlan {\n" +
-            "    pub representation: ValueRepresentation\n" +
-            "    pub layout: TypeLayout\n" +
-            "    pub copy_plan: CopyPlan\n" +
-            "    pub move_value: MovePlan\n" +
-            "    pub drop_value: DropPlan\n" +
+            "    representation: ValueRepresentation\n" +
+            "    layout: TypeLayout\n" +
+            "    copy_plan: CopyPlan\n" +
+            "    move_value: MovePlan\n" +
+            "    drop_value: DropPlan\n" +
             "}\n\n" +
             "pub struct AbiCallPlan {\n" +
-            "    pub parameters: List[AbiValuePlan]\n" +
-            "    pub return_value: Option[AbiValuePlan]\n" +
-            "    pub stack_size: u64\n" +
-            "    pub stack_alignment: u64\n" +
+            "    parameters: List[AbiValuePlan]\n" +
+            "    return_value: Option[AbiValuePlan]\n" +
+            "    stack_size: u64\n" +
+            "    stack_alignment: u64\n" +
             "}\n\n" +
             "pub struct InternalFailure {\n" +
-            "    pub phase: CompilerPhase\n" +
-            "    pub message: String\n" +
-            "    pub origin: Option[NodeOrigin]\n" +
+            "    phase: CompilerPhase\n" +
+            "    message: String\n" +
+            "    origin: Option[NodeOrigin]\n" +
             "}",
           contracts: [
             "Each pass consumes one product and is the only constructor of the next.",
             "TypedProgram may contain error nodes. CheckedProgram cannot.",
+            "TypecheckResult carries sources, diagnostics, editor facts, and exactly one partial or complete semantic product.",
             "Operation semantics owns Stack effect, dispatch, dependencies, ownership, and editor meaning.",
             "PlannedProgram owns complete ValuePlan and AbiCallPlan values.",
-            "Each phase product has a private seal. Public fields support the next pass but cannot construct a product.",
+            "Phase-product fields are private. Each next pass uses one consuming parts operation and no mut$ product borrow.",
             "AnalysisProduct is one sum type, so its phase and usable product cannot disagree.",
+            "Front-end and semantic failures return AnalysisFailureReport with sources and prior diagnostics. Later passes return InternalFailure while their caller retains analysis parts.",
+            "SpecializedBlock and SpecializedFunction contain no type variable or deferred trait operation.",
             "Diagnostics preserve encounter order independently of the highest usable product.",
             "Specialization, target planning, lowering, and rendering run only in that order after CheckedProgram exists."
           ],
@@ -1172,14 +1240,22 @@
             "Resolution creates ModuleId, DeclId, BindingId, and NodeId without token rewriting.",
             "The semantic checker performs one exhaustive walk and builds typed ownership values.",
             "CheckedBlock and CheckedIf replace flat marker protocols and wrong-frame conversions.",
-            "Specialization memoizes generic identity plus TypeBindings and substitutes owned checked nodes.",
+            "Specialization memoizes generic identity plus TypeBindings and produces only SpecializedNode values with concrete types and trait targets.",
             "Target planning memoizes one ValuePlan per concrete TypeId and one ABI plan per call shape.",
             "Machine lowering and rendering remain distinct so backend behavior has an inspectable seam.",
             "The emitter appends a fixed runtime assembly asset and performs no reachability analysis."
           ],
-          errorFlow: "AnalysisProduct owns exactly one highest usable product. Partial TypedProgram supports tools. Only the Checked variant yields CheckedProgram for specialization. Later pass failures are InternalFailure values. Diagnostics do not double as control flow.",
+          errorFlow: "AnalysisProduct owns exactly one highest usable product. TypecheckResult carries sources, diagnostics, and editor facts beside that product. Partial TypedProgram supports tools. Only the Checked variant yields CheckedProgram for specialization. Front-end and semantic passes return AnalysisFailureReport on internal failure. The caller retains analysis parts while later passes return InternalFailure. Diagnostics do not double as control flow.",
           testSeam: "Test each phase product through its constructing interface. Keep source-to-binary behavior tests. Delete arbitrary operation, store, parser, and positional program construction. Replace old internal tests instead of layering a second suite.",
-          behaviorIsolation: "Open behavior questions stay in front-end elaboration, semantic checking, specialization, or target planning. None changes a product's external validity contract unless its own decision later requires it.",
+          behaviorIsolation: [
+            "Selective imports: ResolvedProgram preserves unqualified access, private dependency retention, and the selected initializer closure.",
+            "Compile-time evaluation: the front end preserves const fn, const blocks, constant type parameters, values, and diagnostics before ResolvedProgram commits.",
+            "Generated trait implementations: resolution preserves all five derives, conditional bounds, handwritten overrides, and generated declaration behavior.",
+            "Trait default methods: semantic checking and specialization preserve direct and inherited defaults, generic substitution, ambiguity rules, and diagnostics.",
+            "Ownership guarantees: CheckedProgram preserves moves, borrows, returned origins, field sensitivity, closure captures, deterministic destruction, and unsafe obligations.",
+            "Generic checking and specialization: CheckedProgram stores one checked template; SpecializedProgram preserves bounds, cycles, diagnostics, and layout-sensitive concrete binding.",
+            "Immutable-global initialization: ResolvedProgram records dependency-before-root and within-group source order; PlannedProgram retains exactly-once eager execution and selective-import behavior."
+          ],
           adrImpact: "Strongly follows ADR-0008 and ADR-0162. It preserves the generic behavior in ADR-0069. The larger product ladder is an implementation choice, not a new language commitment.",
           dependencyDirection:
             "analysis -> source + front end + semantics + document\n" +
@@ -1240,7 +1316,7 @@
           metrics: {
             cliCalls: "2",
             publicIntent: "3 production operations",
-            internalSeams: "8 pass seams",
+            internalSeams: "6 pass seams + 13 consuming product views",
             persistentIr: "Six phase products",
             invalid: "0 of 8 external",
             classifications: "syntax + resolve + semantic + plan + lower + render",
@@ -1250,7 +1326,7 @@
             time: "33 to 38 s hypothesis",
             memory: "820,000 to 900,000 KiB hypothesis",
             coupling: "Very high representation cutover",
-            interfaceSize: "9 passes, 17 products, 0 public phase fields, 5 failures",
+            interfaceSize: "6 external calls, 19 internal calls, 0 public phase fields, 2 failure envelopes",
             depth: "High outer leverage, moderate depth at each internal pass",
             locality: "Each phase-valid fact belongs to one product and one constructor",
             seamPlacement: "A seam at each identity, validity, or target-domain change",
@@ -1263,7 +1339,7 @@
           shortName: "Function-at-a-Time",
           label: "Radical direct function compiler",
           thesis: "Index declarations and source body ranges, then resolve, check, plan, and emit each concrete function into a local assembly fragment. Keep only a checked GenericRecipe for generic definitions. Remove the whole-program operation tree and persistent bytecode.",
-          flow: ["ProgramIndex", "root + every declared body", "fragments + GenericRecipe", "concrete instances", "assembly"],
+          flow: ["ProgramIndex", "extern checks + root + every body", "trait + cycle checks", "concrete instances", "assembly"],
           stages: [
             {
               name: "AnalysisInput",
@@ -1283,14 +1359,14 @@
               name: "All-body compiler",
               owner: "direct module",
               seam: "validation_order drives one private body cursor at a time",
-              guarantee: "Root and every declared non-extern function are checked, including unused functions.",
+              guarantee: "Extern declarations, root, eager initializers, and every declared non-extern function are checked in current order.",
               factKeys: ["semantic", "ownership", "editor", "target"]
             },
             {
-              name: "Fragments + recipes",
+              name: "Post-validation product",
               owner: "direct module",
-              seam: "successful concrete bodies commit; generic bodies commit checked recipes",
-              guarantee: "Every concrete non-extern body has a fragment and every generic body has one checked recipe.",
+              seam: "trait implementations and generic cycles pass before ReadyProgram exists",
+              guarantee: "Every concrete body has a held fragment and every generic body has one checked recipe. No user error remains.",
               factKeys: ["machine"]
             },
             {
@@ -1313,8 +1389,16 @@
           externalInterface:
             "pub fn compile input:AnalysisInput\n" +
             "-> CompileOutcome\n\n" +
+            "pub fn into_compile_output output:CompileOutput\n" +
+            "-> String Diagnostics CompilerSourceStore\n\n" +
             "pub fn analyze input:AnalysisInput\n" +
             "-> Result[AnalysisResult CompilerFailureReport]\n\n" +
+            "pub fn into_analysis_parts result:AnalysisResult\n" +
+            "-> CompilerSourceStore Diagnostics EditorProduct Option[StackEffect]\n\n" +
+            "pub fn into_failure_report report:CompilerFailureReport\n" +
+            "-> CompilerFailure Diagnostics CompilerSourceStore\n\n" +
+            "pub fn into_failure_parts failure:CompilerFailure\n" +
+            "-> CompilerPhase String Option[Location]\n\n" +
             "pub fn definition_at editor:$EditorProduct offset:u64\n" +
             "-> Option[DocumentLocation]\n\n" +
             "pub fn hover_at editor:$EditorProduct offset:u64\n" +
@@ -1331,20 +1415,33 @@
             "-> bool",
           internalInterface:
             "pub fn parse_and_resolve input:AnalysisInput\n" +
-            "-> ParseResolveResult\n\n" +
-            "pub fn validate_and_emit_all index:ProgramIndex\n" +
-            "-> DirectPassResult\n\n" +
-            "pub fn emit_specializations recipes:$List[GenericRecipe]\n" +
-            "    fragments:mut$AssemblyFragments\n" +
-            "-> Result[None CompilerFailure]\n\n" +
+            "-> Result[ParseResolveResult CompilerFailureReport]\n\n" +
+            "pub fn into_indexed_parts indexed:IndexedProgram\n" +
+            "-> ProgramIndex Diagnostics EditorProduct\n\n" +
+            "pub fn into_index_parts index:ProgramIndex\n" +
+            "-> CompilerSourceStore DeclarationIndex Map[SourceId List[Token]] Map[BodyId BodySource]\n" +
+            "    List[BodyId] List[BodyId] BodyId\n\n" +
+            "pub fn into_body_parts body:BodySource\n" +
+            "-> SourceId SourceRange List[Token]\n\n" +
+            "pub fn run_all mode:DirectMode indexed:IndexedProgram\n" +
+            "-> Result[DirectPassResult CompilerFailureReport]\n\n" +
+            "pub fn finish_ready ready:ReadyProgram\n" +
+            "-> Result[CompileOutput CompilerFailureReport]\n\n" +
             "pub fn operation_semantics operation:$ResolvedOperation receiver:Option[TypedValue]\n" +
             "    declaration:$FunctionDeclaration declarations:$DeclarationIndex\n" +
             "-> Result[OperationSemantics SemanticDiagnostic]\n\n" +
+            "pub fn into_operation_parts semantics:OperationSemantics\n" +
+            "-> StackEffect TypedAction List[SemanticDependency]\n" +
+            "    OwnershipActions EditorMeaning\n\n" +
             "pub fn plan_value typ:$Type declarations:$DeclarationIndex\n" +
             "-> Result[ValuePlan LayoutFailure]\n\n" +
+            "pub fn into_value_plan_parts plan:ValuePlan\n" +
+            "-> ValueRepresentation TypeLayout CopyPlan MovePlan DropPlan\n\n" +
             "pub fn plan_extern_call declaration:$ExternDeclaration\n" +
             "    arguments:$List[ValuePlan] return_plan:$Option[ValuePlan]\n" +
-            "-> Result[NativeCallPlan AbiFailure]",
+            "-> Result[NativeCallPlan AbiFailure]\n\n" +
+            "pub fn into_native_call_parts plan:NativeCallPlan\n" +
+            "-> String List[AbiPart] List[AbiPart] u64 u64 List[OwnershipAction]",
           dataModel:
             "pub enum CompileOutcome {\n" +
             "    Compiled (CompileOutput)\n" +
@@ -1352,64 +1449,78 @@
             "    InternalFailure (CompilerFailureReport)\n" +
             "}\n\n" +
             "pub struct CompileOutput {\n" +
-            "    pub assembly: String\n" +
-            "    pub diagnostics: Diagnostics\n" +
-            "    pub sources: CompilerSourceStore\n" +
-            "    seal: bool\n" +
+            "    assembly: String\n" +
+            "    diagnostics: Diagnostics\n" +
+            "    sources: CompilerSourceStore\n" +
             "}\n\n" +
             "pub struct CompilerFailure {\n" +
-            "    pub phase: CompilerPhase\n" +
-            "    pub message: String\n" +
-            "    pub location: Option[Location]\n" +
+            "    phase: CompilerPhase\n" +
+            "    message: String\n" +
+            "    location: Option[Location]\n" +
             "}\n\n" +
             "pub struct CompilerFailureReport {\n" +
-            "    pub failure: CompilerFailure\n" +
-            "    pub diagnostics: Diagnostics\n" +
-            "    pub sources: CompilerSourceStore\n" +
+            "    failure: CompilerFailure\n" +
+            "    diagnostics: Diagnostics\n" +
+            "    sources: CompilerSourceStore\n" +
             "}\n\n" +
             "pub struct AnalysisResult {\n" +
-            "    pub sources: CompilerSourceStore\n" +
-            "    pub diagnostics: Diagnostics\n" +
-            "    pub editor: EditorProduct\n" +
-            "    pub global_stack_effect: Option[StackEffect]\n" +
-            "    seal: bool\n" +
+            "    sources: CompilerSourceStore\n" +
+            "    diagnostics: Diagnostics\n" +
+            "    editor: EditorProduct\n" +
+            "    global_stack_effect: Option[StackEffect]\n" +
             "}\n\n" +
             "pub struct EditorProduct {\n" +
-            "    pub definitions: Map[DocumentPosition DocumentLocation]\n" +
-            "    pub hovers: Map[DocumentPosition DocumentHover]\n" +
-            "    pub completions: Map[ScopeId List[CompletionCandidate]]\n" +
-            "    pub references: Map[SymbolId List[DocumentLocation]]\n" +
-            "    pub tokens: Map[SourceId List[DocumentToken]]\n" +
-            "    seal: bool\n" +
+            "    definitions: Map[DocumentPosition DocumentLocation]\n" +
+            "    hovers: Map[DocumentPosition DocumentHover]\n" +
+            "    completions: Map[ScopeId List[CompletionCandidate]]\n" +
+            "    references: Map[SymbolId List[DocumentLocation]]\n" +
+            "    tokens: Map[SourceId List[DocumentToken]]\n" +
             "}\n\n" +
             "pub enum ParseResolveResult {\n" +
             "    Rejected (AnalysisResult)\n" +
-            "    Indexed (ProgramIndex Diagnostics EditorProduct)\n" +
+            "    Indexed (IndexedProgram)\n" +
+            "}\n\n" +
+            "pub struct IndexedProgram {\n" +
+            "    index: ProgramIndex\n" +
+            "    diagnostics: Diagnostics\n" +
+            "    editor: EditorProduct\n" +
             "}\n\n" +
             "pub struct ProgramIndex {\n" +
-            "    pub declarations: DeclarationIndex\n" +
-            "    pub tokens_by_source: Map[SourceId List[Token]]\n" +
-            "    pub bodies: Map[BodyId BodySource]\n" +
-            "    pub validation_order: List[BodyId]\n" +
-            "    pub initializer_order: List[BodyId]\n" +
-            "    pub root_body: BodyId\n" +
-            "    seal: bool\n" +
+            "    sources: CompilerSourceStore\n" +
+            "    declarations: DeclarationIndex\n" +
+            "    tokens_by_source: Map[SourceId List[Token]]\n" +
+            "    bodies: Map[BodyId BodySource]\n" +
+            "    validation_order: List[BodyId]\n" +
+            "    initializer_order: List[BodyId]\n" +
+            "    root_body: BodyId\n" +
             "}\n\n" +
             "pub struct BodySource {\n" +
-            "    pub source: SourceId\n" +
-            "    pub span: SourceRange\n" +
-            "    pub tokens: List[Token]\n" +
+            "    source: SourceId\n" +
+            "    span: SourceRange\n" +
+            "    tokens: List[Token]\n" +
+            "}\n\n" +
+            "pub enum DirectMode {\n" +
+            "    Analysis\n" +
+            "    Assembly\n" +
             "}\n\n" +
             "pub enum DirectPassResult {\n" +
-            "    Rejected (Diagnostics EditorProduct)\n" +
-            "    Ready (AssemblyFragments List[GenericRecipe] EditorProduct StackEffect)\n" +
+            "    Analyzed (AnalysisResult)\n" +
+            "    Rejected (AnalysisResult)\n" +
+            "    Ready (ReadyProgram)\n" +
+            "}\n\n" +
+            "pub struct ReadyProgram {\n" +
+            "    sources: CompilerSourceStore\n" +
+            "    diagnostics: Diagnostics\n" +
+            "    editor: EditorProduct\n" +
+            "    global_stack_effect: StackEffect\n" +
+            "    fragments: AssemblyFragments\n" +
+            "    recipes: List[GenericRecipe]\n" +
             "}\n\n" +
             "pub struct GenericRecipe {\n" +
-            "    pub function: FunctionId\n" +
-            "    pub parameters: List[TypeParameter]\n" +
-            "    pub actions: List[TypedAction]\n" +
-            "    pub stack_effect: StackEffect\n" +
-            "    seal: bool\n" +
+            "    function: FunctionId\n" +
+            "    parameters: List[TypeParameter]\n" +
+            "    actions: List[TypedAction]\n" +
+            "    stack_effect: StackEffect\n" +
             "}\n\n" +
             "pub enum TypedAction {\n" +
             "    Operation (CheckedOperation)\n" +
@@ -1417,35 +1528,34 @@
             "    Return (OwnershipActions)\n" +
             "}\n\n" +
             "pub struct OperationSemantics {\n" +
-            "    pub stack_effect: StackEffect\n" +
-            "    pub action: TypedAction\n" +
-            "    pub dependencies: List[SemanticDependency]\n" +
-            "    pub ownership: OwnershipActions\n" +
-            "    pub editor: EditorMeaning\n" +
+            "    stack_effect: StackEffect\n" +
+            "    action: TypedAction\n" +
+            "    dependencies: List[SemanticDependency]\n" +
+            "    ownership: OwnershipActions\n" +
+            "    editor: EditorMeaning\n" +
             "}\n\n" +
             "pub struct ValuePlan {\n" +
-            "    pub representation: ValueRepresentation\n" +
-            "    pub layout: TypeLayout\n" +
-            "    pub copy_plan: CopyPlan\n" +
-            "    pub move_plan: MovePlan\n" +
-            "    pub drop_plan: DropPlan\n" +
+            "    representation: ValueRepresentation\n" +
+            "    layout: TypeLayout\n" +
+            "    copy_plan: CopyPlan\n" +
+            "    move_plan: MovePlan\n" +
+            "    drop_plan: DropPlan\n" +
             "}\n\n" +
             "pub struct AssemblyFragment {\n" +
-            "    pub function: MonoFunctionId\n" +
-            "    pub label: String\n" +
-            "    pub source: String\n" +
+            "    function: MonoFunctionId\n" +
+            "    label: String\n" +
+            "    source: String\n" +
             "}\n\n" +
             "pub struct AssemblyFragments {\n" +
-            "    pub ordered: List[AssemblyFragment]\n" +
-            "    seal: bool\n" +
+            "    ordered: List[AssemblyFragment]\n" +
             "}\n\n" +
             "pub struct NativeCallPlan {\n" +
-            "    pub symbol: String\n" +
-            "    pub arguments: List[AbiPart]\n" +
-            "    pub return_parts: List[AbiPart]\n" +
-            "    pub stack_bytes: u64\n" +
-            "    pub alignment_padding: u64\n" +
-            "    pub cleanup: List[OwnershipAction]\n" +
+            "    symbol: String\n" +
+            "    arguments: List[AbiPart]\n" +
+            "    return_parts: List[AbiPart]\n" +
+            "    stack_bytes: u64\n" +
+            "    alignment_padding: u64\n" +
+            "    cleanup: List[OwnershipAction]\n" +
             "}\n\n" +
             "pub struct SemanticDiagnostic {\n" +
             "    pub message: String\n" +
@@ -1462,30 +1572,43 @@
           contracts: [
             "Compiled owns complete assembly and warning-only diagnostics.",
             "Rejected owns user diagnostics and never owns usable assembly.",
-            "CompileOutput and AnalysisResult expose read-only facts but keep private seals, so callers cannot construct mismatched outcomes.",
+            "CompileOutput, AnalysisResult, ReadyProgram, and ProgramIndex have private fields. Public operations borrow for queries or consume them once.",
             "Rejected analysis has no global Stack effect. Successful analysis has one.",
             "Each concrete function fragment commits only after checking succeeds.",
             "GenericRecipe is created only after one symbolic body check.",
             "EditorProduct owns source facts and no compiler operation representation.",
             "ProgramIndex copies the current SymbolStore function-name iteration order into validation_order.",
-            "The compiler checks the root first, then every declared non-extern function in validation_order, including unused functions.",
+            "run_all validates extern structs, then extern functions, then root, then every declared non-extern function in validation_order, including unused functions.",
+            "The root cursor consumes initializer_order once: dependency initializers, root-file initializers, then the remaining root body, with source order retained within each group.",
+            "After all bodies, run_all checks trait implementations and generic cycles. ReadyProgram exists only when no user error remains.",
             "Generated lambda bodies validate with their owning function. Generic recipes validate once, then concrete bindings emit in stable discovery order.",
-            "Diagnostics keep lexical, import, parse, root, and validation_order encounter order."
+            "Diagnostics keep lexical, import, parse, extern-struct, extern-function, root, validation_order, trait-implementation, and generic-cycle order.",
+            "parse_and_resolve, run_all, and finish_ready transport internal failure with CompilerFailureReport, which retains diagnostics and sources."
           ],
           internals: [
             "The front end indexes declarations and function body token ranges instead of building a whole-program Op tree.",
-            "validate_and_emit_all consumes validation_order after the root. It never uses call reachability to decide which declared bodies to check.",
+            "run_all uses one semantic engine for analysis and assembly modes. Analysis mode uses no assembly sink.",
+            "Global declaration validation covers unused extern structs and functions before root checking.",
+            "run_all consumes validation_order after the root. It never uses call reachability to decide which declared bodies to check.",
             "Each successful concrete non-extern body commits a fragment, even when it is unused. Generic definitions commit checked recipes instead.",
             "One function-local traversal owns Stack effect, operation semantics, control joins, loans, moves, cleanup, and editor facts.",
             "GenericRecipe stores typed semantic actions with Type AST variables, then specializes and emits once per binding.",
             "ValuePlan and NativeCallPlan are computed at the point where concrete types are known.",
             "Private assembly leaf routines receive completed actions. No machine-operation enum crosses a seam.",
             "EditorProduct is filled during analysis and does not scan emitted or checked operations.",
-            "Final assembly appends a fixed runtime asset without runtime reachability analysis."
+            "finish_ready emits concrete generic instances only after trait and cycle checks, then appends a fixed runtime asset without runtime reachability analysis."
           ],
-          errorFlow: "CompileOutcome is Compiled, Rejected, or InternalFailure. A function uses local fragments, so a later error cannot leak partial assembly. Rejected AnalysisResult keeps partial EditorProduct and None for global_stack_effect. Successful analysis stores Some. Native fragments remain local until all-body validation succeeds.",
+          errorFlow: "CompileOutcome is Compiled, Rejected, or InternalFailure. run_all returns Rejected AnalysisResult for user errors and Err CompilerFailureReport for invariant, layout, or ABI failures. The report retains sources and prior diagnostics. Rejected analysis keeps partial EditorProduct and None for global_stack_effect. Successful analysis stores Some. ReadyProgram and all native fragments have private fields and remain unavailable until every global and body validation succeeds.",
           testSeam: "Test source to CompileOutcome and native execution, source to AnalysisResult and editor queries, source to SyntaxResult, and table-driven value and ABI plans. Delete Op, InstValue, Program, and Parser construction tests.",
-          behaviorIsolation: "GenericRecipe isolates the current one-body generic check. ProgramIndex preserves the current root-first and function-list validation order, so unused invalid functions still reject compilation. Import indexing retains selective-import and initializer order. Generated declarations and constant evaluation stay in front-end elaboration. Ownership rules remain inside the function compiler.",
+          behaviorIsolation: [
+            "Selective imports: ProgramIndex retains unqualified access, private dependencies, selected declaration closure, and selected initializer closure behavior.",
+            "Compile-time evaluation: index elaboration retains const fn, const blocks, constant type parameters, values, and diagnostics.",
+            "Generated trait implementations: index elaboration retains Clone, Copy, Eq, Ord, and Hashable derivation, conditional bounds, and overrides without requiring emitted synthetic bodies.",
+            "Trait default methods: body validation and GenericRecipe retain direct and inherited defaults, generic substitution, ambiguity rules, and diagnostics.",
+            "Ownership guarantees: the function compiler retains moves, borrows, returned origins, field sensitivity, closure captures, deterministic destruction, and unsafe obligations.",
+            "Generic checking and specialization: each generic declaration produces one checked GenericRecipe; finish_ready preserves bounds, cycles, diagnostics, and layout-sensitive concrete binding.",
+            "Immutable-global initialization: initializer_order runs each retained initializer once, with dependency initializers before root-file initializers and source order within each group, before the root body."
+          ],
           adrImpact: "Preserves ADR-0008's one source of Operation semantics but supersedes its long-lived phase product mechanism. Uses ADR-0162 plans and keeps ADR-0069 behavior. A target choice would need to record the ADR-0008 mechanism change.",
           dependencyDirection:
             "compiler driver -> source store + syntax index + direct function compiler + document product\n" +
@@ -1556,7 +1679,7 @@
             time: "29.1 to 32.1 s hypothesis",
             memory: "532,000 to 684,000 KiB hypothesis",
             coupling: "High, complete vertical replacement",
-            interfaceSize: "9 intent/query calls, 0 mutable representation fields, 3 compile outcomes",
+            interfaceSize: "9 intent/query calls, 4 result accessors, 12 internal calls, 0 public representation fields",
             depth: "Very high compile leverage, separate analysis product",
             locality: "Semantic, ownership, target, and emission work meet per function",
             seamPlacement: "Opaque ProgramIndex into a private function compiler",
@@ -1961,8 +2084,8 @@
             escapeHtml(architecture.adrImpact) + "</p></article>" +
           "<article class=\"detail-card\"><h3>Test seam</h3><p>" +
             escapeHtml(architecture.testSeam) + "</p></article>" +
-          "<article class=\"detail-card\"><h3>Open behavior decisions</h3><p>" +
-            escapeHtml(architecture.behaviorIsolation) + "</p></article>" +
+          "<article class=\"detail-card\"><h3>Open behavior decisions</h3>" +
+            list(architecture.behaviorIsolation) + "</article>" +
           "<article class=\"detail-card full\"><h3>Dependency direction</h3><pre>" +
             escapeHtml(architecture.dependencyDirection) + "</pre>" +
             "<h4>Queries after successful typechecking</h4>" +
