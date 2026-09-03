@@ -40,6 +40,12 @@ _Avoid_: stat buffer, metadata tuple
 Casa programs are built primarily by composing small, statically typed functions through the value stack. New features should strengthen that style without sacrificing a minimal language or fast compilation.
 _Avoid_: General-purpose feature parity, syntax-first design
 
+**Root-owned runtime state**:
+Application state constructed during root-body execution and held by an
+ordinary owner. Named functions receive it through explicit parameters, while
+root closures may capture it.
+_Avoid_: Runtime global, program-lifetime singleton
+
 ### Compiler architecture
 
 **Functional compiler pass**:
@@ -279,6 +285,7 @@ _Avoid_: Release lint, tag lint
 - CLI reporting, LSP conversion, and test inspection are adapters outside the **Compiler diagnostics schema**.
 - Diagnostics migration is complete only when compiler-global diagnostics, source, and mode state is deleted and all adapters consume explicit results; snapshot or copy bridges do not satisfy the deletion test.
 - Each evaluation of an **Array literal** has independent owned-value semantics. The compiler may share or statically emit backing data when mutation and destruction still behave independently. Raw address equality is a representation detail.
+- **Root-owned runtime state** follows ordinary move, borrow, and LIFO destruction rules. Imports do not construct it.
 - A **Text view** never releases storage. An **Owned text** value releases its storage exactly once.
 - Converting **Owned text** to a **Text view** borrows without allocation. Converting a **Text view** to **Owned text** allocates and copies.
 - The **Documentation glossary** names project concepts that prevent drift; language keywords and ordinary programming concepts belong in reference docs.

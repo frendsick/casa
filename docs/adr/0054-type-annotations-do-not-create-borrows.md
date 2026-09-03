@@ -1,4 +1,5 @@
 # Type annotations do not create borrows
+status: amended by [ADR-0165](0165-runtime-state-is-owned-by-the-root-body.md)
 
 Assignment preserves the ownership category of the value it binds. Assigning an owner moves it; assigning a shared or exclusive borrow binds that borrow. A type annotation checks or narrows the value's type but does not turn an owner into a borrow:
 

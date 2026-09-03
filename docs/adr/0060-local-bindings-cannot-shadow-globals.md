@@ -1,4 +1,5 @@
 # Local bindings cannot shadow globals
+status: superseded by [ADR-0165](0165-runtime-state-is-owned-by-the-root-body.md)
 
 A local, parameter, pattern binding, or closure parameter cannot use the name of a visible immutable global. The declaration is rejected with a diagnostic suggesting a different local name.
 

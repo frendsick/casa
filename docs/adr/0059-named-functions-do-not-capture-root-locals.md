@@ -1,4 +1,5 @@
 # Named functions do not capture root locals
+status: amended by [ADR-0165](0165-runtime-state-is-owned-by-the-root-body.md)
 
 Named functions cannot capture local bindings from the executable root body. They may read constants and immutable globals; runtime state owned by the root is passed through ordinary owned, shared, or exclusive parameters.
 

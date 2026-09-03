@@ -1,4 +1,5 @@
 # `global` declares an immutable runtime value
+status: superseded by [ADR-0165](0165-runtime-state-is-owned-by-the-root-body.md)
 
 Casa reuses `global` exclusively as an explicit top-level declaration for an exactly-once, runtime-initialized, program-lifetime value. A direct initializer follows the name; a block supplies a more complex stack expression:
 

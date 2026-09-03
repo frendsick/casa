@@ -1,5 +1,5 @@
 # Immutable globals initialize eagerly once
-status: amended by [ADR-0058](0058-global-declares-an-immutable-runtime-value.md)
+status: superseded by [ADR-0165](0165-runtime-state-is-owned-by-the-root-body.md)
 
 Each immutable global has exactly one successful initializer. Modules initialize eagerly once, dependency modules before their importers and globals within a module in source order. Reading a not-yet-initialized global or forming an initialization cycle is a compile-time error.
 

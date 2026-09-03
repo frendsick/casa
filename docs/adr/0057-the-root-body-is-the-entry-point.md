@@ -1,4 +1,5 @@
 # The root body is the entry point
+status: amended by [ADR-0165](0165-runtime-state-is-owned-by-the-root-body.md)
 
 The root source file remains directly executable: its top-level operations form the program's implicit entry-point scope. Casa does not require, reserve, or automatically invoke a function named `main`.
 

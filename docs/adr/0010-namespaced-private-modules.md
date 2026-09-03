@@ -1,4 +1,5 @@
 # Namespaced modules with private declarations by default
+status: amended by [ADR-0165](0165-runtime-state-is-owned-by-the-root-body.md)
 
 Casa modules will define namespaces instead of merging every imported declaration into one global namespace. Ordinary imports provide qualified access, declarations are private by default, and a declaration must be explicitly public to cross a module boundary. Selective imports remain the explicit way to bring public names directly into the importing scope.
 
