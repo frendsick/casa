@@ -1,4 +1,5 @@
 # Owned bindings may lend mutable borrows
+status: amended by [ADR-0165](0165-runtime-state-is-owned-by-the-root-body.md)
 
 Every owned local binding and owned parameter may be reassigned, mutated, or lent as `mut$T`. Casa adds no `mut` binding declaration. Shared `$T` parameters cannot mutate the borrowed value; exclusive `mut$T` parameters can. Borrow exclusivity, rather than a declaration modifier, is the safety boundary.
 

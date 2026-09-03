@@ -1,4 +1,5 @@
 # Imported modules do not run top-level bodies
+status: amended by [ADR-0165](0165-runtime-state-is-owned-by-the-root-body.md)
 
 A module's top-level program body runs only when that module is the root program. Importing a module contributes its declarations and runs the exactly-once immutable-global initializers in its dependency closure. The imported top-level statements that are not global initializers, such as unrelated I/O, `exit`, and test execution, do not run.
 

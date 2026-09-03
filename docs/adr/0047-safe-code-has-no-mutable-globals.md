@@ -1,4 +1,5 @@
 # Safe code has no mutable globals
+status: amended by [ADR-0165](0165-runtime-state-is-owned-by-the-root-body.md)
 
 Top-level global bindings may be constructed during module initialization, but safe code cannot reassign them or borrow them mutably afterward. The in-function `global NAME` mutation declaration is removed; ADR-0058 later reuses `global` exclusively for explicit immutable top-level declarations. Runtime state is owned by an entry point and passed to functions as an owner, shared borrow, or exclusive borrow. Immutable top-level values and `const` declarations remain available.
 

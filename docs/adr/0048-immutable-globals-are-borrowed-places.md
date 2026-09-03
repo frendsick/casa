@@ -1,4 +1,5 @@
 # Immutable globals are borrowed places
+status: superseded by [ADR-0165](0165-runtime-state-is-owned-by-the-root-body.md)
 
 An immutable global denotes a program-lifetime storage place rather than a reusable owned value. Ordinary observation produces `$T`; a function may return that borrow without a borrowed input because the compiler knows its global origin remains live for the complete program.
 

@@ -1,4 +1,5 @@
 # Shared semantics below parsing and typechecking
+status: amended by [ADR-0165](0165-runtime-state-is-owned-by-the-root-body.md)
 
 Selective-import dependency discovery and typechecking both need the typed meaning of resolved operations. We will place that meaning in a phase-independent `compiler/semantics.casa` module below both callers, return data-only facts, and keep import closure policy and typechecking policy in their current phases.
 

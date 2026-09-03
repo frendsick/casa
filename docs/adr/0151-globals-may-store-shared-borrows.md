@@ -1,4 +1,5 @@
 # Globals may store shared borrows
+status: superseded by [ADR-0165](0165-runtime-state-is-owned-by-the-root-body.md)
 
 A global initializer may produce a shared borrow, so a global can name a place inside another global:
 
