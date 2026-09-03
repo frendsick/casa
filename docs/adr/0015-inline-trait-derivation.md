@@ -1,5 +1,5 @@
 # Inline derivation for selected capabilities
-status: amended by [ADR-0158](0158-copy-requires-a-raw-value-representation.md)
+status: amended by [ADR-0158](0158-copy-requires-a-raw-value-representation.md) and [ADR-0163](0163-standard-trait-derivation-is-a-complete-implementation.md)
 
 Casa structs and enums request compiler-generated trait methods with an inline `derives` clause after the type name and any type parameters.
 

@@ -1,5 +1,5 @@
 # Clone is defined in the standard library
-status: amended by [ADR-0084](0084-standard-copy-extends-clone.md) and [ADR-0092](0092-copy-provided-clone-composes-field-clone.md)
+status: amended by [ADR-0084](0084-standard-copy-extends-clone.md), [ADR-0092](0092-copy-provided-clone-composes-field-clone.md), and [ADR-0163](0163-standard-trait-derivation-is-a-complete-implementation.md)
 
 `Clone` is declared as an ordinary trait in `std` rather than injected by the compiler:
 

@@ -182,6 +182,12 @@ A method that a reserved language-integrated trait must provide with a compiler-
 **Trait implementation rules**:
 The rules that control where a trait implementation may be declared and reject duplicate or overlapping implementations.
 
+**Derived trait implementation**:
+A complete compiler-recorded conformance requested with `derives Clone`,
+`Copy`, `Eq`, `Ord`, or `Hashable`. It uses structural operation kinds and
+cannot merge with an overlapping explicit implementation.
+_Avoid_: Synthetic derive function, partial derived fallback
+
 **Borrowed value**:
 The live `T` accessed through a shared `$T` or exclusive `mut$T` borrow.
 
@@ -292,19 +298,19 @@ _Avoid_: Release lint, tag lint
 - A trait implementation may be declared only by the module defining the type or the trait; duplicate and overlapping implementations are rejected without specialization.
 - First-class function values are monomorphic. A generic named function reference supplies all type arguments explicitly, such as `&id[i64]`; direct generic calls still infer them.
 - Every closure is repeatable. Invoking it may consume explicit arguments but may not leave a captured non-`Copy` owner consumed; Casa has no single-use function type.
-- Standard `Copy` is a methodless marker extending Clone; it may be used implicitly and never allocates or calls user code. `derives Copy` and `impl Type: Copy { }` establish the same compiler-validated implementation and supply missing fieldwise Clone behavior. Fixed arrays and extern structs copy their inline bodies into destination storage. A freestanding Copy declaration may omit that supertrait and relationship.
-- A Copy type may provide a customized Clone implementation, which takes precedence over the fieldwise fallback. Generated aggregate Clone calls field Clone methods and preserves stored shared borrows with their origins, while implicit Copy remains allocation-free. The implementation author controls explicit Clone cost and semantics.
+- Standard `Copy` is a methodless marker extending Clone; it may be used implicitly and never allocates or calls user code. A user-defined aggregate can implement it only with `derives Copy`. The compiler validates its raw value representation, fields or payloads, borrows, owned indirection, and destruction, then supplies structural Clone behavior. Compiler-provided implementations for eligible built-in types remain unchanged.
+- A type with custom duplication implements Clone and remains non-Copy. A non-Copy type may use `derives Clone` for structural duplication. Generated aggregate Clone calls field Clone methods and preserves stored shared borrows with their origins, while implicit Copy remains allocation-free.
 - Reserved language-integrated traits use minimum compiler-validated **Language trait method** contracts while allowing additional default methods and supertraits. Primitive operations remain available without importing those declarations.
 - `!=` lowers to the active equality trait's `ne` operator method. The standard default negates `eq`; overrides must preserve that semantic inverse.
 - PartialEq owns the shared `eq` and `ne` operator methods; Eq extends PartialEq as the explicit lawful-total marker. The compiler validates Eq's effective inherited shape, and `derives Eq` implements both traits.
 - PartialOrd owns `partial_cmp` and the `lt`, `le`, `gt`, and `ge` operator methods; Ord extends PartialOrd and Eq, adds `cmp`, and provides the inherited `partial_cmp` default. The compiler validates the complete effective inherited shape.
 - `Clone` is an explicit, infallible trait operation that may allocate or run user code; allocation failure terminates. Stack operations and implicit reuse never invoke it.
-- `Clone` is declared in `std`, not injected by the compiler. The compiler recognizes its canonical identity for explicit `derives Clone` generation and for the fieldwise Clone fallback that standard `Copy` requires. It generates no other Clone bodies.
+- `Clone` is declared in `std`, not injected by the compiler. The compiler recognizes its canonical identity for explicit `derives Clone` generation and for the structural Clone behavior required by canonical standard `Copy`. It generates no other Clone bodies.
 - `array[T N]` owns exactly `N` elements, stores no length word, implements `Copy` when `T: Copy`, and implements `Clone` when `T: Clone`. A runtime-length range is a separate borrowed view, and `List[T]` remains the growable sequence.
 - Standard value owners implement `Clone` when their owned contents do; identity-bearing resources and exclusive borrows do not receive automatic implementations.
-- Structs and enums may opt into generated explicit duplication with `derives Clone`; derivation is conditional on every owned field or payload implementing `Clone` and never implies `Copy`.
-- Derived trait methods are fallbacks: one handwritten customization block may override generated methods and merge into the same trait implementation. Multiple handwritten implementations remain errors, and source order has no effect.
-- Custom `eq` requires explicit `hash` when Hashable is derived and explicit `cmp` when Ord is derived; compiler generation cannot infer those consistency laws.
+- Structs and enums may request a **Derived trait implementation** for Clone, Copy, Eq, Ord, and Hashable. Derivation is conditional on the requirements of stored fields and payloads. Derived Clone never implies Copy.
+- A **Derived trait implementation** is complete. An explicit implementation cannot overlap any conformance or method that the derive request supplies, including one concrete specialization of a conditional generic derive. Casa does not merge or specialize derived implementations.
+- Custom equality, ordering, hashing, or duplication uses complete explicit implementations for the affected traits. Standard trait default methods remain available.
 - A lawful Hashable implementation gives equal values the same hash and returns the same hash while equality-relevant state is unchanged. Unequal values may collide, and exact hash values have no stability guarantee across processes, builds, releases, or targets.
 - Map and Set preserve correctness under hash collisions by comparing keys with Eq. Their traversal order is unspecified, and the unkeyed standard hashes do not provide adversarial collision resistance.
 - Finite recursive owned types may derive Clone. Trait implementation checking resolves recursive obligations as one dependency cycle; runtime cloning traverses and may allocate for the complete structure.

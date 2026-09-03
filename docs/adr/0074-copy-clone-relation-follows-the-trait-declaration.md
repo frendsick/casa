@@ -1,4 +1,5 @@
 # Copy-Clone relation follows the trait declaration
+status: amended by [ADR-0163](0163-standard-trait-derivation-is-a-complete-implementation.md)
 
 The compiler does not intrinsically make every Copy type satisfy Clone. The relationship follows ordinary declared supertraits:
 
