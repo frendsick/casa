@@ -5,7 +5,9 @@ The maintainer selected Compiler Capsule in the
 [architecture comparison](https://github.com/frendsick/casa/issues/644).
 It places compilation behind a deep module whose callers request compiler
 products without coordinating mutable phase state. This records the selected
-direction. Production migration and the detailed interfaces remain unfinished.
+direction. [ADR-0167](0167-compiler-products-own-independent-snapshots.md)
+records the selected representations and product interfaces. Production
+migration and the remaining seam contracts are unfinished.
 
 ## Verified starting point
 
@@ -66,15 +68,13 @@ commit to every private type or removal proposed by the prototype. In
 particular, removing inspectable machine state must still support backend
 validation and diagnostics.
 
-## Interface choice still to prove
+## Interface comparison
 
 The prototype proposes `run -> CompilerProduct` and `query -> ToolAnswer`.
-[Representations and state ownership](https://github.com/frendsick/casa/issues/646)
-must compare these with a small set of typed operations before fixing the
-interface. For example, separate syntax, analysis, and assembly operations can
-make their result types specific to the request. Named editor queries can make
-answer types specific to the query. These are comparison candidates, not
-accepted signatures.
+[ADR-0167](0167-compiler-products-own-independent-snapshots.md) compares these
+with typed operations and records the accepted product and ownership contract.
+Its caller-knowledge comparison resolves this interface choice. Executable
+evidence and the remaining tooling guarantees are still required.
 
 Count everything each caller must know: request and response variants, valid
 pairings, matching rules, ordering, ownership transfer, retained borrows,
@@ -93,10 +93,10 @@ prototype's behavior examples do not override those decisions. ADR-0008's
 single authoritative operation-semantics principle remains applicable. Its
 selective-import protocol does not settle the pending import choice.
 
-Representation and seam design may proceed with these limits. Proposals must
+Seam design proceeds from ADR-0167 within these limits. Proposals must
 label any assumption about an open contract and identify which result depends
 on it. Do not infer syntax removal, diagnostic changes, a performance ceiling,
-or a fixed interface shape from the architecture selection.
+or further interface commitments from the architecture selection alone.
 
 Revisit the direction if the executable slice shows that retained behavior
 requires consumers to coordinate mutable phase state, that checked products
