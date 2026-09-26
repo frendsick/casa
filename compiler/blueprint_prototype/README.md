@@ -1,7 +1,9 @@
 # Compiler Capsule executable blueprint
 
 Status: draft for [Validate the compiler simplification blueprint](https://github.com/frendsick/casa/issues/651).
-The maintainer has not accepted this artifact or performance tolerances.
+Final blueprint acceptance remains pending. The maintainer now targets roughly
+10 seconds for self-compilation and prioritizes time over memory, while avoiding
+multi-gigabyte memory use. See the [performance investigation](PERFORMANCE.md).
 This directory is a throwaway prototype. It must stay on its evidence branch.
 Production implementation remains outside the [compiler map](https://github.com/frendsick/casa/issues/638).
 
@@ -46,8 +48,9 @@ availability outside the checkout, not a self-hosted standalone release binary.
 
 ## Integrated design
 
-The accepted contracts remain the authority. This document connects them without
-reopening language decisions:
+The accepted contracts below describe the current design. The new compile-time
+target permits investigating further simplifications and feature cuts. Any
+specific language change still needs an explicit decision before implementation.
 
 | Concern | Accepted contract |
 | --- | --- |
@@ -263,8 +266,10 @@ provenance, machine, tools, flags, libraries, source corpus and output mode.
 Measure each compiler's own source separately from identical common-source
 workloads. Do not compare the Python slice's self-compilation with Casa's.
 
-Final acceptance still needs the maintainer's explicit time and peak-RSS
-tolerances and a decision on whether the prototype's unexercised contracts need
-more executable evidence before handing off implementation. No tolerance is
-silently inferred from interpreter startup or a small program. Full compiler
-correctness, self-hosting and fixed-point evidence belongs to implementation.
+The maintainer rejected the proposed regression ceilings and set a roughly
+10-second self-compilation goal. Memory is secondary unless it reaches multiple
+gigabytes. The exact acceptance band and memory guardrail remain unspecified.
+The integrated Python slice does not establish a route to that speed target.
+Final acceptance needs measured support for the performance plan and a decision
+on the unexercised contracts. Full compiler correctness, self-hosting and
+fixed-point evidence belongs to implementation.
