@@ -141,9 +141,9 @@ work item owns the body being transformed. Pending, active, completed, and faile
 are private alternatives, rather than public flags beside a replaceable body. Failure
 discards that request's unfinished work. There is no public take/restore protocol.
 
-Exact import-selection policy and constant elaboration remain separate decisions. They
-may change the module builder's work, but cannot publish unresolved code as checked
-input.
+Import policy follows the qualified-only contract in
+[ADR-0168](0168-imports-expose-qualified-names-only.md). Constant elaboration remains
+a separate decision. Neither permits publishing unresolved code as checked input.
 
 ### Semantic bodies
 
