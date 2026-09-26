@@ -85,13 +85,15 @@ source-line estimates are fixed quotas.
 
 ## Open work and reconsideration
 
-The separate decisions for selective imports, constant evaluation, generics,
-tooling, backend scope, and simplification targets remain open. Derivation,
+The separate decisions for constant evaluation, generics, tooling, backend scope,
+and simplification targets remain open. Qualified-only imports and the absence of
+a source-level code-size guarantee are accepted in
+[ADR-0168](0168-imports-expose-qualified-names-only.md). Derivation,
 trait defaults, runtime-global removal, and ownership use the accepted contracts
 linked from the [map](https://github.com/frendsick/casa/issues/638). The older
 prototype's behavior examples do not override those decisions. ADR-0008's
 single authoritative operation-semantics principle remains applicable. Its
-selective-import protocol does not settle the pending import choice.
+selective-import protocol is amended by ADR-0168.
 
 Seam design proceeds from ADR-0167 within these limits. Proposals must
 label any assumption about an open contract and identify which result depends
