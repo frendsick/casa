@@ -9,6 +9,9 @@ direction. [ADR-0167](0167-compiler-products-own-independent-snapshots.md)
 records the selected representations and product interfaces. Production
 migration and the remaining seam contracts are unfinished.
 
+[ADR-0171](0171-editor-products-retain-verified-source-facts.md) completes the
+tooling contract, including partial results, workspace queries, and edit freshness.
+
 ## Verified starting point
 
 At source commit `f07c444`, [TypecheckResult](../../compiler/typechecker.casa)
@@ -74,7 +77,7 @@ The prototype proposes `run -> CompilerProduct` and `query -> ToolAnswer`.
 [ADR-0167](0167-compiler-products-own-independent-snapshots.md) compares these
 with typed operations and records the accepted product and ownership contract.
 Its caller-knowledge comparison resolves this interface choice. Executable
-evidence and the remaining tooling guarantees are still required.
+evidence is still required. ADR-0171 records the tooling guarantees.
 
 Count everything each caller must know: request and response variants, valid
 pairings, matching rules, ordering, ownership transfer, retained borrows,
@@ -85,8 +88,10 @@ source-line estimates are fixed quotas.
 
 ## Open work and reconsideration
 
-The separate decisions for constant evaluation, generics, tooling, backend scope,
-and simplification targets remain open. Qualified-only imports and the absence of
+The separate decisions for backend scope and simplification targets remain open.
+Constant evaluation uses the [bounded expression contract](0168-constants-use-bounded-target-independent-expressions.md),
+and generics use [symbolic checking before specialization](0170-generics-specialize-after-symbolic-checking.md).
+Qualified-only imports and the absence of
 a source-level code-size guarantee are accepted in
 [ADR-0168](0168-imports-expose-qualified-names-only.md). Derivation,
 trait defaults, runtime-global removal, and ownership use the accepted contracts
