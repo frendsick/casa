@@ -228,7 +228,7 @@ The backend owns target layouts, field storage plans, ABI plans, labels, pools, 
 selection, and assembly construction. `size_of` remains a typed symbolic query until
 target planning supplies its value. Constant evaluation must not require a physical
 target value to claim that a target-neutral product is complete.
-[ADR-0168](0168-constants-use-bounded-target-independent-expressions.md) excludes
+[ADR-0171](0171-constants-use-bounded-target-independent-expressions.md) excludes
 layout queries from constant initializers and constant type arguments.
 
 This decision does not remove an inspectable machine representation. If one is retained,
@@ -289,7 +289,7 @@ The front-end decision owns exact parsing, resolution, and constant elaboration 
 The semantic decision owns checking and specialization algorithms. The tooling decision
 owns partial-fact guarantees, target diagnostics in editor analysis,
 version/invalidation policy, and latency. The backend decision owns machine form and
-platform details. Constant elaboration must apply ADR-0168's target-independent
+platform details. Constant elaboration must apply ADR-0171's target-independent
 expression contract. The remaining seam and tooling choices are existing open
 decisions, not new workstreams.
 
