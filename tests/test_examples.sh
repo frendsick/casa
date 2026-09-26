@@ -15,6 +15,8 @@ fi
 # checked-in .err fixtures.
 cd "$ROOT_DIR"
 EXAMPLES_DIR="examples"
+EXAMPLES_TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/casa_examples.XXXXXX")
+trap 'rm -rf "$EXAMPLES_TEST_TMP"' EXIT
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -35,7 +37,7 @@ for f in "$EXAMPLES_DIR"/*.casa; do
 
     out_file="$EXAMPLES_DIR/outputs/$base.out"
     err_file="$EXAMPLES_DIR/outputs/$base.err"
-    binary="/tmp/casa_test_$base"
+    binary="$EXAMPLES_TEST_TMP/$base"
 
     echo "Running test: $base"
 
@@ -56,6 +58,16 @@ for f in "$EXAMPLES_DIR"/*.casa; do
     # Compile
     if [ "$base" = foreign_function ]; then
         "$COMPILER" -L "$ROOT_DIR/lib" -l c "$f" -o "$binary"
+    elif [ "$base" = raylib ]; then
+        raylib_object="$EXAMPLES_TEST_TMP/raylib.o"
+        raylib_library_name="casa_raylib_fixture"
+        raylib_library="$EXAMPLES_TEST_TMP/lib$raylib_library_name.a"
+        cc -std=c11 -Wall -Wextra -Werror \
+            -c "$ROOT_DIR/tests/examples/raylib.c" -o "$raylib_object"
+        ar rcs "$raylib_library" "$raylib_object"
+        LIBRARY_PATH="$EXAMPLES_TEST_TMP${LIBRARY_PATH:+:$LIBRARY_PATH}" \
+            "$COMPILER" -L "$ROOT_DIR/lib" -l "$raylib_library_name" -l c \
+            "$f" -o "$binary"
     else
         "$COMPILER" -L "$ROOT_DIR/lib" "$f" -o "$binary"
     fi

@@ -36,6 +36,7 @@ The examples are ordered from introductory programs to low-level system code.
 | 24 | [`game_of_life.casa`](game_of_life.casa) | An interactive terminal program with raw Linux calls |
 | 25 | [`immutable_global.casa`](immutable_global.casa) | Eager immutable globals with `Copy` and borrowed reads |
 | 26 | [`foreign_function.casa`](foreign_function.casa) | C ABI scalars, an aggregate return, and native library linking |
+| 27 | [`raylib.casa`](raylib.casa) | Optional raylib window, input, drawing, and native resource cleanup |
 
 `game_of_life.casa` needs an interactive terminal. Stop it with Ctrl+C.
 
@@ -44,3 +45,17 @@ The foreign-function example links libc:
 ```sh
 ./casac -L lib -l c examples/foreign_function.casa -r
 ```
+
+The raylib example needs raylib installed as a system library and an X11
+graphical session. Casa does not vendor raylib. Follow the
+[raylib GNU/Linux installation guide](https://github.com/raysan5/raylib/wiki/Working-on-GNU-Linux),
+then compile and run the example with the standard Linux link libraries:
+
+```sh
+./casac -L lib \
+    -l raylib -l GL -l m -l pthread -l dl -l rt -l X11 -l c \
+    examples/raylib.casa -r
+```
+
+The default test suite links a checked-in raylib-shaped fixture, so CI does not
+require raylib or a graphical session.
