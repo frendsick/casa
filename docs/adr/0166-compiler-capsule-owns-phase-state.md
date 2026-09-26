@@ -9,6 +9,9 @@ direction. [ADR-0167](0167-compiler-products-own-independent-snapshots.md)
 records the selected representations and product interfaces. Production
 migration and the remaining seam contracts are unfinished.
 
+[ADR-0172](0172-editor-products-retain-verified-source-facts.md) completes the
+tooling contract, including partial results, workspace queries, and edit freshness.
+
 ## Verified starting point
 
 At source commit `f07c444`, [TypecheckResult](../../compiler/typechecker.casa)
@@ -75,7 +78,7 @@ The prototype proposes `run -> CompilerProduct` and `query -> ToolAnswer`.
 [ADR-0167](0167-compiler-products-own-independent-snapshots.md) compares these
 with typed operations and records the accepted product and ownership contract.
 Its caller-knowledge comparison resolves this interface choice. Executable
-evidence and the remaining tooling guarantees are still required.
+evidence is still required. ADR-0172 records the tooling guarantees.
 
 Count everything each caller must know: request and response variants, valid
 pairings, matching rules, ordering, ownership transfer, retained borrows,
@@ -86,9 +89,9 @@ source-line estimates are fixed quotas.
 
 ## Open work and reconsideration
 
-The separate decisions for tooling and simplification targets remain open.
-Qualified-only imports and the absence of a
-source-level code-size guarantee are accepted in
+Simplification targets remain open. Tooling follows
+[ADR-0172](0172-editor-products-retain-verified-source-facts.md).
+Qualified-only imports and the absence of a source-level code-size guarantee are accepted in
 [ADR-0168](0168-imports-expose-qualified-names-only.md). Backend and runtime seams
 are recorded in [ADR-0169](0169-backend-plans-and-renders-one-function-at-a-time.md).
 Constant evaluation follows

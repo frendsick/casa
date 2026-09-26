@@ -1,12 +1,16 @@
 # Compiler products own independent snapshots
 
+status: amended by [ADR-0172](0172-editor-products-retain-verified-source-facts.md)
+
 related issue: [Choose compiler representations and state ownership](https://github.com/frendsick/casa/issues/646).
 
 The maintainer accepted independent compilation snapshots and the representation
 contract below on 2026-09-26. Typed operations and private semantic construction remove
-caller-managed phase protocols. Production migration remains pending. The separate
-tooling and performance decisions remain open. The backend contract
-is recorded in [ADR-0169](0169-backend-plans-and-renders-one-function-at-a-time.md).
+caller-managed phase protocols. Production migration and performance gates remain
+pending. ADR-0172 completes the tooling contract and refines the editor answer types
+below. The backend contract is recorded in
+[ADR-0169](0169-backend-plans-and-renders-one-function-at-a-time.md).
+The later constant and generic contracts retain target-neutral checking.
 
 Evidence was checked against `c8b392bcba0648fa759290f25eb91d4a90faa32a`, which matched
 `origin/main` on 2026-09-26. ADR-0166 supplies the accepted Compiler Capsule
@@ -36,8 +40,8 @@ syntax(SourceUnit) -> Result[SyntaxResult CompilerFailure]
 analyze(CompilationInput) -> Result[AnalysisSnapshot CompilerFailure]
 assembly(CompilationInput, Target) -> Result[AssemblyResult CompilerFailure]
 
-hover(&AnalysisSnapshot, Position) -> Option[Hover]
-definition(&AnalysisSnapshot, Position) -> Option[SourceRange]
+hover(&AnalysisSnapshot, Position) -> HoverResult
+definition(&AnalysisSnapshot, Position) -> DefinitionResult
 completion(&AnalysisSnapshot, Position, Trigger) -> CompletionResult
 references(&AnalysisSnapshot, Position, IncludeDeclaration) -> ReferenceResult
 semantic_tokens(&AnalysisSnapshot, File) -> TokenResult
@@ -69,12 +73,10 @@ snapshot until source-based conversion is complete, or retains the already conve
 result. Results must not be applied to a newer document revision without checking the
 caller's document version.
 
-The tooling decision must define which facts survive each source failure and how
-unavailable or incomplete answers are represented. `CompletionResult`,
-`ReferenceResult`, and `TokenResult` deliberately leave that contract open. The
-representation decision requires that incomplete facts cannot masquerade as checked
-codegen input. It does not promise a recovery level or silently replace an unavailable
-answer with a complete empty list.
+[ADR-0172](0172-editor-products-retain-verified-source-facts.md) defines which facts
+survive each source failure and distinguishes absent, unavailable, incomplete, and
+complete answers. It also defines workspace reference aggregation and rename through
+these same queries. Incomplete facts cannot masquerade as checked codegen input.
 
 ### Caller knowledge comparison
 
@@ -117,9 +119,10 @@ appropriate.
 
 Replacing an editor snapshot releases its source and index storage when no query still
 borrows it. Producing a replacement while retaining the old snapshot can temporarily
-retain both. Required edit latency, workspace invalidation, and numerical memory limits
-remain with the tooling and performance decisions. If those requirements cannot be met,
-revisit this choice using measurements.
+retain both. ADR-0172 specifies workspace invalidation and measurement of debounced
+reanalysis and on-demand workspace queries. Numerical latency and memory gates remain
+with the performance and executable-blueprint decisions. If those requirements cannot
+be met, revisit this choice using measurements.
 
 ## Private representations
 
@@ -287,12 +290,13 @@ or interpret compiler bodies. No source reduction or performance gain is establi
 this decision.
 
 The front-end decision owns exact parsing, resolution, and constant elaboration seams.
-The semantic decision owns checking and specialization algorithms. The tooling decision
-owns partial-fact guarantees, target diagnostics in editor analysis,
-version/invalidation policy, and latency. ADR-0169 records machine form and
-platform scope. Constant elaboration must apply the accepted
-[target-independent expression contract](0171-constants-use-bounded-target-independent-expressions.md).
-The remaining seam and tooling choices are existing open decisions, not new workstreams.
+The semantic decision owns checking and specialization algorithms. ADR-0172 settles
+partial-fact guarantees, target-neutral editor analysis, workspace query scope, and
+version/invalidation policy. Numerical latency gates still require executable evidence.
+ADR-0169 records machine form and platform scope. Constant elaboration must
+apply the [target-independent expression contract](0171-constants-use-bounded-target-independent-expressions.md).
+Semantic algorithms must apply [the generic checking contract](0170-generics-specialize-after-symbolic-checking.md).
+The remaining seam choices are existing open decisions, not new workstreams.
 
 ## Evidence
 
