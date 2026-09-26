@@ -76,6 +76,18 @@ _Avoid_: Leaking parser object, omnibus context
 The compiler dependency mapping file paths to the exact source text used by a compilation, including imported files and in-memory document overrides.
 _Avoid_: global source cache, diagnostics cache
 
+**Compilation snapshot**:
+The exact source contents and compiler results owned by one syntax, analysis, or assembly request.
+_Avoid_: Shared compiler session, mutable document cache
+
+**Checked program**:
+A complete, target-neutral semantic representation whose source checking, ownership validation, concrete specialization, and trait dispatch have finished. Target-specific layout and ABI restrictions remain separate.
+_Avoid_: Partial analysis product, backend layout
+
+**Editor index**:
+The source-oriented facts of one compilation used to answer editor queries.
+_Avoid_: Checked operations, declaration-store snapshot
+
 **Parse-and-resolve boundary**:
 The first explicit compiler boundary that keeps parser internals private while returning resolved operations and symbols needed by later phases.
 _Avoid_: Parser result, resolver-owned parser
