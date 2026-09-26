@@ -6,6 +6,12 @@ The accepted gates and any later performance tolerances are recorded in those
 issues. The [historical complexity baseline](compiler-complexity-baseline.md)
 remains pinned to its original compiler and source revision.
 
+The maintainer now targets roughly 10-second self-compilation, with memory
+secondary unless it reaches multiple gigabytes. The
+[target and measurement summary](compiler-self-compilation-target.md) records
+this direction and the remaining baseline work. An exact timing acceptance
+band and numeric memory ceiling remain open.
+
 ## Comparison inputs
 
 Record the control and candidate compiler binary hashes, source commits,
