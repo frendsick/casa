@@ -1,4 +1,5 @@
 # Constant type parameters accept integers, bool, and char
+status: amended by [ADR-0168](0168-constants-use-bounded-target-independent-expressions.md)
 related issue: #438
 
 ADR-0152 introduced constant type parameters and accepted `u64` only, because a
@@ -11,6 +12,12 @@ Each distinct value is a distinct instantiation, and instantiations that differ
 only in a constant argument do not unify. Under ADR-0069 each distinct constant
 monomorphizes separately, so a body is still checked once against the symbolic
 parameter before instantiation.
+
+ADR-0168 also permits visible named constants of these kinds as arguments.
+Their canonical values select instances, and integer values must fit the
+parameter's declared width. Symbolic parameter forwarding remains separate
+from named-constant evaluation. Layout queries and inline expressions remain
+excluded from constant type arguments.
 
 An integer argument is a contextual literal, the way ADR-0028 already treats
 numeric literals. The literal carries no width of its own. It fits any integer

@@ -1,5 +1,7 @@
 # `size_of[T]` exposes inline storage size
 
+status: amended by [ADR-0168](0168-constants-use-bounded-target-independent-expressions.md)
+
 Casa provides the safe compile-time intrinsic:
 
 ```casa
@@ -7,6 +9,11 @@ size_of[T] # None -> u64
 ```
 
 It returns the number of bytes occupied by one inline `T`, including tail padding required to keep consecutive values correctly aligned. The result is a compile-time constant after generic specialization.
+
+ADR-0168 excludes this query from named constant initializers and constant type
+arguments. Under ADR-0167, ordinary code retains a typed symbolic query until
+target planning supplies its value. This separates target-neutral checking
+from physical layout.
 
 Generic raw-storage implementations use it to allocate and address dense elements:
 
