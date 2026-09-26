@@ -5,7 +5,8 @@ related issue: [Choose compiler representations and state ownership](https://git
 The maintainer accepted independent compilation snapshots and the representation
 contract below on 2026-09-26. Typed operations and private semantic construction remove
 caller-managed phase protocols. Production migration remains pending. The separate
-language, tooling, backend, and performance decisions remain open.
+language, tooling, and performance decisions remain open. The backend contract
+is recorded in [ADR-0169](0169-backend-plans-and-renders-one-function-at-a-time.md).
 
 Evidence was checked against `c8b392bcba0648fa759290f25eb91d4a90faa32a`, which matched
 `origin/main` on 2026-09-26. ADR-0166 supplies the accepted Compiler Capsule
@@ -230,10 +231,9 @@ target planning supplies its value. Constant evaluation must not require a physi
 target value to claim that a target-neutral product is complete. Whether such use is
 allowed must be reconciled in the constant-evaluation decision.
 
-This decision does not remove an inspectable machine representation. If one is retained,
-it and its constructors belong to the backend. Instruction families, labels, and pools
-must be validated there. Direct assembly versus a private machine representation remains
-the backend decision.
+[ADR-0169](0169-backend-plans-and-renders-one-function-at-a-time.md) retains a private
+instruction buffer for one function at a time. Its constructors belong to the backend,
+which validates instruction families, labels, and pools before publishing assembly.
 
 ## Ownership and reclamation
 
@@ -287,8 +287,8 @@ this decision.
 The front-end decision owns exact parsing, resolution, and constant elaboration seams.
 The semantic decision owns checking and specialization algorithms. The tooling decision
 owns partial-fact guarantees, target diagnostics in editor analysis,
-version/invalidation policy, and latency. The backend decision owns machine form and
-platform details. The constant-evaluation decision must reconcile layout-dependent
+version/invalidation policy, and latency. ADR-0169 records machine form and
+platform scope. The constant-evaluation decision must reconcile layout-dependent
 constants with target-neutral checking. These are existing open decisions, not new
 workstreams.
 

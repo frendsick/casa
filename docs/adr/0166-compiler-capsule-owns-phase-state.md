@@ -31,9 +31,10 @@ migration, not just new names for the current outputs.
 - Use one shared x86-64 backend with a closed platform policy. The policy owns
   physical layout, `size_of` values, ABI, runtime, and assembly spelling.
   Target-specific rejection remains possible after semantic checking.
-- Linux is the current target. Windows is the only planned additional target.
-  Expose its production target variant only when its policy works. Whether
-  implementing Windows is required for the immediate redesign remains open.
+- Linux is the current target and the immediate blueprint acceptance target.
+  Windows is the only planned additional target and remains later work under
+  [ADR-0169](0169-backend-plans-and-renders-one-function-at-a-time.md). Expose its
+  production target variant only when its policy works.
 - Carry the target with `AssemblySource` so the build layer can select the
   assembler, object format, and linker. Native process execution stays outside
   the compiler module.
@@ -86,7 +87,9 @@ source-line estimates are fixed quotas.
 ## Open work and reconsideration
 
 The separate decisions for selective imports, constant evaluation, generics,
-tooling, backend scope, and simplification targets remain open. Derivation,
+tooling, and simplification targets remain open. Backend and runtime seams are
+recorded in [ADR-0169](0169-backend-plans-and-renders-one-function-at-a-time.md).
+Derivation,
 trait defaults, runtime-global removal, and ownership use the accepted contracts
 linked from the [map](https://github.com/frendsick/casa/issues/638). The older
 prototype's behavior examples do not override those decisions. ADR-0008's
