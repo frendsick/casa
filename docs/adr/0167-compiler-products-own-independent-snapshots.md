@@ -227,8 +227,9 @@ partial analysis nor a report can yield this product.
 The backend owns target layouts, field storage plans, ABI plans, labels, pools, runtime
 selection, and assembly construction. `size_of` remains a typed symbolic query until
 target planning supplies its value. Constant evaluation must not require a physical
-target value to claim that a target-neutral product is complete. Whether such use is
-allowed must be reconciled in the constant-evaluation decision.
+target value to claim that a target-neutral product is complete.
+[ADR-0168](0168-constants-use-bounded-target-independent-expressions.md) excludes
+layout queries from constant initializers and constant type arguments.
 
 This decision does not remove an inspectable machine representation. If one is retained,
 it and its constructors belong to the backend. Instruction families, labels, and pools
@@ -288,9 +289,9 @@ The front-end decision owns exact parsing, resolution, and constant elaboration 
 The semantic decision owns checking and specialization algorithms. The tooling decision
 owns partial-fact guarantees, target diagnostics in editor analysis,
 version/invalidation policy, and latency. The backend decision owns machine form and
-platform details. The constant-evaluation decision must reconcile layout-dependent
-constants with target-neutral checking. These are existing open decisions, not new
-workstreams.
+platform details. Constant elaboration must apply ADR-0168's target-independent
+expression contract. The remaining seam and tooling choices are existing open
+decisions, not new workstreams.
 
 ## Evidence
 

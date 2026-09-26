@@ -46,6 +46,22 @@ ordinary owner. Named functions receive it through explicit parameters, while
 root closures may capture it.
 _Avoid_: Runtime global, program-lifetime singleton
 
+**Named constant**:
+A declaration that names a compile-time value, distinct from a runtime binding
+or a symbolic generic constant parameter.
+_Avoid_: Immutable global, compile-time variable
+
+**Constant block**:
+A bounded postfix expression that produces one named constant value using
+primitive operators and stack intrinsics without executing user functions.
+_Avoid_: Compile-time function, arbitrary compile-time code
+
+**Constant parameter**:
+A generic parameter whose argument is an integer, boolean, or character value
+and contributes to the identity of an instantiation. It remains symbolic in
+generic code until concrete specialization.
+_Avoid_: Named constant declaration, type variable
+
 ### Compiler architecture
 
 **Functional compiler pass**:
