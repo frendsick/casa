@@ -6,10 +6,11 @@ related issue: [Choose compiler representations and state ownership](https://git
 
 The maintainer accepted independent compilation snapshots and the representation
 contract below on 2026-09-26. Typed operations and private semantic construction remove
-caller-managed phase protocols. Production migration remains pending. The separate
-backend and performance decisions remain open. ADR-0171 completes the tooling
-contract and refines the editor answer types below. The later constant and generic
-contracts retain target-neutral checking.
+caller-managed phase protocols. Production migration and performance gates remain
+pending. ADR-0171 completes the tooling contract and refines the editor answer types
+below. The backend contract is recorded in
+[ADR-0169](0169-backend-plans-and-renders-one-function-at-a-time.md).
+The later constant and generic contracts retain target-neutral checking.
 
 Evidence was checked against `c8b392bcba0648fa759290f25eb91d4a90faa32a`, which matched
 `origin/main` on 2026-09-26. ADR-0166 supplies the accepted Compiler Capsule
@@ -144,8 +145,10 @@ are private alternatives, rather than public flags beside a replaceable body. Fa
 discards that request's unfinished work. There is no public take/restore protocol.
 
 Import policy follows the qualified-only contract in
-[ADR-0168](0168-imports-expose-qualified-names-only.md). Constant elaboration remains
-a separate decision. Neither permits publishing unresolved code as checked input.
+[Imports expose qualified names only](0168-imports-expose-qualified-names-only.md).
+Constant elaboration applies
+[Constants use bounded target-independent expressions](0168-constants-use-bounded-target-independent-expressions.md).
+Neither permits publishing unresolved code as checked input.
 
 ### Semantic bodies
 
@@ -168,10 +171,9 @@ passed to the backend is concrete and that no deferred dispatch remains. The
 representation admits symbolic terms internally. The constructor, not a claim about the
 underlying enum, establishes concreteness.
 
-The checked-once generic recipe follows the current generic ADR. The separate generic
-contract decision can revise admissible generic programs or their diagnostics. It cannot
-weaken the already accepted requirement that specialization and trait dispatch finish
-before backend entry.
+The checked-once generic recipe follows
+[ADR-0170](0170-generics-specialize-after-symbolic-checking.md). Specialization and
+trait dispatch finish before backend entry.
 
 ### Concrete examples
 
@@ -234,10 +236,9 @@ target value to claim that a target-neutral product is complete.
 [ADR-0168](0168-constants-use-bounded-target-independent-expressions.md) excludes
 layout queries from constant initializers and constant type arguments.
 
-This decision does not remove an inspectable machine representation. If one is retained,
-it and its constructors belong to the backend. Instruction families, labels, and pools
-must be validated there. Direct assembly versus a private machine representation remains
-the backend decision.
+[ADR-0169](0169-backend-plans-and-renders-one-function-at-a-time.md) retains a private
+instruction buffer for one function at a time. Its constructors belong to the backend,
+which validates instruction families, labels, and pools before publishing assembly.
 
 ## Ownership and reclamation
 
@@ -292,7 +293,7 @@ The front-end decision owns exact parsing, resolution, and constant elaboration 
 The semantic decision owns checking and specialization algorithms. ADR-0171 settles
 partial-fact guarantees, target-neutral editor analysis, workspace query scope, and
 version/invalidation policy. Numerical latency gates still require executable evidence.
-The backend decision owns machine form and platform details. Constant elaboration must
+ADR-0169 records machine form and platform scope. Constant elaboration must
 apply the [target-independent expression contract](0168-constants-use-bounded-target-independent-expressions.md).
 Semantic algorithms must apply [the generic checking contract](0170-generics-specialize-after-symbolic-checking.md).
 The remaining seam choices are existing open decisions, not new workstreams.
