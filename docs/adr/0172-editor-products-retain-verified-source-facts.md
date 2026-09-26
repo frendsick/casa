@@ -12,7 +12,7 @@ Production migration and executable validation remain pending.
 ## Verified starting point
 
 Evidence was checked against `62a46a6`, current `origin/main` when this worktree
-was created. The source is unchanged at `719aa09`. Its qualified-only import,
+was created. The source is unchanged at `18e2372`. Its qualified-only import,
 constant-evaluation, generic, and backend decisions were incorporated before publication.
 Historical audit counts are not current measurements.
 

@@ -1,13 +1,13 @@
 # Compiler products own independent snapshots
 
-status: amended by [ADR-0171](0171-editor-products-retain-verified-source-facts.md)
+status: amended by [ADR-0172](0172-editor-products-retain-verified-source-facts.md)
 
 related issue: [Choose compiler representations and state ownership](https://github.com/frendsick/casa/issues/646).
 
 The maintainer accepted independent compilation snapshots and the representation
 contract below on 2026-09-26. Typed operations and private semantic construction remove
 caller-managed phase protocols. Production migration and performance gates remain
-pending. ADR-0171 completes the tooling contract and refines the editor answer types
+pending. ADR-0172 completes the tooling contract and refines the editor answer types
 below. The backend contract is recorded in
 [ADR-0169](0169-backend-plans-and-renders-one-function-at-a-time.md).
 The later constant and generic contracts retain target-neutral checking.
@@ -73,7 +73,7 @@ snapshot until source-based conversion is complete, or retains the already conve
 result. Results must not be applied to a newer document revision without checking the
 caller's document version.
 
-[ADR-0171](0171-editor-products-retain-verified-source-facts.md) defines which facts
+[ADR-0172](0172-editor-products-retain-verified-source-facts.md) defines which facts
 survive each source failure and distinguishes absent, unavailable, incomplete, and
 complete answers. It also defines workspace reference aggregation and rename through
 these same queries. Incomplete facts cannot masquerade as checked codegen input.
@@ -119,7 +119,7 @@ appropriate.
 
 Replacing an editor snapshot releases its source and index storage when no query still
 borrows it. Producing a replacement while retaining the old snapshot can temporarily
-retain both. ADR-0171 specifies workspace invalidation and measurement of debounced
+retain both. ADR-0172 specifies workspace invalidation and measurement of debounced
 reanalysis and on-demand workspace queries. Numerical latency and memory gates remain
 with the performance and executable-blueprint decisions. If those requirements cannot
 be met, revisit this choice using measurements.
@@ -147,7 +147,7 @@ discards that request's unfinished work. There is no public take/restore protoco
 Import policy follows the qualified-only contract in
 [Imports expose qualified names only](0168-imports-expose-qualified-names-only.md).
 Constant elaboration applies
-[Constants use bounded target-independent expressions](0168-constants-use-bounded-target-independent-expressions.md).
+[Constants use bounded target-independent expressions](0171-constants-use-bounded-target-independent-expressions.md).
 Neither permits publishing unresolved code as checked input.
 
 ### Semantic bodies
@@ -233,7 +233,7 @@ The backend owns target layouts, field storage plans, ABI plans, labels, pools, 
 selection, and assembly construction. `size_of` remains a typed symbolic query until
 target planning supplies its value. Constant evaluation must not require a physical
 target value to claim that a target-neutral product is complete.
-[ADR-0168](0168-constants-use-bounded-target-independent-expressions.md) excludes
+[ADR-0171](0171-constants-use-bounded-target-independent-expressions.md) excludes
 layout queries from constant initializers and constant type arguments.
 
 [ADR-0169](0169-backend-plans-and-renders-one-function-at-a-time.md) retains a private
@@ -290,11 +290,11 @@ or interpret compiler bodies. No source reduction or performance gain is establi
 this decision.
 
 The front-end decision owns exact parsing, resolution, and constant elaboration seams.
-The semantic decision owns checking and specialization algorithms. ADR-0171 settles
+The semantic decision owns checking and specialization algorithms. ADR-0172 settles
 partial-fact guarantees, target-neutral editor analysis, workspace query scope, and
 version/invalidation policy. Numerical latency gates still require executable evidence.
 ADR-0169 records machine form and platform scope. Constant elaboration must
-apply the [target-independent expression contract](0168-constants-use-bounded-target-independent-expressions.md).
+apply the [target-independent expression contract](0171-constants-use-bounded-target-independent-expressions.md).
 Semantic algorithms must apply [the generic checking contract](0170-generics-specialize-after-symbolic-checking.md).
 The remaining seam choices are existing open decisions, not new workstreams.
 
