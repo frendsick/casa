@@ -144,7 +144,7 @@ discards that request's unfinished work. There is no public take/restore protoco
 Import policy follows the qualified-only contract in
 [Imports expose qualified names only](0168-imports-expose-qualified-names-only.md).
 Constant elaboration applies
-[Constants use bounded target-independent expressions](0168-constants-use-bounded-target-independent-expressions.md).
+[Constants use bounded target-independent expressions](0171-constants-use-bounded-target-independent-expressions.md).
 Neither permits publishing unresolved code as checked input.
 
 ### Semantic bodies
@@ -230,7 +230,7 @@ The backend owns target layouts, field storage plans, ABI plans, labels, pools, 
 selection, and assembly construction. `size_of` remains a typed symbolic query until
 target planning supplies its value. Constant evaluation must not require a physical
 target value to claim that a target-neutral product is complete.
-[ADR-0168](0168-constants-use-bounded-target-independent-expressions.md) excludes
+[ADR-0171](0171-constants-use-bounded-target-independent-expressions.md) excludes
 layout queries from constant initializers and constant type arguments.
 
 [ADR-0169](0169-backend-plans-and-renders-one-function-at-a-time.md) retains a private
@@ -291,7 +291,7 @@ The semantic decision owns checking and specialization algorithms. The tooling d
 owns partial-fact guarantees, target diagnostics in editor analysis,
 version/invalidation policy, and latency. ADR-0169 records machine form and
 platform scope. Constant elaboration must apply the accepted
-[target-independent expression contract](0168-constants-use-bounded-target-independent-expressions.md).
+[target-independent expression contract](0171-constants-use-bounded-target-independent-expressions.md).
 The remaining seam and tooling choices are existing open decisions, not new workstreams.
 
 ## Evidence

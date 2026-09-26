@@ -44,7 +44,7 @@ normalization, and temporary-storage obligations. Instruction selection consumes
 this plan. The renderer does not classify types or allocate argument registers.
 
 `size_of` remains symbolic until target planning. The subsequently accepted
-[constant-expression contract](0168-constants-use-bounded-target-independent-expressions.md)
+[constant-expression contract](0171-constants-use-bounded-target-independent-expressions.md)
 excludes layout queries from constant initializers and constant type arguments.
 
 Target restrictions produce source diagnostics using retained source context.
