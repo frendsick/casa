@@ -86,11 +86,15 @@ source-line estimates are fixed quotas.
 
 ## Open work and reconsideration
 
-The separate decisions for constant evaluation, generics, tooling, and
-simplification targets remain open. Qualified-only imports and the absence of a
+The separate decisions for tooling and simplification targets remain open.
+Qualified-only imports and the absence of a
 source-level code-size guarantee are accepted in
 [ADR-0168](0168-imports-expose-qualified-names-only.md). Backend and runtime seams
 are recorded in [ADR-0169](0169-backend-plans-and-renders-one-function-at-a-time.md).
+Constant evaluation follows
+[Constants use bounded target-independent expressions](0168-constants-use-bounded-target-independent-expressions.md).
+The generic contract follows
+[ADR-0170](0170-generics-specialize-after-symbolic-checking.md).
 Derivation, trait defaults, runtime-global removal, and ownership use the
 accepted contracts linked from the [map](https://github.com/frendsick/casa/issues/638). The older
 prototype's behavior examples do not override those decisions. ADR-0008's

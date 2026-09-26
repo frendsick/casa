@@ -43,9 +43,9 @@ result storage. Include stack alignment, aggregate transfers, clobbers, return
 normalization, and temporary-storage obligations. Instruction selection consumes
 this plan. The renderer does not classify types or allocate argument registers.
 
-`size_of` remains symbolic until target planning. Whether a layout-dependent
-value may occur in a constant or type argument remains with
-[Choose the compile-time evaluation surface](https://github.com/frendsick/casa/issues/657).
+`size_of` remains symbolic until target planning. The subsequently accepted
+[constant-expression contract](0168-constants-use-bounded-target-independent-expressions.md)
+excludes layout queries from constant initializers and constant type arguments.
 
 Target restrictions produce source diagnostics using retained source context.
 Invalid private state produces `CompilerFailure` with the accumulated report.
