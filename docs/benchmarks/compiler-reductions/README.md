@@ -4,7 +4,13 @@ Native evidence for [Choose reductions toward ten-second self-compilation](https
 This is a throwaway evidence branch. The maintainer decision and production
 rollout remain separate.
 
-## Measured result
+The [native code follow-up](native-code.md) reaches a corrected median of
+**19.568 seconds**, a **26.8% improvement** over its 26.731-second paired
+word-copy control. It tests word copying, leaf expansion, and register lowering
+after the five changes below. It records rejected prototypes and the corrected
+final implementation.
+
+## First five reductions
 
 Five implementation changes bring median end-to-end self-compilation from
 **59.472 to 25.658 seconds** across two incremental studies. That is a **56.9%
@@ -110,7 +116,7 @@ allow a trait parameter to shadow a supertrait name. For example,
 rejects a previously accepted qualified method call. The corrected traversal
 preserves it, and a focused source fixture protects the accepted call.
 
-## Remaining cost profile
+## Cost profile after five reductions
 
 The final compiler was sampled at 10 ms intervals during self-compilation.
 The sampler uses the same instructions as the measured compiler. Its `.text`
@@ -239,24 +245,25 @@ generics, trait defaults, ownership, and deterministic destruction. The evidence
 does not show that any of those features is fundamentally too expensive.
 No additional language restriction or contract supersession is recommended.
 
-The next native experiment should carry resolved operation facts into checking.
+The [native code follow-up](native-code.md) records the current endpoint and
+remaining profile. It recommends canonical declaration and type identities with
+immutable declarations and one owner for changing semantic bodies. Cloning and
+string lookup remain distributed costs. Removing a whole-body copy alone cannot
+be assumed to recover the full inclusive cloning share. Specialization identities
+must compare complete binding keys so hash collisions cannot alias instances.
+
+Within that representation, carry resolved operation facts into checking.
 `collect_operation_facts` currently calls `analyze_operation`, retains symbol
 dependencies, and drops its method result. The checker then resolves operations
 again. Measure reuse within one operation before selecting a broad cache.
 
-After that, test canonical declaration and type identities with immutable
-declarations and one owner for changing semantic bodies. Cloning and string
-lookup remain distributed costs. Removing a whole-body copy alone cannot be
-assumed to recover the full inclusive cloning share. Specialization identities
-must compare complete binding keys so hash collisions cannot alias instances.
-
 ADRs 0167, 0170, 0172, and 0173 permit these private implementation choices.
-Their combined timing benefit is still unmeasured. Reaching ten seconds from
-25.658 requires a further 61.0% reduction. The ten-second route remains a
-hypothesis, and this evidence does not justify declaring the blueprint complete.
+Their combined timing benefit is still unmeasured. The native code follow-up
+records the current endpoint and remaining gap to ten seconds. The route remains
+a hypothesis, and this evidence does not justify declaring the blueprint complete.
 
-The maintainer must still select the next experiments, the acceptable timing
-band around ten seconds, and a numeric memory guardrail. This issue remains open
+The maintainer authorized further native experiments. The acceptable timing
+band around ten seconds and a numeric memory guardrail remain open. This issue remains open
 for that discussion. Production rollout remains outside this planning map.
 
 ## Measurement protocol

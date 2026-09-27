@@ -1,0 +1,575 @@
+--- a/lib/std.casa
++++ b/lib/std.casa
+@@ -2,9 +2,21 @@
+ # for the call duration. The regions do not overlap.
+ pub unsafe fn memcpy dst:ptr src:ptr n:u64 {
+     0 = i: u64
++    while size_of[u64] n i - >= do
++        # SAFETY: At least eight initialized source bytes and writable destination bytes remain.
++        # Raw integer loads and stores permit unaligned addresses on the x86-64 target.
++        unsafe {
++            src i + load64
++            dst i + store64
++        }
++        size_of[u64] += i
++    done
+     while i n > do
+-        unsafe { src i + load8 }
+-        unsafe { dst i + store8 }
++        # SAFETY: i is inside both caller-provided non-overlapping byte ranges.
++        unsafe {
++            src i + load8
++            dst i + store8
++        }
+         1 += i
+     done
+ }
+--- a/compiler/emitter.casa
++++ b/compiler/emitter.casa
+@@ -115,6 +115,221 @@
+     parameter_index: u64
+     size:            u64
+     is_aggregate:    bool
++}
++
++# A forwarding parameter can remain on the value stack when no instruction
++# observes its local slot or introduces another call or control-flow path.
++fn has_forwarding_frame bytecode:$std::List[common::InstValue] -> bool {
++    if 6 bytecode.length < then
++        false return
++    fi
++    if 0 bytecode.get common::InstValue::LocalsInit(count) is then
++        if 1 count != then
++            false return
++        fi
++    else
++        false return
++    fi
++    if 1 bytecode.get common::InstValue::Label is ! then
++        false return
++    fi
++    if 2 bytecode.get common::InstValue::LocalSet(index) is then
++        if 0 index != then
++            false return
++        fi
++    else
++        false return
++    fi
++    if 3 bytecode.get common::InstValue::LocalGet(index) is then
++        if 0 index != then
++            false return
++        fi
++    else
++        false return
++    fi
++    if bytecode.length 2 - bytecode.get common::InstValue::LocalsUninit(count) is then
++        if 1 count != then
++            false return
++        fi
++    else
++        false return
++    fi
++    if bytecode.length 1 - bytecode.get common::InstValue::FnReturn is ! then
++        false return
++    fi
++    4 = index: u64
++    while index bytecode.length 2 - > do
++        if index bytecode.get is_leaf_instruction ! then
++            false return
++        fi
++        1 += index
++    done
++    true
++}
++# Explicitly exclude operations that call runtime helpers, access frame state,
++# or transfer control. Arithmetic keeps its original checks and trap order.
++fn is_leaf_instruction inst:$common::InstValue -> bool {
++    inst match
++        common::InstValue::Drop => true
++        common::InstValue::Dup => true
++        common::InstValue::Over => true
++        common::InstValue::Push => true
++        common::InstValue::PushChar => true
++        common::InstValue::PushStr => true
++        common::InstValue::Rot => true
++        common::InstValue::Swap => true
++        common::InstValue::Load8 => true
++        common::InstValue::Load16 => true
++        common::InstValue::Load32 => true
++        common::InstValue::Load64 => true
++        common::InstValue::Add => true
++        common::InstValue::Sub => true
++        common::InstValue::Mul => true
++        common::InstValue::CheckedAdd => true
++        common::InstValue::CheckedSub => true
++        common::InstValue::CheckedMul => true
++        common::InstValue::BitAnd => true
++        common::InstValue::BitOr => true
++        common::InstValue::BitXor => true
++        common::InstValue::BitNot => true
++        common::InstValue::And => true
++        common::InstValue::Or => true
++        common::InstValue::Not => true
++        common::InstValue::Eq => true
++        common::InstValue::Ne => true
++        common::InstValue::Lt => true
++        common::InstValue::Le => true
++        common::InstValue::Gt => true
++        common::InstValue::Ge => true
++        common::InstValue::Ult => true
++        common::InstValue::Ule => true
++        common::InstValue::Ugt => true
++        common::InstValue::Uge => true
++        common::InstValue::NormalizeInt => true
++        _ => false
++    end
++}
++
++struct LeafTemplate {
++    instructions: std::List[common::InstValue]
++    local_bytes:  u64
++    start:        u64
++    end_index:    u64
++}
++
++# A register holds one distinct value in a suffix of the value stack. Copies
++# use separate registers. Calls, branches, and unsupported operations flush it.
++struct ScalarStack {
++    depth: u64
++}
++
++fn scalar_register index:u64 -> str {
++    index match
++        0 => "%r8"
++        1 => "%r9"
++        2 => "%r10"
++        3 => "%r11"
++        _ => "Invalid scalar register index" panic
++    end
++}
++
++fn scalar_inputs inst:$common::InstValue -> std::Option[u64] {
++    inst match
++        common::InstValue::Push => 0
++        common::InstValue::PushChar => 0
++        common::InstValue::PushStr => 0
++        common::InstValue::LocalGet => 0
++        common::InstValue::LocalAddress => 0
++        common::InstValue::LocalSet => 1
++        common::InstValue::Drop => 1
++        common::InstValue::Dup => 1
++        common::InstValue::Over => 2
++        common::InstValue::Swap => 2
++        common::InstValue::Rot => 3
++        common::InstValue::Load8 => 1
++        common::InstValue::Load16 => 1
++        common::InstValue::Load32 => 1
++        common::InstValue::Load64 => 1
++        common::InstValue::Store8 => 2
++        common::InstValue::Store16 => 2
++        common::InstValue::Store32 => 2
++        common::InstValue::Store64 => 2
++        common::InstValue::Add => 2
++        common::InstValue::Sub => 2
++        common::InstValue::Mul => 2
++        common::InstValue::CheckedAdd => 2
++        common::InstValue::CheckedSub => 2
++        common::InstValue::CheckedMul => 2
++        common::InstValue::BitAnd => 2
++        common::InstValue::BitOr => 2
++        common::InstValue::BitXor => 2
++        common::InstValue::BitNot => 1
++        common::InstValue::And => 2
++        common::InstValue::Or => 2
++        common::InstValue::Not => 1
++        common::InstValue::Eq => 2
++        common::InstValue::Ne => 2
++        common::InstValue::Lt => 2
++        common::InstValue::Le => 2
++        common::InstValue::Gt => 2
++        common::InstValue::Ge => 2
++        common::InstValue::Ult => 2
++        common::InstValue::Ule => 2
++        common::InstValue::Ugt => 2
++        common::InstValue::Uge => 2
++        _ => std::Option[u64]::None return
++    end = count: u64
++    count std::Option::Some
++}
++# Templates borrow no function storage and live only during this emission.
++# The fixed budget bounds code growth. Calls and recursive placeholders never
++# qualify, so classification is independent of function-map traversal order.
++fn collect_leaf_templates
++    functions:mut$std::Map[std::String std::List[common::InstValue]]
++-> std::Map[std::String LeafTemplate] {
++    std::Map[std::String LeafTemplate]::new = templates
++    functions.keys = names
++    for name in names.iter do
++        name functions.get.unwrap = body
++        if body.is_empty then
++            continue
++        fi
++        0 = start: u64
++        body.length 1 - = end_index
++        0 = local_bytes: u64
++        if body has_forwarding_frame then
++            4 = start: u64
++            1 -= end_index
++            common::WORD_SIZE = local_bytes: u64
++        else
++            if end_index body.get common::InstValue::FnReturn is ! then
++                continue
++            fi
++            if 0 body.get common::InstValue::Label is then
++                1 = start: u64
++            fi
++        fi
++        if start end_index <= then
++            continue
++        fi
++        if 8 end_index start - > then
++            continue
++        fi
++        true = eligible
++        start = index
++        while index end_index > do
++            if index body.get is_leaf_instruction ! then
++                false = eligible
++                break
++            fi
++            1 += index
++        done
++        if eligible then
++            name functions.remove.unwrap = instructions
++            end_index start local_bytes instructions LeafTemplate name.clone templates.set
++        fi
++    done
++    templates
+ }
+ 
+ fn count_abi_class
+@@ -319,10 +534,11 @@
+     # ============================================================================
+ 
+     pub fn emit_text self:mut$Emitter bytecode:$std::List[common::InstValue] {
++        self.program.functions collect_leaf_templates = templates
+         ".section .text" self.line
+         self.emit_helpers
+-        self.emit_functions
+-        bytecode self.emit_start
++        templates self.emit_functions
++        templates bytecode self.emit_start
+     }
+ 
+     # ============================================================================
+@@ -836,7 +1052,13 @@
+     # Emit user functions
+     # ============================================================================
+ 
+-    pub fn emit_functions self:mut$Emitter {
++    fn emit_functions self:mut$Emitter templates:$std::Map[std::String LeafTemplate] {
++        for pair in templates.iter do
++            pair.first.as_str sanitize_name = label
++            f"fn_{label}:" self.line_string
++            templates false pair.second.instructions self.emit_bytecode
++            "" self.line
++        done
+         self
+             .program
+             .functions
+@@ -849,7 +1071,7 @@
+                 .unwrap = bytecode
+             name.as_str sanitize_name = label
+             f"fn_{label}:" self.line_string
+-            false bytecode self.emit_bytecode
++            templates false bytecode self.emit_bytecode
+             "" self.line
+         done
+     }
+@@ -858,7 +1080,11 @@
+     # Emit _start entry point
+     # ============================================================================
+ 
+-    pub fn emit_start self:mut$Emitter bytecode:$std::List[common::InstValue] {
++    fn emit_start
++        self:mut$Emitter
++        bytecode:$std::List[common::InstValue]
++        templates:$std::Map[std::String LeafTemplate]
++    {
+         ".globl _start" self.line
+         "_start:" self.line
+         "leaq return_stack(%rip), %r14" self.indent
+@@ -870,7 +1096,7 @@
+         "addq $1, %rcx" self.indent
+         "leaq 8(%rsp,%rcx,8), %rax" self.indent
+         "movq %rax, __envp(%rip)" self.indent
+-        true bytecode self.emit_bytecode
++        templates true bytecode self.emit_bytecode
+         "movq $60, %rax" self.indent
+         "xorq %rdi, %rdi" self.indent
+         "syscall" self.indent
+@@ -881,10 +1107,239 @@
+     # Emit bytecode sequence
+     # ============================================================================
+ 
+-    pub fn emit_bytecode self:mut$Emitter bytecode:$std::List[common::InstValue] is_global:bool {
++    fn emit_bytecode
++        self:mut$Emitter
++        bytecode:$std::List[common::InstValue]
++        is_global:bool
++        templates:$std::Map[std::String LeafTemplate]
++    {
++        0 ScalarStack = cache
++        if is_global ! bytecode has_forwarding_frame && then
++            common::WORD_SIZE self.emit_return_stack_check
++            4 = index: u64
++            while index bytecode.length 2 - > do
++                cache is_global index bytecode.get self.emit_scalar_or_inst
++                1 += index
++            done
++            cache is_global common::InstValue::FnReturn self.emit_scalar_or_inst
++            return
++        fi
+         for inst in bytecode.iter do
++            if inst common::InstValue::FnCall(name) is then
++                if name templates.get std::Option::Some(template) is then
++                    common::WORD_SIZE template.local_bytes + self.emit_return_stack_check
++                    template.start = index
++                    while index template.end_index > do
++                        cache is_global index template.instructions.get self.emit_scalar_or_inst
++                        1 += index
++                    done
++                    continue
++                fi
++            fi
++            cache is_global inst self.emit_scalar_or_inst
++        done
++        cache self.flush_scalar_stack
++    }
++
++    fn flush_scalar_stack self:mut$Emitter cache:mut$ScalarStack {
++        0 = index: u64
++        while index cache.depth > do
++            f"pushq {index scalar_register}" self.indent_string
++            1 += index
++        done
++        0 = cache.depth: u64
++    }
++
++    fn next_scalar_register self:mut$Emitter cache:mut$ScalarStack -> str {
++        if 4 cache.depth == then
++            cache self.flush_scalar_stack
++        fi
++        cache.depth scalar_register = register
++        1 += cache.depth
++        register
++    }
++
++    fn emit_scalar_or_inst
++        self:mut$Emitter
++        inst:$common::InstValue
++        is_global:bool
++        cache:mut$ScalarStack
++    {
++        if cache inst self.emit_scalar_inst ! then
++            cache self.flush_scalar_stack
+             is_global inst self.emit_inst
+-        done
++        fi
++    }
++
++    # False means no assembly or cache state changed. Existing lowering then
++    # receives the complete physical stack, including all cached values.
++    fn emit_scalar_inst self:mut$Emitter inst:$common::InstValue cache:mut$ScalarStack -> bool {
++        if inst scalar_inputs std::Option::Some(count) is then
++            if count cache.depth < then
++                false return
++            fi
++        else
++            false return
++        fi
++        "%r8" = top
++        "%r8" = below
++        if 0 cache.depth > then
++            cache.depth 1 - scalar_register = top
++        fi
++        if 1 cache.depth > then
++            cache.depth 2 - scalar_register = below
++        fi
++        inst match
++            common::InstValue::Push(value) => {
++                cache self.next_scalar_register = target
++                f"movabsq ${value}, {target}" self.indent_string
++            }
++            common::InstValue::PushChar(value) => {
++                cache self.next_scalar_register = target
++                f"movq ${value}, {target}" self.indent_string
++            }
++            common::InstValue::PushStr(index) => {
++                cache self.next_scalar_register = target
++                f"leaq str_{index}(%rip), {target}" self.indent_string
++            }
++            common::InstValue::LocalGet(index) => {
++                cache self.next_scalar_register = target
++                f"movq -{index 1 + common::WORD_SIZE *}(%r14), {target}" self.indent_string
++            }
++            common::InstValue::LocalAddress(index) => {
++                cache self.next_scalar_register = target
++                f"leaq -{index 1 + common::WORD_SIZE *}(%r14), {target}" self.indent_string
++            }
++            common::InstValue::LocalSet(index) => {
++                f"movq {top}, -{index 1 + common::WORD_SIZE *}(%r14)" self.indent_string
++                1 -= cache.depth
++            }
++            common::InstValue::Drop => 1 -= cache.depth
++            common::InstValue::Dup => {
++                cache self.next_scalar_register = target
++                f"movq {top}, {target}" self.indent_string
++            }
++            common::InstValue::Over => {
++                cache self.next_scalar_register = target
++                f"movq {below}, {target}" self.indent_string
++            }
++            common::InstValue::Swap => {
++                f"movq {top}, %rax" self.indent_string
++                f"movq {below}, {top}" self.indent_string
++                f"movq %rax, {below}" self.indent_string
++            }
++            common::InstValue::Rot => {
++                cache.depth 3 - scalar_register = bottom
++                f"movq {bottom}, %rax" self.indent_string
++                f"movq {below}, {bottom}" self.indent_string
++                f"movq {top}, {below}" self.indent_string
++                f"movq %rax, {top}" self.indent_string
++            }
++            common::InstValue::Load8 => f"movzbq ({top}), {top}" self.indent_string
++            common::InstValue::Load16 => f"movzwq ({top}), {top}" self.indent_string
++            common::InstValue::Load32 => {
++                f"movl ({top}), %eax" self.indent_string
++                f"movq %rax, {top}" self.indent_string
++            }
++            common::InstValue::Load64 => f"movq ({top}), {top}" self.indent_string
++            common::InstValue::Store8 => {
++                f"movq {below}, %rax" self.indent_string
++                f"movb %al, ({top})" self.indent_string
++                2 -= cache.depth
++            }
++            common::InstValue::Store16 => {
++                f"movq {below}, %rax" self.indent_string
++                f"movw %ax, ({top})" self.indent_string
++                2 -= cache.depth
++            }
++            common::InstValue::Store32 => {
++                f"movq {below}, %rax" self.indent_string
++                f"movl %eax, ({top})" self.indent_string
++                2 -= cache.depth
++            }
++            common::InstValue::Store64 => {
++                f"movq {below}, ({top})" self.indent_string
++                2 -= cache.depth
++            }
++            common::InstValue::BitNot => f"notq {top}" self.indent_string
++            common::InstValue::Not => {
++                f"cmpq $0, {top}" self.indent_string
++                "sete %al" self.indent
++                f"movzbq %al, {top}" self.indent_string
++            }
++            _ => {
++                inst match
++                    common::InstValue::Add => f"addq {top}, {below}" self.indent_string
++                    common::InstValue::Sub => f"subq {top}, {below}" self.indent_string
++                    common::InstValue::Mul => f"imulq {top}, {below}" self.indent_string
++                    common::InstValue::CheckedAdd(builtin) => {
++                        if 64 builtin.bit_width != then
++                            false return
++                        fi
++                        f"addq {top}, {below}" self.indent_string
++                        if builtin.is_unsigned then "jc arithmetic_error" else "jo arithmetic_error" fi self.indent
++                    }
++                    common::InstValue::CheckedSub(builtin) => {
++                        if 64 builtin.bit_width != then
++                            false return
++                        fi
++                        f"subq {top}, {below}" self.indent_string
++                        if builtin.is_unsigned then "jc arithmetic_error" else "jo arithmetic_error" fi self.indent
++                    }
++                    common::InstValue::CheckedMul(builtin) => {
++                        if 64 builtin.bit_width != then
++                            false return
++                        fi
++                        if builtin.is_unsigned then
++                            f"movq {below}, %rax" self.indent_string
++                            f"mulq {top}" self.indent_string
++                            "testq %rdx, %rdx" self.indent
++                            "jnz arithmetic_error" self.indent
++                            f"movq %rax, {below}" self.indent_string
++                        else
++                            f"imulq {top}, {below}" self.indent_string
++                            "jo arithmetic_error" self.indent
++                        fi
++                    }
++                    common::InstValue::BitAnd => f"andq {top}, {below}" self.indent_string
++                    common::InstValue::BitOr => f"orq {top}, {below}" self.indent_string
++                    common::InstValue::BitXor => f"xorq {top}, {below}" self.indent_string
++                    common::InstValue::And => {
++                        f"testq {top}, {top}" self.indent_string
++                        "setne %al" self.indent
++                        f"testq {below}, {below}" self.indent_string
++                        "setne %cl" self.indent
++                        "andb %cl, %al" self.indent
++                        f"movzbq %al, {below}" self.indent_string
++                    }
++                    common::InstValue::Or => {
++                        f"orq {top}, {below}" self.indent_string
++                        "setne %al" self.indent
++                        f"movzbq %al, {below}" self.indent_string
++                    }
++                    _ => {
++                        inst match
++                            common::InstValue::Eq => "sete"
++                            common::InstValue::Ne => "setne"
++                            common::InstValue::Lt => "setl"
++                            common::InstValue::Le => "setle"
++                            common::InstValue::Gt => "setg"
++                            common::InstValue::Ge => "setge"
++                            common::InstValue::Ult => "setb"
++                            common::InstValue::Ule => "setbe"
++                            common::InstValue::Ugt => "seta"
++                            common::InstValue::Uge => "setae"
++                            _ => "Invalid cached scalar operation" panic
++                        end = comparison
++                        f"cmpq {below}, {top}" self.indent_string
++                        f"{comparison} %al" self.indent_string
++                        f"movzbq %al, {below}" self.indent_string
++                    }
++                end
++                1 -= cache.depth
++            }
++        end
++        true
+     }
+ 
+     # ============================================================================
+@@ -1127,7 +1582,7 @@
+     # writes only after this advances r14 successfully.
+     # ============================================================================
+ 
+-    pub fn emit_return_stack_reservation self:mut$Emitter byte_count:u64 {
++    fn emit_return_stack_check self:mut$Emitter byte_count:u64 {
+         if RETURN_STACK_SIZE byte_count > then
+             "jmp return_stack_overflow" self.indent
+             return
+@@ -1136,6 +1591,13 @@
+         f"leaq return_stack+{maximum_offset}(%rip), %rcx" self.indent_string
+         "cmpq %rcx, %r14" self.indent
+         "ja return_stack_overflow" self.indent
++    }
++
++    pub fn emit_return_stack_reservation self:mut$Emitter byte_count:u64 {
++        byte_count self.emit_return_stack_check
++        if RETURN_STACK_SIZE byte_count > then
++            return
++        fi
+         f"addq ${byte_count}, %r14" self.indent_string
+     }
+ 

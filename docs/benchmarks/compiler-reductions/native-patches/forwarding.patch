@@ -1,0 +1,168 @@
+--- a/lib/std.casa
++++ b/lib/std.casa
+@@ -2,9 +2,21 @@
+ # for the call duration. The regions do not overlap.
+ pub unsafe fn memcpy dst:ptr src:ptr n:u64 {
+     0 = i: u64
++    while size_of[u64] n i - >= do
++        # SAFETY: At least eight initialized source bytes and writable destination bytes remain.
++        # Raw integer loads and stores permit unaligned addresses on the x86-64 target.
++        unsafe {
++            src i + load64
++            dst i + store64
++        }
++        size_of[u64] += i
++    done
+     while i n > do
+-        unsafe { src i + load8 }
+-        unsafe { dst i + store8 }
++        # SAFETY: i is inside both caller-provided non-overlapping byte ranges.
++        unsafe {
++            src i + load8
++            dst i + store8
++        }
+         1 += i
+     done
+ }
+--- a/compiler/emitter.casa
++++ b/compiler/emitter.casa
+@@ -115,6 +115,99 @@
+     parameter_index: u64
+     size:            u64
+     is_aggregate:    bool
++}
++
++# A forwarding parameter can remain on the value stack when no instruction
++# observes its local slot or introduces another call or control-flow path.
++fn has_forwarding_frame bytecode:$std::List[common::InstValue] -> bool {
++    if 6 bytecode.length < then
++        false return
++    fi
++    if 0 bytecode.get common::InstValue::LocalsInit(count) is then
++        if 1 count != then
++            false return
++        fi
++    else
++        false return
++    fi
++    if 1 bytecode.get common::InstValue::Label is ! then
++        false return
++    fi
++    if 2 bytecode.get common::InstValue::LocalSet(index) is then
++        if 0 index != then
++            false return
++        fi
++    else
++        false return
++    fi
++    if 3 bytecode.get common::InstValue::LocalGet(index) is then
++        if 0 index != then
++            false return
++        fi
++    else
++        false return
++    fi
++    if bytecode.length 2 - bytecode.get common::InstValue::LocalsUninit(count) is then
++        if 1 count != then
++            false return
++        fi
++    else
++        false return
++    fi
++    if bytecode.length 1 - bytecode.get common::InstValue::FnReturn is ! then
++        false return
++    fi
++    4 = index: u64
++    while index bytecode.length 2 - > do
++        if index bytecode.get is_leaf_instruction ! then
++            false return
++        fi
++        1 += index
++    done
++    true
++}
++# Explicitly exclude operations that call runtime helpers, access frame state,
++# or transfer control. Arithmetic keeps its original checks and trap order.
++fn is_leaf_instruction inst:$common::InstValue -> bool {
++    inst match
++        common::InstValue::Drop => true
++        common::InstValue::Dup => true
++        common::InstValue::Over => true
++        common::InstValue::Push => true
++        common::InstValue::PushChar => true
++        common::InstValue::PushStr => true
++        common::InstValue::Rot => true
++        common::InstValue::Swap => true
++        common::InstValue::Load8 => true
++        common::InstValue::Load16 => true
++        common::InstValue::Load32 => true
++        common::InstValue::Load64 => true
++        common::InstValue::Add => true
++        common::InstValue::Sub => true
++        common::InstValue::Mul => true
++        common::InstValue::CheckedAdd => true
++        common::InstValue::CheckedSub => true
++        common::InstValue::CheckedMul => true
++        common::InstValue::BitAnd => true
++        common::InstValue::BitOr => true
++        common::InstValue::BitXor => true
++        common::InstValue::BitNot => true
++        common::InstValue::And => true
++        common::InstValue::Or => true
++        common::InstValue::Not => true
++        common::InstValue::Eq => true
++        common::InstValue::Ne => true
++        common::InstValue::Lt => true
++        common::InstValue::Le => true
++        common::InstValue::Gt => true
++        common::InstValue::Ge => true
++        common::InstValue::Ult => true
++        common::InstValue::Ule => true
++        common::InstValue::Ugt => true
++        common::InstValue::Uge => true
++        common::InstValue::NormalizeInt => true
++        _ => false
++    end
+ }
+ 
+ fn count_abi_class
+@@ -882,6 +975,16 @@
+     # ============================================================================
+ 
+     pub fn emit_bytecode self:mut$Emitter bytecode:$std::List[common::InstValue] is_global:bool {
++        if is_global ! bytecode has_forwarding_frame && then
++            common::WORD_SIZE self.emit_return_stack_check
++            4 = index: u64
++            while index bytecode.length 2 - > do
++                is_global index bytecode.get self.emit_inst
++                1 += index
++            done
++            is_global common::InstValue::FnReturn self.emit_inst
++            return
++        fi
+         for inst in bytecode.iter do
+             is_global inst self.emit_inst
+         done
+@@ -1127,7 +1230,7 @@
+     # writes only after this advances r14 successfully.
+     # ============================================================================
+ 
+-    pub fn emit_return_stack_reservation self:mut$Emitter byte_count:u64 {
++    fn emit_return_stack_check self:mut$Emitter byte_count:u64 {
+         if RETURN_STACK_SIZE byte_count > then
+             "jmp return_stack_overflow" self.indent
+             return
+@@ -1136,6 +1239,13 @@
+         f"leaq return_stack+{maximum_offset}(%rip), %rcx" self.indent_string
+         "cmpq %rcx, %r14" self.indent
+         "ja return_stack_overflow" self.indent
++    }
++
++    pub fn emit_return_stack_reservation self:mut$Emitter byte_count:u64 {
++        byte_count self.emit_return_stack_check
++        if RETURN_STACK_SIZE byte_count > then
++            return
++        fi
+         f"addq ${byte_count}, %r14" self.indent_string
+     }
+ 
