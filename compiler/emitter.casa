@@ -28,6 +28,7 @@ pub const F64_HALF_BITS 4602678819172646912
 pub const F32_SIGN_BIT_INDEX 31
 pub const F64_SIGN_BIT_INDEX 63
 pub const ODD_INTEGER_MASK 1
+const MAX_LEAF_INSTRUCTIONS 8
 
 # ============================================================================
 # Emitter state
@@ -206,6 +207,64 @@ fn is_leaf_instruction inst:$common::InstValue -> bool {
         common::InstValue::NormalizeInt => true
         _ => false
     end
+}
+
+struct LeafTemplate {
+    instructions: std::List[common::InstValue]
+    local_bytes:  u64
+    start:        u64
+    end_index:    u64
+}
+
+# Templates borrow no function storage and live only during this emission.
+# The fixed budget bounds code growth. Calls and recursive placeholders never
+# qualify, so classification is independent of function-map traversal order.
+fn collect_leaf_templates
+    functions:mut$std::Map[std::String std::List[common::InstValue]]
+-> std::Map[std::String LeafTemplate] {
+    std::Map[std::String LeafTemplate]::new = templates
+    functions.keys = names
+    for name in names.iter do
+        name functions.get.unwrap = body
+        if body.is_empty then
+            continue
+        fi
+        0 = start: u64
+        body.length 1 - = end_index
+        0 = local_bytes: u64
+        if body has_forwarding_frame then
+            4 = start: u64
+            1 -= end_index
+            common::WORD_SIZE = local_bytes: u64
+        else
+            if end_index body.get common::InstValue::FnReturn is ! then
+                continue
+            fi
+            if 0 body.get common::InstValue::Label is then
+                1 = start: u64
+            fi
+        fi
+        if start end_index <= then
+            continue
+        fi
+        if MAX_LEAF_INSTRUCTIONS end_index start - > then
+            continue
+        fi
+        true = eligible
+        start = index
+        while index end_index > do
+            if index body.get is_leaf_instruction ! then
+                false = eligible
+                break
+            fi
+            1 += index
+        done
+        if eligible then
+            name functions.remove.unwrap = instructions
+            end_index start local_bytes instructions LeafTemplate name.clone templates.set
+        fi
+    done
+    templates
 }
 
 fn count_abi_class
@@ -410,10 +469,11 @@ impl Emitter {
     # ============================================================================
 
     pub fn emit_text self:mut$Emitter bytecode:$std::List[common::InstValue] {
+        self.program.functions collect_leaf_templates = templates
         ".section .text" self.line
         self.emit_helpers
-        self.emit_functions
-        bytecode self.emit_start
+        templates self.emit_functions
+        templates bytecode self.emit_start
     }
 
     # ============================================================================
@@ -927,7 +987,13 @@ impl Emitter {
     # Emit user functions
     # ============================================================================
 
-    pub fn emit_functions self:mut$Emitter {
+    fn emit_functions self:mut$Emitter templates:$std::Map[std::String LeafTemplate] {
+        for pair in templates.iter do
+            pair.first.as_str sanitize_name = label
+            f"fn_{label}:" self.line_string
+            false templates pair.second.instructions self.emit_bytecode
+            "" self.line
+        done
         self
             .program
             .functions
@@ -940,7 +1006,7 @@ impl Emitter {
                 .unwrap = bytecode
             name.as_str sanitize_name = label
             f"fn_{label}:" self.line_string
-            false bytecode self.emit_bytecode
+            false templates bytecode self.emit_bytecode
             "" self.line
         done
     }
@@ -949,7 +1015,11 @@ impl Emitter {
     # Emit _start entry point
     # ============================================================================
 
-    pub fn emit_start self:mut$Emitter bytecode:$std::List[common::InstValue] {
+    fn emit_start
+        self:mut$Emitter
+        bytecode:$std::List[common::InstValue]
+        templates:$std::Map[std::String LeafTemplate]
+    {
         ".globl _start" self.line
         "_start:" self.line
         "leaq return_stack(%rip), %r14" self.indent
@@ -961,7 +1031,7 @@ impl Emitter {
         "addq $1, %rcx" self.indent
         "leaq 8(%rsp,%rcx,8), %rax" self.indent
         "movq %rax, __envp(%rip)" self.indent
-        true bytecode self.emit_bytecode
+        true templates bytecode self.emit_bytecode
         "movq $60, %rax" self.indent
         "xorq %rdi, %rdi" self.indent
         "syscall" self.indent
@@ -972,7 +1042,12 @@ impl Emitter {
     # Emit bytecode sequence
     # ============================================================================
 
-    pub fn emit_bytecode self:mut$Emitter bytecode:$std::List[common::InstValue] is_global:bool {
+    fn emit_bytecode
+        self:mut$Emitter
+        bytecode:$std::List[common::InstValue]
+        templates:$std::Map[std::String LeafTemplate]
+        is_global:bool
+    {
         if is_global ! bytecode has_forwarding_frame && then
             common::WORD_SIZE self.emit_return_stack_check
             4 = index: u64
@@ -984,7 +1059,22 @@ impl Emitter {
             return
         fi
         for inst in bytecode.iter do
+            if inst common::InstValue::FnCall(name) is then
+                if name templates.get std::Option::Some(template) is then
+                    is_global template self.emit_leaf_template
+                    continue
+                fi
+            fi
             is_global inst self.emit_inst
+        done
+    }
+
+    fn emit_leaf_template self:mut$Emitter template:$LeafTemplate is_global:bool {
+        common::WORD_SIZE template.local_bytes + self.emit_return_stack_check
+        template.start = index
+        while index template.end_index > do
+            is_global index template.instructions.get self.emit_inst
+            1 += index
         done
     }
 
