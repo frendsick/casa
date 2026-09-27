@@ -1234,6 +1234,19 @@ impl MatchContext {
 # ============================================================================
 # TypeChecker struct
 # ============================================================================
+# Own the diagnostic inputs until the parameter check finishes. Source-name
+# lookup and message construction run only when a diagnostic needs the text.
+struct ParameterContext {
+    operation: std::String
+    name:      std::String
+    index:     u64
+    file:      std::String
+}
+
+enum ExpectationContext {
+    Text (std::String)
+    Parameter (ParameterContext)
+}
 
 struct TypeChecker {
     stack:                      TypedStack
@@ -1243,7 +1256,7 @@ struct TypeChecker {
     branched_stacks:            std::List[BranchFrame]
     current_location:           common::Location
     current_op_context:         std::String
-    current_expect_ctx:         std::String
+    current_expect_ctx:         ExpectationContext
     in_branch_condition:        bool
     path_continues:             bool
     store:                      mut$common::SymbolStore
@@ -1430,7 +1443,7 @@ impl TypeChecker {
         store # store
         true # path_continues
         false # in_branch_condition
-        "".to_str # current_expect_ctx
+        "".to_str ExpectationContext::Text # current_expect_ctx
         "".to_str # current_op_context
         common::empty_location # current_location
         std::List[BranchFrame]::new # branched_stacks
@@ -2742,15 +2755,16 @@ impl TypeChecker {
     }
 
     fn report_borrowed_to_owned self:mut$TypeChecker expected:$common::Type value:$TypedValue {
+        self.format_expectation_context = context
         if value.place std::Option::Some(place) is then
-            if "" self.current_expect_ctx.as_str != then
-                f"Cannot pass borrowed `{place}` to consuming {self.current_expect_ctx}"
+            if "" context.as_str != then
+                f"Cannot pass borrowed `{place}` to consuming {context}"
             else
                 f"Cannot move borrowed value `{place}`"
             fi
         else
-            if "" self.current_expect_ctx.as_str != then
-                f"Cannot pass a borrowed value to consuming {self.current_expect_ctx}"
+            if "" context.as_str != then
+                f"Cannot pass a borrowed value to consuming {context}"
             else
                 "Cannot move a borrowed value".to_str
             fi
@@ -2910,7 +2924,7 @@ impl TypeChecker {
 
 impl TypeChecker {
     pub fn stack_underflow_message tc:mut$TypeChecker -> std::String {
-        tc.current_expect_ctx = expect_what: $std::String
+        tc.format_expectation_context = expect_what
         if "" expect_what.as_str == then
             "Stack underflow: expected a value but stack is empty".to_str return
         fi
@@ -4457,18 +4471,33 @@ impl TypeChecker {
         index:u64
     {
         if "" operation != then
-            self
-                .current_location
-                .file
-                .as_str operation self.store.format_name_for_source = source_operation
-            if "" parameter.name.as_str != then
-                f"parameter `{parameter.name}` of `{source_operation}`" = self.current_expect_ctx
-            else
-                f"parameter {index 1 +} of `{source_operation}`" = self.current_expect_ctx
-            fi
+            ParameterContext {
+                operation: operation.to_str
+                name: parameter.name.clone
+                index: index
+                file: self
+                    .current_location
+                    .file
+                    .clone
+            } ExpectationContext::Parameter = self.current_expect_ctx
         elif "" parameter.name.as_str != then
-            parameter.name.clone = self.current_expect_ctx
+            parameter.name.clone ExpectationContext::Text = self.current_expect_ctx
         fi
+    }
+
+    fn format_expectation_context self:$TypeChecker -> std::String {
+        self.current_expect_ctx match
+            ExpectationContext::Text(text) => text.clone
+            ExpectationContext::Parameter(parameter) => {
+                parameter.file.as_str parameter.operation.as_str self.store.format_name_for_source
+                = source_operation
+                if "" parameter.name.as_str != then
+                    f"parameter `{parameter.name}` of `{source_operation}`"
+                else
+                    f"parameter {parameter.index 1 +} of `{source_operation}`"
+                fi
+            }
+        end
     }
 
     fn classify_type_variable_return_origins
@@ -4674,7 +4703,7 @@ impl TypeChecker {
                 parameter.typ tc.expect_type_t
                 1 += index
             done
-            "".to_str = tc.current_expect_ctx
+            "".to_str ExpectationContext::Text = tc.current_expect_ctx
             for return_type in effect common::StackEffect::return_types.iter do
                 if return_type common::Type::Function(_) is then
                     callable_cleanup_origins.clone callable_origins.clone return_type
@@ -4743,7 +4772,7 @@ impl TypeChecker {
             bindings parameter.typ.substitute_t tc.expect_type_t
             1 += index
         done
-        "".to_str = tc.current_expect_ctx
+        "".to_str ExpectationContext::Text = tc.current_expect_ctx
 
         tc.store bindings effect rules::collect_bound_semantic_dependencies
         = bound_dependencies
@@ -5203,7 +5232,7 @@ impl TypeChecker {
         op.value.clone = cmp_value
         cmp_value common::OpValue::Eq is cmp_value common::OpValue::Ne is || = is_eq_op
         cmp_value rules::comparison_trait_name = trait_name
-        f"value with trait `{trait_name}`" = tc.current_expect_ctx
+        f"value with trait `{trait_name}`" ExpectationContext::Text = tc.current_expect_ctx
         tc.stack_pop_value = value1
         value1 tc.stack_pop_left_like = value2
         value1 tc.release_value
@@ -5358,7 +5387,7 @@ impl TypeChecker {
 impl TypeChecker {
     pub fn check_stack_ops tc:mut$TypeChecker op:mut$common::Op {
         if op.value common::OpValue::Drop is then
-            "value for `drop`".to_str = tc.current_expect_ctx
+            "value for `drop`".to_str ExpectationContext::Text = tc.current_expect_ctx
             if
                 0 tc
                     .stack
@@ -8635,7 +8664,7 @@ impl TypeChecker {
         emitted_ops:mut$std::List[common::Op]
         function_opt:mut$std::Option[common::Function]
     {
-        "value with trait `Display`".to_str = tc.current_expect_ctx
+        "value with trait `Display`".to_str ExpectationContext::Text = tc.current_expect_ctx
         tc.stack_peek_type = peek_t
         peek_t.format = typ
         tc.store function_opt peek_t rules::make_type_borrow_option op.value rules::analyze_operation = semantics
@@ -10457,7 +10486,7 @@ impl TypeChecker {
         emitted_ops:mut$std::List[common::Op]
         function_opt:mut$std::Option[common::Function]
     {
-        "value with trait `Display`".to_str = tc.current_expect_ctx
+        "value with trait `Display`".to_str ExpectationContext::Text = tc.current_expect_ctx
         tc.stack_peek_type = fstring_type_t
         fstring_type_t.clone = fstring_value_type
         if fstring_value_type.borrow_target std::Option::Some(target) is then
@@ -11473,7 +11502,7 @@ impl TypeChecker {
             ops.pop = current_op
             current_op self.assign_op_id
             current_op common::Op::location.clone = self.current_location
-            "".to_str = self.current_expect_ctx
+            "".to_str ExpectationContext::Text = self.current_expect_ctx
             false = self.underflow_reported_this_op
             function_opt emitted_ops ops current_op self.run_type_check_op
             current_op emitted_ops.push
