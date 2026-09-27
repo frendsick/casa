@@ -117,6 +117,97 @@ struct ExternStackArgument {
     is_aggregate:    bool
 }
 
+# A forwarding parameter can remain on the value stack when no instruction
+# observes its local slot or introduces another call or control-flow path.
+fn has_forwarding_frame bytecode:$std::List[common::InstValue] -> bool {
+    if 6 bytecode.length < then
+        false return
+    fi
+    if 0 bytecode.get common::InstValue::LocalsInit(count) is then
+        if 1 count != then
+            false return
+        fi
+    else
+        false return
+    fi
+    if 1 bytecode.get common::InstValue::Label is ! then
+        false return
+    fi
+    if 2 bytecode.get common::InstValue::LocalSet(index) is then
+        if 0 index != then
+            false return
+        fi
+    else
+        false return
+    fi
+    if 3 bytecode.get common::InstValue::LocalGet(index) is then
+        if 0 index != then
+            false return
+        fi
+    else
+        false return
+    fi
+    if bytecode.length 2 - bytecode.get common::InstValue::LocalsUninit(count) is then
+        if 1 count != then
+            false return
+        fi
+    else
+        false return
+    fi
+    if bytecode.length 1 - bytecode.get common::InstValue::FnReturn is ! then
+        false return
+    fi
+    4 = index: u64
+    while index bytecode.length 2 - > do
+        if index bytecode.get is_leaf_instruction ! then
+            false return
+        fi
+        1 += index
+    done
+    true
+}
+# Explicitly exclude operations that call runtime helpers, access frame state,
+# or transfer control. Checked arithmetic can call the error writer, whose
+# return-stack reservation must observe the original physical frame.
+fn is_leaf_instruction inst:$common::InstValue -> bool {
+    inst match
+        common::InstValue::Drop => true
+        common::InstValue::Dup => true
+        common::InstValue::Over => true
+        common::InstValue::Push => true
+        common::InstValue::PushChar => true
+        common::InstValue::PushStr => true
+        common::InstValue::Rot => true
+        common::InstValue::Swap => true
+        common::InstValue::Load8 => true
+        common::InstValue::Load16 => true
+        common::InstValue::Load32 => true
+        common::InstValue::Load64 => true
+        common::InstValue::Add => true
+        common::InstValue::Sub => true
+        common::InstValue::Mul => true
+        common::InstValue::BitAnd => true
+        common::InstValue::BitOr => true
+        common::InstValue::BitXor => true
+        common::InstValue::BitNot => true
+        common::InstValue::And => true
+        common::InstValue::Or => true
+        common::InstValue::Not => true
+        common::InstValue::Eq => true
+        common::InstValue::Ne => true
+        common::InstValue::Lt => true
+        common::InstValue::Le => true
+        common::InstValue::Gt => true
+        common::InstValue::Ge => true
+        common::InstValue::Ult => true
+        common::InstValue::Ule => true
+        common::InstValue::Ugt => true
+        common::InstValue::Uge => true
+        common::InstValue::NormalizeInt => true
+        _ => false
+    end
+}
+
 fn count_abi_class
     classes:$std::List[common::ExternAbiClass]
     target:$common::ExternAbiClass
@@ -882,6 +973,16 @@ impl Emitter {
     # ============================================================================
 
     pub fn emit_bytecode self:mut$Emitter bytecode:$std::List[common::InstValue] is_global:bool {
+        if is_global ! bytecode has_forwarding_frame && then
+            common::WORD_SIZE self.emit_return_stack_check
+            4 = index: u64
+            while index bytecode.length 2 - > do
+                is_global index bytecode.get self.emit_inst
+                1 += index
+            done
+            is_global common::InstValue::FnReturn self.emit_inst
+            return
+        fi
         for inst in bytecode.iter do
             is_global inst self.emit_inst
         done
@@ -1123,11 +1224,10 @@ impl Emitter {
     }
 
     # ============================================================================
-    # Reserve a checked range on the fixed return and local stack. The caller
-    # writes only after this advances r14 successfully.
+    # Check available return and local stack capacity without advancing r14.
     # ============================================================================
 
-    pub fn emit_return_stack_reservation self:mut$Emitter byte_count:u64 {
+    fn emit_return_stack_check self:mut$Emitter byte_count:u64 {
         if RETURN_STACK_SIZE byte_count > then
             "jmp return_stack_overflow" self.indent
             return
@@ -1136,6 +1236,14 @@ impl Emitter {
         f"leaq return_stack+{maximum_offset}(%rip), %rcx" self.indent_string
         "cmpq %rcx, %r14" self.indent
         "ja return_stack_overflow" self.indent
+    }
+
+    # Reserve space only after the complete range passes the capacity check.
+    pub fn emit_return_stack_reservation self:mut$Emitter byte_count:u64 {
+        byte_count self.emit_return_stack_check
+        if RETURN_STACK_SIZE byte_count > then
+            return
+        fi
         f"addq ${byte_count}, %r14" self.indent_string
     }
 
