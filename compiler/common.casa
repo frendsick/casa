@@ -206,9 +206,7 @@ pub struct ExternAbiType derives std::Clone {
 }
 
 impl ExternAbiType {
-    pub fn new passing:ExternAbiPassing size:u64 -> ExternAbiType {
-        size passing ExternAbiType
-    }
+    pub fn new passing:ExternAbiPassing size:u64 -> ExternAbiType { size passing ExternAbiType }
 }
 
 pub struct ExternCall {
@@ -3404,6 +3402,80 @@ pub fn string_list_index items:$std::List[std::String] value:$str -> i64 {
 pub fn string_list_contains items:$std::List[std::String] value:$str -> bool {
     0 value items string_list_index >=
 }
+pub const UNKNOWN_TYPE_ID 0
+const TYPE_HASH_MULTIPLIER 31
+# Structural type IDs belong to one SymbolStore. Nodes stay immutable until
+# release. Type-variable names retain their surrounding declaration context.
+# These IDs alone are not specialization keys.
+pub struct TypePool {
+    values:  std::List[Type]
+    buckets: std::Map[i64 std::List[u64]]
+}
+
+impl Type {
+    fn hash_structure self:$Type -> i64 {
+        self match
+            Type::Unknown => 0
+            Type::Builtin(builtin) => builtin.format std::str_hash
+            Type::TypeVar(name) => name.as_str std::str_hash
+            Type::Const(constant) => {
+                constant.name.as_str std::str_hash = hash
+                constant.typ.format std::str_hash hash TYPE_HASH_MULTIPLIER.wrapping_mul.wrapping_add = hash
+                constant.value hash TYPE_HASH_MULTIPLIER.wrapping_mul.wrapping_add
+            }
+            Type::Generic(generic) => {
+                generic.base.as_str std::str_hash = hash
+                for parameter in generic.params.iter do
+                    parameter.hash_structure hash TYPE_HASH_MULTIPLIER.wrapping_mul.wrapping_add = hash
+                done
+                hash
+            }
+            Type::Function(function) => {
+                function.parameters.length i64::wrapping_from = hash
+                for parameter in function.parameters.iter do
+                    parameter.hash_structure hash TYPE_HASH_MULTIPLIER.wrapping_mul.wrapping_add = hash
+                done
+                function.return_types.length i64::wrapping_from hash TYPE_HASH_MULTIPLIER.wrapping_mul.wrapping_add = hash
+                for result in function.return_types.iter do
+                    result.hash_structure hash TYPE_HASH_MULTIPLIER.wrapping_mul.wrapping_add = hash
+                done
+                hash
+            }
+        end
+    }
+}
+
+impl TypePool {
+    pub fn new -> TypePool {
+        std::Map[i64 std::List[u64]]::new std::List[Type]::new TypePool = pool
+        Type::Unknown pool.intern drop
+        pool
+    }
+
+    pub fn get self:$TypePool identity:u64 -> $Type { identity self.values.get }
+
+    # Values never change after insertion. Full equality resolves hash collisions.
+    pub fn intern self:mut$TypePool typ:$Type -> u64 {
+        typ.hash_structure = hash
+        if hash self.buckets.get std::Option::Some(identities) is then
+            for identity in identities.iter do
+                if identity copy self.get typ.eq then
+                    identity copy return
+                fi
+            done
+        fi
+        self.values.length = identity
+        typ.clone self.values.push
+        if hash self.buckets.get_mut std::Option::Some(identities) is then
+            identity identities.push
+        else
+            std::List[u64]::new = identities
+            identity identities.push
+            identities hash self.buckets.set
+        fi
+        identity
+    }
+}
 
 # ============================================================================
 # SymbolStore
@@ -3412,13 +3484,13 @@ pub fn string_list_contains items:$std::List[std::String] value:$str -> bool {
 # pipeline. Each phase holds a `store: SymbolStore` field on its owning struct
 # (Parser, TypeChecker, BytecodeCompiler) and uses its declaration behavior.
 #
-# Maps and sets are heap-backed in casa, so passing SymbolStore by value
-# copies the struct but not the underlying map data — all holders observe
-# the same mutations.
+# Each request owns its store. Queries borrow declarations. Semantic sessions
+# clone declarations into independent stores.
 # ============================================================================
 
 pub struct SymbolStore {
     pub next_op_id:             i64
+    pub types:                  TypePool
     functions:                  std::Map[std::String Function]
     pub variables:              std::Map[std::String Variable]
     pub constants:              std::Map[std::String Constant]
@@ -3472,7 +3544,6 @@ fn clear_map [V] values:mut$std::Map[std::String V] {
         name.as_str values.delete_str
     done
 }
-
 # Name lookup produces an owned group ID. Iterators then borrow only the index,
 # without tying the returned list to a temporary formatted lookup key.
 struct TraitImplIndex {
@@ -3487,7 +3558,10 @@ impl TraitImplIndex {
 
     fn append self:mut$TraitImplIndex key:$str identity:u64 {
         if key self.names.get_copy_str std::Option::Some(group) is then
-            identity group self.groups.get_mut.push
+            identity group self
+                .groups
+                .get_mut
+                .push
         else
             std::List[u64]::new = identities
             identity identities.push
@@ -3496,13 +3570,9 @@ impl TraitImplIndex {
         fi
     }
 
-    fn find_group self:$TraitImplIndex key:$str -> std::Option[u64] {
-        key self.names.get_copy_str
-    }
+    fn find_group self:$TraitImplIndex key:$str -> std::Option[u64] { key self.names.get_copy_str }
 
-    fn get_group self:$TraitImplIndex identity:u64 -> $std::List[u64] {
-        identity self.groups.get
-    }
+    fn get_group self:$TraitImplIndex identity:u64 -> $std::List[u64] { identity self.groups.get }
 
     fn clear self:mut$TraitImplIndex {
         self.names clear_map
@@ -3524,7 +3594,7 @@ fn make_trait_impl_pair_index_key receiver:$Type trait_name:$str -> std::String 
 
 pub struct TraitImplCandidates {
     trait_impls: $std::List[std::Option[TraitImpl]]
-    identities: std::Option[$std::List[u64]]
+    identities:  std::Option[$std::List[u64]]
     impl_index:  u64
 }
 
@@ -3755,9 +3825,9 @@ impl SymbolStore {
             if implementation_opt std::Option::Some(implementation) is then
                 implementation.receiver make_trait_impl_receiver_index_key = receiver_key
                 implementation
-                .trait_bound
-                .name
-                .as_str implementation.receiver make_trait_impl_pair_index_key = pair_key
+                    .trait_bound
+                    .name
+                    .as_str implementation.receiver make_trait_impl_pair_index_key = pair_key
                 pair.second copy receiver_key.as_str self.trait_impls_by_receiver.append
                 pair.second copy pair_key.as_str self.trait_impls_by_pair.append
             fi
@@ -3768,7 +3838,10 @@ impl SymbolStore {
         self.trait_impls.keys = names
         for name in names.iter do
             if name.as_str retained.has_str ! then
-                name.as_str self.trait_impls.remove_str.unwrap = identity
+                name.as_str self
+                    .trait_impls
+                    .remove_str
+                    .unwrap = identity
                 std::Option[TraitImpl]::None identity self.trait_impl_values.set
             fi
         done
@@ -3884,6 +3957,7 @@ pub fn symbol_store_new -> SymbolStore {
     std::Map[std::String Constant]::new
     std::Map[std::String Variable]::new
     std::Map[std::String Function]::new
+    TypePool::new
     1
     SymbolStore
 }
