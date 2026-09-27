@@ -29,6 +29,7 @@ pub const F32_SIGN_BIT_INDEX 31
 pub const F64_SIGN_BIT_INDEX 63
 pub const ODD_INTEGER_MASK 1
 const MAX_LEAF_INSTRUCTIONS 8
+const SCALAR_REGISTER_COUNT 4
 
 # ============================================================================
 # Emitter state
@@ -216,6 +217,94 @@ struct LeafTemplate {
     end_index:    u64
 }
 
+# A register holds one distinct value in a suffix of the value stack. Copies
+# use separate registers. Calls, branches, and unsupported operations flush it.
+struct ScalarStack {
+    depth: u64
+    first: u64
+}
+
+impl ScalarStack {
+    fn new -> ScalarStack { 0 0 ScalarStack }
+
+    fn get_register self:$ScalarStack index:u64 -> str {
+        self.first index + SCALAR_REGISTER_COUNT % get_scalar_register
+    }
+}
+
+fn get_scalar_register index:u64 -> str {
+    index match
+        0 => "%r8"
+        1 => "%r9"
+        2 => "%r10"
+        3 => "%r11"
+        _ => "Invalid scalar register index" panic
+    end
+}
+
+fn get_scalar_input_count inst:$common::InstValue -> std::Option[u64] {
+    inst match
+        common::InstValue::Push => 0
+        common::InstValue::PushChar => 0
+        common::InstValue::PushStr => 0
+        common::InstValue::LocalGet => 0
+        common::InstValue::LocalAddress => 0
+        common::InstValue::LocalSet => 1
+        common::InstValue::Drop => 1
+        common::InstValue::Dup => 1
+        common::InstValue::Over => 2
+        common::InstValue::Swap => 2
+        common::InstValue::Rot => 3
+        common::InstValue::Load8 => 1
+        common::InstValue::Load16 => 1
+        common::InstValue::Load32 => 1
+        common::InstValue::Load64 => 1
+        common::InstValue::Store8 => 2
+        common::InstValue::Store16 => 2
+        common::InstValue::Store32 => 2
+        common::InstValue::Store64 => 2
+        common::InstValue::Add => 2
+        common::InstValue::Sub => 2
+        common::InstValue::Mul => 2
+        common::InstValue::CheckedAdd(builtin) => {
+            if 64 builtin.bit_width != then
+                std::Option[u64]::None return
+            fi
+            2
+        }
+        common::InstValue::CheckedSub(builtin) => {
+            if 64 builtin.bit_width != then
+                std::Option[u64]::None return
+            fi
+            2
+        }
+        common::InstValue::CheckedMul(builtin) => {
+            if 64 builtin.bit_width != then
+                std::Option[u64]::None return
+            fi
+            2
+        }
+        common::InstValue::BitAnd => 2
+        common::InstValue::BitOr => 2
+        common::InstValue::BitXor => 2
+        common::InstValue::BitNot => 1
+        common::InstValue::And => 2
+        common::InstValue::Or => 2
+        common::InstValue::Not => 1
+        common::InstValue::Eq => 2
+        common::InstValue::Ne => 2
+        common::InstValue::Lt => 2
+        common::InstValue::Le => 2
+        common::InstValue::Gt => 2
+        common::InstValue::Ge => 2
+        common::InstValue::Ult => 2
+        common::InstValue::Ule => 2
+        common::InstValue::Ugt => 2
+        common::InstValue::Uge => 2
+        _ => std::Option[u64]::None return
+    end = count: u64
+    count std::Option::Some
+}
 # Templates borrow no function storage and live only during this emission.
 # The fixed budget bounds code growth. Calls and recursive placeholders never
 # qualify, so classification is independent of function-map traversal order.
@@ -1048,34 +1137,252 @@ impl Emitter {
         templates:$std::Map[std::String LeafTemplate]
         is_global:bool
     {
+        ScalarStack::new = cache
         if is_global ! bytecode has_forwarding_frame && then
             common::WORD_SIZE self.emit_return_stack_check
             4 = index: u64
             while index bytecode.length 2 - > do
-                is_global index bytecode.get self.emit_inst
+                is_global cache index bytecode.get self.emit_scalar_or_inst
                 1 += index
             done
-            is_global common::InstValue::FnReturn self.emit_inst
+            is_global cache common::InstValue::FnReturn self.emit_scalar_or_inst
             return
         fi
         for inst in bytecode.iter do
             if inst common::InstValue::FnCall(name) is then
                 if name templates.get std::Option::Some(template) is then
-                    is_global template self.emit_leaf_template
+                    is_global cache template self.emit_leaf_template
                     continue
                 fi
             fi
-            is_global inst self.emit_inst
+            is_global cache inst self.emit_scalar_or_inst
         done
+        cache self.flush_scalar_stack
     }
 
-    fn emit_leaf_template self:mut$Emitter template:$LeafTemplate is_global:bool {
+    fn emit_leaf_template
+        self:mut$Emitter
+        template:$LeafTemplate
+        cache:mut$ScalarStack
+        is_global:bool
+    {
         common::WORD_SIZE template.local_bytes + self.emit_return_stack_check
         template.start = index
         while index template.end_index > do
-            is_global index template.instructions.get self.emit_inst
+            is_global cache index template.instructions.get self.emit_scalar_or_inst
             1 += index
         done
+    }
+
+    fn flush_scalar_stack self:mut$Emitter cache:mut$ScalarStack {
+        0 = index: u64
+        while index cache.depth > do
+            f"pushq {index cache.get_register}" self.indent_string
+            1 += index
+        done
+        0 = cache.depth: u64
+        0 = cache.first: u64
+    }
+
+    # Fill below the cached suffix without moving registers that are already
+    # live. The circular order gives each stack value a distinct register.
+    fn refill_scalar_stack self:mut$Emitter cache:mut$ScalarStack needed:u64 {
+        if needed cache.depth >= then
+            return
+        fi
+        needed cache.depth - = missing
+        cache.first SCALAR_REGISTER_COUNT + missing - SCALAR_REGISTER_COUNT % = cache.first
+        missing = index
+        while 0 index > do
+            1 -= index
+            f"popq {index cache.get_register}" self.indent_string
+        done
+        needed = cache.depth
+    }
+
+    fn reserve_scalar_register self:mut$Emitter cache:mut$ScalarStack -> str {
+        if SCALAR_REGISTER_COUNT cache.depth == then
+            cache self.flush_scalar_stack
+        fi
+        cache.depth cache.get_register = register
+        1 += cache.depth
+        register
+    }
+
+    fn emit_scalar_or_inst
+        self:mut$Emitter
+        inst:$common::InstValue
+        cache:mut$ScalarStack
+        is_global:bool
+    {
+        if cache inst self.emit_scalar_inst ! then
+            cache self.flush_scalar_stack
+            is_global inst self.emit_inst
+        fi
+    }
+
+    # False means no assembly or cache state changed. Existing lowering then
+    # receives the complete physical stack, including all cached values.
+    fn emit_scalar_inst self:mut$Emitter inst:$common::InstValue cache:mut$ScalarStack -> bool {
+        if inst get_scalar_input_count std::Option::Some(count) is then
+            count cache self.refill_scalar_stack
+        else
+            false return
+        fi
+        "%r8" = top
+        "%r8" = below
+        if 0 cache.depth > then
+            cache.depth 1 - cache.get_register = top
+        fi
+        if 1 cache.depth > then
+            cache.depth 2 - cache.get_register = below
+        fi
+        inst match
+            common::InstValue::Push(value) => {
+                cache self.reserve_scalar_register = target
+                if INT32_MIN value >= INT32_MAX value <= && then
+                    f"movq ${value}, {target}" self.indent_string
+                else
+                    f"movabsq ${value}, {target}" self.indent_string
+                fi
+            }
+            common::InstValue::PushChar(value) => {
+                cache self.reserve_scalar_register = target
+                f"movq ${value}, {target}" self.indent_string
+            }
+            common::InstValue::PushStr(index) => {
+                cache self.reserve_scalar_register = target
+                f"leaq str_{index}(%rip), {target}" self.indent_string
+            }
+            common::InstValue::LocalGet(index) => {
+                cache self.reserve_scalar_register = target
+                f"movq -{index 1 + common::WORD_SIZE *}(%r14), {target}" self.indent_string
+            }
+            common::InstValue::LocalAddress(index) => {
+                cache self.reserve_scalar_register = target
+                f"leaq -{index 1 + common::WORD_SIZE *}(%r14), {target}" self.indent_string
+            }
+            common::InstValue::LocalSet(index) => {
+                f"movq {top}, -{index 1 + common::WORD_SIZE *}(%r14)" self.indent_string
+                1 -= cache.depth
+            }
+            common::InstValue::Drop => 1 -= cache.depth
+            common::InstValue::Dup => {
+                cache self.reserve_scalar_register = target
+                f"movq {top}, {target}" self.indent_string
+            }
+            common::InstValue::Over => {
+                cache self.reserve_scalar_register = target
+                f"movq {below}, {target}" self.indent_string
+            }
+            common::InstValue::Swap => {
+                f"movq {top}, %rax" self.indent_string
+                f"movq {below}, {top}" self.indent_string
+                f"movq %rax, {below}" self.indent_string
+            }
+            common::InstValue::Rot => {
+                cache.depth 3 - cache.get_register = bottom
+                f"movq {bottom}, %rax" self.indent_string
+                f"movq {below}, {bottom}" self.indent_string
+                f"movq {top}, {below}" self.indent_string
+                f"movq %rax, {top}" self.indent_string
+            }
+            common::InstValue::Load8 => f"movzbq ({top}), {top}" self.indent_string
+            common::InstValue::Load16 => f"movzwq ({top}), {top}" self.indent_string
+            common::InstValue::Load32 => {
+                f"movl ({top}), %eax" self.indent_string
+                f"movq %rax, {top}" self.indent_string
+            }
+            common::InstValue::Load64 => f"movq ({top}), {top}" self.indent_string
+            common::InstValue::Store8 => {
+                f"movq {below}, %rax" self.indent_string
+                f"movb %al, ({top})" self.indent_string
+                2 -= cache.depth
+            }
+            common::InstValue::Store16 => {
+                f"movq {below}, %rax" self.indent_string
+                f"movw %ax, ({top})" self.indent_string
+                2 -= cache.depth
+            }
+            common::InstValue::Store32 => {
+                f"movq {below}, %rax" self.indent_string
+                f"movl %eax, ({top})" self.indent_string
+                2 -= cache.depth
+            }
+            common::InstValue::Store64 => {
+                f"movq {below}, ({top})" self.indent_string
+                2 -= cache.depth
+            }
+            common::InstValue::BitNot => f"notq {top}" self.indent_string
+            common::InstValue::Not => {
+                f"cmpq $0, {top}" self.indent_string
+                "sete %al" self.indent
+                f"movzbq %al, {top}" self.indent_string
+            }
+            _ => {
+                inst match
+                    common::InstValue::Add => f"addq {top}, {below}" self.indent_string
+                    common::InstValue::Sub => f"subq {top}, {below}" self.indent_string
+                    common::InstValue::Mul => f"imulq {top}, {below}" self.indent_string
+                    common::InstValue::CheckedAdd(builtin) => {
+                        f"addq {top}, {below}" self.indent_string
+                        if builtin.is_unsigned then "jc arithmetic_error" else "jo arithmetic_error" fi self.indent
+                    }
+                    common::InstValue::CheckedSub(builtin) => {
+                        f"subq {top}, {below}" self.indent_string
+                        if builtin.is_unsigned then "jc arithmetic_error" else "jo arithmetic_error" fi self.indent
+                    }
+                    common::InstValue::CheckedMul(builtin) => {
+                        if builtin.is_unsigned then
+                            f"movq {below}, %rax" self.indent_string
+                            f"mulq {top}" self.indent_string
+                            "testq %rdx, %rdx" self.indent
+                            "jnz arithmetic_error" self.indent
+                            f"movq %rax, {below}" self.indent_string
+                        else
+                            f"imulq {top}, {below}" self.indent_string
+                            "jo arithmetic_error" self.indent
+                        fi
+                    }
+                    common::InstValue::BitAnd => f"andq {top}, {below}" self.indent_string
+                    common::InstValue::BitOr => f"orq {top}, {below}" self.indent_string
+                    common::InstValue::BitXor => f"xorq {top}, {below}" self.indent_string
+                    common::InstValue::And => {
+                        f"testq {top}, {top}" self.indent_string
+                        "setne %al" self.indent
+                        f"testq {below}, {below}" self.indent_string
+                        "setne %cl" self.indent
+                        "andb %cl, %al" self.indent
+                        f"movzbq %al, {below}" self.indent_string
+                    }
+                    common::InstValue::Or => {
+                        f"orq {top}, {below}" self.indent_string
+                        "setne %al" self.indent
+                        f"movzbq %al, {below}" self.indent_string
+                    }
+                    _ => {
+                        inst match
+                            common::InstValue::Eq => "sete"
+                            common::InstValue::Ne => "setne"
+                            common::InstValue::Lt => "setl"
+                            common::InstValue::Le => "setle"
+                            common::InstValue::Gt => "setg"
+                            common::InstValue::Ge => "setge"
+                            common::InstValue::Ult => "setb"
+                            common::InstValue::Ule => "setbe"
+                            common::InstValue::Ugt => "seta"
+                            common::InstValue::Uge => "setae"
+                            _ => "Invalid cached scalar operation" panic
+                        end = comparison
+                        f"cmpq {below}, {top}" self.indent_string
+                        f"{comparison} %al" self.indent_string
+                        f"movzbq %al, {below}" self.indent_string
+                    }
+                end
+                1 -= cache.depth
+            }
+        end
+        true
     }
 
     # ============================================================================
