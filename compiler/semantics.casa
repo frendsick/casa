@@ -1301,7 +1301,24 @@ pub struct FunctionSemantics {
     pub checked_function: std::Option[common::Function]
 }
 
+struct AnalyzedFunction {
+    checked_function:        common::Function
+    ordered_facts:           std::List[SemanticDependency]
+    inferred_effect:         common::StackEffect
+    diagnostics:             error::Diagnostics
+    return_callables:        std::List[std::Set[std::String]]
+    return_origin_summaries: std::List[ReturnOriginSummary]
+}
+
 impl FunctionSemantics {
+    pub fn into_root_parts
+        self:FunctionSemantics
+    -> std::List[common::Op] common::StackEffect error::Diagnostics {
+        self match
+            FunctionSemantics { operations: operations inferred_effect: inferred_effect diagnostics: diagnostics } => operations inferred_effect diagnostics
+        end
+    }
+
     pub fn has_symbol_dependency self:$FunctionSemantics dependency:$str -> bool {
         for fact in self.ordered_facts.iter do
             if fact SemanticDependency::Symbol(symbol) is then
@@ -1333,8 +1350,14 @@ impl SemanticSession {
         std::Option[common::Function]::None
     }
 
-    pub fn commit_checked_function self:mut$SemanticSession function:common::Function {
-        function self.store.restore_function
+    pub fn clone_function_declaration
+        self:$SemanticSession
+        name:$str
+    -> std::Option[common::Function] {
+        if name self.store.get_function std::Option::Some(function) is then
+            function.clone_declaration std::Option::Some return
+        fi
+        std::Option[common::Function]::None
     }
 
     pub fn into_store self:SemanticSession -> common::SymbolStore {
@@ -10586,8 +10609,7 @@ fn ensure_typechecked
     if function_opt.is_none then
         std::Option[CheckedFunction]::None return
     fi
-    function_opt.unwrap = source_function
-    clone_body source_function prepare_owned_function_for_semantics = function
+    function_opt.unwrap = function
     function.split_body = function_ops = function
     function std::Option::Some = active_function
     infer_parameters
@@ -10823,7 +10845,7 @@ impl TypeChecker {
                 fi
             done
             if returns_callable then
-                function.clone_for_import std::Option::Some = called_function
+                function.clone_declaration std::Option::Some = called_function
             fi
         fi
         if called_function.is_none then
@@ -10837,10 +10859,14 @@ impl TypeChecker {
         self.infer_parameters self.clone_bodies active_calls argument_callables
         self.store called_function.unwrap
         analyze_function_semantics_in_store = analysis
-        CallReturnSummary {
-            callables: analysis.return_callables.clone
-            origins: analysis.return_origin_summaries.clone
-        }
+        analysis match
+            AnalyzedFunction { checked_function: checked_function return_callables: return_callables return_origin_summaries: return_origin_summaries } => {
+                checked_function self.store.restore_function
+                CallReturnSummary {
+                    callables: return_callables origins: return_origin_summaries
+                }
+            }
+        end
     }
 
     fn find_call_argument
@@ -11185,7 +11211,13 @@ impl TypeChecker {
         self.active_calls.clone = active_calls
         function.name.clone active_calls.add
         self.infer_parameters self.clone_bodies active_calls argument_callables self.store function
-        analyze_function_semantics_in_store.return_callables.clone
+        analyze_function_semantics_in_store = analysis
+        analysis match
+            AnalyzedFunction { checked_function: checked_function return_callables: return_callables } => {
+                checked_function self.store.restore_function
+                return_callables
+            }
+        end
     }
 
     fn collect_operation_facts
@@ -11841,8 +11873,11 @@ fn analyze_ops
     if checker.path_continues then
         fallthrough_callables checker.return_callables TypeChecker::merge_return_callables
     fi
-    checker.return_origin_summaries.clone checker.return_callables.clone
-    checker.ordered_facts.clone inferred CheckedOperations
+    checker match
+        TypeChecker { return_origin_summaries: return_origin_summaries return_callables: return_callables ordered_facts: ordered_facts } => {
+            return_origin_summaries return_callables ordered_facts inferred CheckedOperations
+        }
+    end
 }
 
 pub fn check_ops
@@ -11869,7 +11904,9 @@ fn check_ops_with_parameter_policy
     std::Set[std::String]::new
     std::Map[std::String std::Set[std::String]]::new
     require_empty_final_stack diagnostics store function_opt ops analyze_ops = checked
-    checked.inferred_effect.clone
+    checked match
+        CheckedOperations { inferred_effect: inferred_effect } => inferred_effect
+    end
 }
 
 fn clone_operations_for_semantics source:$std::List[common::Op] -> std::List[common::Op] {
@@ -11896,28 +11933,17 @@ fn clone_operations_for_semantics source:$std::List[common::Op] -> std::List[com
 }
 
 fn clone_function_for_semantics source:$common::Function -> common::Function {
-    source.clone_for_import = cloned
+    source.clone_declaration = cloned
     source.ops clone_operations_for_semantics = cloned.ops
     cloned
-}
-
-fn prepare_owned_function_for_semantics
-    source:common::Function
-    clone_body:bool
--> common::Function {
-    if clone_body then
-        source clone_function_for_semantics return
-    fi
-    source
 }
 
 fn select_function_for_semantics
     fallback:$common::Function
     stored:std::Option[common::Function]
-    clone_body:bool
 -> common::Function {
     if stored.is_some then
-        clone_body stored.unwrap prepare_owned_function_for_semantics return
+        stored.unwrap return
     fi
     fallback clone_function_for_semantics
 }
@@ -11955,16 +11981,6 @@ impl common::SymbolStore {
     }
 }
 
-struct AnalyzedFunction {
-    checked_function:        common::Function
-    ordered_facts:           std::List[SemanticDependency]
-    inferred_effect:         common::StackEffect
-    operations:              std::List[common::Op]
-    diagnostics:             error::Diagnostics
-    return_callables:        std::List[std::Set[std::String]]
-    return_origin_summaries: std::List[ReturnOriginSummary]
-}
-
 fn analyze_function_semantics_in_store
     function:$common::Function
     store:mut$common::SymbolStore
@@ -11974,7 +11990,7 @@ fn analyze_function_semantics_in_store
     infer_parameters:bool
 -> AnalyzedFunction {
     function.name.as_str store.take_function_for_typecheck = stored_function
-    clone_body stored_function function select_function_for_semantics = checked_function
+    stored_function function select_function_for_semantics = checked_function
     true = checked_function.is_typechecked
     checked_function.split_body = checked_ops = checked_function
     checked_function std::Option::Some = function_opt
@@ -11982,17 +11998,19 @@ fn analyze_function_semantics_in_store
     infer_parameters clone_body active_calls argument_callables
     false diagnostics store function_opt checked_ops analyze_ops = checked
     function_opt.unwrap = checked_function
-    checked_ops.clone checked_function common::Function::set_ops
-    checked_function.clone store.restore_function
-    AnalyzedFunction {
-        checked_function: checked_function
-        ordered_facts: checked.ordered_facts.clone
-        inferred_effect: checked.inferred_effect.clone
-        operations: checked_ops
-        diagnostics: diagnostics
-        return_callables: checked.return_callables.clone
-        return_origin_summaries: checked.return_origin_summaries.clone
-    }
+    checked_ops checked_function common::Function::set_ops
+    checked match
+        CheckedOperations { ordered_facts: ordered_facts inferred_effect: inferred_effect return_callables: return_callables return_origin_summaries: return_origin_summaries } => {
+            AnalyzedFunction {
+                checked_function: checked_function
+                ordered_facts: ordered_facts
+                inferred_effect: inferred_effect
+                diagnostics: diagnostics
+                return_callables: return_callables
+                return_origin_summaries: return_origin_summaries
+            }
+        }
+    end
 }
 
 pub fn analyze_function_semantics
@@ -12038,22 +12056,39 @@ fn analyze_function_semantics_in_session_mode
     function.name.clone active_calls.add
     infer_parameters session.clone_bodies active_calls argument_callables
     session.store function analyze_function_semantics_in_store = analysis
-    FunctionSemantics {
-        ordered_facts: analysis.ordered_facts.clone
-        inferred_effect: analysis.inferred_effect.clone
-        operations: analysis.operations.clone
-        diagnostics: analysis.diagnostics.clone
-        return_callables: analysis.return_callables.clone
-        checked_function: analysis.checked_function.clone std::Option::Some
-    }
+    analysis match
+        AnalyzedFunction { checked_function: checked_function ordered_facts: ordered_facts inferred_effect: inferred_effect diagnostics: diagnostics return_callables: return_callables } => {
+            checked_function.clone session.store.restore_function
+            FunctionSemantics {
+                ordered_facts: ordered_facts
+                inferred_effect: inferred_effect
+                operations: checked_function.ops.clone
+                diagnostics: diagnostics
+                return_callables: return_callables
+                checked_function: checked_function std::Option::Some
+            }
+        }
+    end
 }
 
 pub fn continue_function_semantics
     function:$common::Function
     session:mut$SemanticSession
--> FunctionSemantics {
+-> error::Diagnostics {
     std::Map[std::String std::Set[std::String]]::new = argument_callables
-    false argument_callables session function analyze_function_semantics_in_session_mode
+    std::Set[std::String]::new = active_calls
+    function.name.clone active_calls.add
+    false session.clone_bodies active_calls argument_callables
+    session.store function analyze_function_semantics_in_store = analysis
+    analysis match
+        AnalyzedFunction { checked_function: checked_function inferred_effect: inferred_effect diagnostics: diagnostics } => {
+            if function.stack_effect.needs_inference diagnostics.has_errors ! && then
+                inferred_effect checked_function common::Function::set_stack_effect
+            fi
+            checked_function session.store.restore_function
+            diagnostics
+        }
+    end
 }
 
 pub fn analyze_global_initializer_semantics
@@ -12084,14 +12119,18 @@ pub fn analyze_global_initializer_semantics_in_session
     false diagnostics session.store function_opt checked_ops analyze_ops = checked
     function_opt.unwrap = checked_initializer
     checked_ops.clone checked_initializer common::Function::set_ops
-    FunctionSemantics {
-        ordered_facts: checked.ordered_facts.clone
-        inferred_effect: checked.inferred_effect.clone
-        operations: checked_ops
-        diagnostics: diagnostics
-        return_callables: checked.return_callables.clone
-        checked_function: checked_initializer std::Option::Some
-    }
+    checked match
+        CheckedOperations { ordered_facts: ordered_facts inferred_effect: inferred_effect return_callables: return_callables } => {
+            FunctionSemantics {
+                ordered_facts: ordered_facts
+                inferred_effect: inferred_effect
+                operations: checked_ops
+                diagnostics: diagnostics
+                return_callables: return_callables
+                checked_function: checked_initializer std::Option::Some
+            }
+        }
+    end
 }
 
 pub fn analyze_root_semantics
@@ -12106,14 +12145,18 @@ pub fn analyze_root_semantics
     std::Set[std::String]::new
     std::Map[std::String std::Set[std::String]]::new
     true diagnostics session.store function_opt checked_ops analyze_ops = checked
-    FunctionSemantics {
-        ordered_facts: checked.ordered_facts.clone
-        inferred_effect: checked.inferred_effect.clone
-        operations: checked_ops
-        diagnostics: diagnostics
-        return_callables: checked.return_callables.clone
-        checked_function: std::Option[common::Function]::None
-    }
+    checked match
+        CheckedOperations { ordered_facts: ordered_facts inferred_effect: inferred_effect return_callables: return_callables } => {
+            FunctionSemantics {
+                ordered_facts: ordered_facts
+                inferred_effect: inferred_effect
+                operations: checked_ops
+                diagnostics: diagnostics
+                return_callables: return_callables
+                checked_function: std::Option[common::Function]::None
+            }
+        }
+    end
 }
 
 pub fn make_default_method_function
