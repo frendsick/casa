@@ -36,9 +36,9 @@ is 1.0% slower than the first study's cleanup median. The first control and fina
 candidate were not measured as a direct pair.
 
 All six compilers reach identical stage 2 and stage 3 assembly. All 28 warm-up
-and measured outputs match their variant's fixed-point assembly. The raw
-samples, commands, source and compiler hashes, and logs are retained in
-[evidence.json](evidence.json).
+and measured outputs match their variant's fixed-point assembly.
+[evidence.json](evidence.json) records raw timings, peak RSS, source revisions,
+compiler hashes, profile counts, and validation summaries.
 
 ## Question
 
@@ -86,13 +86,11 @@ type names. The fallback avoids that regression. Using a hash without comparing
 the complete binding key is a pre-existing correctness weakness. Future
 identity changes must address it.
 
-The [rejected patch](rejected-byte-hash.patch) applies after the empty-global
-guard. Its native reproducer uses structs `Aáab` and `AĀbA`, with sizes 1 and 8.
+The byte-only variant's native reproducer uses structs `Aáab` and `AĀbA`, with sizes 1 and 8.
 Their binding keys collide under byte hashing. The rejected compiler reports
 generic sizes `1, 1`, while the control and corrected compiler report `1, 8`.
 The retained `test_size_of` assertions cover this regression without depending
-on specific hash values. Both rejected patches omit context lines. Apply them
-with `git apply --unidiff-zero` at the stated preceding variant.
+on specific hash values.
 
 Cleanup specialization now retains one set of discovered concrete types for
 the whole `monomorphize_checked_generics` call. The existing guard already
@@ -110,7 +108,7 @@ supertraits. It creates no method candidates and binds no method signatures.
 Actual method selection, default precedence, and ambiguity checks retain their
 existing paths. The public presence-check signature is unchanged.
 
-An initial [nominal-only traversal](rejected-nominal-trait.patch) was rejected. Current substitution rules
+An initial nominal-only traversal was rejected. Current substitution rules
 allow a trait parameter to shadow a supertrait name. For example,
 `trait C[A]: A` instantiated as `C[B]` follows `B`. Ignoring that substitution
 rejects a previously accepted qualified method call. The corrected traversal
@@ -154,22 +152,19 @@ compiler caller before the outermost clone accounts for only 31 final samples.
 This supports investigating representation and ownership across shared paths.
 It does not support assigning the whole cloning share to one body-copy removal.
 
-The retained [four-change profile](cleanup-profile.json) has 2,819 samples.
-The [final profile](trait-profile.json) has 2,572. Their dictionaries preserve
-every raw timestamp, instruction address, and reconstructed stack. Function
-counts and stack IDs use zero-based indices into `functions` and `stacks`.
+The four-change profile has 2,819 samples. The final profile has 2,572.
+Aggregate counts are recorded in `evidence.json`.
 
 ## Correctness and allocation lifetime
 
 Focused checks cover exact underflow messages and source locations, imported
 source names, Unicode map operations and specialization, generic cleanup at
 multiple runtime sites, trait diamonds, missing methods, and substituted
-supertraits. The corresponding control characterizations pass. Rejected
-variants and their native failures remain in `evidence.json`.
+supertraits. The corresponding control characterizations pass. The rejected
+variants' failures are described above and covered by the retained tests.
 
 The final `tests/test_all.sh` run passes all 14 shards, including compiler tests,
-CLI tests, examples, bootstrap, and formatter checks. Its complete output is
-retained with the focused validation logs.
+CLI tests, examples, bootstrap, and formatter checks.
 
 The [lifetime workload](lifetime.casa) repeats one successful generic cleanup
 request and one diagnostic-producing request 30 times in the same process.
@@ -271,7 +266,7 @@ for that discussion. Production rollout remains outside this planning map.
 The reference machine is a Ryzen 7 3700X under WSL2, with 16 logical processors
 and 15.6 GiB available physical memory. The emitted compiler is single-threaded.
 Native builds use `/usr/bin/as` and `/usr/bin/ld` from GNU binutils 2.38, through
-`/usr/bin/cc` 11.4.0. Machine and tool output is retained in `evidence.json`.
+`/usr/bin/cc` 11.4.0. Machine and toolchain versions are recorded in `evidence.json`.
 
 The evidence branch retains each implementation step as a separate commit:
 
@@ -316,8 +311,8 @@ changes one cause.
 
 Each compiler compiles its own source revision through assembly and linking.
 All use the same CLI options, including `--keep-asm --verbose`. The report
-retains compiler hashes, source-file hashes, raw clock samples, CPU accounting,
-peak RSS, generated assembly hashes, and logs. Warm-ups are excluded from medians.
+records source revisions, compiler and fixed-point assembly hashes, raw elapsed
+times, CPU accounting, and peak RSS. Warm-ups are excluded from medians.
 Every measured output must match the other outputs for that same variant.
 
 Create a JSON array in comparison order. Each entry contains `name`, `compiler`,
@@ -336,5 +331,4 @@ python3 docs/benchmarks/compiler-reductions/compare.py variants.json output
 
 Use direct `CLOCK_MONOTONIC_RAW` readings for comparisons on the reference
 machine. The prior investigation found materially different clock rates between
-raw and adjusted monotonic clocks. GNU wall-clock values are retained for
-inspection but do not determine the reported comparison.
+raw and adjusted monotonic clocks. The comparison uses raw-clock elapsed times.

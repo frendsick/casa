@@ -181,7 +181,7 @@ Cloning remains distributed. The largest individual compiler caller before the
 outermost clone accounts for 29 samples. Leaf samples in `memcpy` fall from 9.6%
 in the prior profile to 4.2%. `str.at` still accounts for 6.0%. Expanded helpers
 are attributed to their callers, so their absence as leaf symbols is not itself
-a savings measurement. Full samples are retained in [native-profile.json](native-profile.json).
+a savings measurement. Aggregate counts are recorded in [native-code.json](native-code.json).
 
 The compiler's generated code has fewer instructions and stack operations, but
 its machine-code section grows:
@@ -268,13 +268,11 @@ these requests. They do not establish a bound for arbitrary compiler inputs.
 
 ## Reproduction
 
-The [evidence file](native-code.json) retains source and compiler hashes, native
-builds, complete timing samples, checks, and memory checkpoints. The patches in
-[native-patches](native-patches) reconstruct the original prototypes and final
-compiler from commit `eb69995f8a0c16b7414d7c7440610e611ba7e88e`. Each patch applies
-independently with `git apply`. Reconstruction was checked against every source
-hash in the corresponding snapshot. Rejected patches preserve experimental
-behavior and must not be used as the selected implementation.
+The [evidence file](native-code.json) records raw timings, peak RSS, compiler and
+fixed-point assembly hashes, profile counts, and correctness and memory summaries.
+Its source revisions reproduce the selected variants. Each recorded revision
+was checked against every measured source-file hash. Superseded prototypes have
+timing summaries only. Their source patches and full logs are omitted.
 
 Use the same native toolchain and serial measurement protocol as the first
 study. Each compiler measures its own source snapshot. No compilation, test run,
