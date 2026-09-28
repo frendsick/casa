@@ -3,6 +3,18 @@
 `casafmt` reads Casa source from standard input and writes formatted source to
 standard output.
 
+Formatting uses the root syntax product from `compiler/products.casa`. Its
+lossless grammar in `compiler/syntax.casa` retains source spelling,
+trivia, qualified-name ranges, and nested constructs without loading imports or
+looking up declarations. Unresolved names and both meanings of `Name {}` are
+safe to format. Field labels and assignment annotations are recognized from
+their grammatical position.
+
+The formatter checks tokens, comment attachment, and structural relationships
+against the formatted candidate. If recognition fails or these facts change,
+it returns the original source and a failure status. Analysis and assembly
+still use the private semantic parser while their consumers migrate.
+
 Build a current compiler first, then build the formatter:
 
 ```sh

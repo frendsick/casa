@@ -111,7 +111,7 @@ small interfaces:
 | Interface | Explicit contract | Additional caller knowledge |
 |---|---|---|
 | [`analysis::analyze`](../../compiler/analysis.casa#L49-L75) | Takes root source, root identity, search paths, and overrides. Returns sources, diagnostics, and optional typechecked output. | Callers must inspect diagnostics before treating `typechecked` as successful. The nested result also retains a diagnostic copy. |
-| [`syntax::parse_and_resolve`](../../compiler/syntax.casa#L8495-L8518) | Loads imports into the supplied `SourceStore`, then returns resolved operations, a symbol store, and diagnostics. | A missing operation list means the store is unusable. The type permits other combinations, and callers must retain the mutated source store. |
+| [`syntax::parse_and_resolve`](../../compiler/legacy_parser.casa#L8495-L8518) | Loads imports into the supplied `SourceStore`, then returns resolved operations, a symbol store, and diagnostics. | A missing operation list means the store is unusable. The type permits other combinations, and callers must retain the mutated source store. |
 | [`typechecker::type_check`](../../compiler/typechecker.casa#L53-L75) | Consumes operations and a store. Returns checked operations, updated symbols, a root stack effect, and diagnostics. | The result may contain errors for editor use. Code generation requires the same result to contain only backend-valid operations. |
 | [`bytecode::compile_typechecked`](../../compiler/bytecode.casa#L3713-L3721) | Returns a complete `Program` or an internal failure. | It rechecks diagnostics, then depends on the exact pairing between operations and store-owned side tables. |
 | [`emitter::emit`](../../compiler/emitter.casa#L2647-L2654) | Converts a `Program` to GNU assembly text. | Public `Program` fields and instruction-family helpers allow callers and tests to construct states outside this contract. |
@@ -432,7 +432,7 @@ rg -c '^\s*pub (fn|struct|enum|const)\b' compiler/*.casa
 rg -l 'OpValue::' tests/compiler --glob '*.casa' | wc -l
 rg -l 'InstValue::' tests/compiler --glob '*.casa' | wc -l
 rg -o 'common::Op::new' tests/compiler --glob '*.casa' | wc -l
-rg -o '\bsyntax_only\b' compiler/syntax.casa | wc -l
+rg -o '\bsyntax_only\b' compiler/legacy_parser.casa | wc -l
 rg -o 'clone_for_import' compiler/document.casa | wc -l
 ```
 

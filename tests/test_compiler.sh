@@ -31,7 +31,7 @@ esac
 # being silently omitted from category-based CI runs.
 test_category() {
     case "$1" in
-        test/test_lexer|test/test_parser|test/test_pattern|test/test_type_ast)
+        test/test_source_syntax|test/test_lexer|test/test_parser|test/test_pattern|test/test_type_ast)
             echo compiler_parsing
             ;;
         test/test_analysis|test/test_block_scope|test/test_common|\

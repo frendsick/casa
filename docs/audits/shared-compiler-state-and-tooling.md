@@ -36,7 +36,7 @@ This audit does not choose a target architecture or implement any cleanup.
 
 The primary scope contains 6,708 lines in `compiler/common.casa`,
 `compiler/error.casa`, `compiler/analysis.casa`, `compiler/document.casa`, and
-`casa.casa`. The audit also traced their consumers through `compiler/syntax.casa`,
+`casa.casa`. The audit also traced their consumers through `compiler/legacy_parser.casa`,
 `compiler/semantics.casa`, `compiler/typechecker.casa`,
 `compiler/bytecode.casa`, `compiler/emitter.casa`, `lsp.casa`,
 `formatter/format.casa`, and focused compiler tests.
@@ -115,7 +115,7 @@ different store are valid parameter types but not a valid compilation input.
 [`SymbolStore`](https://github.com/frendsick/casa/blob/bb6ffa784afe7a0a86fa68014c2773e0d6a114e1/compiler/common.casa#L3420-L3442)
 has 21 fields. Sixteen fields are public. Its main implementation exposes 23
 public methods. A parser-side extension exposes 10 more public methods, five
-of which have no caller outside `compiler/syntax.casa`. Semantic analysis adds
+of which have no caller outside `compiler/legacy_parser.casa`. Semantic analysis adds
 the private `clone_for_semantics` implementation in a third file.
 
 A conservative receiver-qualified scan found 229 direct accesses to public
@@ -233,7 +233,7 @@ deletion depends on the selected interface.
 The formatter calls the compact `syntax::analyze_syntax(source, file)` seam.
 That part is deep and should be preserved. Its implementation constructs the
 normal parser and a full `SymbolStore`, then enables `Parser.syntax_only`.
-`compiler/syntax.casa` contains 25 references to this mode across parsing and
+`compiler/legacy_parser.casa` contains 25 references to this mode across parsing and
 fact construction.
 
 The formatter itself names 12 `TokenKind` variants in 64 occurrences, eight
@@ -327,7 +327,7 @@ evidence.
    Compare unconditional syntax facts with an explicit lossless syntax product.
    Do not add a second parser without supporting evidence. This removes 25 mode
    references. Net deletion depends on product design.
-   [`compiler/syntax.casa`](../../compiler/syntax.casa)
+   [`compiler/legacy_parser.casa`](../../compiler/legacy_parser.casa)
 7. `delete:` remove `Op.deferred_return_hint`, its two propagation branches,
    its one semantic read, and its clone-only test setup. No production
    construction path seeds a non-empty value. About 17 lines and one field
@@ -356,7 +356,7 @@ for file in $(rg -l 'OpValue::' --glob '*.casa'); do
   printf '%4d %4d %s\n' "$occurrences" "$variants" "$file"
 done
 
-rg -o '\bsyntax_only\b' compiler/syntax.casa | wc -l
+rg -o '\bsyntax_only\b' compiler/legacy_parser.casa | wc -l
 rg -o 'clone_for_import' compiler/document.casa | wc -l
 rg -l 'OpValue::' tests/compiler --glob '*.casa' | wc -l
 rg -l 'InstValue::' tests/compiler --glob '*.casa' | wc -l
@@ -366,7 +366,7 @@ fields='next_op_id|variables|constants|enums|structs|traits|builtins|copy_types|
 production=$(rg --files -g '*.casa' compiler formatter | rg -v '^compiler/common\.casa$'; printf '%s\n' casa.casa lsp.casa)
 printf '%s\n' "$production" | xargs rg -U -o --no-filename -r x \
   "\\b[A-Za-z0-9_]*store[[:space:]]*\\.($fields)\\b" | wc -l
-sed -n '429,618p' compiler/syntax.casa | rg -U -o --no-filename -r x \
+sed -n '429,618p' compiler/legacy_parser.casa | rg -U -o --no-filename -r x \
   "\\b(self|imported|cloned)[[:space:]]*\\.($fields)\\b" | wc -l
 sed -n '11896,11926p' compiler/semantics.casa | rg -U -o --no-filename -r x \
   "\\b(source|cloned)[[:space:]]*\\.($fields)\\b" | wc -l
