@@ -108,7 +108,7 @@ name rather than a concrete specialization
 A generated ordinary accessor also embeds a parse-time integer offset. Generic
 specialization substitutes typed operations, but it does not replace integer
 operations with specialization-dependent offsets
-([compiler/syntax.casa lines 4098-4108](../../compiler/syntax.casa#L4098-L4108),
+([compiler/legacy_parser.casa lines 4098-4108](../../compiler/legacy_parser.casa#L4098-L4108),
 [compiler/common.casa lines 598-681](../../compiler/common.casa#L598-L681),
 [compiler/typechecker.casa lines 9578-9607](../../compiler/typechecker.casa#L9578-L9607)).
 
@@ -177,8 +177,8 @@ exception inside an aggregate because its bytes are part of the outer body.
 
 The parser lowers dot syntax to a method call and generates a getter and setter
 for every struct member
-([compiler/syntax.casa lines 1373-1391](../../compiler/syntax.casa#L1373-L1391),
-[compiler/syntax.casa lines 4088-4224](../../compiler/syntax.casa#L4088-L4224)).
+([compiler/legacy_parser.casa lines 1373-1391](../../compiler/legacy_parser.casa#L1373-L1391),
+[compiler/legacy_parser.casa lines 4088-4224](../../compiler/legacy_parser.casa#L4088-L4224)).
 An ordinary getter converts the receiver borrow to a raw pointer, adds its
 embedded offset, then chooses one of three operations:
 
@@ -187,7 +187,7 @@ embedded offset, then chooses one of three operations:
 - perform a typed scalar or borrow load
 
 The generated paths are visible in
-[compiler/syntax.casa lines 4088-4157](../../compiler/syntax.casa#L4088-L4157).
+[compiler/legacy_parser.casa lines 4088-4157](../../compiler/legacy_parser.casa#L4088-L4157).
 The fixed-array getter behavior also has a focused parser test
 ([tests/compiler/test_generic_structs.casa lines 112-120](../../tests/compiler/test_generic_structs.casa#L112-L120)).
 
@@ -209,7 +209,7 @@ uses the getter before the setter
 ([compiler/typechecker.casa lines 4487-4552](../../compiler/typechecker.casa#L4487-L4552)).
 The setter stores one pointer for an indirect field and uses a typed store for an
 inline field
-([compiler/syntax.casa lines 4181-4208](../../compiler/syntax.casa#L4181-L4208)).
+([compiler/legacy_parser.casa lines 4181-4208](../../compiler/legacy_parser.casa#L4181-L4208)).
 The replacement value is consumed by the setter. Live borrows prevent moving or
 replacing their owner
 ([docs/adr/0114 lines 1-27](../adr/0114-live-borrows-prevent-moving-their-owner.md#L1-L27)).
@@ -226,7 +226,7 @@ Owner generations later prevent cleanup of the moved binding
 All ordinary structs currently fail `Copy` before field eligibility is relevant
 because their value representation is indirect. Shared borrows can be duplicated,
 exclusive borrows cannot, and fixed arrays depend on element `Copy`
-([compiler/syntax.casa lines 5330-5458](../../compiler/syntax.casa#L5330-L5458)).
+([compiler/legacy_parser.casa lines 5330-5458](../../compiler/legacy_parser.casa#L5330-L5458)).
 The compiler applies the same check to `dup`, `over`, and explicit `copy`
 ([compiler/typechecker.casa lines 8829-8875](../../compiler/typechecker.casa#L8829-L8875)).
 The behavior is intentional: duplicating the struct pointer would create two
@@ -237,7 +237,7 @@ A focused test rejects `Copy` even for a scalar-only struct
 
 Generated `Clone` reads each field, calls field `Clone` except for a shared
 borrow, and reconstructs a new struct
-([compiler/syntax.casa lines 5529-5552](../../compiler/syntax.casa#L5529-L5552)).
+([compiler/legacy_parser.casa lines 5529-5552](../../compiler/legacy_parser.casa#L5529-L5552)).
 It therefore allocates a new outer body. Nested owned fields clone according to
 their own implementations. This is semantic independent-owner duplication, not
 a raw body copy.
@@ -332,7 +332,7 @@ at assignment and later destroy the replacement.
 
 The generated setter writes the replacement pointer without loading or destroying
 the old pointer
-([compiler/syntax.casa lines 4181-4202](../../compiler/syntax.casa#L4181-L4202)).
+([compiler/legacy_parser.casa lines 4181-4202](../../compiler/legacy_parser.casa#L4181-L4202)).
 Outer destruction can reach only the replacement
 ([compiler/bytecode.casa lines 731-758](../../compiler/bytecode.casa#L731-L758)).
 The existing field-assignment test replaces a field that has no observable drop
@@ -346,10 +346,10 @@ The ordinary layout policy stores a nested extern struct as one indirect word.
 Generated accessors independently mark any known extern-struct member as inline,
 even when its parent is ordinary
 ([compiler/common.casa lines 3787-3808](../../compiler/common.casa#L3787-L3808),
-[compiler/syntax.casa lines 4110-4128](../../compiler/syntax.casa#L4110-L4128)).
+[compiler/legacy_parser.casa lines 4110-4128](../../compiler/legacy_parser.casa#L4110-L4128)).
 The getter then returns the address of the pointer slot as if it were the extern
 struct body
-([compiler/syntax.casa lines 4142-4156](../../compiler/syntax.casa#L4142-L4156)).
+([compiler/legacy_parser.casa lines 4142-4156](../../compiler/legacy_parser.casa#L4142-L4156)).
 
 The local runtime probe stored an extern `RunInner { x: u16, flag: u8 }` in an
 ordinary `RunHolder`. Reading `holder.inner.x` returned `40464` instead of the

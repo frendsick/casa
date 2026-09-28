@@ -144,7 +144,7 @@ Deliver the source, reference-documentation, example, and test changes together:
    formatter validation. Formatting valid imports must not require dependencies
    to exist on disk.
 
-The current affected paths are `compiler/syntax.casa`,
+The current affected paths are `compiler/legacy_parser.casa`,
 `compiler/selective_import.casa`, import operation definitions in
 `compiler/common.casa`, and their consumers. Existing behavior checks live in
 `tests/compiler/test_modules.casa`, `test_parser.casa`, `test_selective_import*.casa`,

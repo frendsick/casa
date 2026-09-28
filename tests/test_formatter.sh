@@ -329,6 +329,20 @@ check_formatter_case() {
 check_formatter_case syntax_only 0 \
     $'import "missing_formatter_module_410"\nconst alias missing_constant\nfn use[T:MissingTrait] value:T { value missing_call }\n' \
     $'import "missing_formatter_module_410"\n\nconst alias missing_constant\n\nfn use [T:MissingTrait] value:T { value missing_call }\n'
+check_formatter_case unresolved_struct_fields 0 \
+    $'fn use { Unknown { value: 1 } }\n' \
+    $'fn use {\n    Unknown { value: 1 }\n}\n'
+check_formatter_case missing_unresolved_struct_field_value 1 \
+    $'fn use { Unknown { value: } }\n' \
+    $'fn use { Unknown { value: } }\n' \
+    'Missing value for field'
+check_formatter_case ambiguous_empty_braces 0 \
+    $'fn N { }\nstruct S { }\nfn use { N { } S { } }\n' \
+    $'fn N { }\n\nstruct S {\n}\n\nfn use {\n    N { } S { }\n}\n'
+check_formatter_case generic_bracket_whitespace 1 \
+    $'fn use { std::List [i64] :: new drop }\n' \
+    $'fn use { std::List [i64] :: new drop }\n' \
+    'changed source meaning'
 check_formatter_case invalid_lex 1 \
     'unclosed string "broken' \
     'unclosed string "broken' \

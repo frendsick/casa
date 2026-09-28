@@ -7,6 +7,9 @@ Source revision:
 [`bb6ffa7`](https://github.com/frendsick/casa/commit/bb6ffa784afe7a0a86fa68014c2773e0d6a114e1),
 2026-09-02.
 
+At this revision, `compiler/legacy_parser.casa` was named
+`compiler/syntax.casa`. File names and measurements below describe that revision.
+
 Run date: 2026-09-03.
 
 ## Finding

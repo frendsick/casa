@@ -89,7 +89,7 @@ linearly searches source-name mappings twice. The generated text is consumed by
 diagnostic paths. The profile measures its cost on a successful compilation.
 
 For the third target,
-[`validate_global_initializer_order`](../../../compiler/syntax.casa#L9127)
+[`validate_global_initializer_order`](../../../compiler/legacy_parser.casa#L9127)
 creates a `SemanticSession` before inspecting operations. Its
 [`constructor`](../../../compiler/semantics.casa#L1310) calls
 [`clone_for_semantics`](../../../compiler/semantics.casa#L11897), which copies

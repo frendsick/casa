@@ -19,20 +19,20 @@ from `18e2372`. Final reconciliation at `e5935db` incorporated the semantic and
 measurement decisions without compiler-source changes. These are code and
 existing-test inspections, not new measurements.
 
-- [Import handling](../../compiler/syntax.casa#L6296) scans import grammar during
+- [Import handling](https://github.com/frendsick/casa/blob/5e13d87/compiler/syntax.casa#L6296) scans import grammar during
   namespace discovery, scans it again to resolve prefixes, then parses it normally.
   Namespace rewriting changes token values and requires a reverse source-name map.
-- [Parsing](../../compiler/syntax.casa#L8211) writes declarations into the shared
+- [Parsing](https://github.com/frendsick/casa/blob/5e13d87/compiler/syntax.casa#L8211) writes declarations into the shared
   store before a construct succeeds. Recovery can undo emitted operations but
   cannot undo those declarations. It therefore discards the whole result after
   a failed construct that mutated the store.
-- [Struct literals](../../compiler/syntax.casa#L8160) require an already known
+- [Struct literals](https://github.com/frendsick/casa/blob/5e13d87/compiler/syntax.casa#L8160) require an already known
   struct to recognize the braced form. Recognition of subsequent field labels
   also consults that struct's member names. This couples grammar to declarations.
-- [Constant evaluation](../../compiler/syntax.casa#L2452) reads a token cursor
+- [Constant evaluation](https://github.com/frendsick/casa/blob/5e13d87/compiler/syntax.casa#L2452) reads a token cursor
   and declaration store during parsing. Accessor, derive, and default generation
   also share parser state.
-- [Syntax analysis](../../compiler/syntax.casa#L8359) constructs that same parser
+- [Syntax analysis](https://github.com/frendsick/casa/blob/5e13d87/compiler/syntax.casa#L8359) constructs that same parser
   with a mode flag. Formatter equivalence checks token and comment facts, but
   does not compare structural spans.
 

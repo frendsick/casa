@@ -178,8 +178,8 @@ cost of typed integer/float evaluation, stack operations, and named type argumen
 Source inspection at `62a46a68929ef20860f8a35f49b40ab5c0093949` found no
 executable non-test `const fn` or computed constant declarations. This does not
 establish external usage or make the new features cost-free. Five function-only
-helpers in `compiler/syntax.casa` total 302 physical lines, excluding adjacent
-comments: `op_value_to_operator_kind`, `is_const_fold_literal`,
+helpers in the then-named `compiler/syntax.casa` total 302 physical lines,
+excluding adjacent comments: `op_value_to_operator_kind`, `is_const_fold_literal`,
 `try_fold_const_fn_call`, `validate_const_fn_body`, and `eval_const_fn`.
 These are deletion candidates, not a net reduction estimate. Retained numeric
 validation, literal conversion, and the replacement evaluator still have costs.

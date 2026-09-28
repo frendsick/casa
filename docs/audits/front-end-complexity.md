@@ -6,15 +6,18 @@ Source revision: [`bb6ffa7`](https://github.com/frendsick/casa/commit/bb6ffa784a
 
 Run date: 2026-09-03.
 
+At the source revision, `compiler/legacy_parser.casa` was named
+`compiler/syntax.casa`. Counts and responsibilities below describe that revision.
+
 ## Result
 
-Casa's compiler has a good outer front-end seam. [`analysis::analyze`](../../compiler/analysis.casa#L49-L75) owns source setup and calls [`parse_and_resolve`](../../compiler/syntax.casa#L8495-L8518) before typechecking. The formatter has a second small seam through [`analyze_syntax`](../../compiler/syntax.casa#L8359-L8388). These interfaces hide substantial implementation detail.
+Casa's compiler has a good outer front-end seam. [`analysis::analyze`](../../compiler/analysis.casa#L49-L75) owns source setup and calls [`parse_and_resolve`](../../compiler/legacy_parser.casa#L8495-L8518) before typechecking. The formatter has a second small seam through [`analyze_syntax`](../../compiler/legacy_parser.casa#L8359-L8388). These interfaces hide substantial implementation detail.
 
-The implementation behind those seams has poor locality. `syntax.casa` is 9,918 lines and owns parsing, module discovery, import resolution, declaration elaboration, constant execution, generated declarations, trait validation, identifier resolution, and formatter facts. Most of that code is public. Names and literals are interpreted more than once, and several phase states exist only as conventions across mutable collections.
+The implementation behind those seams has poor locality. `legacy_parser.casa` is 9,918 lines and owns parsing, module discovery, import resolution, declaration elaboration, constant execution, generated declarations, trait validation, identifier resolution, and formatter facts. Most of that code is public. Names and literals are interpreted more than once, and several phase states exist only as conventions across mutable collections.
 
 The first later change should delete obsolete selective-import machinery. Production computes one closure and prunes one shared store. It does not consume the closure's `public_surface_types` and does not call the old transactional merge interface. This is a verified deletion of about 350 to 380 production lines.
 
-The next priorities are the namespace prepass and the broad `syntax.casa` interface. These have more design risk, but they cause repeated grammar interpretation, token mutation, source-name side tables, and direct test dependence on parser state.
+The next priorities are the namespace prepass and the broad `legacy_parser.casa` interface. These have more design risk, but they cause repeated grammar interpretation, token mutation, source-name side tables, and direct test dependence on parser state.
 
 This audit identifies deletion and deepening opportunities. It does not select a token model, pass graph, symbol-store model, module layout, or target architecture.
 
@@ -29,7 +32,7 @@ Simple code lines below exclude blank lines and full-line `#` comments. Public-f
 | Module | Lines | Simple code lines | Public functions | Private functions | External production entries |
 |---|---:|---:|---:|---:|---:|
 | [`compiler/lexer.casa`](../../compiler/lexer.casa) | 1,156 | 1,017 | 46 | 1 | 8 of 12 top-level functions |
-| [`compiler/syntax.casa`](../../compiler/syntax.casa) | 9,918 | 9,051 | 270 | 13 | 4 of 205 top-level functions |
+| [`compiler/legacy_parser.casa`](../../compiler/legacy_parser.casa) | 9,918 | 9,051 | 270 | 13 | 4 of 205 top-level functions |
 | [`compiler/selective_import.casa`](../../compiler/selective_import.casa) | 929 | 890 | 30 | 0 | 1 of 4 top-level functions |
 | Total | 12,003 | 10,958 | 346 | 14 | 13 of 221 top-level functions |
 
@@ -50,20 +53,20 @@ Current self-compilation provides an integrated baseline, not front-end attribut
 | Area | Current owner and flow | State and dependency facts |
 |---|---|---|
 | Source loading and lexing | `analysis::analyze` creates a [`SourceStore`](../../compiler/lexer.casa#L167-L316). Root text uses `lex_source`. Imports use `lex_file`. Formatter text uses `lex_source_fmt`. | `lexer.casa` owns UTF-8 decoding, path normalization, source storage, line indexes, diagnostic rendering, file loading, and tokenization. `SourceStore` is also returned to CLI and LSP consumers. |
-| Parsing | [`parse_ops`](../../compiler/syntax.casa#L8211-L8249) repeatedly calls the token-to-operation parser and controls error recovery. | [`Parser`](../../compiler/syntax.casa#L201-L215) owns a `SymbolStore`, sources, diagnostics, import graph state, initializer indexes, two mode booleans, and mutable caches. [`ParseState`](../../compiler/syntax.casa#L47-L164) uses one-element `List[bool]` values as mutable cells. |
-| Module discovery | [`namespace_module_tokens_with_prefixes`](../../compiler/syntax.casa#L6521-L6552) scans top-level import and declaration syntax before normal parsing. [`collect_resolved_import_prefixes`](../../compiler/syntax.casa#L6674-L6721) scans imports before that pass. | The prepass rewrites `Token.value` from source spelling to internal identity. [`SymbolStore::record_source_names`](../../compiler/common.casa#L3530-L3564) keeps a reverse side table for diagnostics and formatting. |
-| Imports | `Parser` resolves paths, assigns canonical prefixes, parses imports, analyzes each source once, tracks dependencies, retains initializers, and prunes declarations. | [`ImportedModule`](../../compiler/syntax.casa#L166-L172) stores declaration keys and dependency facts. [`ModuleContext`](../../compiler/syntax.casa#L174-L199) stores five parallel collections whose relationships are maintained by parser methods. The cache and cycle stack live for one analysis call. |
-| Selective imports | [`handle_selective_import`](../../compiler/syntax.casa#L7050-L7111) asks the closure builder for declaration keys, drops the returned public-surface set, and retains keys in the shared store. | The builder depends on `common`, `error`, `semantic_rules`, and `semantics`. It reuses `SemanticSession`, so operation semantics are not independently simulated here. |
-| Constants | Parsing dispatches to literal conversion and a syntax-owned interpreter for constant functions and blocks. | [`parse_literal_to_constant_value`](../../compiler/syntax.casa#L1982-L1998), [`eval_const_fn`](../../compiler/syntax.casa#L2309-L2450), and [`eval_const_block`](../../compiler/syntax.casa#L2452-L2522) read and write shared declaration facts. |
-| Declaration elaboration and generated declarations | Declaration parsing writes functions, constants, globals, aggregates, traits, and implementations directly into the shared store. Resolution later derives traits, creates member accessors, finalizes trait methods, and synthesizes Copy or Clone fallbacks. | Generated functions use the same `Function`, visibility sets, names, and resolution path as source functions. The generation policy is spread across roughly 1,500 lines in `syntax.casa`. |
-| Identifier resolution | [`finish_resolution`](../../compiler/syntax.casa#L8429-L8493) expands imports, prunes the store, validates and generates declarations, then resolves root operations, function bodies, trait defaults, and global initializers. | The shared [`SymbolStore`](../../compiler/common.casa#L3420-L3441) contains declarations, visibility sets, source-name mappings, ownership facts, and later-phase facts. Its heap-backed maps alias when the struct is passed by value. |
-| Formatter facts | `analyze_syntax` lexes lossless tokens, removes comments and newlines for parsing, runs the normal parser in `syntax_only` mode, and returns token, comment, and structural facts. The formatter analyzes its output again and compares the facts. | `syntax.casa` has 25 references to `syntax_only`. Parse state owns span stacks and accessor state. The formatter depends on the parser's span kinds and `fallback_token` in addition to the two intended fact functions. |
+| Parsing | [`parse_ops`](../../compiler/legacy_parser.casa#L8211-L8249) repeatedly calls the token-to-operation parser and controls error recovery. | [`Parser`](../../compiler/legacy_parser.casa#L201-L215) owns a `SymbolStore`, sources, diagnostics, import graph state, initializer indexes, two mode booleans, and mutable caches. [`ParseState`](../../compiler/legacy_parser.casa#L47-L164) uses one-element `List[bool]` values as mutable cells. |
+| Module discovery | [`namespace_module_tokens_with_prefixes`](../../compiler/legacy_parser.casa#L6521-L6552) scans top-level import and declaration syntax before normal parsing. [`collect_resolved_import_prefixes`](../../compiler/legacy_parser.casa#L6674-L6721) scans imports before that pass. | The prepass rewrites `Token.value` from source spelling to internal identity. [`SymbolStore::record_source_names`](../../compiler/common.casa#L3530-L3564) keeps a reverse side table for diagnostics and formatting. |
+| Imports | `Parser` resolves paths, assigns canonical prefixes, parses imports, analyzes each source once, tracks dependencies, retains initializers, and prunes declarations. | [`ImportedModule`](../../compiler/legacy_parser.casa#L166-L172) stores declaration keys and dependency facts. [`ModuleContext`](../../compiler/legacy_parser.casa#L174-L199) stores five parallel collections whose relationships are maintained by parser methods. The cache and cycle stack live for one analysis call. |
+| Selective imports | [`handle_selective_import`](../../compiler/legacy_parser.casa#L7050-L7111) asks the closure builder for declaration keys, drops the returned public-surface set, and retains keys in the shared store. | The builder depends on `common`, `error`, `semantic_rules`, and `semantics`. It reuses `SemanticSession`, so operation semantics are not independently simulated here. |
+| Constants | Parsing dispatches to literal conversion and a syntax-owned interpreter for constant functions and blocks. | [`parse_literal_to_constant_value`](../../compiler/legacy_parser.casa#L1982-L1998), [`eval_const_fn`](../../compiler/legacy_parser.casa#L2309-L2450), and [`eval_const_block`](../../compiler/legacy_parser.casa#L2452-L2522) read and write shared declaration facts. |
+| Declaration elaboration and generated declarations | Declaration parsing writes functions, constants, globals, aggregates, traits, and implementations directly into the shared store. Resolution later derives traits, creates member accessors, finalizes trait methods, and synthesizes Copy or Clone fallbacks. | Generated functions use the same `Function`, visibility sets, names, and resolution path as source functions. The generation policy is spread across roughly 1,500 lines in `legacy_parser.casa`. |
+| Identifier resolution | [`finish_resolution`](../../compiler/legacy_parser.casa#L8429-L8493) expands imports, prunes the store, validates and generates declarations, then resolves root operations, function bodies, trait defaults, and global initializers. | The shared [`SymbolStore`](../../compiler/common.casa#L3420-L3441) contains declarations, visibility sets, source-name mappings, ownership facts, and later-phase facts. Its heap-backed maps alias when the struct is passed by value. |
+| Formatter facts | `analyze_syntax` lexes lossless tokens, removes comments and newlines for parsing, runs the normal parser in `syntax_only` mode, and returns token, comment, and structural facts. The formatter analyzes its output again and compares the facts. | `legacy_parser.casa` has 25 references to `syntax_only`. Parse state owns span stacks and accessor state. The formatter depends on the parser's span kinds and `fallback_token` in addition to the two intended fact functions. |
 
 ## Repeated interpretation and invalid intermediate states
 
 ### Names and imports
 
-The namespace prepass interprets import clauses, declaration headers, enum bodies, sigils, and qualified names in [`compiler/syntax.casa` lines 6216 to 6552](../../compiler/syntax.casa#L6216-L6552). `collect_resolved_import_prefixes` separately interprets import clauses. Normal parsing then interprets the same import and declaration grammar again.
+The namespace prepass interprets import clauses, declaration headers, enum bodies, sigils, and qualified names in [`compiler/legacy_parser.casa` lines 6216 to 6552](../../compiler/legacy_parser.casa#L6216-L6552). `collect_resolved_import_prefixes` separately interprets import clauses. Normal parsing then interprets the same import and declaration grammar again.
 
 The prepass mutates identifier token values. Later code sometimes needs source spelling, so `SymbolStore` keeps a linear `source_names` list and copies it into later stores. A token can therefore be in source-name or internal-name form. Correctness depends on pass order and on keeping the side table synchronized.
 
@@ -71,7 +74,7 @@ The language requires source identity, aliases, visibility, selective roots, dep
 
 ### Literals and constants
 
-The lexer emits one `Literal` token kind. Syntax code classifies or converts that spelling in [`get_op_literal`](../../compiler/syntax.casa#L1011-L1047), `parse_literal_to_constant_value`, constant evaluation conversion helpers, [`parse_literal_match_pattern`](../../compiler/syntax.casa#L6032-L6062), and final identifier resolution. The repeated switches cover bool, char, integer, float, and string forms.
+The lexer emits one `Literal` token kind. Syntax code classifies or converts that spelling in [`get_op_literal`](../../compiler/legacy_parser.casa#L1011-L1047), `parse_literal_to_constant_value`, constant evaluation conversion helpers, [`parse_literal_match_pattern`](../../compiler/legacy_parser.casa#L6032-L6062), and final identifier resolution. The repeated switches cover bool, char, integer, float, and string forms.
 
 Casa requires literal spelling, constant values, pattern literals, and constant execution. It does not require every consumer to classify the raw spelling again.
 
@@ -79,7 +82,7 @@ Casa requires literal spelling, constant values, pattern literals, and constant 
 
 `Parser` has 13 public fields. Its module records, initializer indexes, source prefixes, analyzed-source set, import stack, and mutable store can represent combinations that no valid front-end pass should create. `ParseResolveResult` and `SyntaxResult` also expose public fields that permit callers to construct mismatched success values and diagnostics.
 
-Declaration parsing mutates the final shared store before a complete construct succeeds. [`parse_ops`](../../compiler/syntax.casa#L8211-L8249) can roll back emitted operations after recovery, but a failed construct that changed the store makes all output unusable because the store has no matching rollback. This fail-closed behavior is correct. The need for it shows that syntax recognition and declaration elaboration share one mutation boundary.
+Declaration parsing mutates the final shared store before a complete construct succeeds. [`parse_ops`](../../compiler/legacy_parser.casa#L8211-L8249) can roll back emitted operations after recovery, but a failed construct that changed the store makes all output unusable because the store has no matching rollback. This fail-closed behavior is correct. The need for it shows that syntax recognition and declaration elaboration share one mutation boundary.
 
 `SymbolStore` mixes source declarations, generated declarations, visibility, module-private names, source spelling, ownership results, and backend-consumed facts. Passing the struct by value aliases all heap-backed maps by design. The type does not encode which phase owns mutation or which collections must agree.
 
@@ -95,13 +98,13 @@ The accidental part is the cross-cutting mode. Normal parser functions contain `
 
 The outer analysis interface is deep. One input produces diagnostics, sources, and an optional typechecked result. `parse_and_resolve` is also a useful seam because callers do not need its module graph or resolution lifecycle.
 
-The file-level interfaces are shallow despite their size. Of 221 top-level public functions in the audited files, 208 have no production caller outside their defining file. `syntax.casa` exposes 205 top-level functions while production callers use only `parse_and_resolve`, `analyze_syntax`, `syntax_facts_match`, and `fallback_token`.
+The file-level interfaces are shallow despite their size. Of 221 top-level public functions in the audited files, 208 have no production caller outside their defining file. `legacy_parser.casa` exposes 205 top-level functions while production callers use only `parse_and_resolve`, `analyze_syntax`, `syntax_facts_match`, and `fallback_token`.
 
 Tests explain part of this surface. `test_parser.casa` constructs `Parser` directly at 11 sites. It changes `search_paths` and `prune_before_resolution`, calls `namespace_tokens`, `parse_ops`, and `resolve_identifiers_global`, then inspects the cache, store, and parse state. The 718-line selective-closure test imports the declaration enum and calls the legacy merge entry that production does not use.
 
 The tests provide valuable behavior coverage. Their current seam makes implementation details costly to change. Production-level parser and import tests already show that most behavior can be checked through `parse_and_resolve` and `AnalysisInput`.
 
-One ownership anomaly also crosses module boundaries. [`syntax.casa` implements methods on `common::SymbolStore`](../../compiler/syntax.casa#L429-L621), including ownership accessors and `clone_for_typecheck`. Later phases use some of these methods even though their implementation is in the syntax module. This creates hidden compile-order and import coupling and weakens locality.
+One ownership anomaly also crosses module boundaries. [`legacy_parser.casa` implements methods on `common::SymbolStore`](../../compiler/legacy_parser.casa#L429-L621), including ownership accessors and `clone_for_typecheck`. Later phases use some of these methods even though their implementation is in the legacy parser module. This creates hidden compile-order and import coupling and weakens locality.
 
 ## Required complexity
 
@@ -130,7 +133,7 @@ Canonical module analysis is current required context, not a remaining simplific
 
 No `native:` replacement was verified. The audited modules add no third-party dependency, so no dependency removal is available.
 
-Net production deletion frontier: about 680 to 910 lines. The range combines the verified selective-import deletion with conservative namespace, formatter, literal, and path estimates. The estimates overlap in `syntax.casa`, so later work must measure each landed change instead of adding independent headline numbers. A further 2,050 to 2,300 lines are candidates for relocation behind deeper module interfaces. Net dependencies removed: 0.
+Net production deletion frontier: about 680 to 910 lines. The range combines the verified selective-import deletion with conservative namespace, formatter, literal, and path estimates. The estimates overlap in `legacy_parser.casa`, so later work must measure each landed change instead of adding independent headline numbers. A further 2,050 to 2,300 lines are candidates for relocation behind deeper module interfaces. Net dependencies removed: 0.
 
 ## Priority constraints for later architecture work
 
