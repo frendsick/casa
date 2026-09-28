@@ -1,0 +1,671 @@
+import "std" as std
+import "common" as common
+import "error" as error
+
+# A value in a bounded constant block. Numeric literals have no width until an
+# annotation or an operation supplies one.
+pub struct EvalValue derives std::Clone {
+    pub value:    common::ConstantValue
+    pub typ:      std::Option[common::BuiltinType]
+    pub location: common::Location
+}
+
+pub fn literal value:common::ConstantValue location:common::Location -> EvalValue {
+    location std::Option[common::BuiltinType]::None value EvalValue
+}
+
+pub fn typed value:common::ConstantValue typ:common::BuiltinType -> EvalValue {
+    common::empty_location typ std::Option::Some value EvalValue
+}
+
+pub fn check_numeric
+    value:$EvalValue
+    typ:common::BuiltinType
+    location:$common::Location
+    diagnostics:mut$error::Diagnostics
+-> bool {
+    if value.typ std::Option::Some(existing) is then
+        if typ existing != then
+            location f"Constant operand has type `{existing.format}`, expected `{typ.format}`" common::ErrorKind::TypeMismatch diagnostics.record_error_string
+            false return
+        fi
+    fi
+    value.location.clone = diagnostic_location
+    if 0 diagnostic_location.file.length == then
+        location.clone = diagnostic_location
+    fi
+    value.value.clone match
+        common::ConstantValue::Int(integer) => {
+            typ common::Type::Builtin = target
+            if typ.is_integer ! then
+                location f"Integer `{integer.raw}` requires an integer type, got `{typ.format}`" common::ErrorKind::TypeMismatch diagnostics.record_error_string
+                false return
+            fi
+            if target integer.fits ! then
+                diagnostic_location f"Integer `{integer.raw}` is outside `{typ.format}` range {target.get_integer_min}..{target.get_integer_max}" common::ErrorKind::TypeMismatch diagnostics.record_error_string
+                false return
+            fi
+        }
+        common::ConstantValue::Float(raw) => {
+            if typ.is_float ! then
+                location f"Float `{raw}` requires a float type, got `{typ.format}`" common::ErrorKind::TypeMismatch diagnostics.record_error_string
+                false return
+            fi
+            if
+                typ common::BuiltinType::F32 == raw.to_f32.is_none &&
+                typ common::BuiltinType::F64 == raw.to_f64.is_none && ||
+            then
+                diagnostic_location f"Float `{raw}` is outside `{typ.format}` finite range" common::ErrorKind::TypeMismatch diagnostics.record_error_string
+                false return
+            fi
+        }
+        _ => {
+            location f"Expected `{typ.format}` constant operand" common::ErrorKind::TypeMismatch diagnostics.record_error_string
+            false return
+        }
+    end
+    true
+}
+
+pub fn numeric_type
+    left:$EvalValue
+    right:$EvalValue
+    annotation:std::Option[common::BuiltinType]
+    integer:bool
+    location:$common::Location
+    diagnostics:mut$error::Diagnostics
+-> std::Option[common::BuiltinType] {
+    if left.typ std::Option::Some(left_type) is then
+        if right.typ std::Option::Some(right_type) is then
+            if left_type right_type != then
+                location f"Constant operands have different widths: `{left_type.format}` and `{right_type.format}`" common::ErrorKind::TypeMismatch diagnostics.record_error_string
+                std::Option[common::BuiltinType]::None return
+            fi
+        fi
+        left_type std::Option::Some return
+    fi
+    if right.typ std::Option::Some(right_type) is then
+        right_type std::Option::Some return
+    fi
+    if annotation std::Option::Some(hint) is then
+        if integer hint.is_integer && then
+            hint std::Option::Some return
+        fi
+        if integer ! hint.is_float && then
+            hint std::Option::Some return
+        fi
+    fi
+    if integer then common::BuiltinType::I64 else common::BuiltinType::F64 fi std::Option::Some
+}
+
+pub fn make_integer value:i64 typ:common::BuiltinType -> EvalValue {
+    std::String::new = raw
+    if typ.is_unsigned then
+        value u64::wrapping_from.to_str = raw
+    else
+        value.to_str = raw
+    fi
+    typ value raw common::IntegerLiteral::new common::ConstantValue::Int typed
+}
+
+pub fn normalize_integer value:i64 typ:common::BuiltinType -> i64 {
+    typ.bit_width = width
+    if 64 width == then
+        value return
+    fi
+    1 width u64::try_from.unwrap << 1 - i64::wrapping_from = mask
+    mask value & = result
+    if typ.is_unsigned ! then
+        if 1 width 1 - u64::try_from.unwrap << result & 0 != then
+            mask ~ result | = result
+        fi
+    fi
+    result
+}
+
+pub fn apply_stack_intrinsic
+    stack:mut$std::List[EvalValue]
+    name:$str
+    location:$common::Location
+    diagnostics:mut$error::Diagnostics
+-> bool {
+    0 = required: u64
+    if "dup" name == "drop" name == || then
+        1 u64::try_from.unwrap = required
+    fi
+    if "swap" name == "over" name == || then
+        2 u64::try_from.unwrap = required
+    fi
+    if "rot" name == then
+        3 u64::try_from.unwrap = required
+    fi
+    if 0 required == then
+        false return
+    fi
+    if stack.length required > then
+        location f"Stack underflow at `{name}` in constant expression" common::ErrorKind::Syntax diagnostics.record_error_string
+        true return
+    fi
+    if "dup" name == then
+        stack.length 1 - stack.get.clone stack.push
+    elif "drop" name == then
+        stack.pop drop
+    elif "swap" name == then
+        stack.pop = first
+        stack.pop = second
+        second first stack.push stack.push
+    elif "over" name == then
+        stack.length 2 - stack.get.clone stack.push
+    else
+        stack.pop = third
+        stack.pop = second
+        stack.pop = first
+        first third second stack.push stack.push stack.push
+    fi
+    true
+}
+
+fn make_boolean value:bool -> EvalValue {
+    common::BuiltinType::Bool if value then 1 else 0 fi common::ConstantValue::Bool typed
+}
+
+fn is_comparison operator:common::OperatorKind -> bool {
+    operator common::OperatorKind::Eq ==
+    operator common::OperatorKind::Ne == ||
+    operator common::OperatorKind::Lt == ||
+    operator common::OperatorKind::Le == ||
+    operator common::OperatorKind::Gt == ||
+    operator common::OperatorKind::Ge == ||
+}
+
+fn compare_signed left:i64 right:i64 operator:common::OperatorKind -> bool {
+    operator match
+        common::OperatorKind::Eq => left right ==
+        common::OperatorKind::Ne => left right !=
+        common::OperatorKind::Lt => left right <
+        common::OperatorKind::Le => left right <=
+        common::OperatorKind::Gt => left right >
+        common::OperatorKind::Ge => left right >=
+        _ => false
+    end
+}
+
+fn compare_unsigned left:u64 right:u64 operator:common::OperatorKind -> bool {
+    operator match
+        common::OperatorKind::Eq => left right ==
+        common::OperatorKind::Ne => left right !=
+        common::OperatorKind::Lt => left right <
+        common::OperatorKind::Le => left right <=
+        common::OperatorKind::Gt => left right >
+        common::OperatorKind::Ge => left right >=
+        _ => false
+    end
+}
+
+fn operator_spelling operator:common::OperatorKind -> str {
+    operator match
+        common::OperatorKind::Plus => "+"
+        common::OperatorKind::Minus => "-"
+        common::OperatorKind::Mul => "*"
+        common::OperatorKind::Div => "/"
+        common::OperatorKind::Mod => "%"
+        common::OperatorKind::Shl => "<<"
+        common::OperatorKind::Shr => ">>"
+        _ => "operator"
+    end
+}
+
+fn arithmetic_error
+    left:$common::IntegerLiteral
+    right:$common::IntegerLiteral
+    operator:common::OperatorKind
+    location:$common::Location
+    diagnostics:mut$error::Diagnostics
+{
+    location f"Constant `{left.raw} {right.raw} {operator operator_spelling}` overflows or has an invalid divisor" common::ErrorKind::TypeMismatch diagnostics.record_error_string
+}
+
+fn evaluate_unsigned
+    left:$common::IntegerLiteral
+    right:$common::IntegerLiteral
+    typ:common::BuiltinType
+    operator:common::OperatorKind
+    location:$common::Location
+    diagnostics:mut$error::Diagnostics
+-> std::Option[EvalValue] {
+    left.value u64::wrapping_from = first
+    right.value u64::wrapping_from = second
+    if operator is_comparison then
+        operator second first compare_unsigned make_boolean std::Option::Some return
+    fi
+    0 = result: u64
+    false = invalid
+    operator match
+        common::OperatorKind::Plus => {
+            second i64::wrapping_from first i64::wrapping_from.wrapping_add u64::wrapping_from = result
+            if first result < then
+                true = invalid
+            fi
+        }
+        common::OperatorKind::Minus => {
+            if second first < then
+                true = invalid
+            fi
+            if invalid ! then
+                first second - = result
+            fi
+        }
+        common::OperatorKind::Mul => {
+            second i64::wrapping_from first i64::wrapping_from.wrapping_mul u64::wrapping_from = result
+            if 0 second != then
+                if first result second / != then
+                    true = invalid
+                fi
+            fi
+        }
+        common::OperatorKind::Div => {
+            if 0 second == then true = invalid else first second / = result fi
+        }
+        common::OperatorKind::Mod => {
+            if 0 second == then true = invalid else first second % = result fi
+        }
+        common::OperatorKind::BitAnd => first second & = result
+        common::OperatorKind::BitOr => first second | = result
+        common::OperatorKind::BitXor => first second ^ = result
+        _ => {
+            location "Unsupported unsigned integer operator in constant expression" common::ErrorKind::Syntax diagnostics.record_error
+            std::Option[EvalValue]::None return
+        }
+    end
+    result.to_str = raw
+    result i64::wrapping_from raw common::IntegerLiteral::new = literal
+    if invalid typ common::Type::Builtin literal.fits ! || then
+        diagnostics location operator right left arithmetic_error
+        std::Option[EvalValue]::None return
+    fi
+    typ literal common::ConstantValue::Int typed std::Option::Some
+}
+
+fn evaluate_signed
+    left:$common::IntegerLiteral
+    right:$common::IntegerLiteral
+    typ:common::BuiltinType
+    operator:common::OperatorKind
+    location:$common::Location
+    diagnostics:mut$error::Diagnostics
+-> std::Option[EvalValue] {
+    left.value = first
+    right.value = second
+    if operator is_comparison then
+        operator second first compare_signed make_boolean std::Option::Some return
+    fi
+    0 = result
+    false = invalid
+    operator match
+        common::OperatorKind::Plus => {
+            first second.wrapping_add = result
+            if
+                0 second > first result < &&
+                0 second < first result > && ||
+            then
+                true = invalid
+            fi
+        }
+        common::OperatorKind::Minus => {
+            second first.wrapping_sub = result
+            if
+                0 second < first result < &&
+                0 second > first result > && ||
+            then
+                true = invalid
+            fi
+        }
+        common::OperatorKind::Mul => {
+            first second.wrapping_mul = result
+            if
+                -9223372036854775808 first == -1 second == &&
+                -9223372036854775808 second == -1 first == && ||
+            then
+                true = invalid
+            elif 0 second != then
+                if first result second / != then
+                    true = invalid
+                fi
+            fi
+        }
+        common::OperatorKind::Div => {
+            if 0 second == -9223372036854775808 first == -1 second == && || then
+                true = invalid
+            else
+                first second / = result
+            fi
+        }
+        common::OperatorKind::Mod => {
+            if 0 second == -9223372036854775808 first == -1 second == && || then
+                true = invalid
+            else
+                first second % = result
+            fi
+        }
+        common::OperatorKind::BitAnd => first second & = result
+        common::OperatorKind::BitOr => first second | = result
+        common::OperatorKind::BitXor => first second ^ = result
+        _ => {
+            location "Unsupported signed integer operator in constant expression" common::ErrorKind::Syntax diagnostics.record_error
+            std::Option[EvalValue]::None return
+        }
+    end
+    result result.to_str common::IntegerLiteral::new = literal
+    if invalid typ common::Type::Builtin literal.fits ! || then
+        diagnostics location operator right left arithmetic_error
+        std::Option[EvalValue]::None return
+    fi
+    typ literal common::ConstantValue::Int typed std::Option::Some
+}
+
+fn compare_f32 left:f32 right:f32 operator:common::OperatorKind -> bool {
+    operator match
+        common::OperatorKind::Eq => left right ==
+        common::OperatorKind::Ne => left right !=
+        common::OperatorKind::Lt => left right <
+        common::OperatorKind::Le => left right <=
+        common::OperatorKind::Gt => left right >
+        common::OperatorKind::Ge => left right >=
+        _ => false
+    end
+}
+
+fn compare_f64 left:f64 right:f64 operator:common::OperatorKind -> bool {
+    operator match
+        common::OperatorKind::Eq => left right ==
+        common::OperatorKind::Ne => left right !=
+        common::OperatorKind::Lt => left right <
+        common::OperatorKind::Le => left right <=
+        common::OperatorKind::Gt => left right >
+        common::OperatorKind::Ge => left right >=
+        _ => false
+    end
+}
+
+fn evaluate_float
+    left:$common::ConstantValue
+    right:$common::ConstantValue
+    typ:common::BuiltinType
+    operator:common::OperatorKind
+    location:$common::Location
+    diagnostics:mut$error::Diagnostics
+-> std::Option[EvalValue] {
+    if left common::ConstantValue::Float(left_raw) is then
+        if right common::ConstantValue::Float(right_raw) is then
+            if typ common::BuiltinType::F32 == then
+                left_raw.to_f32.unwrap = first
+                right_raw.to_f32.unwrap = second
+                if operator is_comparison then
+                    operator second first compare_f32 make_boolean std::Option::Some return
+                fi
+                operator match
+                    common::OperatorKind::Plus => first second +
+                    common::OperatorKind::Minus => first second -
+                    common::OperatorKind::Mul => first second *
+                    common::OperatorKind::Div => first second /
+                    _ => {
+                        location "Unsupported float operator in constant expression" common::ErrorKind::Syntax diagnostics.record_error
+                        std::Option[EvalValue]::None return
+                    }
+                end = result
+                typ result.to_str common::ConstantValue::Float typed std::Option::Some return
+            fi
+            left_raw.to_f64.unwrap = first
+            right_raw.to_f64.unwrap = second
+            if operator is_comparison then
+                operator second first compare_f64 make_boolean std::Option::Some return
+            fi
+            operator match
+                common::OperatorKind::Plus => first second +
+                common::OperatorKind::Minus => first second -
+                common::OperatorKind::Mul => first second *
+                common::OperatorKind::Div => first second /
+                _ => {
+                    location "Unsupported float operator in constant expression" common::ErrorKind::Syntax diagnostics.record_error
+                    std::Option[EvalValue]::None return
+                }
+            end = result
+            typ result.to_str common::ConstantValue::Float typed std::Option::Some return
+        fi
+    fi
+    std::Option[EvalValue]::None
+}
+
+pub fn apply_operator
+    stack:mut$std::List[EvalValue]
+    operator:common::OperatorKind
+    annotation:std::Option[common::BuiltinType]
+    location:$common::Location
+    diagnostics:mut$error::Diagnostics
+-> bool {
+    if operator common::OperatorKind::Not == operator common::OperatorKind::BitNot == || then
+        if stack.is_empty then
+            location "Stack underflow in constant expression" common::ErrorKind::Syntax diagnostics.record_error
+            false return
+        fi
+        stack.pop = operand
+        if operator common::OperatorKind::Not == then
+            if operand.value common::ConstantValue::Bool(value) is then
+                0 value == make_boolean stack.push
+                true return
+            fi
+        fi
+        if operand.value.clone common::ConstantValue::Int(integer) is then
+            common::BuiltinType::I64 = typ
+            if operand.typ std::Option::Some(selected) is then
+                selected = typ
+            elif annotation std::Option::Some(selected) is then
+                if selected.is_integer then
+                    selected = typ
+                fi
+            fi
+            if diagnostics location typ operand check_numeric ! then
+                false return
+            fi
+            if operator common::OperatorKind::Not == then
+                0 integer.value == make_boolean stack.push
+            else
+                typ integer.value ~ normalize_integer = result
+                typ result make_integer stack.push
+            fi
+            true return
+        fi
+        location "Operator requires an integer or bool constant" common::ErrorKind::TypeMismatch diagnostics.record_error
+        false return
+    fi
+    if 2 stack.length < then
+        location "Stack underflow in constant expression" common::ErrorKind::Syntax diagnostics.record_error
+        false return
+    fi
+    stack.pop = right
+    stack.pop = left
+    if left.value common::ConstantValue::Bool(left_bool) is then
+        if right.value common::ConstantValue::Bool(right_bool) is then
+            operator match
+                common::OperatorKind::And => {
+                    0 left_bool != 0 right_bool != && make_boolean stack.push
+                    true return
+                }
+                common::OperatorKind::Or => {
+                    0 left_bool != 0 right_bool != || make_boolean stack.push
+                    true return
+                }
+                common::OperatorKind::Eq => {
+                    left_bool right_bool == make_boolean stack.push
+                    true return
+                }
+                common::OperatorKind::Ne => {
+                    left_bool right_bool != make_boolean stack.push
+                    true return
+                }
+                _ => {
+                }
+            end
+        fi
+    fi
+    if left.value.clone common::ConstantValue::Int(left_integer) is then
+        if right.value.clone common::ConstantValue::Int(right_integer) is then
+            if operator common::OperatorKind::Shl == operator common::OperatorKind::Shr == || then
+                common::BuiltinType::I64 = typ
+                if left.typ std::Option::Some(selected) is then
+                    selected = typ
+                elif annotation std::Option::Some(selected) is then
+                    if selected.is_integer then
+                        selected = typ
+                    fi
+                fi
+                if diagnostics location typ left check_numeric ! then
+                    false return
+                fi
+                if diagnostics location common::BuiltinType::U64 right check_numeric ! then
+                    false return
+                fi
+                right_integer.value u64::wrapping_from = count
+                if typ.bit_width u64::try_from.unwrap count < ! then
+                    location f"Shift count `{right_integer.raw}` must be below {typ.bit_width}" common::ErrorKind::TypeMismatch diagnostics.record_error_string
+                    false return
+                fi
+                0 = result
+                if operator common::OperatorKind::Shl == then
+                    left_integer.value count << = result
+                elif typ.is_unsigned then
+                    left_integer.value u64::wrapping_from count >> i64::wrapping_from = result
+                else
+                    left_integer.value count >> = result
+                fi
+                typ result normalize_integer = normalized
+                typ normalized make_integer stack.push
+                true return
+            fi
+            if diagnostics location true annotation right left numeric_type std::Option::Some(typ) is then
+                if diagnostics location typ left check_numeric ! then
+                    false return
+                fi
+                if diagnostics location typ right check_numeric ! then
+                    false return
+                fi
+                if typ.is_unsigned then
+                    diagnostics location operator typ right_integer left_integer evaluate_unsigned
+                else
+                    diagnostics location operator typ right_integer left_integer evaluate_signed
+                fi match
+                    std::Option::Some(value) => {
+                        value stack.push true return
+                    }
+                    std::Option::None => false return
+                end
+            fi
+            false return
+        fi
+    fi
+    if left.value common::ConstantValue::Float is right.value common::ConstantValue::Float is && then
+        if diagnostics location false annotation right left numeric_type std::Option::Some(typ) is then
+            if diagnostics location typ left check_numeric ! then
+                false return
+            fi
+            if diagnostics location typ right check_numeric ! then
+                false return
+            fi
+            diagnostics location operator typ right.value left.value evaluate_float match
+                std::Option::Some(value) => {
+                    value stack.push true return
+                }
+                std::Option::None => false return
+            end
+        fi
+        false return
+    fi
+    location "Constant operands have incompatible kinds or unsupported operation" common::ErrorKind::TypeMismatch diagnostics.record_error
+    false
+}
+# Finish an initializer. A block fixes unconstrained numeric widths once;
+# a direct literal or alias remains contextual when it has no annotation.
+pub fn constrain
+    value:EvalValue
+    annotation:std::Option[common::BuiltinType]
+    block:bool
+    location:$common::Location
+    diagnostics:mut$error::Diagnostics
+-> std::Option[EvalValue] {
+    value.value.clone match
+        common::ConstantValue::Int(integer) => {
+            std::Option[common::BuiltinType]::None = required
+            if annotation std::Option::Some(selected) is then
+                selected std::Option::Some = required
+            elif value.typ std::Option::Some(selected) is then
+                selected std::Option::Some = required
+            elif block then
+                common::BuiltinType::I64 std::Option::Some = required
+            fi
+            if required std::Option::Some(selected) is then
+                if diagnostics location selected value check_numeric ! then
+                    std::Option[EvalValue]::None return
+                fi
+                selected std::Option::Some = value.typ
+            elif
+                common::BuiltinType::I64 common::Type::Builtin integer.fits !
+                common::BuiltinType::U64 common::Type::Builtin integer.fits ! &&
+            then
+                location f"Integer `{integer.raw}` is outside all supported widths" common::ErrorKind::TypeMismatch diagnostics.record_error_string
+                std::Option[EvalValue]::None return
+            fi
+        }
+        common::ConstantValue::Float(raw) => {
+            std::Option[common::BuiltinType]::None = required
+            if annotation std::Option::Some(selected) is then
+                selected std::Option::Some = required
+            elif value.typ std::Option::Some(selected) is then
+                selected std::Option::Some = required
+            elif block then
+                common::BuiltinType::F64 std::Option::Some = required
+            fi
+            if required std::Option::Some(selected) is then
+                if diagnostics location selected value check_numeric ! then
+                    std::Option[EvalValue]::None return
+                fi
+                if selected common::BuiltinType::F32 == then
+                    raw
+                        .to_f32
+                        .unwrap
+                        .to_str common::ConstantValue::Float = value.value
+                fi
+                selected std::Option::Some = value.typ
+            elif diagnostics location common::BuiltinType::F64 value check_numeric ! then
+                std::Option[EvalValue]::None return
+            fi
+        }
+        common::ConstantValue::Bool => {
+            if annotation std::Option::Some(selected) is then
+                if selected common::BuiltinType::Bool != then
+                    location f"Bool constant cannot have type `{selected.format}`" common::ErrorKind::TypeMismatch diagnostics.record_error_string
+                    std::Option[EvalValue]::None return
+                fi
+            fi
+            common::BuiltinType::Bool std::Option::Some = value.typ
+        }
+        common::ConstantValue::Char => {
+            if annotation std::Option::Some(selected) is then
+                if selected common::BuiltinType::Char != then
+                    location f"Char constant cannot have type `{selected.format}`" common::ErrorKind::TypeMismatch diagnostics.record_error_string
+                    std::Option[EvalValue]::None return
+                fi
+            fi
+            common::BuiltinType::Char std::Option::Some = value.typ
+        }
+        common::ConstantValue::Str => {
+            if annotation std::Option::Some(selected) is then
+                if selected common::BuiltinType::Str != then
+                    location f"String constant cannot have type `{selected.format}`" common::ErrorKind::TypeMismatch diagnostics.record_error_string
+                    std::Option[EvalValue]::None return
+                fi
+            fi
+            common::BuiltinType::Str std::Option::Some = value.typ
+        }
+    end
+    value std::Option::Some
+}

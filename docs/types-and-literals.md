@@ -145,16 +145,31 @@ const LIMIT 100
 const GREETING "hello"
 ```
 
-A constant can use an earlier constant. A block can evaluate supported
-operators and `const fn` calls at compile time:
+A constant can use an earlier constant or a bounded postfix block. An optional
+annotation fixes its primitive type:
 
 ```casa
-const fn double value:i64 -> i64 { value 2 * }
-const DOUBLE_LIMIT { LIMIT double }
+const ELEMENT_COUNT 128
+const ELEMENT_BYTES 8
+const BUFFER_BYTES:u64 { ELEMENT_COUNT ELEMENT_BYTES * }
+const SCALE:f32 { 0.1 2.0 * }
+fn consume values:array[u8 BUFFER_BYTES] { values drop }
 ```
 
-A `const fn` can also run like a normal function. Its body cannot use control
-flow or global variables, and it can call only other `const fn` functions.
+Blocks accept literals, earlier visible constants, integer and float arithmetic,
+integer bitwise and shift operations, comparisons, eager boolean operations,
+and `dup`, `drop`, `swap`, `over`, and `rot`. They must leave exactly one value.
+Arithmetic reads left to right, so `10 3 -` is `7`. Comparisons use the top
+value as the first operand, so `0 1 >` is `true`. Function calls, conversions,
+control flow, and target layout queries such as `size_of` are not allowed.
+
+Unannotated numeric literals and aliases of contextual literals remain contextual
+at each use. Aliases of typed constants keep their width. A block
+resolves its numeric width once: unconstrained integers use `i64`, and floats
+use `f64`. Use an annotation when the result needs another width. Named
+constants can also supply integer, `bool`, or `char` type arguments. Float and
+string constants cannot be type arguments. Use an ordinary `fn` for runtime
+computations. `const fn` declarations are no longer supported.
 
 ## Numeric conversions
 

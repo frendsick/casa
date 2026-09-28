@@ -13,7 +13,7 @@ The examples are ordered from introductory programs to low-level system code.
 | 1 | [`hello_world.casa`](hello_world.casa) | The smallest complete Casa program |
 | 2 | [`fibonacci.casa`](fibonacci.casa) | Functions, recursion, and early return |
 | 3 | [`fizzbuzz.casa`](fizzbuzz.casa) | Bindings, loops, and conditional branches |
-| 4 | [`euler01.casa`](euler01.casa) | Constants and an arithmetic algorithm |
+| 4 | [`euler01.casa`](euler01.casa) | A typed constant expression and an arithmetic algorithm |
 | 5 | [`struct.casa`](struct.casa) | A struct literal, method, field update, and destructuring |
 | 6 | [`destruction.casa`](destruction.casa) | Deterministic cleanup in reverse acquisition order |
 | 7 | [`enum.casa`](enum.casa) | Payload variants, recursive ownership, exhaustive matching, and guards |

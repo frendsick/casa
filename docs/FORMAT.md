@@ -220,6 +220,18 @@ This applies to pattern matching (`is` checks), constructors, and `match` arms.
 
 ---
 
+## Constant annotations
+
+Put one space after the colon in a constant annotation:
+
+```casa
+const BUFFER_BYTES: u64 { ELEMENT_COUNT ELEMENT_BYTES * }
+```
+
+Keep type arguments adjacent to a function reference: `&length[BUFFER_BYTES]`.
+
+---
+
 ## Struct and enum field layout
 
 - Struct and enum fields use `name: Type` or `pub name: Type` (space after colon).
