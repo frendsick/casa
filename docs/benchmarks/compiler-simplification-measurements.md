@@ -6,11 +6,20 @@ The accepted gates and any later performance tolerances are recorded in those
 issues. The [historical complexity baseline](compiler-complexity-baseline.md)
 remains pinned to its original compiler and source revision.
 
-The maintainer now targets roughly 10-second self-compilation, with memory
-secondary unless it reaches multiple gigabytes. The
-[target and measurement summary](compiler-self-compilation-target.md) records
-this direction and the remaining baseline work. An exact timing acceptance
-band and numeric memory ceiling remain open.
+On 2026-09-28 the maintainer accepted a self-compilation median of at most
+10.0 seconds and a peak-RSS ceiling of 1 GiB for every measured run on the
+reference Ryzen 7 3700X Linux x86-64 host. Timing includes assembly and linking.
+Use the warm-up and three alternating measured pairs below. Record every sample.
+Memory increases must buy a substantial, repeatable end-to-end speed gain.
+The ceiling does not justify spending memory for small improvements.
+The [target and measurement summary](compiler-self-compilation-target.md)
+records the native evidence. The
+[blueprint acceptance record](compiler-simplification-blueprint.md) records the
+accepted scope and production validation obligations.
+
+Common-source comparisons have no fixed percentage regression allowance.
+Regressions beyond observed variation require explicit review of the evidence.
+The self-compilation gates and memory tradeoff requirement still apply.
 
 ## Comparison inputs
 
@@ -51,6 +60,6 @@ costs from measured totals.
 
 The executable slice must calibrate production estimates and test its own contracts. Full
 compiler correctness, self-hosting, fixed-point behavior, and performance gates
-require final implementation evidence. Set explicit time and memory tolerances
-from paired measurements before accepting the final blueprint. If a later
+require final implementation evidence. The native compiler's measured result
+does not establish the redesigned compiler's performance. If a later
 implementation misses an accepted gate, record a new evidence-based decision.
