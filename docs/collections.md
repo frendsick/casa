@@ -147,6 +147,7 @@ reversing.
 | `Bytes::from_str source:$str -> Bytes` | Copy the text's UTF-8 bytes |
 | `length self:$Bytes -> u64` | Number of initialized bytes |
 | `capacity self:$Bytes -> u64` | Number of bytes available before growth |
+| `to_raw_buffer self:$Bytes -> RawBuffer` | Independent allocation containing exactly `length` initialized bytes |
 | `push self:mut$Bytes byte:u8` | Add one byte |
 | `append self:mut$Bytes source:$Bytes` | Copy the source bytes onto the end |
 | `get self:$Bytes index:u64 -> Option[u8]` | Copy one byte if the index is in range |
