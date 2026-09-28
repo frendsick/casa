@@ -52,8 +52,10 @@ The candidate self-compilation median exceeds the accepted 10-second gate by
 Median self-compilation RSS falls by 10.15 MiB. On common source, median RSS
 changes by +4.72 MiB and median wall time changes by
 -0.336 seconds. Baseline timing varied across the final and earlier complete runs. The final revision does not meet the timing gate.
-The timing result and common-source memory cost require an evidence-based decision
-under the accepted measurement protocol. They are not recorded as accepted here.
+The maintainer accepted these measured tradeoffs for #702 on 2026-09-28:
+the 10.264-second self-compilation median and the 4.72 MiB common-source memory
+increase. This acceptance applies to #702. Final compiler-wide validation remains
+with #715.
 
 ## Generated output
 
