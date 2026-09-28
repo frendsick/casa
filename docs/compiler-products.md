@@ -32,6 +32,15 @@ compiler state, so retained results cannot affect other requests.
 `Target::LinuxX86_64`. The caller writes and builds assembly and launches binaries.
 Native failures do not consume or change the report.
 
+Scalar checking uses one request-owned function state to distinguish active,
+accepted, and rejected bodies. Operation handlers record dependencies from the
+same selected target and receiver that they use to check the stack. The editor
+projection includes only operation identities verified by that request, after
+literal checks and recursive call obligations have settled.
+A failed operation withholds facts that depend on its recovered stack. An
+independent sibling branch or function can still contribute verified facts.
+A return-signature error rejects assembly without erasing established calls.
+
 The parser, checker, document projector, and emitter remain temporary adapters.
 Analysis releases their operations and declarations after projecting semantic
 tokens and cannot produce codegen input. Existing consumers retain their current
