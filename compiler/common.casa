@@ -206,9 +206,7 @@ pub struct ExternAbiType derives std::Clone {
 }
 
 impl ExternAbiType {
-    pub fn new passing:ExternAbiPassing size:u64 -> ExternAbiType {
-        size passing ExternAbiType
-    }
+    pub fn new passing:ExternAbiPassing size:u64 -> ExternAbiType { size passing ExternAbiType }
 }
 
 pub struct ExternCall {
@@ -974,29 +972,6 @@ pub enum PatternValue derives std::Clone {
     Literal (LiteralPattern)
 }
 
-pub struct SelectiveImport {
-    pub path:      std::String
-    pub namespace: std::String
-    pub symbols:   std::List[std::String]
-}
-
-impl SelectiveImport: std::Clone {
-    pub fn clone self:$SelectiveImport -> SelectiveImport {
-        self.symbols.clone self.namespace.clone self.path.clone SelectiveImport
-    }
-}
-
-pub struct ModuleImport {
-    pub path:      std::String
-    pub namespace: std::String
-}
-
-impl ModuleImport: std::Clone {
-    pub fn clone self:$ModuleImport -> ModuleImport {
-        self.namespace.clone self.path.clone ModuleImport
-    }
-}
-
 pub struct GlobalInitializer derives std::Clone {
     pub name: std::String
     pub ops:  std::List[Op]
@@ -1144,8 +1119,6 @@ pub enum OpValue derives std::Clone {
     FloatFromDecimal
     FloatSignificand
     # Import
-    ImportFile (ModuleImport)
-    ImportFileSelective (SelectiveImport)
     # F-strings
     FstringConcat (u64)
     FstringToStr
@@ -1194,9 +1167,6 @@ pub fn op_str_value op:$Op -> std::String {
     fi
     if op.value OpValue::Question(value) is then
         value.clone return
-    fi
-    if op.value OpValue::ImportFile(value) is then
-        value.path.clone return
     fi
     if op.value OpValue::Identifier(value) is then
         value.clone return
@@ -3439,37 +3409,19 @@ pub struct SymbolStore {
     pub private_symbols:        std::Set[std::String]
     pub module_private_symbols: std::Set[std::String]
     source_names:               std::List[SourceName]
+    module_bindings:            std::Map[std::String std::Map[std::String SourceBinding]]
+}
+
+pub struct SourceBinding derives std::Clone {
+    pub identity:  std::String
+    pub is_module: bool
 }
 
 pub struct SourceName derives std::Clone {
-    file:     std::String
-    internal: std::String
-    source:   std::String
-}
-
-fn retain_map_names [V] values:mut$std::Map[std::String V] retained:$std::Set[std::String] {
-    values.keys = names
-    for name in names.iter do
-        if name.as_str retained.has_str ! then
-            name.as_str values.delete_str
-        fi
-    done
-}
-
-fn retain_set_names values:mut$std::Set[std::String] retained:$std::Set[std::String] {
-    values.to_list = names
-    for name in names.iter do
-        if name.as_str retained.has_str ! then
-            name.as_str values.remove_str
-        fi
-    done
-}
-
-fn clear_map [V] values:mut$std::Map[std::String V] {
-    values.keys = names
-    for name in names.iter do
-        name.as_str values.delete_str
-    done
+    is_module: bool
+    file:      std::String
+    internal:  std::String
+    source:    std::String
 }
 
 fn append_trait_impl_index
@@ -3527,18 +3479,42 @@ impl TraitImplCandidates: std::Iterable[$TraitImpl] {
 }
 
 impl SymbolStore {
+    pub fn resolve_name self:$SymbolStore name:$str file:$str -> std::String {
+        if file self.module_bindings.get_str std::Option::Some(names) is then
+            if names name resolve_source_name std::Option::Some(resolved) is then
+                resolved.clone return
+            fi
+        fi
+        if 0 name "__casa_" str::find < then
+            name.to_str return
+        fi
+        name source_reference_head = head
+        for binding in self.source_names.iter do
+            if binding.is_module head.as_str binding.internal.as_str str::starts_with && then
+                # No source binding exists. Preserve sigils, but never accept an internal key.
+                f"{name}@unbound" return
+            fi
+        done
+        name.to_str
+    }
+
     pub fn record_source_names
         self:mut$SymbolStore
-        names:$std::Map[std::String std::String]
+        names:$std::Map[std::String SourceBinding]
         file:$str
     {
+        names.clone file.to_str self.module_bindings.set
         for pair in names.iter do
-            pair.first.clone pair.second.clone file.to_str SourceName self.source_names.push
+            pair.first.clone pair
+                .second
+                .identity
+                .clone file.to_str pair.second.is_module SourceName self.source_names.push
         done
     }
 
     pub fn copy_source_names_from self:mut$SymbolStore source:$SymbolStore {
         source.source_names.clone = self.source_names
+        source.module_bindings.clone = self.module_bindings
     }
 
     pub fn format_name_for_source self:$SymbolStore name:$str file:$str -> std::String {
@@ -3553,7 +3529,7 @@ impl SymbolStore {
         for mapping in self.source_names.iter do
             if
                 file mapping.file.as_str ==
-                mapping.internal.as_str "__" str::ends_with &&
+                mapping.is_module &&
                 name mapping.internal.as_str str::starts_with &&
             then
                 name mapping.internal.length name.length mapping.internal.length - str::substring = suffix
@@ -3707,39 +3683,6 @@ impl SymbolStore {
         0 pair_key self.trait_impls_by_pair self.trait_impls TraitImplCandidates
     }
 
-    fn rebuild_trait_impl_indexes self:mut$SymbolStore {
-        self.trait_impls_by_receiver clear_map
-        self.trait_impls_by_pair clear_map
-        for pair in self.trait_impls.iter do
-            pair.second.receiver make_trait_impl_receiver_index_key = receiver_key
-            pair
-                .second
-                .trait_bound
-                .name
-                .as_str pair.second.receiver make_trait_impl_pair_index_key
-            = pair_key
-            pair.first.clone receiver_key.as_str self.trait_impls_by_receiver append_trait_impl_index
-            pair.first.clone pair_key.as_str self.trait_impls_by_pair append_trait_impl_index
-        done
-    }
-
-    pub fn retain_declarations self:mut$SymbolStore retained:$std::Set[std::String] {
-        retained self.functions retain_map_names
-        retained self.variables retain_map_names
-        retained self.constants retain_map_names
-        retained self.enums retain_map_names
-        retained self.structs retain_map_names
-        retained self.traits retain_map_names
-        retained self.trait_impls retain_map_names
-        self.rebuild_trait_impl_indexes
-        retained self.immutable_globals retain_set_names
-        retained self.immutable_global_files retain_map_names
-        retained self.immutable_global_slots retain_map_names
-        retained self.public_symbols retain_set_names
-        retained self.private_symbols retain_set_names
-        retained self.module_private_symbols retain_set_names
-    }
-
     pub fn is_private_from self:$SymbolStore name:$str file:$str -> bool {
         if name self.public_symbols.has_str then
             false return
@@ -3812,6 +3755,7 @@ pub fn symbol_store_new -> SymbolStore {
     "ptr".to_str builtins.add
     "array".to_str builtins.add
 
+    std::Map[std::String std::Map[std::String SourceBinding]]::new
     std::List[SourceName]::new
     std::Set[std::String]::new
     std::Set[std::String]::new
@@ -4273,4 +4217,71 @@ pub fn find_drop_function_name typ:$Type store:$SymbolStore -> std::Option[std::
         function.name.clone std::Option::Some return
     fi
     std::Option[std::String]::None
+}
+
+pub fn resolve_source_name
+    value:$str
+    names:$std::Map[std::String SourceBinding]
+-> std::Option[std::String] {
+    "".to_str = sigil
+    value.to_str = identifier
+    if value "mut$" str::starts_with then
+        "mut$".to_str = sigil
+        value 4 value.length 4 - str::substring = identifier
+    elif value "$" str::starts_with value "&" str::starts_with || then
+        value 0 1 str::substring = sigil
+        value 1 value.length 1 - str::substring = identifier
+    fi
+    std::Option[SourceBinding]::None = replacement_opt
+    0 = matched_length: u64
+    if identifier.as_str names.get_str std::Option::Some(replacement) is then
+        replacement.clone std::Option::Some = replacement_opt
+        identifier.length = matched_length
+    else
+        0 = scan: u64
+        while scan identifier.length > do
+            if
+                ':' scan identifier.at ==
+                identifier.length scan 1 + < &&
+                ':' scan 1 + identifier.at == && !
+            then
+                1 += scan
+                continue
+            fi
+            identifier.as_str 0 scan str::substring = candidate
+            if candidate.as_str names.get_str std::Option::Some(replacement) is then
+                replacement.clone std::Option::Some = replacement_opt
+                scan = matched_length
+            fi
+            2 += scan
+        done
+    fi
+    if replacement_opt std::Option::Some(replacement) is then
+        identifier.as_str matched_length identifier.length matched_length - str::substring = suffix
+        if
+            replacement.is_module
+            suffix.as_str "::" str::starts_with &&
+        then
+            suffix.as_str 2 suffix.length 2 - str::substring = suffix
+        fi
+        f"{sigil}{replacement.identity}{suffix}" std::Option::Some
+    else
+        std::Option[std::String]::None
+    fi
+}
+# The first name in a source reference, without a borrow or function-reference sigil.
+pub fn source_reference_head value:$str -> std::String {
+    0 = start: u64
+    if value "mut$" str::starts_with then
+        4 = start: u64
+    elif value "$" str::starts_with value "&" str::starts_with || then
+        1 = start: u64
+    fi
+    value "::" str::find = separator
+    if 0 separator >= then
+        separator u64::try_from.unwrap
+    else
+        value.length
+    fi = limit
+    value start limit start - str::substring
 }

@@ -18,6 +18,28 @@ fn make_override_input value:$str -> products::CompilationInput {
     input
 }
 
+fn test_override_identity {
+    "override_identity" test::test_start
+    "42" make_override_input = input
+    "pub fn value -> i64 { 42 }".to_str "./lib/dependency.casa".to_str input.source_overrides.set
+    "ignored root override".to_str "./main.casa".to_str input.source_overrides.set
+    input products::analyze.unwrap = snapshot
+    "identical override aliases coalesce" snapshot
+        .get_report
+        .get_diagnostics
+        .has_errors ! test::assert_true
+    "42" make_override_input = conflict
+    "pub fn value -> i64 { 7 }".to_str "./lib/dependency.casa".to_str conflict.source_overrides.set
+    conflict products::analyze match
+        std::Result::Error(failure) => {
+            "input conflict" products::CompilerPhase::Input failure.get_phase test::assert_eq
+            "first alias attributed" failure.get_message.as_str "lib/dependency.casa" str::contains test::assert_true
+            "second alias attributed" failure.get_message.as_str "./lib/dependency.casa" str::contains test::assert_true
+        }
+        std::Result::Ok(unexpected) => "conflicting aliases rejected" false test::assert_true
+    end
+}
+
 fn test_independent_requests {
     "independent_requests" test::test_start
     "41" make_override_input products::analyze.unwrap = first
@@ -66,6 +88,57 @@ fn test_rejected_source {
         }
         products::AssemblyResult::Produced(unexpected_report unexpected_source) => "rejection has no assembly" false test::assert_true
     end
+}
+
+fn test_complete_prefix_facts_do_not_enable_assembly {
+    "complete_prefix_facts_do_not_enable_assembly" test::test_start
+    for
+        suffix in [
+            "fn broken { fn escaped -> i64 { 99 }",
+            "fn broken { \"unterminated",
+            "const answer",
+            "global answer",
+        ].iter
+    do
+        "fn answer -> i64 { 42 } " = prefix
+        prefix suffix str::concat = source
+        source.as_str make_input products::analyze.unwrap = snapshot
+        "source error retained" snapshot
+            .get_report
+            .get_diagnostics
+            .has_errors test::assert_true
+        "complete declaration facts retained" 0 snapshot.get_semantic_tokens.length > test::assert_true
+        prefix.length = damaged_start
+        for token in snapshot.get_semantic_tokens.iter do
+            "damaged declaration publishes no facts" damaged_start token.location.offset < test::assert_true
+        done
+        products::Target::LinuxX86_64 source.as_str make_input products::assembly.unwrap match
+            products::AssemblyResult::Rejected(report) => "source error rejects assembly" report.get_diagnostics.has_errors test::assert_true
+            products::AssemblyResult::Produced(unexpected_report unexpected_source) => "partial facts cannot produce assembly" false test::assert_true
+        end
+    done
+}
+
+fn test_internal_module_names_are_not_source_bindings {
+    "internal_module_names_are_not_source_bindings" test::test_start
+    for
+        body in [
+            "__casa_module_0__answer drop",
+            "__casa_module_1__answer drop",
+            "__casa_std__answer drop",
+            "fn invalid value:__casa_module_0__Secret { value drop }",
+            "fn invalid value:__casa_std__Secret { value drop }",
+        ].iter
+    do
+        f"import \"dependency.casa\" as dependency import \"std.casa\" as standard {body}".as_str make_input = input
+        "import \"child.casa\" as child pub fn answer -> i64 { 41 } struct Secret { }".to_str "dependency.casa".to_str input.source_overrides.set
+        "pub fn answer -> i64 { 42 }".to_str "child.casa".to_str input.source_overrides.set
+        "pub fn answer -> i64 { 43 } struct Secret { }".to_str "std.casa".to_str input.source_overrides.set
+        products::Target::LinuxX86_64 input products::assembly.unwrap match
+            products::AssemblyResult::Rejected(report) => "internal identity is not a source binding" report.get_diagnostics.has_errors test::assert_true
+            products::AssemblyResult::Produced(unexpected_report unexpected_source) => "internal identity access must fail" false test::assert_true
+        end
+    done
 }
 
 fn test_import_rejection_report {
@@ -189,9 +262,12 @@ fn test_assembly_product {
 }
 test_independent_requests
 test_rejected_source
+test_complete_prefix_facts_do_not_enable_assembly
+test_internal_module_names_are_not_source_bindings
 test_import_rejection_report
 test_syntax_product
 test_invalid_utf8_report
 test_failed_request_report
 test_assembly_product
+test_override_identity
 test::test_summary

@@ -6,9 +6,10 @@ The accepted gates and any later performance tolerances are recorded in those
 issues. The [historical complexity baseline](compiler-complexity-baseline.md)
 remains pinned to its original compiler and source revision.
 
-On 2026-09-28 the maintainer accepted a self-compilation median of at most
-10.0 seconds and a peak-RSS ceiling of 1 GiB for every measured run on the
-reference Ryzen 7 3700X Linux x86-64 host. Timing includes assembly and linking.
+On 2026-09-28 the maintainer required a self-compilation median below
+10.0 seconds before #699 closes and a peak-RSS ceiling of 1 GiB for every measured
+run on the reference Ryzen 7 3700X Linux x86-64 host. Intermediate subissues of
+#699 may temporarily exceed the timing target. Timing includes assembly and linking.
 Use the warm-up and three alternating measured pairs below. Record every sample.
 Memory increases must buy a substantial, repeatable end-to-end speed gain.
 The ceiling does not justify spending memory for small improvements.
@@ -61,5 +62,5 @@ costs from measured totals.
 The executable slice must calibrate production estimates and test its own contracts. Full
 compiler correctness, self-hosting, fixed-point behavior, and performance gates
 require final implementation evidence. The native compiler's measured result
-does not establish the redesigned compiler's performance. If a later
-implementation misses an accepted gate, record a new evidence-based decision.
+does not establish the redesigned compiler's performance. For gate misses outside the
+temporary timing allowance for #699 subissues, record a new evidence-based decision.

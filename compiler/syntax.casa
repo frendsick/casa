@@ -60,6 +60,24 @@ pub struct NameSegment {
     pub length:         u64
 }
 
+# Import discovery consumes these parsed clauses without scanning source tokens.
+pub struct ImportSyntax {
+    pub first_token: u64
+    pub after_token: u64
+    pub specifier:   std::String
+    pub alias:       std::Option[std::String]
+    pub location:    common::Location
+}
+
+pub struct DeclarationSyntax {
+    pub name:        std::String
+    pub location:    common::Location
+    pub kind:        std::String
+    pub first_token: u64
+    pub after_token: u64
+    pub external:    bool
+}
+
 pub struct SyntaxFacts {
     pub meaningful_tokens: std::List[SyntaxTokenFact]
     pub comments:          std::List[SyntaxCommentFact]
@@ -67,6 +85,8 @@ pub struct SyntaxFacts {
     pub layout_spans:      std::List[SyntaxSpan]
     pub relations:         std::List[SyntaxRelation]
     pub name_segments:     std::List[NameSegment]
+    pub imports:           std::List[ImportSyntax]
+    pub declarations:      std::List[DeclarationSyntax]
 }
 
 pub struct SyntaxResult {
@@ -145,6 +165,8 @@ pub fn build_syntax_facts
     source:$str
     tokens:$std::List[common::Token]
     spans:std::List[SyntaxSpan]
+    imports:std::List[ImportSyntax]
+    declarations:std::List[DeclarationSyntax]
 -> SyntaxFacts {
     std::List[SyntaxTokenFact]::new = meaningful_tokens
     std::List[SyntaxCommentFact]::new = comments
@@ -220,7 +242,7 @@ pub fn build_syntax_facts
             }
         end
     done
-    name_segments relations layout_spans spans comments meaningful_tokens SyntaxFacts
+    declarations imports name_segments relations layout_spans spans comments meaningful_tokens SyntaxFacts
 }
 
 pub fn syntax_facts_match expected:$SyntaxFacts actual:$SyntaxFacts -> bool {
@@ -291,18 +313,22 @@ pub fn syntax_facts_match expected:$SyntaxFacts actual:$SyntaxFacts -> bool {
 # Nodes are stored in source order. Parent zero denotes the root, otherwise it
 # is the parent's one-based index. Offsets include the original source trivia.
 struct Reader {
-    tokens:      $std::List[common::Token]
-    source:      $str
-    pos:         u64
-    previous:    u64
-    parent:      u64
-    spans:       std::List[SyntaxSpan]
-    diagnostics: error::Diagnostics
+    tokens:        $std::List[common::Token]
+    source:        $str
+    pos:           u64
+    previous:      u64
+    parent:        u64
+    spans:         std::List[SyntaxSpan]
+    imports:       std::List[ImportSyntax]
+    declarations:  std::List[DeclarationSyntax]
+    references:    std::List[u64]
+    type_bindings: std::List[std::String]
+    diagnostics:   error::Diagnostics
 }
 
 impl Reader {
     fn new tokens:$std::List[common::Token] source:$str diagnostics:error::Diagnostics -> Reader {
-        diagnostics std::List[SyntaxSpan]::new 0 0 0 source tokens Reader
+        diagnostics std::List[std::String]::new std::List[u64]::new std::List[DeclarationSyntax]::new std::List[ImportSyntax]::new std::List[SyntaxSpan]::new 0 0 0 source tokens Reader
     }
 
     fn get_token self:$Reader -> $common::Token { self.pos self.tokens.get }
@@ -320,8 +346,30 @@ impl Reader {
         done
     }
 
+    fn record_qualified_reference self:mut$Reader {
+        self.get_token = token
+        if common::TokenKind::Identifier token.kind != then
+            return
+        fi
+        token.value.as_str "::" str::find = separator
+        if 0 separator < then
+            return
+        fi
+        token.value.as_str common::source_reference_head = qualifier
+        if qualifier.as_str self.type_bindings common::string_list_contains ! then
+            self.pos self.references.push
+        fi
+    }
+
+    fn restore_type_bindings self:mut$Reader count:u64 {
+        while count self.type_bindings.length > do
+            self.type_bindings.pop drop
+        done
+    }
+
     fn advance self:mut$Reader {
         if common::TokenKind::Eof self.get_token.kind != then
+            self.record_qualified_reference
             self.pos = self.previous
             1 += self.pos
             self.skip_trivia
@@ -363,8 +411,8 @@ impl Reader {
                 .location
                 .clone = location
             location "Unclosed source construct" common::ErrorKind::UnmatchedBlock self.diagnostics.record_error
-        else
-            "Unexpected token in source syntax" self.fail
+        elif self.has_failed ! then
+            self.get_token.location "Unexpected token in source syntax" common::ErrorKind::UnexpectedToken self.diagnostics.record_error
         fi
     }
 
@@ -436,7 +484,11 @@ impl Reader {
         SyntaxSpanKind::TypeArguments self.begin_node = node
         "[" self.expect
         while self.is_finished ! "]" self.is_at ! && do
-            self.parse_type
+            if "," self.is_at then
+                self.advance
+            else
+                self.parse_type
+            fi
         done
         "]" self.expect
         node self.finish_node
@@ -461,6 +513,10 @@ impl Reader {
             if "const" self.is_at then
                 self.advance
             fi
+            self
+                .get_token
+                .value
+                .clone self.type_bindings.push
             self.parse_name
             if ":" self.is_at then
                 self.advance self.parse_type
@@ -482,7 +538,7 @@ impl Reader {
             .location
             .span
             .offset = offset
-        if 0 offset == then
+        if 0 offset == self.source.length offset > || then
             false return
         fi
         '\n' offset 1 - self.source.at == '\r' offset 1 - self.source.at == ||
@@ -548,9 +604,30 @@ impl Reader {
         done
     }
 
-    fn parse_function self:mut$Reader external:bool requirement:bool {
+    fn record_declaration self:mut$Reader module_scope:bool {
+        if module_scope then
+            false 0 0 self.previous self
+                .tokens
+                .get
+                .value
+                .clone
+            self
+                .get_token
+                .location
+                .clone self
+                .get_token
+                .value
+                .clone
+            DeclarationSyntax self.declarations.push
+        fi
+    }
+
+    fn parse_function self:mut$Reader external:bool requirement:bool module_scope:bool {
+        self.type_bindings.length = inherited_bindings
         SyntaxSpanKind::Definition self.begin_node = node
-        "fn" self.expect self.parse_function_name
+        "fn" self.expect
+        module_scope self.record_declaration
+        self.parse_function_name
         if external "[" self.is_at && then
             "Extern functions cannot have type parameters" self.fail
             node self.finish_node return
@@ -565,6 +642,7 @@ impl Reader {
         elif external ! requirement ! && then
             "Expected a function body" self.fail
         fi
+        inherited_bindings self.restore_type_bindings
         node self.finish_node
     }
 
@@ -579,7 +657,10 @@ impl Reader {
         ")" self.expect
     }
 
-    fn parse_declaration self:mut$Reader {
+    fn parse_declaration self:mut$Reader module_scope:bool {
+        self.type_bindings.length = inherited_bindings
+        self.pos = first_token
+        self.declarations.length = declaration_index
         SyntaxSpanKind::Declaration self.begin_node = node
         "extern" self.is_at = external
         if external then
@@ -590,10 +671,12 @@ impl Reader {
             fi
         fi
         if "fn" self.is_at then
-            false external self.parse_function
+            module_scope false external self.parse_function
         elif "struct" self.is_at "enum" self.is_at || then
             "enum" self.is_at = enumeration
-            self.advance self.parse_name self.parse_generic_parameters
+            self.advance
+            module_scope self.record_declaration
+            self.parse_name self.parse_generic_parameters
             if "derives" self.is_at then
                 self.advance self.parse_name
                 while "{" self.is_at ! self.is_finished ! && do
@@ -624,6 +707,7 @@ impl Reader {
             "trait" self.is_at = requirement
             self.advance
             if requirement then
+                module_scope self.record_declaration
                 self.parse_name self.parse_generic_parameters
             else
                 self.parse_generic_parameters self.parse_type
@@ -642,38 +726,72 @@ impl Reader {
                 if "unsafe" self.is_at then
                     self.advance
                 fi
-                requirement false self.parse_function
+                false requirement false self.parse_function
             done
             "}" self.expect
         else
             "Expected a declaration" self.fail
         fi
+        if module_scope declaration_index self.declarations.length > && then
+            declaration_index self.declarations.get_mut = declaration
+            first_token = declaration.first_token
+            self.pos = declaration.after_token
+            external = declaration.external
+        fi
+        inherited_bindings self.restore_type_bindings
         node self.finish_node
     }
 
     fn parse_import self:mut$Reader {
+        if 0 self.parent != then
+            self
+                .get_token
+                .location
+                .clone = location
+            location "Import statements are only allowed at global scope" common::ErrorKind::InvalidScope self.diagnostics.record_error
+            return
+        fi
+        self.pos = first_token
         SyntaxSpanKind::Import self.begin_node = node
         self.advance
+        self
+            .get_token
+            .location
+            .clone = location
+        std::String::new = specifier
+        std::Option[std::String]::None = alias
         if
             common::TokenKind::Literal self.get_token.kind == self
                 .get_token
                 .value
                 .as_str "\"" str::starts_with &&
         then
+            self
+                .get_token
+                .value
+                .as_str = value
+            value 1 value.length 2 - str::substring = specifier
             self.advance
         else
             "Expected an import string" self.fail
         fi
         if "as" self.is_at then
-            self.advance self.parse_name
+            self.advance
+            self
+                .get_token
+                .value
+                .clone std::Option::Some = alias
+            self.parse_name
         fi
         if "{" self.is_at then
-            self.advance self.parse_name
-            while "}" self.is_at ! self.is_finished ! && do
-                self.parse_name
-            done
-            "}" self.expect
+            if alias.clone std::Option::Some(written) is then
+                written.clone
+            else
+                specifier.clone
+            fi = qualifier
+            f"Selective imports are no longer supported; remove the selection clause and use `{qualifier}::name`".as_str self.fail
         fi
+        location alias specifier self.pos first_token ImportSyntax self.imports.push
         node self.finish_node
     }
 
@@ -963,18 +1081,27 @@ impl Reader {
     }
 
     fn parse_value_declaration self:mut$Reader {
+        self.pos = first_token
+        self.declarations.length = declaration_index
+        0 self.parent == = module_scope
         SyntaxSpanKind::Declaration self.begin_node = node
         "const" self.is_at = constant
         self.advance
         if constant "fn" self.is_at && then
-            self.parse_declaration
+            module_scope self.parse_declaration
         else
+            module_scope self.record_declaration
             self.parse_name
             if constant then
                 self.parse_constant_initializer
             else
                 self.parse_expression
             fi
+        fi
+        if module_scope declaration_index self.declarations.length > && then
+            declaration_index self.declarations.get_mut = declaration
+            first_token = declaration.first_token
+            self.pos = declaration.after_token
         fi
         node self.finish_node
     }
@@ -986,13 +1113,13 @@ impl Reader {
         if
             "fn" self.is_at "struct" self.is_at || "enum" self.is_at || "trait" self.is_at || "impl" self.is_at || "extern" self.is_at ||
         then
-            self.parse_declaration
+            0 self.parent == self.parse_declaration
         elif "pub" self.is_at then
             self.advance
-            if "unsafe" self.is_at "const" self.is_at || then
+            if "unsafe" self.is_at "const" self.is_at || "global" self.is_at || then
                 self.parse_expression
             else
-                self.parse_declaration
+                0 self.parent == self.parse_declaration
             fi
         elif "import" self.is_at then
             self.parse_import
@@ -1001,7 +1128,7 @@ impl Reader {
         elif "unsafe" self.is_at then
             self.advance
             if "fn" self.is_at then
-                self.parse_declaration
+                0 self.parent == self.parse_declaration
             else
                 self.parse_block
             fi
@@ -1037,6 +1164,12 @@ impl Reader {
             else
                 self.parse_named_expression
             fi
+        elif "(" self.is_at then
+            self
+                .get_token
+                .location
+                .clone = location
+            location "General casts are not supported; use a named conversion" common::ErrorKind::UnexpectedToken self.diagnostics.record_error
         elif "," self.is_at ":" self.is_at || "=>" self.is_at || "#" self.is_at || then
             self.advance
         elif
@@ -1058,6 +1191,14 @@ impl Reader {
 
 pub fn analyze_syntax source:$str file:$str -> SyntaxResult {
     file source lexer::lex_source_fmt.into_parts = diagnostics = tokens
+    diagnostics source tokens parse_tokens
+}
+
+pub fn parse_tokens
+    tokens:std::List[common::Token]
+    source:$str
+    diagnostics:error::Diagnostics
+-> SyntaxResult {
     if diagnostics.has_errors then
         diagnostics std::Option[SyntaxFacts]::None tokens SyntaxResult return
     fi
@@ -1067,13 +1208,64 @@ pub fn analyze_syntax source:$str file:$str -> SyntaxResult {
         reader.parse_expression
     done
     reader match
-        Reader { spans: spans diagnostics: result_diagnostics } => {
+        Reader { spans: spans imports: imports declarations: declarations diagnostics: result_diagnostics } => {
             if result_diagnostics.has_errors then
                 result_diagnostics std::Option[SyntaxFacts]::None tokens SyntaxResult
             else
-                spans tokens source build_syntax_facts = facts
+                declarations imports spans tokens source build_syntax_facts = facts
                 result_diagnostics facts std::Option::Some tokens SyntaxResult
             fi
+        }
+    end
+}
+
+pub struct ModuleSyntax {
+    pub imports:        std::List[ImportSyntax]
+    pub declarations:   std::List[DeclarationSyntax]
+    pub references:     std::List[u64]
+    pub diagnostics:    error::Diagnostics
+    pub complete_until: u64
+}
+
+# Record complete top-level constructs before the first syntax or lexical error.
+# lexical_limit is a source byte offset. complete_until is a token index.
+pub fn parse_module
+    tokens:$std::List[common::Token]
+    source:$str
+    lexical_limit:std::Option[u64]
+-> ModuleSyntax {
+    error::Diagnostics::new source tokens Reader::new = reader
+    reader.skip_trivia
+    reader.pos = complete_until
+    while reader.is_finished ! do
+        if lexical_limit std::Option::Some(limit) is then
+            if
+                limit reader
+                    .get_token
+                    .location
+                    .span
+                    .offset >=
+            then
+                break
+            fi
+        fi
+        reader.parse_expression
+        if lexical_limit std::Option::Some(limit) is then
+            reader.previous tokens
+                .get
+                .location
+                .span = previous_span: $common::Span
+            if limit previous_span.offset previous_span.length + > then
+                break
+            fi
+        fi
+        if reader.has_failed ! then
+            reader.pos = complete_until
+        fi
+    done
+    reader match
+        Reader { imports: imports declarations: declarations references: references diagnostics: diagnostics } => {
+            complete_until diagnostics references declarations imports ModuleSyntax
         }
     end
 }

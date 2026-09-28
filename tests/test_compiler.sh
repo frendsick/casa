@@ -41,8 +41,7 @@ test_category() {
             ;;
         test/test_products|test/test_bytecode|test/test_document|test/test_emitter|test/test_error|\
         test/test_extern|\
-        test/test_lsp|test/test_modules|test/test_selective_import|\
-        test/test_selective_import_closure)
+        test/test_lsp|test/test_module_identity|test/test_modules|test/test_qualified_import)
             echo compiler_integration
             ;;
         test/test_closure_ownership|test/test_copy_clone|\
@@ -51,7 +50,7 @@ test_category() {
             ;;
         test/test_const_param|test/test_enum_variant_hint|\
         test/test_generic_structs|test/test_one_letter_nominal_types|\
-        test/test_selective_import_type_deps|test/test_typed_struct_fields)
+        test/test_qualified_import_type_deps|test/test_typed_struct_fields)
             echo types_generics
             ;;
         test/test_derived_conformances|test/test_display|test/test_traits)
