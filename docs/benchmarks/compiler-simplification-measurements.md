@@ -14,8 +14,8 @@ Memory increases must buy a substantial, repeatable end-to-end speed gain.
 The ceiling does not justify spending memory for small improvements.
 The [target and measurement summary](compiler-self-compilation-target.md)
 records the native evidence. The
-[blueprint acceptance record](compiler-simplification-blueprint.md) tracks the
-remaining acceptance decision.
+[blueprint acceptance record](compiler-simplification-blueprint.md) records the
+accepted scope and production validation obligations.
 
 Common-source comparisons have no fixed percentage regression allowance.
 Regressions beyond observed variation require explicit review of the evidence.

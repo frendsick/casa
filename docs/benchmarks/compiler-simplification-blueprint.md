@@ -1,6 +1,6 @@
 # Compiler simplification blueprint acceptance
 
-Status: pending maintainer acceptance in
+Status: accepted by the maintainer on 2026-09-28 in
 [Validate the compiler simplification blueprint](https://github.com/frendsick/casa/issues/651).
 Reconciled against `origin/main` at `f08a6e1` on 2026-09-28.
 
@@ -57,8 +57,8 @@ malformed-module recovery. Its editor workload retains 21,344 bytes of reachable
 snapshot data, while traced allocations still grow. It does not prove a process
 memory plateau. The generic-heavy workload is compiled but not executed.
 
-The proposal is to accept this bounded evidence for the blueprint and enforce
-the omitted contracts during production implementation. The full compiler must
+The maintainer accepted this bounded evidence for the blueprint. The omitted
+contracts remain mandatory during production implementation. The full compiler must
 pass retained behavior suites, all 14 CI shards, standalone installed-runtime
 checks, self-hosting, fixed-point assembly equality, native ABI/runtime checks,
 and representative repeated-editor workloads. Those obligations are not waived.
@@ -88,8 +88,10 @@ measured pairs, raw-clock wall times, all samples, and the
 and common-source results remain separate. Missing an accepted gate requires
 a new evidence-based decision.
 
-## Remaining maintainer decision
+## Acceptance and handoff
 
-Final acceptance must confirm whether the documented slice limits are sufficient
-for planning and whether the linked implementation plan can proceed with its
-full production gates. Until that confirmation, the blueprint remains open.
+The maintainer accepted the reconciled blueprint, its documented slice limits,
+and the eight implementation units on 2026-09-28. The planning map is complete.
+Production implementation can use this plan and must meet the retained contracts
+and gates. The slice and current compiler measurements do not establish that
+the redesigned compiler already meets them.

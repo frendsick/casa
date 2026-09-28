@@ -9,13 +9,13 @@ materially higher memory use.
 This makes the earlier roughly ten-second goal explicit. The previous proposals
 to allow 20% more time and 25% more memory were not accepted. Common-source
 regressions beyond observed variation require explicit review of the evidence,
-without a fixed percentage allowance. Final blueprint acceptance remains pending
-in [Validate the compiler simplification blueprint](https://github.com/frendsick/casa/issues/651).
+without a fixed percentage allowance. The maintainer accepted the blueprint on
+2026-09-28 in [Validate the compiler simplification blueprint](https://github.com/frendsick/casa/issues/651).
 
 Aggressive simplification and feature reductions may be investigated for large
 compilation gains. Each behavior change needs an explicit decision about its
-benefit and user cost. Blueprint acceptance remains open, and production
-implementation remains outside the compiler-planning map.
+benefit and user cost. Production implementation remains outside the completed
+compiler-planning map and must meet the accepted contracts and gates.
 
 The measurement workload is a fresh compiler process building its complete
 source into a native executable, including assembly and linking. Use the
