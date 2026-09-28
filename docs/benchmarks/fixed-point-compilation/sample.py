@@ -45,6 +45,7 @@ if __name__ == "__main__":
     code = Path(assembly).read_text()
     returns = set(re.findall(
         r"leaq (\.L\w+)\(%rip\), %(?:rax|rcx)\n\s*movq %(?:rax|rcx), -8\(%r14\)", code))
+    returns.update(re.findall(r"callq? [^\n]+\n(\.L\w+):", code))
     return_addresses = {names[name] for name in returns}
     entries = sorted((address, name) for name, address in names.items()
                      if name.startswith("fn_") or name in {
