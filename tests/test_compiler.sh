@@ -39,7 +39,7 @@ test_category() {
         test/test_typechecker|test/test_underflow_messages|error/*)
             echo compiler_analysis
             ;;
-        test/test_bytecode|test/test_document|test/test_emitter|test/test_error|\
+        test/test_products|test/test_bytecode|test/test_document|test/test_emitter|test/test_error|\
         test/test_extern|\
         test/test_lsp|test/test_modules|test/test_selective_import|\
         test/test_selective_import_closure)

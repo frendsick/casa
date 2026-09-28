@@ -164,9 +164,16 @@ pub fn absolute_normalize_path path:$str -> std::String {
     absolute.as_str normalize_path
 }
 
+struct RejectedSource derives std::Clone {
+    bytes:          std::Bytes
+    invalid_offset: u64
+}
+
 pub struct SourceStore derives std::Clone {
-    pub sources:     std::Map[std::String std::String]
-    pub line_starts: std::Map[std::String std::List[u64]]
+    rejected_sources: std::Map[std::String RejectedSource]
+    loaded_files:     std::Set[std::String]
+    pub sources:      std::Map[std::String std::String]
+    pub line_starts:  std::Map[std::String std::List[u64]]
 }
 
 pub struct SourceContext {
@@ -178,11 +185,14 @@ impl SourceStore {
     pub fn new -> SourceStore {
         std::Map[std::String std::List[u64]]::new
         std::Map[std::String std::String]::new
+        std::Set[std::String]::new
+        std::Map[std::String RejectedSource]::new
         SourceStore
     }
 
     pub fn add self:mut$SourceStore path:$str source:$str {
         path normalize_path = normalized
+        normalized self.rejected_sources.delete
         source.to_str normalized.clone self.sources.set
 
         # Build line-start index: byte offset of the first byte of each line.
@@ -196,6 +206,33 @@ impl SourceStore {
             1 += i
         done
         starts normalized self.line_starts.set
+    }
+
+    # Drop supplied overrides that were never loaded by this request.
+    pub fn retain_used self:mut$SourceStore root_file:$str {
+        for
+            path in self
+                .sources
+                .keys
+                .iter
+        do
+            if path.as_str root_file != path self.loaded_files.has ! && then
+                path self.sources.delete
+                path self.line_starts.delete
+            fi
+        done
+        std::Set[std::String]::new = self.loaded_files
+    }
+
+    # Return an independent byte copy, including source rejected before UTF-8 decoding.
+    pub fn get_bytes self:$SourceStore path:$str -> std::Option[std::Bytes] {
+        if path self.rejected_sources.get_str std::Option::Some(source) is then
+            source.bytes.clone std::Option::Some return
+        fi
+        if path self.get std::Option::Some(source) is then
+            source.as_str std::Bytes::from_str std::Option::Some return
+        fi
+        std::Option[std::Bytes]::None
     }
 
     pub fn get self:$SourceStore path:$str -> std::Option[$std::String] {
@@ -1119,10 +1156,24 @@ pub fn is_float_literal value:$str -> bool {
 
 pub fn lex_source code:$str file:$str -> LexResult { false file.to_str code Lexer::new.lex }
 
+impl RejectedSource {
+    fn lex self:$RejectedSource path:$str -> LexResult {
+        error::Diagnostics::new = diagnostics
+        1 self.invalid_offset path.to_str common::Location::new = location
+        location f"Source is not valid UTF-8 at byte {self.invalid_offset}"
+        common::ErrorKind::Syntax diagnostics.record_error_string
+        diagnostics std::List[common::Token]::new LexResult
+    }
+}
+
 pub fn lex_file path:$str sources:mut$SourceStore -> std::Result[LexResult os::IoError] {
     path normalize_path = normalized_path
+    normalized_path.clone sources.loaded_files.add
     if normalized_path.as_str sources.sources.get_str std::Option::Some(source) is then
         path source.as_str lex_source std::Result::Ok return
+    fi
+    if normalized_path.as_str sources.rejected_sources.get_str std::Option::Some(source) is then
+        normalized_path.as_str source.lex std::Result::Ok return
     fi
     normalized_path.as_str.as_cstr = normalized_path_cstr
     if normalized_path_cstr.is_none then
@@ -1133,11 +1184,10 @@ pub fn lex_file path:$str sources:mut$SourceStore -> std::Result[LexResult os::I
         std::Result::Ok(read_bytes) => {
             read_bytes.to_str match
                 std::Result::Error(utf8_error) => {
-                    error::Diagnostics::new = diagnostics
-                    1 utf8_error.index normalized_path.clone common::Location::new = location
-                    location f"Source is not valid UTF-8 at byte {utf8_error.index}"
-                    common::ErrorKind::Syntax diagnostics.record_error_string
-                    diagnostics std::List[common::Token]::new LexResult std::Result::Ok return
+                    utf8_error.index read_bytes RejectedSource = rejected
+                    normalized_path.as_str rejected.lex = result
+                    rejected normalized_path sources.rejected_sources.set
+                    result std::Result::Ok return
                 }
                 std::Result::Ok(read_source) => {
                     read_source.as_str normalized_path.as_str sources.add

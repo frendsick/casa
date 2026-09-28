@@ -1,0 +1,197 @@
+import "std" as std
+import "../../compiler/products.casa" as products
+import "../../compiler/build.casa" as build
+import "../../compiler/document.casa" as document
+import "../../lib/test.casa" as test
+import "../../lib/os.casa" as os
+
+fn make_input source:$str -> products::CompilationInput {
+    "/tmp/casa_products".to_str source.to_str "main.casa".to_str products::SourceUnit
+    products::CompilationInput::new
+}
+
+fn make_override_input value:$str -> products::CompilationInput {
+    "import \"dependency\" as dependency\ndependency::value print" make_input = input
+    f"pub fn value -> i64 \{ {value} \}" "lib/dependency.casa".to_str input.source_overrides.set
+    "lib".to_str input.library_paths.push
+    "unused".to_str "unused.casa".to_str input.source_overrides.set
+    input
+}
+
+fn test_independent_requests {
+    "independent_requests" test::test_start
+    "41" make_override_input products::analyze.unwrap = first
+    "42" make_override_input products::analyze.unwrap = second
+    "first accepted" first
+        .get_report
+        .get_diagnostics
+        .has_errors ! test::assert_true
+    "second accepted" second
+        .get_report
+        .get_diagnostics
+        .has_errors ! test::assert_true
+    "first override" "pub fn value -> i64 { 41 }" "/tmp/casa_products/lib/dependency.casa"
+    first
+        .get_report
+        .get_sources
+        .get
+        .unwrap test::assert_str_eq
+    first drop
+    "second survives first release" "pub fn value -> i64 { 42 }" "/tmp/casa_products/lib/dependency.casa"
+    second
+        .get_report
+        .get_sources
+        .get
+        .unwrap test::assert_str_eq
+    "unused override released" "/tmp/casa_products/unused.casa"
+    second
+        .get_report
+        .get_sources
+        .get
+        .is_none test::assert_true
+    "editor facts retained" 0 second.get_semantic_tokens.length > test::assert_true
+}
+
+fn test_rejected_source {
+    "rejected_source" test::test_start
+    products::Target::LinuxX86_64 "\"bad\" 1 *" make_input products::assembly.unwrap = result
+    result match
+        products::AssemblyResult::Rejected(report) => {
+            "source error" report.get_diagnostics.has_errors test::assert_true
+            "exact rejected text" "\"bad\" 1 *" "/tmp/casa_products/main.casa"
+            report
+                .get_sources
+                .get
+                .unwrap test::assert_str_eq
+        }
+        products::AssemblyResult::Produced(unexpected_report unexpected_source) => "rejection has no assembly" false test::assert_true
+    end
+}
+
+fn test_import_rejection_report {
+    "import_rejection_report" test::test_start
+    "import \"dependency\" as dependency\nmissing_root" make_input = input
+    "missing_import".to_str "dependency.casa".to_str input.source_overrides.set
+    products::Target::LinuxX86_64 input products::assembly.unwrap = result
+    "import error retained" result
+        .get_report
+        .get_diagnostics
+        .has_errors test::assert_true
+    "exact imported rejection" "missing_import" "/tmp/casa_products/dependency.casa"
+    result
+        .get_report
+        .get_sources
+        .get
+        .unwrap test::assert_str_eq
+    "first diagnostic is imported" "/tmp/casa_products/dependency.casa"
+    0 result
+        .get_report
+        .get_diagnostics
+        .entries
+        .get
+        .get_location
+        .file test::assert_str_eq
+    "root source retained" "import \"dependency\" as dependency\nmissing_root"
+    "/tmp/casa_products/main.casa" result
+        .get_report
+        .get_sources
+        .get
+        .unwrap test::assert_str_eq
+}
+
+fn test_syntax_product {
+    "syntax_product" test::test_start
+    "# comment\nimport \"missing\" as missing\n42 print\n".to_str
+    "syntax.casa".to_str products::SourceUnit products::syntax.unwrap = valid
+    "root syntax ignores missing import" valid.get_facts.is_some test::assert_true
+    "lossless tokens" 0 valid.get_tokens.length > test::assert_true
+    "fn broken {".to_str "syntax.casa".to_str products::SourceUnit products::syntax.unwrap = rejected
+    "rejected syntax has no facts" rejected.get_facts.is_none test::assert_true
+    "syntax diagnostics" rejected
+        .get_report
+        .get_diagnostics
+        .has_errors test::assert_true
+    "syntax rejection keeps source" "fn broken {" "syntax.casa"
+    rejected
+        .get_report
+        .get_sources
+        .get
+        .unwrap test::assert_str_eq
+}
+
+fn test_invalid_utf8_report {
+    "invalid_utf8_report" test::test_start
+    std::Bytes::new = bytes
+    255 bytes.push
+    bytes "/tmp/casa_products_invalid.casa".as_cstr.unwrap file::write_all.unwrap drop
+    products::Target::LinuxX86_64
+    "import \"/tmp/casa_products_invalid.casa\" as invalid" make_input
+    products::assembly.unwrap = result
+    "/tmp/casa_products_invalid.casa".as_cstr.unwrap file::remove.unwrap drop
+    "invalid UTF-8 rejected" result
+        .get_report
+        .get_diagnostics
+        .has_errors test::assert_true
+    "/tmp/casa_products_invalid.casa" result
+        .get_report
+        .get_sources
+        .get_bytes
+        .unwrap = retained
+    "exact rejected bytes" bytes retained == test::assert_true
+    "no invented UTF-8 text" "/tmp/casa_products_invalid.casa"
+    result
+        .get_report
+        .get_sources
+        .get
+        .is_none test::assert_true
+}
+
+fn test_failed_request_report {
+    "failed_request_report" test::test_start
+    "42 print" make_input = input
+    "relative".to_str = input.base_directory
+    products::Target::LinuxX86_64 input products::assembly match
+        std::Result::Error(failure) => {
+            "failure phase" products::CompilerPhase::Input failure.get_phase == test::assert_true
+            "failure retains source" "42 print" "main.casa"
+            failure
+                .get_report
+                .get_sources
+                .get
+                .unwrap test::assert_str_eq
+        }
+        std::Result::Ok(_) => "relative base fails" false test::assert_true
+    end
+}
+
+fn test_assembly_product {
+    "assembly_product" test::test_start
+    products::Target::LinuxX86_64 "42" make_override_input products::assembly.unwrap match
+        products::AssemblyResult::Produced(report source) => {
+            "assembly target" products::Target::LinuxX86_64 source.get_target == test::assert_true
+            "assembly entry" source.get_text.as_str "_start:" str::contains test::assert_true
+            "assembly keeps used source" "/tmp/casa_products/lib/dependency.casa"
+            report
+                .get_sources
+                .get
+                .is_some test::assert_true
+            std::List[std::String]::new false "/tmp/casa_products_test"
+            source.get_text.as_str build::compile_binary
+            std::List[std::Bytes]::new = run
+            "/bin/sh" run.push_str
+            "-c" run.push_str
+            "test \"$(/tmp/casa_products_test)\" = 42" run.push_str
+            "native output is 42" 0 run std::run_command test::assert_eq
+            "/tmp/casa_products_test".as_cstr.unwrap file::remove.unwrap drop
+        }
+        products::AssemblyResult::Rejected(_) => "scalar source accepted" false test::assert_true
+    end
+}
+test_independent_requests
+test_rejected_source
+test_import_rejection_report
+test_syntax_product
+test_invalid_utf8_report
+test_failed_request_report
+test_assembly_product
+test::test_summary
