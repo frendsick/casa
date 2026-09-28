@@ -1,11 +1,16 @@
 # Self-compilation target and measurements
 
-On 2026-09-26 the maintainer set a goal of roughly **10 seconds for
-self-compilation** and rejected half-minute compilation as acceptable.
-Memory is secondary unless self-compilation needs multiple gigabytes. The
-previous proposals to allow 20% more time and 25% more memory were not accepted.
-The exact timing acceptance band and numeric RSS ceiling remain open.
-The decision is recorded in [Validate the compiler simplification blueprint](https://github.com/frendsick/casa/issues/651#issuecomment-5849035021).
+On 2026-09-28 the maintainer accepted a **10.0-second maximum median** for
+self-compilation on the reference Ryzen 7 3700X Linux x86-64 host. Every measured
+run must use at most **1 GiB peak RSS**. Memory increases must buy a substantial,
+repeatable reduction in end-to-end compile time. Small speed gains do not justify
+materially higher memory use.
+
+This makes the earlier roughly ten-second goal explicit. The previous proposals
+to allow 20% more time and 25% more memory were not accepted. Common-source
+regressions beyond observed variation require explicit review of the evidence,
+without a fixed percentage allowance. Final blueprint acceptance remains pending
+in [Validate the compiler simplification blueprint](https://github.com/frendsick/casa/issues/651).
 
 Aggressive simplification and feature reductions may be investigated for large
 compilation gains. Each behavior change needs an explicit decision about its
@@ -19,6 +24,29 @@ a compiled-module cache. Final acceptance requires the fixed-point compiler and
 the [paired measurement protocol](compiler-simplification-measurements.md).
 
 ## Current evidence
+
+The [completed native investigation](https://github.com/frendsick/casa/issues/683#issuecomment-5867480612)
+reached the speed target without reducing language features. The implementation
+merged in [Bring self-compilation below ten seconds](https://github.com/frendsick/casa/pull/696).
+
+| Pair | Control seconds | Candidate seconds |
+| --- | ---: | ---: |
+| 1 | 13.095 | 9.721 |
+| 2, candidate first | 12.740 | 9.578 |
+| 3 | 12.928 | 9.710 |
+| Median | 12.928 | 9.710 |
+
+Both fixed-point compilers built the same committed source, `5c7ff5b`. The control
+was `dfb77b4`. One warm-up per compiler preceded three alternating measured pairs.
+Times use `CLOCK_MONOTONIC_RAW` and include assembling and linking. Median peak
+RSS fell from 294.2 to 283.2 MiB. The measurements apply to this host and workload.
+
+The [evidence report](https://github.com/frendsick/casa/blob/43c405c750fa2d230fcc4ea2cf1f5ad0b7fb85d1/docs/benchmarks/under-ten-native/README.md)
+and [raw samples](https://github.com/frendsick/casa/blob/43c405c750fa2d230fcc4ea2cf1f5ad0b7fb85d1/docs/benchmarks/under-ten-native/timings.csv)
+retain provenance, native probes, and correctness results. This is evidence for
+the current compiler. The redesigned compiler must independently meet its gates.
+
+## Historical investigation, 2026-09-26
 
 The branch compiler was built from production revision
 `29fe1866a6ed6e408bdf127b19bf3734b839e376` by stable Casa v1.50.0.
@@ -34,8 +62,8 @@ One warm-up preceded three serial measured runs with `-L lib`, `--keep-asm`,
 | Median | 54.469 | 56.88 | 571.50 |
 
 The clocks disagree beyond rounding. The cause is unverified, so both readings
-are retained. Resolve this discrepancy before using the results for a precise
-acceptance comparison.
+are retained as historical evidence. Later fixed-point and native measurements
+use `CLOCK_MONOTONIC_RAW` for acceptance comparisons.
 
 These are branch-compiler measurements, not established fixed-point timings.
 The historical [33.11-second baseline](compiler-complexity-baseline.md#measured-build-cost)
@@ -70,10 +98,11 @@ versions, commands and logs. The
 demonstrates its limited contracts but does not predict native compilation speed.
 No speed improvement or blueprint acceptance is claimed by this checkpoint.
 
-## Next decisions
+## Blueprint acceptance
 
 [Establish fixed-point compilation costs](https://github.com/frendsick/casa/issues/682)
-first establishes the comparable baseline and attributes the dominant costs.
-[Choose reductions toward ten-second self-compilation](https://github.com/frendsick/casa/issues/683)
-then uses native experiments to measure gains and select tradeoffs with the
-maintainer. Final blueprint validation follows those results.
+and [Choose reductions toward ten-second self-compilation](https://github.com/frendsick/casa/issues/683)
+are complete. The [blueprint acceptance record](compiler-simplification-blueprint.md)
+reconciles their evidence with the earlier executable slice and implementation
+plan. Acceptance of the blueprint remains separate from eventual production
+validation.
