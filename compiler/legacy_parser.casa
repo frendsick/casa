@@ -494,15 +494,22 @@ pub fn op_value_to_operator_kind op_value:$common::OpValue -> std::Option[common
 # ============================================================================
 
 pub struct TokenCursor {
-    pub tokens:        $std::List[common::Token]
-    pub pos:           u64
-    pub names:         std::Map[std::String common::SourceBinding]
-    pub type_bindings: std::List[std::String]
+    pub tokens:          $std::List[common::Token]
+    pub pos:             u64
+    pub names:           std::Map[std::String common::SourceBinding]
+    pub type_bindings:   std::List[std::String]
+    pub module_prefixes: std::List[std::String]
 }
 
 impl TokenCursor {
     pub fn new tokens:$std::List[common::Token] -> TokenCursor {
-        std::List[std::String]::new std::Map[std::String common::SourceBinding]::new 0 tokens TokenCursor
+        std::List[std::String]::new std::List[std::String]::new std::Map[std::String common::SourceBinding]::new 0 tokens TokenCursor
+    }
+
+    pub fn copy_module_prefixes self:mut$TokenCursor prefixes:$std::Map[std::String std::String] {
+        for prefix in prefixes.iter do
+            prefix.second.clone self.module_prefixes.push
+        done
     }
 
     pub fn restore_type_bindings self:mut$TokenCursor count:u64 {
@@ -517,10 +524,18 @@ impl TokenCursor {
             name.to_str return
         fi
         if self.names name common::resolve_source_name std::Option::Some(resolved) is then
-            resolved.clone
-        else
-            name.to_str
+            resolved.clone return
         fi
+        if head.as_str "__casa_" str::starts_with ! then
+            name.to_str return
+        fi
+        for prefix in self.module_prefixes.iter do
+            if head.as_str prefix.as_str str::starts_with then
+                # No source binding exists. An unspellable suffix prevents store-key access.
+                f"{name}@unbound" return
+            fi
+        done
+        name.to_str
     }
 
     pub fn pop self:mut$TokenCursor -> std::Option[common::Token] {
@@ -718,6 +733,9 @@ pub fn parse_type_ast cursor:mut$TokenCursor state:mut$ParseState -> common::Typ
             base_token common::Token::location "Expected type name" common::ErrorKind::UnexpectedToken state.record_error
         fi
         base_token common::Token::value.as_str cursor.resolve_name = base
+        if base.as_str "@unbound" str::ends_with then
+            base_token.location f"Type `{base_token.value}` is not defined in this module" common::ErrorKind::UndefinedName state.record_error_string
+        fi
     fi
     if base.as_str "mut$" str::starts_with then
         common::EXCLUSIVE_BORROW_TYPE = borrow_prefix
@@ -7173,7 +7191,7 @@ pub fn try_parse_explicit_associated_item
         cursor.peek = suffix_opt
         if suffix_opt.is_none then
             token common::Token::value.as_str cursor.resolve_name.as_str 1 token common::Token::value.as_str cursor.resolve_name.length 1 - str::substring = ref_name
-            token common::Token::location token common::Token::value.as_str cursor.resolve_name common::OpValue::Identifier common::Op::new = ref_op
+            token common::Token::location token common::Token::value.clone common::OpValue::Identifier common::Op::new = ref_op
             type_args ref_name common::GenericType common::Type::Generic std::Option::Some ref_op common::Op::set_type_hint
             ref_op ops.push
             true return
@@ -7181,7 +7199,7 @@ pub fn try_parse_explicit_associated_item
         if suffix_opt std::Option::Some(suffix) is then
             if ":" suffix common::Token::value.as_str != then
                 token common::Token::value.as_str cursor.resolve_name.as_str 1 token common::Token::value.as_str cursor.resolve_name.length 1 - str::substring = ref_name
-                token common::Token::location token common::Token::value.as_str cursor.resolve_name common::OpValue::Identifier common::Op::new = ref_op
+                token common::Token::location token common::Token::value.clone common::OpValue::Identifier common::Op::new = ref_op
                 type_args ref_name common::GenericType common::Type::Generic std::Option::Some ref_op common::Op::set_type_hint
                 ref_op ops.push
                 true return
@@ -7201,7 +7219,7 @@ pub fn try_parse_explicit_associated_item
                 then
                     member_token common::Token::value.clone = member
                     token common::Token::value.as_str cursor.resolve_name = base
-                    token common::Token::location f"{base}::{member}" common::OpValue::Identifier common::Op::new = associated_op
+                    token common::Token::location f"{token.value}::{member}" common::OpValue::Identifier common::Op::new = associated_op
                     base.clone = receiver_base
                     if '&' 0 receiver_base.as_str.at == then
                         receiver_base.as_str 1 receiver_base.length 1 -
@@ -7337,6 +7355,7 @@ pub fn parse_ops parser:mut$Parser tokens:std::List[common::Token] -> std::List[
         .current_module
         .names
         .clone = cursor.names
+    parser.source_prefixes cursor.copy_module_prefixes
     std::List[common::Op]::new = ops
     while cursor.is_finished ! do
         if parser.current_module.complete_until std::Option::Some(limit) is then
@@ -7715,7 +7734,7 @@ pub fn resolve_array_identifiers
             elif rai_name.as_str store.has_function then
                 rai_name.clone common::OpValue::FnPush rai_item common::Op::set_value
             else
-                rai_item common::Op::location.clone f"Identifier `{rai_name}` is not defined" common::ErrorKind::UndefinedName error::CasaError::new errors.push
+                rai_item common::Op::location.clone f"Identifier `{rai_name_ref}` is not defined" common::ErrorKind::UndefinedName error::CasaError::new errors.push
             fi
         fi
         1 += item_index
@@ -8937,7 +8956,12 @@ pub fn resolve_plain_identifier
         return
     fi
 
-    op common::Op::location.clone f"Identifier `{ident}` is not defined" common::ErrorKind::UndefinedName error::CasaError::new resolve_errors.push
+    if op.value common::OpValue::Identifier(written) is then
+        f"Identifier `{written}` is not defined"
+    else
+        f"Identifier `{ident}` is not defined"
+    fi = message
+    op.location.clone message common::ErrorKind::UndefinedName error::CasaError::new resolve_errors.push
 }
 
 impl Parser {
@@ -9230,6 +9254,7 @@ impl Parser {
             .current_module
             .names
             .clone = cursor.names
+        self.source_prefixes cursor.copy_module_prefixes
         for declaration in declarations.iter do
             declaration.first_token = cursor.pos
             if "struct" declaration.kind.as_str == then
