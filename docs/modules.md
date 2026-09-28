@@ -96,7 +96,7 @@ Code outside the defining module can construct a struct only when every field is
 
 ### Import failures
 
-An imported file must lex, parse, and resolve successfully before its declarations are available to the importer. This includes unused declarations and root statements. A failed import reports the imported file's diagnostics at the import position and stops dependent resolution. Discovery continues through later independent imports. Failed modules are not loaded again under another alias. Declaration headers are collected before ordinary bodies are resolved. If the root source has a syntax error, analysis can retain facts from the complete top-level prefix. The damaged construct and its remainder are unavailable, and the error prevents assembly.
+An imported file must lex, parse, and resolve successfully before its declarations are available to the importer. This includes unused declarations and root statements. A failed import reports the imported file's diagnostics at the import position and stops dependent resolution. Discovery continues through later independent imports. Failed modules are not loaded again under another alias. Declaration headers are collected before ordinary bodies are resolved. If the root source has a syntax or lexical error, analysis can retain facts from the complete top-level prefix. The damaged construct and its remainder are unavailable, and the error prevents assembly.
 
 Module imports must be acyclic. A cycle is a compile-time error that lists the complete resolved path from the first repeated module back to itself. The compiler visits dependencies in source order before their importers and processes repeated imports only once.
 
