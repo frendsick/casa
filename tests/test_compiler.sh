@@ -41,7 +41,7 @@ test_category() {
             ;;
         test/test_products|test/test_bytecode|test/test_document|test/test_emitter|test/test_error|\
         test/test_extern|\
-        test/test_lsp|test/test_modules|test/test_qualified_import)
+        test/test_lsp|test/test_module_identity|test/test_modules|test/test_qualified_import)
             echo compiler_integration
             ;;
         test/test_closure_ownership|test/test_copy_clone|\
