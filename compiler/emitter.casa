@@ -30,6 +30,7 @@ pub const F64_SIGN_BIT_INDEX 63
 pub const ODD_INTEGER_MASK 1
 const MAX_LEAF_INSTRUCTIONS 8
 const SCALAR_REGISTER_COUNT 4
+const MAX_DIRECT_LOCAL_WORDS 32
 
 # ============================================================================
 # Emitter state
@@ -250,6 +251,7 @@ fn get_scalar_input_count inst:$common::InstValue -> std::Option[u64] {
         common::InstValue::LocalGet => 0
         common::InstValue::LocalAddress => 0
         common::InstValue::LocalSet => 1
+        common::InstValue::JumpNe => 1
         common::InstValue::Drop => 1
         common::InstValue::Dup => 1
         common::InstValue::Over => 2
@@ -263,6 +265,25 @@ fn get_scalar_input_count inst:$common::InstValue -> std::Option[u64] {
         common::InstValue::Store16 => 2
         common::InstValue::Store32 => 2
         common::InstValue::Store64 => 2
+        common::InstValue::NormalizeInt(builtin) => {
+            if 64 builtin.bit_width == then
+                0
+            else
+                std::Option[u64]::None return
+            fi
+        }
+        common::InstValue::NumericConvert(conversion) => {
+            if
+                conversion.kind common::NumericConversionKind::FromBits ==
+                conversion.kind common::NumericConversionKind::ToBits == ||
+                conversion.source.is_integer conversion.target.is_integer &&
+                64 conversion.target.bit_width == && ||
+            then
+                0
+            else
+                std::Option[u64]::None return
+            fi
+        }
         common::InstValue::Add => 2
         common::InstValue::Sub => 2
         common::InstValue::Mul => 2
@@ -576,6 +597,7 @@ impl Emitter {
     pub fn emit_heap_helpers self:mut$Emitter {
         # heap_alloc: requested byte count in %rdi, pushes an aligned pointer.
         "heap_alloc:" self.line
+        "popq -8(%r14)" self.indent
         "testq %rdi, %rdi" self.indent
         "jz .Lheap_alloc_null" self.indent
         "movq %rdi, %rax" self.indent
@@ -680,7 +702,8 @@ impl Emitter {
         "pushq $0" self.indent
         ".Lheap_alloc_return:" self.line
         "subq $8, %r14" self.indent
-        "jmpq *(%r14)" self.indent
+        "pushq (%r14)" self.indent
+        "ret" self.indent
         ".Lheap_alloc_oom:" self.line
         f"movq ${STDERR_FD}, %rdi" self.indent_string
         "leaq allocation_failure_msg(%rip), %rsi" self.indent
@@ -693,6 +716,7 @@ impl Emitter {
 
         # heap_free: pointer in %rdi, returns the complete allocation for reuse.
         "heap_free:" self.line
+        "popq -8(%r14)" self.indent
         "testq %rdi, %rdi" self.indent
         "jz .Lheap_free_return" self.indent
         "leaq -8(%rdi), %rax" self.indent
@@ -711,7 +735,8 @@ impl Emitter {
         "movq %rax, free_list(%rip)" self.indent
         ".Lheap_free_return:" self.line
         "subq $8, %r14" self.indent
-        "jmpq *(%r14)" self.indent
+        "pushq (%r14)" self.indent
+        "ret" self.indent
         "" self.line
     }
 
@@ -719,6 +744,7 @@ impl Emitter {
     # Output operations cannot report errors, so an unrecoverable write exits unsuccessfully.
     pub fn emit_write_helper self:mut$Emitter {
         "write_all:" self.line
+        "popq -8(%r14)" self.indent
         ".Lwrite_all_next:" self.line
         "testq %rdx, %rdx" self.indent
         "jz .Lwrite_all_return" self.indent
@@ -733,7 +759,8 @@ impl Emitter {
         "jmp .Lwrite_all_next" self.indent
         ".Lwrite_all_return:" self.line
         "subq $8, %r14" self.indent
-        "jmpq *(%r14)" self.indent
+        "pushq (%r14)" self.indent
+        "ret" self.indent
         ".Lwrite_all_fail:" self.line
         f"movq ${EXIT_SYSCALL}, %rax" self.indent_string
         f"movq ${FAILURE_STATUS}, %rdi" self.indent_string
@@ -747,6 +774,7 @@ impl Emitter {
 
         # print_int: value in %rdi, returns via r14
         "print_int:" self.line
+        "popq -8(%r14)" self.indent
         "movq %rdi, %rax" self.indent
         "leaq print_buf+32(%rip), %rsi" self.indent
         "testq %rax, %rax" self.indent
@@ -778,11 +806,13 @@ impl Emitter {
         f"movq ${STDOUT_FD}, %rdi" self.indent_string
         "print_int_write_done" "write_all" self.emit_call_via_return_stack
         "subq $8, %r14" self.indent
-        "jmpq *(%r14)" self.indent
+        "pushq (%r14)" self.indent
+        "ret" self.indent
         "" self.line
 
         # print_uint: value in %rdi, returns via r14
         "print_uint:" self.line
+        "popq -8(%r14)" self.indent
         "movq %rdi, %rax" self.indent
         "leaq print_buf+32(%rip), %rsi" self.indent
         "testq %rax, %rax" self.indent
@@ -805,22 +835,26 @@ impl Emitter {
         f"movq ${STDOUT_FD}, %rdi" self.indent_string
         "print_uint_write_done" "write_all" self.emit_call_via_return_stack
         "subq $8, %r14" self.indent
-        "jmpq *(%r14)" self.indent
+        "pushq (%r14)" self.indent
+        "ret" self.indent
         "" self.line
 
         # print_str: string pointer in %rdi (points to length prefix), returns via r14
         "print_str:" self.line
+        "popq -8(%r14)" self.indent
         "movq (%rdi), %rdx" self.indent
         "leaq 8(%rdi), %rsi" self.indent
         f"movq ${STDOUT_FD}, %rdi" self.indent_string
         "print_str_write_done" "write_all" self.emit_call_via_return_stack
         "subq $8, %r14" self.indent
-        "jmpq *(%r14)" self.indent
+        "pushq (%r14)" self.indent
+        "ret" self.indent
         "" self.line
 
         # encode_char: Unicode scalar in %rdi, UTF-8 bytes in print_buf.
         # Returns the buffer in %rsi and its byte length in %rdx via r14.
         "encode_char:" self.line
+        "popq -8(%r14)" self.indent
         "leaq print_buf(%rip), %rsi" self.indent
         "cmpq $127, %rdi" self.indent
         "ja .Lec_two" self.indent
@@ -880,12 +914,14 @@ impl Emitter {
         "movq $4, %rdx" self.indent
         ".Lec_return:" self.line
         "subq $8, %r14" self.indent
-        "jmpq *(%r14)" self.indent
+        "pushq (%r14)" self.indent
+        "ret" self.indent
         "" self.line
 
         # primitive_to_str: value in %rdi, kind in %r8, pushes an owned String.
         # Kinds: 0 signed integer, 1 unsigned integer, 2 bool, 3 char, 4 cstr.
         "primitive_to_str:" self.line
+        "popq -8(%r14)" self.indent
         "cmpq $2, %r8" self.indent
         "je .Lpts_bool" self.indent
         "cmpq $3, %r8" self.indent
@@ -970,11 +1006,13 @@ impl Emitter {
         "movq %r13, (%rax)" self.indent
         "pushq %rax" self.indent
         "subq $8, %r14" self.indent
-        "jmpq *(%r14)" self.indent
+        "pushq (%r14)" self.indent
+        "ret" self.indent
         "" self.line
 
         # str_concat consumes N owned String wrappers and pushes one owned String.
         "str_concat:" self.line
+        "popq -8(%r14)" self.indent
         "movq %rdi, %r15" self.indent
         "movq %rsp, %r12" self.indent
         "xorq %r10, %r10" self.indent
@@ -1034,7 +1072,8 @@ impl Emitter {
         "leaq (%r12, %r15, 8), %rsp" self.indent
         "pushq %rax" self.indent
         "subq $8, %r14" self.indent
-        "jmpq *(%r14)" self.indent
+        "pushq (%r14)" self.indent
+        "ret" self.indent
         "" self.line
 
         # Arithmetic failure handler: write error to fd 2 and exit(1).
@@ -1080,6 +1119,7 @@ impl Emitter {
         for pair in templates.iter do
             pair.first.as_str sanitize_name = label
             f"fn_{label}:" self.line_string
+            "popq -8(%r14)" self.indent
             false templates pair.second.instructions self.emit_bytecode
             "" self.line
         done
@@ -1095,6 +1135,7 @@ impl Emitter {
                 .unwrap = bytecode
             name.as_str sanitize_name = label
             f"fn_{label}:" self.line_string
+            "popq -8(%r14)" self.indent
             false templates bytecode self.emit_bytecode
             "" self.line
         done
@@ -1266,6 +1307,12 @@ impl Emitter {
                 f"movq {top}, -{index 1 + common::WORD_SIZE *}(%r14)" self.indent_string
                 1 -= cache.depth
             }
+            common::InstValue::JumpNe(label) => {
+                1 -= cache.depth
+                cache self.flush_scalar_stack
+                f"testq {top}, {top}" self.indent_string
+                f"jz .L{label}" self.indent_string
+            }
             common::InstValue::Drop => 1 -= cache.depth
             common::InstValue::Dup => {
                 cache self.reserve_scalar_register = target
@@ -1314,6 +1361,11 @@ impl Emitter {
                 2 -= cache.depth
             }
             common::InstValue::BitNot => f"notq {top}" self.indent_string
+            # These eligible conversions leave the representation unchanged.
+            common::InstValue::NormalizeInt => {
+            }
+            common::InstValue::NumericConvert => {
+            }
             common::InstValue::Not => {
                 f"cmpq $0, {top}" self.indent_string
                 "sete %al" self.indent
@@ -1644,14 +1696,12 @@ impl Emitter {
         f"addq ${byte_count}, %r14" self.indent_string
     }
 
-    # Emit call-via-return-stack: reserve a return address, write it, jump to
-    # the target, then emit the return label.
+    # The callee moves the native return address into the reserved slot before
+    # accessing the value stack. Native call/ret enables CPU return prediction.
     pub fn emit_call_via_return_stack self:mut$Emitter jump_target:$str label_prefix:$str {
         self.emit_uid = uid
         common::WORD_SIZE self.emit_return_stack_reservation
-        f"leaq .L{label_prefix}_{uid}(%rip), %rax" self.indent_string
-        f"movq %rax, -{common::WORD_SIZE}(%r14)" self.indent_string
-        f"jmp {jump_target}" self.indent_string
+        f"call {jump_target}" self.indent_string
         f".L{label_prefix}_{uid}:" self.line_string
     }
 
@@ -2621,7 +2671,7 @@ impl Emitter {
                 count common::WORD_SIZE * = byte_count
                 "movq %r14, %rdi" self.indent
                 byte_count self.emit_return_stack_reservation
-                if 8 count <= then
+                if MAX_DIRECT_LOCAL_WORDS count <= then
                     "xorq %rax, %rax" self.indent
                     0 u64::try_from.unwrap = index
                     while index count > do
@@ -2688,10 +2738,8 @@ impl Emitter {
                 "addq $8, %rcx" self.indent
                 "movq %rcx, env_sp(%rip)" self.indent
                 "movq %rax, current_env(%rip)" self.indent
-                f"leaq .Lret_{uid}(%rip), %rcx" self.indent_string
-                f"movq %rcx, -{common::WORD_SIZE}(%r14)" self.indent_string
                 "movq (%rax), %rax" self.indent
-                "jmpq *%rax" self.indent
+                "callq *%rax" self.indent
                 f".Lret_{uid}:" self.line_string
                 "movq env_sp(%rip), %rcx" self.indent
                 "subq $8, %rcx" self.indent
@@ -2770,9 +2818,7 @@ impl Emitter {
                 "movq %rcx, env_sp(%rip)" self.indent
                 "movq %rax, current_env(%rip)" self.indent
                 "pushq %rax" self.indent
-                f"leaq .Lclosure_drop_return_{uid}(%rip), %rcx" self.indent_string
-                f"movq %rcx, -{common::WORD_SIZE}(%r14)" self.indent_string
-                "jmpq *%rdx" self.indent
+                "callq *%rdx" self.indent
                 f".Lclosure_drop_return_{uid}:" self.line_string
                 "movq env_sp(%rip), %rcx" self.indent
                 "subq $8, %rcx" self.indent
@@ -2808,7 +2854,8 @@ impl Emitter {
                     "syscall" self.indent
                 else
                     "subq $8, %r14" self.indent
-                    "jmpq *(%r14)" self.indent
+                    "pushq (%r14)" self.indent
+                    "ret" self.indent
                 fi
             }
             _ => {
