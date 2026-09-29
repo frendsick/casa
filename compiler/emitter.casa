@@ -1,6 +1,7 @@
 # x86-64 GNU assembly emitter for the Casa compiler.
 import "std" as std
 import "common" as common
+import "typechecker" as typechecker
 
 # ============================================================================
 # Constants
@@ -39,7 +40,13 @@ const MAX_DIRECT_LOCAL_WORDS 32
 pub struct Emitter {
     pub asm:           std::String
     pub label_counter: u64
-    pub program:       common::Program
+    functions:         std::Map[std::String std::List[common::InstValue]]
+    strings:           std::List[std::String]
+    static_arrays:     std::List[common::StaticArray]
+    static_structs:    std::List[common::StaticStruct]
+    constants_count:   u64
+    buffering:         bool
+    instructions:      std::List[MachineLine]
 }
 
 impl common::Program {
@@ -58,10 +65,19 @@ impl common::Program {
 
 impl Emitter {
     pub fn new program:common::Program -> Emitter {
-        program
-        0
-        std::String::new
-        Emitter
+        program match
+            common::Program { functions: functions strings: strings static_arrays: arrays static_structs: structs constants_count: constants } => {
+                std::List[MachineLine]::new false constants structs arrays strings functions
+                0 std::String::new Emitter
+            }
+        end
+    }
+
+    fn new_scalar -> Emitter {
+        std::List[MachineLine]::new false 0
+        std::List[common::StaticStruct]::new std::List[common::StaticArray]::new
+        std::List[std::String]::new std::Map[std::String std::List[common::InstValue]]::new
+        0 std::String::new Emitter
     }
 
     pub fn into_asm self:Emitter -> std::String {
@@ -76,14 +92,22 @@ impl Emitter {
     }
 
     pub fn line self:mut$Emitter text:$str {
-        text self.asm.append
-        '\n' self.asm.push
+        if self.buffering then
+            text.to_str MachineLine::Directive self.instructions.push
+        else
+            text self.asm.append
+            '\n' self.asm.push
+        fi
     }
 
     pub fn indent self:mut$Emitter text:$str {
-        "    " self.asm.append
-        text self.asm.append
-        '\n' self.asm.push
+        if self.buffering then
+            text.to_str MachineLine::Instruction self.instructions.push
+        else
+            "    " self.asm.append
+            text self.asm.append
+            '\n' self.asm.push
+        fi
     }
 
     pub fn line_string self:mut$Emitter text:std::String { text.as_str self.line }
@@ -449,8 +473,8 @@ pub fn escape_string s:$str -> std::String {
 impl Emitter {
     pub fn emit_bss self:mut$Emitter {
         ".section .bss" self.line
-        if 0 self.program.constants_count > then
-            f"constants: .skip {self.program.constants_count common::WORD_SIZE *}" self.line_string
+        if 0 self.constants_count > then
+            f"constants: .skip {self.constants_count common::WORD_SIZE *}" self.line_string
         fi
         f"return_stack: .skip {RETURN_STACK_SIZE}" self.line_string
         f"env_stack: .skip {RETURN_STACK_SIZE}" self.line_string
@@ -478,14 +502,10 @@ impl Emitter {
         0 = index: u64
         while
             index self
-                .program
                 .strings
                 .length >
         do
-            index self
-                .program
-                .strings
-                .get = value
+            index self.strings.get = value
             value.as_str escape_string = escaped
             ".align 8" self.line
             f"str_{index}:" self.line_string
@@ -507,7 +527,6 @@ impl Emitter {
         # Static closure record per function
         for
             name in self
-                .program
                 .functions
                 .keys
                 .iter
@@ -522,12 +541,10 @@ impl Emitter {
         0 = sa_index: u64
         while
             sa_index self
-                .program
                 .static_arrays
                 .length >
         do
             sa_index self
-                .program
                 .static_arrays
                 .get
                 .clone = sa
@@ -560,12 +577,10 @@ impl Emitter {
         0 = ss_index: u64
         while
             ss_index self
-                .program
                 .static_structs
                 .length >
         do
             ss_index self
-                .program
                 .static_structs
                 .get
                 .clone = ss
@@ -597,7 +612,7 @@ impl Emitter {
     # ============================================================================
 
     pub fn emit_text self:mut$Emitter bytecode:$std::List[common::InstValue] {
-        self.program.functions collect_leaf_templates = templates
+        self.functions collect_leaf_templates = templates
         ".section .text" self.line
         self.emit_helpers
         templates self.emit_functions
@@ -1141,13 +1156,9 @@ impl Emitter {
             false templates pair.second.instructions self.emit_bytecode
             "" self.line
         done
-        self
-            .program
-            .functions
-            .keys = function_names
+        self.functions.keys = function_names
         for name in function_names.iter do
             name self
-                .program
                 .functions
                 .remove
                 .unwrap = bytecode
@@ -1829,10 +1840,7 @@ impl Emitter {
                 "pushq %rax" self.indent
             }
             common::InstValue::PushStaticArray(array_index) => {
-                array_index self
-                    .program
-                    .static_arrays
-                    .get common::StaticArray::elements.length 8 * = byte_count
+                array_index self.static_arrays.get common::StaticArray::elements.length 8 * = byte_count
                 if 0 byte_count == then
                     1 = byte_count: u64
                 fi
@@ -2909,33 +2917,10 @@ impl Emitter {
 
     pub fn emit_io_ops self:mut$Emitter inst:$common::InstValue {
         inst match
-            common::InstValue::PrintInt => {
-                "popq %rdi" self.indent
-                "print_done" "print_int" self.emit_call_via_return_stack
-            }
-            common::InstValue::PrintUint => {
-                "popq %rdi" self.indent
-                "print_uint_done" "print_uint" self.emit_call_via_return_stack
-            }
-            common::InstValue::PrintBool => {
-                self.emit_uid = uid
-                "popq %rax" self.indent
-                "testq %rax, %rax" self.indent
-                f"jz .Lpb_false_{uid}" self.indent_string
-                "leaq bool_true(%rip), %rsi" self.indent
-                "movq $4, %rdx" self.indent
-                f"jmp .Lpb_write_{uid}" self.indent_string
-                f".Lpb_false_{uid}:" self.line_string
-                "leaq bool_false(%rip), %rsi" self.indent
-                "movq $5, %rdx" self.indent
-                f".Lpb_write_{uid}:" self.line_string
-                f"movq ${STDOUT_FD}, %rdi" self.indent_string
-                "print_bool_write_done" "write_all" self.emit_call_via_return_stack
-            }
-            common::InstValue::PrintStr => {
-                "popq %rdi" self.indent
-                "print_done" "print_str" self.emit_call_via_return_stack
-            }
+            common::InstValue::PrintInt => self.select_print_int
+            common::InstValue::PrintUint => self.select_print_uint
+            common::InstValue::PrintBool => self.select_print_bool
+            common::InstValue::PrintStr => self.select_print_str
             common::InstValue::PrintString => {
                 "popq %r12" self.indent
                 "movq (%r12), %rdi" self.indent
@@ -2945,28 +2930,8 @@ impl Emitter {
                 "movq %r12, %rdi" self.indent
                 "print_string_wrapper_free_done" "heap_free" self.emit_call_via_return_stack
             }
-            common::InstValue::PrintChar => {
-                "popq %rdi" self.indent
-                "print_char_encoded" "encode_char" self.emit_call_via_return_stack
-                f"movq ${STDOUT_FD}, %rdi" self.indent_string
-                "print_char_write_done" "write_all" self.emit_call_via_return_stack
-            }
-            common::InstValue::PrintCstr => {
-                self.emit_uid = uid
-                "popq %rsi" self.indent
-                "movq %rsi, %rdi" self.indent
-                f".Lpc_scan_{uid}:" self.line_string
-                "cmpb $0, (%rsi)" self.indent
-                f"je .Lpc_done_{uid}" self.indent_string
-                "incq %rsi" self.indent
-                f"jmp .Lpc_scan_{uid}" self.indent_string
-                f".Lpc_done_{uid}:" self.line_string
-                "movq %rsi, %rdx" self.indent
-                "subq %rdi, %rdx" self.indent
-                "movq %rdi, %rsi" self.indent
-                f"movq ${STDOUT_FD}, %rdi" self.indent_string
-                "print_cstr_write_done" "write_all" self.emit_call_via_return_stack
-            }
+            common::InstValue::PrintChar => self.select_print_char
+            common::InstValue::PrintCstr => self.select_print_cstr
             common::InstValue::FstringConcat(fstring_count) => {
                 f"movq ${fstring_count}, %rdi" self.indent_string
                 "concat_done" "str_concat" self.emit_call_via_return_stack
@@ -3216,5 +3181,1106 @@ pub fn emit program:common::Program -> std::String {
     emitter.emit_bss
     emitter.emit_data
     bytecode emitter.emit_text
+    emitter.into_asm
+}
+
+impl Emitter {
+    fn select_print_int self:mut$Emitter {
+        "popq %rdi" self.indent
+        "print_done" "print_int" self.emit_call_via_return_stack
+    }
+}
+
+impl Emitter {
+    fn select_print_uint self:mut$Emitter {
+        "popq %rdi" self.indent
+        "print_uint_done" "print_uint" self.emit_call_via_return_stack
+    }
+}
+
+impl Emitter {
+    fn select_print_bool self:mut$Emitter {
+        self.emit_uid = uid
+        "popq %rax" self.indent
+        "testq %rax, %rax" self.indent
+        f"jz .Lpb_false_{uid}" self.indent_string
+        "leaq bool_true(%rip), %rsi" self.indent
+        "movq $4, %rdx" self.indent
+        f"jmp .Lpb_write_{uid}" self.indent_string
+        f".Lpb_false_{uid}:" self.line_string
+        "leaq bool_false(%rip), %rsi" self.indent
+        "movq $5, %rdx" self.indent
+        f".Lpb_write_{uid}:" self.line_string
+        f"movq ${STDOUT_FD}, %rdi" self.indent_string
+        "print_bool_write_done" "write_all" self.emit_call_via_return_stack
+    }
+}
+
+impl Emitter {
+    fn select_print_str self:mut$Emitter {
+        "popq %rdi" self.indent
+        "print_done" "print_str" self.emit_call_via_return_stack
+    }
+}
+
+impl Emitter {
+    fn select_print_char self:mut$Emitter {
+        "popq %rdi" self.indent
+        "print_char_encoded" "encode_char" self.emit_call_via_return_stack
+        f"movq ${STDOUT_FD}, %rdi" self.indent_string
+        "print_char_write_done" "write_all" self.emit_call_via_return_stack
+    }
+}
+
+impl Emitter {
+    fn select_print_cstr self:mut$Emitter {
+        self.emit_uid = uid
+        "popq %rsi" self.indent
+        "movq %rsi, %rdi" self.indent
+        f".Lpc_scan_{uid}:" self.line_string
+        "cmpb $0, (%rsi)" self.indent
+        f"je .Lpc_done_{uid}" self.indent_string
+        "incq %rsi" self.indent
+        f"jmp .Lpc_scan_{uid}" self.indent_string
+        f".Lpc_done_{uid}:" self.line_string
+        "movq %rsi, %rdx" self.indent
+        "subq %rdi, %rdx" self.indent
+        "movq %rdi, %rsi" self.indent
+        f"movq ${STDOUT_FD}, %rdi" self.indent_string
+        "print_cstr_write_done" "write_all" self.emit_call_via_return_stack
+    }
+}
+# Target instructions for one function. Selection fixes all widths, offsets,
+# targets and runtime calls before the renderer sees this buffer.
+enum MachineLine {
+    Instruction (std::String)
+    Directive (std::String)
+}
+
+impl Emitter {
+    fn render_function self:mut$Emitter {
+        false = self.buffering
+        self.instructions.reverse
+        while self.instructions.is_empty ! do
+            self.instructions.pop match
+                MachineLine::Instruction(text) => text.as_str self.indent
+                MachineLine::Directive(text) => text.as_str self.line
+            end
+        done
+        # Release capacity as well as elements between functions.
+        std::List[MachineLine]::new = self.instructions
+    }
+}
+# Scalar commitment is private. Unsupported aggregate/closure/extern programs
+# stay on the legacy path until their target plans migrate.
+enum ScalarPrimitive derives std::Copy {
+    WrappingAdd
+    WrappingSub
+    WrappingMul
+    Add
+    Sub
+    Mul
+    Div
+    Mod
+    Shl
+    Shr
+    BitAnd
+    BitOr
+    BitXor
+    BitNot
+    And
+    Or
+    Not
+    Eq
+    Ne
+    Lt
+    Le
+    Gt
+    Ge
+    Drop
+    Dup
+    Over
+    Swap
+    Rot
+    PrintInt
+    PrintBool
+    PrintChar
+    PrintStr
+    PrintCstr
+}
+
+enum CheckedScalarOp {
+    Integer (i64)
+    Float (std::String common::BuiltinType)
+    String (u64)
+    Primitive (ScalarPrimitive common::BuiltinType)
+    Convert (common::NumericConversion)
+    Load (u64)
+    Store (u64)
+    Call (u64)
+    Conditional (CheckedScalarBody CheckedScalarBody CheckedScalarBody)
+    Return
+}
+
+struct CheckedScalarBody {
+    operations: std::List[CheckedScalarOp]
+}
+
+struct CheckedScalarFunction {
+    body:        CheckedScalarBody
+    local_count: u64
+}
+
+struct CheckedScalarProgram {
+    functions: std::List[CheckedScalarFunction]
+    strings:   std::List[std::String]
+}
+
+struct ScalarCursor {
+    position: u64
+}
+
+struct ScalarCommit {
+    source:     $common::SymbolStore
+    names:      std::List[std::String]
+    identities: std::Map[std::String u64]
+    strings:    std::List[std::String]
+    supported:  bool
+    failure:    std::Option[std::String]
+}
+
+impl ScalarCommit {
+    fn fail self:mut$ScalarCommit message:$str {
+        if self.failure.is_none then
+            message.to_str std::Option::Some = self.failure
+        fi
+    }
+
+    fn classify_type self:mut$ScalarCommit typ:$common::Type -> common::BuiltinType {
+        if typ common::Type::Builtin(builtin) is then
+            builtin copy return
+        fi
+        false = self.supported
+        common::BuiltinType::I64
+    }
+
+    fn resolve_function self:mut$ScalarCommit name:$str -> u64 {
+        if name self.identities.get_copy_str std::Option::Some(identity) is then
+            identity return
+        fi
+        if name self.source.get_function std::Option::Some(function) is then
+            function.extern_symbol.is_some = external
+            function.is_typechecked = checked
+            if external then
+                false = self.supported
+            elif checked ! then
+                "Unchecked function in scalar commitment" self.fail
+            fi
+        else
+            "Missing function in scalar commitment" self.fail
+        fi
+        self.names.length = identity
+        name.to_str self.names.push
+        identity name.to_str self.identities.set
+        identity
+    }
+
+    fn resolve_local self:mut$ScalarCommit name:$str locals:$std::Map[std::String u64] -> u64 {
+        if name locals.get_copy_str std::Option::Some(identity) is then
+            identity return
+        fi
+        f"Missing local `{name}` in scalar commitment".as_str self.fail
+        0
+    }
+
+    fn intern self:mut$ScalarCommit value:$str -> u64 {
+        0 = index: u64
+        for item in self.strings.iter do
+            if value item.as_str == then
+                index return
+            fi
+            1 += index
+        done
+        value.to_str self.strings.push
+        index
+    }
+
+    fn commit_primitive
+        self:mut$ScalarCommit
+        op:$common::Op
+        kind:ScalarPrimitive
+        output:mut$std::List[CheckedScalarOp]
+    {
+        common::BuiltinType::I64 = builtin
+        if op.type_hint std::Option::Some(typ) is then
+            typ self.classify_type = builtin
+        elif kind.requires_type then
+            "Missing checked scalar type" self.fail
+        fi
+        builtin kind CheckedScalarOp::Primitive output.push
+    }
+
+    fn validate_ownership self:mut$ScalarCommit op:$common::Op locals:$std::Map[std::String u64] {
+        if op.ownership std::Option::Some(ownership) is then
+            for cleanup in ownership.cleanups.iter do
+                locals cleanup.name.as_str self.resolve_local drop
+                false = self.supported
+            done
+            if ownership.moves_owner ownership.conditional_move.is_some || then
+                false = self.supported
+            fi
+        fi
+    }
+
+    fn commit_operation
+        self:mut$ScalarCommit
+        op:$common::Op
+        locals:$std::Map[std::String u64]
+        output:mut$std::List[CheckedScalarOp]
+    {
+        locals op self.validate_ownership
+        op.value match
+            common::OpValue::PushInt(value) => value.value CheckedScalarOp::Integer output.push
+            common::OpValue::PushBool(value) => value CheckedScalarOp::Integer output.push
+            common::OpValue::PushChar(value) => value CheckedScalarOp::Integer output.push
+            common::OpValue::PushStr(value) => value.as_str self.intern CheckedScalarOp::String output.push
+            common::OpValue::PushFloat(value) => {
+                if op.type_hint std::Option::Some(typ) is then
+                    typ self.classify_type value.clone CheckedScalarOp::Float output.push
+                else
+                    "Floating operation lacks a checked type" self.fail
+                fi
+            }
+            common::OpValue::FnCall(name) => name.as_str self.resolve_function CheckedScalarOp::Call output.push
+            common::OpValue::PushVar(name) => locals name.as_str self.resolve_local CheckedScalarOp::Load output.push
+            common::OpValue::AssignVar(name) => locals name.as_str self.resolve_local CheckedScalarOp::Store output.push
+            common::OpValue::AssignInc(name) => {
+                locals name.as_str self.resolve_local = identity
+                identity CheckedScalarOp::Load output.push
+                output ScalarPrimitive::Add op self.commit_primitive
+                identity CheckedScalarOp::Store output.push
+            }
+            common::OpValue::AssignDec(name) => {
+                locals name.as_str self.resolve_local = identity
+                identity CheckedScalarOp::Load output.push
+                common::BuiltinType::I64 ScalarPrimitive::Swap CheckedScalarOp::Primitive output.push
+                output ScalarPrimitive::Sub op self.commit_primitive
+                identity CheckedScalarOp::Store output.push
+            }
+            common::OpValue::FnReturn => CheckedScalarOp::Return output.push
+            common::OpValue::NumericConvert(conversion) => conversion.clone CheckedScalarOp::Convert output.push
+            common::OpValue::UnsafeStart => {
+            }
+            common::OpValue::UnsafeEnd => {
+            }
+            common::OpValue::OwnerCleanup => {
+            }
+            common::OpValue::Rejected => "Rejected operation in scalar commitment" self.fail
+            common::OpValue::Identifier(_) => "Unresolved identifier in scalar commitment" self.fail
+            common::OpValue::MethodCall(_) => "Unresolved method in scalar commitment" self.fail
+            common::OpValue::QualifiedMethodCall(_) => "Unresolved method in scalar commitment" self.fail
+            common::OpValue::TraitMethodCall(_) => "Unresolved trait in scalar commitment" self.fail
+            common::OpValue::TraitMethodRef(_) => "Unresolved trait in scalar commitment" self.fail
+            common::OpValue::Print => "Unresolved print in scalar commitment" self.fail
+            common::OpValue::FnPush(name) => {
+                name.as_str self.resolve_function drop
+                false = self.supported
+            }
+            common::OpValue::PushArray(items) => {
+                false = self.supported
+                for item in items.iter do
+                    output locals item self.commit_operation
+                done
+            }
+            common::OpValue::ExprGroup(items) => {
+                for item in items.iter do
+                    output locals item self.commit_operation
+                done
+            }
+            common::OpValue::MatchArm(arm) => {
+                false = self.supported
+                for item in arm.guard_ops.iter do
+                    output locals item self.commit_operation
+                done
+            }
+            common::OpValue::WrappingAdd => output ScalarPrimitive::WrappingAdd op self.commit_primitive
+            common::OpValue::WrappingSub => output ScalarPrimitive::WrappingSub op self.commit_primitive
+            common::OpValue::WrappingMul => output ScalarPrimitive::WrappingMul op self.commit_primitive
+            common::OpValue::Add => output ScalarPrimitive::Add op self.commit_primitive
+            common::OpValue::Sub => output ScalarPrimitive::Sub op self.commit_primitive
+            common::OpValue::Mul => output ScalarPrimitive::Mul op self.commit_primitive
+            common::OpValue::Div => output ScalarPrimitive::Div op self.commit_primitive
+            common::OpValue::Mod => output ScalarPrimitive::Mod op self.commit_primitive
+            common::OpValue::Shl => output ScalarPrimitive::Shl op self.commit_primitive
+            common::OpValue::Shr => output ScalarPrimitive::Shr op self.commit_primitive
+            common::OpValue::BitAnd => output ScalarPrimitive::BitAnd op self.commit_primitive
+            common::OpValue::BitOr => output ScalarPrimitive::BitOr op self.commit_primitive
+            common::OpValue::BitXor => output ScalarPrimitive::BitXor op self.commit_primitive
+            common::OpValue::BitNot => output ScalarPrimitive::BitNot op self.commit_primitive
+            common::OpValue::And => output ScalarPrimitive::And op self.commit_primitive
+            common::OpValue::Or => output ScalarPrimitive::Or op self.commit_primitive
+            common::OpValue::Not => output ScalarPrimitive::Not op self.commit_primitive
+            common::OpValue::Eq => output ScalarPrimitive::Eq op self.commit_primitive
+            common::OpValue::Ne => output ScalarPrimitive::Ne op self.commit_primitive
+            common::OpValue::Lt => output ScalarPrimitive::Lt op self.commit_primitive
+            common::OpValue::Le => output ScalarPrimitive::Le op self.commit_primitive
+            common::OpValue::Gt => output ScalarPrimitive::Gt op self.commit_primitive
+            common::OpValue::Ge => output ScalarPrimitive::Ge op self.commit_primitive
+            common::OpValue::Drop => output ScalarPrimitive::Drop op self.commit_primitive
+            common::OpValue::Dup => output ScalarPrimitive::Dup op self.commit_primitive
+            common::OpValue::Over => output ScalarPrimitive::Over op self.commit_primitive
+            common::OpValue::Swap => output ScalarPrimitive::Swap op self.commit_primitive
+            common::OpValue::Rot => output ScalarPrimitive::Rot op self.commit_primitive
+            common::OpValue::PrintInt => output ScalarPrimitive::PrintInt op self.commit_primitive
+            common::OpValue::PrintBool => output ScalarPrimitive::PrintBool op self.commit_primitive
+            common::OpValue::PrintChar => output ScalarPrimitive::PrintChar op self.commit_primitive
+            common::OpValue::PrintStr => output ScalarPrimitive::PrintStr op self.commit_primitive
+            common::OpValue::PrintCstr => output ScalarPrimitive::PrintCstr op self.commit_primitive
+            _ => false = self.supported
+        end
+    }
+
+    fn commit_body
+        self:mut$ScalarCommit
+        ops:$std::List[common::Op]
+        cursor:mut$ScalarCursor
+        locals:$std::Map[std::String u64]
+    -> CheckedScalarBody {
+        std::List[CheckedScalarOp]::new = output
+        while cursor.position ops.length > self.failure.is_none && do
+            cursor.position ops.get = op
+            op.value match
+                common::OpValue::IfCondition => break
+                common::OpValue::IfElse => break
+                common::OpValue::IfElif => break
+                common::OpValue::IfEnd => break
+                common::OpValue::IfStart => {
+                    locals op self.validate_ownership
+                    locals cursor ops self.commit_conditional output.push
+                }
+                _ => {
+                    output locals op self.commit_operation
+                    1 += cursor.position
+                }
+            end
+        done
+        output CheckedScalarBody
+    }
+
+    fn commit_conditional
+        self:mut$ScalarCommit
+        ops:$std::List[common::Op]
+        cursor:mut$ScalarCursor
+        locals:$std::Map[std::String u64]
+    -> CheckedScalarOp {
+        1 += cursor.position
+        locals cursor ops self.commit_body = condition
+        if cursor.position ops.length <= then
+            "Incomplete scalar condition" self.fail
+            std::List[CheckedScalarOp]::new CheckedScalarBody
+            std::List[CheckedScalarOp]::new CheckedScalarBody condition CheckedScalarOp::Conditional return
+        fi
+        if cursor.position ops.get.value common::OpValue::IfCondition is ! then
+            "Missing checked condition boundary" self.fail
+        fi
+        locals cursor.position ops.get self.validate_ownership
+        1 += cursor.position
+        locals cursor ops self.commit_body = consequent
+        std::List[CheckedScalarOp]::new = alternative
+        if cursor.position ops.length > then
+            locals cursor.position ops.get self.validate_ownership
+            cursor.position ops.get.value match
+                common::OpValue::IfElse => {
+                    1 += cursor.position
+                    locals cursor ops self.commit_body = else_body
+                    else_body match
+                        CheckedScalarBody {
+                            operations: operations
+                        } => operations = alternative
+                    end
+                }
+                common::OpValue::IfElif => {
+                    locals cursor ops self.commit_conditional alternative.push
+                    alternative CheckedScalarBody consequent condition CheckedScalarOp::Conditional return
+                }
+                _ => {
+                }
+            end
+        fi
+        if cursor.position ops.length <= then
+            "Incomplete scalar conditional" self.fail
+        elif cursor.position ops.get.value common::OpValue::IfEnd is then
+            locals cursor.position ops.get self.validate_ownership
+            1 += cursor.position
+        else
+            "Invalid checked conditional boundary" self.fail
+        fi
+        alternative CheckedScalarBody consequent condition CheckedScalarOp::Conditional
+    }
+
+    fn commit_function
+        self:mut$ScalarCommit
+        ops:$std::List[common::Op]
+        variables:$std::List[common::Variable]
+    -> CheckedScalarFunction {
+        std::Map[std::String u64]::new = locals
+        for variable in variables.iter do
+            variable.typ self.classify_type drop
+            if variable.name locals.has ! then
+                locals.length variable.name.clone locals.set
+            fi
+        done
+        if self.supported ! then
+            locals.length std::List[CheckedScalarOp]::new CheckedScalarBody CheckedScalarFunction return
+        fi
+        0 ScalarCursor = cursor
+        locals cursor ops self.commit_body = body
+        if cursor.position ops.length != then
+            "Unexpected checked control boundary" self.fail
+        fi
+        locals.length body CheckedScalarFunction
+    }
+}
+
+impl ScalarCommit {
+    fn commit_named_function
+        self:mut$ScalarCommit
+        function:$common::Function
+    -> CheckedScalarFunction {
+        if function.extern_symbol.is_some then
+            false = self.supported
+            0 std::List[CheckedScalarOp]::new CheckedScalarBody CheckedScalarFunction return
+        fi
+        for
+            parameter in function
+                .stack_effect
+                .parameters
+                .iter
+        do
+            parameter.typ self.classify_type drop
+        done
+        for
+            typ in function
+                .stack_effect
+                .return_types
+                .iter
+        do
+            typ self.classify_type drop
+        done
+        if function.captures.is_empty ! then
+            false = self.supported
+        fi
+        function.variables.clone = variables
+        for capture in function.captures.iter do
+            capture.clone variables.push
+        done
+        variables function.ops self.commit_function
+    }
+}
+
+fn commit_scalar
+    result:$typechecker::TypecheckResult
+-> std::Result[std::Option[CheckedScalarProgram] std::String] {
+    if result.diagnostics.has_errors then
+        "Scalar commitment requires error-free checking".to_str std::Result::Error return
+    fi
+    std::Option[std::String]::None true std::List[std::String]::new
+    std::Map[std::String u64]::new std::List[std::String]::new result.store ScalarCommit = commit
+    # Identity zero belongs to root execution. Callees receive identities before any body is built.
+    "".to_str commit.names.push
+    std::List[common::Variable]::new = root_variables
+    for
+        variable in result
+            .store
+            .variables
+            .iter
+    do
+        variable.second.clone root_variables.push
+    done
+    std::List[CheckedScalarFunction]::new = functions
+    root_variables result.ops commit.commit_function functions.push
+    1 = index: u64
+    while index commit.names.length > commit.failure.is_none && commit.supported && do
+        index commit
+            .names
+            .get
+            .clone = name
+        if name.as_str result.store.get_function std::Option::Some(function) is then
+            function commit.commit_named_function functions.push
+        fi
+        1 += index
+    done
+    commit match
+        ScalarCommit { strings: strings supported: supported failure: failure } => {
+            if failure std::Option::Some(message) is then
+                message.clone std::Result::Error
+            elif supported then
+                strings functions CheckedScalarProgram std::Option::Some std::Result::Ok
+            else
+                std::Option[CheckedScalarProgram]::None std::Result::Ok
+            fi
+        }
+    end
+}
+# Request-owned target plans retain only offsets and small leaf ranges. Checked
+# bodies own the operations, so no machine buffer survives function rendering.
+struct ScalarTargetPlan {
+    functions:   $std::List[CheckedScalarFunction]
+    leaf_starts: std::List[std::Option[u64]]
+}
+
+impl CheckedScalarFunction {
+    fn find_leaf_start self:$CheckedScalarFunction -> std::Option[u64] {
+        self.body.operations = operations: $std::List[CheckedScalarOp]
+        0 = start: u64
+        if 1 self.local_count == 2 operations.length >= && then
+            if 0 operations.get CheckedScalarOp::Store(slot) is then
+                if 0 slot != then
+                    std::Option[u64]::None return
+                fi
+            else
+                std::Option[u64]::None return
+            fi
+            if 1 operations.get CheckedScalarOp::Load(slot) is then
+                if 0 slot != then
+                    std::Option[u64]::None return
+                fi
+            else
+                std::Option[u64]::None return
+            fi
+            2 = start: u64
+        elif 0 self.local_count != then
+            std::Option[u64]::None return
+        fi
+        if MAX_LEAF_INSTRUCTIONS operations.length start - > then
+            std::Option[u64]::None return
+        fi
+        start = index
+        while index operations.length > do
+            index operations.get match
+                CheckedScalarOp::Integer(_) => {
+                }
+                CheckedScalarOp::String(_) => {
+                }
+                CheckedScalarOp::Primitive(kind builtin) => {
+                    if builtin.is_float then
+                        std::Option[u64]::None return
+                    fi
+                    kind match
+                        # Error writers must observe the original physical frame.
+                        ScalarPrimitive::Add => std::Option[u64]::None return
+                        ScalarPrimitive::Sub => std::Option[u64]::None return
+                        ScalarPrimitive::Mul => std::Option[u64]::None return
+                        ScalarPrimitive::PrintInt => std::Option[u64]::None return
+                        ScalarPrimitive::PrintBool => std::Option[u64]::None return
+                        ScalarPrimitive::PrintChar => std::Option[u64]::None return
+                        ScalarPrimitive::PrintStr => std::Option[u64]::None return
+                        ScalarPrimitive::PrintCstr => std::Option[u64]::None return
+                        ScalarPrimitive::Div => std::Option[u64]::None return
+                        ScalarPrimitive::Mod => std::Option[u64]::None return
+                        ScalarPrimitive::Shl => std::Option[u64]::None return
+                        ScalarPrimitive::Shr => std::Option[u64]::None return
+                        _ => {
+                        }
+                    end
+                }
+                _ => std::Option[u64]::None return
+            end
+            1 += index
+        done
+        start std::Option::Some
+    }
+}
+
+impl ScalarTargetPlan {
+    fn new functions:$std::List[CheckedScalarFunction] -> ScalarTargetPlan {
+        std::List[std::Option[u64]]::new = starts
+        for function in functions.iter do
+            function.find_leaf_start starts.push
+        done
+        starts functions ScalarTargetPlan
+    }
+}
+
+impl ScalarPrimitive {
+    fn requires_type self:$ScalarPrimitive -> bool {
+        self match
+            ScalarPrimitive::Drop => false
+            ScalarPrimitive::Dup => false
+            ScalarPrimitive::Over => false
+            ScalarPrimitive::Swap => false
+            ScalarPrimitive::Rot => false
+            ScalarPrimitive::And => false
+            ScalarPrimitive::Or => false
+            ScalarPrimitive::Not => false
+            ScalarPrimitive::PrintBool => false
+            ScalarPrimitive::PrintChar => false
+            ScalarPrimitive::PrintStr => false
+            ScalarPrimitive::PrintCstr => false
+            _ => true
+        end
+    }
+
+    fn get_input_count self:$ScalarPrimitive -> u64 {
+        self match
+            ScalarPrimitive::Drop => 1
+            ScalarPrimitive::Dup => 1
+            ScalarPrimitive::BitNot => 1
+            ScalarPrimitive::Not => 1
+            ScalarPrimitive::Rot => 3
+            ScalarPrimitive::PrintInt => 1
+            ScalarPrimitive::PrintBool => 1
+            ScalarPrimitive::PrintChar => 1
+            ScalarPrimitive::PrintStr => 1
+            ScalarPrimitive::PrintCstr => 1
+            _ => 2
+        end
+    }
+
+    fn get_comparison self:$ScalarPrimitive unsigned:bool -> std::Option[str] {
+        self match
+            ScalarPrimitive::Eq => "sete"
+            ScalarPrimitive::Ne => "setne"
+            ScalarPrimitive::Lt => if unsigned then "setb" else "setl" fi
+            ScalarPrimitive::Le => if unsigned then "setbe" else "setle" fi
+            ScalarPrimitive::Gt => if unsigned then "seta" else "setg" fi
+            ScalarPrimitive::Ge => if unsigned then "setae" else "setge" fi
+            _ => std::Option[str]::None return
+        end std::Option::Some
+    }
+}
+
+impl Emitter {
+    fn select_scalar_primitive
+        self:mut$Emitter
+        kind:$ScalarPrimitive
+        builtin:common::BuiltinType
+        cache:mut$ScalarStack
+    {
+        # Floating operations and narrow checked arithmetic use the shared target selectors.
+        if builtin.is_float then
+            if false kind.get_comparison std::Option::Some(comparison) is then
+                cache self.flush_scalar_stack
+                if common::BuiltinType::F32 builtin == then
+                    "ucomiss"
+                else
+                    "ucomisd"
+                fi
+                true kind.get_comparison.unwrap self.emit_float_comparison
+                return
+            fi
+            kind match
+                ScalarPrimitive::Add => "add"
+                ScalarPrimitive::Sub => "sub"
+                ScalarPrimitive::Mul => "mul"
+                ScalarPrimitive::Div => "div"
+                _ => ""
+            end = operation
+            if operation "" != then
+                cache self.flush_scalar_stack
+                if common::BuiltinType::F32 builtin == then "ss" else "sd" fi = suffix
+                operation suffix str::concat.as_str self.emit_float_binary
+                return
+            fi
+        fi
+        if common::BuiltinType::Str builtin == then
+            kind match
+                ScalarPrimitive::Eq => {
+                    cache self.flush_scalar_stack
+                    self.emit_str_eq
+                    return
+                }
+                ScalarPrimitive::Ne => {
+                    cache self.flush_scalar_stack
+                    self.emit_str_eq
+                    "xorq $1, (%rsp)" self.indent
+                    return
+                }
+                _ => {
+                }
+            end
+        fi
+        if builtin.is_integer 64 builtin.bit_width != && then
+            cache self.flush_scalar_stack
+            kind match
+                ScalarPrimitive::Add => "arithmetic_error" builtin self.emit_checked_add
+                ScalarPrimitive::Sub => "arithmetic_error" builtin self.emit_checked_sub
+                ScalarPrimitive::Mul => "arithmetic_error" builtin self.emit_checked_mul
+                _ => {
+                    builtin kind cache self.select_scalar_cached
+                    return
+                }
+            end
+            return
+        fi
+        builtin kind cache self.select_scalar_cached
+    }
+
+    fn select_scalar_cached
+        self:mut$Emitter
+        cache:mut$ScalarStack
+        kind:$ScalarPrimitive
+        builtin:common::BuiltinType
+    {
+        kind.get_input_count cache self.refill_scalar_stack
+        cache.depth 1 - cache.get_register = top
+        if 1 cache.depth > then cache.depth 2 - cache.get_register else top fi = below
+        kind match
+            ScalarPrimitive::Drop => 1 -= cache.depth
+            ScalarPrimitive::Dup => {
+                cache self.reserve_scalar_register = target
+                # reserve may flush a full cache, including the value being duplicated.
+                f"movq {top}, {target}" self.indent_string
+            }
+            ScalarPrimitive::Over => {
+                cache self.reserve_scalar_register = target
+                f"movq {below}, {target}" self.indent_string
+            }
+            ScalarPrimitive::Swap => {
+                f"movq {top}, %rax" self.indent_string
+                f"movq {below}, {top}" self.indent_string
+                f"movq %rax, {below}" self.indent_string
+            }
+            ScalarPrimitive::Rot => {
+                cache.depth 3 - cache.get_register = bottom
+                f"movq {bottom}, %rax" self.indent_string
+                f"movq {below}, {bottom}" self.indent_string
+                f"movq {top}, {below}" self.indent_string
+                f"movq %rax, {top}" self.indent_string
+            }
+            ScalarPrimitive::BitNot => f"notq {top}" self.indent_string
+            ScalarPrimitive::Not => {
+                f"testq {top}, {top}" self.indent_string
+                "sete %al" self.indent
+                f"movzbq %al, {top}" self.indent_string
+            }
+            ScalarPrimitive::WrappingAdd => {
+                f"addq {top}, {below}" self.indent_string
+                1 -= cache.depth
+            }
+            ScalarPrimitive::WrappingSub => {
+                # Method receiver is the top operand, unlike infix subtraction.
+                f"subq {below}, {top}" self.indent_string
+                f"movq {top}, {below}" self.indent_string
+                1 -= cache.depth
+            }
+            ScalarPrimitive::WrappingMul => {
+                f"imulq {top}, {below}" self.indent_string
+                1 -= cache.depth
+            }
+            ScalarPrimitive::Add => {
+                f"addq {top}, {below}" self.indent_string
+                if builtin.is_unsigned then "jc arithmetic_error" else "jo arithmetic_error" fi self.indent
+                1 -= cache.depth
+            }
+            ScalarPrimitive::Sub => {
+                f"subq {top}, {below}" self.indent_string
+                if builtin.is_unsigned then "jc arithmetic_error" else "jo arithmetic_error" fi self.indent
+                1 -= cache.depth
+            }
+            ScalarPrimitive::Mul => {
+                if builtin.is_unsigned then
+                    f"movq {below}, %rax" self.indent_string
+                    f"mulq {top}" self.indent_string
+                    "testq %rdx, %rdx" self.indent
+                    "jnz arithmetic_error" self.indent
+                    f"movq %rax, {below}" self.indent_string
+                else
+                    f"imulq {top}, {below}" self.indent_string
+                    "jo arithmetic_error" self.indent
+                fi
+                1 -= cache.depth
+            }
+            ScalarPrimitive::BitAnd => {
+                f"andq {top}, {below}" self.indent_string
+                1 -= cache.depth
+            }
+            ScalarPrimitive::BitOr => {
+                f"orq {top}, {below}" self.indent_string
+                1 -= cache.depth
+            }
+            ScalarPrimitive::BitXor => {
+                f"xorq {top}, {below}" self.indent_string
+                1 -= cache.depth
+            }
+            ScalarPrimitive::And => {
+                f"testq {top}, {top}" self.indent_string
+                "setne %al" self.indent
+                f"testq {below}, {below}" self.indent_string
+                "setne %cl" self.indent
+                "andb %cl, %al" self.indent
+                f"movzbq %al, {below}" self.indent_string
+                1 -= cache.depth
+            }
+            ScalarPrimitive::Or => {
+                f"orq {top}, {below}" self.indent_string
+                "setne %al" self.indent
+                f"movzbq %al, {below}" self.indent_string
+                1 -= cache.depth
+            }
+            ScalarPrimitive::Div => {
+                cache self.flush_scalar_stack
+                "arithmetic_error" builtin false self.emit_checked_division
+            }
+            ScalarPrimitive::Mod => {
+                cache self.flush_scalar_stack
+                "arithmetic_error" builtin true self.emit_checked_division
+            }
+            ScalarPrimitive::Shl => {
+                cache self.flush_scalar_stack
+                builtin false self.emit_checked_shift
+            }
+            ScalarPrimitive::Shr => {
+                cache self.flush_scalar_stack
+                builtin true self.emit_checked_shift
+            }
+            ScalarPrimitive::PrintInt => {
+                cache self.flush_scalar_stack
+                if builtin.is_unsigned then
+                    self.select_print_uint
+                else
+                    self.select_print_int
+                fi
+            }
+            ScalarPrimitive::PrintBool => {
+                cache self.flush_scalar_stack self.select_print_bool
+            }
+            ScalarPrimitive::PrintChar => {
+                cache self.flush_scalar_stack self.select_print_char
+            }
+            ScalarPrimitive::PrintStr => {
+                cache self.flush_scalar_stack self.select_print_str
+            }
+            ScalarPrimitive::PrintCstr => {
+                cache self.flush_scalar_stack self.select_print_cstr
+            }
+            _ => {
+                f"cmpq {below}, {top}" self.indent_string
+                builtin.is_unsigned kind.get_comparison.unwrap = comparison
+                f"{comparison} %al" self.indent_string
+                f"movzbq %al, {below}" self.indent_string
+                1 -= cache.depth
+            }
+        end
+        if builtin.is_integer 64 builtin.bit_width != && then
+            kind match
+                ScalarPrimitive::Shl => true
+                ScalarPrimitive::Shr => true
+                ScalarPrimitive::WrappingAdd => true
+                ScalarPrimitive::WrappingSub => true
+                ScalarPrimitive::WrappingMul => true
+                ScalarPrimitive::BitAnd => true
+                ScalarPrimitive::BitOr => true
+                ScalarPrimitive::BitXor => true
+                ScalarPrimitive::BitNot => true
+                _ => false
+            end = normalize
+            if normalize then
+                cache self.flush_scalar_stack
+                builtin self.emit_normalize_numeric
+            fi
+        fi
+    }
+
+    fn select_scalar_return self:mut$Emitter frame_bytes:u64 root:bool {
+        if 0 frame_bytes != then
+            f"subq ${frame_bytes}, %r14" self.indent_string
+        fi
+        if root then
+            "movq $60, %rax" self.indent
+            "xorq %rdi, %rdi" self.indent
+            "syscall" self.indent
+        else
+            "subq $8, %r14" self.indent
+            "pushq (%r14)" self.indent
+            "ret" self.indent
+        fi
+    }
+
+    fn select_scalar_call
+        self:mut$Emitter
+        identity:u64
+        cache:mut$ScalarStack
+        frame_bytes:u64
+        plan:$ScalarTargetPlan
+        root:bool
+    {
+        if identity plan.leaf_starts.get std::Option::Some(start) is then
+            # Expansion must check the call slot and the callee's original locals,
+            # even though neither is physically allocated by the expanded body.
+            identity plan
+                .functions
+                .get
+                .local_count 1 + common::WORD_SIZE * self.emit_return_stack_check
+            root start plan frame_bytes cache identity plan
+                .functions
+                .get
+                .body self.select_scalar_body
+        else
+            cache self.flush_scalar_stack
+            "scalar_ret" f".Lscalar_fn_{identity}".as_str self.emit_call_via_return_stack
+        fi
+    }
+
+    fn select_scalar_body
+        self:mut$Emitter
+        body:$CheckedScalarBody
+        cache:mut$ScalarStack
+        frame_bytes:u64
+        plan:$ScalarTargetPlan
+        start:u64
+        root:bool
+    {
+        start = index
+        while index body.operations.length > do
+            index body.operations.get = operation
+            1 += index
+            operation match
+                CheckedScalarOp::Integer(value) => {
+                    cache self.reserve_scalar_register = target
+                    f"movabsq ${value}, {target}" self.indent_string
+                }
+                CheckedScalarOp::String(identity) => {
+                    cache self.reserve_scalar_register = target
+                    f"leaq str_{identity}(%rip), {target}" self.indent_string
+                }
+                CheckedScalarOp::Float(value builtin) => {
+                    cache self.flush_scalar_stack
+                    "jmp 1f" self.indent
+                    if common::BuiltinType::F32 builtin == then
+                        ".align 4" self.line "0:" self.line
+                        f".float {value}" self.line_string
+                        "1:" self.line "movl 0b(%rip), %eax" self.indent
+                    else
+                        ".align 8" self.line "0:" self.line
+                        f".double {value}" self.line_string
+                        "1:" self.line "movq 0b(%rip), %rax" self.indent
+                    fi
+                    "pushq %rax" self.indent
+                }
+                CheckedScalarOp::Primitive(kind builtin) => cache builtin copy kind self.select_scalar_primitive
+                CheckedScalarOp::Convert(conversion) => {
+                    cache self.flush_scalar_stack
+                    conversion self.emit_numeric_conversion
+                }
+                CheckedScalarOp::Load(identity) => {
+                    cache self.reserve_scalar_register = target
+                    f"movq -{identity 1 + common::WORD_SIZE *}(%r14), {target}" self.indent_string
+                }
+                CheckedScalarOp::Store(identity) => {
+                    1 cache self.refill_scalar_stack
+                    cache.depth 1 - cache.get_register = top
+                    f"movq {top}, -{identity 1 + common::WORD_SIZE *}(%r14)" self.indent_string
+                    1 -= cache.depth
+                }
+                CheckedScalarOp::Call(identity) => root plan frame_bytes cache identity self.select_scalar_call
+                CheckedScalarOp::Conditional(condition consequent alternative) => {
+                    self.emit_uid = label
+                    root 0 plan frame_bytes cache condition self.select_scalar_body
+                    1 cache self.refill_scalar_stack
+                    cache.depth 1 - cache.get_register = top
+                    1 -= cache.depth
+                    cache self.flush_scalar_stack
+                    f"testq {top}, {top}" self.indent_string
+                    f"jz .Lscalar_else_{label}" self.indent_string
+                    root 0 plan frame_bytes cache consequent self.select_scalar_body
+                    cache self.flush_scalar_stack
+                    f"jmp .Lscalar_end_{label}" self.indent_string
+                    f".Lscalar_else_{label}:" self.line_string
+                    root 0 plan frame_bytes cache alternative self.select_scalar_body
+                    cache self.flush_scalar_stack
+                    f".Lscalar_end_{label}:" self.line_string
+                }
+                CheckedScalarOp::Return => {
+                    cache self.flush_scalar_stack
+                    root frame_bytes self.select_scalar_return
+                }
+            end
+        done
+    }
+
+    fn select_scalar_function
+        self:mut$Emitter
+        function:$CheckedScalarFunction
+        identity:u64
+        plan:$ScalarTargetPlan
+    {
+        true = self.buffering
+        function.local_count common::WORD_SIZE * = frame_bytes
+        0 = start: u64
+        if 0 identity != then
+            if identity plan.leaf_starts.get std::Option::Some(leaf_start) is then
+                leaf_start = start
+                if 0 start != then
+                    0 = frame_bytes: u64
+                fi
+            fi
+        fi
+        if 0 identity == then
+            ".globl _start" self.line "_start:" self.line
+            "leaq return_stack(%rip), %r14" self.indent
+        else
+            f".Lscalar_fn_{identity}:" self.line_string
+            "popq -8(%r14)" self.indent
+        fi
+        if 0 start != then
+            common::WORD_SIZE self.emit_return_stack_check
+        fi
+        if 0 frame_bytes != then
+            "movq %r14, %rdi" self.indent
+            frame_bytes self.emit_return_stack_reservation
+            if MAX_DIRECT_LOCAL_WORDS function.local_count <= then
+                "xorq %rax, %rax" self.indent
+                0 = slot: u64
+                while slot function.local_count > do
+                    f"movq %rax, {slot common::WORD_SIZE *}(%rdi)" self.indent_string
+                    1 += slot
+                done
+            else
+                f"movq ${function.local_count}, %rcx" self.indent_string
+                "xorq %rax, %rax" self.indent "rep stosq" self.indent
+            fi
+        fi
+        ScalarStack::new = cache
+        0 identity == start plan frame_bytes cache function.body self.select_scalar_body
+        cache self.flush_scalar_stack
+        0 identity == frame_bytes self.select_scalar_return
+        self.render_function
+    }
+}
+# Returns None only for a complete checked program requiring the legacy target path.
+# An invalid private reference or incomplete check is always a failure.
+pub fn compile_scalar
+    result:$typechecker::TypecheckResult
+-> std::Result[std::Option[std::String] std::String] {
+    result commit_scalar match
+        std::Result::Error(message) => message std::Result::Error
+        std::Result::Ok(candidate) => {
+            if candidate std::Option::Some(program) is then
+                program select_scalar_program std::Option::Some std::Result::Ok
+            else
+                std::Option[std::String]::None std::Result::Ok
+            fi
+        }
+    end
+}
+
+fn select_scalar_program program:CheckedScalarProgram -> std::String {
+    Emitter::new_scalar = emitter
+    program match
+        CheckedScalarProgram { functions: functions strings: strings } => {
+            strings = emitter.strings
+            emitter.emit_bss
+            emitter.emit_data
+            ".section .text" emitter.line
+            emitter.emit_helpers
+            functions ScalarTargetPlan::new = plan
+            0 = identity: u64
+            for function in functions.iter do
+                plan identity function emitter.select_scalar_function
+                1 += identity
+            done
+        }
+    end
     emitter.into_asm
 }
