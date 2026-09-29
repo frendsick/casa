@@ -100,7 +100,7 @@ An imported file must lex, parse, and resolve successfully before its declaratio
 
 Module imports must be acyclic. A cycle is a compile-time error that lists the complete resolved path from the first repeated module back to itself. The compiler visits dependencies in source order before their importers and processes repeated imports only once.
 
-Imports do not run or typecheck the imported root body. They initialize the module's immutable globals. Each global initializes once, even when the file is imported through more than one alias.
+Imports contribute declarations. They do not run or typecheck the imported root body, even when a file is imported through more than one alias. Create runtime state in the program's root body and pass it to functions.
 
 ### `-L` / `--library-path`
 

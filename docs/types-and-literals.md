@@ -138,7 +138,7 @@ Intrinsics](intrinsics.md#advanced-memory-access).
 
 ## Constants
 
-Declare a global compile-time value with `const`:
+Declare a named compile-time value with `const`:
 
 ```casa
 const LIMIT 100
