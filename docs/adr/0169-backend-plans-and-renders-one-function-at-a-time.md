@@ -2,7 +2,7 @@
 
 related issue: [Choose the backend and runtime seams](https://github.com/frendsick/casa/issues/649).
 
-The maintainer accepted this contract on 2026-09-26. Keep a private machine
+Keep a private machine
 instruction buffer for one function at a time, with complete storage and native
 call plans before rendering. Embed the Linux runtime as assembly text in a
 separate Casa module. Linux x86-64 is the immediate blueprint acceptance target.
@@ -10,8 +10,8 @@ Windows remains later work.
 
 This completes the backend choices left open by
 [ADR-0166](0166-compiler-capsule-owns-phase-state.md) and
-[ADR-0167](0167-compiler-products-own-independent-snapshots.md). Production
-migration and executable blueprint validation remain pending. This decision
+[ADR-0167](0167-compiler-products-own-independent-snapshots.md). The blueprint is complete. Runtime embedding and the standalone native driver
+are implemented. Final consumer cutover remains in #715. This decision
 establishes no source reduction or performance gain.
 
 ## Checked input and target planning
@@ -79,8 +79,7 @@ references before publishing complete assembly. Partial output remains private.
 
 The buffer earns its cost through frame finalization and inspectable target
 instructions. Direct text emission would need another way to size frames before
-writing prologues and returns. Current lowering discovers locals and then
-rewrites returns. A whole-program machine product has no additional demonstrated
+writing prologues and returns. Discovering locals during lowering requires frame finalization before rendering. A whole-program machine product has no additional demonstrated
 consumer. Do not add a second semantic tree, a general control-flow graph, a
 backend registry, or an optimization framework.
 
@@ -170,22 +169,10 @@ Any alternative must preserve the checked-input and failure contracts.
 
 ## Evidence
 
-The source inspected was `62a46a68929ef20860f8a35f49b40ab5c0093949`.
-
-- [Function lowering](https://github.com/frendsick/casa/blob/62a46a68929ef20860f8a35f49b40ab5c0093949/compiler/bytecode.casa#L2528)
-  discovers frame size and inserts frame restoration at returns.
-- [Native-call emission](https://github.com/frendsick/casa/blob/62a46a68929ef20860f8a35f49b40ab5c0093949/compiler/emitter.casa#L918)
-  makes placement decisions after earlier ABI classification.
-- [Runtime emission](https://github.com/frendsick/casa/blob/62a46a68929ef20860f8a35f49b40ab5c0093949/compiler/emitter.casa#L336)
-  mixes fixed assembly, constants, and generated return labels.
-- [String lexing](https://github.com/frendsick/casa/blob/62a46a68929ef20860f8a35f49b40ab5c0093949/compiler/lexer.casa#L622)
-  accepts literal newlines. The
-  [formatter](https://github.com/frendsick/casa/blob/62a46a68929ef20860f8a35f49b40ab5c0093949/formatter/format.casa#L497)
-  preserves literal source spans.
-- [Native build](https://github.com/frendsick/casa/blob/62a46a68929ef20860f8a35f49b40ab5c0093949/compiler/build.casa#L8)
-  runs the assembler and C compiler driver separately. The
-  [installer](https://github.com/frendsick/casa/blob/62a46a68929ef20860f8a35f49b40ab5c0093949/install.sh#L43)
-  downloads standalone compiler and formatter binaries.
-
-The [backend audit](../benchmarks/backend-runtime-complexity-audit.md) supplies
+The [backend audit](../benchmarks/backend-runtime-complexity-audit.md) records
 the historical baseline. Its estimates are not measurements of this design.
+[Compiler products](../compiler-products.md) and
+[the native-build lifetime workload](../benchmarks/native-build-lifetime.casa)
+document the implemented runtime/native adapter and reclamation evidence.
+The original lowering, ABI, string, runtime, and distribution traces remain in
+[the pinned decision](https://github.com/frendsick/casa/blob/e9a258837d40185376c97e4fd03fccb98d238d82/docs/adr/0169-backend-plans-and-renders-one-function-at-a-time.md#evidence).

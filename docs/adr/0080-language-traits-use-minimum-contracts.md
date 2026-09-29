@@ -23,12 +23,9 @@ implicit and stack duplication use Copy.
 
 ## Consequences
 
-- Primitive arithmetic, comparison, and stack copying do not depend on importing trait declarations.
 - Generic comparison and overloaded comparison for user types require active equality or ordering declarations with the complete effective operator-method stack effects.
 - Display-backed formatting requires its declared formatting method for user-defined and generic values; primitive formatting must have an intrinsic freestanding path.
-- `trait Copy { }` and `trait Copy: Clone { }` are both valid contracts in the
-  canonical standard namespace. The latter imposes Clone through ordinary
-  supertrait checking.
 - A canonical Eq declaration such as `trait Eq { fn unrelated -> str }` is
   invalid because the equality operator method is missing.
-- Current primitive comparison already bypasses trait dispatch; primitive printing and formatted strings require implementation work to gain the same freestanding behavior.
+
+Implementation: primitive comparison bypasses trait dispatch. Freestanding primitive formatting remains pending, and the standard library still exposes `Word` despite [ADR-0022](0022-word-is-not-a-public-trait.md).

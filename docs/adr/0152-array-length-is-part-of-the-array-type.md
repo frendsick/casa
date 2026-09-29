@@ -3,8 +3,9 @@
 `array[T N]` is an owned sequence of exactly `N` elements, where `N` is a
 compile-time constant. Arrays of different lengths are different types. The
 value is its element storage. It carries no length word and no separate header,
-so its size is `N * size_of[T]` and the compiler may place it inline in a struct
-field or on the stack instead of allocating it.
+so its element storage is `N * size_of[T]`. The empty value occupies one byte
+under [ADR-0155](0155-a-zero-length-array-is-inhabited-and-occupies-one-byte.md).
+The compiler may place arrays inline or on the stack.
 
 `N` is a constant type parameter that is also usable as a value inside the
 declaration that binds it. The binding site marks it with `const` and states
@@ -49,11 +50,8 @@ A view over a runtime-length range can no longer be an array, because its length
 is not known when the type is written. Casa needs a separate runtime-length
 sequence view, and `List` slicing returns that view instead of an array.
 
-This replaces the archived runtime-length array decision listed in the
-[ADR index](README.md#retired-records) and ends its deferral of type-level array
-lengths and a distinct slice type. Under
-[ADR-0156](0156-owned-values-have-independent-behavior-not-address-identity.md),
-each evaluation of an array literal still produces an independent owned value.
+Each array literal evaluation produces an independent owner under
+[ADR-0156](0156-owned-values-have-independent-behavior-not-address-identity.md).
 
 ## Considered options
 
@@ -72,13 +70,8 @@ each evaluation of an array literal still produces an independent owned value.
 ## Consequences
 
 - `[1, 2, 3]` has type `array[i64 3]`, not `array[i64]`.
-- Arrays of different lengths no longer unify. `if condition then [1, 2] else
-  [1, 2, 3] fi` becomes a type error, and existing sources that rely on the
-  joined type must change.
+- A branch joining `[1, 2]` and `[1, 2, 3]` is a type error.
 - `.length` resolves to a constant. No array operation loads a stored length.
-- Indexing an array with an out-of-range constant is a compile-time error when
-  the array length is also concrete at that checking site. A symbolic generic
-  length or runtime index keeps the terminating runtime bounds check.
 - `[]` is `array[T 0]`. ADR-0155 settles its size: a zero-length array is
   inhabited and keeps ADR-0132's one-byte minimum, so `N * size_of[T]`
   describes its element storage rather than the whole value.
@@ -90,6 +83,5 @@ each evaluation of an array literal still produces an independent owned value.
   ADR-0069 each distinct `N` monomorphizes separately.
 - Converting an owned array into a list still transfers its allocation, but the
   list must record the length that the array no longer stores.
-- A constant parameter states its own type, so array length needs `u64` only.
-  Constant parameters of other types are a later extension rather than a syntax
-  change.
+- [ADR-0153](0153-constant-type-parameters-accept-integers-bool-and-char.md) extends
+  the constant parameter kinds. Array length remains `u64`.

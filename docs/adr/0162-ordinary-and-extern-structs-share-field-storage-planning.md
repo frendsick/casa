@@ -14,9 +14,6 @@ field placement algorithm. A matching ordinary struct can have the same physical
 body in one compiler build without gaining ABI stability or native-call
 eligibility.
 
-The representation change is staged. The first implementation centralizes the
-storage plan and preserves existing placement where that placement is internally
-consistent. It also fixes existing disagreements between layout and accessors.
 After address-based projection and destruction are available, an eligible
 concrete nested struct field in an ordinary struct uses its complete target
 layout inline. This rule does not depend on whether the nested declaration is
@@ -46,8 +43,7 @@ when its flattened field graph uses supported scalar, pointer, fixed-array, and
 concrete nested layouts. Empty structs, zero-length arrays, unresolved generic
 fields, enums, and recursive cut points retain Casa-specific layouts. Equal body
 layout does not make ownership, borrowing, destruction, the standalone value
-carrier, or the native calling convention equivalent to C. By-value extern
-parameters and returns remain separate work.
+carrier, or the native calling convention equivalent to C. By-value extern parameters and returns retain their separate ABI contract.
 
 The shared plan is target-specific where C size, alignment, padding, and array
 stride are target-specific. Ownership, recursion cut points, indirect standalone
@@ -56,10 +52,6 @@ language decisions.
 
 ## Consequences
 
-- The compiler has one source of truth for aggregate field placement and field
-  operations.
-- Extern validation and ABI stability remain explicit without a second layout
-  engine.
 - Eligible nested fields can remove persistent child allocations and can improve
   C body compatibility.
 - Inlining can enlarge an outer body and changes `size_of`, member offsets, and
@@ -70,12 +62,10 @@ language decisions.
   reduced live body storage but was slower because destruction allocated a
   temporary owner. Default inlining waits until the affected paths add no such
   allocation.
-- The accepted implementation is split into focused changes. It does not require
-  a full struct value-representation rewrite.
 
 The supporting trace, compatibility matrix, prototype results, and option
 comparison are in
 [the ordinary struct C-compatibility investigation](../benchmarks/ordinary-struct-c-compatibility.md).
-Owned-field replacement is tracked by #619, shared storage planning by #620,
-and concrete field inlining by #621. Issue #621 is blocked by the two correctness
-prerequisites.
+Implementation: owned-field replacement (#619) and shared storage planning
+(#620) are complete. Eligible nested ordinary-field inlining remains accepted
+but unimplemented in [#621](https://github.com/frendsick/casa/issues/621).

@@ -141,7 +141,7 @@ The empty case is an explicit one-byte Casa rule
 ([docs/adr/0132 lines 1-12](../adr/0132-inhabited-types-have-a-minimum-size-of-one-byte.md#L1-L12)).
 A zero-length fixed-array field also occupies one inline byte, which has no
 standard C array equivalent
-([docs/adr/0155 lines 5-18](../adr/0155-a-zero-length-array-is-inhabited-and-occupies-one-byte.md#L5-L18)).
+([docs/adr/0155 lines 5-18](https://github.com/frendsick/casa/blob/e9a258837d40185376c97e4fd03fccb98d238d82/docs/adr/0155-a-zero-length-array-is-inhabited-and-occupies-one-byte.md#L5-L18)).
 
 ### Construction
 
@@ -319,7 +319,7 @@ facts
 ([docs/adr/0017 lines 1-20](../adr/0017-compiler-managed-recursive-indirection.md#L1-L20),
 [docs/adr/0127 lines 1-17](../adr/0127-ordinary-layout-has-no-stable-abi-contract.md#L1-L17),
 [docs/adr/0132 lines 1-12](../adr/0132-inhabited-types-have-a-minimum-size-of-one-byte.md#L1-L12),
-[docs/adr/0155 lines 5-18](../adr/0155-a-zero-length-array-is-inhabited-and-occupies-one-byte.md#L5-L18)).
+[docs/adr/0155 lines 5-18](https://github.com/frendsick/casa/blob/e9a258837d40185376c97e4fd03fccb98d238d82/docs/adr/0155-a-zero-length-array-is-inhabited-and-occupies-one-byte.md#L5-L18)).
 
 ## Verified current limitations
 

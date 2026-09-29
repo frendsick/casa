@@ -2,22 +2,21 @@
 
 related issue: [Choose the generic checking and specialization contract](https://github.com/frendsick/casa/issues/661).
 
-The maintainer accepted this contract on 2026-09-26. Casa checks each generic
+Casa checks each generic
 body once against its declared bounds, then caches
 reachable concrete specializations. This retains early definition errors and
 direct trait calls without hidden runtime type descriptors or dictionaries.
 Distinct bindings can increase compilation cost and emitted size.
 
 This record extends [ADR-0069](0069-generics-are-monomorphized-after-one-body-check.md)
-for the Compiler Capsule blueprint. Production migration remains pending.
-The semantic representation and specialization algorithms belong to
+for Compiler Capsule. Checked recipes are implemented, while the full
+target-neutral boundary and consumer cutover remain incomplete. Algorithms follow
 [Choose the semantic-analysis and specialization seams](https://github.com/frendsick/casa/issues/648).
 
 ## Checking and inference
 
 Every generic declaration admitted to source checking receives its symbolic
-body check, even when unused. Import selection remains a separate contract.
-The check uses symbolic type and constant parameters, the
+body check, even when unused. Imports follow ADR-0168. The check uses symbolic type and constant parameters, the
 declared stack effect, and declared bounds. It validates control flow,
 ownership, borrowing, returned values, and required operations. A missing bound
 is a definition error. Specialization must not repeat this body check.
@@ -39,10 +38,8 @@ This retains [ADR-0042](0042-generic-function-references-are-explicitly-speciali
 Check trait bounds and constant-argument types at the call or reference.
 Concrete integer constants must fit the declared width. Forwarded constant
 parameters remain symbolic until substitution and must satisfy the receiving
-parameter's constraints. This preserves constant forwarding without deciding
-which additional constant expressions the language accepts. That surface and
-layout-dependent constants remain with
-[Choose the compile-time evaluation surface](https://github.com/frendsick/casa/issues/657).
+parameter's constraints. The accepted expression surface and layout exclusions follow
+[ADR-0171](0171-constants-use-bounded-target-independent-expressions.md).
 
 ## Reachability and recursion
 
@@ -113,39 +110,16 @@ input and trait-driven inference, explicit references, same-binding recursion,
 mutual and constant-changing recursion, symbolic constant forwarding and width
 checks, concrete copying and destruction, and specialization reuse.
 
-The semantic seam owns cycle traversal, checked recipes, identity keys, cache
-lifetime, and concrete obligation resolution. The existing blueprint validation
-ticket owns executable evidence. No new implementation workstream is created.
+[ADR-0173](0173-semantic-checking-owns-source-obligations.md) owns cycle
+traversal, recipes, identities, cache lifetime, and concrete obligations.
 
-## Current evidence and migration gaps
+## Current implementation
 
-Evidence is pinned to `62a46a68929ef20860f8a35f49b40ab5c0093949`, the worktree's
-`origin/main` base on 2026-09-26. These are source and test inspections, not new
-execution results.
+[Checked-recipe measurements](../benchmarks/checked-recipes/README.md) document
+the implemented recipe path. Cycle validation traverses non-generic callees and
+reports the source cycle and changed bindings. These requirements remain part
+of the accepted contract, not outstanding migration gaps.
 
-- [Recursion tests](https://github.com/frendsick/casa/blob/62a46a68929ef20860f8a35f49b40ab5c0093949/tests/compiler/test_traits.casa#L529) already accept
-  unchanged bindings and reject a finite type swap through a function reference.
-- [Generic binding and cycle checking](https://github.com/frendsick/casa/blob/62a46a68929ef20860f8a35f49b40ab5c0093949/compiler/semantics.casa#L12169) compose
-  type and constant bindings. Current cycle traversal stops at non-generic
-  callees, and its diagnostic omits the complete cycle and changed bindings.
-  The target contract requires both gaps to be addressed.
-- [Input trait inference](https://github.com/frendsick/casa/blob/62a46a68929ef20860f8a35f49b40ab5c0093949/tests/compiler/test_traits.casa#L1190) includes
-  `I: Carrier[T]`, where the input's implementation supplies `T`. Parser type
-  hints used by generic calls include explicit associated arguments such as
-  `List[i64]::new`. They do not establish inference from later output context.
-- [Constant argument matching](https://github.com/frendsick/casa/blob/62a46a68929ef20860f8a35f49b40ab5c0093949/compiler/semantics.casa#L3543)
-  checks concrete widths but returns early for symbolic values.
-  [Explicit reference validation](https://github.com/frendsick/casa/blob/62a46a68929ef20860f8a35f49b40ab5c0093949/compiler/semantics.casa#L7513)
-  checks that a binding is a constant without checking its width there.
-  Uniform checks for references and forwarded constants need focused migration
-  coverage. These missing checks are code-inspection findings, not demonstrated
-  acceptance of invalid programs.
-- [Specialization naming](https://github.com/frendsick/casa/blob/62a46a68929ef20860f8a35f49b40ab5c0093949/compiler/semantics.casa#L12434)
-  currently hashes formatted bindings into function names. The backend still
-  [selects drop hooks](https://github.com/frendsick/casa/blob/62a46a68929ef20860f8a35f49b40ab5c0093949/compiler/bytecode.casa#L679).
-  Canonical semantic identity, complete source attribution, and semantic target
-  resolution before backend entry remain migration requirements.
-- The [semantic audit](../benchmarks/semantic-analysis-complexity.md) identifies
-  cloned operation trees and ownership-metadata transfer as implementation
-  costs. This decision retains generic semantics without requiring that
-  machinery.
+The full target-neutral semantic boundary remains incomplete, with consumer
+cutover in #715. The historical code-inspection findings remain in
+[the original decision](https://github.com/frendsick/casa/blob/e9a258837d40185376c97e4fd03fccb98d238d82/docs/adr/0170-generics-specialize-after-symbolic-checking.md#current-evidence-and-migration-gaps).

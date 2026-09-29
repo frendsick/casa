@@ -12,6 +12,35 @@ Use `related issue: #NNN` when the related implementation issue is known. The
 issue tracks delivery status. An open related issue does not change an accepted
 ADR's status.
 
+## Admission and retention
+
+Create a record only for a durable decision that is costly to reverse,
+surprising without context, and based on a real tradeoff. Record the decision,
+its non-obvious reason, and consequences outside the immediate implementation.
+API usage belongs in reference docs. Delivery steps and progress belong in issues.
+Measurements and reproducible protocols belong with benchmark evidence.
+
+Keep an accepted future contract even when code does not implement it. Label
+implementation gaps separately from decision status and verify them against
+current code and issue state. Amend or supersede a decision explicitly when
+policy changes. An old implementation description is not an accepted contract.
+
+Every section must justify its maintenance cost by preserving a decision,
+useful rationale, non-local consequence, or necessary evidence. There is no
+length cap. Keep examples that distinguish ambiguous semantics or demonstrate
+constraints that prose alone would obscure. Keep rejected alternatives only
+when their tradeoff explains the choice or a reconsideration condition.
+Remove repetition, obsolete progress, option catalogs without decision value,
+and implementation details already available in code or reference docs.
+
+Condense within stable identifiers and filenames where practical. Merge records
+only when they describe one decision, and name the surviving destination.
+Before deletion or folding, inventory repository links, status metadata, issue
+references, and pinned artifacts. Obtain maintainer approval of that inventory.
+Repair maintained links and provide stable destinations for historical ones.
+Preserve original text in a pinned snapshot and git history. After combined
+cleanup, check links, status references, issue metadata, and comparable counts.
+
 ## Retired records
 
 The [approved retention inventory](https://github.com/frendsick/casa/issues/665#issuecomment-5897405812)

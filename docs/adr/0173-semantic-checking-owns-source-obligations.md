@@ -2,24 +2,20 @@
 
 related issue: [Choose the semantic-analysis and specialization seams](https://github.com/frendsick/casa/issues/648).
 
-The maintainer accepted this contract on 2026-09-26. Compiler Capsule uses one
+Compiler Capsule uses one
 request-owned semantic builder. It checks source bodies,
 proves ownership and control flow, and specializes reachable concrete bodies
 before it commits a target-neutral checked program. The target backend decides
 physical layout and machine behavior. This places each source-level decision
 with the state that can prove it, while keeping temporary checking state out of
 compiler products. This refines [ADR-0167](0167-compiler-products-own-independent-snapshots.md)
-and [ADR-0170](0170-generics-specialize-after-symbolic-checking.md). Production
-migration remains pending.
+and [ADR-0170](0170-generics-specialize-after-symbolic-checking.md). Full
+source-once traversal and consumer cutover remain incomplete in #715.
 
-Compiler-source evidence was inspected at
-`18e23726e93924294313979eac4023b7536696d7` on 2026-09-26. Later
-documentation-only merges changed the worktree base without changing those
-sources. The
-[semantic audit](../benchmarks/semantic-analysis-complexity.md) is a historical
-baseline. Current code still uses a mutable `SymbolStore`, phase flags, encoded
-origins, and operation-ID ownership records. The contracts below are a design,
-not a claim about implemented behavior.
+The [semantic audit](../benchmarks/semantic-analysis-complexity.md) is historical
+evidence. [Compiler products](../compiler-products.md) describe delivered scalar,
+ownership, and recipe work. The complete source-once summary and checked-commit
+contracts below remain accepted requirements.
 
 ## Private semantic seam
 
@@ -78,10 +74,8 @@ an unresolved binding or inferred type as verified. This follows the
 
 Dispatch and dependencies use the same final receiver and implementation
 context. A preliminary dependency scan may discover names, but its candidate
-method is never an authoritative target. This matters today because the
-dependency prepass uses a defaulted stack type while the method handler may
-change the receiver capability and install Clone before resolution. The
-semantic decision is the single source of truth for both outputs. Later
+method is never an authoritative target. Defaulted receiver guesses can differ from the final capability or installed
+Clone candidate. One final semantic decision must drive both outputs. Later
 private traversals may consume its established target for editor facts,
 reachability, or code emission without resolving it again.
 
@@ -102,10 +96,7 @@ to a source input, local place, or callable input, with access capability.
 Ordinary origins and origins observed by cleanup are distinct typed sets.
 Loans record shared or exclusive capability, live place, and the source ranges
 needed for the conflict and later-use diagnostic. A typed value combines its
-type, capability, optional place, source range, and those origin sets. This
-replaces prefixes such as `!`, `%:`, and `@:` and their parsing helpers.
-It also replaces parallel binding-origin and cleanup-origin maps rather than
-copying them into another layer.
+type, capability, optional place, source range, and those origin sets. Use typed origins rather than encoded strings or parallel origin maps.
 
 Each body has a local typed stack and ownership state. Stack transitions own
 literal resolution, input-driven inference through a trait implementation,
@@ -210,8 +201,7 @@ coherence checking. The accepted target trait graph gives these contributions:
 | `Hashable` | `Hashable`, `Eq`, `PartialEq` | Structural `hash` and the same structural `eq` |
 
 Expand transitive supertraits from the resolved trait declarations, so a
-future standard trait hierarchy change updates the effective closure. The
-current `std.casa` still gives `Hashable` a `Word` supertrait, which
+future standard trait hierarchy change updates the effective closure. The standard library still gives `Hashable` a `Word` supertrait, which
 [ADR-0022](0022-word-is-not-a-public-trait.md) removes in the target. Standard
 default methods, including `ne` and `partial_cmp`, remain trait-owned bodies.
 They do not need duplicate structural operations. Reject a repeated source

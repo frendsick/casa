@@ -10,7 +10,6 @@ Each concrete receiver type and fully instantiated trait pair has at most one im
 - Allowing implementations anywhere maximizes extension, but lets unrelated imports change bound satisfaction and default-method lookup.
 - Restricting implementations to the type's module gives one owner, but prevents a newly defined local trait from being implemented for built-in or imported types.
 - Restricting implementations to the trait's module prevents a local type from adopting an imported trait.
-- Allowing either owner preserves both common extension directions while excluding third-party combinations.
 
 ## Consequences
 
@@ -18,5 +17,5 @@ Each concrete receiver type and fully instantiated trait pair has at most one im
 - Duplicate and potentially overlapping implementations are compile-time errors with both declaration locations.
 - Casa initially has no trait implementation specialization, priority ordering, negative implementations, or unrestricted `impl[T] T: Trait` implementations for every type.
 - Trait implementation lookup is deterministic and can be indexed by fully instantiated trait and receiver type rather than searching for matching methods.
-- Derived implementations participate in overlap checks. Explicit implementations cannot overlap their effective trait families or methods under [ADR-0163](0163-standard-trait-derivation-is-a-complete-implementation.md). Two explicit implementations remain duplicates.
+- Derived implementations participate in overlap checks. An explicit implementation cannot overlap a derived effective trait family or method set under [ADR-0163](0163-standard-trait-derivation-is-a-complete-implementation.md).
 - Modules remain free to provide ordinary wrapper functions when the orphan rule prevents a trait implementation.

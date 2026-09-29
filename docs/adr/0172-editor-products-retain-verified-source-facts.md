@@ -3,42 +3,20 @@
 related issue: [Choose compiler products for editor and formatter tooling](https://github.com/frendsick/casa/issues/650).
 
 This completes the tooling contract for the independent snapshots in
-[ADR-0167](0167-compiler-products-own-independent-snapshots.md). The maintainer
-accepted target-neutral analysis, debounced full reanalysis, useful partial
-results, and workspace-wide references and rename on demand on 2026-09-26.
+[ADR-0167](0167-compiler-products-own-independent-snapshots.md). It requires target-neutral analysis, debounced full reanalysis, useful partial
+results, and workspace-wide references and rename on demand.
 Workspace scope is the editor's opened folders with explicit exclusions.
-Production migration and executable validation remain pending.
+Editor and workspace snapshot interfaces are implemented. LSP and formatter
+consumer cutover remains open in #715.
 
 ## Verified starting point
 
-Evidence was checked against `62a46a6`, current `origin/main` when this worktree
-was created. The source is unchanged at `18e2372`. Its qualified-only import,
-constant-evaluation, generic, and backend decisions were incorporated before publication.
-Historical audit counts are not current measurements.
-
-- [Analysis](../../compiler/analysis.casa) can retain typechecked output after
-  type and ownership errors. Unusable parse/resolve output instead gives
-  [editor documents](../../compiler/document.casa) empty operations and maps.
-  Failed imports can cause this loss across the root compilation.
-- Editor documents retain operations and complete function, struct, enum, and
-  variable maps. Queries scan operations and clone function bodies. There is
-  no indication that an answer or list is incomplete.
-- [The LSP](../../lsp.casa) recompiles the changed document with open-document
-  overrides. It ignores document versions and does not invalidate dependents
-  or handle document close. Completion always reports a complete list.
-- References and rename inspect one compilation. If two roots import the same
-  public function, renaming from one root can miss uses in the other root.
-  The existing multi-file rename test proves root/import grouping only.
-- [Syntax analysis](../../compiler/syntax.casa) supports formatting without
-  imports or name resolution. It retains rejected tokens, but requires clean
-  syntax before exposing formatter facts. Its equivalence check compares
-  meaningful tokens and comment facts, not its structural spans.
-- [Extern checking](../../compiler/typechecker.casa) currently invokes
-  System V ABI classification during analysis. Target-neutral analysis must
-  separate language admissibility from physical target restrictions.
-
-These are code-derived facts. Existing tests do not establish the recovery
-matrix below, version safety, or editor latency.
+The [original decision](https://github.com/frendsick/casa/blob/e9a258837d40185376c97e4fd03fccb98d238d82/docs/adr/0172-editor-products-retain-verified-source-facts.md#verified-starting-point)
+records the pre-migration implementation. Current
+[editor snapshot](../benchmarks/editor-snapshots/README.md) and
+[workspace snapshot](../benchmarks/workspace-snapshots/README.md) evidence covers
+the delivered products. Remaining consumer cutover does not remove any recovery,
+freshness, rename-safety, or formatter-equivalence requirement below.
 
 ## Products and query answers
 
@@ -69,8 +47,7 @@ never rereads disk. Invalid positions and files outside the snapshot return
 unavailable answers rather than fabricated empty results.
 
 There are still five typed queries. The following is contract notation, not
-Casa syntax. It refines ADR-0167's provisional answer shapes, including the
-`Option` results for hover and definition.
+Casa syntax. It refines ADR-0167's provisional answer shapes.
 
 | Query | Owned payload and availability |
 | --- | --- |
@@ -209,10 +186,8 @@ texts for one identity rather than choosing by map iteration order. The report
 must identify both supplied aliases. Ordered import search still selects the
 first available candidate under Casa's existing path/module rules.
 
-Each request reads a selected source once and retains those exact bytes. An
-override wins over disk for the same identity. The finished snapshot retains
-only sources used by its report or facts, not unrelated open documents. This
-is not an atomic filesystem snapshot across all reads.
+Request source ownership follows ADR-0167: read once, prefer overrides, retain
+used sources, and make no atomic-filesystem-snapshot promise.
 
 The LSP owns document versions and a workspace generation. Keep current open
 text separately from completed compiler snapshots. Opening, changing, or
@@ -302,8 +277,7 @@ relationships, not byte offsets that formatting changes. Permit only existing
 grammar-authorized whitespace, newline, comma, and comment-prefix spacing
 normalization. A mismatch, candidate rejection, or reportable internal failure
 returns the original input and failure status. Keep idempotence and paired
-layout convergence checks. The current token/comment comparison alone is not
-evidence that the new structure check exists.
+layout convergence checks. Token/comment comparison alone does not establish structural equivalence.
 
 ## Migration and validation
 
@@ -316,12 +290,9 @@ evidence that the new structure check exists.
 | Formatter `syntax_only` flag paths and semantic `SymbolStore` construction | Shared syntax recognition and facts, followed by separate semantic analysis when requested. Keep formatter safety. |
 | Reverse source-name maps and test-facing typechecker clone/commit/forwarding protocols | Source spelling separate from identity, and tests through typed products. Removal is shared with the front-end and semantic migrations. |
 
-Remove assertions whose sole purpose is preserving `.ops`, declaration-map
-layout, take/restore ordering, cloned metadata fields, or source-name clone
-survival. Examples occur in `test_lsp.casa`'s partial-operation checks and
-`test_common.casa`'s lifecycle/clone checks. Preserve their distinct observable
-behaviors through the new interfaces. Do not remove semantic or ownership
-coverage merely because its old fixture inspected internal state.
+Replace tests that mirror private operations, declaration maps, take/restore
+ordering, or cloned metadata with observable behavior checks through products.
+Preserve semantic and ownership coverage regardless of the old fixture's internals.
 
 Required migration checks cover every query against each recovery class, with
 an unaffected declaration and a dependent damaged region. Distinguish absent,
