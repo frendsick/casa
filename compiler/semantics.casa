@@ -1157,6 +1157,7 @@ struct IfContext {
 }
 
 struct WhileContext {
+    after:                   TypedStack
     before:                  TypedStack
     flow_before:             OwnershipFlow
     flow_exit:               OwnershipFlow
@@ -1266,6 +1267,7 @@ impl WhileContext {
         false
         OwnershipFlow::new
         OwnershipFlow::new
+        TypedStack::new
         TypedStack::new
         WhileContext
     }
@@ -2138,7 +2140,7 @@ impl TypeChecker {
             fi
             false = check_origins
             if pair.first.as_str tc.scope.lookup std::Option::Some(typ) is then
-                tc.store typ type_has_borrow = check_origins
+                tc.store typ type_has_borrow typ common::Type::Function is || = check_origins
             fi
             if check_origins expected_origins pair.second.origins origins_equal ! && then
                 op.location f"Loop back-edge changes loans for `{pair.first}`"
@@ -2158,7 +2160,7 @@ impl TypeChecker {
             fi
             false = check_origins
             if pair.first.as_str tc.scope.lookup std::Option::Some(typ) is then
-                tc.store typ type_has_borrow = check_origins
+                tc.store typ type_has_borrow typ common::Type::Function is || = check_origins
             fi
             if
                 pair
@@ -2178,6 +2180,21 @@ impl TypeChecker {
                 op.location f"Loop back-edge does not restore cleanup-observed loans for `{pair.first}`"
                 common::ErrorKind::InvalidVariable tc.diagnostics.record_error_string
             fi
+        done
+        for pair in current.callables.iter do
+            if pair.first.as_str local_names common::string_list_contains then
+                continue
+            fi
+            for callable in pair.second.iter do
+                false = established
+                if pair.first expected.callables.get std::Option::Some(targets) is then
+                    callable targets.has = established
+                fi
+                if established ! then
+                    op.location f"Loop back-edge changes callable targets for `{pair.first}`"
+                    common::ErrorKind::InvalidVariable tc.diagnostics.record_error_string
+                fi
+            done
         done
     }
 
@@ -4338,7 +4355,8 @@ impl TypeChecker {
             .stack
             .values
             .get TypedValue::type_value.clone = value_type
-        if function_opt value_type self.type_is_duplicable then
+        function_opt value_type self.type_is_duplicable = duplicable
+        if duplicable self.store value_type type_has_borrow ! && then
             return
         fi
         value_index self
@@ -4359,10 +4377,16 @@ impl TypeChecker {
                 fi
             done
         fi
+        if duplicable then
+            if origins.is_some then
+                origins = value.origins
+            fi
+            return
+        fi
+        origins = value.origins
         if projected_place std::Option::Some(place) is then
             place.clone std::Option::Some = value.place
         fi
-        origins = value.origins
         if receiver_capability ValueCapability::Shared is then
             ValueCapability::Shared
         else
@@ -4477,8 +4501,9 @@ impl TypeChecker {
                     expected_owner.clone = owner_type
                 fi
                 f"$borrowed_temporary_{op.id}_{parameter_index}" = name
-                function_opt.is_none = is_global
+                false = is_global
                 is_global name.as_str tc.scope.assign
+                owner_type name.as_str tc.scope.set_type drop
                 if function_opt std::Option::Some(function) is then
                     owner_type.clone name.clone common::Variable function.variables.push
                 else
@@ -4544,8 +4569,9 @@ impl TypeChecker {
                 common::OpValue::OwnerCleanup op common::Op::set_value
                 return
             fi
-            function_opt.is_none = is_global
+            false = is_global
             is_global binding.name.as_str tc.scope.assign
+            value.type_value binding.name.as_str tc.scope.set_type drop
             false binding.name.as_str tc.set_owner_moved
             is_global function_opt value.type_value binding.name.as_str op tc.record_owner_assignment
             stack_index tc
@@ -4666,6 +4692,17 @@ impl TypeChecker {
                 type_variable.as_str sources.type_variable_cleanup clone_nonempty_origins
                 cleanup_origins merge_origins = cleanup_origins
             done
+            # A symbolic payload does not erase an explicit borrow in the result shape.
+            if tc.store resolved_return type_has_shared_borrow then
+                sources.shared origins merge_origins = origins
+            fi
+            if tc.store resolved_return type_has_exclusive_borrow then
+                sources.exclusive origins merge_origins = origins
+            fi
+            std::List[std::String]::new = visiting
+            if visiting tc.store resolved_return does_cleanup_observe_borrow then
+                origins cleanup_origins merge_origins = cleanup_origins
+            fi
             origins cleanup_origins ReturnCleanupMode::Exact return
         fi
 
@@ -6087,7 +6124,8 @@ impl TypeChecker {
         if function_opt std::Option::Some(function) is then
             var_name.as_str function common::Function::variables common::variable_list_contains ! return
         fi
-        true
+        # Root bindings obey the same block lifetime as function locals.
+        false
     }
 
     pub fn record_implicit_binding self:mut$TypeChecker var_name:$str op:mut$common::Op {
@@ -6278,6 +6316,15 @@ impl TypeChecker {
                 "local" effective_type_t scoped_type var_name.as_str op tc.unify_assignment_type = unified_scoped
                 unified_scoped.clone std::Option::Some = op.type_hint
                 unified_scoped.clone var_name.as_str tc.scope.set_type drop
+                if
+                    function_opt.is_none
+                    var_name.as_str tc
+                        .store
+                        .variables
+                        .get_mut_str std::Option::Some(variable) is &&
+                then
+                    unified_scoped.clone = variable.typ
+                fi
                 is_parameter_initialization function_opt effective_type_t var_name.as_str
                 tc.assignment_origins = origins
                 is_parameter_initialization function_opt effective_type_t var_name.as_str
@@ -6370,6 +6417,7 @@ impl TypeChecker {
                     false var_name.as_str tc.set_owner_moved
                 fi
                 global_var.typ.clone = global_type
+                global_type var_name.as_str tc.scope.set_type drop
                 global_type.clone std::Option::Some = op.type_hint
                 is_global function_opt global_type var_name.as_str op tc.record_owner_assignment
                 global_var var_name.clone tc
@@ -6805,9 +6853,91 @@ impl TypeChecker {
         std::Option[u64]::None
     }
 
+    # A header is checked before its body, so settle its literal types once.
+    fn resolve_loop_header self:mut$TypeChecker {
+        0 = index: u64
+        while
+            index self
+                .stack
+                .values
+                .length >
+        do
+            index self
+                .stack
+                .values
+                .get_mut = value
+            value.type_value resolve_numeric_literal_default = resolved
+            self.literal_resolutions self.diagnostics resolved value.resolve_literals drop
+            resolved = value.type_value
+            false = value.is_literal_constant
+            1 += index
+        done
+    }
+
+    # A back-edge must preserve every fact used to check the next iteration.
+    fn validate_loop_stack self:mut$TypeChecker expected:$TypedStack op:$common::Op {
+        if expected self.stack.equals ! then
+            self.store expected.get_types self.stack.get_types stacks_compatible = unified
+            if unified.is_empty then
+                op.location "Loop back-edge has incompatible stack effects"
+                common::ErrorKind::StackMismatch self.diagnostics.record_error
+                return
+            fi
+        fi
+        0 = index: u64
+        while index expected.values.length > do
+            index expected.values.get = before
+            index self
+                .stack
+                .values
+                .get = after
+            if
+                before.capability after.capability !=
+                before.origins after.origins origins_equal ! ||
+                before.cleanup_origins after.cleanup_origins origins_equal ! ||
+            then
+                op.location "Loop back-edge changes stack capability or origins"
+                common::ErrorKind::InvalidVariable self.diagnostics.record_error
+            fi
+            for callable in after.callables.iter do
+                if callable before.callables.has ! then
+                    op.location "Loop back-edge changes stack callable targets"
+                    common::ErrorKind::InvalidVariable self.diagnostics.record_error
+                fi
+            done
+            1 += index
+        done
+    }
+
+    fn merge_loop_exit self:mut$TypeChecker context:mut$WhileContext op:mut$common::Op {
+        if self.path_continues ! then
+            return
+        fi
+        context.before self.materialize_branch_results
+        if context.has_exit then
+            if context.after self.stack.equals then
+                self.stack context.after.merge_literals
+            else
+                self.store self.stack context.after.unify_types = unified
+                if unified.is_empty then
+                    op.location "Loop exits have incompatible stack effects"
+                    common::ErrorKind::StackMismatch self.diagnostics.record_error
+                else
+                    unified context.after.set_types
+                fi
+            fi
+        else
+            self.stack context.after.restore
+        fi
+        context.after.mark_literals_runtime
+        context.flow_exit self.merge_current_ownership_flow
+        true = context.has_exit
+    }
+
     pub fn check_while_block tc:mut$TypeChecker op:mut$common::Op {
         op.value.clone = while_value
         if while_value common::OpValue::WhileStart is then
+            tc.resolve_loop_header
             tc
                 .scope
                 .frames
@@ -6831,10 +6961,11 @@ impl TypeChecker {
                 .pop
                 .into_while = while_ctx
             true while_ctx WhileContext::set_condition_present
-            while_ctx.flow_exit tc.merge_current_ownership_flow
-            if tc.path_continues then
-                true = while_ctx.has_exit
-            fi
+            tc.stack.snapshot = body_stack
+            tc.current_ownership_flow = body_flow
+            op while_ctx tc.merge_loop_exit
+            body_stack tc.stack.restore
+            body_flow tc.restore_ownership_flow
             while_ctx BranchFrame::BranchWhile tc.branched_stacks.push
         elif
             while_value common::OpValue::WhileBreak is
@@ -6858,10 +6989,14 @@ impl TypeChecker {
                         true = found_while
                         if tc.path_continues then
                             if while_value common::OpValue::WhileBreak is then
-                                tc.current_ownership_flow while_ctx.flow_exit.merge
-                                true = while_ctx.has_exit
+                                while_ctx.before tc.materialize_branch_results
+                                false names op tc.attach_owner_cleanups
+                                op while_ctx tc.merge_loop_exit
                             else
+                                while_ctx.before tc.materialize_branch_results
+                                op while_ctx.before tc.validate_loop_stack
                                 op names while_ctx.flow_before tc.report_loop_flow_difference
+                                false names op tc.attach_owner_cleanups
                             fi
                         fi
                         while_ctx BranchFrame::BranchWhile = top_frame
@@ -6871,22 +7006,29 @@ impl TypeChecker {
                         break
                     fi
                 done
-                false names op tc.attach_owner_cleanups
             fi
-            false = tc.path_continues
+            tc.end_path
         elif while_value common::OpValue::WhileEnd is then
-            op tc.attach_scope_cleanups
             tc
                 .branched_stacks
                 .pop
                 .into_while = while_ctx
             while_ctx.scope_depth tc.scope.names_from = names
             if tc.path_continues then
+                while_ctx.before tc.materialize_branch_results
+                op while_ctx.before tc.validate_loop_stack
                 op names while_ctx.flow_before tc.report_loop_flow_difference
             fi
+            op tc.attach_scope_cleanups
             tc.scope.exit
             if while_ctx.has_exit then
+                while_ctx.after tc.stack.restore
                 while_ctx.flow_exit tc.restore_ownership_flow
+                true = tc.path_continues
+                if op.ownership std::Option::Some(ownership) is then
+                    ownership.cleanups.clone = cleanups
+                    names cleanups op tc.validate_owner_cleanups
+                fi
             else
                 while_ctx.flow_before tc.restore_ownership_flow
             fi
@@ -7860,6 +8002,19 @@ impl TypeChecker {
             fi
             parameter.typ TypeChecker::does_type_need_symbolic_origin return
         done
+        for capture in function.captures.iter do
+            if dependency.place.binding capture.name != then
+                continue
+            fi
+            if dependency.kind OriginKind::InputCleanup is then
+                std::List[std::String]::new = visiting
+                visiting self.store capture.typ does_cleanup_observe_borrow return
+            fi
+            if dependency.exclusive then
+                self.store capture.typ type_has_exclusive_borrow return
+            fi
+            self.store capture.typ type_has_borrow return
+        done
         false
     }
 
@@ -7877,6 +8032,14 @@ impl TypeChecker {
             .place
             .binding
             .clone = root
+        for capture in function.captures.iter do
+            if root capture.name == then
+                if exclusive then
+                    capture.typ.is_exclusive_borrow return
+                fi
+                capture.typ.is_borrow return
+            fi
+        done
         if
             root self
                 .store
@@ -7974,21 +8137,26 @@ impl TypeChecker {
             index self
                 .stack
                 .values
-                .length > index function
-                .stack_effect
-                .return_types
-                .length > &&
+                .length >
         do
-            index function
-                .stack_effect
-                .return_types
-                .get
-                .clone = return_type
             index self
                 .stack
                 .values
                 .get
                 .clone = value
+            value.type_value.clone = return_type
+            if
+                index function
+                    .stack_effect
+                    .return_types
+                    .length >
+            then
+                index function
+                    .stack_effect
+                    .return_types
+                    .get
+                    .clone = return_type
+            fi
             if return_type.is_borrow ! value.capability ValueCapability::Owned is ! && then
                 value self.clone_hint = hint
                 self.current_location f"Cannot return a borrowed value as owned{hint}"
@@ -8083,6 +8251,103 @@ impl TypeChecker {
                 fi
             fi
             1 += capture_index
+        done
+    }
+
+    # Inferred bodies still need one compatible result on every returning path.
+    fn merge_return_stack self:mut$TypeChecker {
+        if self.path_continues ! then
+            return
+        fi
+        if self.has_return_types ! then
+            self.stack self.return_types.restore
+            true = self.has_return_types
+            return
+        fi
+        if self.return_types self.stack.equals then
+            self.stack self.return_types.merge_literals
+        else
+            self.store self.stack self.return_types.unify_types = unified
+            if unified.is_empty then
+                self.current_location "Returning paths have incompatible stack effects"
+                common::ErrorKind::StackMismatch self.diagnostics.record_error
+            else
+                unified self.return_types.set_types
+            fi
+        fi
+    }
+
+    fn resolve_return_literals self:mut$TypeChecker {
+        0 = index: u64
+        while
+            index self
+                .return_types
+                .values
+                .length >
+        do
+            index self
+                .return_types
+                .values
+                .get_mut = value
+            value.type_value resolve_numeric_literal_default = resolved
+            self.literal_resolutions self.diagnostics resolved value.resolve_literals drop
+            resolved = value.type_value
+            1 += index
+        done
+    }
+
+    fn validate_return_stack self:mut$TypeChecker function:mut$common::Function {
+        if self.path_continues ! function.name.as_str "lambda__" str::starts_with || then
+            return
+        fi
+        function.stack_effect common::stack_effect_to_str.as_str "None -> None" == = inferred
+        if inferred then
+            return
+        fi
+        function self.resolve_declared_return_literals
+        self.stack.get_types function
+            .stack_effect
+            .parameters
+            .clone common::StackEffect::new = actual
+        if function.stack_effect actual checked_generic_body_effect_matches ! then
+            self.current_location "Return has incompatible stack effects"
+            common::ErrorKind::SignatureMismatch self.diagnostics.record_error
+        fi
+    }
+
+    # Owned captures keep their contained loans separate from their own storage.
+    fn record_capture_origins self:mut$TypeChecker function:$common::Function {
+        for capture in function.captures.iter do
+            capture.typ.clone capture.name.clone self
+                .scope
+                .function_bindings
+                .set
+            if capture.typ.is_borrow self.store capture.typ type_has_borrow ! || then
+                continue
+            fi
+            self.store capture.typ type_has_exclusive_borrow = exclusive
+            exclusive OriginKind::InputOrigins capture.name.as_str Place::new Origin
+            std::Option[std::List[Origin]]::None append_origin = origins
+            std::Option[std::List[Origin]]::None = cleanup_origins
+            std::List[std::String]::new = visiting
+            if visiting self.store capture.typ does_cleanup_observe_borrow then
+                exclusive OriginKind::InputCleanup capture.name.as_str Place::new Origin
+                cleanup_origins append_origin = cleanup_origins
+            fi
+            cleanup_origins origins capture.name.as_str self.record_binding_origins
+        done
+    }
+
+    fn validate_capture_restoration self:mut$TypeChecker function:$common::Function {
+        if self.path_continues ! then
+            return
+        fi
+        for capture_name in function.owned_captures.iter do
+            if capture_name.as_str self.owner_is_moved then
+                self.current_location
+                f"Repeatable closure does not restore captured owner `{capture_name}`"
+                common::ErrorKind::InvalidVariable self.diagnostics.record_error_string
+            fi
         done
     }
 
@@ -8531,11 +8796,12 @@ impl TypeChecker {
                 common::ErrorKind::InvalidScope tc.diagnostics.record_error
                 return
             fi
-            tc.path_continues = return_reachable
             if function_opt std::Option::Some(function) is then
                 function tc.resolve_declared_return_borrow_capabilities
                 function tc.validate_borrow_returns
+                function tc.validate_return_stack
             fi
+            tc.merge_return_stack
             tc.stack TypeChecker::collect_return_origin_summaries = returned_origins
             returned_origins tc.return_origin_summaries
             TypeChecker::merge_return_origin_summaries
@@ -8565,11 +8831,10 @@ impl TypeChecker {
                 return_value.callables.clone returned_callables.push
             done
             returned_callables tc.return_callables TypeChecker::merge_return_callables
-            op tc.attach_all_owner_cleanups
-            if return_reachable tc.has_return_types ! && then
-                true = tc.has_return_types
-                tc.stack tc.return_types.restore
+            if function_opt std::Option::Some(function) is then
+                function tc.validate_capture_restoration
             fi
+            op tc.attach_all_owner_cleanups
             tc.end_path
         fi
     }
@@ -8821,6 +9086,15 @@ impl TypeChecker {
                     else
                         enum_name common::GenericType::new common::Type::Generic tc.stack_push_type
                     fi
+                    # A payload-free variant proves that this value contains no loan.
+                    std::List[Origin]::new std::Option::Some
+                    tc
+                        .stack
+                        .values
+                        .length 1 - tc
+                        .stack
+                        .values
+                        .get_mut TypedValue::set_origins
                     return
                 fi
 
@@ -9357,8 +9631,9 @@ impl TypeChecker {
             return
         fi
         f"$if_is_subject_{op.id}" = name
-        function_opt.is_none = is_global
+        false = is_global
         is_global name.as_str self.scope.assign
+        subject.type_value name.as_str self.scope.set_type drop
         if function_opt std::Option::Some(function) is then
             subject.type_value.clone name.clone common::Variable function.variables.push
         else
@@ -9692,31 +9967,6 @@ impl TypeChecker {
         fi
     }
 
-    fn apply_match_result_stack self:mut$TypeChecker op:mut$common::Op match_ctx:mut$MatchContext {
-        # Apply final stack state
-        match_ctx MatchContext::before = final_before: mut$TypedStack
-        match_ctx MatchContext::after = final_after: mut$TypedStack
-        # When stack == before and before == after, nothing changed
-        if final_before self.stack.equals final_after final_before.equals && then
-            return
-        fi
-        # When stack == before but after differs (e.g. wildcard-only match),
-        # accept the after state directly
-        if final_before self.stack.equals final_after final_before.equals ! && then
-            final_after self.stack.restore
-            return
-        fi
-        self.store final_after self.stack.unify_types = unified
-        if 0 unified.length != then
-            self.stack final_after.merge_literals
-            final_after.mark_literals_runtime
-            final_after self.stack.restore
-            unified self.stack.set_types
-            return
-        fi
-        op common::Op::location "Match arms have incompatible stack effects" common::ErrorKind::StackMismatch self.diagnostics.record_error
-    }
-
     fn finish_match self:mut$TypeChecker op:mut$common::Op {
         self
             .branched_stacks
@@ -9734,6 +9984,7 @@ impl TypeChecker {
             true = match_ctx.has_continuing_arm
         fi
         if match_ctx.has_continuing_arm then
+            match_ctx.after self.stack.restore
             match_ctx.flow_after self.restore_ownership_flow
         else
             match_ctx.flow_before self.restore_ownership_flow
@@ -9741,7 +9992,6 @@ impl TypeChecker {
         match_ctx.has_continuing_arm = self.path_continues
 
         match_ctx op self.check_match_exhaustiveness
-        match_ctx op self.apply_match_result_stack
     }
 
     pub fn check_match
@@ -10898,7 +11148,7 @@ impl TypeChecker {
                 self
                     .stack
                     .values
-                    .length 1 - offset - parameter_index = stack_index
+                    .length 1 - offset - parameter_index - = stack_index
                 stack_index self
                     .stack
                     .values
@@ -11705,6 +11955,7 @@ fn analyze_ops
     argument_callables.clone = checker.callable_bindings
     std::Option[u64]::None = budget
     if function_opt std::Option::Some(the_function) is then
+        the_function checker.record_capture_origins
         the_function
             .stack_effect
             .trait_bounds
@@ -11751,19 +12002,15 @@ fn analyze_ops
     if function_opt std::Option::Some(checked_function) is then
         checker.path_continues ! checker.has_return_types ! && = checked_function.is_non_returning
         checked_function checker.resolve_declared_return_borrow_capabilities
-        if checker.has_return_types ! then
+        if checker.path_continues then
             checked_function checker.validate_borrow_returns
         fi
         checked_function checker.resolve_declared_return_literals
-        for capture_name in checked_function.owned_captures.iter do
-            if capture_name.as_str checker.owner_is_moved then
-                checked_function.location
-                f"Repeatable closure does not restore captured owner `{capture_name}`"
-                common::ErrorKind::InvalidVariable checker.diagnostics.record_error_string
-            fi
-        done
     fi
 
+    if checker.has_return_types then
+        checker.merge_return_stack
+    fi
     if checker.path_continues then
         checker.stack TypeChecker::collect_return_origin_summaries = fallthrough_origins
         fallthrough_origins checker.return_origin_summaries
@@ -11783,8 +12030,10 @@ fn analyze_ops
             .values
             .get
             .clone = stack_value
-        stack_value checker.materialize_copy_escape
-        stack_value checker.finish_value_use
+        if checker.path_continues then
+            stack_value checker.materialize_copy_escape
+            stack_value checker.finish_value_use
+        fi
         stack_value.type_value resolve_numeric_literal_default = final_type
         checker.literal_resolutions checker.diagnostics final_type stack_value.resolve_literals drop
         false = stack_value.is_literal_constant
@@ -11796,26 +12045,25 @@ fn analyze_ops
             .set
         1 += stack_index
     done
+    if function_opt std::Option::Some(function) is then
+        function checker.validate_capture_restoration
+    fi
     if 0 checker.owner_events.length != then
         checker.current_location.clone common::OpValue::OwnerCleanup common::Op::new = cleanup_op
         cleanup_op checker.assign_op_id
         cleanup_op checker.attach_all_owner_cleanups
         cleanup_op ops.push
     fi
+    checker.resolve_return_literals
     checker.moved_operations ops attach_checked_moves
     checker.literal_resolutions ops apply_resolved_literal_hints
     checker.diagnostics ops resolve_default_literals
 
-    # Build inferred stack effect
-    std::List[common::Type]::new = inferred_returns
-    for
-        inferred_value in checker
-            .stack
-            .values
-            .iter
-    do
-        inferred_value.type_value.clone inferred_returns.push
-    done
+    # Build inferred stack effect from every returning path.
+    checker.stack.get_types = inferred_returns
+    if checker.has_return_types then
+        checker.return_types.get_types = inferred_returns
+    fi
     inferred_returns checker.parameters.clone common::StackEffect::new = inferred
 
     # Verify against declared stack effect if function has one

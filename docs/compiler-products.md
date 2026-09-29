@@ -48,6 +48,19 @@ sets and its diagnostic location in one record. Continuing branch completion
 transfers results before checking LIFO cleanup and leaving the scope. Returns
 attach cleanup to the exit and do not contribute to the continuing join.
 
+Loop back-edges and `continue` validate stack shape, capability, origins,
+callable targets, and binding ownership against the loop header. False conditions
+and reachable `break` paths contribute to the exit join. Root block bindings
+follow the same lexical cleanup rules as function locals. Match joins retain the
+merged origins and callable targets even when their stack types do not change.
+
+Each explicit return checks its declared stack effect. Both early returns and
+fallthrough validate borrowed origins and restore owned captures for repeatable
+closures. A payload-free enum variant establishes an empty origin set. Recursive
+borrowed callable results retain conservative input origins when a recursive
+summary is still active. Callable-summary analysis still revisits bodies. The
+source-once dependency and fixed-point migration in ADR-0173 remains pending.
+
 Checked operations own their assignment, move, and cleanup actions. Ownership
 actions are optional on operations that need none. Specialization substitutes
 cleanup types within those operations, and bytecode lowering reads the actions
