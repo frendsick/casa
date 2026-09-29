@@ -42,12 +42,16 @@ After the implementation and review are stable:
 
 - **MUST** run focused filters for the changed behavior. Run `test_bootstrap.sh`
   only when the affected path requires bootstrap validation.
-- **MUST** run the complete CI suite once on the final reviewed code before
-  opening or updating a pull request:
+- **MUST** run the complete CI suite locally once during the implementation
+  session:
 
   ```
   tests/test_all.sh
   ```
+
+- After that pass, validate later changes with focused filters for the affected
+  behavior. Push the result and let required PR CI run the complete suite on
+  the final code. Monitor CI before reporting the PR complete.
 
 - `test_all.sh` builds the branch compiler once, then runs the same 14 shards as
   CI in parallel. It uses the smaller of four jobs and the number of online

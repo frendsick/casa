@@ -30,7 +30,7 @@ the accepted design contracts or establish performance gains for a rewrite.
   with both the historical audit and a pinned current checkpoint. Separate
   runtime relocation from deletion and identify inseparable behavior changes.
 - The bootstrap route uses the stable compiler named by `casa-release.env`,
-  currently v1.52.0. The slice's v1.50.0 instructions reproduce its historical
+  currently v1.53.0. The slice's v1.50.0 instructions reproduce its historical
   experiment. Create the next stable release and update `casa-release.env` when
   the newest stable compiler cannot compile valid repository syntax.
 - Implementation units 5 and 6 must preserve the current native `call`/`ret`

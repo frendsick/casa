@@ -5,6 +5,7 @@ import "std" as std
 import "os" as os
 import "parser" as parser
 import "common" as common
+import "constant_eval" as constant_eval
 import "error" as error
 import "lexer" as lexer
 import "semantics" as semantics
@@ -23,6 +24,7 @@ pub struct ParseState {
     pub output_usable:     std::List[bool]
     pub recovery_required: std::List[bool]
     pub store_mutated:     std::List[bool]
+    pub constant_errors:   u64
 }
 
 impl ParseState {
@@ -33,7 +35,7 @@ impl ParseState {
         false recovery_required.push
         std::List[bool]::new = output_usable
         true output_usable.push
-        store_mutated recovery_required output_usable diagnostics ParseState
+        0 store_mutated recovery_required output_usable diagnostics ParseState
     }
 
     pub fn record_error
@@ -69,6 +71,15 @@ impl ParseState {
     pub fn mark_output_unusable self:mut$ParseState { false 0 self.output_usable.set }
 
     pub fn has_usable_output self:mut$ParseState -> bool { 0 self.output_usable.get copy }
+
+    pub fn has_nonconstant_errors_since
+        self:$ParseState
+        errors_before:u64
+        constant_errors_before:u64
+    -> bool {
+        self.diagnostics.error_count errors_before -
+        self.constant_errors constant_errors_before - !=
+    }
 
     pub fn request_recovery self:mut$ParseState { true 0 self.recovery_required.set }
 
@@ -360,6 +371,7 @@ impl common::SymbolStore {
         done
         self.variables.clone = cloned.variables
         self.constants.clone = cloned.constants
+        self.failed_constants.clone = cloned.failed_constants
         self.enums.clone = cloned.enums
         self.structs.clone = cloned.structs
         self.traits.clone = cloned.traits
@@ -428,47 +440,23 @@ pub fn operator_to_op_value operator_kind:common::OperatorKind -> std::Option[co
     end
 }
 
-pub fn op_value_to_operator_kind op_value:$common::OpValue -> std::Option[common::OperatorKind] {
-    op_value match
-        common::OpValue::Add => common::OperatorKind::Plus std::Option::Some
-        common::OpValue::Sub => common::OperatorKind::Minus std::Option::Some
-        common::OpValue::Mul => common::OperatorKind::Mul std::Option::Some
-        common::OpValue::Div => common::OperatorKind::Div std::Option::Some
-        common::OpValue::Mod => common::OperatorKind::Mod std::Option::Some
-        common::OpValue::Shl => common::OperatorKind::Shl std::Option::Some
-        common::OpValue::Shr => common::OperatorKind::Shr std::Option::Some
-        common::OpValue::BitAnd => common::OperatorKind::BitAnd std::Option::Some
-        common::OpValue::BitOr => common::OperatorKind::BitOr std::Option::Some
-        common::OpValue::BitXor => common::OperatorKind::BitXor std::Option::Some
-        common::OpValue::BitNot => common::OperatorKind::BitNot std::Option::Some
-        common::OpValue::And => common::OperatorKind::And std::Option::Some
-        common::OpValue::Or => common::OperatorKind::Or std::Option::Some
-        common::OpValue::Not => common::OperatorKind::Not std::Option::Some
-        common::OpValue::Eq => common::OperatorKind::Eq std::Option::Some
-        common::OpValue::Ge => common::OperatorKind::Ge std::Option::Some
-        common::OpValue::Gt => common::OperatorKind::Gt std::Option::Some
-        common::OpValue::Le => common::OperatorKind::Le std::Option::Some
-        common::OpValue::Lt => common::OperatorKind::Lt std::Option::Some
-        common::OpValue::Ne => common::OperatorKind::Ne std::Option::Some
-        _ => std::Option[common::OperatorKind]::None
-    end
-}
-
 # ============================================================================
 # Token cursor
 # ============================================================================
 
 pub struct TokenCursor {
-    pub tokens:          $std::List[common::Token]
-    pub pos:             u64
-    pub names:           std::Map[std::String common::SourceBinding]
-    pub type_bindings:   std::List[std::String]
-    pub module_prefixes: std::List[std::String]
+    pub tokens:           $std::List[common::Token]
+    pub pos:              u64
+    pub names:            std::Map[std::String common::SourceBinding]
+    pub constants:        std::Map[std::String common::Constant]
+    pub failed_constants: std::Set[std::String]
+    pub type_bindings:    std::List[std::String]
+    pub module_prefixes:  std::List[std::String]
 }
 
 impl TokenCursor {
     pub fn new tokens:$std::List[common::Token] -> TokenCursor {
-        std::List[std::String]::new std::List[std::String]::new std::Map[std::String common::SourceBinding]::new 0 tokens TokenCursor
+        std::List[std::String]::new std::List[std::String]::new std::Set[std::String]::new std::Map[std::String common::Constant]::new std::Map[std::String common::SourceBinding]::new 0 tokens TokenCursor
     }
 
     pub fn copy_module_prefixes self:mut$TokenCursor prefixes:$std::Map[std::String std::String] {
@@ -667,7 +655,7 @@ pub fn expect_delimiter cursor:mut$TokenCursor expected_value:str -> bool {
 # or char literal) rather than a type name (ADR-0153).
 
 pub fn is_type_argument_literal value:$str -> bool {
-    if value common::try_parse_uint_literal.is_some then
+    if value common::try_parse_uint_literal.is_some value lexer::is_negative_integer_literal || then
         true return
     fi
     if "true" value.as_str == "false" value.as_str == || then
@@ -691,6 +679,26 @@ pub fn parse_type_ast cursor:mut$TokenCursor state:mut$ParseState -> common::Typ
         "fn".to_str = base
     else
         fallback_token state cursor expect_token.unwrap_or = base_token
+        if base_token.kind common::TokenKind::Literal == then
+            if 0 base_token.value.length != then
+                if
+                    0 base_token
+                        .value
+                        .at
+                        .is_digit base_token.value.as_str common::try_parse_uint_literal.is_none &&
+                then
+                    base_token.location f"Integer type argument `{base_token.value}` is outside `u64` range" common::ErrorKind::TypeMismatch state.record_error_string
+                    common::Type::Unknown return
+                fi
+            fi
+            if base_token.value.as_str lexer::is_negative_integer_literal then
+                base_token.value.as_str parser::str_to_int base_token.value.clone common::IntegerLiteral::new = signed_literal
+                if common::make_i64_type signed_literal.fits ! then
+                    base_token.location f"Integer type argument `{base_token.value}` is outside `i64` range" common::ErrorKind::TypeMismatch state.record_error_string
+                    common::Type::Unknown return
+                fi
+            fi
+        fi
         if
             common::TokenKind::Identifier base_token common::Token::kind !=
             base_token common::Token::value.as_str cursor.resolve_name.as_str is_type_argument_literal ! &&
@@ -717,10 +725,41 @@ pub fn parse_type_ast cursor:mut$TokenCursor state:mut$ParseState -> common::Typ
         common::Type::Unknown return
     fi
 
+    if base.as_str cursor.type_bindings common::string_list_contains then
+        borrow_prefix base common::Type::TypeVar common::apply_borrow_type return
+    fi
+
     # Char constant (ADR-0153): built here rather than in `parse_type_str`,
     # which cannot decode the codepoint.
     if base.as_str char_literal_codepoint std::Option::Some(char_codepoint) is then
         common::BuiltinType::Char char_codepoint common::ConstType::concrete common::Type::Const return
+    fi
+
+    if base.as_str cursor.constants.get_str std::Option::Some(named_constant) is then
+        named_constant.value match
+            common::ConstantValue::Int(integer) => {
+                common::BuiltinType::U64 = integer_type
+                if integer.raw.as_str "-" str::starts_with 0 integer.value != && then
+                    common::BuiltinType::I64 = integer_type
+                fi
+                integer_type integer.value common::ConstType::concrete common::Type::Const return
+            }
+            common::ConstantValue::Bool(value) => {
+                common::BuiltinType::Bool value common::ConstType::concrete common::Type::Const return
+            }
+            common::ConstantValue::Char(value) => {
+                common::BuiltinType::Char value common::ConstType::concrete common::Type::Const return
+            }
+            _ => {
+                peek.location f"Constant `{peek.value}` cannot be a type argument: only integer, bool, and char values are allowed" common::ErrorKind::TypeMismatch state.record_error_string
+                common::Type::Unknown return
+            }
+        end
+    fi
+
+    if base.as_str cursor.failed_constants.has_str then
+        peek.location f"Constant `{peek.value}` is unavailable because its declaration failed" common::ErrorKind::UndefinedName state.record_error_string
+        common::Type::Unknown return
     fi
 
     cursor.peek = next_opt
@@ -1781,531 +1820,207 @@ pub fn parse_literal_to_constant_value raw:$str -> common::ConstantValue {
     raw parser::str_to_int raw.to_str common::IntegerLiteral::new common::ConstantValue::Int
 }
 
-# ============================================================================
-# try_fold_const_fn_call - constant-fold a const fn call with all-literal args
-# ============================================================================
-
-pub fn is_const_fold_literal value:$common::OpValue -> bool {
-    value common::OpValue::PushInt is
-    value common::OpValue::PushFloat is ||
-    value common::OpValue::PushStr is ||
-    value common::OpValue::PushBool is ||
-    value common::OpValue::PushChar is ||
-}
-
-pub fn try_fold_const_fn_call
-    store:mut$common::SymbolStore
-    ops:mut$std::List[common::Op]
-    op_index:u64
-    fn_name:$str
-    location:$common::Location
-    diagnostics:mut$error::Diagnostics
--> u64 {
-    fn_name store.get_function = fold_fn_opt
-    if fold_fn_opt.is_none then
-        op_index return
-    fi
-    fold_fn_opt.unwrap = fold_fn
-    if fold_fn common::Function::is_const_fn ! then
-        op_index return
-    fi
-    for
-        parameter in fold_fn
-            .stack_effect
-            .parameters
-            .iter
-    do
-        if parameter.typ.has_unresolved_type_var parameter.typ.has_unresolved || then
-            op_index return
-        fi
-    done
-    for
-        return_type in fold_fn
-            .stack_effect
-            .return_types
-            .iter
-    do
-        if return_type.has_unresolved_type_var return_type.has_unresolved || then
-            op_index return
-        fi
-    done
-    fold_fn common::Function::stack_effect common::StackEffect::parameters.length = fold_param_count
-    op_index 1 - = call_idx
-    call_idx fold_param_count - = first_arg_idx
-    if 0 first_arg_idx > then
-        op_index return
-    fi
-    first_arg_idx = check_idx
-    while check_idx call_idx > do
-        check_idx ops.get common::Op::value.clone = check_val
-        if check_val is_const_fold_literal ! then
-            op_index return
-        fi
-        1 += check_idx
-    done
-    std::List[common::ConstantValue]::new = fold_stack
-    std::List[std::String]::new = fold_eval_stack
-    first_arg_idx = load_idx
-    while load_idx call_idx > do
-        load_idx ops.get common::Op::value.clone = load_val
-        if load_val common::OpValue::PushInt(li) is then
-            li.value li.raw.clone common::IntegerLiteral::new common::ConstantValue::Int fold_stack.push
-        elif load_val common::OpValue::PushFloat(float_literal) is then
-            float_literal.clone common::ConstantValue::Float fold_stack.push
-        elif load_val common::OpValue::PushStr(ls) is then
-            ls.clone common::ConstantValue::Str fold_stack.push
-        elif load_val common::OpValue::PushBool(lb) is then
-            lb common::ConstantValue::Bool fold_stack.push
-        elif load_val common::OpValue::PushChar(lc) is then
-            lc common::ConstantValue::Char fold_stack.push
-        fi
-        1 += load_idx
-    done
-    fn_name.clone = eval_name
-    if diagnostics fold_eval_stack location fold_stack eval_name store eval_const_fn ! then
-        op_index return
-    fi
-    fold_stack.pop = fold_result
-    fold_result match
-        common::ConstantValue::Int(ri) => {
-            ri common::OpValue::PushInt first_arg_idx ops.get_mut common::Op::set_value
-        }
-        common::ConstantValue::Float(float_result) => {
-            float_result common::OpValue::PushFloat first_arg_idx ops.get_mut common::Op::set_value
-        }
-        common::ConstantValue::Str(rs) => {
-            rs common::OpValue::PushStr first_arg_idx ops.get_mut common::Op::set_value
-        }
-        common::ConstantValue::Bool(rb) => {
-            rb common::OpValue::PushBool first_arg_idx ops.get_mut common::Op::set_value
-        }
-        common::ConstantValue::Char(rc) => {
-            rc common::OpValue::PushChar first_arg_idx ops.get_mut common::Op::set_value
-        }
-    end
-    if
-        1 fold_fn
-            .stack_effect
-            .return_types
-            .length ==
-    then
-        0 fold_fn
-            .stack_effect
-            .return_types
-            .get
-            .clone std::Option::Some
-        first_arg_idx ops.get_mut common::Op::set_type_hint
-    fi
-    first_arg_idx 1 + = shift_dst
-    call_idx 1 + = shift_src
-    while shift_src ops.length > do
-        shift_src ops.get.clone shift_dst ops.set
-        1 += shift_src
-        1 += shift_dst
-    done
-    0 = pop_count: u64
-    while pop_count fold_param_count > do
-        ops.pop drop
-        1 += pop_count
-    done
-    first_arg_idx 1 +
-}
-
-# ============================================================================
-# validate_const_fn_body - ensure const fn body has no disallowed ops
-# ============================================================================
-
-pub fn validate_const_fn_body function:mut$common::Function diagnostics:mut$error::Diagnostics {
-    for op in function common::Function::ops.iter do
-        op common::Op::value = v: $common::OpValue
-        if v common::OpValue::IfStart is then
-            op common::Op::location "Control flow (`if`) is not allowed in const fn" common::ErrorKind::Syntax diagnostics.record_error
-        fi
-        if v common::OpValue::WhileStart is then
-            op common::Op::location "Control flow (`while`) is not allowed in const fn" common::ErrorKind::Syntax diagnostics.record_error
-        fi
-    done
-}
-
-# ============================================================================
-# eval_const_block - compile-time evaluation of const { ... } expressions
-# ============================================================================
-
-pub fn validate_constant_numeric
-    value:$common::ConstantValue
-    target:$common::Type
-    location:$common::Location
-    diagnostics:mut$error::Diagnostics
--> bool {
-    value match
-        common::ConstantValue::Int(literal) => {
-            if target.is_integer_type_t ! then
-                location f"Integer literal `{literal.raw}` requires an integer context, got `{target.format}`" common::ErrorKind::TypeMismatch diagnostics.record_error_string
-                false return
-            fi
-            if target literal.fits ! then
-                target.get_integer_min = minimum
-                target.get_integer_max = maximum
-                location f"Integer literal `{literal.raw}` is outside `{target.format}` range {minimum}..{maximum}" common::ErrorKind::TypeMismatch diagnostics.record_error_string
-                false return
-            fi
-        }
-        common::ConstantValue::Float(literal) => {
-            if target.is_float_type_t ! then
-                location f"Floating-point literal `{literal}` requires `f32` or `f64` context, got `{target.format}`" common::ErrorKind::TypeMismatch diagnostics.record_error_string
-                false return
-            fi
-        }
-        _ => {
-        }
-    end
-    true
-}
-
-pub fn const_eval_apply_operator
-    stack:mut$std::List[common::ConstantValue]
-    operator_kind:common::OperatorKind
-    location:$common::Location
-    diagnostics:mut$error::Diagnostics
-{
-    if operator_kind common::OperatorKind::Not == then
-        if 0 stack.length == then
-            location "Stack underflow in const expression" common::ErrorKind::Syntax diagnostics.record_error
-        fi
-        stack.pop = a_val
-        if a_val.clone common::ConstantValue::Bool(a_bool) is then
-            if 0 a_bool != then 0 else 1 fi common::ConstantValue::Bool stack.push
-        elif a_val.clone common::ConstantValue::Int(a_int) is then
-            if diagnostics location common::make_i64_type a_val validate_constant_numeric ! then
-                0 common::IntegerLiteral::from_int common::ConstantValue::Int stack.push
-                return
-            fi
-            if 0 a_int.value != then 0 else 1 fi common::ConstantValue::Bool stack.push
-        else
-            location "Operator `!` requires bool or i64 operand" common::ErrorKind::Syntax diagnostics.record_error
-        fi
-        return
-    fi
-    if operator_kind common::OperatorKind::BitNot == then
-        if 0 stack.length == then
-            location "Stack underflow in const expression" common::ErrorKind::Syntax diagnostics.record_error
-        fi
-        stack.pop = bitnot_val
-        if bitnot_val.clone common::ConstantValue::Int(bitnot_int) is then
-            if diagnostics location common::make_i64_type bitnot_val validate_constant_numeric ! then
-                0 common::IntegerLiteral::from_int common::ConstantValue::Int stack.push
-                return
-            fi
-            bitnot_int.value ~ common::IntegerLiteral::from_int common::ConstantValue::Int stack.push
-        else
-            location "Operator `~` requires i64 operand" common::ErrorKind::Syntax diagnostics.record_error
-        fi
-        return
-    fi
-    if 2 stack.length < then
-        location "Stack underflow in const expression" common::ErrorKind::Syntax diagnostics.record_error
-    fi
-    stack.pop = b_val
-    stack.pop = a_val
-    if a_val.clone common::ConstantValue::Int(a_int) is then
-        if b_val.clone common::ConstantValue::Int(b_int) is then
-            if
-                diagnostics location common::make_i64_type a_val validate_constant_numeric !
-                diagnostics location common::make_i64_type b_val validate_constant_numeric ! ||
-            then
-                0 common::IntegerLiteral::from_int common::ConstantValue::Int stack.push
-                return
-            fi
-            if operator_kind common::OperatorKind::Plus == then
-                a_int.value b_int.value + common::IntegerLiteral::from_int common::ConstantValue::Int stack.push return
-            fi
-            if operator_kind common::OperatorKind::Minus == then
-                a_int.value b_int.value - common::IntegerLiteral::from_int common::ConstantValue::Int stack.push return
-            fi
-            if operator_kind common::OperatorKind::Mul == then
-                a_int.value b_int.value * common::IntegerLiteral::from_int common::ConstantValue::Int stack.push return
-            fi
-            if operator_kind common::OperatorKind::Div == then
-                a_int.value b_int.value / common::IntegerLiteral::from_int common::ConstantValue::Int stack.push return
-            fi
-            if operator_kind common::OperatorKind::Mod == then
-                a_int.value b_int.value % common::IntegerLiteral::from_int common::ConstantValue::Int stack.push return
-            fi
-            if operator_kind common::OperatorKind::Shl == then
-                a_int.value b_int.value u64::try_from.unwrap <<
-                common::IntegerLiteral::from_int common::ConstantValue::Int stack.push return
-            fi
-            if operator_kind common::OperatorKind::Shr == then
-                a_int.value b_int.value u64::try_from.unwrap >>
-                common::IntegerLiteral::from_int common::ConstantValue::Int stack.push return
-            fi
-            if operator_kind common::OperatorKind::BitAnd == then
-                a_int.value b_int.value & common::IntegerLiteral::from_int common::ConstantValue::Int stack.push return
-            fi
-            if operator_kind common::OperatorKind::BitOr == then
-                a_int.value b_int.value | common::IntegerLiteral::from_int common::ConstantValue::Int stack.push return
-            fi
-            if operator_kind common::OperatorKind::BitXor == then
-                a_int.value b_int.value ^ common::IntegerLiteral::from_int common::ConstantValue::Int stack.push return
-            fi
-            if operator_kind common::OperatorKind::Eq == then
-                if a_int.value b_int.value == then 1 else 0 fi common::ConstantValue::Bool stack.push return
-            fi
-            if operator_kind common::OperatorKind::Ne == then
-                if a_int.value b_int.value != then 1 else 0 fi common::ConstantValue::Bool stack.push return
-            fi
-            if operator_kind common::OperatorKind::Lt == then
-                if a_int.value b_int.value < then 1 else 0 fi common::ConstantValue::Bool stack.push return
-            fi
-            if operator_kind common::OperatorKind::Le == then
-                if a_int.value b_int.value <= then 1 else 0 fi common::ConstantValue::Bool stack.push return
-            fi
-            if operator_kind common::OperatorKind::Gt == then
-                if a_int.value b_int.value > then 1 else 0 fi common::ConstantValue::Bool stack.push return
-            fi
-            if operator_kind common::OperatorKind::Ge == then
-                if a_int.value b_int.value >= then 1 else 0 fi common::ConstantValue::Bool stack.push return
-            fi
-            location "Unsupported operator for i64 operands in const expression" common::ErrorKind::Syntax diagnostics.record_error
-        fi
-    fi
-    if a_val common::ConstantValue::Bool(a_bool) is then
-        if b_val common::ConstantValue::Bool(b_bool) is then
-            if operator_kind common::OperatorKind::And == then
-                if 0 a_bool != 0 b_bool != && then 1 else 0 fi common::ConstantValue::Bool stack.push return
-            fi
-            if operator_kind common::OperatorKind::Or == then
-                if 0 a_bool != 0 b_bool != || then 1 else 0 fi common::ConstantValue::Bool stack.push return
-            fi
-            if operator_kind common::OperatorKind::Eq == then
-                if a_bool b_bool == then 1 else 0 fi common::ConstantValue::Bool stack.push return
-            fi
-            if operator_kind common::OperatorKind::Ne == then
-                if a_bool b_bool != then 1 else 0 fi common::ConstantValue::Bool stack.push return
-            fi
-            location "Unsupported operator for bool operands in const expression" common::ErrorKind::Syntax diagnostics.record_error
-        fi
-    fi
-    location "Type mismatch in const expression" common::ErrorKind::Syntax diagnostics.record_error
-}
-
-pub fn eval_const_fn
-    store:$common::SymbolStore
-    fn_name:$str
-    stack:mut$std::List[common::ConstantValue]
-    location:$common::Location
-    eval_stack:mut$std::List[std::String]
-    diagnostics:mut$error::Diagnostics
--> bool {
-    if fn_name eval_stack common::string_list_contains then
-        location f"Cycle detected in const evaluation: `{fn_name}`" common::ErrorKind::Syntax diagnostics.record_error_string
-        false return
-    fi
-    fn_name store.get_function = fn_opt
-    if fn_opt.is_none then
-        location f"`{fn_name}` is not a const fn" common::ErrorKind::Syntax diagnostics.record_error_string
-        false return
-    fi
-    fn_opt.unwrap = function: $common::Function
-    if function common::Function::is_const_fn ! then
-        location f"`{fn_name}` is not a const fn" common::ErrorKind::Syntax diagnostics.record_error_string
-        false return
-    fi
-    fn_name.clone eval_stack.push_str
-    function common::Function::stack_effect common::StackEffect::parameters.length = param_count
-    std::List[common::ConstantValue]::new = fn_stack
-    std::Map[std::String common::ConstantValue]::new = locals
-    if param_count stack.length < then
-        location f"Not enough arguments for const fn `{fn_name}`" common::ErrorKind::Syntax diagnostics.record_error_string
-        false return
-    fi
-    0 = pi: u64
-    while pi param_count > do
-        stack.pop = argument
-        pi function
-            .stack_effect
-            .parameters
-            .get
-            .typ = parameter_type: $common::Type
-        if diagnostics location parameter_type argument validate_constant_numeric ! then
-            false return
-        fi
-        argument fn_stack.push
-        1 += pi
-    done
-    function common::Function::ops = fn_ops: $std::List[common::Op]
-    0 = oi: u64
-    while oi fn_ops.length > do
-        oi fn_ops.get = fn_op
-        1 += oi
-        fn_op common::Op::value.clone = op_value
-        if op_value common::OpValue::PushInt(push_int) is then
-            push_int.value push_int.raw.clone common::IntegerLiteral::new common::ConstantValue::Int fn_stack.push
-            continue
-        fi
-        if op_value common::OpValue::PushFloat(push_float) is then
-            push_float.clone common::ConstantValue::Float fn_stack.push
-            continue
-        fi
-        if op_value common::OpValue::PushStr(push_str) is then
-            push_str.clone common::ConstantValue::Str fn_stack.push
-            continue
-        fi
-        if op_value common::OpValue::PushBool(push_bool) is then
-            push_bool common::ConstantValue::Bool fn_stack.push
-            continue
-        fi
-        if op_value common::OpValue::PushChar(push_char) is then
-            push_char common::ConstantValue::Char fn_stack.push
-            continue
-        fi
-        op_value op_value_to_operator_kind = eval_op_kind_opt
-        if eval_op_kind_opt std::Option::Some(eval_op_kind) is then
-            diagnostics fn_op common::Op::location eval_op_kind fn_stack const_eval_apply_operator
-            continue
-        fi
-        if op_value common::OpValue::FnReturn is then
-            break
-        fi
-        if op_value common::OpValue::FnCall(call_name) is then
-            if
-                diagnostics eval_stack fn_op common::Op::location fn_stack call_name.as_str store eval_const_fn !
-            then
-                false return
-            fi
-            continue
-        fi
-        if op_value common::OpValue::AssignVar(assign_name) is then
-            if 0 fn_stack.length != then
-                fn_stack.pop assign_name.clone locals.set
-            fi
-            continue
-        fi
-        if op_value common::OpValue::PushVar(var_name) is then
-            var_name.as_str locals.get_str = local_opt
-            if local_opt std::Option::Some(local) is then
-                local.clone fn_stack.push
-                continue
-            fi
-            var_name.as_str store.constants.get_str = inner_const_opt
-            if inner_const_opt std::Option::Some(inner_const) is then
-                inner_const common::Constant::value.clone fn_stack.push
-                continue
-            fi
-            fn_op common::Op::location f"Cannot use variable `{var_name}` in const fn evaluation" common::ErrorKind::Syntax diagnostics.record_error_string
-            false return
-        fi
-        if op_value common::OpValue::Identifier(ident_name) is then
-            ident_name.as_str locals.get_str = local_opt
-            if local_opt std::Option::Some(local) is then
-                local.clone fn_stack.push
-                continue
-            fi
-            fn_op
-                .location
-                .file
-                .as_str ident_name.as_str store.resolve_name = resolved_name
-            resolved_name.as_str store.constants.get_str = inner_const_opt
-            if inner_const_opt std::Option::Some(inner_const) is then
-                inner_const common::Constant::value.clone fn_stack.push
-                continue
-            fi
-            resolved_name.as_str store.get_function = inner_fn_opt
-            if inner_fn_opt std::Option::Some(inner_fn) is then
-                if inner_fn common::Function::is_const_fn then
-                    if
-                        diagnostics eval_stack fn_op common::Op::location fn_stack resolved_name.as_str store eval_const_fn !
-                    then
-                        false return
-                    fi
-                    continue
-                fi
-            fi
-            fn_op common::Op::location f"Cannot use `{ident_name}` in const fn evaluation" common::ErrorKind::Syntax diagnostics.record_error_string
-            false return
-        fi
-        fn_op common::Op::location "Unsupported operation in const fn" common::ErrorKind::Syntax diagnostics.record_error
-        false return
-    done
-    eval_stack.pop drop
-    if 0 fn_stack.length == then
-        location f"Const fn `{fn_name}` produced no value" common::ErrorKind::Syntax diagnostics.record_error_string
-        false return
-    fi
-    fn_stack.pop stack.push
-    true
-}
-
-pub fn eval_const_block
+fn read_constant_reference
     parser:mut$Parser
     cursor:mut$TokenCursor
+    token:$common::Token
+-> std::Option[constant_eval::EvalValue] {
+    token.value.as_str cursor.resolve_name = name
+    if
+        name.as_str parser
+            .store
+            .constants
+            .get_str std::Option::Some(found) is
+    then
+        if
+            token
+                .location
+                .file
+                .as_str name.as_str parser.store.is_private_from
+        then
+            token.location f"Constant `{token.value}` is private" common::ErrorKind::InvalidScope parser.state.record_error_string
+            std::Option[constant_eval::EvalValue]::None return
+        fi
+        token.location.clone found.typ.clone found.value.clone constant_eval::EvalValue::new std::Option::Some return
+    fi
+    if
+        name.as_str parser
+            .store
+            .get_function
+            .is_some
+        name.as_str parser
+            .store
+            .structs
+            .has_str ||
+        name.as_str parser
+            .store
+            .enums
+            .has_str ||
+        name.as_str parser
+            .store
+            .variables
+            .has_str ||
+    then
+        token.location f"`{token.value}` is not a constant" common::ErrorKind::TypeMismatch parser.state.record_error_string
+    elif
+        name.as_str parser
+            .store
+            .failed_constants
+            .has_str
+        token
+            .location
+            .file
+            .as_str name.as_str parser.store.is_private_from &&
+    then
+        token.location f"Constant `{token.value}` is private" common::ErrorKind::InvalidScope parser.state.record_error_string
+    elif
+        name.as_str parser
+            .store
+            .failed_constants
+            .has_str token.value.as_str cursor.names.has_str ||
+    then
+        token.location f"Constant `{token.value}` is unavailable" common::ErrorKind::UndefinedName parser.state.record_error_string
+    else
+        token.location f"Unknown constant `{token.value}`" common::ErrorKind::UndefinedName parser.state.record_error_string
+    fi
+    std::Option[constant_eval::EvalValue]::None
+}
+
+fn evaluate_bounded_block
+    parser:mut$Parser
+    cursor:mut$TokenCursor
+    annotation:std::Option[common::BuiltinType]
     location:$common::Location
--> common::ConstantValue {
+-> std::Option[constant_eval::EvalValue] {
     fallback_token parser.state "{" cursor expect_token_value.unwrap_or drop
-    std::List[common::ConstantValue]::new = stack
-    std::List[std::String]::new = eval_stack
-    while true do
-        cursor.pop = tok_opt
-        if tok_opt.is_none then
-            location "Unclosed const block expression" common::ErrorKind::Syntax parser.state.record_error
-            parser.state.mark_output_unusable
-            0 common::IntegerLiteral::from_int common::ConstantValue::Int return
+    std::List[constant_eval::EvalValue]::new = stack
+    while cursor.is_finished ! do
+        cursor.pop.unwrap = token
+        if "}" token.value.as_str == then
+            if 1 stack.length != then
+                token.location f"Constant block must leave exactly one value, got {stack.length}" common::ErrorKind::Syntax parser.state.record_error_string
+                std::Option[constant_eval::EvalValue]::None return
+            fi
+            stack.pop std::Option::Some return
         fi
-        tok_opt.unwrap = tok
-        if "}" tok common::Token::value.as_str == then
-            break
-        fi
-        if common::TokenKind::Comment tok common::Token::kind == then
+        if common::TokenKind::Comment token.kind == common::TokenKind::Newline token.kind == || then
             continue
         fi
-        if common::TokenKind::Newline tok common::Token::kind == then
+        if token.kind common::TokenKind::Literal == then
+            token.location.clone std::Option[common::BuiltinType]::None token.value.as_str parse_literal_to_constant_value constant_eval::EvalValue::new stack.push
             continue
         fi
-        if common::TokenKind::Literal tok common::Token::kind == then
-            tok common::Token::value.as_str parse_literal_to_constant_value stack.push
-            continue
-        fi
-        if common::TokenKind::Operator tok common::Token::kind == then
-            tok common::Token::value.as_str common::operator_from_str = op_kind_opt
-            if op_kind_opt std::Option::Some(op_kind) is then
-                parser.state.diagnostics tok common::Token::location op_kind stack const_eval_apply_operator
+        parser
+            .state
+            .diagnostics
+            .error_count = errors_before_intrinsic
+        if
+            parser.state.diagnostics token.location token.value.as_str stack constant_eval::apply_stack_intrinsic
+        then
+            if
+                parser
+                    .state
+                    .diagnostics
+                    .error_count errors_before_intrinsic <
+            then
+                std::Option[constant_eval::EvalValue]::None return
             fi
             continue
         fi
-        if common::TokenKind::Identifier tok common::Token::kind == then
-            tok common::Token::value.as_str cursor.resolve_name = resolved_ident
-            resolved_ident.as_str = ident: $str
-            ident parser
-                .store
-                .constants
-                .get_str = c_opt
-            if c_opt std::Option::Some(casa_const) is then
-                casa_const common::Constant::value.clone stack.push
+        if token.kind common::TokenKind::Operator == then
+            if token.value.as_str common::operator_from_str std::Option::Some(operator) is then
+                if
+                    parser.state.diagnostics token.location annotation.clone operator stack constant_eval::apply_operator !
+                then
+                    std::Option[constant_eval::EvalValue]::None return
+                fi
                 continue
             fi
-            ident parser.store.get_function = f_opt
-            if f_opt std::Option::Some(function) is then
-                if function common::Function::is_const_fn then
+        fi
+        if token.kind common::TokenKind::Identifier == then
+            if token cursor parser read_constant_reference std::Option::Some(value) is then
+                value stack.push
+                continue
+            fi
+            std::Option[constant_eval::EvalValue]::None return
+        fi
+        token.location f"Unsupported token `{token.value}` in constant block" common::ErrorKind::Syntax parser.state.record_error_string
+        std::Option[constant_eval::EvalValue]::None return
+    done
+    location "Unclosed constant block" common::ErrorKind::Syntax parser.state.record_error
+    std::Option[constant_eval::EvalValue]::None
+}
+
+impl Parser {
+    fn evaluate_constant_declaration
+        self:mut$Parser
+        cursor:mut$TokenCursor
+        declaration:$grammar::DeclarationSyntax
+    {
+        declaration.first_token = cursor.pos
+        cursor.pop.unwrap = keyword
+        cursor.pop.unwrap = name_token
+        name_token.value.as_str cursor.resolve_name = name
+        std::Option[common::BuiltinType]::None = annotation
+        if cursor.peek std::Option::Some(next) is then
+            if ":" next.value.as_str == then
+                cursor.pop drop
+                self.state cursor parse_type_ast = annotation_type
+                if annotation_type common::Type::Builtin(builtin) is then
                     if
-                        parser.state.diagnostics eval_stack tok common::Token::location stack ident parser.store eval_const_fn !
+                        builtin.is_integer builtin.is_float ||
+                        builtin common::BuiltinType::Bool == ||
+                        builtin common::BuiltinType::Char == ||
+                        builtin common::BuiltinType::Str == ||
                     then
-                        0 common::IntegerLiteral::from_int common::ConstantValue::Int return
+                        builtin std::Option::Some = annotation
+                    else
+                        name_token.location f"Unsupported constant type `{builtin.format}`" common::ErrorKind::TypeMismatch self.state.record_error_string
+                        return
                     fi
-                    continue
+                else
+                    name_token.location "Constant annotation must name a primitive value type" common::ErrorKind::TypeMismatch self.state.record_error
+                    return
                 fi
             fi
-            tok common::Token::location f"Cannot use `{ident}` in const block expression" common::ErrorKind::Syntax parser.state.record_error_string
         fi
-        if common::TokenKind::Keyword tok common::Token::kind == then
-            tok common::Token::location "Control flow is not allowed in const block expressions" common::ErrorKind::Syntax parser.state.record_error
+        if cursor.pop std::Option::Some(value_token) is then
+            false = block
+            std::Option[constant_eval::EvalValue]::None = value
+            if "{" value_token.value.as_str == then
+                true = block
+                cursor.retreat
+                value_token.location annotation.clone cursor self evaluate_bounded_block = value
+            elif value_token.kind common::TokenKind::Literal == then
+                value_token.location.clone std::Option[common::BuiltinType]::None value_token.value.as_str parse_literal_to_constant_value constant_eval::EvalValue::new std::Option::Some = value
+            elif value_token.kind common::TokenKind::Identifier == then
+                value_token cursor self read_constant_reference = value
+            else
+                value_token.location "Expected a literal, constant name, or bounded block" common::ErrorKind::Syntax self.state.record_error
+                return
+            fi
+            if value std::Option::Some(initializer) is then
+                if
+                    self.state.diagnostics name_token.location block annotation.clone initializer constant_eval::constrain std::Option::Some(checked) is
+                then
+                    if
+                        name.as_str self
+                            .store
+                            .constants
+                            .has_str
+                    then
+                        name_token.location f"Constant `{name_token.value}` is already defined" common::ErrorKind::DuplicateName self.state.record_error_string
+                        return
+                    fi
+                    name_token.location.clone checked.typ.clone checked.value.clone name.clone common::Constant = constant
+                    constant.clone name.clone cursor.constants.set
+                    constant name.clone self.put_constant
+                fi
+            fi
+        else
+            keyword.location "Constant declaration requires an initializer" common::ErrorKind::Syntax self.state.record_error
         fi
-        tok common::Token::location f"Unexpected token in const block expression: `{tok common::Token::value.as_str}`" common::ErrorKind::Syntax parser.state.record_error_string
-    done
-    if 0 stack.length == then
-        location "Const block expression produced no value" common::ErrorKind::Syntax parser.state.record_error
-        0 common::IntegerLiteral::from_int common::ConstantValue::Int return
-    fi
-    stack.pop
+    }
 }
 
 # ============================================================================
@@ -6514,135 +6229,22 @@ impl Parser {
         fallback_token self.state common::TokenKind::Identifier cursor expect_token_kind.unwrap_or drop
         token cursor self.parse_global_initializer drop
     }
-    # const
+    # Bounded constants are elaborated after module discovery and before headers.
     fn handle_keyword_const
         self:mut$Parser
         token:$common::Token
         cursor:mut$TokenCursor
         function_name:$str
     {
-        self token common::Token::location "Constants" function_name require_global_scope
-        # const fn is a compile-time evaluable function
-        cursor.peek = const_next_opt
-        if const_next_opt std::Option::Some(const_next) is then
-            if "fn" const_next common::Token::value.as_str == then
-                cursor self parse_function = function
-                true function common::Function::set_is_const_fn
-                self.state.diagnostics function validate_const_fn_body
-                if
-                    function common::Function::name.as_str self
-                        .store
-                        .get_function
-                        .is_some
-                then
-                    function common::Function::location f"Identifier `{function common::Function::name}` is already defined" common::ErrorKind::DuplicateName self.state.record_error_string
-                fi
-                function common::Function::name.clone = const_function_name
-                function const_function_name.clone self.put_function
+        self token.location "Constants" function_name require_global_scope
+        if cursor.peek std::Option::Some(next) is then
+            if "fn" next.value.as_str == then
+                cursor self parse_function drop
+                token.location "`const fn` was removed; use `fn` for runtime calls and a bounded `const` block for constant values" common::ErrorKind::Syntax self.state.record_error
                 return
             fi
         fi
-        fallback_token self.state common::TokenKind::Identifier cursor expect_token_kind.unwrap_or = const_name_token
-        const_name_token common::Token::value.as_str cursor.resolve_name = const_name
-        if
-            const_name self
-                .store
-                .constants
-                .get
-                .is_some
-        then
-            token common::Token::location f"Constant `{const_name}` is already defined" common::ErrorKind::DuplicateName self.state.record_error_string
-        fi
-        if
-            const_name.as_str self
-                .store
-                .get_function
-                .is_some
-        then
-            token common::Token::location f"Constant `{const_name}` conflicts with an existing function" common::ErrorKind::DuplicateName self.state.record_error_string
-        fi
-        if
-            const_name self
-                .store
-                .variables
-                .get
-                .is_some
-        then
-            token common::Token::location f"Constant `{const_name}` conflicts with an existing variable" common::ErrorKind::DuplicateName self.state.record_error_string
-        fi
-        if
-            const_name self
-                .store
-                .structs
-                .get
-                .is_some
-        then
-            token common::Token::location f"Constant `{const_name}` conflicts with an existing struct" common::ErrorKind::DuplicateName self.state.record_error_string
-        fi
-        if
-            const_name self
-                .store
-                .enums
-                .get
-                .is_some
-        then
-            token common::Token::location f"Constant `{const_name}` conflicts with an existing enum" common::ErrorKind::DuplicateName self.state.record_error_string
-        fi
-        cursor.pop = const_value_token_opt
-        if const_value_token_opt.is_none then
-            token common::Token::location "Expected a literal value, block expression, or constant name after constant name" common::ErrorKind::Syntax self.state.record_error
-        fi
-        const_value_token_opt.unwrap = const_value_token
-        if "{" const_value_token common::Token::value.as_str == then
-            cursor.retreat
-            token common::Token::location cursor self eval_const_block
-            = const_block_val
-            token common::Token::location.clone const_block_val const_name.clone common::Constant = casa_const
-            casa_const const_name self.put_constant
-        elif common::TokenKind::Literal const_value_token common::Token::kind == then
-            const_value_token common::Token::value.as_str parse_literal_to_constant_value = const_lit_val
-            token common::Token::location.clone const_lit_val const_name.clone common::Constant = casa_const
-            casa_const const_name self.put_constant
-        elif common::TokenKind::Identifier const_value_token common::Token::kind == then
-            const_value_token common::Token::value.as_str cursor.resolve_name = const_ref_name
-            const_ref_name self
-                .store
-                .constants
-                .get = const_ref_opt
-            if const_ref_opt std::Option::Some(const_ref) is then
-                token common::Token::location.clone const_ref common::Constant::value.clone const_name.clone common::Constant
-                = casa_const
-                casa_const const_name self.put_constant
-            elif
-                const_ref_name.as_str self
-                    .store
-                    .get_function
-                    .is_some
-            then
-                token common::Token::location f"Cannot use `{const_ref_name}` as a constant value; it is not a constant" common::ErrorKind::Syntax self.state.record_error_string
-            elif
-                const_ref_name self
-                    .store
-                    .structs
-                    .get
-                    .is_some
-            then
-                token common::Token::location f"Cannot use `{const_ref_name}` as a constant value; it is not a constant" common::ErrorKind::Syntax self.state.record_error_string
-            elif
-                const_ref_name self
-                    .store
-                    .enums
-                    .get
-                    .is_some
-            then
-                token common::Token::location f"Cannot use `{const_ref_name}` as a constant value; it is not a constant" common::ErrorKind::Syntax self.state.record_error_string
-            else
-                token common::Token::location f"Undefined constant `{const_ref_name}` referenced in constant `{const_name}`" common::ErrorKind::Syntax self.state.record_error_string
-            fi
-        else
-            token common::Token::location f"Expected a literal value, block expression, or constant name for constant `{const_name}`" common::ErrorKind::Syntax self.state.record_error_string
-        fi
-        return
+        token.location "Constant declaration was not elaborated" common::ErrorKind::Syntax self.state.record_error
     }
 }
 
@@ -7246,6 +6848,14 @@ pub fn parse_ops parser:mut$Parser tokens:std::List[common::Token] -> std::List[
     fi
     tokens TokenCursor::new = cursor
     parser
+        .store
+        .constants
+        .clone = cursor.constants
+    parser
+        .store
+        .failed_constants
+        .clone = cursor.failed_constants
+    parser
         .current_module
         .names
         .clone = cursor.names
@@ -7604,6 +7214,9 @@ pub fn resolve_array_identifiers
             elif
                 rai_name.as_str store.constants.get_str = rai_const_opt rai_const_opt std::Option::Some(rai_const) is
             then
+                if rai_const.typ std::Option::Some(builtin) is then
+                    builtin common::Type::Builtin std::Option::Some = rai_item.type_hint
+                fi
                 rai_const common::Constant::value.clone = rai_const_value
                 rai_const_value match
                     common::ConstantValue::Int(rai_const_int) => {
@@ -7681,7 +7294,8 @@ impl Parser {
         self
             .state
             .diagnostics
-            .error_count = error_count_before
+            .error_count = errors_before
+        self.state.constant_errors = constant_errors_before
         self.sources import_path.clone lexer::lex_file = import_result
         error::Diagnostics::new = diagnostics
         std::List[common::Token]::new = tokens
@@ -7694,7 +7308,7 @@ impl Parser {
             .diagnostics
             .merge
         if
-            error_count_before self
+            errors_before self
                 .state
                 .diagnostics
                 .error_count >
@@ -7717,11 +7331,7 @@ impl Parser {
         module_prefix tokens self.prepare_module
         tokens self parse_ops = imported_ops
         if
-            error_count_before self
-                .state
-                .diagnostics
-                .error_count >
-            self.state.has_usable_output ! ||
+            self.state.has_usable_output ! constant_errors_before errors_before self.state.has_nonconstant_errors_since ||
         then
             self.import_stack.pop drop
             self.module_contexts.pop drop
@@ -7754,11 +7364,7 @@ impl Parser {
         self.import_stack.pop drop
         self.module_contexts.pop = module_context
         if
-            resolved_ops_opt.is_none
-            error_count_before self
-                .state
-                .diagnostics
-                .error_count > ||
+            resolved_ops_opt.is_none constant_errors_before errors_before self.state.has_nonconstant_errors_since ||
         then
             false std::Result::Ok
             return
@@ -8021,13 +7627,6 @@ pub fn resolve_identifiers
                 continue
             fi
             resolve_errors allow_root_local_capture ident.as_str current_op function store resolve_plain_identifier
-            if current_op.value common::OpValue::FnCall(resolved_fn_name) is then
-                current_op.location.clone = fold_location
-                resolved_fn_name.clone = fold_function_name
-                current_op op_index 1 - ops.set
-                diagnostics fold_location fold_function_name.as_str op_index ops store try_fold_const_fn_call = op_index
-                continue
-            fi
             current_op op_index 1 - ops.set
             continue
         fi
@@ -8480,6 +8079,9 @@ pub fn resolve_plain_identifier
 
     ident store.constants.get_str = const_opt
     if const_opt std::Option::Some(casa_const) is then
+        if casa_const.typ std::Option::Some(builtin) is then
+            builtin common::Type::Builtin std::Option::Some = op.type_hint
+        fi
         casa_const common::Constant::value.clone = const_value
         const_value match
             common::ConstantValue::Int(const_int) => {
@@ -8534,6 +8136,9 @@ pub fn resolve_plain_identifier
     else
         f"Identifier `{ident}` is not defined"
     fi = message
+    if ident store.failed_constants.has_str then
+        f"Constant `{ident}` is unavailable because its declaration failed" = message
+    fi
     op.location.clone message common::ErrorKind::UndefinedName error::CasaError::new resolve_errors.push
 }
 
@@ -8755,20 +8360,18 @@ impl Parser {
             self.state.has_usable_output imports_usable && = imports_usable
             0 self.state.diagnostics take_diagnostics_since diagnostics.merge
         done
-        diagnostics = self.state.diagnostics
         if imports_usable ! then
+            diagnostics.clone self
+                .state
+                .diagnostics
+                .merge
             self.state.mark_output_unusable
         fi
         while declaration_index parsed.declarations.length > do
             names module_prefix declaration_index parsed.declarations.get self.bind_declaration
             1 += declaration_index
         done
-        if
-            self
-                .state
-                .diagnostics
-                .has_errors self.state.has_usable_output ! ||
-        then
+        if self.state.has_usable_output ! then
             lexical_diagnostics.clone self
                 .state
                 .diagnostics
@@ -8791,6 +8394,15 @@ impl Parser {
                 .diagnostics
                 .has_errors
         then
+            0 self.state.diagnostics take_diagnostics_since = qualified_diagnostics
+            diagnostics.clone self
+                .state
+                .diagnostics
+                .merge
+            qualified_diagnostics self
+                .state
+                .diagnostics
+                .merge
             lexical_diagnostics.clone self
                 .state
                 .diagnostics
@@ -8802,8 +8414,81 @@ impl Parser {
             self.state.mark_output_unusable return
         fi
         file.as_str names self.store.record_source_names
-        names = self.current_module_mut.names
+        names.clone = self.current_module_mut.names
+        tokens TokenCursor::new = constant_cursor
+        self
+            .store
+            .constants
+            .clone = constant_cursor.constants
+        self
+            .store
+            .failed_constants
+            .clone = constant_cursor.failed_constants
+        self.source_prefixes constant_cursor.copy_module_prefixes
+        0 = import_index: u64
+        for declaration in parsed.declarations.iter do
+            while import_index parsed.imports.length > do
+                import_index parsed.imports.get = preceding_import
+                if
+                    declaration
+                        .location
+                        .span
+                        .offset preceding_import
+                        .location
+                        .span
+                        .offset < !
+                then
+                    break
+                fi
+                std::String::new = import_name
+                if preceding_import.alias std::Option::Some(alias) is then
+                    alias.clone = import_name
+                else
+                    preceding_import.specifier.clone = import_name
+                fi
+                if import_name.as_str names.get_str std::Option::Some(binding) is then
+                    binding.clone import_name.clone constant_cursor.names.set
+                fi
+                1 += import_index
+            done
+            if declaration.name.as_str names.get_str std::Option::Some(binding) is then
+                binding.clone declaration.name.clone constant_cursor.names.set
+            fi
+            if "const" declaration.kind.as_str == then
+                declaration.after_token declaration.first_token.to_str self
+                    .current_module_mut
+                    .header_ends
+                    .set
+                self
+                    .state
+                    .diagnostics
+                    .error_count = errors_before_constant
+                declaration constant_cursor self.evaluate_constant_declaration
+                self
+                    .state
+                    .diagnostics
+                    .error_count errors_before_constant - self.state.constant_errors + = self.state.constant_errors
+                declaration.name.as_str constant_cursor.resolve_name = constant_name
+                if
+                    constant_name.as_str self
+                        .store
+                        .constants
+                        .has_str !
+                then
+                    constant_name.as_str self.register_private_declaration
+                    constant_name.clone self
+                        .store
+                        .failed_constants
+                        .add
+                    constant_name.clone constant_cursor.failed_constants.add
+                fi
+            fi
+        done
         tokens parsed.declarations self.collect_headers
+        diagnostics self
+            .state
+            .diagnostics
+            .merge
         lexical_diagnostics.clone self
             .state
             .diagnostics
@@ -8823,6 +8508,14 @@ impl Parser {
         tokens:$std::List[common::Token]
     {
         tokens TokenCursor::new = cursor
+        self
+            .store
+            .constants
+            .clone = cursor.constants
+        self
+            .store
+            .failed_constants
+            .clone = cursor.failed_constants
         self
             .current_module
             .names
