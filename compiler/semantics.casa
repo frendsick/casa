@@ -1094,6 +1094,8 @@ struct IfContext {
     conditional_moves:       std::List[std::String]
     current_branch_label:    std::String
     current_branch_location: common::Location
+    entry_facts_available:   bool
+    branches_have_facts:     bool
 }
 
 struct WhileContext {
@@ -1181,6 +1183,7 @@ impl BranchFrame {
 
 impl IfContext {
     pub fn new -> IfContext {
+        true true
         common::empty_location
         "".to_str
         std::List[std::String]::new
@@ -1283,11 +1286,13 @@ struct TypeChecker {
     initialized_parameters:     std::Set[std::String]
     pending_lambdas:            std::Map[i64 std::String]
     active_calls:               std::Set[std::String]
+    checks:                     mut$SemanticChecks
     clone_bodies:               bool
     infer_parameters:           bool
     ordered_facts:              std::List[SemanticDependency]
     seen_dependencies:          std::Set[std::String]
     diagnostics:                mut$error::Diagnostics
+    facts_available:            bool
 }
 
 pub struct FunctionSemantics {
@@ -1312,17 +1317,163 @@ impl FunctionSemantics {
     }
 }
 
+enum FunctionCheckStatus derives std::Copy {
+    Checking
+    Checked
+    Rejected
+}
+
+struct FactBranch {
+    entry_available:    bool
+    branches_available: bool
+}
+
+struct SemanticChecks {
+    functions:           std::Map[std::String FunctionCheckStatus]
+    verified_operations: std::Set[i64]
+}
+
+impl SemanticChecks {
+    fn has_rejected_target self:$SemanticChecks operation:$common::Op -> bool {
+        operation.value match
+            common::OpValue::FnCall(name) => name.as_str self.function_is_rejected
+            common::OpValue::FnPush(name) => name.as_str self.function_is_rejected
+            common::OpValue::ExprGroup(items) => items self.body_has_rejected_target
+            common::OpValue::PushArray(items) => items self.body_has_rejected_target
+            common::OpValue::MatchArm(arm) => arm.guard_ops self.body_has_rejected_target
+            _ => false
+        end
+    }
+
+    fn function_is_rejected self:$SemanticChecks name:$str -> bool {
+        if name self.functions.get_str std::Option::Some(status) is then
+            status FunctionCheckStatus::Rejected is return
+        fi
+        false
+    }
+
+    fn body_has_rejected_target self:$SemanticChecks operations:$std::List[common::Op] -> bool {
+        for operation in operations.iter do
+            if operation self.has_rejected_target then
+                true return
+            fi
+        done
+        false
+    }
+
+    # Recursion can use an active signature. Settle those obligations before publishing facts.
+    fn settle_function_rejections self:mut$SemanticChecks store:$common::SymbolStore {
+        store.get_function_names = names
+        true = changed
+        while changed do
+            false = changed
+            for name in names.iter do
+                if name.as_str self.function_is_rejected then
+                    continue
+                fi
+                name.as_str store.get_function.unwrap = function
+                if function.ops self.body_has_rejected_target then
+                    FunctionCheckStatus::Rejected name.clone self.functions.set
+                    true = changed
+                fi
+            done
+        done
+    }
+
+    # Only propagate settled failures. Names, types and stack effects are already selected.
+    fn settle_operation_facts
+        self:mut$SemanticChecks
+        operations:$std::List[common::Op]
+        available:bool
+    -> bool {
+        std::List[FactBranch]::new = branches
+        for operation in operations.iter do
+            operation.value common::OpValue::IfCondition is
+            operation.value common::OpValue::IfElse is ||
+            operation.value common::OpValue::IfElif is ||
+            operation.value common::OpValue::IfEnd is || = branch_boundary
+            if branch_boundary branches.is_empty && then
+                operation.id self.verified_operations.remove
+                false = available
+                continue
+            fi
+            operation.value match
+                common::OpValue::IfStart => true available FactBranch branches.push
+                common::OpValue::IfCondition => {
+                    branches.pop = branch
+                    available branch.entry_available && = branch.entry_available
+                    branch branches.push
+                }
+                common::OpValue::IfElse => {
+                    branches.pop = branch
+                    available branch.branches_available && = branch.branches_available
+                    branch.entry_available = available
+                    branch branches.push
+                }
+                common::OpValue::IfElif => {
+                    branches.pop = branch
+                    available branch.branches_available && = branch.branches_available
+                    branch.entry_available = available
+                    branch branches.push
+                }
+                common::OpValue::IfEnd => {
+                    branches.pop = branch
+                    available branch.entry_available && branch.branches_available && = available
+                }
+                common::OpValue::ExprGroup(items) => available items self.settle_operation_facts = available
+                common::OpValue::PushArray(items) => available items self.settle_operation_facts = available
+                common::OpValue::MatchArm(arm) => available arm.guard_ops self.settle_operation_facts = available
+                _ => {
+                }
+            end
+            if operation.value common::OpValue::Rejected is operation self.has_rejected_target || then
+                false = available
+            fi
+            if available ! then
+                operation.id self.verified_operations.remove
+            fi
+        done
+        available
+    }
+
+    fn new store:$common::SymbolStore -> SemanticChecks {
+        std::Map[std::String FunctionCheckStatus]::new = functions
+        # Already checked generated accessors and specialized bodies enter at the adapter boundary.
+        for name in store.get_function_names.iter do
+            if
+                name.as_str store
+                    .get_function
+                    .unwrap
+                    .is_typechecked
+            then
+                FunctionCheckStatus::Checked name.clone functions.set
+            fi
+        done
+        std::Set[i64]::new functions SemanticChecks
+    }
+}
+
 pub struct SemanticSession {
     store:        common::SymbolStore
     clone_bodies: bool
+    checks:       SemanticChecks
 }
 
 impl SemanticSession {
     pub fn new store:$common::SymbolStore -> SemanticSession {
-        true store.clone_for_semantics SemanticSession
+        store SemanticChecks::new true store.clone_for_semantics SemanticSession
     }
 
-    pub fn from_store store:common::SymbolStore -> SemanticSession { false store SemanticSession }
+    pub fn from_store store:common::SymbolStore -> SemanticSession {
+        store SemanticChecks::new false store SemanticSession
+    }
+
+    pub fn has_checked_function self:$SemanticSession name:$str -> bool {
+        name self
+            .checks
+            .functions
+            .has_str
+    }
 
     pub fn clone_function self:$SemanticSession name:$str -> std::Option[common::Function] {
         if name self.store.get_function std::Option::Some(function) is then
@@ -1333,6 +1484,25 @@ impl SemanticSession {
 
     pub fn commit_checked_function self:mut$SemanticSession function:common::Function {
         function self.store.restore_function
+    }
+
+    pub fn into_checked_parts
+        self:SemanticSession
+        root_operations:$std::List[common::Op]
+    -> common::SymbolStore std::Set[i64] {
+        self match
+            SemanticSession { store: store checks: checks } => {
+                store checks.settle_function_rejections
+                true root_operations checks.settle_operation_facts drop
+                for name in store.get_function_names.iter do
+                    true name.as_str store
+                        .get_function
+                        .unwrap
+                        .ops checks.settle_operation_facts drop
+                done
+                store checks.verified_operations.clone
+            }
+        end
     }
 
     pub fn into_store self:SemanticSession -> common::SymbolStore {
@@ -1399,14 +1569,17 @@ impl TypeChecker {
         store:mut$common::SymbolStore
         diagnostics:mut$error::Diagnostics
         active_calls:std::Set[std::String]
+        checks:mut$SemanticChecks
         clone_bodies:bool
         infer_parameters:bool
     -> TypeChecker {
+        true # facts_available
         diagnostics # diagnostics
         std::Set[std::String]::new # seen_dependencies
         std::List[SemanticDependency]::new # ordered_facts
         infer_parameters # infer_parameters
         clone_bodies # clone_bodies
+        checks # checks
         active_calls # active_calls
         std::Map[i64 std::String]::new # pending_lambdas
         std::Set[std::String]::new # initialized_parameters
@@ -1632,6 +1805,7 @@ pub fn resolve_default_literals ops:mut$std::List[common::Op] diagnostics:mut$er
     while default_op_index ops.length > do
         default_op_index ops.get_mut = op
         1 += default_op_index
+        diagnostics.error_count = errors_before_literal
         op.value.clone = op_value
         if op_value common::OpValue::PushInt is then
             op.type_hint.clone = target_opt
@@ -1665,6 +1839,9 @@ pub fn resolve_default_literals ops:mut$std::List[common::Op] diagnostics:mut$er
             arm.clone = resolved_arm
             diagnostics resolved_arm.guard_ops resolve_default_literals
             resolved_arm common::OpValue::MatchArm op common::Op::set_value
+        fi
+        if errors_before_literal diagnostics.error_count != then
+            common::OpValue::Rejected op common::Op::set_value
         fi
     done
 }
@@ -5262,8 +5439,9 @@ impl TypeChecker {
         trait_name tc.add_symbol_dependency
         tc.store function_opt type1_t rules::make_type_borrow_option cmp_value rules::analyze_operation
         = semantics
+        semantics tc.record_decision_dependencies
         trait_name.to_str common::GenericType::new common::Type::Generic = trait_type
-        if tc.diagnostics tc.store function_opt trait_type type1_t type_satisfies_trait ! then
+        if tc.checks tc.diagnostics tc.store function_opt trait_type type1_t check_trait_satisfaction ! then
             cmp_value comparison_op_str = cmp_str
             op common::Op::location f"Type `{type1}` cannot be compared with `{cmp_str}`: does not satisfy trait `{trait_name}`" common::ErrorKind::MissingTraitMethod tc.diagnostics.record_error_string
             common::make_bool_type tc.stack_push_type
@@ -5490,6 +5668,7 @@ impl TypeChecker {
         fi
         tc.store function_opt std::Option[common::Type]::None op.value
         rules::analyze_operation = semantics
+        semantics tc.record_decision_dependencies
         if semantics.stack_effect std::Option::Some(stored_effect) is then
             stored_effect.clone = effect
             # Raw stores require an explicit conversion instead of binding `T` to
@@ -5678,6 +5857,7 @@ impl TypeChecker {
         fi
         tc.store function_opt std::Option[common::Type]::None op.value
         rules::analyze_operation = semantics
+        semantics tc.record_decision_dependencies
         if semantics.into_stack_effect std::Option::Some(effect) is then
             function_opt std::Option[common::Type]::None "" effect
             tc.apply_stack_effect
@@ -6318,6 +6498,7 @@ impl TypeChecker {
         fi
         tc.store function_opt receiver rules::make_type_borrow_option op.value rules::analyze_operation
         = semantics
+        semantics tc.record_decision_dependencies
         if semantics.into_method std::Option::Some(method) is then
             method.stack_effect.clone = effect
             method.method_name.clone = method_name
@@ -6356,6 +6537,7 @@ impl TypeChecker {
         if op.value.clone common::OpValue::TraitMethodRef(call) is then
             tc.store function_opt call.receiver rules::make_type_borrow_option op.value rules::analyze_operation
             = semantics
+            semantics tc.record_decision_dependencies
             if semantics.into_method std::Option::Some(method) is then
                 method.stack_effect.clone = effect
                 effect common::stack_effect_to_function_type tc.stack_push_type
@@ -6490,6 +6672,7 @@ impl TypeChecker {
         op.value.clone = if_value
         if if_value common::OpValue::IfStart is then
             IfContext::new = if_ctx
+            tc.facts_available = if_ctx.entry_facts_available
             tc.path_continues = if_ctx.entry_continues
             op common::Op::location.clone if_ctx IfContext::set_current_branch_location
             if_ctx BranchFrame::BranchIf = if_frame
@@ -6500,6 +6683,7 @@ impl TypeChecker {
             true = tc.in_branch_condition
         elif if_value common::OpValue::IfCondition is then
             false = tc.in_branch_condition
+            tc.diagnostics.error_count = errors_before_condition
             if tc.path_continues then
                 common::make_bool_type tc.expect_type_t
             fi
@@ -6510,6 +6694,8 @@ impl TypeChecker {
                 .branched_stacks
                 .pop
                 .into_if = if_ctx
+            tc.facts_available errors_before_condition tc.diagnostics.error_count == &&
+            if_ctx.entry_facts_available && = if_ctx.entry_facts_available
             tc.current_ownership_flow = if_ctx.flow_before
             for name in if_ctx.conditional_moves.iter do
                 name.as_str if_ctx.flow_before.remove_move
@@ -6538,6 +6724,8 @@ impl TypeChecker {
                 .branched_stacks
                 .pop
                 .into_if = if_ctx
+            tc.facts_available if_ctx.branches_have_facts && = if_ctx.branches_have_facts
+            tc.diagnostics.error_count = errors_before_completion
             if tc.path_continues then
                 if_ctx.before tc.materialize_branch_results
             fi
@@ -6549,6 +6737,9 @@ impl TypeChecker {
                 if_ctx op tc.merge_if_branch_stack
                 true = if_ctx.has_continuing_branch
             fi
+            errors_before_completion tc.diagnostics.error_count == if_ctx.branches_have_facts &&
+            = if_ctx.branches_have_facts
+            if_ctx.entry_facts_available = tc.facts_available
             if_ctx.flow_before tc.restore_ownership_flow
             if_ctx.entry_continues = tc.path_continues
             if if_value common::OpValue::IfElse is then
@@ -6563,6 +6754,8 @@ impl TypeChecker {
                 .branched_stacks
                 .pop
                 .into_if = if_ctx
+            tc.facts_available if_ctx.branches_have_facts && = if_ctx.branches_have_facts
+            tc.diagnostics.error_count = errors_before_completion
             if tc.path_continues then
                 if_ctx.before tc.materialize_branch_results
             fi
@@ -6587,6 +6780,8 @@ impl TypeChecker {
                 if_ctx.flow_before tc.restore_ownership_flow
                 if_ctx.before tc.stack.restore
             fi
+            if_ctx.branches_have_facts if_ctx.entry_facts_available &&
+            errors_before_completion tc.diagnostics.error_count == && = tc.facts_available
             if_ctx.has_continuing_branch = tc.path_continues
         fi
     }
@@ -6952,11 +7147,12 @@ pub fn collect_trait_shape_requirements
     fi
 }
 
-pub fn type_has_trait_shape
+fn type_has_trait_shape
     receiver:$common::Type
     trait_type:$common::Type
     store:mut$common::SymbolStore
     diagnostics:mut$error::Diagnostics
+    checks:mut$SemanticChecks
     generic_declaration:bool
 -> bool {
     trait_type.match_base = trait_lookup_name
@@ -6970,7 +7166,7 @@ pub fn type_has_trait_shape
                 if method_semantics.kind rules::MethodSemanticsKind::DefaultMethod is then
                     continue
                 fi
-                false true diagnostics store method_semantics.function_name.as_str ensure_typechecked = fn_opt
+                false true checks diagnostics store method_semantics.function_name.as_str ensure_checked_function = fn_opt
             fi
             if fn_opt.is_none then
                 # Default methods (with a body) don't require a concrete implementation
@@ -7010,6 +7206,18 @@ pub fn type_satisfies_trait
     store:mut$common::SymbolStore
     diagnostics:mut$error::Diagnostics
 -> bool {
+    store SemanticChecks::new = checks
+    checks diagnostics store function_opt trait_type receiver check_trait_satisfaction
+}
+
+fn check_trait_satisfaction
+    receiver:$common::Type
+    trait_type:$common::Type
+    function_opt:mut$std::Option[common::Function]
+    store:mut$common::SymbolStore
+    diagnostics:mut$error::Diagnostics
+    checks:mut$SemanticChecks
+-> bool {
     receiver.clone = receiver_type
     if receiver.borrow_target std::Option::Some(target) is then
         if
@@ -7034,7 +7242,7 @@ pub fn type_satisfies_trait
     if store trait_type receiver_type rules::type_has_satisfying_trait_impl ! then
         false return
     fi
-    false diagnostics store trait_type receiver_type type_has_trait_shape
+    false checks diagnostics store trait_type receiver_type type_has_trait_shape
 }
 
 pub fn find_tparam_index tparams:$std::List[std::String] name:$str -> std::Option[u64] {
@@ -7495,8 +7703,8 @@ impl TypeChecker {
                 tc.store resolved_trait concrete_name.as_str function_opt caller_forwards_trait_bound
                 = forwards_bound
                 if
-                    forwards_bound ! tc.diagnostics tc.store function_opt resolved_trait concrete
-                    type_satisfies_trait ! &&
+                    forwards_bound ! tc.checks tc.diagnostics tc.store function_opt resolved_trait concrete
+                    check_trait_satisfaction ! &&
                 then
                     location f"Type `{concrete_name}` does not satisfy trait `{resolved_trait.format}`"
                     common::ErrorKind::TypeMismatch tc.diagnostics.record_error_string
@@ -7517,12 +7725,7 @@ impl TypeChecker {
         lambda_name:std::String
         expected:std::Option[common::Type]
     {
-        if
-            lambda_name.as_str self
-                .store
-                .functions
-                .remove_str std::Option::Some(lambda) is
-        then
+        if lambda_name.as_str self.store.take_function_for_update std::Option::Some(lambda) is then
             lambda.clone = owned_lambda
             if expected std::Option::Some(expected_type) is then
                 expected_type.clone = callback_type
@@ -7546,13 +7749,10 @@ impl TypeChecker {
                     contextual_effect owned_lambda common::Function::set_stack_effect
                 fi
             fi
-            owned_lambda lambda_name.clone self
-                .store
-                .functions
-                .set
+            owned_lambda self.store.restore_function
             if
-                self.infer_parameters self.clone_bodies self.diagnostics self.store
-                lambda_name.as_str ensure_typechecked std::Option::Some(checked) is
+                self.infer_parameters self.clone_bodies self.checks self.diagnostics self.store
+                lambda_name.as_str ensure_checked_function std::Option::Some(checked) is
             then
                 checked.stack_effect common::stack_effect_to_function_type = lambda_type
                 stack_index self
@@ -7562,6 +7762,8 @@ impl TypeChecker {
                 lambda_type.clone = value.type_value
                 lambda_type type_capability = value.capability
                 std::Option[i64]::None = value.source
+            else
+                false = self.facts_available
             fi
         fi
     }
@@ -8017,8 +8219,8 @@ impl TypeChecker {
     {
         op.value.clone = fn_value
         if fn_value common::OpValue::FnCall(fn_name) is then
-            tc.infer_parameters tc.clone_bodies tc.diagnostics tc.store fn_name.as_str
-            ensure_typechecked = fn_opt
+            tc.infer_parameters tc.clone_bodies tc.checks tc.diagnostics tc.store fn_name.as_str
+            ensure_checked_function = fn_opt
             if fn_opt.is_some then
                 fn_opt.unwrap = function
                 function.is_non_returning = is_non_returning
@@ -8091,6 +8293,8 @@ impl TypeChecker {
                 if is_non_returning then
                     tc.end_path
                 fi
+            else
+                false = tc.facts_available
             fi
         elif fn_value common::OpValue::FnExec is fn_value common::OpValue::FnExecOwned is || then
             tc.stack.peek_callables = executable_callables
@@ -8098,8 +8302,8 @@ impl TypeChecker {
             std::Option[common::StackEffect]::None = callable_effect
             for callable in executable_callables.iter do
                 if
-                    tc.infer_parameters tc.clone_bodies tc.diagnostics tc.store callable.as_str
-                    ensure_typechecked std::Option::Some(checked) is
+                    tc.infer_parameters tc.clone_bodies tc.checks tc.diagnostics tc.store callable.as_str
+                    ensure_checked_function std::Option::Some(checked) is
                 then
                     checked.stack_effect.clone = candidate_effect
                     CallStackLayout::CallableOnTop candidate_effect callable.as_str
@@ -8108,6 +8312,8 @@ impl TypeChecker {
                     if callable_effect.is_none then
                         candidate_effect std::Option::Some = callable_effect
                     fi
+                else
+                    false = tc.facts_available
                 fi
             done
             if callable_effect.clone std::Option::Some(effect) is then
@@ -8204,8 +8410,8 @@ impl TypeChecker {
                 closure_cleanup_origins = pending_value.cleanup_origins
                 return
             fi
-            tc.infer_parameters tc.clone_bodies tc.diagnostics tc.store push_name.as_str
-            ensure_typechecked = push_fn_opt
+            tc.infer_parameters tc.clone_bodies tc.checks tc.diagnostics tc.store push_name.as_str
+            ensure_checked_function = push_fn_opt
             if push_fn_opt.is_some then
                 push_fn_opt.unwrap = push_fn
                 push_fn.into_parts = is_unsafe = effect
@@ -8307,6 +8513,7 @@ impl TypeChecker {
                     closure_cleanup_origins = closure_value.cleanup_origins
                 fi
             else
+                false = tc.facts_available
                 std::List[common::Type]::new std::List[common::Type]::new common::FunctionType common::Type::Function tc.stack_push_type
             fi
         elif fn_value common::OpValue::FnReturn is then
@@ -8491,8 +8698,7 @@ impl TypeChecker {
         "value with trait `Display`".to_str ExpectationContext::Text = tc.current_expect_ctx
         tc.stack_peek_type = peek_t
         peek_t.format = typ
-        tc.store function_opt peek_t rules::make_type_borrow_option op.value rules::analyze_operation = semantics
-        if semantics.resolved_operation std::Option::Some(operation) is then
+        if peek_t rules::primitive_print_operation std::Option::Some(operation) is then
             operation.clone = resolved_operation
             tc.stack_pop_drop
             resolved_operation op common::Op::set_value
@@ -8504,16 +8710,15 @@ impl TypeChecker {
             return
         fi
         common::STD_DISPLAY_TRAIT.to_str common::GenericType::new common::Type::Generic = display_type
-        if tc.diagnostics tc.store function_opt display_type peek_t type_satisfies_trait ! then
+        if
+            tc.checks tc.diagnostics tc.store function_opt display_type peek_t check_trait_satisfaction !
+        then
             op common::Op::location f"Type `{typ}` cannot be printed: does not satisfy trait `Display`" common::ErrorKind::MissingTraitMethod tc.diagnostics.record_error_string
             tc.stack_pop_drop
             return
         fi
-        if semantics.method std::Option::Some(method) is then
-            method.method_name.clone common::OpValue::MethodCall op common::Op::set_value
-        else
-            "to_str".to_str common::OpValue::MethodCall op common::Op::set_value
-        fi
+        common::STD_DISPLAY_TRAIT tc.add_symbol_dependency
+        "to_str".to_str common::OpValue::MethodCall op common::Op::set_value
         function_opt emitted_ops op tc.check_method_call
         op common::Op::location common::OpValue::Print common::Op::new = print_op
         print_op pending_ops.push
@@ -9083,8 +9288,7 @@ impl TypeChecker {
                 op common::pattern_guard_ops = guard_ops
                 self.scope.snapshot = guard_scope
                 self.current_ownership_flow = guard_flow
-                self.infer_parameters
-                self.clone_bodies
+                self.infer_parameters self.clone_bodies self.checks
                 self.active_calls.clone self.diagnostics self.store TypeChecker::new = guard_checker
                 self.current_trait_bounds.clone = guard_checker.current_trait_bounds
                 guard_scope = guard_checker.scope
@@ -9769,11 +9973,12 @@ pub fn get_default_trait_specialization_parts
     fi
 }
 
-pub fn instantiate_default_trait_method
+fn instantiate_default_trait_method
     semantics:rules::MethodSemantics
     receiver:$common::Type
     store:mut$common::SymbolStore
     diagnostics:mut$error::Diagnostics
+    checks:mut$SemanticChecks
 -> std::Option[std::String] {
     semantics.function_name.clone = receiver_key
     if receiver_key.as_str store.has_function then
@@ -9838,8 +10043,8 @@ pub fn instantiate_default_trait_method
                 rules::resolve_method_semantics = infer_method_opt
                 std::Option[CheckedFunction]::None = infer_fn_opt
                 if infer_method_opt std::Option::Some(infer_semantics) is then
-                    false true diagnostics store infer_semantics.function_name.as_str
-                    ensure_typechecked = infer_fn_opt
+                    false true checks diagnostics store infer_semantics.function_name.as_str
+                    ensure_checked_function = infer_fn_opt
                 fi
                 if infer_fn_opt.is_some then
                     infer_fn_opt.unwrap = infer_fn
@@ -9956,7 +10161,7 @@ pub fn instantiate_default_trait_method
     true = synth_fn.is_resolved
     synth_vars synth_fn common::Function::set_variables
     synth_fn store.set_function
-    false true diagnostics store synth_fn_name.as_str ensure_typechecked drop
+    false true checks diagnostics store synth_fn_name.as_str ensure_checked_function drop
 
     synth_fn_name.clone std::Option::Some
 }
@@ -10116,25 +10321,6 @@ impl TypeChecker {
                 op.location "Reserved `drop` methods cannot be called directly; use the `drop` intrinsic" common::ErrorKind::InvalidScope tc.diagnostics.record_error
             fi
             tc.stack_peek_type = receiver
-            f"{receiver.match_base}::{method_name}" = private_method_key
-            if
-                tc.store receiver method_name.as_str rules::find_semantic_method_function
-                std::Option::Some(resolved_method_key) is
-            then
-                if resolved_method_key.as_str "[" str::find 0 <= then
-                    resolved_method_key.clone = private_method_key
-                fi
-            fi
-            if
-                op
-                    .location
-                    .file
-                    .as_str private_method_key.as_str tc.store.is_private_from
-            then
-                op.location f"Method `{private_method_key}` is private"
-                common::ErrorKind::InvalidScope tc.diagnostics.record_error_string
-                return
-            fi
             ValueCapability::Owned = receiver_capability
             if
                 0 tc
@@ -10191,6 +10377,7 @@ impl TypeChecker {
             method_value.clone = analyzed_method_value
             tc.store function_opt lookup_receiver rules::make_type_borrow_option analyzed_method_value
             rules::analyze_operation = semantics
+            semantics tc.record_decision_dependencies
             semantics.into_method match
                 std::Option::Some(method_semantics) => {
                     method_semantics.kind = method_kind
@@ -10215,11 +10402,10 @@ impl TypeChecker {
                         fn_name.as_str tc.add_symbol_dependency
                     fi
                     if
-                        fn_name.as_str "[" str::find 0 <=
                         op
                             .location
                             .file
-                            .as_str fn_name.as_str tc.store.is_private_from &&
+                            .as_str fn_name.as_str tc.store.is_private_from
                     then
                         op.location f"Method `{fn_name}` is private"
                         common::ErrorKind::InvalidScope tc.diagnostics.record_error_string
@@ -10234,14 +10420,14 @@ impl TypeChecker {
                         tc.add_default_method_dependency
                         method_argument_callables method_semantics
                         tc.collect_default_method_return_callables = method_return_callables
-                        tc.diagnostics tc.store default_receiver method_semantics
+                        tc.checks tc.diagnostics tc.store default_receiver method_semantics
                         instantiate_default_trait_method = default_inst_opt
                         if default_inst_opt std::Option::Some(default_name) is then
                             default_name.clone = fn_name
                         fi
                     fi
-                    tc.infer_parameters tc.clone_bodies tc.diagnostics tc.store fn_name.as_str
-                    ensure_typechecked = checked_function_opt
+                    tc.infer_parameters tc.clone_bodies tc.checks tc.diagnostics tc.store fn_name.as_str
+                    ensure_checked_function = checked_function_opt
                     checked_function_opt match
                         std::Option::Some(function) => {
                             function.is_non_returning = is_non_returning
@@ -10353,20 +10539,17 @@ impl TypeChecker {
                 return
             fi
         fi
-        tc.store function_opt fstring_type_t rules::make_type_borrow_option op.value
-        rules::analyze_operation = semantics
         common::STD_DISPLAY_TRAIT.to_str common::GenericType::new common::Type::Generic = display_type
-        if tc.diagnostics tc.store function_opt display_type fstring_type_t type_satisfies_trait ! then
+        if
+            tc.checks tc.diagnostics tc.store function_opt display_type fstring_type_t check_trait_satisfaction !
+        then
             op common::Op::location f"Type `{fstring_type}` cannot be used in f-string: does not satisfy trait `Display`" common::ErrorKind::MissingTraitMethod tc.diagnostics.record_error_string
             tc.stack_pop_drop
             common::make_string_type tc.stack_push_type
             return
         fi
-        if semantics.method std::Option::Some(method) is then
-            method.method_name.clone common::OpValue::MethodCall op common::Op::set_value
-        else
-            "to_str".to_str common::OpValue::MethodCall op common::Op::set_value
-        fi
+        common::STD_DISPLAY_TRAIT tc.add_symbol_dependency
+        "to_str".to_str common::OpValue::MethodCall op common::Op::set_value
         function_opt emitted_ops op tc.check_method_call
     }
 }
@@ -10405,18 +10588,44 @@ fn ensure_typechecked
             existing checked_function_summary std::Option::Some return
         fi
     fi
+    store SemanticChecks::new = checks
+    infer_parameters clone_body checks diagnostics store function_name ensure_checked_function
+}
+
+fn ensure_checked_function
+    function_name:$str
+    store:mut$common::SymbolStore
+    diagnostics:mut$error::Diagnostics
+    checks:mut$SemanticChecks
+    clone_body:bool
+    infer_parameters:bool
+-> std::Option[CheckedFunction] {
+    if function_name store.get_function std::Option::Some(existing) is then
+        if function_name checks.functions.get_str std::Option::Some(status) is then
+            if status FunctionCheckStatus::Rejected is then
+                existing.location f"Function `{function_name}` did not pass checking"
+                common::ErrorKind::TypeMismatch diagnostics.record_error_string
+                std::Option[CheckedFunction]::None return
+            fi
+            existing checked_function_summary std::Option::Some return
+        fi
+        if existing.extern_symbol.is_some then
+            existing checked_function_summary std::Option::Some return
+        fi
+    fi
     function_name store.take_function_for_typecheck = function_opt
     if function_opt.is_none then
         std::Option[CheckedFunction]::None return
     fi
+    FunctionCheckStatus::Checking function_name.to_str checks.functions.set
     function_opt.unwrap = source_function
     clone_body source_function prepare_owned_function_for_semantics = function
     function.split_body = function_ops = function
     function std::Option::Some = active_function
-    infer_parameters
-    clone_body
-    false diagnostics store active_function function_ops check_ops_with_parameter_policy
-    = inferred_stack_effect
+    infer_parameters clone_body checks std::Set[std::String]::new
+    std::Map[std::String std::Set[std::String]]::new
+    false diagnostics store active_function function_ops analyze_ops = checked
+    checked.inferred_effect.clone = inferred_stack_effect
     active_function.unwrap = function
     function_ops function common::Function::set_ops
     if function.name.as_str "lambda__" str::starts_with then
@@ -10429,6 +10638,11 @@ fn ensure_typechecked
     fi
     function checked_function_summary = summary
     function store.restore_function
+    if checked.is_valid ! then
+        FunctionCheckStatus::Rejected function_name.to_str checks.functions.set
+        std::Option[CheckedFunction]::None return
+    fi
+    FunctionCheckStatus::Checked function_name.to_str checks.functions.set
     summary std::Option::Some
 }
 
@@ -10657,7 +10871,7 @@ impl TypeChecker {
         fi
         self.active_calls.clone = active_calls
         function_name.to_str active_calls.add
-        self.infer_parameters self.clone_bodies active_calls argument_callables
+        self.infer_parameters self.clone_bodies self.checks active_calls argument_callables
         self.store called_function.unwrap
         analyze_function_semantics_in_store = analysis
         CallReturnSummary {
@@ -11007,15 +11221,29 @@ impl TypeChecker {
         method.stack_effect.clone default_ops function_name make_default_method_function = function
         self.active_calls.clone = active_calls
         function.name.clone active_calls.add
-        self.infer_parameters self.clone_bodies active_calls argument_callables self.store function
+        self.infer_parameters self.clone_bodies self.checks active_calls argument_callables self.store function
         analyze_function_semantics_in_store.return_callables.clone
     }
 
-    fn collect_operation_facts
-        self:mut$TypeChecker
-        op:$common::Op
-        function_opt:mut$std::Option[common::Function]
-    {
+    fn record_decision_dependencies self:mut$TypeChecker decision:$rules::SemanticFacts {
+        for dependency in decision.dependencies.iter do
+            dependency.as_str self.add_symbol_dependency
+        done
+    }
+
+    fn rollback_operation_facts self:mut$TypeChecker facts_before:u64 {
+        while facts_before self.ordered_facts.length > do
+            self.ordered_facts.pop drop
+        done
+        std::Set[std::String]::new = self.seen_dependencies
+        for fact in self.ordered_facts.iter do
+            if fact SemanticDependency::Symbol(name) is then
+                name.clone self.seen_dependencies.add
+            fi
+        done
+    }
+
+    fn collect_operation_facts self:mut$TypeChecker op:$common::Op {
         if op.type_hint std::Option::Some(type_hint) is then
             type_hint.clone SemanticDependency::Type self.ordered_facts.push
         fi
@@ -11024,20 +11252,11 @@ impl TypeChecker {
         fi
 
         op.value match
-            common::OpValue::FnCall(_) => {
+            common::OpValue::FnCall(function_name) => {
+                function_name.as_str self.add_symbol_dependency
             }
             common::OpValue::FnPush(function_name) => {
                 function_name.as_str self.add_symbol_dependency
-            }
-            common::OpValue::Identifier(name) => {
-                if name.as_str "&" str::starts_with then
-                    name.as_str 1 name.length 1 - str::substring = referenced_name
-                    if referenced_name.as_str self.store.has_function then
-                        referenced_name.as_str self.add_symbol_dependency
-                    fi
-                elif name.as_str self.store.has_function then
-                    name.clone SemanticDependency::Call self.ordered_facts.push
-                fi
             }
             common::OpValue::StructNew(casa_struct) => {
                 casa_struct.name.as_str self.add_symbol_dependency
@@ -11081,31 +11300,6 @@ impl TypeChecker {
             _ => {
             }
         end
-
-        std::Option[common::Type]::None = receiver
-        if
-            0 self
-                .stack
-                .values
-                .length !=
-        then
-            self
-                .stack
-                .values
-                .length 1 - self
-                .stack
-                .values
-                .get
-                .type_value
-                .clone
-            resolve_numeric_literal_default = receiver_type
-            receiver_type rules::make_type_borrow_option = receiver
-        fi
-        self.store function_opt receiver op.value rules::analyze_operation = operation_facts
-        for dependency in operation_facts.dependencies.iter do
-            dependency.as_str self.add_symbol_dependency
-        done
-        operation_facts.method drop
     }
 
     pub fn check_copy_operation
@@ -11179,7 +11373,6 @@ impl TypeChecker {
         emitted_ops:mut$std::List[common::Op]
         function_opt:mut$std::Option[common::Function]
     {
-        function_opt current_op self.collect_operation_facts
         if
             current_op.value common::OpValue::Dup is
             current_op.value common::OpValue::Over is ||
@@ -11221,6 +11414,11 @@ impl TypeChecker {
             return
         fi
         current_op.value match
+            common::OpValue::Identifier(_) => {
+                # Name resolution already reported this error.
+                false = self.facts_available
+            }
+            common::OpValue::Rejected => false = self.facts_available
             common::OpValue::UnsafeStart => 1 += self.unsafe_depth
             common::OpValue::UnsafeEnd => {
                 if 0 self.unsafe_depth != then
@@ -11298,7 +11496,24 @@ impl TypeChecker {
             current_op common::Op::location.clone = self.current_location
             "".to_str ExpectationContext::Text = self.current_expect_ctx
             false = self.underflow_reported_this_op
+            self.diagnostics.error_count = errors_before
+            self.ordered_facts.length = facts_before
+            current_op.value common::OpValue::IfElse is
+            current_op.value common::OpValue::IfElif is || = restores_branch
             function_opt emitted_ops ops current_op self.run_type_check_op
+            errors_before self.diagnostics.error_count == = succeeded
+            if succeeded ! restores_branch ! && then
+                false = self.facts_available
+            fi
+            if succeeded self.facts_available && then
+                current_op self.collect_operation_facts
+                current_op.id self
+                    .checks
+                    .verified_operations
+                    .add
+            else
+                facts_before self.rollback_operation_facts
+            fi
             current_op emitted_ops.push
         done
         emitted_ops ops.append
@@ -11452,6 +11667,7 @@ pub fn checked_generic_body_effect_matches
 }
 
 struct CheckedOperations {
+    is_valid:                bool
     inferred_effect:         common::StackEffect
     ordered_facts:           std::List[SemanticDependency]
     return_callables:        std::List[std::Set[std::String]]
@@ -11466,10 +11682,12 @@ fn analyze_ops
     require_empty_final_stack:bool
     argument_callables:$std::Map[std::String std::Set[std::String]]
     active_calls:std::Set[std::String]
+    checks:mut$SemanticChecks
     clone_bodies:bool
     infer_parameters:bool
 -> CheckedOperations {
-    infer_parameters clone_bodies active_calls diagnostics store TypeChecker::new = checker
+    diagnostics.error_count = errors_before_check
+    infer_parameters clone_bodies checks active_calls diagnostics store TypeChecker::new = checker
     argument_callables.clone = checker.callable_bindings
     std::Option[u64]::None = budget
     if function_opt std::Option::Some(the_function) is then
@@ -11586,7 +11804,7 @@ fn analyze_ops
     inferred_returns checker.parameters.clone common::StackEffect::new = inferred
 
     # Verify against declared stack effect if function has one
-    checker.diagnostics.error_count errors_before_ops < = had_type_errors
+    checker.diagnostics.error_count errors_before_ops < checker.facts_available ! || = had_type_errors
     if had_type_errors ! then
         if
             require_empty_final_stack
@@ -11636,7 +11854,8 @@ fn analyze_ops
         fallthrough_callables checker.return_callables TypeChecker::merge_return_callables
     fi
     checker.return_origin_summaries.clone checker.return_callables.clone
-    checker.ordered_facts.clone inferred CheckedOperations
+    checker.ordered_facts.clone inferred
+    errors_before_check checker.diagnostics.error_count == checker.facts_available && CheckedOperations
 }
 
 pub fn check_ops
@@ -11659,7 +11878,8 @@ fn check_ops_with_parameter_policy
     clone_bodies:bool
     infer_parameters:bool
 -> common::StackEffect {
-    infer_parameters clone_bodies
+    store SemanticChecks::new = checks
+    infer_parameters clone_bodies checks
     std::Set[std::String]::new
     std::Map[std::String std::Set[std::String]]::new
     require_empty_final_stack diagnostics store function_opt ops analyze_ops = checked
@@ -11757,19 +11977,27 @@ fn analyze_function_semantics_in_store
     store:mut$common::SymbolStore
     argument_callables:$std::Map[std::String std::Set[std::String]]
     active_calls:std::Set[std::String]
+    checks:mut$SemanticChecks
     clone_body:bool
     infer_parameters:bool
 -> AnalyzedFunction {
+    FunctionCheckStatus::Checking function.name.clone checks.functions.set
     function.name.as_str store.take_function_for_typecheck = stored_function
     clone_body stored_function function select_function_for_semantics = checked_function
     true = checked_function.is_typechecked
     checked_function.split_body = checked_ops = checked_function
     checked_function std::Option::Some = function_opt
     error::Diagnostics::new = diagnostics
-    infer_parameters clone_body active_calls argument_callables
+    infer_parameters clone_body checks active_calls argument_callables
     false diagnostics store function_opt checked_ops analyze_ops = checked
     function_opt.unwrap = checked_function
     checked_ops.clone checked_function common::Function::set_ops
+    if checked.is_valid ! then
+        FunctionCheckStatus::Rejected
+    else
+        FunctionCheckStatus::Checked
+    fi
+    checked_function.name.clone checks.functions.set
     checked_function.clone store.restore_function
     AnalyzedFunction {
         checked_function: checked_function
@@ -11823,7 +12051,7 @@ fn analyze_function_semantics_in_session_mode
 -> FunctionSemantics {
     std::Set[std::String]::new = active_calls
     function.name.clone active_calls.add
-    infer_parameters session.clone_bodies active_calls argument_callables
+    infer_parameters session.clone_bodies session.checks active_calls argument_callables
     session.store function analyze_function_semantics_in_store = analysis
     FunctionSemantics {
         ordered_facts: analysis.ordered_facts.clone
@@ -11850,8 +12078,7 @@ pub fn analyze_root_semantics
     operations clone_operations_for_semantics = checked_ops
     std::Option[common::Function]::None = function_opt
     error::Diagnostics::new = diagnostics
-    false
-    session.clone_bodies
+    false session.clone_bodies session.checks
     std::Set[std::String]::new
     std::Map[std::String std::Set[std::String]]::new
     true diagnostics session.store function_opt checked_ops analyze_ops = checked
@@ -12187,7 +12414,8 @@ pub fn resolve_specialized_trait_operation
     semantics_opt.unwrap = semantics
     semantics.function_name.clone = function_name
     if semantics.kind rules::MethodSemanticsKind::DefaultMethod is then
-        diagnostics store lookup_receiver semantics instantiate_default_trait_method = default_name_opt
+        store SemanticChecks::new = checks
+        checks diagnostics store lookup_receiver semantics instantiate_default_trait_method = default_name_opt
         if default_name_opt std::Option::Some(default_name) is then
             default_name.clone = function_name
         fi
