@@ -247,3 +247,8 @@ Image casa_extern_memory_mixed(int64_t first, Color color, double scale,
                     image.mipmaps + 3, image.format + 4};
     return result;
 }
+
+IntPair casa_extern_int_pair(IntPair value) {
+    IntPair result = {value.first + 1, value.second + 2};
+    return result;
+}

@@ -154,3 +154,292 @@ pub fn classify_extern_type
     fi
     std::Option[common::ExternAbiType]::None
 }
+
+struct ExternStackArgument {
+    parameter_index: u64
+    size:            u64
+    is_aggregate:    bool
+}
+
+fn count_abi_class
+    classes:$std::List[common::ExternAbiClass]
+    target:$common::ExternAbiClass
+-> u64 {
+    0 = count: u64
+    for abi_class in classes.iter do
+        if target abi_class == then
+            1 += count
+        fi
+    done
+    count
+}
+
+struct NativePlanner {
+    actions:         std::List[common::NativeAction]
+    stack_arguments: std::List[ExternStackArgument]
+    integer_index:   u64
+    float_index:     u64
+}
+
+impl NativePlanner {
+    fn new -> NativePlanner {
+        0 0 std::List[ExternStackArgument]::new
+        std::List[common::NativeAction]::new NativePlanner
+    }
+
+    fn append self:mut$NativePlanner instruction:std::String {
+        instruction common::NativeAction::Instruction self.actions.push
+    }
+
+    fn append_literal self:mut$NativePlanner instruction:$str { instruction.to_str self.append }
+
+    fn plan_scalar_parameter
+        self:mut$NativePlanner
+        builtin:$common::BuiltinType
+        parameter_index:u64
+    {
+        ["%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"] = integer_registers
+        ["%xmm0", "%xmm1", "%xmm2", "%xmm3", "%xmm4", "%xmm5", "%xmm6", "%xmm7"]
+        = float_registers
+        parameter_index common::WORD_SIZE * = offset
+        if builtin.is_float then
+            if self.float_index 8 > then
+                self.float_index float_registers array::nth = register
+                if builtin common::BuiltinType::F32 == then
+                    f"movss {offset}(%r13), {register}" self.append
+                else
+                    f"movsd {offset}(%r13), {register}" self.append
+                fi
+                1 += self.float_index
+            else
+                false common::WORD_SIZE parameter_index ExternStackArgument
+                self.stack_arguments.push
+            fi
+        else
+            if self.integer_index 6 > then
+                self.integer_index integer_registers array::nth = register
+                f"movq {offset}(%r13), {register}" self.append
+                1 += self.integer_index
+            else
+                false common::WORD_SIZE parameter_index ExternStackArgument
+                self.stack_arguments.push
+            fi
+        fi
+    }
+
+    fn plan_register_parameter
+        self:mut$NativePlanner
+        classes:$std::List[common::ExternAbiClass]
+        size:u64
+        parameter_index:u64
+    {
+        ["%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"] = integer_registers
+        ["%xmm0", "%xmm1", "%xmm2", "%xmm3", "%xmm4", "%xmm5", "%xmm6", "%xmm7"]
+        = float_registers
+        parameter_index common::WORD_SIZE * = offset
+        common::ExternAbiClass::Integer classes count_abi_class
+        = required_integer_registers
+        common::ExternAbiClass::Sse classes count_abi_class
+        = required_float_registers
+        if
+            self.integer_index required_integer_registers + 6 >=
+            self.float_index required_float_registers + 8 >= &&
+        then
+            f"movq {offset}(%r13), %rax" self.append
+            0 = class_index: u64
+            for abi_class in classes.iter do
+                class_index common::WORD_SIZE * = class_offset
+                if abi_class common::ExternAbiClass::Integer == then
+                    self.integer_index integer_registers array::nth = register
+                    f"movq {class_offset}(%rax), {register}" self.append
+                    1 += self.integer_index
+                else
+                    self.float_index float_registers array::nth = register
+                    f"movq {class_offset}(%rax), {register}" self.append
+                    1 += self.float_index
+                fi
+                1 += class_index
+            done
+        else
+            true size parameter_index ExternStackArgument self.stack_arguments.push
+        fi
+    }
+
+    fn plan_parameter self:mut$NativePlanner parameter:$common::ExternAbiType parameter_index:u64 {
+        parameter.passing match
+            common::ExternAbiPassing::Scalar(builtin) => parameter_index builtin self.plan_scalar_parameter
+            common::ExternAbiPassing::Registers(classes) => parameter_index parameter.size classes self.plan_register_parameter
+            common::ExternAbiPassing::Memory => {
+                true parameter.size parameter_index ExternStackArgument self.stack_arguments.push
+            }
+        end
+    }
+
+    fn count_stack_slots self:$NativePlanner -> u64 {
+        0 = stack_slots: u64
+        for stack_argument in self.stack_arguments.iter do
+            if stack_argument.is_aggregate then
+                stack_argument.size common::WORD_SIZE u64::try_from.unwrap 1 - +
+                common::WORD_SIZE u64::try_from.unwrap / += stack_slots
+            else
+                1 += stack_slots
+            fi
+        done
+        stack_slots
+    }
+
+    fn plan_stack self:mut$NativePlanner {
+        # Build the native stack below the Casa arguments so pushes cannot overwrite sources.
+        "movq %r13, %rsp" self.append_literal
+        "andq $-16, %rsp" self.append_literal
+        self.count_stack_slots = stack_slots
+        if 0 stack_slots 2 % != then
+            "subq $8, %rsp" self.append_literal
+        fi
+        while self.stack_arguments.is_empty ! do
+            self.stack_arguments.pop = argument
+            argument.parameter_index common::WORD_SIZE * = offset
+            if argument.is_aggregate then
+                argument.size common::WORD_SIZE u64::try_from.unwrap 1 - +
+                common::WORD_SIZE u64::try_from.unwrap / = argument_slots
+                argument_slots common::WORD_SIZE * = argument_size
+                f"subq ${argument_size}, %rsp" self.append
+                f"movq {offset}(%r13), %rax" self.append
+                0 = slot_index: u64
+                while slot_index argument_slots > do
+                    slot_index common::WORD_SIZE * = slot_offset
+                    f"movq {slot_offset}(%rax), %rbx" self.append
+                    f"movq %rbx, {slot_offset}(%rsp)" self.append
+                    1 += slot_index
+                done
+            else
+                f"pushq {offset}(%r13)" self.append
+            fi
+        done
+    }
+
+    fn plan_register_result self:mut$NativePlanner classes:$std::List[common::ExternAbiClass] {
+        0 = return_integer_index: u64
+        0 = return_float_index: u64
+        for abi_class in classes.iter do
+            if abi_class common::ExternAbiClass::Integer == then
+                if 0 return_integer_index == then "%rax" else "%rdx" fi = register
+                f"pushq {register}" self.append
+                1 += return_integer_index
+            else
+                if 0 return_float_index == then "%xmm0" else "%xmm1" fi = register
+                "subq $8, %rsp" self.append_literal
+                f"movq {register}, (%rsp)" self.append
+                1 += return_float_index
+            fi
+        done
+    }
+
+    fn plan_result self:mut$NativePlanner return_type:$common::ExternAbiType {
+        return_type.passing match
+            common::ExternAbiPassing::Scalar(builtin) => {
+                builtin match
+                    common::BuiltinType::I8 => "movsbq %al, %rax" self.append_literal
+                    common::BuiltinType::I16 => "movswq %ax, %rax" self.append_literal
+                    common::BuiltinType::I32 => "movslq %eax, %rax" self.append_literal
+                    common::BuiltinType::Bool => "movzbq %al, %rax" self.append_literal
+                    common::BuiltinType::U8 => "movzbq %al, %rax" self.append_literal
+                    common::BuiltinType::U16 => "movzwq %ax, %rax" self.append_literal
+                    common::BuiltinType::U32 => "movl %eax, %eax" self.append_literal
+                    common::BuiltinType::F32 => "movd %xmm0, %eax" self.append_literal
+                    common::BuiltinType::F64 => "movq %xmm0, %rax" self.append_literal
+                    _ => {
+                    }
+                end
+                "pushq %rax" self.append_literal
+            }
+            common::ExternAbiPassing::Registers(classes) => classes self.plan_register_result
+            common::ExternAbiPassing::Memory => {
+                "pushq %r15" self.append_literal
+            }
+        end
+    }
+
+    fn plan_call
+        self:mut$NativePlanner
+        symbol:$str
+        parameters:$std::List[common::ExternAbiType]
+        result_type:$std::Option[common::ExternAbiType]
+    {
+        if result_type std::Option::Some(return_type) is then
+            if return_type.passing common::ExternAbiPassing::Memory is then
+                return_type.size common::NativeAction::Allocate self.actions.push
+                "popq %r15" self.append_literal
+                "movq %r15, %rdi" self.append_literal
+                1 += self.integer_index
+            fi
+        fi
+
+        "movq %rsp, %r13" self.append_literal
+        0 = parameter_index: u64
+        for parameter in parameters.iter do
+            parameter_index parameter self.plan_parameter
+            1 += parameter_index
+        done
+
+        f"leaq {parameters.length common::WORD_SIZE *}(%r13), %r12"
+        self.append
+        self.plan_stack
+
+        f"call {symbol}" self.append
+        # Preserve the source slots until copied aggregate parameters are released.
+        "movq %r13, %rsp" self.append_literal
+
+        if result_type std::Option::Some(return_type) is then
+            return_type self.plan_result
+        fi
+
+        0 = cleanup_index: u64
+        for parameter in parameters.iter do
+            if
+                parameter.passing common::ExternAbiPassing::Registers(_) is
+                parameter.passing common::ExternAbiPassing::Memory is ||
+            then
+                cleanup_index common::WORD_SIZE * = cleanup_offset
+                cleanup_offset common::NativeAction::ReleaseArgument self.actions.push
+            fi
+            1 += cleanup_index
+        done
+
+        if result_type std::Option::Some(return_type) is then
+            if return_type.passing common::ExternAbiPassing::Registers(classes) is then
+                return_type.size common::NativeAction::Allocate self.actions.push
+                "popq %rbx" self.append_literal
+                classes.length = class_index
+                while 0 class_index != do
+                    1 -= class_index
+                    "popq %rax" self.append_literal
+                    class_index common::WORD_SIZE * = class_offset
+                    f"movq %rax, {class_offset}(%rbx)" self.append
+                done
+                "pushq %rbx" self.append_literal
+            fi
+        fi
+
+        if result_type std::Option::Some(_) is then
+            "popq %rax" self.append_literal
+            "movq %r12, %rsp" self.append_literal
+            "pushq %rax" self.append_literal
+        else
+            "movq %r12, %rsp" self.append_literal
+        fi
+    }
+}
+# Classification is supplied once for a verified concrete signature. The plan
+# fixes all placements, copies, normalization and temporary cleanup before use.
+pub fn plan_native_call
+    symbol:$str
+    parameters:$std::List[common::ExternAbiType]
+    return_type:$std::Option[common::ExternAbiType]
+-> common::NativeCallPlan {
+    NativePlanner::new = planner
+    return_type parameters symbol planner.plan_call
+    planner match
+        NativePlanner { actions: actions } => actions common::NativeCallPlan
+    end
+}
