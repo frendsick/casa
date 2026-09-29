@@ -51,5 +51,11 @@ if matches_filter process_exit "$@"; then
     fi
 fi
 
+if matches_filter lsp_workspace "$@"; then
+    matched=true
+    "$COMPILER" -L lib lsp.casa -o "$CLI_TMP/lsp"
+    python3 tests/test_lsp_workspace.py "$CLI_TMP/lsp"
+fi
+
 report_no_matches "$matched" "$@"
 echo "CLI tests passed"
