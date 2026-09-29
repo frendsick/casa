@@ -38,6 +38,7 @@ const MAX_DIRECT_LOCAL_WORDS 32
 # ============================================================================
 
 pub struct Emitter {
+    native_calls:      std::Map[std::String common::NativeCallPlan]
     pub asm:           std::String
     pub label_counter: u64
     functions:         std::Map[std::String std::List[common::InstValue]]
@@ -54,9 +55,9 @@ impl common::Program {
     # while it reads the instruction list.
     pub fn split_bytecode self:common::Program -> common::Program std::List[common::InstValue] {
         self match
-            common::Program { bytecode: bytecode functions: functions strings: strings static_arrays: static_arrays static_structs: static_structs constants_count: constants_count } => {
+            common::Program { native_calls: native_calls bytecode: bytecode functions: functions strings: strings static_arrays: static_arrays static_structs: static_structs constants_count: constants_count } => {
                 constants_count static_structs static_arrays
-                strings functions std::List[common::InstValue]::new common::Program
+                strings functions std::List[common::InstValue]::new native_calls common::Program
                 bytecode
             }
         end
@@ -66,9 +67,9 @@ impl common::Program {
 impl Emitter {
     pub fn new program:common::Program -> Emitter {
         program match
-            common::Program { functions: functions strings: strings static_arrays: arrays static_structs: structs constants_count: constants } => {
+            common::Program { native_calls: native_calls functions: functions strings: strings static_arrays: arrays static_structs: structs constants_count: constants } => {
                 std::List[MachineLine]::new false constants structs arrays strings functions
-                0 std::String::new Emitter
+                0 std::String::new native_calls Emitter
             }
         end
     }
@@ -77,7 +78,7 @@ impl Emitter {
         std::List[MachineLine]::new false 0
         std::List[common::StaticStruct]::new std::List[common::StaticArray]::new
         std::List[std::String]::new std::Map[std::String std::List[common::InstValue]]::new
-        0 std::String::new Emitter
+        0 std::String::new std::Map[std::String common::NativeCallPlan]::new Emitter
     }
 
     pub fn into_asm self:Emitter -> std::String {
@@ -150,13 +151,6 @@ pub fn sanitize_name name:$str -> std::String {
     done
     result
 }
-
-struct ExternStackArgument {
-    parameter_index: u64
-    size:            u64
-    is_aggregate:    bool
-}
-
 # A forwarding parameter can remain on the value stack when no instruction
 # observes its local slot or introduces another call or control-flow path.
 fn has_forwarding_frame bytecode:$std::List[common::InstValue] -> bool {
@@ -412,19 +406,6 @@ fn collect_leaf_templates
         fi
     done
     templates
-}
-
-fn count_abi_class
-    classes:$std::List[common::ExternAbiClass]
-    target:$common::ExternAbiClass
--> u64 {
-    0 = count: u64
-    for abi_class in classes.iter do
-        if target abi_class == then
-            1 += count
-        fi
-    done
-    count
 }
 
 # ============================================================================
@@ -1494,211 +1475,27 @@ impl Emitter {
         "pushq %rax" self.indent
     }
 
-    pub fn emit_extern_call self:mut$Emitter call:$common::ExternCall {
-        ["%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"] = integer_registers
-        ["%xmm0", "%xmm1", "%xmm2", "%xmm3", "%xmm4", "%xmm5", "%xmm6", "%xmm7"]
-        = float_registers
-        std::List[ExternStackArgument]::new = stack_arguments
-        0 = integer_register_index: u64
-        0 = float_register_index: u64
-
-        if call.return_type std::Option::Some(return_type) is then
-            if return_type.passing common::ExternAbiPassing::Memory is then
-                f"movq ${return_type.size}, %rdi" self.indent_string
-                "extern_memory_return_alloc_done" "heap_alloc" self.emit_call_via_return_stack
-                "popq %r15" self.indent
-                "movq %r15, %rdi" self.indent
-                1 += integer_register_index
-            fi
-        fi
-
-        "movq %rsp, %r13" self.indent
-        0 = parameter_index: u64
-        for parameter in call.parameters.iter do
-            parameter_index common::WORD_SIZE * = offset
-            parameter.passing match
-                common::ExternAbiPassing::Scalar(builtin) => {
-                    if builtin.is_float then
-                        if float_register_index 8 > then
-                            float_register_index float_registers array::nth = register
-                            if builtin common::BuiltinType::F32 == then
-                                f"movss {offset}(%r13), {register}" self.indent_string
-                            else
-                                f"movsd {offset}(%r13), {register}" self.indent_string
-                            fi
-                            1 += float_register_index
-                        else
-                            false common::WORD_SIZE parameter_index ExternStackArgument
-                            stack_arguments.push
-                        fi
-                    else
-                        if integer_register_index 6 > then
-                            integer_register_index integer_registers array::nth = register
-                            f"movq {offset}(%r13), {register}" self.indent_string
-                            1 += integer_register_index
-                        else
-                            false common::WORD_SIZE parameter_index ExternStackArgument
-                            stack_arguments.push
-                        fi
-                    fi
+    # Plans are request-owned. Temporarily move one out to keep its borrow
+    # independent of the emitter's mutable output, then restore it for later calls.
+    pub fn emit_extern_call self:mut$Emitter identity:$std::String {
+        identity self
+            .native_calls
+            .remove
+            .unwrap = plan
+        for action in plan.actions.iter do
+            action match
+                common::NativeAction::Instruction(text) => text.as_str self.indent
+                common::NativeAction::Allocate(size) => {
+                    f"movq ${size}, %rdi" self.indent_string
+                    "extern_alloc_done" "heap_alloc" self.emit_call_via_return_stack
                 }
-                common::ExternAbiPassing::Registers(classes) => {
-                    common::ExternAbiClass::Integer classes count_abi_class
-                    = required_integer_registers
-                    common::ExternAbiClass::Sse classes count_abi_class
-                    = required_float_registers
-                    if
-                        integer_register_index required_integer_registers + 6 >=
-                        float_register_index required_float_registers + 8 >= &&
-                    then
-                        f"movq {offset}(%r13), %rax" self.indent_string
-                        0 = class_index: u64
-                        for abi_class in classes.iter do
-                            class_index common::WORD_SIZE * = class_offset
-                            if abi_class common::ExternAbiClass::Integer == then
-                                integer_register_index integer_registers array::nth = register
-                                f"movq {class_offset}(%rax), {register}" self.indent_string
-                                1 += integer_register_index
-                            else
-                                float_register_index float_registers array::nth = register
-                                f"movq {class_offset}(%rax), {register}" self.indent_string
-                                1 += float_register_index
-                            fi
-                            1 += class_index
-                        done
-                    else
-                        true parameter.size parameter_index ExternStackArgument stack_arguments.push
-                    fi
-                }
-                common::ExternAbiPassing::Memory => {
-                    true parameter.size parameter_index ExternStackArgument stack_arguments.push
+                common::NativeAction::ReleaseArgument(offset) => {
+                    f"pushq {offset}(%r13)" self.indent_string
+                    self.emit_heap_free_if_allocated
                 }
             end
-            1 += parameter_index
         done
-
-        f"leaq {call.parameters.length common::WORD_SIZE *}(%r13), %r12"
-        self.indent_string
-        # Build the native stack below the Casa arguments so pushes cannot overwrite sources.
-        "movq %r13, %rsp" self.indent
-        "andq $-16, %rsp" self.indent
-        0 = stack_slots: u64
-        for stack_argument in stack_arguments.iter do
-            if stack_argument.is_aggregate then
-                stack_argument.size common::WORD_SIZE u64::try_from.unwrap 1 - +
-                common::WORD_SIZE u64::try_from.unwrap / += stack_slots
-            else
-                1 += stack_slots
-            fi
-        done
-        if 0 stack_slots 2 % != then
-            "subq $8, %rsp" self.indent
-        fi
-        stack_arguments.length = stack_index
-        while 0 stack_index != do
-            1 -= stack_index
-            stack_index stack_arguments.get = stack_argument
-            stack_argument.parameter_index common::WORD_SIZE * = offset
-            if stack_argument.is_aggregate then
-                stack_argument.size common::WORD_SIZE u64::try_from.unwrap 1 - +
-                common::WORD_SIZE u64::try_from.unwrap / = argument_slots
-                argument_slots common::WORD_SIZE * = argument_size
-                f"subq ${argument_size}, %rsp" self.indent_string
-                f"movq {offset}(%r13), %rax" self.indent_string
-                0 = slot_index: u64
-                while slot_index argument_slots > do
-                    slot_index common::WORD_SIZE * = slot_offset
-                    f"movq {slot_offset}(%rax), %rbx" self.indent_string
-                    f"movq %rbx, {slot_offset}(%rsp)" self.indent_string
-                    1 += slot_index
-                done
-            else
-                f"pushq {offset}(%r13)" self.indent_string
-            fi
-        done
-
-        f"call {call.symbol}" self.indent_string
-        # Preserve the source slots until copied aggregate parameters are released.
-        "movq %r13, %rsp" self.indent
-
-        if call.return_type std::Option::Some(return_type) is then
-            return_type.passing match
-                common::ExternAbiPassing::Scalar(builtin) => {
-                    builtin match
-                        common::BuiltinType::I8 => "movsbq %al, %rax" self.indent
-                        common::BuiltinType::I16 => "movswq %ax, %rax" self.indent
-                        common::BuiltinType::I32 => "movslq %eax, %rax" self.indent
-                        common::BuiltinType::Bool => "movzbq %al, %rax" self.indent
-                        common::BuiltinType::U8 => "movzbq %al, %rax" self.indent
-                        common::BuiltinType::U16 => "movzwq %ax, %rax" self.indent
-                        common::BuiltinType::U32 => "movl %eax, %eax" self.indent
-                        common::BuiltinType::F32 => "movd %xmm0, %eax" self.indent
-                        common::BuiltinType::F64 => "movq %xmm0, %rax" self.indent
-                        _ => {
-                        }
-                    end
-                    "pushq %rax" self.indent
-                }
-                common::ExternAbiPassing::Registers(classes) => {
-                    ["%rax", "%rdx"] = return_integer_registers
-                    ["%xmm0", "%xmm1"] = return_float_registers
-                    0 = return_integer_index: u64
-                    0 = return_float_index: u64
-                    for abi_class in classes.iter do
-                        if abi_class common::ExternAbiClass::Integer == then
-                            return_integer_index return_integer_registers array::nth = register
-                            f"pushq {register}" self.indent_string
-                            1 += return_integer_index
-                        else
-                            return_float_index return_float_registers array::nth = register
-                            "subq $8, %rsp" self.indent
-                            f"movq {register}, (%rsp)" self.indent_string
-                            1 += return_float_index
-                        fi
-                    done
-                }
-                common::ExternAbiPassing::Memory => {
-                    "pushq %r15" self.indent
-                }
-            end
-        fi
-
-        0 = cleanup_index: u64
-        for parameter in call.parameters.iter do
-            if
-                parameter.passing common::ExternAbiPassing::Registers(_) is
-                parameter.passing common::ExternAbiPassing::Memory is ||
-            then
-                cleanup_index common::WORD_SIZE * = cleanup_offset
-                f"pushq {cleanup_offset}(%r13)" self.indent_string
-                self.emit_heap_free_if_allocated
-            fi
-            1 += cleanup_index
-        done
-
-        if call.return_type std::Option::Some(return_type) is then
-            if return_type.passing common::ExternAbiPassing::Registers(classes) is then
-                f"movq ${return_type.size}, %rdi" self.indent_string
-                "extern_return_alloc_done" "heap_alloc" self.emit_call_via_return_stack
-                "popq %rbx" self.indent
-                classes.length = class_index
-                while 0 class_index != do
-                    1 -= class_index
-                    "popq %rax" self.indent
-                    class_index common::WORD_SIZE * = class_offset
-                    f"movq %rax, {class_offset}(%rbx)" self.indent_string
-                done
-                "pushq %rbx" self.indent
-            fi
-        fi
-
-        if call.return_type std::Option::Some(_) is then
-            "popq %rax" self.indent
-            "movq %r12, %rsp" self.indent
-            "pushq %rax" self.indent
-        else
-            "movq %r12, %rsp" self.indent
-        fi
+        plan identity.clone self.native_calls.set
     }
 
     # ============================================================================
