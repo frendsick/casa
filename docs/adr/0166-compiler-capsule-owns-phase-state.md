@@ -1,27 +1,15 @@
 # Compiler Capsule owns phase state
 related issue: [Confirm Compiler Capsule constraints and tradeoffs](https://github.com/frendsick/casa/issues/645)
 
-The maintainer selected Compiler Capsule in the
-[architecture comparison](https://github.com/frendsick/casa/issues/644).
-It places compilation behind a deep module whose callers request compiler
-products without coordinating mutable phase state. This records the selected
-direction. [ADR-0167](0167-compiler-products-own-independent-snapshots.md)
-records the selected representations and product interfaces. Production
-migration and the remaining seam contracts are unfinished.
+Compiler Capsule hides mutable phase coordination behind compiler products.
+[ADR-0167](0167-compiler-products-own-independent-snapshots.md) defines their
+representations and ownership. [ADR-0172](0172-editor-products-retain-verified-source-facts.md)
+defines partial tooling results, workspace scope, and freshness.
 
-[ADR-0172](0172-editor-products-retain-verified-source-facts.md) completes the
-tooling contract, including partial results, workspace queries, and edit freshness.
-
-## Verified starting point
-
-At source commit `f07c444`, [TypecheckResult](../../compiler/typechecker.casa)
-exposes operations and a symbol store, while
-[compile_typechecked](../../compiler/bytecode.casa) checks diagnostics before
-lowering. [Semantic analysis](../../compiler/semantics.casa) uses physical
-layout in `check_size_of` and x86-64 ABI classification for extern validation.
-[Editor documents](../../compiler/document.casa) retain operations and function
-maps. Sealing phase state and separating target policy therefore require a
-migration, not just new names for the current outputs.
+The [blueprint](../benchmarks/compiler-simplification-blueprint.md) is complete.
+Production consumer cutover remains open in
+[#715](https://github.com/frendsick/casa/issues/715). Selecting the architecture
+alone establishes no performance gain or completed production migration.
 
 ## Accepted constraints
 
@@ -74,42 +62,25 @@ validation and diagnostics.
 
 ## Interface comparison
 
-The prototype proposes `run -> CompilerProduct` and `query -> ToolAnswer`.
-[ADR-0167](0167-compiler-products-own-independent-snapshots.md) compares these
-with typed operations and records the accepted product and ownership contract.
-Its caller-knowledge comparison resolves this interface choice. Executable
-evidence is still required. ADR-0172 records the tooling guarantees.
-
-Count everything each caller must know: request and response variants, valid
-pairings, matching rules, ordering, ownership transfer, retained borrows,
-reclamation, and failure states. A broad result requires callers to understand
-which variants can occur for their request. Typed operations may remove that
-matching burden while exposing more callable names. Neither call counts nor
-source-line estimates are fixed quotas.
+ADR-0167 selects typed operations over the prototype's `run -> CompilerProduct`
+and `query -> ToolAnswer` protocols. Compare caller knowledge: variants, valid
+pairings, ordering, ownership transfer, retained borrows, reclamation, and failure
+states. Typed operations remove tag matching without removing lifetime rules.
+Call counts and source estimates are not fixed quotas.
 
 ## Open work and reconsideration
 
-Simplification targets remain open. Tooling follows
-[ADR-0172](0172-editor-products-retain-verified-source-facts.md).
-Qualified-only imports and the absence of a source-level code-size guarantee are accepted in
-[ADR-0168](0168-imports-expose-qualified-names-only.md). Backend and runtime seams
-are recorded in [ADR-0169](0169-backend-plans-and-renders-one-function-at-a-time.md).
-Constant evaluation follows
-[Constants use bounded target-independent expressions](0171-constants-use-bounded-target-independent-expressions.md).
-The generic contract follows
-[ADR-0170](0170-generics-specialize-after-symbolic-checking.md).
-Derivation, trait defaults, runtime-global removal, and ownership use the
-accepted contracts linked from the [map](https://github.com/frendsick/casa/issues/638). The older
-prototype's behavior examples do not override those decisions. The single
-authoritative operation-semantics principle continues in
-[ADR-0173](0173-semantic-checking-owns-source-obligations.md). Qualified-only
-imports follow ADR-0168. The prototype's older decision identifiers have
-surviving destinations in the [ADR index](README.md#retired-records).
+The accepted front-end, semantic, backend, constant, generic, and tooling
+contracts are [ADR-0168](0168-imports-expose-qualified-names-only.md) through
+[ADR-0174](0174-front-end-parses-source-before-module-resolution.md).
+Derivation, trait defaults, root-owned runtime state, and ownership follow the
+accepted decisions linked from the [map](https://github.com/frendsick/casa/issues/638).
+Prototype examples do not override them. Older identifiers have destinations in
+[the ADR index](README.md#retired-records).
 
-Seam design proceeds from ADR-0167 within these limits. Proposals must
-label any assumption about an open contract and identify which result depends
-on it. Do not infer syntax removal, diagnostic changes, a performance ceiling,
-or further interface commitments from the architecture selection alone.
+Do not infer syntax removal, diagnostic changes, performance ceilings, or new
+interface commitments from architecture selection. Proposals must identify any
+open-contract assumption and which result depends on it.
 
 Revisit the direction if the executable slice shows that retained behavior
 requires consumers to coordinate mutable phase state, that checked products
@@ -118,10 +89,8 @@ parallel semantic implementations. Also revisit it if measured time or memory
 costs miss the subsequently agreed acceptance gates. A more inspectable private
 product or a typed operation can be adopted without reopening the whole choice.
 
-[Blueprint validation](https://github.com/frendsick/casa/issues/651) must supply
-an executable integrated slice, resolved behavior decisions, agreed comparison
-measurements, and an implementation breakdown before final acceptance. It must
-define a working bootstrap route and final fixed-point validation. The map
-permits a non-incremental cutover, but this documentation does not change the
-repository's current stable-release and CI rules. No performance gain or
-production implementation is established by this record.
+The blueprint requires an integrated executable slice, resolved behavior,
+agreed measurements, an implementation breakdown, a stable bootstrap route, and
+final fixed-point validation. A non-incremental cutover remains permitted without
+changing the repository's stable-release and CI rules. Measured acceptance gates
+are recorded in [the measurement contract](../benchmarks/compiler-simplification-measurements.md).

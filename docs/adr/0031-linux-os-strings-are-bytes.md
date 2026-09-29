@@ -1,22 +1,20 @@
 # Linux OS strings are Bytes
 status: amended by [ADR-0160](0160-os-byte-round-trips-use-bytes-and-cstr.md)
 
-On Casa's Linux target, process arguments, environment values, directory entry names, and similar OS-provided strings without a UTF-8 guarantee enter safe code as owned `Bytes`. Callers use `to_str` to validate and create an owned `String` when their domain expects text. Casa does not add `OsString` or `OsStr`; on Linux those types would wrap the same arbitrary byte sequences without adding a new invariant.
+Linux process arguments, environment values, and directory entry names have no
+UTF-8 guarantee. Safe APIs return owned `Bytes`, preserving the exact input
+without exposing borrowed process/syscall buffer lifetimes. `to_str` validates
+and copies into an owned `String` when the application requires text.
 
-The initial APIs include `process::args -> List[Bytes]`, `env::get key:$str -> Option[Bytes]`, and `dir::list path:$str -> Result[List[Bytes] IoError]`. Filesystem paths and environment keys initially accept only `$str`. Casa deliberately defers raw `Bytes` path inputs, a `Path` type, duplicate raw-path functions, and implicit `str`/`Bytes` coercions.
+Returning text would reject, replace, or misrepresent valid Linux values.
+`OsString` and `OsStr` would add no invariant on this byte-native target. A
+native-string abstraction waits for a platform with a different representation.
 
-## Considered options
+NUL-terminated interfaces exclude the terminator from logical byte length.
+These byte values do not gain Display by assuming an encoding. Programs may
+inspect, compare, hash, or deliberately render them.
 
-- Returning `str` keeps common programs concise, but either admits invalid UTF-8 or silently rejects/replaces valid Linux values.
-- Adding `OsString` anticipates non-byte-native platforms, but Casa currently targets Linux x86-64 and has no second representation to abstract.
-- Returning borrowed views into process or syscall buffers avoids copies, but exposes storage lifetimes throughout otherwise simple APIs.
-- Returning owned `Bytes` preserves every Linux value and follows the existing raw-input boundary.
-
-## Consequences
-
-- Text-oriented programs validate explicitly through `to_str`.
-- These APIs do not implement `Display` by assuming an encoding. Programs may inspect, compare, hash, or deliberately render their bytes.
-- Values obtained from NUL-terminated OS interfaces exclude the terminator from their logical length.
-- Environment keys and filesystem path inputs remain text-only. Consequently, safe code initially cannot pass a non-UTF-8 argument or directory entry back to a filesystem API.
-- Raw path support requires a concrete use to settle interior-NUL validation and how path-validation failures compose with `IoError`; it is not added speculatively.
-- Cross-platform support may introduce a native-string abstraction only when a target cannot represent its OS strings as bytes.
+[ADR-0160](0160-os-byte-round-trips-use-bytes-and-cstr.md) replaces the initial
+text-only path restriction. Filesystem operations accept one Linux path argument,
+`$cstr`, which NUL-free text or bytes can lend. There is no `Path` type, duplicate
+raw-path API, or implicit text/byte coercion. Environment keys remain `$str`.

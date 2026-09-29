@@ -10,14 +10,10 @@ size_of[array[T N]] # N size_of[T] * for N > 0
 size_of[array[T 0]] # 1
 ```
 
-The storage holds no elements. The byte gives a materialized value a nonzero
-layout and gives an empty array element a nonzero stride when a generic container
-computes `capacity size_of[T] *`. A local reserves one machine word because
-local slots are word-sized. An aggregate field uses the one-byte layout
-directly. These placements are not a stable contract (ADR-0127). ADR-0156 makes
-addresses across independently owned values a representation detail.
-
-This supersedes the line in ADR-0152 that gave `array[T 0]` size zero.
+The storage holds no elements. The byte supplies a nonzero layout and element
+stride for generic containers computing `capacity size_of[T] *`. Storage placement
+is compiler-owned under ADR-0127. Addresses across independent owners are a
+representation detail under ADR-0156.
 
 ## Considered options
 
@@ -35,10 +31,6 @@ This supersedes the line in ADR-0152 that gave `array[T 0]` size zero.
 
 ## Consequences
 
-- `size_of[array[T N]]` is `N size_of[T] *` for every `N > 0`, and 1 for `N`
-  zero.
-- A materialized `[]` follows the one-byte layout whether its storage is local,
-  static, or shared.
 - Destruction of an `array[T 0]` visits no elements, which the length in the
   type already states.
 - No compiler or library path needs a zero-sized-value branch, which is what

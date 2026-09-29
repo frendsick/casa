@@ -2,39 +2,24 @@
 
 related issue: [Choose the front-end and module-analysis seams](https://github.com/frendsick/casa/issues/647).
 
-The maintainer accepted this contract on 2026-09-26, including preservation of
-both meanings of `Name {}`. Parse each source once into lossless tokens and structured source constructs.
+Parse each source once into lossless tokens and structured constructs, preserving
+both meanings of `Name {}`.
 Collect declarations and discover modules from those constructs. Resolve source
 names through compilation-local identities without changing token spelling.
 This completes the front-end responsibilities of ADR-0167 under the
 import, constant, and tooling contracts in ADR-0168, ADR-0171, and ADR-0172.
 The semantic construction consumes these facts under
 [ADR-0173](0173-semantic-checking-owns-source-obligations.md).
-Production migration and executable validation remain pending.
+Shared syntax recognition is implemented. Semantic parsing still uses
+`legacy_parser.casa`, with full production cutover open in #715.
 
 ## Evidence and alternatives
 
-Production evidence was inspected at `5e13d87`, whose compiler source is unchanged
-from `18e2372`. Final reconciliation at `e5935db` incorporated the semantic and
-measurement decisions without compiler-source changes. These are code and
-existing-test inspections, not new measurements.
-
-- [Import handling](https://github.com/frendsick/casa/blob/5e13d87/compiler/syntax.casa#L6296) scans import grammar during
-  namespace discovery, scans it again to resolve prefixes, then parses it normally.
-  Namespace rewriting changes token values and requires a reverse source-name map.
-- [Parsing](https://github.com/frendsick/casa/blob/5e13d87/compiler/syntax.casa#L8211) writes declarations into the shared
-  store before a construct succeeds. Recovery can undo emitted operations but
-  cannot undo those declarations. It therefore discards the whole result after
-  a failed construct that mutated the store.
-- [Struct literals](https://github.com/frendsick/casa/blob/5e13d87/compiler/syntax.casa#L8160) require an already known
-  struct to recognize the braced form. Recognition of subsequent field labels
-  also consults that struct's member names. This couples grammar to declarations.
-- [Constant evaluation](https://github.com/frendsick/casa/blob/5e13d87/compiler/syntax.casa#L2452) reads a token cursor
-  and declaration store during parsing. Accessor, derive, and default generation
-  also share parser state.
-- [Syntax analysis](https://github.com/frendsick/casa/blob/5e13d87/compiler/syntax.casa#L8359) constructs that same parser
-  with a mode flag. Formatter equivalence checks token and comment facts, but
-  does not compare structural spans.
+The [historical front-end trace](https://github.com/frendsick/casa/blob/e9a258837d40185376c97e4fd03fccb98d238d82/docs/adr/0174-front-end-parses-source-before-module-resolution.md#evidence-and-alternatives)
+records repeated import recognition, token rewriting, parser/store mutation,
+declaration-dependent struct grammar, and parser-driven constant/derive/default
+work. Those findings explain the separate source and semantic responsibilities.
+They are not current measurements.
 
 Keeping token rewriting would preserve the repeated grammar and reverse-name
 protocol. A complete parsed/resolved/typed product ladder would add ownership
@@ -265,10 +250,8 @@ and semantic errors do not block syntax-only formatting. Delete the parser's
 
 Retain the useful cases in `test_parser.casa`, `test_analysis.casa`,
 `test_struct_literal.casa`, import tests, and formatter safety tests. Replace
-assertions that require an empty symbol store after local damage. The existing
-unknown-later-field, empty-literal, and missing-value tests include no-crash
-probes and are not proof of correct rejection. Strengthen the corresponding
-observable checks during migration.
+assertions that require an empty symbol store after local damage. No-crash probes alone do not establish correct rejection. Check observable
+rejection of unknown fields, empty literals, and missing field values.
 
 Check diagnostic ordering with an earlier parser error, an imported error, and
 a later lexical error in one root. Include a nested import, an unlocated

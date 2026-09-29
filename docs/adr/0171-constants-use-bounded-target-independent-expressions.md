@@ -2,16 +2,14 @@
 
 related issue: [Choose the compile-time evaluation surface](https://github.com/frendsick/casa/issues/657).
 
-The maintainer selected bounded constant expressions, including floating-point
-arithmetic, on 2026-09-26. Remove `const fn`. Retain relationships between values
-in source without executing user functions in the compiler. Optional numeric
-widths, five stack intrinsics, and named constant type arguments are included.
-This is the compiler blueprint contract. Production migration remains pending.
+Bounded constant expressions retain value relationships without executing user
+functions. `const fn` is removed. The expression surface below is implemented.
+The target-neutral `size_of` checking boundary remains pending.
 
 ## Declarations and values
 
 Keep `const NAME VALUE`, earlier-constant references, `pub const`, and postfix
-blocks. Add an optional type annotation, as in the following proposed syntax:
+blocks. An optional annotation specifies the type:
 
 ```casa
 const ELEMENT_COUNT 128
@@ -122,9 +120,7 @@ module's private constants without exposing those names to the importer.
 Discover modules and reject import cycles under ADR-0068. Elaborate dependency
 constants before importer constants, then evaluate each module's declarations
 in source order. Each constant has one resolved value per compilation snapshot.
-This requires import and visibility facts before evaluation. The current
-parser's early global-name lookup is not the target interface.
-
+This requires import and visibility facts before evaluation.
 Constant type arguments accept literal values, visible named constants, and
 symbolic constant parameters. The admitted kinds remain integers, `bool`, and
 `char` under ADR-0153. Float and string type arguments remain rejected even
@@ -175,16 +171,6 @@ parameter binding, calls, cycle tracking, and opportunistic call folding.
 The selected contract removes that machinery while accepting the additional
 cost of typed integer/float evaluation, stack operations, and named type arguments.
 
-Source inspection at `62a46a68929ef20860f8a35f49b40ab5c0093949` found no
-executable non-test `const fn` or computed constant declarations. This does not
-establish external usage or make the new features cost-free. Five function-only
-helpers in the then-named `compiler/syntax.casa` total 302 physical lines,
-excluding adjacent comments: `op_value_to_operator_kind`, `is_const_fold_literal`,
-`try_fold_const_fn_call`, `validate_const_fn_body`, and `eval_const_fn`.
-These are deletion candidates, not a net reduction estimate. Retained numeric
-validation, literal conversion, and the replacement evaluator still have costs.
-Do not add this count to overlapping historical audit estimates.
-
 Migrate runtime uses of former `const fn` declarations to ordinary `fn`.
 Replace their constant calls with supported expressions or precomputed values.
 Computed constants that relied on contextual retyping now need an appropriate
@@ -204,12 +190,9 @@ shared mutable array storage.
 [ADR-0156](0156-owned-values-have-independent-behavior-not-address-identity.md)
 continues to govern independent array ownership.
 
-The current evaluator uses `i64` intermediates and contextual result literals,
-does not compute floats or support stack intrinsics, and can reach runtime
-failure paths or discard surplus stack values. Imported constants and named
-type arguments also need new resolution paths. These are explicit migration
-obligations, not claims about current production behavior.
-
-Evidence: [evaluator and folding](https://github.com/frendsick/casa/blob/62a46a68929ef20860f8a35f49b40ab5c0093949/compiler/syntax.casa#L1979-L2522),
-[numeric constant tests](https://github.com/frendsick/casa/blob/62a46a68929ef20860f8a35f49b40ab5c0093949/tests/compiler/test_numeric_types.casa#L112-L143),
-and [generic constant tests](https://github.com/frendsick/casa/blob/62a46a68929ef20860f8a35f49b40ab5c0093949/tests/compiler/test_const_param.casa).
+Implementation: [bounded-constant evidence](../benchmarks/bounded-constants/README.md)
+records typed/contextual values, floats, stack intrinsics, imports, and named type
+arguments. Ordinary `check_size_of` still consults physical layout, so the
+accepted target-independent checking requirement remains incomplete. The
+historical evaluator trace and migration findings remain in
+[the original decision](https://github.com/frendsick/casa/blob/e9a258837d40185376c97e4fd03fccb98d238d82/docs/adr/0171-constants-use-bounded-target-independent-expressions.md#tradeoffs-and-migration).

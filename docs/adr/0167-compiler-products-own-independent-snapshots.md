@@ -4,17 +4,14 @@ status: amended by [ADR-0172](0172-editor-products-retain-verified-source-facts.
 
 related issue: [Choose compiler representations and state ownership](https://github.com/frendsick/casa/issues/646).
 
-The maintainer accepted independent compilation snapshots and the representation
-contract below on 2026-09-26. Typed operations and private semantic construction remove
-caller-managed phase protocols. Production migration and performance gates remain
-pending. ADR-0172 completes the tooling contract and refines the editor answer types
-below. The backend contract is recorded in
-[ADR-0169](0169-backend-plans-and-renders-one-function-at-a-time.md).
-The later constant and generic contracts retain target-neutral checking.
+Typed operations and private semantic construction remove caller-managed phase
+protocols under [ADR-0166](0166-compiler-capsule-owns-phase-state.md).
+ADR-0172 refines the editor answers below, and
+[ADR-0169](0169-backend-plans-and-renders-one-function-at-a-time.md) defines the backend.
+The generic and constant contracts retain target-neutral checking.
 
-Evidence was checked against `c8b392bcba0648fa759290f25eb91d4a90faa32a`, which matched
-`origin/main` on 2026-09-26. ADR-0166 supplies the accepted Compiler Capsule
-constraints. Historical audit counts remain historical.
+Implementation: typed products and snapshots exist. Final consumer cutover and
+performance gates remain with [#715](https://github.com/frendsick/casa/issues/715).
 
 ## Selected model
 
@@ -28,8 +25,8 @@ Represent structured control flow directly. Put cleanup actions on the operation
 exits that perform them. Keep temporary loan analysis and specialization work private.
 Editor queries consume source-oriented facts, without retaining compiler bodies.
 
-This replaces the current public operation/store pairing. It does not require a distinct
-copy of the complete operation vocabulary for every phase.
+The checked product replaces public operation/store pairing without duplicating
+the complete operation vocabulary for every phase.
 
 ## External interface
 
@@ -89,9 +86,7 @@ these same queries. Incomplete facts cannot masquerade as checked codegen input.
 | Ownership | Caller still needs report, source, index, and query lifetime rules. | The same necessary snapshot lifetime rule, with no retained compiler session. |
 
 The typed interface adds callable names but removes tag-pairing rules. It does not claim
-that ownership and failure rules disappear. Current LSP code uses five distinct editor
-queries. References also supplies rename, so rename needs no second symbol-analysis
-operation.
+that ownership and failure rules disappear. References also supplies rename, so rename needs no second symbol-analysis operation.
 
 ## Independent snapshots
 
@@ -289,44 +284,14 @@ retained memory and repeated-request cost, and show that editor queries no longe
 or interpret compiler bodies. No source reduction or performance gain is established by
 this decision.
 
-The front-end decision owns exact parsing, resolution, and constant elaboration seams.
-The semantic decision owns checking and specialization algorithms. ADR-0172 settles
-partial-fact guarantees, target-neutral editor analysis, workspace query scope, and
-version/invalidation policy. Numerical latency gates still require executable evidence.
-ADR-0169 records machine form and platform scope. Constant elaboration must
-apply the [target-independent expression contract](0171-constants-use-bounded-target-independent-expressions.md).
-Semantic algorithms must apply [the generic checking contract](0170-generics-specialize-after-symbolic-checking.md).
-The remaining seam choices are existing open decisions, not new workstreams.
+The front-end, semantic, tooling, backend, constant, and generic seam contracts
+are settled in ADR-0168 through ADR-0174. Numerical performance gates and final
+migration evidence remain with the blueprint and #715.
 
 ## Evidence
 
-- [Current analysis result and entry
-  operation](https://github.com/frendsick/casa/blob/c8b392bcba0648fa759290f25eb91d4a90faa32a/compiler/analysis.casa#L33)
-  expose diagnostics, sources, and optional typechecked data.
-- [Current typecheck result and
-  orchestration](https://github.com/frendsick/casa/blob/c8b392bcba0648fa759290f25eb91d4a90faa32a/compiler/typechecker.casa#L7)
-  expose mutable operations and store. [Backend
-  entry](https://github.com/frendsick/casa/blob/c8b392bcba0648fa759290f25eb91d4a90faa32a/compiler/bytecode.casa#L3713)
-  checks diagnostics at runtime.
-- [Operation ownership
-  records](https://github.com/frendsick/casa/blob/c8b392bcba0648fa759290f25eb91d4a90faa32a/compiler/common.casa#L479)
-  and [function
-  flags](https://github.com/frendsick/casa/blob/c8b392bcba0648fa759290f25eb91d4a90faa32a/compiler/common.casa#L1479)
-  demonstrate the current identity and lifecycle protocols.
-- [Current semantic value
-  state](https://github.com/frendsick/casa/blob/c8b392bcba0648fa759290f25eb91d4a90faa32a/compiler/semantics.casa#L101)
-  distinguishes ordinary and cleanup-observed origins.
-- [Editor
-  state](https://github.com/frendsick/casa/blob/c8b392bcba0648fa759290f25eb91d4a90faa32a/compiler/document.casa#L22)
-  retains operations and declaration maps. [Document
-  construction](https://github.com/frendsick/casa/blob/c8b392bcba0648fa759290f25eb91d4a90faa32a/compiler/document.casa#L706)
-  consumes the analysis result.
-- [Syntax
-  analysis](https://github.com/frendsick/casa/blob/c8b392bcba0648fa759290f25eb91d4a90faa32a/compiler/syntax.casa#L8359)
-  supports the formatter's independent syntax request.
-- [Pinned architecture
-  comparison](https://github.com/frendsick/casa/blob/bd3516658e11b4a1544562a552ae47e37329c073/compiler/compiler_architecture_prototype.html)
-  supplies the broad intent and query protocols used in the comparison.
-- [Pinned invalid-state
-  baseline](https://github.com/frendsick/casa/blob/539d13953c189d2d12be1e8daf3cbf9947fc977d/docs/benchmarks/compiler-complexity-baseline.md#L158)
-  identifies the eight families.
+The [pinned architecture comparison](https://github.com/frendsick/casa/blob/bd3516658e11b4a1544562a552ae47e37329c073/compiler/compiler_architecture_prototype.html)
+contains the broad request/query protocols. The
+[pinned complexity baseline](https://github.com/frendsick/casa/blob/539d13953c189d2d12be1e8daf3cbf9947fc977d/docs/benchmarks/compiler-complexity-baseline.md#L158)
+identifies the eight invalid-state families. Historical implementation traces
+remain in [the original decision](https://github.com/frendsick/casa/blob/e9a258837d40185376c97e4fd03fccb98d238d82/docs/adr/0167-compiler-products-own-independent-snapshots.md#evidence).
