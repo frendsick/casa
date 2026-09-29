@@ -260,6 +260,157 @@ fn test_assembly_product {
         products::AssemblyResult::Rejected(_) => "scalar source accepted" false test::assert_true
     end
 }
+
+fn test_scalar_checked_facts {
+    "scalar_checked_facts" test::test_start
+    "fn need value:i64 -> i64 { value } fn broken { true need drop } fn healthy -> i64 { 41 } healthy print"
+    = source
+    source make_input products::analyze.unwrap = snapshot
+    "bad scalar input rejected" snapshot
+        .get_report
+        .get_diagnostics
+        .has_errors test::assert_true
+    source "true need" str::find u64::try_from.unwrap 5 + = failed_offset
+    source "drop }" str::find u64::try_from.unwrap = dependent_offset
+    source "healthy print" str::find u64::try_from.unwrap = independent_offset
+    false = found_independent
+    for token in snapshot.get_semantic_tokens.iter do
+        "failed call has no verified token" failed_offset token.location.offset != test::assert_true
+        "dependent operation has no verified token" dependent_offset token.location.offset != test::assert_true
+        if independent_offset token.location.offset == then
+            true = found_independent
+        fi
+    done
+    "independent function call retained" found_independent test::assert_true
+    products::Target::LinuxX86_64 source make_input products::assembly.unwrap match
+        products::AssemblyResult::Rejected(report) => "source diagnostic retained" report.get_diagnostics.has_errors test::assert_true
+        products::AssemblyResult::Produced(_) => "failed decision cannot produce assembly" false test::assert_true
+    end
+}
+
+fn test_resolver_rejections_have_no_facts {
+    "resolver_rejections_have_no_facts" test::test_start
+    for
+        source in [
+            "const VALUE 42\n1 = VALUE",
+            "const VALUE 42\n1 += VALUE",
+            "const VALUE 42\n1 -= VALUE",
+        ].iter
+    do
+        source make_input products::analyze.unwrap = snapshot
+        "resolver error retained" snapshot
+            .get_report
+            .get_diagnostics
+            .has_errors test::assert_true
+        source.length 5 - = rejected_offset
+        for token in snapshot.get_semantic_tokens.iter do
+            "rejected assignment is not verified" rejected_offset token.location.offset != test::assert_true
+        done
+        products::Target::LinuxX86_64 source make_input products::assembly.unwrap match
+            products::AssemblyResult::Rejected(_) => {
+            }
+            products::AssemblyResult::Produced(_) => "resolver rejection cannot produce assembly" false test::assert_true
+        end
+    done
+}
+
+fn test_rejected_function_has_no_caller_facts {
+    "rejected_function_has_no_caller_facts" test::test_start
+    for
+        source in [
+            "const VALUE 42\nfn broken -> i64 { 1 = VALUE }\nbroken print",
+            "const VALUE 42\nfn broken -> i64 { 1 = VALUE }\n&broken exec print",
+        ].iter
+    do
+        source make_input products::analyze.unwrap = snapshot
+        "resolver error retained" snapshot
+            .get_report
+            .get_diagnostics
+            .has_errors test::assert_true
+        source "}\n" str::find u64::try_from.unwrap 2 + = caller_offset
+        for token in snapshot.get_semantic_tokens.iter do
+            "rejected callee cannot verify caller facts" caller_offset token.location.offset < test::assert_true
+        done
+    done
+}
+
+fn test_deferred_rejections_have_no_facts {
+    "deferred_rejections_have_no_facts" test::test_start
+    for
+        source in [
+            "fn need x:u8 { x drop } 256 need",
+            "fn bad { good true 1 + drop } fn good { bad } if true then bad else good fi",
+            "[256] = values:array[u8 1] values drop",
+        ].iter
+    do
+        source make_input products::analyze.unwrap = snapshot
+        "deferred source error retained" snapshot
+            .get_report
+            .get_diagnostics
+            .has_errors test::assert_true
+        for token in snapshot.get_semantic_tokens.iter do
+            source token.location.offset source.length token.location.offset - str::substring = remaining
+            if source "[" str::starts_with then
+                source "[" str::find u64::try_from.unwrap = nested_offset
+                "nested rejected literal has no facts" nested_offset token.location.offset < test::assert_true
+            fi
+            "invalid literal is not verified" remaining.as_str "256 need" != test::assert_true
+            "invalid literal consumer is not verified" remaining.as_str "need" != test::assert_true
+            "recursive rejected call is not verified" remaining.as_str "bad } if true then bad else good fi" != test::assert_true
+            "recursive dependent is not verified" remaining.as_str "good fi" != test::assert_true
+        done
+    done
+}
+
+fn test_scalar_independent_regions {
+    "scalar_independent_regions" test::test_start
+    for
+        source in [
+            "fn good -> i64 { 41 } fn need x:i64 { x drop } fn broken flag:bool { if flag then true need else good drop fi }",
+            "fn good -> i64 { 41 } fn broken -> bool { good drop }",
+            "fn good -> i64 { 41 } fn need x:u8 { x drop } fn broken flag:bool { if flag then 256 need else good drop fi }",
+        ].iter
+    do
+        source make_input products::analyze.unwrap = snapshot
+        "rejected body reported" snapshot
+            .get_report
+            .get_diagnostics
+            .has_errors test::assert_true
+        source "good drop" str::find u64::try_from.unwrap = independent_offset
+        false = found_independent
+        for token in snapshot.get_semantic_tokens.iter do
+            if independent_offset token.location.offset == then
+                true = found_independent
+            fi
+        done
+        "verified independent call retained" found_independent test::assert_true
+    done
+}
+
+fn test_scalar_branch_execution {
+    "scalar_branch_execution" test::test_start
+    "fn subtract right:i64 left:i64 -> i64 { left right - } impl i64 { fn twice self:i64 -> i64 { self 2 * } } fn choose flag:bool -> i64 { if flag then 20 3 subtract .twice else 4 fi 8 + } true choose print false choose print"
+    make_input products::Target::LinuxX86_64 swap products::assembly.unwrap match
+        products::AssemblyResult::Produced(report source) => {
+            "scalar branch accepted" report.get_diagnostics.has_errors ! test::assert_true
+            std::List[std::String]::new false "/tmp/casa_scalar_branch_test"
+            source.get_text.as_str build::compile_binary
+            std::List[std::Bytes]::new = run
+            "/bin/sh" run.push_str
+            "-c" run.push_str
+            "test \"$(/tmp/casa_scalar_branch_test)\" = 4212" run.push_str
+            "both continuing branches execute" 0 run std::run_command test::assert_eq
+            "/tmp/casa_scalar_branch_test".as_cstr.unwrap file::remove.unwrap drop
+        }
+        products::AssemblyResult::Rejected(_) => "scalar branch accepted" false test::assert_true
+    end
+}
+test_scalar_checked_facts
+test_resolver_rejections_have_no_facts
+test_rejected_function_has_no_caller_facts
+test_deferred_rejections_have_no_facts
+test_scalar_independent_regions
+test_scalar_branch_execution
 test_independent_requests
 test_rejected_source
 test_complete_prefix_facts_do_not_enable_assembly
