@@ -53,7 +53,7 @@ test_category() {
         test/test_qualified_import_type_deps|test/test_typed_struct_fields)
             echo types_generics
             ;;
-        test/test_derived_conformances|test/test_display|test/test_traits)
+        test/test_derived_conformances|test/test_display|test/test_trait_default_recipes|test/test_traits)
             echo types_traits
             ;;
         test/test_array_length|test/test_array_methods|test/test_size_of|\

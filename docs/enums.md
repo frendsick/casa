@@ -85,8 +85,8 @@ have no implicit comparison or hashing implementation. See the
 [derivation rules](traits.md#derive-standard-traits).
 
 Only payload-free enums can currently derive `Copy`. Payload enums use managed
-indirection and can derive `Clone` for explicit independent duplication. Clone
-can be customized. See
+indirection and can derive `Clone` for explicit independent duplication. For
+custom Clone behavior, omit the derive and write an explicit implementation. See
 [Copy and Clone](traits.md#copy-and-clone).
 
 See [`examples/enum.casa`](../examples/enum.casa) for more runnable examples.

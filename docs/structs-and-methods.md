@@ -146,9 +146,14 @@ struct Point derives Clone {
 }
 ```
 
-Define the method when the generated behavior is not suitable:
+For custom behavior, omit `derives Clone` and define the method:
 
 ```casa
+struct Point {
+    x: i64
+    y: i64
+}
+
 impl Point: Clone {
     fn clone self:$Point -> Point {
         self.y self.x Point

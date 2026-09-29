@@ -180,10 +180,11 @@ When `T` occurs only below a stored shared borrow, derived Clone duplicates the
 borrow and does not require `T: Clone`. The duplicate keeps the same loan
 origin. An exclusive-borrow field cannot derive Clone.
 
-An explicit trait method replaces only its generated method. The compiler
-still supplies the other methods and standard defaults. A custom `eq` combined
-with derived `Hashable` needs an explicit `hash`. A custom `eq` combined with
-derived `Ord` needs an explicit `cmp`.
+Each derive is a complete trait implementation. An explicit implementation
+cannot overlap its trait or inherited methods, even for one concrete instance
+of a generic derived type. Omit the derive and implement the complete trait
+when custom behavior is needed. Standard trait defaults remain available to
+both derived and explicit implementations.
 
 ## Copy and Clone
 
@@ -195,7 +196,7 @@ dynamic collections are not.
 Shared borrows can be duplicated with `dup` and `over`, but `$T` does not
 implement or satisfy `Copy`. An exclusive `mut$T` borrow cannot be duplicated.
 
-Payload-free enums can opt in with `derives Copy` or an empty implementation:
+Payload-free enums can opt in with `derives Copy`:
 
 ```casa
 import "std" { Copy }
@@ -204,12 +205,11 @@ enum Direction derives Copy {
     North
     South
 }
-
 ```
 
-The two forms are alternatives. `derives Copy` also supplies fieldwise Clone
-behavior required by the standard `Copy: Clone` relationship, unless the type
-defines its own Clone method.
+`derives Copy` supplies fieldwise Clone behavior required by the standard
+`Copy: Clone` relationship. User-defined structs and enums cannot use an
+explicit `impl Type: Copy` block or combine derived Copy with custom Clone.
 
 Ordinary structs and payload enums use heap-indirect value storage. They cannot
 implement `Copy`, even when every field is Copy, because duplicating their
@@ -220,10 +220,18 @@ independent duplication. When `T` implements Clone, calling `.clone` on `$T` or
 `mut$T` calls the borrowed value's implementation and returns an owned `T`.
 
 Clone operations are always explicit and can allocate or run user code. A type
-can derive the implementation or define it by hand:
+can derive the implementation:
 
 ```casa
 struct Document derives Clone {
+    title: String
+}
+```
+
+For custom behavior, omit `derives Clone` and write the implementation:
+
+```casa
+struct Document {
     title: String
 }
 
@@ -294,8 +302,9 @@ trait Greet: Labeled {
 ```
 
 A type that implements `Greet` must also provide the requirements inherited
-from `Labeled`. It receives `greeting` unless an applicable inherent method
-replaces that default.
+from `Labeled`. It receives `greeting` unless its trait implementation defines
+a matching method. An inherent method can win ordinary lookup but does not
+satisfy a bodyless trait requirement.
 
 Casa rejects supertrait cycles and inherited methods with incompatible stack
 effects. Two unrelated applicable defaults with the same name are ambiguous.
