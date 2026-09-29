@@ -22,8 +22,18 @@ The compiler then creates one implementation for each reachable concrete type
 combination. Each implementation uses direct layout, destruction, and trait
 method operations. Generic calls do not pass runtime type or trait metadata.
 
-Recursive generic calls must keep the same type arguments. A call cycle that
-changes them is rejected as polymorphic recursion.
+Unused generic declarations are checked too. An invalid body or missing trait
+bound is a definition error, even when no concrete instance is needed.
+
+Recursive generic calls must keep the complete type and constant bindings.
+This also applies to mutual recursion, function references, and cycles through
+ordinary functions. The diagnostic shows the call cycle and the changed
+bindings. Independent calls with different bindings remain valid.
+
+Calls with the same complete bindings reuse one concrete implementation.
+Direct calls reuse the checked body's symbolic callable result summary. Borrowed
+results retain their input origins, including borrows returned by generic
+closures.
 
 Use more than one type parameter when the types are independent:
 
@@ -318,3 +328,20 @@ implementations of the same trait method. Casa uses the exact receiver method
 before a generic receiver method or a trait default. Use the full receiver for
 qualified calls and references to its inherent method alias, such as
 `Box[i64]::describe` and `&Box[i64]::describe`.
+
+## Forwarding constant parameters
+
+A concrete constant argument must fit the declared parameter type. The same
+check applies to an explicit function reference. For example, `&small[256]`
+is invalid when `small` declares `const N:u8`.
+
+A forwarded symbolic constant must fit for every value of its declared type.
+Widening from `u8` to `u64` is valid. Narrowing from `u64` to `u8`, or forwarding
+a signed type to an unsigned type, is rejected at the generic definition.
+
+```casa
+fn wide[const N:u64] { }
+fn forward[const N:u8] { &wide[N] drop }
+
+&forward[255] exec
+```

@@ -63,7 +63,9 @@ struct ReturnOriginSummary derives std::Clone {
     cleanup_origins: std::Option[std::List[Origin]]
 }
 
-struct CallReturnSummary {
+const CALLABLE_PARAMETER_PREFIX "parameter "
+
+struct CallReturnSummary derives std::Clone {
     callables: std::List[std::Set[std::String]]
     origins:   std::List[ReturnOriginSummary]
 }
@@ -1390,6 +1392,7 @@ struct FactBranch {
 struct SemanticChecks {
     functions:           std::Map[std::String FunctionCheckStatus]
     verified_operations: std::Set[i64]
+    return_summaries:    std::Map[std::String CallReturnSummary]
 }
 
 impl SemanticChecks {
@@ -1508,7 +1511,7 @@ impl SemanticChecks {
                 FunctionCheckStatus::Checked name.clone functions.set
             fi
         done
-        std::Set[i64]::new functions SemanticChecks
+        std::Map[std::String CallReturnSummary]::new std::Set[i64]::new functions SemanticChecks
     }
 }
 
@@ -3702,9 +3705,6 @@ impl TypeChecker {
             return
         fi
         if actual common::Type::Const(actual_const) is then
-            if actual_const.is_symbolic then
-                return
-            fi
             if expected_const.typ actual_const.fits_parameter ! then
                 tc.current_location f"Constant argument `{actual.format}` does not fit type `{expected_const.typ.format}` of constant parameter `{expected_const.name}`" common::ErrorKind::TypeMismatch tc.diagnostics.record_error_string
             fi
@@ -4681,6 +4681,12 @@ impl TypeChecker {
             fi
         fi
 
+        # Recursive calls have no saved summary yet. Keep all input origins for
+        # callable results, including function types with symbolic return parameters.
+        if resolved_return common::Type::Function(_) is then
+            sources.callable.clone sources.callable_cleanup.clone ReturnCleanupMode::Exact return
+        fi
+
         if resolved_return.has_unresolved_type_var then
             std::Option[std::List[Origin]]::None = origins
             std::Option[std::List[Origin]]::None = cleanup_origins
@@ -4712,10 +4718,6 @@ impl TypeChecker {
         fi
         if tc.store resolved_return type_has_exclusive_borrow then
             sources.exclusive origins merge_origins = origins
-        fi
-        if resolved_return common::Type::Function(_) is then
-            sources.callable origins merge_origins = origins
-            sources.callable_cleanup.clone origins ReturnCleanupMode::Exact return
         fi
         std::List[std::String]::new = visiting
         if visiting tc.store resolved_return does_cleanup_observe_borrow then
@@ -6006,7 +6008,9 @@ impl TypeChecker {
         if function_opt name is_function_parameter ! then
             origins return
         fi
-        if typ TypeChecker::does_type_need_symbolic_origin then
+        if typ.is_borrow then
+            typ.is_exclusive_borrow name Place::new origins add_origin = origins
+        elif typ TypeChecker::does_type_need_symbolic_origin then
             false OriginKind::InputOrigins name Place::new Origin = dependency
             dependency origins append_origin = origins
         elif tc.store typ type_has_borrow then
@@ -7779,23 +7783,30 @@ impl TypeChecker {
             done
         fi
 
-        for
-            constant_name in effect
-                .const_params
-                .keys
-                .iter
-        do
-            if constant_name.as_str bindings clone_type_binding std::Option::Some(bound) is then
-                bound.clone = resolved_bound
-                if function_opt std::Option::Some(caller) is then
-                    caller.stack_effect.const_params resolved_bound rules::rewrite_type_const_params
-                    = resolved_bound
-                fi
-                resolved_bound constant_name.clone bindings.set
-            fi
-        done
         function_opt location bindings effect tc.validate_generic_bindings
         bindings
+    }
+
+    fn validate_reference_types
+        self:mut$TypeChecker
+        effect:$common::StackEffect
+        bindings:$std::Map[std::String common::Type]
+        location:$common::Location
+        function_opt:mut$std::Option[common::Function]
+    {
+        for type_variable in effect.type_vars.iter do
+            if type_variable.as_str bindings clone_type_binding std::Option::Some(bound) is then
+                if bound common::Type::Const is then
+                    location f"Type parameter `{type_variable}` requires a type, got `{bound.format}`"
+                    common::ErrorKind::TypeMismatch self.diagnostics.record_error_string
+                else
+                    location function_opt bound self.validate_type_exists
+                fi
+            else
+                location f"Cannot determine concrete type for type variable `{type_variable}`"
+                common::ErrorKind::TypeMismatch self.diagnostics.record_error_string
+            fi
+        done
     }
 
     pub fn validate_generic_bindings
@@ -7812,10 +7823,16 @@ impl TypeChecker {
                 .iter
         do
             if constant_name.as_str bindings clone_type_binding std::Option::Some(bound) is then
-                if bound common::Type::Const is ! then
-                    location f"Constant parameter `{constant_name}` requires a compile-time constant, got `{bound.format}`"
-                    common::ErrorKind::TypeMismatch tc.diagnostics.record_error_string
+                if function_opt std::Option::Some(caller) is then
+                    caller.stack_effect.const_params bound rules::rewrite_type_const_params = bound
                 fi
+                constant_name effect
+                    .const_params
+                    .get
+                    .unwrap constant_name.clone
+                common::ConstType::symbolic = expected
+                bound expected tc.validate_const_argument
+                bound constant_name.clone bindings.set
             else
                 location f"Cannot determine the value of constant parameter `{constant_name}`"
                 common::ErrorKind::TypeMismatch tc.diagnostics.record_error_string
@@ -8322,7 +8339,13 @@ impl TypeChecker {
                 .scope
                 .function_bindings
                 .set
-            if capture.typ.is_borrow self.store capture.typ type_has_borrow ! || then
+            if capture.typ.is_borrow then
+                capture.typ.is_exclusive_borrow capture.name.as_str Place::new
+                std::Option[std::List[Origin]]::None add_origin = origins
+                std::Option[std::List[Origin]]::None origins capture.name.as_str self.record_binding_origins
+                continue
+            fi
+            if self.store capture.typ type_has_borrow ! then
                 continue
             fi
             self.store capture.typ type_has_exclusive_borrow = exclusive
@@ -8575,6 +8598,9 @@ impl TypeChecker {
             CallReturnSummary::new = executable_summary
             std::Option[common::StackEffect]::None = callable_effect
             for callable in executable_callables.iter do
+                if callable.as_str CALLABLE_PARAMETER_PREFIX str::starts_with then
+                    continue
+                fi
                 if
                     tc.infer_parameters tc.clone_bodies tc.checks tc.diagnostics tc.store callable.as_str
                     ensure_checked_function std::Option::Some(checked) is
@@ -8730,6 +8756,7 @@ impl TypeChecker {
                         op.location f"Generic function reference `&{push_name}` requires explicit type arguments"
                         common::ErrorKind::TypeMismatch tc.diagnostics.record_error_string
                     fi
+                    function_opt op.location specialization_bindings effect tc.validate_reference_types
                     function_opt op.location specialization_bindings effect tc.validate_generic_bindings
                     specialization_bindings.clone = op.call_bindings
                     specialization_bindings effect common::apply_type_subs_to_stack_effect = effect
@@ -10890,6 +10917,8 @@ fn ensure_checked_function
         std::Option[CheckedFunction]::None return
     fi
     FunctionCheckStatus::Checked function_name.to_str checks.functions.set
+    checked.return_origin_summaries.clone checked.return_callables.clone CallReturnSummary
+    function_name.to_str checks.return_summaries.set
     summary std::Option::Some
 }
 
@@ -10987,6 +11016,27 @@ pub fn validate_extern_functions store:mut$common::SymbolStore diagnostics:mut$e
 # ============================================================================
 # Main type check dispatch
 # ============================================================================
+
+fn resolve_returned_callables
+    returned:$std::Set[std::String]
+    arguments:$std::Map[std::String std::Set[std::String]]
+-> std::Set[std::String] {
+    std::Set[std::String]::new = resolved
+    for callable in returned.iter do
+        if callable.as_str CALLABLE_PARAMETER_PREFIX str::starts_with ! then
+            callable.clone resolved.add
+            continue
+        fi
+        CALLABLE_PARAMETER_PREFIX.length = prefix_length
+        callable.as_str prefix_length callable.length prefix_length - str::substring = parameter
+        if parameter.as_str arguments.get_str std::Option::Some(inputs) is then
+            for input in inputs.iter do
+                input.clone resolved.add
+            done
+        fi
+    done
+    resolved
+}
 
 impl TypeChecker {
     fn bind_stack_callable_arguments
@@ -11087,44 +11137,27 @@ impl TypeChecker {
         summaries
     }
 
+    # Substitute callable inputs in the saved symbolic result without checking the body again.
     fn collect_function_return_summary
-        self:mut$TypeChecker
+        self:$TypeChecker
         function_name:$str
         argument_callables:$std::Map[std::String std::Set[std::String]]
     -> CallReturnSummary {
-        std::Option[common::Function]::None = called_function
-        if function_name self.store.get_function std::Option::Some(function) is then
-            false = returns_callable
-            for
-                return_type in function
-                    .stack_effect
-                    .return_types
-                    .iter
-            do
-                if return_type common::Type::Function is then
-                    true = returns_callable
-                    break
-                fi
+        if
+            function_name self
+                .checks
+                .return_summaries
+                .get_str std::Option::Some(saved) is
+        then
+            saved.clone = summary
+            std::List[std::Set[std::String]]::new = returns
+            for returned in summary.callables.iter do
+                argument_callables returned resolve_returned_callables returns.push
             done
-            if returns_callable then
-                function.clone_for_import std::Option::Some = called_function
-            fi
+            returns = summary.callables
+            summary return
         fi
-        if called_function.is_none then
-            CallReturnSummary::new return
-        fi
-        if function_name self.active_calls.has_str then
-            CallReturnSummary::new return
-        fi
-        self.active_calls.clone = active_calls
-        function_name.to_str active_calls.add
-        self.infer_parameters self.clone_bodies self.checks active_calls argument_callables
-        self.store called_function.unwrap
-        analyze_function_semantics_in_store = analysis
-        CallReturnSummary {
-            callables: analysis.return_callables.clone
-            origins: analysis.return_origin_summaries.clone
-        }
+        CallReturnSummary::new
     }
 
     fn find_call_argument
@@ -11969,6 +12002,8 @@ fn analyze_ops
             if "" parameter.name.as_str != then
                 if parameter.name.as_str argument_callables.get_str std::Option::Some(callables) is then
                     callables.clone = parameter_callables
+                elif parameter.typ TypeChecker::does_type_need_symbolic_origin then
+                    f"{CALLABLE_PARAMETER_PREFIX}{parameter.name}" parameter_callables.add
                 fi
             fi
             parameter_callables checker.contextual_callables.push
@@ -12065,6 +12100,20 @@ fn analyze_ops
         checker.return_types.get_types = inferred_returns
     fi
     inferred_returns checker.parameters.clone common::StackEffect::new = inferred
+    if function_opt std::Option::Some(function) is then
+        function
+            .stack_effect
+            .type_vars
+            .clone = inferred.type_vars
+        function
+            .stack_effect
+            .trait_bounds
+            .clone = inferred.trait_bounds
+        function
+            .stack_effect
+            .const_params
+            .clone = inferred.const_params
+    fi
 
     # Verify against declared stack effect if function has one
     checker.diagnostics.error_count errors_before_ops < checker.facts_available ! || = had_type_errors
@@ -12260,6 +12309,10 @@ fn analyze_function_semantics_in_store
         FunctionCheckStatus::Checked
     fi
     checked_function.name.clone checks.functions.set
+    if checked.is_valid then
+        checked.return_origin_summaries.clone checked.return_callables.clone CallReturnSummary
+        checked_function.name.clone checks.return_summaries.set
+    fi
     checked_function.clone store.restore_function
     AnalyzedFunction {
         checked_function: checked_function
@@ -12417,18 +12470,25 @@ pub fn check_trait_impls store:mut$common::SymbolStore diagnostics:mut$error::Di
     done
 }
 
+fn does_binding_name_precede left:$std::String right:$std::String -> bool {
+    for pair in right.iter left.iter.zip do
+        if pair.first pair.second != then
+            pair.second pair.first < return
+        fi
+    done
+    right.length left.length <
+}
+
 pub fn generic_binding_key bindings:$std::Map[std::String common::Type] -> std::String {
     bindings.keys = names
+    &does_binding_name_precede names.sort_by
     std::String::new = key
     for name in names.iter do
-        name.as_str key.append
-        '=' key.push
         name bindings
             .get
             .unwrap
-            .format
-            .as_str key.append
-        ';' key.push
+            .format = value
+        f"{name.length}:{name}={value.length}:{value};" key.append_string
     done
     key
 }
@@ -12457,6 +12517,7 @@ pub fn validate_generic_cycle_call
     op:$common::Op
     substitutions:mut$std::Map[std::String common::Type]
     active:mut$std::Map[std::String std::String]
+    path:mut$std::List[std::String]
     store:$common::SymbolStore
     diagnostics:mut$error::Diagnostics
 {
@@ -12475,16 +12536,6 @@ pub fn validate_generic_cycle_call
         return
     fi
     callee_opt.unwrap = callee_ref
-    callee_ref.stack_effect.clone = callee_effect
-    if
-        0 callee_effect.type_vars.length == 0 callee_effect
-            .const_params
-            .keys
-            .length == &&
-    then
-        return
-    fi
-    callee_ref.ops.clone = callee_ops
     std::Map[std::String common::Type]::new = composed
     for pair in op.call_bindings.iter do
         substitutions pair.second.substitute_t pair.first.clone composed.set
@@ -12492,35 +12543,40 @@ pub fn validate_generic_cycle_call
     composed generic_binding_key = key
     if function_name active.get std::Option::Some(previous) is then
         if previous.as_str key.as_str != then
-            op.location f"Polymorphic recursion changes the type arguments of `{function_name}`"
+            path.clone = cycle
+            function_name.clone cycle.push
+            " -> " cycle.join_strings = cycle_text
+            op.location f"Polymorphic recursion changes the type arguments of `{function_name}`: `{previous}` becomes `{key}` (cycle: {cycle_text})"
             common::ErrorKind::TypeMismatch diagnostics.record_error_string
         fi
         return
     fi
     key.clone function_name.clone active.set
-    diagnostics store active composed callee_ops validate_generic_cycles_in_ops
+    function_name.clone path.push
+    diagnostics store path active composed callee_ref.ops validate_generic_cycles_in_ops
     function_name.as_str active.delete_str
+    path.pop drop
 }
 
 pub fn validate_generic_cycles_in_ops
     ops:$std::List[common::Op]
     substitutions:mut$std::Map[std::String common::Type]
     active:mut$std::Map[std::String std::String]
+    path:mut$std::List[std::String]
     store:$common::SymbolStore
     diagnostics:mut$error::Diagnostics
 {
     for op in ops.iter do
-        diagnostics store active substitutions op validate_generic_cycle_call
-        op.value.clone = value
-        value match
+        diagnostics store path active substitutions op validate_generic_cycle_call
+        op.value match
             common::OpValue::PushArray(items) => {
-                diagnostics store active substitutions items validate_generic_cycles_in_ops
+                diagnostics store path active substitutions items validate_generic_cycles_in_ops
             }
             common::OpValue::ExprGroup(items) => {
-                diagnostics store active substitutions items validate_generic_cycles_in_ops
+                diagnostics store path active substitutions items validate_generic_cycles_in_ops
             }
             common::OpValue::MatchArm(arm) => {
-                diagnostics store active substitutions arm.guard_ops validate_generic_cycles_in_ops
+                diagnostics store path active substitutions arm.guard_ops validate_generic_cycles_in_ops
             }
             _ => {
             }
@@ -12545,8 +12601,10 @@ pub fn validate_generic_cycles store:$common::SymbolStore diagnostics:mut$error:
             fi
             function.stack_effect identity_generic_bindings = bindings
             std::Map[std::String std::String]::new = active
+            std::List[std::String]::new = path
+            function_name.clone path.push
             bindings generic_binding_key function_name.clone active.set
-            diagnostics store active bindings function.ops validate_generic_cycles_in_ops
+            diagnostics store path active bindings function.ops validate_generic_cycles_in_ops
         fi
     done
 }
@@ -12702,7 +12760,16 @@ pub fn monomorphized_function_name
     bindings:$std::Map[std::String common::Type]
 -> std::String {
     bindings generic_binding_key = key
-    f"{function_name}__mono_{key.as_str std::str_hash}"
+    f"{function_name}__mono_ " = name
+    # Encode the complete key. Hash collisions must never merge semantic instances.
+    for character in key.iter do
+        if character.is_alpha character.is_digit || then
+            character name.push
+        else
+            f"_{character.codepoint}_" name.append_string
+        fi
+    done
+    name
 }
 
 pub fn function_receiver_bindings
