@@ -24,6 +24,7 @@ pub struct ParseState {
     pub output_usable:     std::List[bool]
     pub recovery_required: std::List[bool]
     pub store_mutated:     std::List[bool]
+    pub constant_errors:   u64
 }
 
 impl ParseState {
@@ -34,7 +35,7 @@ impl ParseState {
         false recovery_required.push
         std::List[bool]::new = output_usable
         true output_usable.push
-        store_mutated recovery_required output_usable diagnostics ParseState
+        0 store_mutated recovery_required output_usable diagnostics ParseState
     }
 
     pub fn record_error
@@ -70,6 +71,15 @@ impl ParseState {
     pub fn mark_output_unusable self:mut$ParseState { false 0 self.output_usable.set }
 
     pub fn has_usable_output self:mut$ParseState -> bool { 0 self.output_usable.get copy }
+
+    pub fn has_nonconstant_errors_since
+        self:$ParseState
+        errors_before:u64
+        constant_errors_before:u64
+    -> bool {
+        self.diagnostics.error_count errors_before -
+        self.constant_errors constant_errors_before - !=
+    }
 
     pub fn request_recovery self:mut$ParseState { true 0 self.recovery_required.set }
 
@@ -361,6 +371,7 @@ impl common::SymbolStore {
         done
         self.variables.clone = cloned.variables
         self.constants.clone = cloned.constants
+        self.failed_constants.clone = cloned.failed_constants
         self.enums.clone = cloned.enums
         self.structs.clone = cloned.structs
         self.traits.clone = cloned.traits
@@ -434,17 +445,18 @@ pub fn operator_to_op_value operator_kind:common::OperatorKind -> std::Option[co
 # ============================================================================
 
 pub struct TokenCursor {
-    pub tokens:          $std::List[common::Token]
-    pub pos:             u64
-    pub names:           std::Map[std::String common::SourceBinding]
-    pub constants:       std::Map[std::String common::Constant]
-    pub type_bindings:   std::List[std::String]
-    pub module_prefixes: std::List[std::String]
+    pub tokens:           $std::List[common::Token]
+    pub pos:              u64
+    pub names:            std::Map[std::String common::SourceBinding]
+    pub constants:        std::Map[std::String common::Constant]
+    pub failed_constants: std::Set[std::String]
+    pub type_bindings:    std::List[std::String]
+    pub module_prefixes:  std::List[std::String]
 }
 
 impl TokenCursor {
     pub fn new tokens:$std::List[common::Token] -> TokenCursor {
-        std::List[std::String]::new std::List[std::String]::new std::Map[std::String common::Constant]::new std::Map[std::String common::SourceBinding]::new 0 tokens TokenCursor
+        std::List[std::String]::new std::List[std::String]::new std::Set[std::String]::new std::Map[std::String common::Constant]::new std::Map[std::String common::SourceBinding]::new 0 tokens TokenCursor
     }
 
     pub fn copy_module_prefixes self:mut$TokenCursor prefixes:$std::Map[std::String std::String] {
@@ -743,6 +755,11 @@ pub fn parse_type_ast cursor:mut$TokenCursor state:mut$ParseState -> common::Typ
                 common::Type::Unknown return
             }
         end
+    fi
+
+    if base.as_str cursor.failed_constants.has_str then
+        peek.location f"Constant `{peek.value}` is unavailable because its declaration failed" common::ErrorKind::UndefinedName state.record_error_string
+        common::Type::Unknown return
     fi
 
     cursor.peek = next_opt
@@ -1824,7 +1841,7 @@ fn read_constant_reference
             token.location f"Constant `{token.value}` is private" common::ErrorKind::InvalidScope parser.state.record_error_string
             std::Option[constant_eval::EvalValue]::None return
         fi
-        token.location.clone found.typ.clone found.value.clone constant_eval::EvalValue std::Option::Some return
+        token.location.clone found.typ.clone found.value.clone constant_eval::EvalValue::new std::Option::Some return
     fi
     if
         name.as_str parser
@@ -1845,7 +1862,23 @@ fn read_constant_reference
             .has_str ||
     then
         token.location f"`{token.value}` is not a constant" common::ErrorKind::TypeMismatch parser.state.record_error_string
-    elif token.value.as_str cursor.names.has_str then
+    elif
+        name.as_str parser
+            .store
+            .failed_constants
+            .has_str
+        token
+            .location
+            .file
+            .as_str name.as_str parser.store.is_private_from &&
+    then
+        token.location f"Constant `{token.value}` is private" common::ErrorKind::InvalidScope parser.state.record_error_string
+    elif
+        name.as_str parser
+            .store
+            .failed_constants
+            .has_str token.value.as_str cursor.names.has_str ||
+    then
         token.location f"Constant `{token.value}` is unavailable" common::ErrorKind::UndefinedName parser.state.record_error_string
     else
         token.location f"Unknown constant `{token.value}`" common::ErrorKind::UndefinedName parser.state.record_error_string
@@ -1874,9 +1907,13 @@ fn evaluate_bounded_block
             continue
         fi
         if token.kind common::TokenKind::Literal == then
-            token.location.clone token.value.as_str parse_literal_to_constant_value constant_eval::literal stack.push
+            token.location.clone std::Option[common::BuiltinType]::None token.value.as_str parse_literal_to_constant_value constant_eval::EvalValue::new stack.push
             continue
         fi
+        parser
+            .state
+            .diagnostics
+            .error_count = errors_before_intrinsic
         if
             parser.state.diagnostics token.location token.value.as_str stack constant_eval::apply_stack_intrinsic
         then
@@ -1884,7 +1921,7 @@ fn evaluate_bounded_block
                 parser
                     .state
                     .diagnostics
-                    .has_errors
+                    .error_count errors_before_intrinsic <
             then
                 std::Option[constant_eval::EvalValue]::None return
             fi
@@ -1955,7 +1992,7 @@ impl Parser {
                 cursor.retreat
                 value_token.location annotation.clone cursor self evaluate_bounded_block = value
             elif value_token.kind common::TokenKind::Literal == then
-                value_token.location.clone value_token.value.as_str parse_literal_to_constant_value constant_eval::literal std::Option::Some = value
+                value_token.location.clone std::Option[common::BuiltinType]::None value_token.value.as_str parse_literal_to_constant_value constant_eval::EvalValue::new std::Option::Some = value
             elif value_token.kind common::TokenKind::Identifier == then
                 value_token cursor self read_constant_reference = value
             else
@@ -6815,6 +6852,10 @@ pub fn parse_ops parser:mut$Parser tokens:std::List[common::Token] -> std::List[
         .constants
         .clone = cursor.constants
     parser
+        .store
+        .failed_constants
+        .clone = cursor.failed_constants
+    parser
         .current_module
         .names
         .clone = cursor.names
@@ -7253,7 +7294,8 @@ impl Parser {
         self
             .state
             .diagnostics
-            .error_count = error_count_before
+            .error_count = errors_before
+        self.state.constant_errors = constant_errors_before
         self.sources import_path.clone lexer::lex_file = import_result
         error::Diagnostics::new = diagnostics
         std::List[common::Token]::new = tokens
@@ -7266,7 +7308,7 @@ impl Parser {
             .diagnostics
             .merge
         if
-            error_count_before self
+            errors_before self
                 .state
                 .diagnostics
                 .error_count >
@@ -7289,11 +7331,7 @@ impl Parser {
         module_prefix tokens self.prepare_module
         tokens self parse_ops = imported_ops
         if
-            error_count_before self
-                .state
-                .diagnostics
-                .error_count >
-            self.state.has_usable_output ! ||
+            self.state.has_usable_output ! constant_errors_before errors_before self.state.has_nonconstant_errors_since ||
         then
             self.import_stack.pop drop
             self.module_contexts.pop drop
@@ -7326,11 +7364,7 @@ impl Parser {
         self.import_stack.pop drop
         self.module_contexts.pop = module_context
         if
-            resolved_ops_opt.is_none
-            error_count_before self
-                .state
-                .diagnostics
-                .error_count > ||
+            resolved_ops_opt.is_none constant_errors_before errors_before self.state.has_nonconstant_errors_since ||
         then
             false std::Result::Ok
             return
@@ -8102,6 +8136,9 @@ pub fn resolve_plain_identifier
     else
         f"Identifier `{ident}` is not defined"
     fi = message
+    if ident store.failed_constants.has_str then
+        f"Constant `{ident}` is unavailable because its declaration failed" = message
+    fi
     op.location.clone message common::ErrorKind::UndefinedName error::CasaError::new resolve_errors.push
 }
 
@@ -8323,20 +8360,18 @@ impl Parser {
             self.state.has_usable_output imports_usable && = imports_usable
             0 self.state.diagnostics take_diagnostics_since diagnostics.merge
         done
-        diagnostics = self.state.diagnostics
         if imports_usable ! then
+            diagnostics.clone self
+                .state
+                .diagnostics
+                .merge
             self.state.mark_output_unusable
         fi
         while declaration_index parsed.declarations.length > do
             names module_prefix declaration_index parsed.declarations.get self.bind_declaration
             1 += declaration_index
         done
-        if
-            self
-                .state
-                .diagnostics
-                .has_errors self.state.has_usable_output ! ||
-        then
+        if self.state.has_usable_output ! then
             lexical_diagnostics.clone self
                 .state
                 .diagnostics
@@ -8359,6 +8394,15 @@ impl Parser {
                 .diagnostics
                 .has_errors
         then
+            0 self.state.diagnostics take_diagnostics_since = qualified_diagnostics
+            diagnostics.clone self
+                .state
+                .diagnostics
+                .merge
+            qualified_diagnostics self
+                .state
+                .diagnostics
+                .merge
             lexical_diagnostics.clone self
                 .state
                 .diagnostics
@@ -8376,6 +8420,10 @@ impl Parser {
             .store
             .constants
             .clone = constant_cursor.constants
+        self
+            .store
+            .failed_constants
+            .clone = constant_cursor.failed_constants
         self.source_prefixes constant_cursor.copy_module_prefixes
         0 = import_index: u64
         for declaration in parsed.declarations.iter do
@@ -8411,18 +8459,36 @@ impl Parser {
                     .current_module_mut
                     .header_ends
                     .set
+                self
+                    .state
+                    .diagnostics
+                    .error_count = errors_before_constant
                 declaration constant_cursor self.evaluate_constant_declaration
+                self
+                    .state
+                    .diagnostics
+                    .error_count errors_before_constant - self.state.constant_errors + = self.state.constant_errors
+                declaration.name.as_str constant_cursor.resolve_name = constant_name
+                if
+                    constant_name.as_str self
+                        .store
+                        .constants
+                        .has_str !
+                then
+                    constant_name.as_str self.register_private_declaration
+                    constant_name.clone self
+                        .store
+                        .failed_constants
+                        .add
+                    constant_name.clone constant_cursor.failed_constants.add
+                fi
             fi
         done
-        if
-            self
-                .state
-                .diagnostics
-                .has_errors
-        then
-            self.state.mark_output_unusable return
-        fi
         tokens parsed.declarations self.collect_headers
+        diagnostics self
+            .state
+            .diagnostics
+            .merge
         lexical_diagnostics.clone self
             .state
             .diagnostics
@@ -8446,6 +8512,10 @@ impl Parser {
             .store
             .constants
             .clone = cursor.constants
+        self
+            .store
+            .failed_constants
+            .clone = cursor.failed_constants
         self
             .current_module
             .names
