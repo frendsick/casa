@@ -56,8 +56,9 @@ Casa tests.
     decisions. A combined self-review or an unrecorded axis does not complete a
     round.
 11. Repeat until no Must fix or Prerequisite assigned to the current work
-    remains, then run the selected tier's final validation once and open or
-    update the pull request. See [testing.md](./testing.md) and [git.md](./git.md).
+    remains, then follow the selected tier's final validation rules in
+    [testing.md](./testing.md) and open or update the pull request. See
+    [git.md](./git.md) for the PR workflow.
 
 ## Why no pausing
 
