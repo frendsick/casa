@@ -9,9 +9,8 @@ Casa is a statically typed, stack-based programming language for Linux.
 ## Requirements
 
 - Linux on x86-64
-- GNU assembler (`as`) and a C compiler driver (`cc`)
-  - For example, on Ubuntu, install the `binutils` and `build-essential`
-    packages.
+- A C compiler driver at `/usr/bin/cc`, with GNU assembler and linker tools
+  - For example, on Ubuntu, install the `build-essential` package.
 
 ## Install
 

@@ -32,6 +32,24 @@ compiler state, so retained results cannot affect other requests.
 `Target::LinuxX86_64`. The caller writes and builds assembly and launches binaries.
 Native failures do not consume or change the report.
 
+`compiler/build.casa` provides `NativeDriver::compile_binary`, which borrows an
+`AssemblySource`, an output path, and ordered native library names. The default
+driver is `/usr/bin/cc`. One invocation assembles and links with `-nostdlib`,
+`-no-pie`, `-Wl,-e,_start`, and `-Wl,-z,noexecstack`. Tool diagnostics inherit
+the caller's stderr. The adapter returns `Result[bool BuildFailure]` with `true`
+on success. Write, launch, wait, nonzero exit, and signal failures return to the
+caller. Only the forked child exits after an unsuccessful `execve`.
+
+The fixed Linux runtime code and data are embedded from `compiler/runtime.casa`.
+Program-specific pools and bodies remain generated. Installed compilers need no
+runtime asset from the checkout. `keep_asm` retains the complete `<output>.s` on
+success and native failure. Otherwise the adapter removes it after the driver
+returns. The compiler creates no intermediate object file.
+
+`AssemblySource::new` wraps completed legacy backend text with its target for
+the CLI during consumer migration. Request products construct the same type
+inside `assembly`.
+
 Scalar checking uses one request-owned function state to distinguish active,
 accepted, and rejected bodies. Operation handlers record dependencies from the
 same selected target and receiver that they use to check the stack. The editor
@@ -107,3 +125,16 @@ final redesign performance.
 `tests/compiler/test_products.casa` checks independent overrides, release order,
 source rejection, syntax products, retained failure context, and native output
 from requested assembly. The private-field fixture checks the product boundary.
+
+The [native build lifetime workload](benchmarks/native-build-lifetime.casa)
+repeats missing-tool, nonzero-tool, and successful-build paths for 30 rounds.
+The [allocator samples](benchmarks/native-build-lifetime.json) show zero live
+allocations between rounds. After warm-up, reusable storage remains at 43 blocks
+and 1,296 payload bytes, with 68 KiB RSS and one retained 64 MiB mapped chunk.
+These measurements cover adapter ownership, not compiler speed.
+
+```sh
+./casac -L lib casa.casa -o casac_new
+./casac_new -L lib docs/benchmarks/native-build-lifetime.casa -o /tmp/casa-native-build-lifetime
+python3 docs/benchmarks/compiler-reductions/lifetime.py /tmp/casa-native-build-lifetime docs/benchmarks/native-build-lifetime.json
+```

@@ -2,6 +2,7 @@
 import "std" as std
 import "common" as common
 import "typechecker" as typechecker
+import "runtime" as runtime
 
 # ============================================================================
 # Constants
@@ -9,15 +10,8 @@ import "typechecker" as typechecker
 pub const INT32_MAX 2147483647
 pub const INT32_MIN -2147483648
 pub const RETURN_STACK_SIZE 1048576
-pub const SMALL_ALLOC_LIMIT 512
 pub const HEAP_CHUNK_HEADER_SIZE 16
-pub const HEAP_GROWTH_SIZE 67108864
-pub const MMAP_SYSCALL 9
-pub const MMAP_PROT_READ_WRITE 3
-pub const MMAP_PRIVATE_ANONYMOUS 34
-pub const WRITE_SYSCALL 1
 pub const EXIT_SYSCALL 60
-pub const EINTR_RESULT -4
 pub const STDOUT_FD 1
 pub const STDERR_FD 2
 pub const FAILURE_STATUS 1
@@ -457,20 +451,6 @@ impl Emitter {
         if 0 self.constants_count > then
             f"constants: .skip {self.constants_count common::WORD_SIZE *}" self.line_string
         fi
-        f"return_stack: .skip {RETURN_STACK_SIZE}" self.line_string
-        f"env_stack: .skip {RETURN_STACK_SIZE}" self.line_string
-        "env_sp: .skip 8" self.line
-        "current_env: .skip 8" self.line
-        ".align 16" self.line
-        "heap_chunks: .skip 8" self.line
-        "heap_ptr: .skip 8" self.line
-        "heap_end: .skip 8" self.line
-        "free_list: .skip 8" self.line
-        f"small_free_lists: .skip {SMALL_ALLOC_LIMIT}" self.line_string
-        "__argc: .skip 8" self.line
-        "__argv: .skip 8" self.line
-        "__envp: .skip 8" self.line
-        "print_buf: .skip 32" self.line
         "" self.line
     }
 
@@ -494,17 +474,6 @@ impl Emitter {
             f".asciz \"{escaped}\"" self.line_string
             1 += index
         done
-        "bool_true: .ascii \"true\"" self.line
-        "bool_false: .ascii \"false\"" self.line
-        "float_decimal_ten: .long 10" self.line
-        "arithmetic_error_msg: .ascii \"error: integer arithmetic failed\\n\"" self.line
-        ".equ arithmetic_error_msg_len, . - arithmetic_error_msg" self.line
-        "return_stack_overflow_msg: .ascii \"error: return stack overflow\\n\"" self.line
-        ".equ return_stack_overflow_msg_len, . - return_stack_overflow_msg" self.line
-        "env_stack_overflow_msg: .ascii \"error: env stack overflow\\n\"" self.line
-        ".equ env_stack_overflow_msg_len, . - env_stack_overflow_msg" self.line
-        "allocation_failure_msg: .ascii \"fatal: allocation failed\\n\"" self.line
-        ".equ allocation_failure_msg_len, . - allocation_failure_msg" self.line
         # Static closure record per function
         for
             name in self
@@ -595,7 +564,6 @@ impl Emitter {
     pub fn emit_text self:mut$Emitter bytecode:$std::List[common::InstValue] {
         self.functions collect_leaf_templates = templates
         ".section .text" self.line
-        self.emit_helpers
         templates self.emit_functions
         templates bytecode self.emit_start
     }
@@ -603,528 +571,6 @@ impl Emitter {
     # ============================================================================
     # Helper subroutines
     # ============================================================================
-
-    # Each mmap chunk starts with the previous chunk and its end address.
-    # Small blocks use exact-size bins. Larger blocks keep first-fit reuse.
-    # ponytail: large blocks are not split or coalesced; add both if large-block
-    # fragmentation becomes measurable.
-    pub fn emit_heap_helpers self:mut$Emitter {
-        # heap_alloc: requested byte count in %rdi, pushes an aligned pointer.
-        "heap_alloc:" self.line
-        "popq -8(%r14)" self.indent
-        "testq %rdi, %rdi" self.indent
-        "jz .Lheap_alloc_null" self.indent
-        "movq %rdi, %rax" self.indent
-        "addq $7, %rax" self.indent
-        "jc .Lheap_alloc_oom" self.indent
-        "andq $-8, %rax" self.indent
-        f"cmpq ${SMALL_ALLOC_LIMIT}, %rax" self.indent_string
-        "ja .Lheap_alloc_large" self.indent
-        "leaq small_free_lists(%rip), %r9" self.indent
-        "leaq -8(%r9,%rax), %r9" self.indent
-        "movq (%r9), %rcx" self.indent
-        "testq %rcx, %rcx" self.indent
-        "jz .Lheap_alloc_bump" self.indent
-        "movq 8(%rcx), %r8" self.indent
-        "movq %r8, (%r9)" self.indent
-        "leaq 8(%rcx), %rax" self.indent
-        "pushq %rax" self.indent
-        "jmp .Lheap_alloc_return" self.indent
-        ".Lheap_alloc_large:" self.line
-        "movq free_list(%rip), %rcx" self.indent
-        "xorq %rdx, %rdx" self.indent
-        ".Lheap_alloc_search:" self.line
-        "testq %rcx, %rcx" self.indent
-        "jz .Lheap_alloc_bump" self.indent
-        "cmpq %rax, (%rcx)" self.indent
-        "jae .Lheap_alloc_reuse" self.indent
-        "movq %rcx, %rdx" self.indent
-        "movq 8(%rcx), %rcx" self.indent
-        "jmp .Lheap_alloc_search" self.indent
-        ".Lheap_alloc_reuse:" self.line
-        "movq 8(%rcx), %r8" self.indent
-        "testq %rdx, %rdx" self.indent
-        "jz .Lheap_alloc_reuse_head" self.indent
-        "movq %r8, 8(%rdx)" self.indent
-        "jmp .Lheap_alloc_return_block" self.indent
-        ".Lheap_alloc_reuse_head:" self.line
-        "movq %r8, free_list(%rip)" self.indent
-        ".Lheap_alloc_return_block:" self.line
-        "leaq 8(%rcx), %rax" self.indent
-        "pushq %rax" self.indent
-        "jmp .Lheap_alloc_return" self.indent
-        ".Lheap_alloc_bump:" self.line
-        "movq heap_ptr(%rip), %rcx" self.indent
-        "testq %rcx, %rcx" self.indent
-        "jz .Lheap_alloc_map" self.indent
-        "addq $7, %rcx" self.indent
-        "andq $-8, %rcx" self.indent
-        "movq %rax, %r8" self.indent
-        "addq $8, %r8" self.indent
-        "jc .Lheap_alloc_oom" self.indent
-        "addq %rcx, %r8" self.indent
-        "jc .Lheap_alloc_oom" self.indent
-        "cmpq heap_end(%rip), %r8" self.indent
-        "jbe .Lheap_alloc_commit" self.indent
-        ".Lheap_alloc_map:" self.line
-        "pushq %rsi" self.indent
-        "pushq %r10" self.indent
-        "pushq %r11" self.indent
-        "pushq %rax" self.indent
-        "movq %rax, %rsi" self.indent
-        f"addq ${HEAP_CHUNK_HEADER_SIZE 8 +}, %rsi" self.indent_string
-        "jc .Lheap_alloc_oom" self.indent
-        f"cmpq ${HEAP_GROWTH_SIZE}, %rsi" self.indent_string
-        "jae .Lheap_alloc_map_size_ready" self.indent
-        f"movq ${HEAP_GROWTH_SIZE}, %rsi" self.indent_string
-        ".Lheap_alloc_map_size_ready:" self.line
-        "xorq %rdi, %rdi" self.indent
-        f"movq ${MMAP_PROT_READ_WRITE}, %rdx" self.indent_string
-        f"movq ${MMAP_PRIVATE_ANONYMOUS}, %r10" self.indent_string
-        "movq $-1, %r8" self.indent
-        "xorq %r9, %r9" self.indent
-        f"movq ${MMAP_SYSCALL}, %rax" self.indent_string
-        "syscall" self.indent
-        "popq %rdx" self.indent
-        "testq %rax, %rax" self.indent
-        "jz .Lheap_alloc_oom" self.indent
-        "cmpq $-4095, %rax" self.indent
-        "jae .Lheap_alloc_oom" self.indent
-        "movq heap_chunks(%rip), %r8" self.indent
-        "movq %r8, (%rax)" self.indent
-        "movq %rax, %rcx" self.indent
-        "addq %rsi, %rcx" self.indent
-        "jc .Lheap_alloc_oom" self.indent
-        "movq %rcx, 8(%rax)" self.indent
-        "movq %rax, heap_chunks(%rip)" self.indent
-        "movq %rcx, heap_end(%rip)" self.indent
-        f"leaq {HEAP_CHUNK_HEADER_SIZE}(%rax), %rcx" self.indent_string
-        "movq %rdx, %rax" self.indent
-        "popq %r11" self.indent
-        "popq %r10" self.indent
-        "popq %rsi" self.indent
-        "movq %rax, %r8" self.indent
-        "addq $8, %r8" self.indent
-        "addq %rcx, %r8" self.indent
-        ".Lheap_alloc_commit:" self.line
-        "movq %rax, (%rcx)" self.indent
-        "movq %r8, heap_ptr(%rip)" self.indent
-        "leaq 8(%rcx), %rax" self.indent
-        "pushq %rax" self.indent
-        "jmp .Lheap_alloc_return" self.indent
-        ".Lheap_alloc_null:" self.line
-        "pushq $0" self.indent
-        ".Lheap_alloc_return:" self.line
-        "subq $8, %r14" self.indent
-        "pushq (%r14)" self.indent
-        "ret" self.indent
-        ".Lheap_alloc_oom:" self.line
-        f"movq ${STDERR_FD}, %rdi" self.indent_string
-        "leaq allocation_failure_msg(%rip), %rsi" self.indent
-        "movq $allocation_failure_msg_len, %rdx" self.indent
-        "allocation_failure_write_done" "write_all" self.emit_call_via_return_stack
-        f"movq ${EXIT_SYSCALL}, %rax" self.indent_string
-        f"movq ${FAILURE_STATUS}, %rdi" self.indent_string
-        "syscall" self.indent
-        "" self.line
-
-        # heap_free: pointer in %rdi, returns the complete allocation for reuse.
-        "heap_free:" self.line
-        "popq -8(%r14)" self.indent
-        "testq %rdi, %rdi" self.indent
-        "jz .Lheap_free_return" self.indent
-        "leaq -8(%rdi), %rax" self.indent
-        "movq (%rax), %rdx" self.indent
-        f"cmpq ${SMALL_ALLOC_LIMIT}, %rdx" self.indent_string
-        "ja .Lheap_free_large" self.indent
-        "leaq small_free_lists(%rip), %rcx" self.indent
-        "leaq -8(%rcx,%rdx), %rcx" self.indent
-        "movq (%rcx), %rdx" self.indent
-        "movq %rdx, 8(%rax)" self.indent
-        "movq %rax, (%rcx)" self.indent
-        "jmp .Lheap_free_return" self.indent
-        ".Lheap_free_large:" self.line
-        "movq free_list(%rip), %rcx" self.indent
-        "movq %rcx, 8(%rax)" self.indent
-        "movq %rax, free_list(%rip)" self.indent
-        ".Lheap_free_return:" self.line
-        "subq $8, %r14" self.indent
-        "pushq (%r14)" self.indent
-        "ret" self.indent
-        "" self.line
-    }
-
-    # write_all: fd in %rdi, buffer in %rsi, byte length in %rdx, returns via r14.
-    # Output operations cannot report errors, so an unrecoverable write exits unsuccessfully.
-    pub fn emit_write_helper self:mut$Emitter {
-        "write_all:" self.line
-        "popq -8(%r14)" self.indent
-        ".Lwrite_all_next:" self.line
-        "testq %rdx, %rdx" self.indent
-        "jz .Lwrite_all_return" self.indent
-        f"movq ${WRITE_SYSCALL}, %rax" self.indent_string
-        "syscall" self.indent
-        f"cmpq ${EINTR_RESULT}, %rax" self.indent_string
-        "je .Lwrite_all_next" self.indent
-        "testq %rax, %rax" self.indent
-        "jle .Lwrite_all_fail" self.indent
-        "addq %rax, %rsi" self.indent
-        "subq %rax, %rdx" self.indent
-        "jmp .Lwrite_all_next" self.indent
-        ".Lwrite_all_return:" self.line
-        "subq $8, %r14" self.indent
-        "pushq (%r14)" self.indent
-        "ret" self.indent
-        ".Lwrite_all_fail:" self.line
-        f"movq ${EXIT_SYSCALL}, %rax" self.indent_string
-        f"movq ${FAILURE_STATUS}, %rdi" self.indent_string
-        "syscall" self.indent
-        "" self.line
-    }
-
-    pub fn emit_helpers self:mut$Emitter {
-        self.emit_heap_helpers
-        self.emit_write_helper
-
-        # print_int: value in %rdi, returns via r14
-        "print_int:" self.line
-        "popq -8(%r14)" self.indent
-        "movq %rdi, %rax" self.indent
-        "leaq print_buf+32(%rip), %rsi" self.indent
-        "testq %rax, %rax" self.indent
-        "jnz .Lpi_nonzero" self.indent
-        "decq %rsi" self.indent
-        "movb $48, (%rsi)" self.indent
-        "jmp .Lpi_write" self.indent
-        ".Lpi_nonzero:" self.line
-        "movq %rax, %r15" self.indent
-        "jns .Lpi_abs" self.indent
-        "negq %rax" self.indent
-        ".Lpi_abs:" self.line
-        "movq $10, %rcx" self.indent
-        ".Lpi_digit_loop:" self.line
-        "decq %rsi" self.indent
-        "xorq %rdx, %rdx" self.indent
-        "divq %rcx" self.indent
-        "addb $48, %dl" self.indent
-        "movb %dl, (%rsi)" self.indent
-        "testq %rax, %rax" self.indent
-        "jnz .Lpi_digit_loop" self.indent
-        "testq %r15, %r15" self.indent
-        "jns .Lpi_write" self.indent
-        "decq %rsi" self.indent
-        "movb $45, (%rsi)" self.indent
-        ".Lpi_write:" self.line
-        "leaq print_buf+32(%rip), %rdx" self.indent
-        "subq %rsi, %rdx" self.indent
-        f"movq ${STDOUT_FD}, %rdi" self.indent_string
-        "print_int_write_done" "write_all" self.emit_call_via_return_stack
-        "subq $8, %r14" self.indent
-        "pushq (%r14)" self.indent
-        "ret" self.indent
-        "" self.line
-
-        # print_uint: value in %rdi, returns via r14
-        "print_uint:" self.line
-        "popq -8(%r14)" self.indent
-        "movq %rdi, %rax" self.indent
-        "leaq print_buf+32(%rip), %rsi" self.indent
-        "testq %rax, %rax" self.indent
-        "jnz .Lpui_digit_loop" self.indent
-        "decq %rsi" self.indent
-        "movb $48, (%rsi)" self.indent
-        "jmp .Lpui_write" self.indent
-        ".Lpui_digit_loop:" self.line
-        "decq %rsi" self.indent
-        "xorq %rdx, %rdx" self.indent
-        "movq $10, %rcx" self.indent
-        "divq %rcx" self.indent
-        "addb $48, %dl" self.indent
-        "movb %dl, (%rsi)" self.indent
-        "testq %rax, %rax" self.indent
-        "jnz .Lpui_digit_loop" self.indent
-        ".Lpui_write:" self.line
-        "leaq print_buf+32(%rip), %rdx" self.indent
-        "subq %rsi, %rdx" self.indent
-        f"movq ${STDOUT_FD}, %rdi" self.indent_string
-        "print_uint_write_done" "write_all" self.emit_call_via_return_stack
-        "subq $8, %r14" self.indent
-        "pushq (%r14)" self.indent
-        "ret" self.indent
-        "" self.line
-
-        # print_str: string pointer in %rdi (points to length prefix), returns via r14
-        "print_str:" self.line
-        "popq -8(%r14)" self.indent
-        "movq (%rdi), %rdx" self.indent
-        "leaq 8(%rdi), %rsi" self.indent
-        f"movq ${STDOUT_FD}, %rdi" self.indent_string
-        "print_str_write_done" "write_all" self.emit_call_via_return_stack
-        "subq $8, %r14" self.indent
-        "pushq (%r14)" self.indent
-        "ret" self.indent
-        "" self.line
-
-        # encode_char: Unicode scalar in %rdi, UTF-8 bytes in print_buf.
-        # Returns the buffer in %rsi and its byte length in %rdx via r14.
-        "encode_char:" self.line
-        "popq -8(%r14)" self.indent
-        "leaq print_buf(%rip), %rsi" self.indent
-        "cmpq $127, %rdi" self.indent
-        "ja .Lec_two" self.indent
-        "movb %dil, (%rsi)" self.indent
-        "movq $1, %rdx" self.indent
-        "jmp .Lec_return" self.indent
-        ".Lec_two:" self.line
-        "cmpq $2047, %rdi" self.indent
-        "ja .Lec_three" self.indent
-        "movq %rdi, %rax" self.indent
-        "shrq $6, %rax" self.indent
-        "orb $192, %al" self.indent
-        "movb %al, (%rsi)" self.indent
-        "movq %rdi, %rax" self.indent
-        "andb $63, %al" self.indent
-        "orb $128, %al" self.indent
-        "movb %al, 1(%rsi)" self.indent
-        "movq $2, %rdx" self.indent
-        "jmp .Lec_return" self.indent
-        ".Lec_three:" self.line
-        "cmpq $65535, %rdi" self.indent
-        "ja .Lec_four" self.indent
-        "movq %rdi, %rax" self.indent
-        "shrq $12, %rax" self.indent
-        "orb $224, %al" self.indent
-        "movb %al, (%rsi)" self.indent
-        "movq %rdi, %rax" self.indent
-        "shrq $6, %rax" self.indent
-        "andb $63, %al" self.indent
-        "orb $128, %al" self.indent
-        "movb %al, 1(%rsi)" self.indent
-        "movq %rdi, %rax" self.indent
-        "andb $63, %al" self.indent
-        "orb $128, %al" self.indent
-        "movb %al, 2(%rsi)" self.indent
-        "movq $3, %rdx" self.indent
-        "jmp .Lec_return" self.indent
-        ".Lec_four:" self.line
-        "movq %rdi, %rax" self.indent
-        "shrq $18, %rax" self.indent
-        "orb $240, %al" self.indent
-        "movb %al, (%rsi)" self.indent
-        "movq %rdi, %rax" self.indent
-        "shrq $12, %rax" self.indent
-        "andb $63, %al" self.indent
-        "orb $128, %al" self.indent
-        "movb %al, 1(%rsi)" self.indent
-        "movq %rdi, %rax" self.indent
-        "shrq $6, %rax" self.indent
-        "andb $63, %al" self.indent
-        "orb $128, %al" self.indent
-        "movb %al, 2(%rsi)" self.indent
-        "movq %rdi, %rax" self.indent
-        "andb $63, %al" self.indent
-        "orb $128, %al" self.indent
-        "movb %al, 3(%rsi)" self.indent
-        "movq $4, %rdx" self.indent
-        ".Lec_return:" self.line
-        "subq $8, %r14" self.indent
-        "pushq (%r14)" self.indent
-        "ret" self.indent
-        "" self.line
-
-        # primitive_to_str: value in %rdi, kind in %r8, pushes an owned String.
-        # Kinds: 0 signed integer, 1 unsigned integer, 2 bool, 3 char, 4 cstr.
-        "primitive_to_str:" self.line
-        "popq -8(%r14)" self.indent
-        "cmpq $2, %r8" self.indent
-        "je .Lpts_bool" self.indent
-        "cmpq $3, %r8" self.indent
-        "je .Lpts_char" self.indent
-        "cmpq $4, %r8" self.indent
-        "je .Lpts_cstr" self.indent
-        "movq %rdi, %rax" self.indent
-        "leaq print_buf+32(%rip), %rsi" self.indent
-        "testq %rax, %rax" self.indent
-        "jnz .Lpts_integer_nonzero" self.indent
-        "decq %rsi" self.indent
-        "movb $48, (%rsi)" self.indent
-        "jmp .Lpts_integer_done" self.indent
-        ".Lpts_integer_nonzero:" self.line
-        "testq %r8, %r8" self.indent
-        "jnz .Lpts_integer_abs" self.indent
-        "testq %rax, %rax" self.indent
-        "jns .Lpts_integer_abs" self.indent
-        "negq %rax" self.indent
-        ".Lpts_integer_abs:" self.line
-        "movq $10, %rcx" self.indent
-        ".Lpts_integer_loop:" self.line
-        "decq %rsi" self.indent
-        "xorq %rdx, %rdx" self.indent
-        "divq %rcx" self.indent
-        "addb $48, %dl" self.indent
-        "movb %dl, (%rsi)" self.indent
-        "testq %rax, %rax" self.indent
-        "jnz .Lpts_integer_loop" self.indent
-        "testq %r8, %r8" self.indent
-        "jnz .Lpts_integer_done" self.indent
-        "testq %rdi, %rdi" self.indent
-        "jns .Lpts_integer_done" self.indent
-        "decq %rsi" self.indent
-        "movb $45, (%rsi)" self.indent
-        ".Lpts_integer_done:" self.line
-        "leaq print_buf+32(%rip), %rdx" self.indent
-        "subq %rsi, %rdx" self.indent
-        "jmp .Lpts_copy" self.indent
-        ".Lpts_bool:" self.line
-        "testq %rdi, %rdi" self.indent
-        "jz .Lpts_bool_false" self.indent
-        "leaq bool_true(%rip), %rsi" self.indent
-        "movq $4, %rdx" self.indent
-        "jmp .Lpts_copy" self.indent
-        ".Lpts_bool_false:" self.line
-        "leaq bool_false(%rip), %rsi" self.indent
-        "movq $5, %rdx" self.indent
-        "jmp .Lpts_copy" self.indent
-        ".Lpts_char:" self.line
-        "pts_char_encoded" "encode_char" self.emit_call_via_return_stack
-        "jmp .Lpts_copy" self.indent
-        ".Lpts_cstr:" self.line
-        "movq %rdi, %rsi" self.indent
-        "movq %rdi, %rax" self.indent
-        ".Lpts_cstr_loop:" self.line
-        "cmpb $0, (%rax)" self.indent
-        "je .Lpts_cstr_done" self.indent
-        "incq %rax" self.indent
-        "jmp .Lpts_cstr_loop" self.indent
-        ".Lpts_cstr_done:" self.line
-        "movq %rax, %rdx" self.indent
-        "subq %rsi, %rdx" self.indent
-        ".Lpts_copy:" self.line
-        "pushq %rsi" self.indent
-        "pushq %rdx" self.indent
-        "movq %rdx, %rdi" self.indent
-        "addq $9, %rdi" self.indent
-        "jc .Lheap_alloc_oom" self.indent
-        "primitive_string_data_done" "heap_alloc" self.emit_call_via_return_stack
-        "popq %r13" self.indent
-        "popq %rdx" self.indent
-        "popq %rsi" self.indent
-        "movq %rdx, (%r13)" self.indent
-        "leaq 8(%r13), %rdi" self.indent
-        "movq %rdx, %rcx" self.indent
-        "rep movsb" self.indent
-        "movb $0, (%rdi)" self.indent
-        "movq $8, %rdi" self.indent
-        "primitive_string_wrapper_done" "heap_alloc" self.emit_call_via_return_stack
-        "popq %rax" self.indent
-        "movq %r13, (%rax)" self.indent
-        "pushq %rax" self.indent
-        "subq $8, %r14" self.indent
-        "pushq (%r14)" self.indent
-        "ret" self.indent
-        "" self.line
-
-        # str_concat consumes N owned String wrappers and pushes one owned String.
-        "str_concat:" self.line
-        "popq -8(%r14)" self.indent
-        "movq %rdi, %r15" self.indent
-        "movq %rsp, %r12" self.indent
-        "xorq %r10, %r10" self.indent
-        "xorq %rcx, %rcx" self.indent
-        ".Lsc_len_loop:" self.line
-        "cmpq %r15, %rcx" self.indent
-        "jge .Lsc_len_done" self.indent
-        "movq (%r12, %rcx, 8), %rax" self.indent
-        "movq (%rax), %rax" self.indent
-        "addq (%rax), %r10" self.indent
-        "jc .Lheap_alloc_oom" self.indent
-        "incq %rcx" self.indent
-        "jmp .Lsc_len_loop" self.indent
-        ".Lsc_len_done:" self.line
-        "movq %r10, %rdi" self.indent
-        "addq $9, %rdi" self.indent
-        "jc .Lheap_alloc_oom" self.indent
-        "concat_string_data_done" "heap_alloc" self.emit_call_via_return_stack
-        "popq %r13" self.indent
-        "movq %r10, (%r13)" self.indent
-        "leaq 8(%r13), %rdi" self.indent
-        "movq %r15, %rcx" self.indent
-        "decq %rcx" self.indent
-        ".Lsc_copy_loop:" self.line
-        "cmpq $0, %rcx" self.indent
-        "jl .Lsc_copy_done" self.indent
-        "movq (%r12, %rcx, 8), %rsi" self.indent
-        "movq (%rsi), %rsi" self.indent
-        "movq (%rsi), %rdx" self.indent
-        "addq $8, %rsi" self.indent
-        "pushq %rcx" self.indent
-        "movq %rdx, %rcx" self.indent
-        "rep movsb" self.indent
-        "popq %rcx" self.indent
-        "decq %rcx" self.indent
-        "jmp .Lsc_copy_loop" self.indent
-        ".Lsc_copy_done:" self.line
-        "movb $0, (%rdi)" self.indent
-        "xorq %rcx, %rcx" self.indent
-        ".Lsc_free_loop:" self.line
-        "cmpq %r15, %rcx" self.indent
-        "jge .Lsc_free_done" self.indent
-        "movq (%r12, %rcx, 8), %rbx" self.indent
-        "pushq %rcx" self.indent
-        "movq (%rbx), %rdi" self.indent
-        "concat_part_data_free_done" "heap_free" self.emit_call_via_return_stack
-        "movq %rbx, %rdi" self.indent
-        "concat_part_wrapper_free_done" "heap_free" self.emit_call_via_return_stack
-        "popq %rcx" self.indent
-        "incq %rcx" self.indent
-        "jmp .Lsc_free_loop" self.indent
-        ".Lsc_free_done:" self.line
-        "movq $8, %rdi" self.indent
-        "concat_string_wrapper_done" "heap_alloc" self.emit_call_via_return_stack
-        "popq %rax" self.indent
-        "movq %r13, (%rax)" self.indent
-        "leaq (%r12, %r15, 8), %rsp" self.indent
-        "pushq %rax" self.indent
-        "subq $8, %r14" self.indent
-        "pushq (%r14)" self.indent
-        "ret" self.indent
-        "" self.line
-
-        # Arithmetic failure handler: write error to fd 2 and exit(1).
-        "arithmetic_error:" self.line
-        "leaq arithmetic_error_msg(%rip), %rsi" self.indent
-        "movq $arithmetic_error_msg_len, %rdx" self.indent
-        f"movq ${STDERR_FD}, %rdi" self.indent_string
-        "arithmetic_error_write_done" "write_all" self.emit_call_via_return_stack
-        f"movq ${FAILURE_STATUS}, %rdi" self.indent_string
-        f"movq ${EXIT_SYSCALL}, %rax" self.indent_string
-        "syscall" self.indent
-        "" self.line
-
-        # Return stack overflow handler: write error to fd 2 and exit(1).
-        "return_stack_overflow:" self.line
-        "leaq return_stack_overflow_msg(%rip), %rsi" self.indent
-        "movq $return_stack_overflow_msg_len, %rdx" self.indent
-        "movq $2, %rdi" self.indent
-        "movq $1, %rax" self.indent
-        "syscall" self.indent
-        "movq $1, %rdi" self.indent
-        "movq $60, %rax" self.indent
-        "syscall" self.indent
-        "" self.line
-
-        # env_stack overflow handler: write error to fd 2 and exit(1).
-        "env_stack_overflow:" self.line
-        "leaq env_stack_overflow_msg(%rip), %rsi" self.indent
-        "movq $env_stack_overflow_msg_len, %rdx" self.indent
-        f"movq ${STDERR_FD}, %rdi" self.indent_string
-        "env_stack_overflow_write_done" "write_all" self.emit_call_via_return_stack
-        f"movq ${FAILURE_STATUS}, %rdi" self.indent_string
-        f"movq ${EXIT_SYSCALL}, %rax" self.indent_string
-        "syscall" self.indent
-        "" self.line
-    }
-
     # ============================================================================
     # Emit user functions
     # ============================================================================
@@ -2975,6 +2421,7 @@ impl Emitter {
 pub fn emit program:common::Program -> std::String {
     program.split_bytecode = bytecode = program
     program Emitter::new = emitter
+    runtime::ASSEMBLY emitter.asm.append
     emitter.emit_bss
     emitter.emit_data
     bytecode emitter.emit_text
@@ -4067,10 +3514,10 @@ fn select_scalar_program program:CheckedScalarProgram -> std::String {
     program match
         CheckedScalarProgram { functions: functions strings: strings } => {
             strings = emitter.strings
+            runtime::ASSEMBLY emitter.asm.append
             emitter.emit_bss
             emitter.emit_data
             ".section .text" emitter.line
-            emitter.emit_helpers
             functions ScalarTargetPlan::new = plan
             0 = identity: u64
             for function in functions.iter do

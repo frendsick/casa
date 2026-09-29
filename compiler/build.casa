@@ -1,70 +1,182 @@
-# Assembler and linker integration for producing x86-64 binaries.
+# Linux native build adapter. Tool diagnostics inherit the caller's stderr.
 import "std" as std
 import "os" as os
+import "products" as products
 
-pub const ASSEMBLER_PATH "/usr/bin/as"
-pub const LINKER_PATH "/usr/bin/cc"
+const PIPE2_SYSCALL 293
+const FORK_SYSCALL 57
+const EXECVE_SYSCALL 59
+const WAIT4_SYSCALL 61
+const O_CLOEXEC 524288
+const EINTR_RESULT -4
+const SIGNAL_MASK 127
+const EXIT_STATUS_SHIFT 8
+const EXIT_STATUS_MASK 255
 
-pub fn compile_binary
-    asm_source:$str
-    output_name:$str
-    keep_asm:bool
-    link_libraries:$std::List[std::String]
-{
-    f"{output_name}.s" = asm_file
-    f"{output_name}.o" = obj_file
+pub enum BuildFailure {
+    Write(std::String os::IoError)
+    Launch(os::IoError)
+    Wait(os::IoError)
+    Exit(i64)
+    Signal(i64)
+}
 
-    # Write assembly to file
-    asm_source std::Bytes::from_str asm_file
-        .as_str
-        .as_cstr
-        .unwrap file::write_all = write_result
-    if write_result std::Result::Error(write_err) is then
-        f"error: cannot write {asm_file}: {write_err.to_str}" std::eprintln_string
-        1 process::exit
-    fi
+impl BuildFailure: std::Display {
+    pub fn to_str self:$BuildFailure -> std::String {
+        self match
+            BuildFailure::Write(path error) => f"cannot write {path}: {error.to_str}"
+            BuildFailure::Launch(error) => f"cannot launch native compiler: {error.to_str}"
+            BuildFailure::Wait(error) => f"cannot wait for native compiler: {error.to_str}"
+            BuildFailure::Exit(status) => f"native build failed with exit code {status}"
+            BuildFailure::Signal(signal) => f"native compiler terminated by signal {signal}"
+        end
+    }
+}
 
-    # Assemble
-    std::List[std::Bytes]::new = assembler_args
-    ASSEMBLER_PATH assembler_args.push_str
-    "-o" assembler_args.push_str
-    obj_file.as_str assembler_args.push_str
-    asm_file.as_str assembler_args.push_str
-    assembler_args std::run_command = assemble_result
-    if 0 assemble_result != then
-        f"Assembly failed with exit code {assemble_result}" std::eprintln_string
-        1 process::exit
-    fi
+pub struct NativeDriver {
+    pub executable: std::String
+}
 
-    # Link
-    std::List[std::Bytes]::new = linker_args
-    LINKER_PATH linker_args.push_str
-    "-nostdlib" linker_args.push_str
-    "-no-pie" linker_args.push_str
-    "-Wl,-e,_start" linker_args.push_str
-    "-Wl,-z,noexecstack" linker_args.push_str
-    "-o" linker_args.push_str
-    output_name linker_args.push_str
-    obj_file.as_str linker_args.push_str
-    for library in link_libraries.iter do
-        "-l" linker_args.push_str
-        library.as_str linker_args.push_str
-    done
-    linker_args std::run_command = link_result
-    if 0 link_result != then
-        f"Linking failed with exit code {link_result}" std::eprintln_string
-        1 process::exit
-    fi
+impl NativeDriver {
+    pub fn new -> NativeDriver { "/usr/bin/cc".to_str NativeDriver }
 
-    # Clean build artifacts
-    if keep_asm ! then
-        asm_file
-            .as_str
-            .as_cstr
-            .unwrap file::remove drop
-    fi
-    obj_file
-        .as_str
-        .as_cstr
-        .unwrap file::remove drop
+    # A close-on-exec pipe separates launch errors from the tool's exit status.
+    # All argv owners stay live until wait4 reaps the child. Tool stderr is inherited.
+    fn run arguments:$std::List[std::Bytes] -> std::Result[bool BuildFailure] {
+        arguments.length 1 + size_of[ptr] * std::RawBuffer::new = arguments_buffer
+        0 = index: u64
+        for argument in arguments.iter do
+            if argument.as_cstr std::Option::Some(text) is then
+                # SAFETY: argv has one slot per argument plus a terminator. The
+                # borrowed NUL-terminated argument remains live through wait4.
+                unsafe { text ptr::from_ref arguments_buffer.data index size_of[ptr] * + ptr::write[ptr] }
+            else
+                os::EINVAL os::IoError::Other BuildFailure::Launch std::Result::Error return
+            fi
+            1 += index
+        done
+        # SAFETY: The final slot is inside argv's allocation.
+        unsafe { ptr::null arguments_buffer.data arguments.length size_of[ptr] * + ptr::write[ptr] }
+        8 std::RawBuffer::new = pipe_fds
+        # SAFETY: pipe2 writes two i32 file descriptors into the eight-byte buffer.
+        unsafe { O_CLOEXEC pipe_fds.data PIPE2_SYSCALL syscall2 = pipe_result }
+        if 0 pipe_result < then
+            pipe_result os::errno_to_io_error BuildFailure::Launch std::Result::Error return
+        fi
+        # SAFETY: Successful pipe2 initialized both descriptor slots.
+        unsafe {
+            pipe_fds.data ptr::read[i32] i64::from = read_fd
+            pipe_fds.data 4 + ptr::read[i32] i64::from = write_fd
+        }
+        # SAFETY: fork has no pointer arguments. Only the child calls execve.
+        unsafe { FORK_SYSCALL syscall0 = child_pid }
+        if 0 child_pid < then
+            read_fd file::close drop
+            write_fd file::close drop
+            child_pid os::errno_to_io_error BuildFailure::Launch std::Result::Error return
+        fi
+        if 0 child_pid == then
+            read_fd file::close drop
+            # SAFETY: argv is terminated and its borrowed strings are still live.
+            # envp is the process environment supplied by the runtime.
+            unsafe { envp arguments_buffer.data arguments_buffer.data ptr::read[ptr] EXECVE_SYSCALL syscall3 = launch_result }
+            # SAFETY: The eight-byte buffer belongs to this process. The parent
+            # reads the negative execve result only when execve failed.
+            unsafe { launch_result pipe_fds.data ptr::write[i64] }
+            while true do
+                # SAFETY: The child writes its initialized i64 into the open pipe.
+                unsafe { 8 pipe_fds.data write_fd 1 syscall3 = sent }
+                if EINTR_RESULT sent != then
+                    break
+                fi
+            done
+            1 process::exit
+        fi
+        write_fd file::close drop
+        0 = read_result
+        while true do
+            8 pipe_fds.data read_fd file::read = read_result
+            if EINTR_RESULT read_result != then
+                break
+            fi
+        done
+        read_fd file::close drop
+        8 std::RawBuffer::new = status
+        0 = wait_result
+        while true do
+            # SAFETY: status has room for wait4's status word. The child belongs
+            # to this process and null rusage requests no resource record.
+            unsafe { ptr::null 0 status.data child_pid WAIT4_SYSCALL syscall4 = wait_result }
+            if EINTR_RESULT wait_result != then
+                break
+            fi
+        done
+        if 0 read_result < then
+            read_result os::errno_to_io_error BuildFailure::Launch std::Result::Error return
+        fi
+        if 0 read_result > then
+            # SAFETY: The child writes one complete i64 before it exits.
+            unsafe { pipe_fds.data ptr::read[i64] }
+            os::errno_to_io_error BuildFailure::Launch std::Result::Error return
+        fi
+        if 0 wait_result < then
+            wait_result os::errno_to_io_error BuildFailure::Wait std::Result::Error return
+        fi
+        # SAFETY: Successful wait4 initialized the i32 status word.
+        unsafe { status.data ptr::read[i32] i64::from = child_status }
+        child_status SIGNAL_MASK & = signal
+        if 0 signal != then
+            signal BuildFailure::Signal std::Result::Error return
+        fi
+        child_status EXIT_STATUS_SHIFT >> EXIT_STATUS_MASK & = exit_status
+        if 0 exit_status != then
+            exit_status BuildFailure::Exit std::Result::Error return
+        fi
+        true std::Result::Ok
+    }
+
+    # Write complete target assembly, assemble and link once, then clean up even
+    # on native failures. --keep-asm keeps the complete source on success or failure.
+    pub fn compile_binary
+        self:$NativeDriver
+        source:$products::AssemblySource
+        output:$str
+        libraries:$std::List[std::String]
+        keep_asm:bool
+    -> std::Result[bool BuildFailure] {
+        source.get_target match
+            products::Target::LinuxX86_64 => {
+            }
+        end
+        f"{output}.s" = assembly_path
+        if assembly_path.as_str.as_cstr std::Option::Some(path) is then
+            source.get_text.as_str std::Bytes::from_str path file::write_all = written
+            if written std::Result::Error(error) is then
+                error assembly_path BuildFailure::Write std::Result::Error return
+            fi
+        else
+            os::EINVAL os::IoError::Other assembly_path BuildFailure::Write std::Result::Error return
+        fi
+        std::List[std::Bytes]::new = arguments
+        self.executable.as_str arguments.push_str
+        "-nostdlib" arguments.push_str
+        "-no-pie" arguments.push_str
+        "-Wl,-e,_start" arguments.push_str
+        "-Wl,-z,noexecstack" arguments.push_str
+        "-o" arguments.push_str
+        output arguments.push_str
+        assembly_path.as_str arguments.push_str
+        for library in libraries.iter do
+            "-l" arguments.push_str
+            library.as_str arguments.push_str
+        done
+        arguments NativeDriver::run = result
+        if keep_asm ! then
+            assembly_path
+                .as_str
+                .as_cstr
+                .unwrap file::remove drop
+        fi
+        result
+    }
 }
