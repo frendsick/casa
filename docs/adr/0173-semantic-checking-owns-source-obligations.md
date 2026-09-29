@@ -23,6 +23,12 @@ not a claim about implemented behavior.
 
 ## Private semantic seam
 
+Operation meaning has one authoritative implementation. Parsing cannot annotate
+every semantic dependency because receiver types, inferred stack effects, trait
+dispatch, branches, and patterns are not all known then. Such annotations would
+require a second interpreter later and spread type knowledge into parsing.
+Semantic decisions belong with the builder that has the facts to prove them.
+
 These are interface sketches, not Casa declarations. The module names and
 internal record names are illustrative. A caller supplies parsed source facts
 with explicit recovery coverage and a request-owned report builder. It does

@@ -163,12 +163,17 @@ used during syntax work, selective-import analysis, complete typechecking, and
 bytecode generation. This is useful leverage. The problem is that callers can
 select individual rules and reconstruct larger semantic decisions.
 
-[ADR-0008](../adr/0008-shared-semantics.md) already places shared operation
+[ADR-0008](https://github.com/frendsick/casa/blob/afbdec5d52e6737e11f1e00ff126f7de5dc2c99f/docs/adr/0008-shared-semantics.md) already places shared operation
 semantics below syntax and typechecking. It calls for resolved operations,
 inferred effects, ordered semantic dependencies, and diagnostics while keeping
 transient stacks, branches, generics, callables, and dispatch private. The
 current modules reuse one engine, but the 273-function surface and shared
 mutable store do not provide the intended deep seam.
+
+That record is now archived in git history. Its authoritative-operation principle
+continues in [ADR-0173](../adr/0173-semantic-checking-owns-source-obligations.md),
+and qualified-only imports follow
+[ADR-0168](../adr/0168-imports-expose-qualified-names-only.md).
 
 ## Data ownership and phase state
 

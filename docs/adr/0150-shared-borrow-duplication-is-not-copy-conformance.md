@@ -15,9 +15,13 @@ stored shared-borrow field is safe to duplicate even though its type does not
 satisfy a `Copy` bound. Copy-generated Clone duplicates such a field as a
 borrow, preserves its origin, and calls `.clone` for other fields and payloads.
 
-This supersedes ADR-0118 and the borrow Clone consequences of ADR-0120. It also
-refines earlier statements in ADR-0013, ADR-0033, ADR-0035, ADR-0077, and
-ADR-0079 that described shared-borrow duplication as a Copy implementation.
+This replaces the archived borrow Clone decision listed in the
+[ADR index](README.md#retired-records) and the borrow Clone consequences of
+ADR-0120. It also refines earlier statements in ADR-0013, ADR-0033, and ADR-0035
+that described shared-borrow duplication as a Copy implementation. Current
+derivation and representation rules remain in
+[ADR-0163](0163-standard-trait-derivation-is-a-complete-implementation.md) and
+[ADR-0158](0158-copy-requires-a-raw-value-representation.md).
 
 ## Consequences
 

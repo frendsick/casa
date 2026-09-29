@@ -49,13 +49,15 @@ A view over a runtime-length range can no longer be an array, because its length
 is not known when the type is written. Casa needs a separate runtime-length
 sequence view, and `List` slicing returns that view instead of an array.
 
-This supersedes ADR-0073 and ends the deferral it recorded for type-level array
-lengths and for a distinct slice type. ADR-0020 is unaffected: each evaluation of
-an array literal still produces an independent owned value.
+This replaces the archived runtime-length array decision listed in the
+[ADR index](README.md#retired-records) and ends its deferral of type-level array
+lengths and a distinct slice type. Under
+[ADR-0156](0156-owned-values-have-independent-behavior-not-address-identity.md),
+each evaluation of an array literal still produces an independent owned value.
 
 ## Considered options
 
-- Keeping the runtime length, as ADR-0073 chose, preserves one sequence type and
+- Keeping the earlier runtime-length design preserves one sequence type and
   one array spelling. It also forces every array to carry a header and an
   indirection, and leaves inline arrays, stack arrays, and fixed-size foreign
   fields inexpressible at any cost.

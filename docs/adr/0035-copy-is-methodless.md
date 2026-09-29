@@ -6,7 +6,7 @@ related issue: #314
 
 The compiler accepts a Copy implementation only when every field is `Copy`, the type has no custom destruction, and raw duplication cannot create multiple owners or exclusive borrows. Copy has no method because there is no behavior to customize. An eligible user type may omit the implementation to preserve move-only semantic identity.
 
-Casa initially deferred a generic deep-duplication capability. ADR-0074 and ADR-0075 later introduce explicit `Clone` while preserving this decision's boundary: `Copy` remains methodless, and `dup` and `over` remain `Copy`-only.
+Casa initially deferred a generic deep-duplication capability. [ADR-0075](0075-clone-is-explicit-and-infallible.md) defines explicit Clone, and [ADR-0080](0080-language-traits-use-minimum-contracts.md) defines its declaration-driven relationship to Copy. Copy remains methodless, and stack duplication never falls back to Clone. Shared-borrow duplication follows [ADR-0150](0150-shared-borrow-duplication-is-not-copy-conformance.md).
 
 ## Considered options
 

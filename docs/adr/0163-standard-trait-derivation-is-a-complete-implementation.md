@@ -18,6 +18,11 @@ every equality-relevant field, and supplies its required equality behavior.
 Exact hash values remain runtime-local and unspecified. Copy supplies structural
 Clone when the canonical Copy trait extends Clone.
 
+Structural Clone calls each owned field's or active payload's Clone operation.
+It does not raw-copy the complete aggregate, even when the aggregate is Copy.
+Explicit cloning may allocate or run field code. Implicit Copy, `dup`, and
+`over` remain raw, compiler-validated, and allocation-free.
+
 An explicit implementation cannot overlap behavior supplied by a derive request
 on the same type. This rule rejects a custom `eq` with derived Eq, Ord, or
 Hashable, a custom `cmp` with derived Ord, a custom `hash` with derived Hashable,
@@ -35,6 +40,14 @@ Clone requirement on the referent. An exclusive-borrow field cannot derive
 Clone. A type that needs custom generic behavior omits the derive and provides
 one complete generic implementation with the bounds required by its body.
 
+Each owned field or payload in `derives Clone` has one conditional Clone
+requirement. There is no disjunctive “Clone or Copy” bound. Standard Copy fields
+satisfy Clone through the visible Copy supertrait declaration. A generic type
+can still be constructed and moved when its conditional Clone implementation is
+unavailable. Types opt in explicitly, even when every field supports Clone.
+Derivation uses the existing inline syntax and adds no general attribute or
+metaprogramming mechanism.
+
 User-defined structs and enums can implement Copy only with `derives Copy`.
 Compiler-provided implementations for eligible built-in types remain unchanged.
 The compiler accepts a user-derived Copy implementation only when the type has a
@@ -42,6 +55,13 @@ raw value representation, every field or payload is Copy, and the value contains
 no exclusive borrow, owned indirection, or custom destruction. A type that needs
 custom duplication implements Clone and remains non-Copy. A non-Copy type can
 use `derives Clone` when structural duplication is sufficient.
+
+A declared generic function that duplicates a parameter or passes it to a
+Copy-bounded operation must expose the ordinary Copy bound. Missing bounds are
+diagnosed at the generic definition. Inferring hidden public bounds would make
+contracts depend on body details, while waiting until monomorphization would
+produce surprising call-site failures. A function or lambda whose complete stack
+effect is inferred may infer and display the bound as part of that type.
 
 ## Consequences
 
