@@ -41,6 +41,20 @@ A failed operation withholds facts that depend on its recovered stack. An
 independent sibling branch or function can still contribute verified facts.
 A return-signature error rejects assembly without erasing established calls.
 
+Ownership checking keeps typed places with a resolved binding name and field
+components. Origins distinguish access to a place from dependencies on an
+input's ordinary or cleanup-observed origins. Each binding keeps both origin
+sets and its diagnostic location in one record. Continuing branch completion
+transfers results before checking LIFO cleanup and leaving the scope. Returns
+attach cleanup to the exit and do not contribute to the continuing join.
+
+Checked operations own their assignment, move, and cleanup actions. Ownership
+actions are optional on operations that need none. Specialization substitutes
+cleanup types within those operations, and bytecode lowering reads the actions
+directly. Pending moves from stack values remain private to the body checker
+until it attaches them to their source operations. There is no ownership table
+in `SymbolStore`.
+
 The parser, checker, document projector, and emitter remain temporary adapters.
 Analysis releases their operations and declarations after projecting semantic
 tokens and cannot produce codegen input. Existing consumers retain their current
