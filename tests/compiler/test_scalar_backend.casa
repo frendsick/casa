@@ -1,0 +1,133 @@
+import "std" as std
+import "../../compiler/common.casa" as common
+import "../../compiler/error.casa" as error
+import "../../compiler/emitter.casa" as emitter
+import "../../compiler/products.casa" as products
+import "../../lib/test.casa" as test
+import "helpers.casa" as helpers
+
+fn test_complete_scalar_commit {
+    "complete_scalar_commit" test::test_start
+    error::Diagnostics::new = diagnostics
+    diagnostics "fn twice value:i64 -> i64 { if 0 value == then 0 return fi value 2 * } 21 twice print" helpers::typecheck_test_source = checked
+    checked emitter::compile_scalar.unwrap = selected
+    "scalar path selected" selected.is_some test::assert_true
+    selected.unwrap = text
+    "native direct call" text.as_str "call .Lscalar_fn_1" str::contains test::assert_true
+    "checked native return" text.as_str "popq -8(%r14)" str::contains test::assert_true
+    "runtime included" text.as_str "return_stack_overflow:" str::contains test::assert_true
+    "root included" text.as_str "_start:" str::contains test::assert_true
+}
+
+fn test_invalid_private_references {
+    "invalid_private_references" test::test_start
+    error::Diagnostics::new = diagnostics
+    diagnostics "fn identity value:i64 -> i64 { value } 42 identity drop" helpers::typecheck_test_source = checked
+    0 = index: u64
+    while index checked.ops.length > do
+        index checked.ops.get_mut = op
+        if op.value common::OpValue::FnCall is then
+            "missing".to_str common::OpValue::FnCall = op.value
+        fi
+        1 += index
+    done
+    "missing function fails instead of falling back" checked emitter::compile_scalar.is_error test::assert_true
+
+    error::Diagnostics::new = local_diagnostics
+    local_diagnostics "42 = value value drop" helpers::typecheck_test_source = local_checked
+    0 = local_index: u64
+    while local_index local_checked.ops.length > do
+        local_index local_checked.ops.get_mut = op
+        if op.value common::OpValue::PushVar is then
+            "missing".to_str common::OpValue::PushVar = op.value
+        fi
+        1 += local_index
+    done
+    "missing local fails before selection" local_checked emitter::compile_scalar.is_error test::assert_true
+}
+
+fn test_unchecked_and_incomplete_bodies {
+    "unchecked_and_incomplete_bodies" test::test_start
+    error::Diagnostics::new = diagnostics
+    diagnostics "fn value -> i64 { 42 } value drop" helpers::typecheck_test_source = checked
+    "value" checked
+        .store
+        .take_function_for_update
+        .unwrap = function
+    false = function.is_typechecked
+    function checked.store.restore_function
+    "unchecked callee fails" checked emitter::compile_scalar.is_error test::assert_true
+
+    error::Diagnostics::new = branch_diagnostics
+    branch_diagnostics "if true then 42 drop fi" helpers::typecheck_test_source = branch
+    branch.ops.pop drop
+    "incomplete conditional fails" branch emitter::compile_scalar.is_error test::assert_true
+
+    error::Diagnostics::new = rejected_diagnostics
+    rejected_diagnostics "true 1 +" helpers::typecheck_test_source = rejected
+    "error-bearing input fails" rejected emitter::compile_scalar.is_error test::assert_true
+}
+
+fn test_legacy_capability_is_distinct {
+    "legacy_capability_is_distinct" test::test_start
+    error::Diagnostics::new = diagnostics
+    diagnostics "struct Pair { value:i64 } 42 Pair drop" helpers::typecheck_test_source = checked
+    "aggregate requests legacy path" checked emitter::compile_scalar.unwrap.is_none test::assert_true
+}
+
+fn test_missing_scalar_type_facts {
+    "missing_scalar_type_facts" test::test_start
+    for code in ["1 2 + drop", "1 2 < drop", "42 print"].iter do
+        error::Diagnostics::new = diagnostics
+        diagnostics code helpers::typecheck_test_source = checked
+        0 = index: u64
+        while index checked.ops.length > do
+            index checked.ops.get_mut = op
+            op.value match
+                common::OpValue::Add => true
+                common::OpValue::Lt => true
+                common::OpValue::PrintInt => true
+                _ => false
+            end = typed_operation
+            if typed_operation then
+                std::Option[common::Type]::None = op.type_hint
+            fi
+            1 += index
+        done
+        "missing required fact cannot select instructions" checked emitter::compile_scalar.is_error test::assert_true
+    done
+}
+
+fn test_compound_and_wrapping_use_scalar_path {
+    "compound_and_wrapping_use_scalar_path" test::test_start
+    for
+        code in [
+            "42 = value 1 += value 2 -= value value print",
+            "255 = value:u8 1 = delta:u8 delta value.wrapping_add print",
+            "2 = value:i8 3 = delta:i8 delta value.wrapping_sub print",
+            "128 = value:u8 2 = factor:u8 factor value.wrapping_mul print",
+        ].iter
+    do
+        error::Diagnostics::new = diagnostics
+        diagnostics code helpers::typecheck_test_source = checked
+        "scalar arithmetic commits without legacy fallback" checked emitter::compile_scalar.unwrap.is_some test::assert_true
+    done
+}
+
+fn test_invalid_cleanup_reference {
+    "invalid_cleanup_reference" test::test_start
+    error::Diagnostics::new = diagnostics
+    diagnostics "if true then 42 drop fi" helpers::typecheck_test_source = checked
+    common::OpOwnership::new = ownership
+    0 common::make_i64_type "missing" common::OwnerEvent::new ownership.cleanups.push
+    ownership std::Option::Some 0 checked.ops.get_mut common::Op::set_ownership
+    "invalid branch cleanup fails before selection" checked emitter::compile_scalar.is_error test::assert_true
+}
+test_complete_scalar_commit
+test_invalid_private_references
+test_unchecked_and_incomplete_bodies
+test_legacy_capability_is_distinct
+test_missing_scalar_type_facts
+test_compound_and_wrapping_use_scalar_path
+test_invalid_cleanup_reference
+test::test_summary

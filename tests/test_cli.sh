@@ -51,6 +51,17 @@ if matches_filter process_exit "$@"; then
     fi
 fi
 
+if matches_filter sealed_scalar "$@"; then
+    matched=true
+    scalar_binary="$CLI_TMP/sealed_scalar"
+    "$COMPILER" tests/compiler/fixtures/sealed_scalar.casa -o "$scalar_binary" --keep-asm
+    [ "$("$scalar_binary")" = "120:9:7:5:15:14:13:-1:true:true:0:true
+1:0:-128:41:0:-1:0" ]
+    grep -q 'call .Lscalar_fn_' "$scalar_binary.s"
+    grep -q 'return_stack_overflow:' "$scalar_binary.s"
+    grep -q 'popq -8(%r14)' "$scalar_binary.s"
+fi
+
 if matches_filter lsp_workspace "$@"; then
     matched=true
     "$COMPILER" -L lib lsp.casa -o "$CLI_TMP/lsp"
