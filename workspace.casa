@@ -1,0 +1,616 @@
+# On-demand workspace queries. Requests own source revisions and release each compiler snapshot.
+import "lib/std.casa" as std
+import "lib/os.casa" as os
+import "compiler/lexer.casa" as lexer
+import "compiler/common.casa" as common
+import "compiler/products.casa" as products
+import "compiler/document.casa" as document
+
+const FILE_TYPE_MASK 61440
+const DIRECTORY_MODE 16384
+const REGULAR_FILE_MODE 32768
+const SYMLINK_MODE 40960
+const WRITE_PERMISSION_MASK 146
+const LSTAT_SYSCALL 6
+const STAT_BUFFER_BYTES 144
+
+pub struct Workspace {
+    pub folders:       std::List[std::String]
+    pub exclusions:    std::List[std::String]
+    pub library_paths: std::List[std::String]
+    pub overrides:     std::Map[std::String std::String]
+    pub generation:    u64
+}
+
+pub struct References {
+    pub declaration:     document::DocumentLocation
+    pub ranges:          std::List[document::DocumentLocation]
+    pub sources:         std::Map[std::String std::String]
+    pub roots:           std::List[std::String]
+    pub complete:        bool
+    pub generation:      u64
+    pub workspace_scope: bool
+}
+
+impl Workspace {
+    pub fn new -> Workspace {
+        0 std::Map[std::String std::String]::new std::List[std::String]::new
+        std::List[std::String]::new std::List[std::String]::new Workspace
+    }
+
+    pub fn contains self:$Workspace path:$str -> bool {
+        for excluded in self.exclusions.iter do
+            if excluded.as_str path is_within then
+                false return
+            fi
+        done
+        for folder in self.folders.iter do
+            if folder.as_str path is_within then
+                true return
+            fi
+        done
+        false
+    }
+
+    # Discovery does not follow directory symlinks. A failed entry makes coverage incomplete.
+    pub fn discover self:$Workspace -> std::List[std::String] bool {
+        std::Set[std::String]::new = found
+        std::Set[std::String]::new = visited
+        self.folders.clone = pending
+        self.folders.is_empty ! = complete
+        while pending.is_empty ! do
+            pending.pop = directory
+            if directory visited.has then
+                continue
+            fi
+            directory.clone visited.add
+            if directory.as_str self.contains ! then
+                continue
+            fi
+            if pending found directory.as_str self.discover_directory ! then
+                false = complete
+            fi
+        done
+        for entry in self.overrides.iter do
+            if entry.first.as_str self.contains entry.first.as_str ".casa" str::ends_with && then
+                entry.first.clone found.add
+            fi
+        done
+        found.to_list complete
+    }
+
+    fn discover_directory
+        self:$Workspace
+        directory:$str
+        found:mut$std::Set[std::String]
+        pending:mut$std::List[std::String]
+    -> bool {
+        directory.as_cstr match
+            std::Option::Some(path) => path dir::list
+            _ => false return
+        end match
+            std::Result::Ok(entries) => entries
+            _ => false return
+        end = entries
+        true = complete
+        for entry in entries.iter do
+            entry.to_str match
+                std::Result::Ok(name) => {
+                    directory name.as_str path::join = child
+                    if pending found child.as_str self.discover_entry ! then
+                        false = complete
+                    fi
+                }
+                _ => false = complete
+            end
+        done
+        complete
+    }
+
+    fn discover_entry
+        self:$Workspace
+        path:$str
+        found:mut$std::Set[std::String]
+        pending:mut$std::List[std::String]
+    -> bool {
+        if path self.contains ! then
+            true return
+        fi
+        if path read_mode std::Option::Some(mode) is then
+            if DIRECTORY_MODE mode FILE_TYPE_MASK & == then
+                path.to_str pending.push
+            elif REGULAR_FILE_MODE mode FILE_TYPE_MASK & == path ".casa" str::ends_with && then
+                path.to_str found.add
+            elif SYMLINK_MODE mode FILE_TYPE_MASK & == path ".casa" str::ends_with && then
+                found path discover_source_link return
+            fi
+            true
+        else
+            false
+        fi
+    }
+
+    pub fn read_source self:$Workspace path:$str -> std::Option[std::String] {
+        if path self.overrides.get_str std::Option::Some(source) is then
+            source.clone std::Option::Some return
+        fi
+        path read_source
+    }
+
+    pub fn analyze_root
+        self:$Workspace
+        path:$str
+        overrides:$std::Map[std::String std::String]
+    -> std::Result[products::AnalysisSnapshot products::CompilerFailure] {
+        path overrides
+            .get_str
+            .unwrap
+            .clone = source
+        "/".to_str source path.to_str products::SourceUnit products::CompilationInput::new = input
+        self.library_paths.clone = input.library_paths
+        self.overrides.clone = input.source_overrides
+        for entry in overrides.iter do
+            entry.second.clone entry.first.clone input.source_overrides.set
+        done
+        input products::analyze
+    }
+
+    pub fn find_references
+        self:$Workspace
+        file:$str
+        offset:u64
+        include_declaration:bool
+    -> std::Option[References] {
+        file self.read_source match
+            std::Option::Some(selected_source) => selected_source
+            _ => std::Option[References]::None return
+        end = selected_source
+        std::Map[std::String std::String]::new = captured
+        selected_source file.to_str captured.set
+        captured file self.analyze_root match
+            std::Result::Ok(selected_snapshot) => selected_snapshot
+            _ => std::Option[References]::None return
+        end = selected_snapshot
+        true offset file selected_snapshot.get_index.find_references match
+            document::ReferenceAnswer::Complete(answer) => answer true
+            document::ReferenceAnswer::Incomplete(answer _) => answer false
+            _ => std::Option[References]::None return
+        end = complete = answer
+        answer.rename_requires_workspace self.generation complete std::List[std::String]::new
+        std::Map[std::String std::String]::new std::List[document::DocumentLocation]::new
+        answer.declaration.clone References = result
+        if answer.rename_requires_workspace then
+            self.discover = discovered = roots
+            discovered result.complete && = result.complete
+            roots = result.roots
+        fi
+        result.roots.clone = roots
+        false = selected_root
+        for candidate_root in roots.iter do
+            if candidate_root file == then
+                true = selected_root
+            fi
+        done
+        if selected_root ! then
+            file.to_str result.roots.push
+            file.to_str roots.push
+        fi
+        include_declaration selected_snapshot result.collect
+        selected_snapshot drop
+        for root in roots.iter do
+            if root file == then
+                continue
+            fi
+            if root.as_str self.read_source std::Option::Some(source) is then
+                source root.clone captured.set
+                captured root.as_str self.analyze_root match
+                    std::Result::Ok(snapshot) => include_declaration snapshot result.collect
+                    _ => false = result.complete
+                end
+            else
+                false = result.complete
+            fi
+        done
+        result.sort_ranges
+        for root in roots.iter do
+            if
+                root.as_str result
+                    .sources
+                    .get_str
+                    .is_none
+            then
+                continue
+            fi
+            result.sources root.as_str self.analyze_root match
+                std::Result::Ok(snapshot) => snapshot result.verify_context
+                _ => false = result.complete
+            end
+        done
+        if result self.is_current ! then
+            std::Option[References]::None return
+        fi
+        result std::Option::Some
+    }
+
+    # Open text wins over disk. Every retained disk revision is checked before publication.
+    pub fn is_current self:$Workspace result:$References -> bool {
+        if self.generation result.generation != then
+            false return
+        fi
+        for entry in result.sources.iter do
+            if entry.first.as_str self.read_source std::Option::Some(current) is then
+                if current entry.second != then
+                    false return
+                fi
+            else
+                false return
+            fi
+        done
+        true
+    }
+
+    fn can_edit self:$Workspace path:$str -> bool {
+        if path self.contains ! then
+            false return
+        fi
+        path.as_cstr match
+            std::Option::Some(cpath) => cpath file::stat
+            _ => false return
+        end match
+            std::Result::Ok(stat) => 0 stat.mode WRITE_PERMISSION_MASK & !=
+            std::Result::Error(os::IoError::NotFound) => path self
+                .overrides
+                .get_str
+                .is_some
+            _ => false
+        end
+    }
+
+    pub fn validate_rename self:$Workspace result:$References name:$str -> bool {
+        if result.complete ! name valid_name ! || result self.is_current ! || then
+            false return
+        fi
+        if
+            result
+                .declaration
+                .file
+                .as_str self.contains !
+        then
+            false return
+        fi
+        for range in result.ranges.iter do
+            if range.file.as_str self.can_edit ! then
+                false return
+            fi
+        done
+        name result.edited_sources = proposed
+        for root in result.roots.iter do
+            result.sources root.as_str self.analyze_root match
+                std::Result::Ok(snapshot) => snapshot
+                _ => false return
+            end = before
+            proposed root.as_str self.analyze_root match
+                std::Result::Ok(snapshot) => snapshot
+                _ => false return
+            end = after
+            if
+                after
+                    .get_report
+                    .get_diagnostics
+                    .has_errors
+            then
+                false return
+            fi
+            if name result after before verify_bindings ! then
+                false return
+            fi
+        done
+        if result.workspace_scope then
+            self.discover = complete = current_roots
+            if complete ! current_roots.length result.roots.length != || then
+                false return
+            fi
+            for root in current_roots.iter do
+                if
+                    root.as_str result
+                        .sources
+                        .get_str
+                        .is_none
+                then
+                    false return
+                fi
+            done
+        fi
+        result self.is_current
+    }
+}
+
+pub fn is_within path:$str folder:$str -> bool {
+    if path folder == then
+        true return
+    fi
+    if folder "/" == then
+        path "/" str::starts_with return
+    fi
+    path f"{folder}/".as_str str::starts_with
+}
+
+pub fn read_source path:$str -> std::Option[std::String] {
+    if path.as_cstr std::Option::Some(cpath) is then
+        cpath file::read_all match
+            std::Result::Ok(bytes) => {
+                bytes.to_str match
+                    std::Result::Ok(source) => source std::Option::Some return
+                    _ => {
+                    }
+                end
+            }
+            _ => {
+            }
+        end
+    fi
+    std::Option[std::String]::None
+}
+
+fn discover_source_link path:$str found:mut$std::Set[std::String] -> bool {
+    path.as_cstr.unwrap file::stat match
+        std::Result::Ok(target) => {
+            if target.is_file then path.to_str found.add fi
+            true
+        }
+        _ => false
+    end
+}
+# lstat preserves symlink identity and prevents discovery cycles.
+fn read_mode path:$str -> std::Option[i64] {
+    if path.as_cstr std::Option::Some(cpath) is then
+        STAT_BUFFER_BYTES std::RawBuffer::new = buffer
+        # SAFETY: Linux x86-64 lstat writes a 144-byte stat into buffer. cpath remains live.
+        unsafe { buffer.data cpath ptr::from_ref LSTAT_SYSCALL syscall2 } = status
+        if 0 status >= then
+            # SAFETY: Successful lstat initialized the mode field at byte 24.
+            unsafe { buffer.data 24 + load32 i64::from } std::Option::Some return
+        fi
+    fi
+    std::Option[i64]::None
+}
+
+impl References {
+    fn capture_sources self:mut$References sources:$lexer::SourceStore -> bool {
+        true = same_revision
+        for entry in sources.sources.iter do
+            if entry.first.as_str self.sources.get_str std::Option::Some(previous) is then
+                if previous entry.second != then
+                    false = self.complete
+                    false = same_revision
+                fi
+            else
+                entry.second.clone entry.first.clone self.sources.set
+            fi
+        done
+        same_revision
+    }
+
+    fn collect self:mut$References snapshot:$products::AnalysisSnapshot include_declaration:bool {
+        if snapshot.get_report.get_sources self.capture_sources ! then
+            return
+        fi
+        if
+            self
+                .declaration
+                .file
+                .as_str snapshot
+                .get_report
+                .get_sources
+                .get
+                .is_none
+        then
+            if
+                snapshot
+                    .get_report
+                    .get_diagnostics
+                    .has_errors
+            then
+                false = self.complete
+            fi
+            return
+        fi
+        include_declaration self.declaration.offset self
+            .declaration
+            .file
+            .as_str
+        snapshot.get_index.find_references match
+            document::ReferenceAnswer::Complete(answer) => answer
+            document::ReferenceAnswer::Incomplete(answer _) => {
+                false = self.complete answer
+            }
+            _ => {
+                false = self.complete return
+            }
+        end = answer
+        if answer.declaration self.declaration.matches ! then
+            false = self.complete return
+        fi
+        for range in answer.ranges.iter do
+            range.clone self.ranges.push
+        done
+    }
+
+    # A source occurrence must identify the same declaration in every root that loads it.
+    fn verify_context self:mut$References snapshot:$products::AnalysisSnapshot {
+        self.complete = complete
+        std::List[document::DocumentLocation]::new = verified
+        for range in self.ranges.iter do
+            if
+                range.file.as_str snapshot
+                    .get_report
+                    .get_sources
+                    .get
+                    .is_none
+            then
+                range.clone verified.push
+                continue
+            fi
+            false range.offset range.file.as_str snapshot.get_index.find_references match
+                document::ReferenceAnswer::Complete(answer) => answer
+                document::ReferenceAnswer::Incomplete(answer _) => answer
+                _ => {
+                    range.clone verified.push continue
+                }
+            end = answer
+            if answer.declaration self.declaration.matches then
+                range.clone verified.push
+            else
+                false = complete
+            fi
+        done
+        complete = self.complete
+        verified = self.ranges
+    }
+
+    fn sort_ranges self:mut$References {
+        &document::DocumentLocation::comes_before self.ranges.sort_by
+        std::List[document::DocumentLocation]::new = unique
+        for range in self.ranges.iter do
+            if unique.is_empty ! then
+                if range unique.length 1 - unique.get.matches then
+                    continue
+                fi
+            fi
+            range.clone unique.push
+        done
+        unique = self.ranges
+    }
+
+    pub fn map_location
+        self:$References
+        location:$document::DocumentLocation
+        name:$str
+    -> document::DocumentLocation {
+        location.clone = mapped
+        for range in self.ranges.iter do
+            if range.file location.file != then
+                continue
+            fi
+            if location.offset range.offset < then
+                mapped.offset name.length + range.length - = mapped.offset
+            elif range location.matches then
+                name.length = mapped.length
+            fi
+        done
+        mapped
+    }
+
+    pub fn edited_sources self:$References name:$str -> std::Map[std::String std::String] {
+        std::Map[std::String std::String]::new = edited
+        for entry in self.sources.iter do
+            std::String::new = text
+            0 = cursor: u64
+            for range in self.ranges.iter do
+                if range.file entry.first != then
+                    continue
+                fi
+                entry.second.as_str cursor range.offset cursor - str::substring.as_str text.append
+                name text.append
+                range.offset range.length + = cursor
+            done
+            entry.second.as_str cursor entry.second.length cursor - str::substring.as_str text.append
+            text entry.first.clone edited.set
+        done
+        edited
+    }
+}
+
+fn valid_name name:$str -> bool {
+    name.to_str "/rename-name.casa".to_str products::SourceUnit products::syntax match
+        std::Result::Ok(syntax) => {
+            if
+                syntax
+                    .get_report
+                    .get_diagnostics
+                    .has_errors
+            then
+                false return
+            fi
+            if syntax.get_facts std::Option::Some(facts) is then
+                if 1 facts.meaningful_tokens.length != 1 facts.name_segments.length != || then
+                    false return
+                fi
+                0 facts.meaningful_tokens.get = token
+                0 facts.name_segments.get = segment
+                common::TokenKind::Identifier token.kind == name token.spelling == &&
+                0 segment.start == && name.length segment.length == && return
+            fi
+        }
+        _ => {
+        }
+    end
+    false
+}
+# Compare established definitions at syntax-owned name segments through the edit mapping.
+fn verify_bindings
+    before:$products::AnalysisSnapshot
+    after:$products::AnalysisSnapshot
+    edits:$References
+    name:$str
+-> bool {
+    for
+        entry in before
+            .get_report
+            .get_sources
+            .sources
+            .iter
+    do
+        entry.second.clone entry.first.clone products::SourceUnit products::syntax match
+            std::Result::Ok(syntax) => syntax
+            _ => false return
+        end = syntax
+        if syntax.get_facts std::Option::Some(facts) is then
+            for segment in facts.name_segments.iter do
+                segment.length segment.start entry.first.clone document::DocumentLocation = location
+                if name edits after before location verify_binding ! then
+                    false return
+                fi
+            done
+        else
+            false return
+        fi
+    done
+    true
+}
+
+fn verify_binding
+    location:$document::DocumentLocation
+    before:$products::AnalysisSnapshot
+    after:$products::AnalysisSnapshot
+    edits:$References
+    name:$str
+-> bool {
+    name location edits.map_location = mapped
+    location.offset location.file.as_str before.get_index.find_definition match
+        document::PointAnswer::Known(target) => {
+            name target edits.map_location = expected
+            mapped.offset mapped.file.as_str after.get_index.find_definition match
+                document::PointAnswer::Known(actual) => actual expected.matches return
+                _ => false return
+            end
+        }
+        document::PointAnswer::Unavailable(_) => false return
+        _ => {
+        }
+    end
+    # Declarations have no definition answer. References still verify their identity.
+    false location.offset location.file.as_str before.get_index.find_references match
+        document::ReferenceAnswer::Complete(answer) => {
+            name answer.declaration edits.map_location = expected
+            false mapped.offset mapped.file.as_str after.get_index.find_references match
+                document::ReferenceAnswer::Complete(actual) => actual.declaration expected.matches return
+                _ => false return
+            end
+        }
+        document::ReferenceAnswer::Incomplete(unused missing) => false return
+        _ => {
+        }
+    end
+    true
+}

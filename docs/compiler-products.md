@@ -97,8 +97,10 @@ Type references are incomplete while signature and field type occurrences are
 not represented. Rename must reject these answers. Snapshot release is measured
 by the [editor snapshot workload](benchmarks/editor-snapshots/README.md).
 
-Workspace aggregation and freshness checks belong to #714. Final consumer
-cutover belongs to #715. Language behavior is unchanged. The
+`workspace.casa` aggregates owned answers across fresh snapshots, retains exact
+source revisions, and validates proposed rename bindings through reanalysis.
+Workspace discovery and LSP document versions stay outside the compiler products.
+Final consumer cutover belongs to #715. Language behavior is unchanged. The
 [request measurements](benchmarks/compiler-products/README.md) do not establish
 final redesign performance.
 

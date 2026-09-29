@@ -15,6 +15,7 @@ import "compiler/legacy_parser.casa" as syntax
 import "compiler/typechecker.casa" as typechecker
 import "compiler/analysis.casa" as analysis
 import "compiler/document.casa" as document
+import "workspace.casa" as workspace
 
 # ============================================================================
 # LSP structs
@@ -75,9 +76,12 @@ pub struct CompileResult {
 }
 
 pub struct LspState {
-    pub library_paths:  std::List[std::String]
-    pub open_documents: std::Map[std::String document::AnalyzedDocument]
-    pub reader:         io::StdinReader
+    pub library_paths:   std::List[std::String]
+    pub open_documents:  std::Map[std::String document::AnalyzedDocument]
+    pub workspace:       workspace::Workspace
+    pub versions:        std::Map[std::String i64]
+    pub versioned_edits: bool
+    pub reader:          io::StdinReader
 }
 
 impl CompileResult {
@@ -93,7 +97,50 @@ impl LspState {
         LspState {
             library_paths: std::List[std::String]::new
             open_documents: std::Map[std::String document::AnalyzedDocument]::new
+            workspace: workspace::Workspace::new
+            versions: std::Map[std::String i64]::new
+            versioned_edits: false
             reader: io::StdinReader::new
+        }
+    }
+}
+
+impl LspState {
+    fn has_document_versions self:$LspState result:$workspace::References -> bool {
+        for range in result.ranges.iter do
+            if
+                range.file.as_str self
+                    .workspace
+                    .overrides
+                    .get_str
+                    .is_some
+            then
+                if
+                    range.file.as_str self
+                        .versions
+                        .get_str
+                        .is_none
+                then
+                    false return
+                fi
+            fi
+        done
+        true
+    }
+
+    # The server processes one request at a time. Refuse publication if input arrived meanwhile.
+    fn has_pending_input self:$LspState -> bool {
+        if self.reader.size self.reader.pos < then
+            true return
+        fi
+        POLL_DESCRIPTOR_BYTES std::RawBuffer::new = descriptor
+        # SAFETY: poll reads one initialized Linux pollfd and writes its revents field.
+        unsafe {
+            0 descriptor.data store32
+            POLL_READABLE descriptor.data POLL_EVENTS_OFFSET + store16
+            0 descriptor.data POLL_RETURNED_EVENTS_OFFSET + store16
+            0 1 descriptor.data POLL_SYSCALL syscall3 drop
+            descriptor.data POLL_RETURNED_EVENTS_OFFSET + load16 POLL_READABLE & 0 !=
         }
     }
 }
@@ -109,6 +156,12 @@ impl LspLocation {
 # ============================================================================
 # LSP constants
 # ============================================================================
+const POLL_SYSCALL 7
+const POLL_DESCRIPTOR_BYTES 8
+const POLL_EVENTS_OFFSET 4
+const POLL_RETURNED_EVENTS_OFFSET 6
+const POLL_READABLE 1
+const UTF16_SINGLE_UNIT_MAX 65535
 pub const DIAGNOSTIC_ERROR 1
 pub const DIAGNOSTIC_WARNING 2
 pub const COMPLETION_METHOD 2
@@ -161,15 +214,141 @@ pub fn convert_location_to_lsp_range
 }
 
 pub fn uri_to_path uri:$str -> std::String {
-    # Strip file:// prefix
-    if uri "file://" str::starts_with then
-        uri 7 uri.length 7 - str::substring
+    if uri "file://" str::starts_with then 7 else 0 fi = cursor: u64
+    std::Bytes::new = path
+    while cursor uri.length > do
+        cursor uri.at = byte
+        if '%' byte == cursor 2 + uri.length > && then
+            if cursor uri decode_uri_byte std::Option::Some(decoded_byte) is then
+                decoded_byte path.push
+                3 += cursor
+                continue
+            fi
+        fi
+        byte.codepoint u8::try_from.unwrap path.push
+        1 += cursor
+    done
+    path.to_str match
+        std::Result::Ok(decoded) => decoded.as_str lexer::absolute_normalize_path
+        _ => uri.to_str
+    end
+}
+
+fn decode_hex byte:u32 -> std::Option[u32] {
+    if '0'.codepoint byte >= '9'.codepoint byte <= && then
+        byte '0'.codepoint - std::Option::Some return
+    fi
+    if 'a'.codepoint byte >= 'f'.codepoint byte <= && then
+        byte 'a'.codepoint - 10 + std::Option::Some return
+    fi
+    if 'A'.codepoint byte >= 'F'.codepoint byte <= && then
+        byte 'A'.codepoint - 10 + std::Option::Some return
+    fi
+    std::Option[u32]::None
+}
+
+fn decode_uri_byte uri:$str offset:u64 -> std::Option[u8] {
+    offset 1 + uri.at.codepoint decode_hex match
+        std::Option::Some(value) => value
+        _ => std::Option[u8]::None return
+    end = high
+    offset 2 + uri.at.codepoint decode_hex match
+        std::Option::Some(value) => value
+        _ => std::Option[u8]::None return
+    end = low
+    high 16 * low + u8::try_from
+}
+
+pub fn path_to_uri path:$str -> std::String {
+    "file://".to_str = uri
+    "0123456789ABCDEF" = hex
+    0 = cursor: u64
+    while cursor path.length > do
+        cursor path.at = byte
+        byte.codepoint = code
+        if
+            'a'.codepoint code >= 'z'.codepoint code <= &&
+            'A'.codepoint code >= 'Z'.codepoint code <= && ||
+            '0'.codepoint code >= '9'.codepoint code <= && ||
+            '/' byte == || '-' byte == || '_' byte == || '.' byte == || '~' byte == ||
+        then
+            byte uri.push
+        else
+            '%' uri.push
+            code 16 / u64::from hex.at uri.push
+            code 16 % u64::from hex.at uri.push
+        fi
+        1 += cursor
+    done
+    uri
+}
+# LSP columns count UTF-16 units. Compiler locations count UTF-8 bytes.
+pub fn offset_from_lsp source:$str position:$LspRange -> std::Option[u64] {
+    0 = line: i64
+    0 = column: i64
+    0 = offset: u64
+    if 0 position.start_line < 0 position.start_col < || then
+        std::Option[u64]::None return
+    fi
+    while source.length offset <= do
+        if position.start_line line == position.start_col column == && then
+            offset std::Option::Some return
+        fi
+        if source.length offset == then
+            break
+        fi
+        if source offset lexer::decode_utf8_scalar std::Option::Some(scalar) is then
+            scalar lexer::DecodedUtf8Scalar::codepoint = codepoint
+            if '\n'.codepoint codepoint == '\r'.codepoint codepoint == || then
+                if position.start_line line == then
+                    break
+                fi
+                1 += line
+                0 = column: i64
+            else
+                if UTF16_SINGLE_UNIT_MAX scalar lexer::DecodedUtf8Scalar::codepoint > then 2 else 1 fi += column
+            fi
+            scalar.byte_length += offset
+            codepoint offset source skip_line_feed = offset
+        else
+            break
+        fi
+    done
+    std::Option[u64]::None
+}
+
+fn skip_line_feed source:$str offset:u64 previous:u32 -> u64 {
+    if '\r'.codepoint previous != source.length offset >= || then
+        offset return
+    fi
+    if '\n' offset source.at == then
+        offset 1 +
     else
-        uri.to_str
+        offset
     fi
 }
 
-pub fn path_to_uri path:$str -> std::String { f"file://{path}" }
+fn position_from_offset source:$str target:u64 -> i64 i64 {
+    0 = line: i64
+    0 = column: i64
+    0 = offset: u64
+    while offset target > do
+        if source offset lexer::decode_utf8_scalar std::Option::Some(scalar) is then
+            scalar lexer::DecodedUtf8Scalar::codepoint = codepoint
+            if '\n'.codepoint codepoint == '\r'.codepoint codepoint == || then
+                1 += line
+                0 = column: i64
+            else
+                if UTF16_SINGLE_UNIT_MAX scalar lexer::DecodedUtf8Scalar::codepoint > then 2 else 1 fi += column
+            fi
+            scalar.byte_length += offset
+            codepoint offset source skip_line_feed = offset
+        else
+            break
+        fi
+    done
+    line column
+}
 
 # ============================================================================
 # JSON builders for LSP types
@@ -257,8 +436,10 @@ pub fn read_message reader:mut$io::StdinReader -> std::Option[json::JsonValue] {
             std::Result::Ok(value) => value
         end
         = header_line
-        if 0 header_line.length != '\r' header_line.length 1 - header_line.at == && then
-            header_line.as_str 0 header_line.length 1 - str::substring = header_line
+        if 0 header_line.length != then
+            if '\r' header_line.length 1 - header_line.at == then
+                header_line.as_str 0 header_line.length 1 - str::substring = header_line
+            fi
         fi
         if 0 header_line.length == then
             break
@@ -358,10 +539,35 @@ pub fn ingest_document_into
 
 pub fn ingest_document uri:$str source:$str state:mut$LspState -> std::List[LspDiagnostic] {
     uri uri_to_path = path
+    source.to_str path.clone state
+        .workspace
+        .overrides
+        .set
+    1 += state.workspace.generation
     state.library_paths state.open_documents source path.as_str compile_document_with_paths.into_parts
     = diagnostics = document
     document uri.to_str state.open_documents.set
     diagnostics
+}
+
+impl LspState {
+    fn refresh_document self:mut$LspState uri:$str {
+        uri uri_to_path = path
+        if
+            path.as_str self
+                .workspace
+                .overrides
+                .get_str std::Option::Some(source) is
+        then
+            source.clone
+        else
+            return
+        fi = source
+        self.library_paths self.open_documents source.as_str path.as_str compile_document_with_paths.into_parts
+        = diagnostics = document
+        document uri.to_str self.open_documents.set
+        diagnostics uri publish_diagnostics
+    }
 }
 
 pub fn diagnostics_from analysis:$analysis::AnalysisResult path:$str -> std::List[LspDiagnostic] {
@@ -452,11 +658,14 @@ pub fn convert_document_location_to_lsp
     sources:$lexer::SourceStore
     location:$document::DocumentLocation
 -> LspLocation {
-    location.length location.offset location.file.clone common::Location::new
-    sources
-    convert_location_to_lsp_range
-    location.file.as_str path_to_uri
-    LspLocation
+    if location.file.as_str sources.get std::Option::Some(source) is then
+        location.offset source.as_str position_from_offset = start_col = start_line
+        location.offset location.length + source.as_str position_from_offset = end_col = end_line
+        end_col end_line start_col start_line LspRange
+    else
+        0 0 0 0 LspRange
+    fi
+    location.file.as_str path_to_uri LspLocation
 }
 
 # ============================================================================
@@ -526,6 +735,11 @@ pub fn handle_did_open message:$json::JsonValue state:mut$LspState {
         "Expected option value while unwrapping text text_document json_get_str" exit_with_lsp_error
     fi
     text_opt.unwrap = text
+    if "version" text_document json::json_get_int std::Option::Some(version) is then
+        version copy uri.as_str uri_to_path state.versions.set
+    else
+        uri.as_str uri_to_path.as_str state.versions.remove_str drop
+    fi
     state text.as_str uri.as_str ingest_document = diagnostics
     diagnostics uri.as_str publish_diagnostics
 }
@@ -557,31 +771,38 @@ pub fn handle_did_change message:$json::JsonValue state:mut$LspState {
         "Expected option value while unwrapping text change json_get_str" exit_with_lsp_error
     fi
     text_opt.unwrap = text
+    if "version" text_document json::json_get_int std::Option::Some(version) is then
+        uri.as_str uri_to_path = path
+        if path state.versions.get std::Option::Some(previous) is then
+            if previous copy version copy <= then
+                return
+            fi
+        fi
+        version copy path state.versions.set
+    else
+        uri.as_str uri_to_path.as_str state.versions.remove_str drop
+    fi
     state text.as_str uri.as_str ingest_document = diagnostics
     diagnostics uri.as_str publish_diagnostics
 }
 
 pub fn handle_did_save message:$json::JsonValue state:mut$LspState {
+    # Open buffers remain authoritative when a save notification arrives.
     message extract_uri = uri
-    uri.as_str uri_to_path = saved_path
-    saved_path.as_str.as_cstr = saved_path_cstr
-    if saved_path_cstr.is_none then
-        f"error: handle_did_save path contains NUL for {uri}".as_str std::eprintln
-        return
-    fi
-    saved_path_cstr.unwrap file::read_all = read_result
-    if read_result std::Result::Error(read_err) is then
-        f"error: handle_did_save read failed for {uri}: {read_err.to_str}".as_str std::eprintln
-        return
-    fi
-    read_result.unwrap.to_str = saved_source_result
-    if saved_source_result std::Result::Error(utf8_error) is then
-        f"error: handle_did_save read invalid UTF-8 at byte {utf8_error.index} for {uri}".as_str std::eprintln
-        return
-    fi
-    saved_source_result.unwrap = saved_source
-    state saved_source.as_str uri.as_str ingest_document = diagnostics
-    diagnostics uri.as_str publish_diagnostics
+    uri.as_str state.refresh_document
+    1 += state.workspace.generation
+}
+
+pub fn handle_did_close message:$json::JsonValue state:mut$LspState {
+    message extract_uri = uri
+    uri.as_str uri_to_path = path
+    path.as_str state
+        .workspace
+        .overrides
+        .remove_str drop
+    path.as_str state.versions.remove_str drop
+    uri.as_str state.open_documents.remove_str drop
+    1 += state.workspace.generation
 }
 
 # ============================================================================
@@ -862,13 +1083,6 @@ pub fn handle_references message:$json::JsonValue state:$LspState {
     fi
     request_id_opt.unwrap = request_id
 
-    uri.as_str state.open_documents.get_str = document_opt
-    if document_opt.is_none then
-        json::JsonValue::JsonNull request_id send_response
-        return
-    fi
-    document_opt.unwrap = document
-
     # includeDeclaration
     std::Option[$json::JsonValue]::None = context_opt
     if "params" message json::json_get_object std::Option::Some(params) is then
@@ -883,7 +1097,25 @@ pub fn handle_references message:$json::JsonValue state:$LspState {
     fi
 
     message extract_position = position
-    include_decl position LspRange::start_col position LspRange::start_line document compute_references_with_coverage = incomplete = refs_opt
+    uri.as_str uri_to_path = path
+    position path.as_str state.workspace query_workspace_references = result_opt
+    if result_opt.is_none then
+        json::JsonValue::JsonNull request_id send_response return
+    fi
+    result_opt.unwrap = result
+    if state.has_pending_input then
+        "References cancelled because newer client input is pending." request_id send_request_error return
+    fi
+    result.complete ! = incomplete
+    result make_reference_sources = sources
+    std::List[LspLocation]::new = references
+    for range in result.ranges.iter do
+        if include_decl ! range result.declaration.matches && then
+            continue
+        fi
+        range sources convert_document_location_to_lsp references.push
+    done
+    references std::Option::Some = refs_opt
     if refs_opt.is_none then
         json::JsonValue::JsonNull request_id send_response
         return
@@ -891,7 +1123,7 @@ pub fn handle_references message:$json::JsonValue state:$LspState {
     if incomplete then
         json::json_object
         "type".to_str 2 json::JsonValue::JsonInt json::json_set
-        "message".to_str "References cover verified uses in this compilation only. Some source uses are not represented.".to_str
+        "message".to_str "Workspace references are incomplete. Some sources or bindings could not be verified.".to_str
         json::JsonValue::JsonString json::json_set
         json::JsonValue::JsonObject "window/showMessage" send_notification
     fi
@@ -909,36 +1141,6 @@ pub fn handle_references message:$json::JsonValue state:$LspState {
 # Rename handler
 # ============================================================================
 
-pub fn compute_rename
-    state:$document::AnalyzedDocument
-    line:i64
-    column:i64
-    new_name:$str
--> std::Option[std::Map[std::String std::List[TextEdit]]] {
-    column line convert_lsp_position = position
-    if true position state.find_reference_answer_at document::ReferenceAnswer::Complete(result) is then
-        result.into_ranges = document_references
-        std::Map[std::String std::List[TextEdit]]::new = edits_map
-        for document_reference in document_references.iter do
-            document_reference state.sources convert_document_location_to_lsp.into_parts
-            = edit_range = reference_uri
-
-            new_name.to_str edit_range TextEdit = edit
-            reference_uri edits_map.get_mut = existing_edits
-            existing_edits match
-                std::Option::Some(edits) => edit edits.push
-                std::Option::None => {
-                    std::List[TextEdit]::new = document_edits
-                    edit document_edits.push
-                    document_edits reference_uri edits_map.set
-                }
-            end
-        done
-        edits_map std::Option::Some return
-    fi
-    std::Option[std::Map[std::String std::List[TextEdit]]]::None
-}
-
 pub fn handle_rename message:$json::JsonValue state:$LspState {
     message extract_uri = uri
     "id" message json::json_get_value = request_id_opt
@@ -946,13 +1148,6 @@ pub fn handle_rename message:$json::JsonValue state:$LspState {
         "Expected option value while unwrapping id message json_get_value" exit_with_lsp_error
     fi
     request_id_opt.unwrap = request_id
-
-    uri.as_str state.open_documents.get_str = document_opt
-    if document_opt.is_none then
-        json::JsonValue::JsonNull request_id send_response
-        return
-    fi
-    document_opt.unwrap = document
 
     "params" message json::json_get_object = params_opt
     if params_opt.is_none then
@@ -965,31 +1160,107 @@ pub fn handle_rename message:$json::JsonValue state:$LspState {
     fi
     new_name_opt.unwrap = new_name
 
-    message extract_position = position
-    new_name.as_str position LspRange::start_col position LspRange::start_line document compute_rename = edits_opt
-    if edits_opt.is_none then
-        json::JsonValue::JsonNull request_id send_response
-        return
+    if state.versioned_edits ! then
+        "Rename requires client support for versioned document changes." request_id send_request_error return
     fi
-    edits_opt.unwrap = edits_map
+    message extract_position = position
+    uri.as_str uri_to_path = path
+    position path.as_str state.workspace query_workspace_references = result_opt
+    if result_opt.is_none then
+        "Rename identity is unavailable." request_id send_request_error return
+    fi
+    result_opt.unwrap = result
+    if result state.has_document_versions ! then
+        "Rename requires the current version of every affected open document." request_id send_request_error return
+    fi
+    if new_name.as_str result state.workspace.validate_rename ! then
+        "Rename refused: stale or incomplete sources, invalid name, or changed bindings." request_id send_request_error return
+    fi
+    if state.has_pending_input then
+        "Rename cancelled because newer client input is pending." request_id send_request_error return
+    fi
+    result new_name.as_str state make_workspace_edit request_id send_response
+}
 
-    # Convert to JSON changes object
-    json::json_object = changes
-    edits_map.keys = change_uris
-    for change_uri in change_uris.iter do
-        change_uri edits_map.get.unwrap = edit_list
-        std::List[json::JsonValue]::new = edit_json_list
-        0 = edit_index: u64
-        while edit_index edit_list.length > do
-            edit_index edit_list.get.to_json edit_json_list.push
-            1 += edit_index
-        done
-        changes change_uri.clone edit_json_list json::JsonValue::JsonArray json::json_set = changes
-    done
-
+pub fn send_request_error id:$json::JsonValue message:$str {
     json::json_object
-    "changes".to_str changes json::JsonValue::JsonObject json::json_set
-    json::JsonValue::JsonObject request_id send_response
+    "code".to_str -32803 json::JsonValue::JsonInt json::json_set
+    "message".to_str message.to_str json::JsonValue::JsonString json::json_set
+    json::JsonValue::JsonObject = failure
+    json::json_object
+    "jsonrpc".to_str "2.0".to_str json::JsonValue::JsonString json::json_set
+    "id".to_str id.clone json::json_set
+    "error".to_str failure json::json_set
+    json::JsonValue::JsonObject json::json_serialize send_json_rpc
+}
+
+pub fn query_workspace_references
+    state:$workspace::Workspace
+    path:$str
+    position:$LspRange
+-> std::Option[workspace::References] {
+    path state.read_source match
+        std::Option::Some(source) => source
+        _ => std::Option[workspace::References]::None return
+    end = source
+    position source.as_str offset_from_lsp match
+        std::Option::Some(offset) => offset
+        _ => std::Option[workspace::References]::None return
+    end = offset
+    true offset path state.find_references match
+        std::Option::Some(result) => result
+        _ => std::Option[workspace::References]::None return
+    end = result
+    if path result.sources.get_str std::Option::Some(analyzed) is then
+        if source analyzed == then
+            result std::Option::Some return
+        fi
+    fi
+    std::Option[workspace::References]::None
+}
+
+fn make_reference_sources result:$workspace::References -> lexer::SourceStore {
+    lexer::SourceStore::new = sources
+    for entry in result.sources.iter do
+        entry.second.as_str entry.first.as_str sources.add
+    done
+    sources
+}
+
+pub fn make_workspace_edit
+    state:$LspState
+    name:$str
+    result:$workspace::References
+-> json::JsonValue {
+    result make_reference_sources = sources
+    std::List[json::JsonValue]::new = changes
+    for entry in result.sources.iter do
+        std::List[json::JsonValue]::new = edits
+        for range in result.ranges.iter do
+            if range.file entry.first != then
+                continue
+            fi
+            range sources convert_document_location_to_lsp = location
+            name.to_str location.range.clone TextEdit.to_json edits.push
+        done
+        if edits.is_empty then
+            continue
+        fi
+        json::JsonValue::JsonNull = version
+        if entry.first state.versions.get std::Option::Some(current) is then
+            current copy json::JsonValue::JsonInt = version
+        fi
+        json::json_object
+        "uri".to_str entry.first.as_str path_to_uri json::JsonValue::JsonString json::json_set
+        "version".to_str version json::json_set json::JsonValue::JsonObject = identifier
+        json::json_object
+        "textDocument".to_str identifier json::json_set
+        "edits".to_str edits json::JsonValue::JsonArray json::json_set
+        json::JsonValue::JsonObject changes.push
+    done
+    json::json_object
+    "documentChanges".to_str changes json::JsonValue::JsonArray json::json_set
+    json::JsonValue::JsonObject
 }
 
 # ============================================================================
@@ -1100,6 +1371,56 @@ pub fn extract_library_paths message:$json::JsonValue -> std::List[std::String] 
     paths
 }
 
+fn configure_workspace message:$json::JsonValue state:mut$LspState {
+    if "params" message json::json_get_object std::Option::Some(params) is then
+        if "workspaceFolders" params json::json_get_array std::Option::Some(folders) is then
+            for folder in folders.iter do
+                if "uri" folder json::json_get_str std::Option::Some(uri) is then
+                    uri.as_str uri_to_path state
+                        .workspace
+                        .folders
+                        .push
+                fi
+            done
+        elif "rootUri" params json::json_get_str std::Option::Some(uri) is then
+            uri.as_str uri_to_path state
+                .workspace
+                .folders
+                .push
+        fi
+        if "initializationOptions" params json::json_get_object std::Option::Some(options) is then
+            options state configure_exclusions
+        fi
+        if "capabilities" params json::json_get_object std::Option::Some(capabilities) is then
+            capabilities state configure_edit_capability
+        fi
+    fi
+    1 += state.workspace.generation
+}
+
+fn configure_exclusions state:mut$LspState options:$json::JsonValue {
+    if "excludePaths" options json::json_get_array std::Option::Some(paths) is then
+        for path in paths.iter do
+            if path json::JsonValue::JsonString(value) is then
+                value.as_str lexer::absolute_normalize_path state
+                    .workspace
+                    .exclusions
+                    .push
+            fi
+        done
+    fi
+}
+
+fn configure_edit_capability state:mut$LspState capabilities:$json::JsonValue {
+    if "workspace" capabilities json::json_get_object std::Option::Some(workspace) is then
+        if "workspaceEdit" workspace json::json_get_object std::Option::Some(edit) is then
+            if "documentChanges" edit json::json_get_bool std::Option::Some(supported) is then
+                supported copy = state.versioned_edits
+            fi
+        fi
+    fi
+}
+
 pub fn handle_initialize message:$json::JsonValue state:mut$LspState {
     "id" message json::json_get_value = request_id_opt
     if request_id_opt.is_none then
@@ -1108,6 +1429,8 @@ pub fn handle_initialize message:$json::JsonValue state:mut$LspState {
     request_id_opt.unwrap = request_id
 
     message extract_library_paths = state.library_paths
+    state.library_paths.clone = state.workspace.library_paths
+    state message configure_workspace
 
     # Build semantic tokens legend
     std::List[json::JsonValue]::new = token_types
@@ -1139,6 +1462,12 @@ pub fn handle_initialize message:$json::JsonValue state:mut$LspState {
     "completionProvider".to_str json::json_object
     "triggerCharacters".to_str triggers json::JsonValue::JsonArray json::json_set
     json::JsonValue::JsonObject json::json_set
+    "workspace".to_str json::json_object
+    "workspaceFolders".to_str json::json_object
+    "supported".to_str true json::JsonValue::JsonBool json::json_set
+    "changeNotifications".to_str true json::JsonValue::JsonBool json::json_set
+    json::JsonValue::JsonObject json::json_set
+    json::JsonValue::JsonObject json::json_set
     "referencesProvider".to_str true json::JsonValue::JsonBool json::json_set
     "renameProvider".to_str true json::JsonValue::JsonBool json::json_set
     "semanticTokensProvider".to_str json::json_object
@@ -1150,6 +1479,42 @@ pub fn handle_initialize message:$json::JsonValue state:mut$LspState {
     json::JsonValue::JsonObject json::json_set
     json::JsonValue::JsonObject json::json_set
     json::JsonValue::JsonObject request_id send_response
+}
+
+fn change_workspace_folders message:$json::JsonValue state:mut$LspState {
+    if "params" message json::json_get_object std::Option::Some(params) is then
+        if "event" params json::json_get_object std::Option::Some(event) is then
+            event state update_workspace_folders
+        fi
+    fi
+    1 += state.workspace.generation
+}
+
+fn update_workspace_folders state:mut$LspState event:$json::JsonValue {
+    std::Set[std::String]::new = folders
+    for
+        folder in state
+            .workspace
+            .folders
+            .iter
+    do
+        folder.clone folders.add
+    done
+    if "removed" event json::json_get_array std::Option::Some(removed) is then
+        for item in removed.iter do
+            if "uri" item json::json_get_str std::Option::Some(uri) is then
+                uri.as_str uri_to_path folders.remove
+            fi
+        done
+    fi
+    if "added" event json::json_get_array std::Option::Some(added) is then
+        for item in added.iter do
+            if "uri" item json::json_get_str std::Option::Some(uri) is then
+                uri.as_str uri_to_path folders.add
+            fi
+        done
+    fi
+    folders.to_list = state.workspace.folders
 }
 
 pub fn handle_shutdown message:$json::JsonValue {
@@ -1168,6 +1533,12 @@ pub fn dispatch_message message:$json::JsonValue state:mut$LspState {
         return
     fi
     method_opt.unwrap = method
+    if
+        "textDocument/definition" method == "textDocument/hover" method == ||
+        "textDocument/completion" method == || "textDocument/semanticTokens/full" method == ||
+    then
+        message extract_uri.as_str state.refresh_document
+    fi
 
     if "initialize" method == then
         state message handle_initialize
@@ -1179,6 +1550,12 @@ pub fn dispatch_message message:$json::JsonValue state:mut$LspState {
         state message handle_did_open
     elif "textDocument/didChange" method == then
         state message handle_did_change
+    elif "textDocument/didClose" method == then
+        state message handle_did_close
+    elif "workspace/didChangeWorkspaceFolders" method == then
+        state message change_workspace_folders
+    elif "workspace/didChangeWatchedFiles" method == then
+        1 += state.workspace.generation
     elif "textDocument/didSave" method == then
         state message handle_did_save
     elif "textDocument/definition" method == then

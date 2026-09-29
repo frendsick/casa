@@ -82,8 +82,8 @@ safer.
 | Definition | Functions, bindings, structs, enum variants, and qualified methods |
 | Hover | Types and stack effects for symbols, literals, operators, and intrinsics |
 | Completion | Names, keywords, intrinsics, dot methods, and qualified names |
-| References | Functions, bindings, structs, and enums |
-| Rename | Functions and bindings across analyzed source locations |
+| References | Verified uses across discovered workspace roots and imports |
+| Rename | Validated workspace edits for functions and bindings |
 | Semantic tokens | Full-document token classification |
 
 Definitions and references can resolve imported declarations. Unsaved content
@@ -94,8 +94,30 @@ Query results own their presentation text and source ranges.
 Source errors can leave independent hover, definition, completion, reference,
 and token facts available. Partial completion lists set `isIncomplete`.
 Completion edits replace the selected identifier range.
-References cover one compilation and show a notice when coverage is incomplete.
-Rename refuses incomplete coverage.
+References discover Casa files beneath `workspaceFolders` or `rootUri` on demand,
+including unopened files and unsaved documents. No manifest is required. Directory
+symlinks are not traversed. Add absolute files or directories to the initialization
+option `excludePaths` to exclude them from discovery. Imported sources still
+participate when required by an included root.
+
+Requests analyze current open text and disk sources, correlate declaration ranges
+and exact source revisions, and deduplicate uses. Incomplete discovery, failed
+imports, and missing semantic facts produce a visible partial-reference notice.
+Conflicting bindings across roots are excluded. Local binding queries use their
+containing compilation without workspace discovery.
+
+Rename requires complete coverage, a valid identifier, and candidate reanalysis
+that preserves established bindings. It rejects collisions, unavailable validation
+facts, and edits outside the included writable workspace. Open documents receive
+versioned `documentChanges`. Closed documents receive a null version after an
+exact disk-content check. The client must support versioned document changes.
+Open text remains authoritative on save. Closing a document removes its override.
+
+The server processes requests synchronously and uses fresh analyses for workspace
+queries. It refuses publication when newer client input is pending. This avoids
+applying old ranges while a queued edit waits. There is no background workspace
+scan or debounce delay. File changes after the final disk check remain subject
+to the client's edit application behavior.
 
 ## Limitations
 
@@ -105,8 +127,12 @@ Rename refuses incomplete coverage.
 - Completion is broad. The editor performs prefix filtering.
 - Dot completion does not support every arbitrary expression.
 - There are no code actions or formatting requests.
-- References and rename cover the analyzed root and imports. Workspace discovery
-  and document-version checks are not implemented.
+- Type rename remains unavailable until signature and field type references have
+  complete coverage.
+- Rename validation is conservative. Syntax failures or diagnostics in a required
+  root can prevent rename even when some references remain queryable.
+- Workspace requests reanalyze roots on each request. Large workspaces can be slow.
+  Exclude generated files and intentionally invalid fixtures with `excludePaths`.
 
 See [Compiler Diagnostics](errors.md) to interpret errors and [Casa Format
 Guide](FORMAT.md) to format source files.
