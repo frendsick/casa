@@ -68,9 +68,9 @@ current change more closely, while self-compilation still builds different trees
 
 The [accepted memory gate](../compiler-simplification-measurements.md) requires
 memory increases to buy substantial, repeatable speed gains. This change does
-not meet that requirement. Performance acceptance needs an evidence-based
-maintainer decision or a measured correction. Passing the numerical ceilings
-does not waive the memory gate.
+not meet that requirement. On 2026-09-29, the maintainer accepted the measured
+time and memory increases for #708 after reviewing this evidence. This decision
+permits this change to proceed. It does not change the general memory gate.
 
 ## Lifetime and complexity
 
@@ -113,5 +113,5 @@ Validation: `tests/test_all.sh` passed all 14 shards, including bootstrap and
 formatter checks. The focused product tests passed with the candidate compiler.
 Both control and candidate passed the assembly fixed-point comparison.
 The final Standards and Spec code reviews found no blocking defects. The
-performance acceptance decision above remains open. One extra
-clone of saved callable sets remains a non-blocking review finding.
+maintainer accepted the performance cost as recorded above. One extra clone
+of saved callable sets remains a non-blocking review finding.
