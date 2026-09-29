@@ -289,30 +289,21 @@ counter increment_counter
 
 Lexical closures in the root body can capture root locals.
 
-`global` is valid only at the top level and always requires an initializer. It
-does not declare access inside a function.
-
-Declare an immutable runtime global at the top level with an initializer:
+Create runtime state in the root body and pass it to named functions:
 
 ```casa
-global LIMIT 100
-
-global OPERATORS {
-    build_operators
+fn show_limit limit:i64 {
+    limit print
 }
 
-pub global PUBLIC_LIMIT 200
+100 = limit
+limit show_limit
 ```
 
-A direct initializer is one operation. Use a block for a multi-operation
-initializer. The initializer must produce one value. Dependency modules
-initialize before their importers, and globals in one module initialize in
-source order. A global cannot read a later global during initialization.
-
-An immutable global is private unless it has `pub`. A `Copy` value is copied
-when an owned value is required. A non-`Copy` value is borrowed and cannot move
-out of its global place. Local and pattern bindings cannot shadow a visible
-immutable global.
+Root bindings initialize when execution reaches them. Root owners follow the
+usual move, borrow, and LIFO cleanup rules. Libraries can expose constructors
+or loaders for state they need callers to own. The removed `global` keyword
+produces a diagnostic that suggests `const` or a root binding.
 
 Use `= name:Type` when the value needs an explicit type:
 

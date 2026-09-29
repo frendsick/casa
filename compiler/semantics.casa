@@ -423,8 +423,6 @@ pub fn collect_variable_uses ops:$std::List[common::Op] uses:VariableUses -> Var
             uses items collect_variable_uses = uses
         elif op.value common::OpValue::ExprGroup(items) is then
             uses items collect_variable_uses = uses
-        elif op.value common::OpValue::InitGlobal(initializer) is then
-            uses initializer.ops collect_variable_uses = uses
         elif op.value common::OpValue::MatchArm(arm) is then
             uses arm.guard_ops collect_variable_uses = uses
         fi
@@ -1342,7 +1340,6 @@ impl SemanticChecks {
             common::OpValue::FnPush(name) => name.as_str self.function_is_rejected
             common::OpValue::ExprGroup(items) => items self.body_has_rejected_target
             common::OpValue::PushArray(items) => items self.body_has_rejected_target
-            common::OpValue::InitGlobal(initializer) => initializer.ops self.body_has_rejected_target
             common::OpValue::MatchArm(arm) => arm.guard_ops self.body_has_rejected_target
             _ => false
         end
@@ -1425,7 +1422,6 @@ impl SemanticChecks {
                 }
                 common::OpValue::ExprGroup(items) => available items self.settle_operation_facts = available
                 common::OpValue::PushArray(items) => available items self.settle_operation_facts = available
-                common::OpValue::InitGlobal(initializer) => available initializer.ops self.settle_operation_facts = available
                 common::OpValue::MatchArm(arm) => available arm.guard_ops self.settle_operation_facts = available
                 _ => {
                 }
@@ -1522,7 +1518,6 @@ pub enum SemanticDependency derives std::Clone {
     BoundCall (SemanticBoundCall)
     DefaultMethodCall (SemanticDefaultMethodCall)
     Type (common::Type)
-    Global (SemanticGlobalReference)
 }
 
 pub struct SemanticBoundCall derives std::Clone {
@@ -1535,11 +1530,6 @@ pub struct SemanticDefaultMethodCall derives std::Clone {
     pub method_name:        std::String
     pub stack_effect:       common::StackEffect
     pub argument_callables: std::Map[std::String std::Set[std::String]]
-}
-
-pub struct SemanticGlobalReference derives std::Clone {
-    pub name:     std::String
-    pub location: common::Location
 }
 
 pub fn unsafe_operation_name operation:$common::OpValue -> str {
@@ -1723,14 +1713,6 @@ impl common::Op {
                 done
                 false
             }
-            common::OpValue::InitGlobal(initializer) => {
-                for item in initializer.ops.iter do
-                    if item.has_numeric_literal then
-                        true return
-                    fi
-                done
-                false
-            }
             _ => false
         end
     }
@@ -1853,10 +1835,6 @@ pub fn resolve_default_literals ops:mut$std::List[common::Op] diagnostics:mut$er
             items.clone = owned_items
             diagnostics owned_items resolve_default_literals
             owned_items common::OpValue::ExprGroup op common::Op::set_value
-        elif op_value common::OpValue::InitGlobal(initializer) is then
-            initializer.clone = resolved_initializer
-            diagnostics resolved_initializer.ops resolve_default_literals
-            resolved_initializer common::OpValue::InitGlobal op common::Op::set_value
         elif op_value common::OpValue::MatchArm(arm) is then
             arm.clone = resolved_arm
             diagnostics resolved_arm.guard_ops resolve_default_literals
@@ -1900,10 +1878,6 @@ pub fn apply_resolved_literal_hints
             items.clone = owned_items
             resolutions owned_items apply_resolved_literal_hints
             owned_items common::OpValue::ExprGroup op common::Op::set_value
-        elif op_value.clone common::OpValue::InitGlobal(initializer) is then
-            initializer.clone = resolved_initializer
-            resolutions resolved_initializer.ops apply_resolved_literal_hints
-            resolved_initializer common::OpValue::InitGlobal op common::Op::set_value
         elif op_value.clone common::OpValue::MatchArm(arm) is then
             arm.clone = resolved_arm
             resolutions resolved_arm.guard_ops apply_resolved_literal_hints
@@ -2830,53 +2804,6 @@ impl TypeChecker {
         ValueCapability::Owned std::Option[std::String]::None literals
         tc.current_location.clone type_value.clone TypedValue
         tc
-            .stack
-            .values
-            .push
-    }
-
-    pub fn stack_push_global
-        tc:mut$TypeChecker
-        type_value:$common::Type
-        name:$str
-        op:mut$common::Op
-        in_function:bool
-    {
-        if std::Option[common::Function]::None type_value tc.type_is_duplicable then
-            type_value tc.stack_push_type
-            if type_value tc.uses_copy_storage then
-                type_value.clone std::Option::Some op common::Op::set_type_hint
-                tc
-                    .stack
-                    .values
-                    .length 1 - tc
-                    .stack
-                    .values
-                    .get_mut = value
-                op.id std::Option::Some = value.source
-            fi
-            return
-        fi
-        if
-            name tc
-                .store
-                .immutable_globals
-                .has_str in_function ||
-        then
-            ValueCapability::Shared
-        else
-            ValueCapability::Exclusive
-        fi = capability
-        if type_value.is_borrow then
-            type_value type_capability = capability
-        fi
-        std::Set[std::String]::new
-        false std::Map[std::String std::Option[LoanSpan]]::new
-        std::Option[std::List[std::String]]::None
-        std::Option[std::List[std::String]]::None
-        std::Option[i64]::None std::Option[std::String]::None
-        capability name.to_str std::Option::Some std::List[LiteralRef]::new
-        tc.current_location.clone type_value.clone TypedValue tc
             .stack
             .values
             .push
@@ -6158,15 +6085,7 @@ impl TypeChecker {
     }
 
     pub fn record_implicit_binding self:mut$TypeChecker var_name:$str op:mut$common::Op {
-        if
-            var_name self
-                .store
-                .immutable_globals
-                .has_str
-        then
-            f"Binding `{var_name}` shadows immutable global `{var_name}`; choose a different name" = message
-            op common::Op::location message common::ErrorKind::DuplicateName self.diagnostics.record_error_string
-        elif var_name self.scope.bind ! then
+        if var_name self.scope.bind ! then
             f"Binding `{var_name}` shadows an existing variable; choose a different name" = message
             op common::Op::location message common::ErrorKind::DuplicateName self.diagnostics.record_error_string
         fi
@@ -6651,7 +6570,6 @@ impl TypeChecker {
         if push_value common::OpValue::PushCapture(capture_name) is then
             op capture_name.as_str tc.use_binding
             std::Option[common::Type]::None = capture_type_opt
-            false = is_global_capture
             if function_opt std::Option::Some(function) is then
                 capture_name.as_str function common::Function::captures common::variable_list_index = capture_index
                 if 0 capture_index >= then
@@ -6659,16 +6577,11 @@ impl TypeChecker {
                         capture_index u64::try_from.unwrap function common::Function::captures.get common::Variable::typ.is_unknown !
                     then
                         capture_index u64::try_from.unwrap function common::Function::captures.get common::Variable::typ.clone std::Option::Some = capture_type_opt
-                        capture_name.as_str function.global_captures common::string_list_contains = is_global_capture
                     fi
                 fi
             fi
             if capture_type_opt std::Option::Some(capture_type) is then
-                if is_global_capture then
-                    true op capture_name.as_str capture_type tc.stack_push_global
-                else
-                    function_opt op capture_name.as_str capture_type tc.stack_push_binding
-                fi
+                function_opt op capture_name.as_str capture_type tc.stack_push_binding
                 capture_name.as_str tc.apply_binding_callables
                 return
             fi
@@ -6690,15 +6603,7 @@ impl TypeChecker {
             # Check local variables first
             if function_opt var_name.as_str tc.local_var_type std::Option::Some(local_type) is then
                 if local_type.is_unknown ! then
-                    if function_opt var_name.as_str tc.is_global_assignment then
-                        if var_name.as_str common::is_internal_variable_name then
-                            function_opt op var_name.as_str local_type tc.stack_push_binding
-                        else
-                            function_opt.is_some op var_name.as_str local_type tc.stack_push_global
-                        fi
-                    else
-                        function_opt op var_name.as_str local_type tc.stack_push_binding
-                    fi
+                    function_opt op var_name.as_str local_type tc.stack_push_binding
                 else
                     common::make_unknown_type tc.stack_push_type
                 fi
@@ -6706,14 +6611,14 @@ impl TypeChecker {
                 return
             fi
 
-            # Check module-level variables.
+            # Check root bindings.
             var_name.as_str tc
                 .store
                 .variables
                 .get_str = global_opt
             if global_opt std::Option::Some(global_var) is then
                 if global_var common::Variable::typ.is_unknown ! then
-                    function_opt.is_some op var_name.as_str global_var common::Variable::typ tc.stack_push_global
+                    function_opt op var_name.as_str global_var common::Variable::typ tc.stack_push_binding
                 else
                     common::make_unknown_type tc.stack_push_type
                 fi
@@ -8185,10 +8090,6 @@ impl TypeChecker {
         while capture_index lambda.captures.length > do
             capture_index lambda.captures.get_mut = capture
             capture common::Variable::name.as_str = capture_name: $str
-            if capture_name.as_str lambda.global_captures common::string_list_contains then
-                1 += capture_index
-                continue
-            fi
             capture.typ.clone = capture_type
             if capture_type.is_unknown_placeholder then
                 1 += capture_index
@@ -8699,85 +8600,6 @@ pub fn check_expression_group
         function_opt owned_group_ops tc.run_type_check_ops
         owned_group_ops common::OpValue::ExprGroup op common::Op::set_value
     fi
-}
-
-impl TypeChecker {
-    pub fn check_global_initializer self:mut$TypeChecker op:mut$common::Op {
-        if op.value common::OpValue::InitGlobal(initializer) is then
-            initializer.clone = checked_initializer
-            self
-                .stack
-                .values
-                .length = stack_before
-            std::Option[common::Function]::None = root_scope
-            root_scope checked_initializer.ops self.run_type_check_ops
-            self
-                .stack
-                .values
-                .length = stack_after
-            if stack_before 1 + stack_after != then
-                op.location
-                f"Global `{checked_initializer.name}` initializer must produce exactly one value, produced {stack_after stack_before -}"
-                common::ErrorKind::SignatureMismatch self.diagnostics.record_error_string
-                while
-                    self
-                        .stack
-                        .values
-                        .length stack_before >
-                do
-                    self.stack_pop_drop
-                done
-                checked_initializer common::OpValue::InitGlobal op common::Op::set_value
-                return
-            fi
-
-            self.stack_pop_value = value
-            value.type_value resolve_numeric_literal_default = global_type
-            self.literal_resolutions self.diagnostics global_type value.resolve_literals drop
-            if global_type.is_exclusive_borrow then
-                op.location
-                f"Global `{checked_initializer.name}` cannot store an exclusive borrow"
-                common::ErrorKind::InvalidVariable self.diagnostics.record_error_string
-            elif value.capability ValueCapability::Owned is ! global_type.is_borrow ! && then
-                common::SHARED_BORROW_TYPE global_type common::apply_borrow_type = global_type
-            fi
-            checked_initializer.name.clone = initializer_storage
-            if
-                checked_initializer.name.as_str self
-                    .store
-                    .immutable_global_slots
-                    .get_str
-                std::Option::Some(slot) is
-            then
-                slot.clone = initializer_storage
-            fi
-            self
-                .store
-                .immutable_global_slots
-                .iter = global_slots
-            for pair in global_slots do
-                if pair.second.as_str initializer_storage.as_str != then
-                    continue
-                fi
-                pair.first.as_str self
-                    .store
-                    .variables
-                    .remove_str = global_opt
-                global_opt match
-                    std::Option::Some(global_var) => {
-                        global_type.clone global_var common::Variable::set_typ
-                        global_var pair.first.clone self
-                            .store
-                            .variables
-                            .set
-                    }
-                    std::Option::None => {
-                    }
-                end
-            done
-            checked_initializer common::OpValue::InitGlobal op common::Op::set_value
-        fi
-    }
 }
 
 impl TypeChecker {
@@ -10315,7 +10137,6 @@ fn instantiate_default_trait_method
             true = cloned_lambda.is_resolved
             lambda.variables.clone cloned_lambda common::Function::set_variables
             lambda.captures.clone cloned_lambda common::Function::set_captures
-            lambda.global_captures.clone cloned_lambda common::Function::set_global_captures
             lambda.captures_by_move cloned_lambda common::Function::set_captures_by_move
             lambda.captures_shared cloned_lambda common::Function::set_captures_shared
             0 = lambda_op_index: u64
@@ -11437,26 +11258,6 @@ impl TypeChecker {
             common::OpValue::FnPush(function_name) => {
                 function_name.as_str self.add_symbol_dependency
             }
-            common::OpValue::PushVar(name) => {
-                op.location.clone name.clone SemanticGlobalReference
-                SemanticDependency::Global self.ordered_facts.push
-            }
-            common::OpValue::PushCapture(name) => {
-                op.location.clone name.clone SemanticGlobalReference
-                SemanticDependency::Global self.ordered_facts.push
-            }
-            common::OpValue::AssignVar(name) => {
-                op.location.clone name.clone SemanticGlobalReference
-                SemanticDependency::Global self.ordered_facts.push
-            }
-            common::OpValue::AssignInc(name) => {
-                op.location.clone name.clone SemanticGlobalReference
-                SemanticDependency::Global self.ordered_facts.push
-            }
-            common::OpValue::AssignDec(name) => {
-                op.location.clone name.clone SemanticGlobalReference
-                SemanticDependency::Global self.ordered_facts.push
-            }
             common::OpValue::StructNew(casa_struct) => {
                 casa_struct.name.as_str self.add_symbol_dependency
             }
@@ -11633,7 +11434,6 @@ impl TypeChecker {
             common::OpValue::BindTemporary(_) => function_opt current_op self.check_temporary_binding
             common::OpValue::PushVar(_) => function_opt current_op self.check_push_var
             common::OpValue::PushCapture(_) => function_opt current_op self.check_push_var
-            common::OpValue::InitGlobal(_) => current_op self.check_global_initializer
             common::OpValue::IfStart => current_op self.check_if_block
             common::OpValue::IfCondition => current_op self.check_if_block
             common::OpValue::IfElif => current_op self.check_if_block
@@ -12095,10 +11895,6 @@ fn clone_operations_for_semantics source:$std::List[common::Op] -> std::List[com
             items clone_operations_for_semantics common::OpValue::PushArray op common::Op::set_value
         elif value common::OpValue::ExprGroup(items) is then
             items clone_operations_for_semantics common::OpValue::ExprGroup op common::Op::set_value
-        elif value common::OpValue::InitGlobal(initializer) is then
-            initializer.clone = cloned_initializer
-            initializer.ops clone_operations_for_semantics = cloned_initializer.ops
-            cloned_initializer common::OpValue::InitGlobal op common::Op::set_value
         elif value common::OpValue::MatchArm(arm) is then
             arm.clone = cloned_arm
             arm.guard_ops clone_operations_for_semantics = cloned_arm.guard_ops
@@ -12158,9 +11954,6 @@ impl common::SymbolStore {
         source.copy_types.clone = cloned.copy_types
         source.borrow_shapes.clone = cloned.borrow_shapes
         source.op_ownership.clone = cloned.op_ownership
-        source.immutable_globals.clone = cloned.immutable_globals
-        source.immutable_global_files.clone = cloned.immutable_global_files
-        source.immutable_global_slots.clone = cloned.immutable_global_slots
         source.public_symbols.clone = cloned.public_symbols
         source.private_symbols.clone = cloned.private_symbols
         source.module_private_symbols.clone = cloned.module_private_symbols
@@ -12276,43 +12069,6 @@ pub fn continue_function_semantics
 -> FunctionSemantics {
     std::Map[std::String std::Set[std::String]]::new = argument_callables
     false argument_callables session function analyze_function_semantics_in_session_mode
-}
-
-pub fn analyze_global_initializer_semantics
-    operations:$std::List[common::Op]
-    store:$common::SymbolStore
--> FunctionSemantics {
-    store SemanticSession::new = session
-    session operations analyze_global_initializer_semantics_in_session
-}
-
-pub fn analyze_global_initializer_semantics_in_session
-    operations:$std::List[common::Op]
-    session:mut$SemanticSession
--> FunctionSemantics {
-    common::empty_location
-    operations clone_operations_for_semantics
-    common::GLOBAL_SCOPE_LABEL.to_str common::Function::new = initializer
-    true = initializer.is_typechecked
-    initializer.split_body = checked_ops = initializer
-    initializer std::Option::Some = function_opt
-    error::Diagnostics::new = diagnostics
-    std::Set[std::String]::new = active_calls
-    common::GLOBAL_SCOPE_LABEL.to_str active_calls.add
-    false session.clone_bodies session.checks
-    active_calls
-    std::Map[std::String std::Set[std::String]]::new
-    false diagnostics session.store function_opt checked_ops analyze_ops = checked
-    function_opt.unwrap = checked_initializer
-    checked_ops.clone checked_initializer common::Function::set_ops
-    FunctionSemantics {
-        ordered_facts: checked.ordered_facts.clone
-        inferred_effect: checked.inferred_effect.clone
-        operations: checked_ops
-        diagnostics: diagnostics
-        return_callables: checked.return_callables.clone
-        checked_function: checked_initializer std::Option::Some
-    }
 }
 
 pub fn analyze_root_semantics

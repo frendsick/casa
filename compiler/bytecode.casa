@@ -186,7 +186,6 @@ struct BytecodeState {
     store:           $common::SymbolStore
     program:         common::Program
     failure:         std::Option[BytecodeFailure]
-    global_slots:    std::Map[std::String u64]
     constants_table: std::List[std::String]
     label_counter:   u64
     op_label_map:    std::Map[i64 u64]
@@ -234,9 +233,7 @@ impl BytecodeState {
         std::Map[i64 u64]::new
         0
         std::List[std::String]::new
-        store index_global_variable_map
         std::Option[BytecodeFailure]::None
-        0
         0
         std::List[common::StaticStruct]::new
         std::List[common::StaticArray]::new
@@ -262,11 +259,12 @@ impl BytecodeState {
 
 impl BytecodeCompiler {
     fn new state:mut$BytecodeState ops:$std::List[common::Op] -> BytecodeCompiler {
+        state.store state.store.variables index_root_variable_map = locals_count = local_slots
         std::Map[std::String u64]::new
         state
-        0
+        locals_count
         std::Map[std::String u64]::new
-        std::Map[std::String u64]::new
+        local_slots
         std::Option[common::Function]::None
         ops
         BytecodeCompiler
@@ -521,60 +519,21 @@ fn index_local_variable_list
     slots next_slot
 }
 
-fn index_variable_map
+fn index_root_variable_map
     variables:$std::Map[std::String common::Variable]
--> std::Map[std::String u64] {
+    store:$common::SymbolStore
+-> std::Map[std::String u64] u64 {
     std::Map[std::String u64]::new = slots
     variables.keys = names
-    0 = index: u64
-    for name in names.iter do
-        index name.clone slots.set
-        1 += index
-    done
-    slots
-}
-
-fn index_global_variable_map store:$common::SymbolStore -> std::Map[std::String u64] {
-    if
-        0 store
-            .immutable_global_slots
-            .keys
-            .length ==
-    then
-        store.variables index_variable_map return
-    fi
-    std::Map[std::String u64]::new = slots
-    std::Map[std::String u64]::new = storage_slots
     0 = next_slot: u64
-    for
-        name in store
-            .variables
-            .keys
-            .iter
-    do
-        name.clone = storage_name
-        if name.as_str store.immutable_global_slots.get_str std::Option::Some(global_slot) is then
-            global_slot.clone = storage_name
-        fi
-        if storage_name.as_str storage_slots.get_copy_str std::Option::Some(existing) is then
-            existing name.clone slots.set
-        else
-            next_slot storage_name storage_slots.set
-            next_slot name.clone slots.set
-            1 += next_slot
+    for name in names.iter do
+        if name.as_str variables.get_str std::Option::Some(variable) is then
+            store variable local_variable_slot_width = width
+            next_slot width + 1 - name.clone slots.set
+            width += next_slot
         fi
     done
-    slots
-}
-
-fn global_slot_count slots:$std::Map[std::String u64] -> u64 {
-    0 = count: u64
-    for slot in slots.values.iter do
-        if slot copy count <= then
-            slot copy 1 + = count
-        fi
-    done
-    count
+    slots next_slot
 }
 
 impl BytecodeCompiler {
@@ -584,20 +543,9 @@ impl BytecodeCompiler {
         local_index
     }
 
-    fn resolve_variable
-        compiler:mut$BytecodeCompiler
-        variable_name:$str
-    -> common::ResolvedVariable {
+    fn resolve_local compiler:mut$BytecodeCompiler variable_name:$str -> u64 {
         if variable_name compiler.local_slots.get_copy_str std::Option::Some(local_index) is then
-            local_index common::ResolvedVariable::Local return
-        fi
-        if
-            variable_name compiler
-                .state
-                .global_slots
-                .get_copy_str std::Option::Some(global_index) is
-        then
-            global_index common::ResolvedVariable::Global return
+            local_index return
         fi
         if compiler.function std::Option::Some(function) is then
             f"Variable `{variable_name}` is missing while compiling `{function.name}`"
@@ -606,7 +554,7 @@ impl BytecodeCompiler {
             f"Variable `{variable_name}` is missing during bytecode compilation"
             compiler.record_failure_string
         fi
-        0 common::ResolvedVariable::Local
+        0
     }
 
     fn find_local_inline_aggregate_type
@@ -621,6 +569,16 @@ impl BytecodeCompiler {
                     fi
                 fi
             done
+        elif
+            variable_name self
+                .state
+                .store
+                .variables
+                .get_str std::Option::Some(variable) is
+        then
+            if self.state.store variable.typ uses_inline_local_storage then
+                variable.typ.clone std::Option::Some return
+            fi
         fi
         std::Option[common::Type]::None
     }
@@ -631,20 +589,18 @@ impl BytecodeCompiler {
         move_owned:bool
         bytecode:mut$std::List[common::InstValue]
     {
-        variable_name compiler.resolve_variable = resolved
+        variable_name compiler.resolve_local = local_index
         if
             variable_name compiler.find_local_inline_aggregate_type
             std::Option::Some(aggregate_type) is
         then
-            if resolved common::ResolvedVariable::Local(local_index) is then
-                local_index common::InstValue::LocalAddress bytecode.push
-                if move_owned then
-                    bytecode aggregate_type compiler.emit_typed_load
-                fi
-                return
+            local_index common::InstValue::LocalAddress bytecode.push
+            if move_owned then
+                bytecode aggregate_type compiler.emit_typed_load
             fi
+            return
         fi
-        bytecode resolved.emit_get
+        local_index common::InstValue::LocalGet bytecode.push
     }
 
     fn emit_variable_set
@@ -652,18 +608,16 @@ impl BytecodeCompiler {
         variable_name:$str
         bytecode:mut$std::List[common::InstValue]
     {
-        variable_name compiler.resolve_variable = resolved
+        variable_name compiler.resolve_local = local_index
         if
             variable_name compiler.find_local_inline_aggregate_type
             std::Option::Some(aggregate_type) is
         then
-            if resolved common::ResolvedVariable::Local(local_index) is then
-                local_index common::InstValue::LocalAddress bytecode.push
-                bytecode aggregate_type compiler.emit_typed_store
-                return
-            fi
+            local_index common::InstValue::LocalAddress bytecode.push
+            bytecode aggregate_type compiler.emit_typed_store
+            return
         fi
-        bytecode resolved.emit_set
+        local_index common::InstValue::LocalSet bytecode.push
     }
 }
 
@@ -1056,23 +1010,20 @@ impl BytecodeCompiler {
             variable_name compiler.find_local_inline_aggregate_type
             std::Option::Some(aggregate_type) is
         then
-            variable_name compiler.resolve_variable = resolved
-            if resolved common::ResolvedVariable::Local(local_index) is then
-                local_index common::InstValue::LocalAddress bytecode.push
-                bytecode op aggregate_type compiler.state.store compiler.compile_drop_hook
-                if aggregate_type common::get_array_length_parameter std::Option::Some(array_length) is then
-                    if aggregate_type.array_element_type std::Option::Some(element_type) is then
-                        bytecode op array_length element_type compiler.compile_array_destruction
-                        common::InstValue::Drop bytecode.push
-                        return
-                    fi
+            variable_name compiler.resolve_local = local_index
+            local_index common::InstValue::LocalAddress bytecode.push
+            bytecode op aggregate_type compiler.state.store compiler.compile_drop_hook
+            if aggregate_type common::get_array_length_parameter std::Option::Some(array_length) is then
+                if aggregate_type.array_element_type std::Option::Some(element_type) is then
+                    bytecode op array_length element_type compiler.compile_array_destruction
+                    common::InstValue::Drop bytecode.push
+                    return
                 fi
-                common::InstValue::Drop bytecode.push
-                return
             fi
+            common::InstValue::Drop bytecode.push
+            return
         fi
-        variable_name compiler.resolve_variable = resolved
-        bytecode resolved.emit_get
+        variable_name compiler.resolve_local common::InstValue::LocalGet bytecode.push
         bytecode op typ compiler.compile_destruction
     }
 
@@ -1498,11 +1449,11 @@ impl BytecodeCompiler {
             capture_index common::InstValue::CaptureSet bytecode.push
             return
         fi
-        name.as_str compiler.resolve_variable = resolved
+        name.as_str compiler.resolve_local = local_index
 
         op.value match
             common::OpValue::AssignDec => {
-                bytecode resolved.emit_get
+                local_index common::InstValue::LocalGet bytecode.push
                 common::InstValue::Swap bytecode.push
                 common::InstValue::Sub = instruction
                 if op.type_hint std::Option::Some(type_hint) is then
@@ -1512,10 +1463,10 @@ impl BytecodeCompiler {
                 fi
                 instruction bytecode.push
                 bytecode op compiler.emit_integer_normalization
-                bytecode resolved.emit_set
+                local_index common::InstValue::LocalSet bytecode.push
             }
             common::OpValue::AssignInc => {
-                bytecode resolved.emit_get
+                local_index common::InstValue::LocalGet bytecode.push
                 common::InstValue::Add = instruction
                 if op.type_hint std::Option::Some(type_hint) is then
                     if type_hint common::Type::Builtin(builtin) is then
@@ -1524,7 +1475,7 @@ impl BytecodeCompiler {
                 fi
                 instruction bytecode.push
                 bytecode op compiler.emit_integer_normalization
-                bytecode resolved.emit_set
+                local_index common::InstValue::LocalSet bytecode.push
             }
             common::OpValue::AssignVar => bytecode name.as_str compiler.emit_variable_set
             common::OpValue::Question(_) => bytecode name.as_str compiler.emit_variable_set
@@ -2901,25 +2852,9 @@ impl BytecodeCompiler {
         binding:$common::TemporaryBinding
         bytecode:mut$std::List[common::InstValue]
     {
-        if compiler.function.is_some then
-            if binding.name.as_str compiler.local_slots.has_str ! then
-                compiler.allocate_local = local
-                local binding.name.clone compiler.local_slots.set
-            fi
-        elif
-            binding.name.as_str compiler
-                .state
-                .global_slots
-                .has_str !
-        then
-            compiler
-                .state
-                .global_slots
-                .length = global_slot
-            global_slot binding.name.clone compiler
-                .state
-                .global_slots
-                .set
+        if binding.name.as_str compiler.local_slots.has_str ! then
+            compiler.allocate_local = local
+            local binding.name.clone compiler.local_slots.set
         fi
         std::List[u64]::new = spilled
         0 = depth: u64
@@ -3318,11 +3253,6 @@ impl BytecodeCompiler {
             common::OpValue::PtrFromRaw(_) => true
             common::OpValue::PtrFromRef => true
             common::OpValue::PtrIntoRaw => true
-            common::OpValue::InitGlobal(initializer) => {
-                bytecode initializer.ops self.compile_sequence
-                bytecode initializer.name.as_str self.emit_variable_set
-                true
-            }
             common::OpValue::OwnerCleanup => true
             common::OpValue::PushEnumVariant(variant) => {
                 if
@@ -3490,14 +3420,12 @@ impl BytecodeCompiler {
                 true
             }
             common::OpValue::PushCapture(name) => {
-                false = is_global_capture
                 std::Option[common::Type]::None = copied_aggregate_type
                 if self.function.is_none then
-                    f"Capture `{name}` reached global bytecode compilation"
+                    f"Capture `{name}` reached root bytecode compilation"
                     self.record_failure_string
                 elif name self.capture_slots.get_copy std::Option::Some(capture_index) is then
                     if self.function std::Option::Some(function) is then
-                        name.as_str function.global_captures common::string_list_contains = is_global_capture
                         capture_index function.captures.get = capture
                         if capture.typ self.is_copy_aggregate then
                             capture.typ.clone std::Option::Some = copied_aggregate_type
@@ -3512,7 +3440,6 @@ impl BytecodeCompiler {
                             .state
                             .store
                             .does_op_move_owner
-                        is_global_capture ! &&
                         copied_aggregate_type.is_none &&
                     then
                         capture_index common::InstValue::CaptureFlagClear bytecode.push
@@ -3545,20 +3472,7 @@ impl BytecodeCompiler {
                     .state
                     .store
                     .does_op_move_owner = moves_owner
-                name.as_str self.resolve_variable = resolved
-                false = copied_global_aggregate
-                if resolved common::ResolvedVariable::Global(_) is then
-                    if op.type_hint std::Option::Some(copied_type) is then
-                        if copied_type self.is_copy_aggregate then
-                            bytecode resolved.emit_get
-                            bytecode op copied_type self.emit_copy_aggregate_for_op
-                            true = copied_global_aggregate
-                        fi
-                    fi
-                fi
-                if copied_global_aggregate ! then
-                    bytecode moves_owner name.as_str self.emit_variable_get
-                fi
+                bytecode moves_owner name.as_str self.emit_variable_get
                 if moves_owner then
                     if name self.owner_flags.get_copy std::Option::Some(flag) is then
                         0 common::InstValue::Push bytecode.push
@@ -3675,17 +3589,9 @@ fn compile_bytecode_into ops:$std::List[common::Op] state:mut$BytecodeState {
     std::List[common::InstValue]::new = bytecode
     ops state BytecodeCompiler::new = compiler
 
-    # Emit globals init if needed
-    if
-        compiler.state.global_slots global_slot_count = global_count
-        0 global_count !=
-    then
-        global_count common::InstValue::GlobalsInit bytecode.push
-    fi
-
     bytecode compiler.compile_ops
 
-    # Handle locals for global scope
+    # Reserve root local slots around the root body.
     compiler.locals_count = locals_count
     if locals_count 0 < then
         std::List[common::InstValue]::new = final_bytecode
@@ -3696,7 +3602,6 @@ fn compile_bytecode_into ops:$std::List[common::Op] state:mut$BytecodeState {
     fi
 
     bytecode = compiler.state.program.bytecode
-    compiler.state.global_slots global_slot_count = compiler.state.program.globals_count
     compiler
         .state
         .constants_table

@@ -138,7 +138,7 @@ Intrinsics](intrinsics.md#advanced-memory-access).
 
 ## Constants
 
-Declare a global compile-time value with `const`:
+Declare a named compile-time value with `const`:
 
 ```casa
 const LIMIT 100
@@ -154,7 +154,7 @@ const DOUBLE_LIMIT { LIMIT double }
 ```
 
 A `const fn` can also run like a normal function. Its body cannot use control
-flow or global variables, and it can call only other `const fn` functions.
+flow or runtime bindings, and it can call only other `const fn` functions.
 
 ## Numeric conversions
 

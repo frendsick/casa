@@ -32,6 +32,4 @@ locals, so their state dependencies remain visible in their parameters.
   diagnostic. Global-initializer scheduling and dependency cycles,
   selected-initializer closure, initializer alias deduplication, global origins,
   and immortal storage tests are removed.
-- The language reference, examples, and tests change with the compiler
-  migration. Until then, they continue to describe and test implemented global
-  behavior.
+- The language reference, examples, and tests follow the compiler migration.
