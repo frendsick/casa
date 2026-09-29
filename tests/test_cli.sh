@@ -62,6 +62,53 @@ if matches_filter sealed_scalar "$@"; then
     grep -q 'popq -8(%r14)' "$scalar_binary.s"
 fi
 
+if matches_filter installed_native "$@"; then
+    matched=true
+    cp "$COMPILER" "$CLI_TMP/casac"
+    cp tests/compiler/fixtures/installed_native.casa "$CLI_TMP/program.casa"
+    (
+        cd "$CLI_TMP"
+        ./casac program.casa -o program -l m --keep-asm
+        [ "$(./program)" = "true:42" ]
+        [ ! -e program.o ]
+        grep -q 'heap_alloc:' program.s
+        grep -q 'write_all:' program.s
+        grep -q 'return_stack_overflow:' program.s
+        grep -q 'call sqrt' program.s
+        /usr/bin/cc -nostdlib -no-pie -Wl,-e,_start -Wl,-z,noexecstack \
+            -o rebuilt program.s -l m
+        [ "$(./rebuilt)" = "true:42" ]
+        ./casac program.casa -o clean -l m
+        [ ! -e clean.s ]
+        [ ! -e clean.o ]
+        if ./casac program.casa -o missing/output -l m >write.out 2>&1; then
+            echo "native build accepted an unwritable assembly path" >&2
+            exit 1
+        fi
+        grep -q 'error: cannot write missing/output.s: not found' write.out
+        printf 'existing source\n' >readonly.s
+        chmod a-w readonly.s
+        # Root can write read-only files. Run this check only when access is denied.
+        if [ ! -w readonly.s ]; then
+            if ./casac program.casa -o readonly -l m >readonly.out 2>&1; then
+                echo "native build accepted a read-only assembly file" >&2
+                exit 1
+            fi
+            grep -q 'error: cannot write readonly.s: permission denied' readonly.out
+            [ "$(cat readonly.s)" = "existing source" ]
+        fi
+        chmod u+w readonly.s
+        if ./casac program.casa -o failed -l casa_missing_native_library >link.out 2>&1; then
+            echo "native build accepted a missing library" >&2
+            exit 1
+        fi
+        grep -q 'casa_missing_native_library' link.out
+        grep -q 'error: native build failed with exit code' link.out
+        [ ! -e failed.s ]
+        [ ! -e failed.o ]
+    )
+fi
+
 if matches_filter lsp_workspace "$@"; then
     matched=true
     "$COMPILER" -L lib lsp.casa -o "$CLI_TMP/lsp"

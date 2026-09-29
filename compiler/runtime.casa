@@ -1,0 +1,613 @@
+# Fixed Linux x86-64 runtime, embedded by normal compilation.
+# Each helper preserves the checked native call/ret convention through r14.
+pub const HEAP_GROWTH_SIZE 67108864
+pub const ASSEMBLY ".equ CASA_RETURN_STACK_SIZE, 1048576
+.equ CASA_SMALL_ALLOC_LIMIT, 512
+.equ CASA_HEAP_CHUNK_HEADER_SIZE, 16
+.equ CASA_HEAP_GROWTH_SIZE, 67108864
+.equ CASA_MMAP_SYSCALL, 9
+.equ CASA_MMAP_PROT_READ_WRITE, 3
+.equ CASA_MMAP_PRIVATE_ANONYMOUS, 34
+.equ CASA_WRITE_SYSCALL, 1
+.equ CASA_EXIT_SYSCALL, 60
+.equ CASA_EINTR_RESULT, -4
+.equ CASA_STDOUT_FD, 1
+.equ CASA_STDERR_FD, 2
+.equ CASA_FAILURE_STATUS, 1
+
+.section .bss
+return_stack: .skip CASA_RETURN_STACK_SIZE
+env_stack: .skip CASA_RETURN_STACK_SIZE
+env_sp: .skip 8
+current_env: .skip 8
+.align 16
+heap_chunks: .skip 8
+heap_ptr: .skip 8
+heap_end: .skip 8
+free_list: .skip 8
+small_free_lists: .skip CASA_SMALL_ALLOC_LIMIT
+__argc: .skip 8
+__argv: .skip 8
+__envp: .skip 8
+print_buf: .skip 32
+
+.section .data
+bool_true: .ascii \"true\"
+bool_false: .ascii \"false\"
+float_decimal_ten: .long 10
+arithmetic_error_msg: .ascii \"error: integer arithmetic failed\\n\"
+.equ arithmetic_error_msg_len, . - arithmetic_error_msg
+return_stack_overflow_msg: .ascii \"error: return stack overflow\\n\"
+.equ return_stack_overflow_msg_len, . - return_stack_overflow_msg
+env_stack_overflow_msg: .ascii \"error: env stack overflow\\n\"
+.equ env_stack_overflow_msg_len, . - env_stack_overflow_msg
+allocation_failure_msg: .ascii \"fatal: allocation failed\\n\"
+.equ allocation_failure_msg_len, . - allocation_failure_msg
+
+.section .text
+# Each mmap chunk starts with the previous chunk and its end address.
+# Small blocks use exact-size bins. Larger blocks keep first-fit reuse.
+# ponytail: large blocks are not split or coalesced; add both if large-block
+# fragmentation becomes measurable.
+# heap_alloc: requested byte count in %rdi, pushes an aligned pointer.
+heap_alloc:
+    popq -8(%r14)
+    testq %rdi, %rdi
+    jz .Lheap_alloc_null
+    movq %rdi, %rax
+    addq $7, %rax
+    jc .Lheap_alloc_oom
+    andq $-8, %rax
+    cmpq $CASA_SMALL_ALLOC_LIMIT, %rax
+    ja .Lheap_alloc_large
+    leaq small_free_lists(%rip), %r9
+    leaq -8(%r9,%rax), %r9
+    movq (%r9), %rcx
+    testq %rcx, %rcx
+    jz .Lheap_alloc_bump
+    movq 8(%rcx), %r8
+    movq %r8, (%r9)
+    leaq 8(%rcx), %rax
+    pushq %rax
+    jmp .Lheap_alloc_return
+.Lheap_alloc_large:
+    movq free_list(%rip), %rcx
+    xorq %rdx, %rdx
+.Lheap_alloc_search:
+    testq %rcx, %rcx
+    jz .Lheap_alloc_bump
+    cmpq %rax, (%rcx)
+    jae .Lheap_alloc_reuse
+    movq %rcx, %rdx
+    movq 8(%rcx), %rcx
+    jmp .Lheap_alloc_search
+.Lheap_alloc_reuse:
+    movq 8(%rcx), %r8
+    testq %rdx, %rdx
+    jz .Lheap_alloc_reuse_head
+    movq %r8, 8(%rdx)
+    jmp .Lheap_alloc_return_block
+.Lheap_alloc_reuse_head:
+    movq %r8, free_list(%rip)
+.Lheap_alloc_return_block:
+    leaq 8(%rcx), %rax
+    pushq %rax
+    jmp .Lheap_alloc_return
+.Lheap_alloc_bump:
+    movq heap_ptr(%rip), %rcx
+    testq %rcx, %rcx
+    jz .Lheap_alloc_map
+    addq $7, %rcx
+    andq $-8, %rcx
+    movq %rax, %r8
+    addq $8, %r8
+    jc .Lheap_alloc_oom
+    addq %rcx, %r8
+    jc .Lheap_alloc_oom
+    cmpq heap_end(%rip), %r8
+    jbe .Lheap_alloc_commit
+.Lheap_alloc_map:
+    pushq %rsi
+    pushq %r10
+    pushq %r11
+    pushq %rax
+    movq %rax, %rsi
+    addq $CASA_HEAP_CHUNK_HEADER_SIZE+8, %rsi
+    jc .Lheap_alloc_oom
+    cmpq $CASA_HEAP_GROWTH_SIZE, %rsi
+    jae .Lheap_alloc_map_size_ready
+    movq $CASA_HEAP_GROWTH_SIZE, %rsi
+.Lheap_alloc_map_size_ready:
+    xorq %rdi, %rdi
+    movq $CASA_MMAP_PROT_READ_WRITE, %rdx
+    movq $CASA_MMAP_PRIVATE_ANONYMOUS, %r10
+    movq $-1, %r8
+    xorq %r9, %r9
+    movq $CASA_MMAP_SYSCALL, %rax
+    syscall
+    popq %rdx
+    testq %rax, %rax
+    jz .Lheap_alloc_oom
+    cmpq $-4095, %rax
+    jae .Lheap_alloc_oom
+    movq heap_chunks(%rip), %r8
+    movq %r8, (%rax)
+    movq %rax, %rcx
+    addq %rsi, %rcx
+    jc .Lheap_alloc_oom
+    movq %rcx, 8(%rax)
+    movq %rax, heap_chunks(%rip)
+    movq %rcx, heap_end(%rip)
+    leaq CASA_HEAP_CHUNK_HEADER_SIZE(%rax), %rcx
+    movq %rdx, %rax
+    popq %r11
+    popq %r10
+    popq %rsi
+    movq %rax, %r8
+    addq $8, %r8
+    addq %rcx, %r8
+.Lheap_alloc_commit:
+    movq %rax, (%rcx)
+    movq %r8, heap_ptr(%rip)
+    leaq 8(%rcx), %rax
+    pushq %rax
+    jmp .Lheap_alloc_return
+.Lheap_alloc_null:
+    pushq $0
+.Lheap_alloc_return:
+    subq $8, %r14
+    pushq (%r14)
+    ret
+.Lheap_alloc_oom:
+    movq $CASA_STDERR_FD, %rdi
+    leaq allocation_failure_msg(%rip), %rsi
+    movq $allocation_failure_msg_len, %rdx
+    leaq return_stack+CASA_RETURN_STACK_SIZE-8(%rip), %rcx
+    cmpq %rcx, %r14
+    ja return_stack_overflow
+    addq $8, %r14
+    call write_all
+.Lruntime_allocation_failure_write_done:
+    movq $CASA_EXIT_SYSCALL, %rax
+    movq $CASA_FAILURE_STATUS, %rdi
+    syscall
+
+# heap_free: pointer in %rdi, returns the complete allocation for reuse.
+heap_free:
+    popq -8(%r14)
+    testq %rdi, %rdi
+    jz .Lheap_free_return
+    leaq -8(%rdi), %rax
+    movq (%rax), %rdx
+    cmpq $CASA_SMALL_ALLOC_LIMIT, %rdx
+    ja .Lheap_free_large
+    leaq small_free_lists(%rip), %rcx
+    leaq -8(%rcx,%rdx), %rcx
+    movq (%rcx), %rdx
+    movq %rdx, 8(%rax)
+    movq %rax, (%rcx)
+    jmp .Lheap_free_return
+.Lheap_free_large:
+    movq free_list(%rip), %rcx
+    movq %rcx, 8(%rax)
+    movq %rax, free_list(%rip)
+.Lheap_free_return:
+    subq $8, %r14
+    pushq (%r14)
+    ret
+
+# write_all: fd in %rdi, buffer in %rsi, byte length in %rdx, returns via r14.
+# Output operations cannot report errors, so an unrecoverable write exits unsuccessfully.
+write_all:
+    popq -8(%r14)
+.Lwrite_all_next:
+    testq %rdx, %rdx
+    jz .Lwrite_all_return
+    movq $CASA_WRITE_SYSCALL, %rax
+    syscall
+    cmpq $CASA_EINTR_RESULT, %rax
+    je .Lwrite_all_next
+    testq %rax, %rax
+    jle .Lwrite_all_fail
+    addq %rax, %rsi
+    subq %rax, %rdx
+    jmp .Lwrite_all_next
+.Lwrite_all_return:
+    subq $8, %r14
+    pushq (%r14)
+    ret
+.Lwrite_all_fail:
+    movq $CASA_EXIT_SYSCALL, %rax
+    movq $CASA_FAILURE_STATUS, %rdi
+    syscall
+
+# print_int: value in %rdi, returns via r14
+print_int:
+    popq -8(%r14)
+    movq %rdi, %rax
+    leaq print_buf+32(%rip), %rsi
+    testq %rax, %rax
+    jnz .Lpi_nonzero
+    decq %rsi
+    movb $48, (%rsi)
+    jmp .Lpi_write
+.Lpi_nonzero:
+    movq %rax, %r15
+    jns .Lpi_abs
+    negq %rax
+.Lpi_abs:
+    movq $10, %rcx
+.Lpi_digit_loop:
+    decq %rsi
+    xorq %rdx, %rdx
+    divq %rcx
+    addb $48, %dl
+    movb %dl, (%rsi)
+    testq %rax, %rax
+    jnz .Lpi_digit_loop
+    testq %r15, %r15
+    jns .Lpi_write
+    decq %rsi
+    movb $45, (%rsi)
+.Lpi_write:
+    leaq print_buf+32(%rip), %rdx
+    subq %rsi, %rdx
+    movq $CASA_STDOUT_FD, %rdi
+    leaq return_stack+CASA_RETURN_STACK_SIZE-8(%rip), %rcx
+    cmpq %rcx, %r14
+    ja return_stack_overflow
+    addq $8, %r14
+    call write_all
+.Lruntime_print_int_write_done:
+    subq $8, %r14
+    pushq (%r14)
+    ret
+
+# print_uint: value in %rdi, returns via r14
+print_uint:
+    popq -8(%r14)
+    movq %rdi, %rax
+    leaq print_buf+32(%rip), %rsi
+    testq %rax, %rax
+    jnz .Lpui_digit_loop
+    decq %rsi
+    movb $48, (%rsi)
+    jmp .Lpui_write
+.Lpui_digit_loop:
+    decq %rsi
+    xorq %rdx, %rdx
+    movq $10, %rcx
+    divq %rcx
+    addb $48, %dl
+    movb %dl, (%rsi)
+    testq %rax, %rax
+    jnz .Lpui_digit_loop
+.Lpui_write:
+    leaq print_buf+32(%rip), %rdx
+    subq %rsi, %rdx
+    movq $CASA_STDOUT_FD, %rdi
+    leaq return_stack+CASA_RETURN_STACK_SIZE-8(%rip), %rcx
+    cmpq %rcx, %r14
+    ja return_stack_overflow
+    addq $8, %r14
+    call write_all
+.Lruntime_print_uint_write_done:
+    subq $8, %r14
+    pushq (%r14)
+    ret
+
+# print_str: string pointer in %rdi (points to length prefix), returns via r14
+print_str:
+    popq -8(%r14)
+    movq (%rdi), %rdx
+    leaq 8(%rdi), %rsi
+    movq $CASA_STDOUT_FD, %rdi
+    leaq return_stack+CASA_RETURN_STACK_SIZE-8(%rip), %rcx
+    cmpq %rcx, %r14
+    ja return_stack_overflow
+    addq $8, %r14
+    call write_all
+.Lruntime_print_str_write_done:
+    subq $8, %r14
+    pushq (%r14)
+    ret
+
+# encode_char: Unicode scalar in %rdi, UTF-8 bytes in print_buf.
+# Returns the buffer in %rsi and its byte length in %rdx via r14.
+encode_char:
+    popq -8(%r14)
+    leaq print_buf(%rip), %rsi
+    cmpq $127, %rdi
+    ja .Lec_two
+    movb %dil, (%rsi)
+    movq $1, %rdx
+    jmp .Lec_return
+.Lec_two:
+    cmpq $2047, %rdi
+    ja .Lec_three
+    movq %rdi, %rax
+    shrq $6, %rax
+    orb $192, %al
+    movb %al, (%rsi)
+    movq %rdi, %rax
+    andb $63, %al
+    orb $128, %al
+    movb %al, 1(%rsi)
+    movq $2, %rdx
+    jmp .Lec_return
+.Lec_three:
+    cmpq $65535, %rdi
+    ja .Lec_four
+    movq %rdi, %rax
+    shrq $12, %rax
+    orb $224, %al
+    movb %al, (%rsi)
+    movq %rdi, %rax
+    shrq $6, %rax
+    andb $63, %al
+    orb $128, %al
+    movb %al, 1(%rsi)
+    movq %rdi, %rax
+    andb $63, %al
+    orb $128, %al
+    movb %al, 2(%rsi)
+    movq $3, %rdx
+    jmp .Lec_return
+.Lec_four:
+    movq %rdi, %rax
+    shrq $18, %rax
+    orb $240, %al
+    movb %al, (%rsi)
+    movq %rdi, %rax
+    shrq $12, %rax
+    andb $63, %al
+    orb $128, %al
+    movb %al, 1(%rsi)
+    movq %rdi, %rax
+    shrq $6, %rax
+    andb $63, %al
+    orb $128, %al
+    movb %al, 2(%rsi)
+    movq %rdi, %rax
+    andb $63, %al
+    orb $128, %al
+    movb %al, 3(%rsi)
+    movq $4, %rdx
+.Lec_return:
+    subq $8, %r14
+    pushq (%r14)
+    ret
+
+# primitive_to_str: value in %rdi, kind in %r8, pushes an owned String.
+# Kinds: 0 signed integer, 1 unsigned integer, 2 bool, 3 char, 4 cstr.
+primitive_to_str:
+    popq -8(%r14)
+    cmpq $2, %r8
+    je .Lpts_bool
+    cmpq $3, %r8
+    je .Lpts_char
+    cmpq $4, %r8
+    je .Lpts_cstr
+    movq %rdi, %rax
+    leaq print_buf+32(%rip), %rsi
+    testq %rax, %rax
+    jnz .Lpts_integer_nonzero
+    decq %rsi
+    movb $48, (%rsi)
+    jmp .Lpts_integer_done
+.Lpts_integer_nonzero:
+    testq %r8, %r8
+    jnz .Lpts_integer_abs
+    testq %rax, %rax
+    jns .Lpts_integer_abs
+    negq %rax
+.Lpts_integer_abs:
+    movq $10, %rcx
+.Lpts_integer_loop:
+    decq %rsi
+    xorq %rdx, %rdx
+    divq %rcx
+    addb $48, %dl
+    movb %dl, (%rsi)
+    testq %rax, %rax
+    jnz .Lpts_integer_loop
+    testq %r8, %r8
+    jnz .Lpts_integer_done
+    testq %rdi, %rdi
+    jns .Lpts_integer_done
+    decq %rsi
+    movb $45, (%rsi)
+.Lpts_integer_done:
+    leaq print_buf+32(%rip), %rdx
+    subq %rsi, %rdx
+    jmp .Lpts_copy
+.Lpts_bool:
+    testq %rdi, %rdi
+    jz .Lpts_bool_false
+    leaq bool_true(%rip), %rsi
+    movq $4, %rdx
+    jmp .Lpts_copy
+.Lpts_bool_false:
+    leaq bool_false(%rip), %rsi
+    movq $5, %rdx
+    jmp .Lpts_copy
+.Lpts_char:
+    leaq return_stack+CASA_RETURN_STACK_SIZE-8(%rip), %rcx
+    cmpq %rcx, %r14
+    ja return_stack_overflow
+    addq $8, %r14
+    call encode_char
+.Lruntime_pts_char_encoded:
+    jmp .Lpts_copy
+.Lpts_cstr:
+    movq %rdi, %rsi
+    movq %rdi, %rax
+.Lpts_cstr_loop:
+    cmpb $0, (%rax)
+    je .Lpts_cstr_done
+    incq %rax
+    jmp .Lpts_cstr_loop
+.Lpts_cstr_done:
+    movq %rax, %rdx
+    subq %rsi, %rdx
+.Lpts_copy:
+    pushq %rsi
+    pushq %rdx
+    movq %rdx, %rdi
+    addq $9, %rdi
+    jc .Lheap_alloc_oom
+    leaq return_stack+CASA_RETURN_STACK_SIZE-8(%rip), %rcx
+    cmpq %rcx, %r14
+    ja return_stack_overflow
+    addq $8, %r14
+    call heap_alloc
+.Lruntime_primitive_string_data_done:
+    popq %r13
+    popq %rdx
+    popq %rsi
+    movq %rdx, (%r13)
+    leaq 8(%r13), %rdi
+    movq %rdx, %rcx
+    rep movsb
+    movb $0, (%rdi)
+    movq $8, %rdi
+    leaq return_stack+CASA_RETURN_STACK_SIZE-8(%rip), %rcx
+    cmpq %rcx, %r14
+    ja return_stack_overflow
+    addq $8, %r14
+    call heap_alloc
+.Lruntime_primitive_string_wrapper_done:
+    popq %rax
+    movq %r13, (%rax)
+    pushq %rax
+    subq $8, %r14
+    pushq (%r14)
+    ret
+
+# str_concat consumes N owned String wrappers and pushes one owned String.
+str_concat:
+    popq -8(%r14)
+    movq %rdi, %r15
+    movq %rsp, %r12
+    xorq %r10, %r10
+    xorq %rcx, %rcx
+.Lsc_len_loop:
+    cmpq %r15, %rcx
+    jge .Lsc_len_done
+    movq (%r12, %rcx, 8), %rax
+    movq (%rax), %rax
+    addq (%rax), %r10
+    jc .Lheap_alloc_oom
+    incq %rcx
+    jmp .Lsc_len_loop
+.Lsc_len_done:
+    movq %r10, %rdi
+    addq $9, %rdi
+    jc .Lheap_alloc_oom
+    leaq return_stack+CASA_RETURN_STACK_SIZE-8(%rip), %rcx
+    cmpq %rcx, %r14
+    ja return_stack_overflow
+    addq $8, %r14
+    call heap_alloc
+.Lruntime_concat_string_data_done:
+    popq %r13
+    movq %r10, (%r13)
+    leaq 8(%r13), %rdi
+    movq %r15, %rcx
+    decq %rcx
+.Lsc_copy_loop:
+    cmpq $0, %rcx
+    jl .Lsc_copy_done
+    movq (%r12, %rcx, 8), %rsi
+    movq (%rsi), %rsi
+    movq (%rsi), %rdx
+    addq $8, %rsi
+    pushq %rcx
+    movq %rdx, %rcx
+    rep movsb
+    popq %rcx
+    decq %rcx
+    jmp .Lsc_copy_loop
+.Lsc_copy_done:
+    movb $0, (%rdi)
+    xorq %rcx, %rcx
+.Lsc_free_loop:
+    cmpq %r15, %rcx
+    jge .Lsc_free_done
+    movq (%r12, %rcx, 8), %rbx
+    pushq %rcx
+    movq (%rbx), %rdi
+    leaq return_stack+CASA_RETURN_STACK_SIZE-8(%rip), %rcx
+    cmpq %rcx, %r14
+    ja return_stack_overflow
+    addq $8, %r14
+    call heap_free
+.Lruntime_concat_part_data_free_done:
+    movq %rbx, %rdi
+    leaq return_stack+CASA_RETURN_STACK_SIZE-8(%rip), %rcx
+    cmpq %rcx, %r14
+    ja return_stack_overflow
+    addq $8, %r14
+    call heap_free
+.Lruntime_concat_part_wrapper_free_done:
+    popq %rcx
+    incq %rcx
+    jmp .Lsc_free_loop
+.Lsc_free_done:
+    movq $8, %rdi
+    leaq return_stack+CASA_RETURN_STACK_SIZE-8(%rip), %rcx
+    cmpq %rcx, %r14
+    ja return_stack_overflow
+    addq $8, %r14
+    call heap_alloc
+.Lruntime_concat_string_wrapper_done:
+    popq %rax
+    movq %r13, (%rax)
+    leaq (%r12, %r15, 8), %rsp
+    pushq %rax
+    subq $8, %r14
+    pushq (%r14)
+    ret
+
+# Arithmetic failure handler: write error to fd 2 and exit(1).
+arithmetic_error:
+    leaq arithmetic_error_msg(%rip), %rsi
+    movq $arithmetic_error_msg_len, %rdx
+    movq $CASA_STDERR_FD, %rdi
+    leaq return_stack+CASA_RETURN_STACK_SIZE-8(%rip), %rcx
+    cmpq %rcx, %r14
+    ja return_stack_overflow
+    addq $8, %r14
+    call write_all
+.Lruntime_arithmetic_error_write_done:
+    movq $CASA_FAILURE_STATUS, %rdi
+    movq $CASA_EXIT_SYSCALL, %rax
+    syscall
+
+# Return stack overflow handler: write error to fd 2 and exit(1).
+return_stack_overflow:
+    leaq return_stack_overflow_msg(%rip), %rsi
+    movq $return_stack_overflow_msg_len, %rdx
+    movq $2, %rdi
+    movq $1, %rax
+    syscall
+    movq $1, %rdi
+    movq $60, %rax
+    syscall
+
+# env_stack overflow handler: write error to fd 2 and exit(1).
+env_stack_overflow:
+    leaq env_stack_overflow_msg(%rip), %rsi
+    movq $env_stack_overflow_msg_len, %rdx
+    movq $CASA_STDERR_FD, %rdi
+    leaq return_stack+CASA_RETURN_STACK_SIZE-8(%rip), %rcx
+    cmpq %rcx, %r14
+    ja return_stack_overflow
+    addq $8, %r14
+    call write_all
+.Lruntime_env_stack_overflow_write_done:
+    movq $CASA_FAILURE_STATUS, %rdi
+    movq $CASA_EXIT_SYSCALL, %rax
+    syscall
+
+"

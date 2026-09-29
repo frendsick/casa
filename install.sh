@@ -9,7 +9,7 @@ RELEASE_ENV_FILE="casa-release.env"
 RELEASE_ENV_URL="https://raw.githubusercontent.com/$GITHUB_REPO/main/$RELEASE_ENV_FILE"
 
 # List of dependencies
-DEPENDENCIES="as ld"
+DEPENDENCIES="cc"
 
 # Script entry point
 main() {
@@ -202,8 +202,8 @@ install_dependencies() {
     if [ "$distro" = "Debian" ] ||
         [ "$distro" = "Kali" ] ||
         [ "$distro" = "Ubuntu" ]; then
-        # APT has both `as` and `ld` in the `binutils` package
-        install_packages "apt" "binutils"
+        # The C compiler driver invokes the assembler and linker.
+        install_packages "apt" "build-essential"
     # Could not determine the distro
     elif [ -z "$distro" ]; then
         log "WARNING" "Install dependencies" 'Could not determine the Linux distribution with `lsb_release`'
