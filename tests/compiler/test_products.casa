@@ -485,6 +485,105 @@ fn test_scalar_branch_execution {
         products::AssemblyResult::Rejected(_) => "scalar branch accepted" false test::assert_true
     end
 }
+
+fn has_root_diagnostic diagnostics:$error::Diagnostics -> bool {
+    for diagnostic in diagnostics.entries.iter do
+        if diagnostic error::Diagnostic::Error(failure) is then
+            if
+                failure
+                    .location
+                    .file
+                    .as_str "/tmp/casa_products/main.casa" ==
+            then
+                true return
+            fi
+        fi
+    done
+    false
+}
+
+fn test_control_flow_rejections {
+    "control_flow_rejections" test::test_start
+    for
+        source in [
+            "while true do 1 done drop",
+            "struct Ref { value:$i64 } fn borrow input:$Ref -> $Ref { input } fn reader input:$i64 -> fn[-> $Ref] { input Ref = wrapped move { wrapped borrow } } 42 = owner owner reader = callback callback exec = view callback drop view drop",
+            "struct Ref { value:$i64 } fn borrow input:$Ref -> $Ref { input } 42 = owner owner Ref = wrapped move { wrapped borrow } = callback callback exec = view callback drop view drop",
+            "300 while false do drop 1 = tiny:u8 tiny done print",
+            "fn borrow x:$i64 -> $i64 { x } fn bad { 42 = local local borrow return } bad drop",
+            "fn borrow x:$i64 -> $i64 { x } { 42 = local local borrow return } exec drop",
+            "fn borrow x:$i64 -> $i64 { x } { 42 = local local borrow } exec drop",
+            "true = flag { if flag then 300 return fi 1 = tiny:u8 tiny } exec print",
+            "true = flag { if flag then 300 return else 1 = tiny:u8 tiny return fi } exec print",
+            "true = flag { if flag then return fi 42 } exec print",
+            "true = flag { if flag then false return fi 42 } exec print",
+            "fn bad { if true then false return fi 42 } bad print",
+            "fn bad flag:bool -> i64 { if flag then false return fi 42 } true bad print",
+            "fn borrow value:$i64 -> $i64 { value } 1 = first 2 = second first borrow while true do drop second borrow done drop",
+            "fn first -> i64 { 1 } fn second -> i64 { 2 } &first while true do drop &second done exec print",
+            "fn first -> i64 { 1 } fn second -> i64 { 2 } &first = callback while true do &second = callback done callback exec print",
+            "while true do 1 continue done",
+            "while true do 1 break done drop",
+            "1 while true do drop false done drop",
+            "fn bad input:$i64 flag:bool -> $i64 { if flag then input return fi 42 = local local }",
+            "fn bad input:$i64 flag:bool -> $i64 { if flag then flag input bad return fi 42 = local local }",
+            "struct Owner { value: i64 } fn bad flag:bool { 1 Owner = owner move { if flag then owner drop return fi owner.value drop } drop }",
+            "struct Owner { value: i64 } fn bad { 1 Owner = owner move { owner } drop }",
+            "struct Resource { value:i64 } fn pick a:$Resource b:$Resource flag:bool -> fn[-> i64] { if flag then false a b pick return fi move { a.value } } fn bad { 1 Resource = first 2 Resource = second true second first pick = callback second drop callback exec print } bad",
+            "struct Resource { value:i64 } fn pick a:$Resource b:$Resource flag:bool -> fn[-> i64] { if flag then false a b pick return fi move { a.value } } fn bad -> fn[-> i64] { 1 Resource = local false local local pick } bad drop",
+            "enum Choice { First Second } Choice::First match Choice::First => 1 drop end",
+            "true match true => 1 false => false end drop",
+            "struct Owner { value:i64 } fn borrow owner:$Owner -> $Owner { owner } fn bad flag:bool { 1 Owner = first 2 Owner = second first borrow flag match true => { drop second borrow } false => { } end = view second drop view.value print } true bad",
+        ].iter
+    do
+        source make_input products::analyze.unwrap = snapshot
+        source snapshot
+            .get_report
+            .get_diagnostics
+            .has_errors test::assert_true
+        products::Target::LinuxX86_64 source make_input products::assembly.unwrap match
+            products::AssemblyResult::Rejected(report) => {
+                source report.get_diagnostics.has_errors test::assert_true
+                "control-flow rejection retains a source location"
+                report.get_diagnostics has_root_diagnostic test::assert_true
+            }
+            products::AssemblyResult::Produced(_) => source false test::assert_true
+        end
+    done
+}
+
+fn test_empty_borrowed_variant_return {
+    "empty_borrowed_variant_return" test::test_start
+    "enum Maybe { Some($i64) None } fn select input:$i64 flag:bool -> Maybe { if flag then input Maybe::Some return fi Maybe::None } 42 = owner false owner select drop"
+    make_input products::analyze.unwrap = snapshot
+    "payload-free return has no escaping loan"
+    snapshot
+        .get_report
+        .get_diagnostics
+        .has_errors ! test::assert_true
+}
+
+fn test_control_flow_execution {
+    "control_flow_execution" test::test_start
+    "struct Owner { value: i64 } impl Owner { fn drop self:mut$Owner { self.value print } } fn pick flag:bool -> Owner { flag match true => { 11 Owner = chosen chosen } false => { 12 Owner = chosen chosen return } end } fn inferred { if true then 5 return else 6 return fi } fn inferred_owner { 13 Owner = result result return } fn read item:$Owner { item.value print } fn borrow input:$i64 -> $i64 { input } fn make input:$i64 -> fn[-> $i64] { move { input borrow } } fn reader item:$Owner -> fn[-> i64] { { item.value } } fn recursive_reader a:$Owner b:$Owner flag:bool -> fn[-> i64] { if flag then false a b recursive_reader return fi move { a.value } } fn choose input:$Owner count:i64 -> $Owner { if 0 count == then input return fi count 1 - input choose } 0 while 3 over < do 1 + done print true pick drop false pick drop 0 = count while 3 count < do count 1 + Owner = local 1 += count count match 1 => continue 2 => { 9 Owner = inner break } _ => { } end done while 7 Owner = probe false do done 41 Owner = owner owner reader = callback callback exec print callback exec print callback drop 2 owner choose.value print owner drop 1 Owner = first 2 Owner = second true second first recursive_reader = callback2 callback2 exec print callback2 drop second drop first drop 0 = iteration while 2 iteration < do iteration 1 + Owner read 1 += iteration done 99 print inferred print inferred_owner drop true = flag { if flag then 7 return else 8 return fi } exec print { if flag then 42 return fi 1 = tiny:u8 tiny } exec print 1 = value value make exec copy print 0 = condition_count 1 Owner while drop 2 Owner = condition_owner condition_owner 1 condition_count < do condition_owner read 1 += condition_count done drop struct Ref { value:$i64 } fn contents input:$i64 -> fn[-> $i64] { input Ref = wrapped move { wrapped.value } } fn contents_branch input:$i64 -> fn[-> $i64] { input Ref = wrapped move { if true then 1 drop fi wrapped.value } } fn contents_loop input:$i64 -> fn[-> $i64] { input Ref = wrapped move { while false do done wrapped.value } } 42 = external external contents = direct direct exec = a direct drop a copy print external contents_branch = branched branched exec = b branched drop b copy print external contents_loop = looped looped exec = c looped drop c copy print"
+    make_input products::Target::LinuxX86_64 swap products::assembly.unwrap match
+        products::AssemblyResult::Produced(report source) => {
+            "valid control flow accepted" report.get_diagnostics.has_errors ! test::assert_true
+            std::List[std::String]::new false "/tmp/casa_control_flow_test"
+            source.get_text.as_str build::compile_binary
+            std::List[std::Bytes]::new = run
+            "/bin/sh" run.push_str
+            "-c" run.push_str
+            "test \"$(/tmp/casa_control_flow_test)\" = 3111219274141414122111229951374211222424242" run.push_str
+            "loop exits, match transfers, and borrowed callbacks execute" 0 run std::run_command test::assert_eq
+            "/tmp/casa_control_flow_test".as_cstr.unwrap file::remove.unwrap drop
+        }
+        products::AssemblyResult::Rejected(_) => "valid control flow accepted" false test::assert_true
+    end
+}
+test_empty_borrowed_variant_return
+test_control_flow_execution
+test_control_flow_rejections
 test_scalar_checked_facts
 test_resolver_rejections_have_no_facts
 test_rejected_function_has_no_caller_facts
