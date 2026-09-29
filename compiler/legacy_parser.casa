@@ -281,7 +281,7 @@ fn add_map_names [V] source:$std::Map[std::String V] destination:mut$std::Set[st
 impl common::SymbolStore {
     pub fn declaration_names self:$common::SymbolStore -> std::Set[std::String] {
         std::Set[std::String]::new = names
-        for name in self.get_function_names.iter do
+        for name in self.get_source_function_names.iter do
             name.clone names.add
         done
         names self.constants add_map_names
@@ -329,7 +329,12 @@ impl common::SymbolStore {
             name.as_str self
                 .get_function
                 .unwrap
-                .clone_for_import cloned.set_function
+                .clone_for_import = function
+            if name.as_str self.is_generated_recipe then
+                function cloned.set_generated_recipe
+            else
+                function cloned.set_function
+            fi
         done
         self.variables.clone = cloned.variables
         self.constants.clone = cloned.constants
@@ -2182,6 +2187,7 @@ pub fn parse_extern_function parser:mut$Parser cursor:mut$TokenCursor -> common:
 
 pub fn parse_derived_traits cursor:mut$TokenCursor state:mut$ParseState -> std::List[std::String] {
     std::List[std::String]::new = derived_traits
+    std::Set[std::String]::new = seen
     if cursor.peek std::Option::Some(token) is then
         if "derives" token.value.as_str != then
             derived_traits return
@@ -2192,8 +2198,14 @@ pub fn parse_derived_traits cursor:mut$TokenCursor state:mut$ParseState -> std::
                 if "{" derived.value.as_str == then
                     break
                 fi
-                fallback_token state common::TokenKind::Identifier cursor expect_token_kind.unwrap_or
-                common::Token::value.as_str cursor.resolve_name derived_traits.push
+                fallback_token state common::TokenKind::Identifier cursor expect_token_kind.unwrap_or = trait_token
+                trait_token.value.as_str cursor.resolve_name = trait_name
+                if trait_name.as_str seen.has_str then
+                    trait_token.location f"Trait `{trait_name}` is derived more than once" common::ErrorKind::DuplicateName state.record_error_string
+                else
+                    trait_name.clone seen.add
+                    trait_name derived_traits.push
+                fi
             else
                 break
             fi
@@ -2374,241 +2386,57 @@ pub fn make_derived_function_name receiver:$common::Type method_name:$str -> std
     f"{receiver.match_base}::__derived_{method_name}"
 }
 
-pub fn merge_derived_override
-    state:mut$ParseState
-    receiver:$common::Type
-    method_name:$str
-    function_name:$std::String
-    location:$common::Location
-    found:std::Option[std::String]
--> std::Option[std::String] {
-    if found.clone std::Option::Some(existing) is then
-        if existing function_name != then
-            location f"Derived method `{receiver.match_base}::{method_name}` has multiple explicit overrides" common::ErrorKind::DuplicateName state.record_error_string
-        fi
-        found return
-    fi
-    function_name.clone std::Option::Some
+pub fn is_same_declaration left:$common::Location right:$common::Location -> bool {
+    left.file right.file == left.span.offset right.span.offset == &&
 }
 
-pub fn is_derived_override_trait method_name:$str trait_name:$str -> bool {
-    if "clone" method_name == then
-        common::STD_CLONE_TRAIT trait_name == return
-    fi
-    if "hash" method_name == then
-        common::STD_HASHABLE_TRAIT trait_name == return
-    fi
-    if "cmp" method_name == then
-        common::STD_ORD_TRAIT trait_name == return
-    fi
-    if
-        "partial_cmp" method_name ==
-        "lt" method_name == ||
-        "le" method_name == ||
-        "gt" method_name == ||
-        "ge" method_name == ||
-    then
-        common::STD_PARTIAL_ORD_TRAIT trait_name ==
-        common::STD_ORD_TRAIT trait_name == || return
-    fi
-    if "eq" method_name == "ne" method_name == || then
-        common::STD_PARTIAL_EQ_TRAIT trait_name ==
-        common::STD_EQ_TRAIT trait_name == ||
-        common::STD_PARTIAL_ORD_TRAIT trait_name == ||
-        common::STD_ORD_TRAIT trait_name == ||
-        common::STD_HASHABLE_TRAIT trait_name == || return
-    fi
-    false
-}
-
-pub fn does_derived_parameter_override_cover_domain
-    store:$common::SymbolStore
-    expected_parameter:$common::Type
-    actual_parameter:$common::Type
-    required_type_vars:$std::Set[std::String]
-    required_trait:$str
-    trait_impl:$common::TraitImpl
+fn share_trait_method
+    left:$std::List[rules::TraitMethodCandidate]
+    right:$std::List[rules::TraitMethodCandidate]
 -> bool {
-    if expected_parameter common::Type::TypeVar(name) is then
-        name.clone std::Option::Some
-    else
-        std::Option[std::String]::None
-    fi = expected_variable_opt
-    if expected_variable_opt.is_none then
-        true return
-    fi
-    expected_variable_opt.unwrap = expected_variable
-
-    if actual_parameter common::Type::TypeVar(name) is then
-        name.clone std::Option::Some
-    else
-        std::Option[std::String]::None
-    fi = actual_variable_opt
-    if actual_variable_opt.is_none then
-        true return
-    fi
-    actual_variable_opt.unwrap = actual_variable
-
-    actual_variable.as_str trait_impl.trait_bounds.get_str = bounds_opt
-    if bounds_opt.is_none then
-        true return
-    fi
-    bounds_opt.unwrap = bounds
-    if 0 bounds.length != expected_variable.as_str required_type_vars.has_str ! && then
-        false return
-    fi
-    required_trait.to_str common::GenericType::new common::Type::Generic = generated_bound
-    for bound in bounds.iter do
-        bound common::trait_bound_to_type = explicit_bound
-        if store explicit_bound generated_bound rules::trait_type_implies ! then
-            false return
-        fi
-    done
-    true
-}
-
-pub fn does_derived_override_cover_domain
-    store:$common::SymbolStore
-    receiver:$common::Type
-    required_type_vars:$std::Set[std::String]
-    required_trait:$str
-    trait_impl:$common::TraitImpl
--> bool {
-    if receiver common::Type::Generic(expected) is then
-        if trait_impl.receiver common::Type::Generic(actual) is then
-            true = covers_domain
-            0 = index: u64
-            while index expected.params.length > do
-                index expected.params.get = expected_parameter
-                index actual.params.get = actual_parameter
-                trait_impl required_trait required_type_vars actual_parameter expected_parameter store
-                does_derived_parameter_override_cover_domain covers_domain && = covers_domain
-                1 += index
-            done
-            covers_domain
-        else
-            false
-        fi
-    else
-        false
-    fi
-}
-
-pub fn find_derived_override
-    parser:mut$Parser
-    receiver:$common::Type
-    type_vars:$std::List[std::String]
-    required_type_vars:$std::Set[std::String]
-    required_trait:$str
-    method_name:$str
-    location:$common::Location
--> std::Option[std::String] {
-    std::Option[std::String]::None = found
-    std::Option[std::String]::None = rejected
-    for trait_impl in receiver parser.store.get_trait_impl_candidates_for_receiver do
-        if trait_impl type_vars receiver match_derived_receiver_impl ! then
-            continue
-        fi
-        if
-            trait_impl
-                .trait_bound
-                .name
-                .as_str method_name is_derived_override_trait !
-        then
-            continue
-        fi
-        trait_impl.trait_bound common::trait_bound_to_type = trait_type
-        if parser.store method_name trait_type rules::trait_type_has_method ! then
-            continue
-        fi
-        method_name trait_impl.methods.get_str = function_name_opt
-        if function_name_opt.is_none then
-            continue
-        fi
-        function_name_opt.unwrap = function_name
-        method_name receiver make_derived_function_name = generated_name
-        if generated_name function_name == then
-            continue
-        fi
-        if
-            trait_impl required_trait required_type_vars receiver parser.store does_derived_override_cover_domain !
-        then
-            if rejected.is_none then
-                location f"Explicit `{method_name}` override must cover the full derived implementation domain" common::ErrorKind::TraitSignatureMismatch parser.state.record_error_string
-                function_name.clone std::Option::Some = rejected
+    for left_method in left.iter do
+        for right_method in right.iter do
+            if left_method.method.name right_method.method.name == then
+                true return
             fi
-            continue
-        fi
-        found location function_name method_name receiver parser.state merge_derived_override = found
-    done
-    found
-}
-
-pub fn is_derived_trait_bound_satisfied
-    parser:mut$Parser
-    bounds:$std::List[common::TraitBound]
-    required_trait:$str
--> bool {
-    required_trait.to_str common::GenericType::new common::Type::Generic = required_type
-    for bound in bounds.iter do
-        if parser.store required_type bound common::trait_bound_to_type rules::trait_type_implies then
-            true return
-        fi
-    done
-    false
-}
-
-pub fn add_derived_bound
-    parser:mut$Parser
-    trait_impl:mut$common::TraitImpl
-    type_variable:$std::String
-    required_trait:$str
-{
-    if type_variable trait_impl.trait_bounds.get std::Option::Some(existing_bounds) is then
-        existing_bounds.clone = bounds
-        if required_trait bounds parser is_derived_trait_bound_satisfied ! then
-            std::List[common::Type]::new required_trait.to_str common::TraitBound bounds.push
-        fi
-        bounds type_variable.clone trait_impl.trait_bounds.set
-        return
-    fi
-    std::List[common::TraitBound]::new = bounds
-    std::List[common::Type]::new required_trait.to_str common::TraitBound bounds.push
-    bounds type_variable.clone trait_impl.trait_bounds.set
-}
-
-pub fn add_derived_bound_at
-    parser:mut$Parser
-    trait_impl:mut$common::TraitImpl
-    receiver:$common::GenericType
-    index:u64
-    required_trait:$str
-{
-    if index receiver.params.length > then
-        if index receiver.params.get common::Type::TypeVar(type_variable) is then
-            required_trait type_variable trait_impl parser add_derived_bound
-        fi
-    fi
-}
-
-pub fn add_named_derived_trait_bounds
-    parser:mut$Parser
-    trait_impl:mut$common::TraitImpl
-    type_vars:$std::List[std::String]
-    required_type_vars:$std::Set[std::String]
-    required_trait:$str
-{
-    trait_impl.receiver.clone = receiver_type
-    if receiver_type common::Type::Generic(receiver) is then
-        0 = index: u64
-        while index type_vars.length > do
-            index type_vars.get = aggregate_variable
-            if aggregate_variable required_type_vars.has then
-                required_trait index receiver trait_impl parser add_derived_bound_at
-            fi
-            1 += index
         done
-    fi
+    done
+    false
+}
+
+pub fn find_overlapping_explicit_trait
+    parser:$Parser
+    receiver:$common::Type
+    trait_name:$str
+    location:$common::Location
+-> std::Option[std::String] {
+    trait_name.to_str common::GenericType::new common::Type::Generic = derived_type
+    derived_type parser.store rules::collect_trait_method_candidates = derived_methods
+    for
+        explicit_impl in parser
+            .store
+            .clone_trait_impls
+            .iter
+    do
+        if location explicit_impl.location is_same_declaration then
+            continue
+        fi
+        if explicit_impl.receiver.match_base receiver.match_base != then
+            continue
+        fi
+        explicit_impl.trait_bound common::trait_bound_to_type = explicit_type
+        if parser.store explicit_type derived_type rules::trait_type_implies then
+            explicit_type.format std::Option::Some return
+        fi
+        if parser.store derived_type explicit_type rules::trait_type_implies then
+            explicit_type.format std::Option::Some return
+        fi
+        explicit_type parser.store rules::collect_trait_method_candidates = explicit_methods
+        if explicit_methods derived_methods share_trait_method then
+            explicit_type.format std::Option::Some return
+        fi
+    done
+    std::Option[std::String]::None
 }
 
 pub fn install_derived_trait_impl
@@ -2634,20 +2462,10 @@ pub fn install_derived_trait_impl
         break
     done
     if existing_opt std::Option::Some(existing) is then
-        if
-            existing required_trait required_type_vars receiver parser.store does_derived_override_cover_domain !
-        then
-            location "Explicit derived implementation must cover the full derived implementation domain" common::ErrorKind::TraitSignatureMismatch parser.state.record_error
+        if location existing.location is_same_declaration then
             return
         fi
-        existing.clone = merged
-        for pair in methods.iter do
-            if pair.first merged.methods.has ! then
-                pair.second.clone pair.first.clone merged.methods.set
-            fi
-        done
-        required_trait required_type_vars type_vars merged parser add_named_derived_trait_bounds
-        merged parser.store.set_trait_impl
+        location f"Derived `{trait_name}` for `{receiver.format}` overlaps an explicit implementation" common::ErrorKind::DuplicateName parser.state.record_error_string
         return
     fi
 
@@ -3240,122 +3058,85 @@ pub fn derive_traits_for_aggregate
     done
 
     type_vars name make_aggregate_receiver = receiver
-    derives_eq derives_hashable || derives_ord || = needs_eq
-    common::STD_EQ_TRAIT.to_str = eq_required_trait
-    if derives_eq ! then
-        if derives_ord derives_hashable && then
-            common::STD_EQ_TRAIT.to_str = eq_required_trait
-        elif derives_ord then
-            common::STD_ORD_TRAIT.to_str = eq_required_trait
-        else
-            common::STD_HASHABLE_TRAIT.to_str = eq_required_trait
+    for derived_trait in derived_traits.iter do
+        if
+            location derived_trait.as_str receiver parser find_overlapping_explicit_trait std::Option::Some(explicit_trait) is
+        then
+            location f"Derived `{derived_trait}` for `{name}` overlaps explicit `{explicit_trait}` implementation" common::ErrorKind::DuplicateName parser.state.record_error_string
+            return
         fi
-    fi
-    std::Option[std::String]::None = clone_override
-    std::Option[std::String]::None = eq_override
-    std::Option[std::String]::None = hash_override
-    std::Option[std::String]::None = cmp_override
-    if derives_clone then
-        location "clone" common::STD_CLONE_TRAIT clone_required_type_vars type_vars receiver parser find_derived_override = clone_override
-    fi
-    if needs_eq then
-        location "eq" eq_required_trait.as_str required_type_vars type_vars receiver parser find_derived_override = eq_override
-    fi
-    if derives_hashable then
-        location "hash" common::STD_HASHABLE_TRAIT required_type_vars type_vars receiver parser find_derived_override = hash_override
-    fi
-    if derives_ord then
-        location "cmp" common::STD_ORD_TRAIT required_type_vars type_vars receiver parser find_derived_override = cmp_override
-    fi
-
-    clone_override.is_none derives_clone && = clone_generated
-    eq_override.is_none needs_eq && = eq_generated
-    hash_override.is_none derives_hashable && = hash_generated
-    cmp_override.is_none derives_ord && = cmp_generated
-    if clone_generated has_exclusive_borrow && then
+    done
+    derives_eq derives_hashable || derives_ord || = needs_eq
+    if derives_clone has_exclusive_borrow && then
         location f"Cannot derive `Clone` for `{name}` because exclusive-borrow fields cannot be cloned"
         common::ErrorKind::TraitSignatureMismatch parser.state.record_error_string
-        false = derives_clone
-        false = clone_generated
-    fi
-    if eq_override.is_some then
-        if derives_hashable hash_override.is_none && then
-            location "A custom derived `eq` method requires an explicit `hash` companion" common::ErrorKind::TraitSignatureMismatch parser.state.record_error
-            false = hash_generated
-        fi
-        if derives_ord cmp_override.is_none && then
-            location "A custom derived `eq` method requires an explicit `cmp` companion" common::ErrorKind::TraitSignatureMismatch parser.state.record_error
-            false = cmp_generated
-        fi
+        return
     fi
 
     std::Option[std::String]::None = clone_function
-    if clone_override std::Option::Some(override_name) is then
-        override_name.clone std::Option::Some = clone_function
-    elif clone_generated then
+    if derives_clone then
         "clone" receiver make_derived_function_name = function_name
+        if
+            function_name.as_str parser.store.has_function function_name.as_str parser.store.is_generated_recipe ! &&
+        then
+            location f"Derived `clone` for `{name}` conflicts with source method `{function_name}`" common::ErrorKind::DuplicateName parser.state.record_error_string
+            return
+        fi
         if function_name.as_str parser.store.has_function ! then
             location clone_required_type_vars type_vars receiver parser make_derived_clone_function = function
-            function parser.store.set_function
+            function parser.store.set_generated_recipe
         fi
         function_name std::Option::Some = clone_function
     fi
 
     std::Option[std::String]::None = eq_function
-    if eq_override std::Option::Some(override_name) is then
-        override_name.clone std::Option::Some = eq_function
-    elif eq_generated then
+    if needs_eq then
         "eq" receiver make_derived_function_name = function_name
+        if
+            function_name.as_str parser.store.has_function function_name.as_str parser.store.is_generated_recipe ! &&
+        then
+            location f"Derived `eq` for `{name}` conflicts with source method `{function_name}`" common::ErrorKind::DuplicateName parser.state.record_error_string
+            return
+        fi
         if function_name.as_str parser.store.has_function ! then
             location required_type_vars type_vars receiver parser make_derived_eq_function = function
-            function parser.store.set_function
+            function parser.store.set_generated_recipe
         fi
         function_name std::Option::Some = eq_function
     fi
 
     std::Option[std::String]::None = hash_function
-    if hash_override std::Option::Some(override_name) is then
-        override_name.clone std::Option::Some = hash_function
-    elif hash_generated then
+    if derives_hashable then
         "hash" receiver make_derived_function_name = function_name
+        if
+            function_name.as_str parser.store.has_function function_name.as_str parser.store.is_generated_recipe ! &&
+        then
+            location f"Derived `hash` for `{name}` conflicts with source method `{function_name}`" common::ErrorKind::DuplicateName parser.state.record_error_string
+            return
+        fi
         if function_name.as_str parser.store.has_function ! then
             location required_type_vars type_vars receiver parser make_derived_hash_function = function
-            function parser.store.set_function
+            function parser.store.set_generated_recipe
         fi
         function_name std::Option::Some = hash_function
     fi
 
     std::Option[std::String]::None = cmp_function
-    if cmp_override std::Option::Some(override_name) is then
-        override_name.clone std::Option::Some = cmp_function
-    elif cmp_generated then
+    if derives_ord then
         if location parser validate_derived_ordering then
             "cmp" receiver make_derived_function_name = function_name
+            if
+                function_name.as_str parser.store.has_function function_name.as_str parser.store.is_generated_recipe ! &&
+            then
+                location f"Derived `cmp` for `{name}` conflicts with source method `{function_name}`" common::ErrorKind::DuplicateName parser.state.record_error_string
+                return
+            fi
             if function_name.as_str parser.store.has_function ! then
                 location required_type_vars type_vars receiver parser make_derived_cmp_function = function
-                function parser.store.set_function
+                function parser.store.set_generated_recipe
             fi
             function_name std::Option::Some = cmp_function
-        else
-            false = cmp_generated
         fi
-    fi
-
-    std::Option[std::String]::None = ne_override
-    std::Option[std::String]::None = partial_cmp_override
-    std::Option[std::String]::None = lt_override
-    std::Option[std::String]::None = le_override
-    std::Option[std::String]::None = gt_override
-    std::Option[std::String]::None = ge_override
-    if needs_eq then
-        location "ne" eq_required_trait.as_str required_type_vars type_vars receiver parser find_derived_override = ne_override
-    fi
-    if derives_ord then
-        location "partial_cmp" common::STD_ORD_TRAIT required_type_vars type_vars receiver parser find_derived_override = partial_cmp_override
-        location "lt" common::STD_ORD_TRAIT required_type_vars type_vars receiver parser find_derived_override = lt_override
-        location "le" common::STD_ORD_TRAIT required_type_vars type_vars receiver parser find_derived_override = le_override
-        location "gt" common::STD_ORD_TRAIT required_type_vars type_vars receiver parser find_derived_override = gt_override
-        location "ge" common::STD_ORD_TRAIT required_type_vars type_vars receiver parser find_derived_override = ge_override
     fi
 
     if derives_clone then
@@ -3372,27 +3153,19 @@ pub fn derive_traits_for_aggregate
     if derives_eq then
         std::Map[std::String std::String]::new = methods
         eq_function "eq" methods set_derived_method
-        ne_override "ne" methods set_derived_method
         location methods common::STD_EQ_TRAIT common::STD_EQ_TRAIT required_type_vars type_vars receiver parser
         install_derived_trait_impl
     fi
     if derives_ord then
         std::Map[std::String std::String]::new = methods
         eq_function "eq" methods set_derived_method
-        ne_override "ne" methods set_derived_method
         cmp_function "cmp" methods set_derived_method
-        partial_cmp_override "partial_cmp" methods set_derived_method
-        lt_override "lt" methods set_derived_method
-        le_override "le" methods set_derived_method
-        gt_override "gt" methods set_derived_method
-        ge_override "ge" methods set_derived_method
         location methods common::STD_ORD_TRAIT common::STD_ORD_TRAIT required_type_vars type_vars receiver parser
         install_derived_trait_impl
     fi
     if derives_hashable then
         std::Map[std::String std::String]::new = methods
         eq_function "eq" methods set_derived_method
-        ne_override "ne" methods set_derived_method
         hash_function "hash" methods set_derived_method
         location methods common::STD_HASHABLE_TRAIT common::STD_HASHABLE_TRAIT required_type_vars type_vars receiver parser
         install_derived_trait_impl
@@ -3836,8 +3609,10 @@ pub fn parse_trait parser:mut$Parser cursor:mut$TokenCursor -> common::CasaTrait
 
                 # Parse optional default method body
                 std::List[common::Op]::new = default_ops
+                false = has_default_body
                 if cursor.peek std::Option::Some(body_peek) is then
                     if "{" body_peek common::Token::value.as_str == then
+                        true = has_default_body
                         f"{name_token common::Token::value.as_str cursor.resolve_name.as_str}::{method_name common::Token::value.as_str}" = default_name
                         default_name.as_str cursor parser parse_block_ops = default_ops
                         trait_tv_set default_ops common::canonicalize_operation_type_vars
@@ -3845,7 +3620,7 @@ pub fn parse_trait parser:mut$Parser cursor:mut$TokenCursor -> common::CasaTrait
                 fi
 
                 inherited_method_bindings cursor.restore_type_bindings
-                method_type_vars false std::List[common::Variable]::new default_ops method_stack_effect method_name common::Token::value.clone common::TraitMethod methods.push
+                has_default_body method_name.location.clone std::Option[common::Function]::None method_type_vars false std::List[common::Variable]::new default_ops method_stack_effect method_name common::Token::value.clone common::TraitMethod methods.push
             fi
         else
             false = parse_trait_loop
@@ -4422,12 +4197,7 @@ pub fn validate_language_trait_contract parser:mut$Parser casa_trait:$common::Ca
         fi
     done
     for candidate in candidates.iter do
-        if
-            0 candidate
-                .method
-                .default_ops
-                .length !=
-        then
+        if candidate.method.has_default_body then
             continue
         fi
         if candidate.trait_type trait_type.eq ! then
@@ -5037,11 +4807,7 @@ pub fn synthesize_copy_clone_fallbacks parser:mut$Parser {
         f"{receiver_name}::{common::STD_COPY_TRAIT}::clone" = function_name
         if function_name.as_str parser.store.has_function ! then
             function_name.as_str trait_impl parser make_copy_clone_fallback = function
-            function parser.store.set_function
-            function_name.clone parser
-                .current_module_mut
-                .declared_names
-                .add
+            function parser.store.set_generated_recipe
         fi
         function_name.clone "clone".to_str trait_impl.methods.set
         trait_impl parser.store.set_trait_impl
@@ -5069,6 +4835,33 @@ pub fn validate_trait_impls parser:mut$Parser {
         fi
         trait_opt.unwrap = casa_trait
         trait_impl.trait_bound common::trait_bound_to_type = trait_type
+        if
+            common::STD_COPY_TRAIT trait_impl
+                .trait_bound
+                .name
+                .as_str ==
+        then
+            trait_impl.receiver.match_base = receiver_name
+            if
+                receiver_name.as_str parser
+                    .store
+                    .structs
+                    .get_str std::Option::Some(casa_struct) is
+            then
+                if casa_struct.location trait_impl.location is_same_declaration ! then
+                    trait_impl.location f"`Copy` for `{trait_impl.receiver.format}` requires `derives Copy` on the type declaration" common::ErrorKind::TraitSignatureMismatch parser.state.record_error_string
+                fi
+            elif
+                receiver_name.as_str parser
+                    .store
+                    .enums
+                    .get_str std::Option::Some(casa_enum) is
+            then
+                if casa_enum.location trait_impl.location is_same_declaration ! then
+                    trait_impl.location f"`Copy` for `{trait_impl.receiver.format}` requires `derives Copy` on the type declaration" common::ErrorKind::TraitSignatureMismatch parser.state.record_error_string
+                fi
+            fi
+        fi
         if trait_type trait_impl parser.store is_copy_trait_impl_valid ! then
             trait_impl.location f"Type `{trait_impl.receiver.format}` cannot implement `Copy` because its representation is not safely copyable" common::ErrorKind::TraitSignatureMismatch parser.state.record_error_string
         fi
@@ -6890,14 +6683,14 @@ impl Parser {
             0 = method_index: u64
             while method_index casa_trait.methods.length > do
                 method_index casa_trait.methods.get = method
-                if 0 method.default_ops.length != method.default_is_resolved ! && then
+                if method.has_default_body method.default_is_resolved ! && then
                     method.default_ops.clone = resolved_ops
                     method.stack_effect.clone
                     std::List[common::Op]::new
                     f"{trait_name}::{method.name}"
                     semantics::make_default_method_function = function
                     self.state.diagnostics false function resolved_ops self.store resolve_identifiers
-                    method.type_vars.clone true function.variables.clone resolved_ops method.stack_effect.clone method.name.clone
+                    method.has_default_body method.location.clone std::Option[common::Function]::None method.type_vars.clone true function.variables.clone resolved_ops method.stack_effect.clone method.name.clone
                     common::TraitMethod = resolved_method
                     resolved_method method_index casa_trait.methods.set
                 fi

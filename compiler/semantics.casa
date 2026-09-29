@@ -187,13 +187,17 @@ enum OriginKind derives std::Eq std::Hashable std::Copy {
     InputCleanup
 }
 
-struct Origin derives std::Eq std::Hashable std::Clone {
+struct Origin derives std::Clone {
     place:     Place
     kind:      OriginKind
     exclusive: bool
 }
 
 impl Origin: std::Hashable {
+    pub fn eq self:$Origin other:$Origin -> bool {
+        other.place self.place.eq other.kind self.kind == && other.exclusive self.exclusive == &&
+    }
+
     pub fn hash self:$Origin -> i64 {
         self.place.hash self.kind.hash ^ if self.exclusive then 1 else 0 fi ^
     }
@@ -7318,7 +7322,7 @@ fn type_has_trait_shape
             fi
             if fn_opt.is_none then
                 # Default methods (with a body) don't require a concrete implementation
-                if 0 method common::TraitMethod::default_ops.length != then
+                if method.has_default_body then
                     continue
                 fi
                 false return
@@ -7628,7 +7632,7 @@ pub fn ensure_function_clone_method
     std::List[common::Variable]::new = variables
     typ.clone "self".to_str common::Variable variables.push
     variables function common::Function::set_variables
-    function store.set_function
+    function store.set_generated_recipe
 }
 
 impl TypeChecker {
@@ -10283,36 +10287,25 @@ fn instantiate_default_trait_method
     receiver.base = fn_base_opt
     semantics.function_name = synth_fn_name: $std::String
 
-    # For generic receivers, keep trait type params as function type vars.
-    # For non-generic receivers, substitute trait type params with concrete types.
+    # Bind trait arguments before specializing the receiver and default body.
     std::Map[std::String common::Type]::new = trait_subs
     receiver.clone = default_self_type
     common::empty_stack_effect = resolved_stack_effect
-    if fn_base_opt.clone std::Option::Some(base_name) is then
-        if 0 type_params.length != then
-            std::List[common::Type]::new = default_type_params
-            for type_param in type_params.iter do
-                type_param.clone common::Type::TypeVar default_type_params.push
+    if semantics.trait_type std::Option::Some(resolved_trait_type) is then
+        if resolved_trait_type.type_params std::Option::Some(trait_args) is then
+            for pair in trait_args.iter type_params.iter.zip do
+                pair.second.clone pair.first.clone trait_subs.set
             done
-            default_type_params base_name.clone common::GenericType common::Type::Generic
-            = default_self_type
         fi
-        default_self_type default_method common::TraitMethod::stack_effect common::resolve_trait_stack_effect = resolved_stack_effect
-    else
-        if semantics.trait_type std::Option::Some(resolved_trait_type) is then
-            if resolved_trait_type.type_params std::Option::Some(trait_args) is then
-                for pair in trait_args.iter type_params.iter.zip do
-                    pair.second.clone pair.first.clone trait_subs.set
-                done
-            fi
-        fi
+    fi
+    if fn_base_opt.is_none then
         # Infer trait type params from concrete method stack effects
         std::Set[std::String]::new = type_param_set
         for type_param in type_params.iter do
             type_param.clone type_param_set.add
         done
         for infer_method in declared_methods.iter do
-            if 0 infer_method common::TraitMethod::default_ops.length == then
+            if infer_method.has_default_body ! then
                 store std::Option[common::Function]::None receiver infer_method common::TraitMethod::name.as_str
                 rules::resolve_method_semantics = infer_method_opt
                 std::Option[CheckedFunction]::None = infer_fn_opt
@@ -10333,8 +10326,8 @@ fn instantiate_default_trait_method
                 fi
             fi
         done
-        trait_subs receiver default_method common::TraitMethod::stack_effect common::resolve_trait_stack_effect common::apply_type_subs_to_stack_effect = resolved_stack_effect
     fi
+    trait_subs receiver default_method common::TraitMethod::stack_effect common::resolve_trait_stack_effect common::apply_type_subs_to_stack_effect = resolved_stack_effect
 
     # Add trait type params as function type vars for generic receivers
     if fn_base_opt.is_some then
@@ -10344,7 +10337,9 @@ fn instantiate_default_trait_method
             receiver_type_var.clone resolved_stack_effect common::StackEffect::type_vars.add
         done
         for type_param in type_params.iter do
-            type_param.clone resolved_stack_effect common::StackEffect::type_vars.add
+            if type_param.as_str trait_subs.has_str ! then
+                type_param.clone resolved_stack_effect common::StackEffect::type_vars.add
+            fi
         done
     fi
 
@@ -10355,24 +10350,36 @@ fn instantiate_default_trait_method
         method_type_var.clone resolved_stack_effect common::StackEffect::type_vars.add
     done
 
-    # Build function ops: parameter assignments + cloned body
+    # The trait owns the checked body. Only its bindings change for a receiver.
     std::List[common::Op]::new = synth_ops
-    default_method.default_variables.clone = synth_vars
+    default_method.checked_default.clone = checked_recipe_opt
+    checked_recipe_opt.is_some = has_checked_recipe
+    std::List[common::Variable]::new = synth_vars
+    std::List[common::Op]::new = cloned_body
+    if checked_recipe_opt std::Option::Some(checked_recipe) is then
+        checked_recipe.variables.clone = synth_vars
+        checked_recipe.ops.clone = cloned_body
+    else
+        default_method.default_variables.clone = synth_vars
+        default_method.default_ops.clone = cloned_body
+    fi
     0 = variable_index: u64
     while variable_index synth_vars.length > do
         variable_index synth_vars.get_mut = variable
         trait_subs variable.typ.substitute_t variable common::Variable::set_typ
         1 += variable_index
     done
-    for synth_param in resolved_stack_effect common::StackEffect::parameters.iter do
-        if "" synth_param common::Parameter::name.as_str != then
-            common::empty_location synth_param common::Parameter::name.clone common::OpValue::AssignVar common::Op::new synth_ops.push
-        fi
-    done
+    if has_checked_recipe ! then
+        for synth_param in resolved_stack_effect common::StackEffect::parameters.iter do
+            if "" synth_param common::Parameter::name.as_str != then
+                common::empty_location synth_param common::Parameter::name.clone common::OpValue::AssignVar common::Op::new synth_ops.push
+            fi
+        done
+    fi
 
-    default_method common::TraitMethod::default_ops.clone = cloned_body
     if 0 trait_subs.length != then
         trait_subs cloned_body common::substitute_ops_types
+        store trait_subs cloned_body specialize_op_metadata
     fi
     if semantics.trait_type std::Option::Some(default_trait_type) is then
         store receiver default_trait_type cloned_body qualify_default_method_calls
@@ -10397,22 +10404,33 @@ fn instantiate_default_trait_method
             lambda.split_body = lambda_ops = lambda
             if 0 trait_subs.length != then
                 trait_subs lambda_ops common::substitute_ops_types
+                store trait_subs lambda_ops specialize_op_metadata
             fi
             if semantics.trait_type std::Option::Some(default_trait_type) is then
                 store receiver default_trait_type lambda_ops qualify_default_method_calls
             fi
-            std::List[common::Parameter]::new = lambda_params
-            std::List[common::Type]::new = lambda_returns
-            lambda_returns lambda_params common::StackEffect::new = lambda_effect
-            for lambda_type_var in resolved_stack_effect common::StackEffect::type_vars.iter do
-                lambda_type_var.clone lambda_effect common::StackEffect::type_vars.add
-            done
+            trait_subs lambda.stack_effect common::apply_type_subs_to_stack_effect = lambda_effect
+            resolved_stack_effect.type_vars.clone = lambda_effect.type_vars
             lambda_effect lambda common::Function::location.clone lambda_ops cloned_lambda_name.clone common::Function::with_stack_effect = cloned_lambda
             true = cloned_lambda.is_resolved
+            lambda.is_typechecked has_checked_recipe && = cloned_lambda.is_typechecked
             lambda.variables.clone cloned_lambda common::Function::set_variables
             lambda.captures.clone cloned_lambda common::Function::set_captures
+            lambda.owned_captures.clone = cloned_lambda.owned_captures
             lambda.captures_by_move cloned_lambda common::Function::set_captures_by_move
             lambda.captures_shared cloned_lambda common::Function::set_captures_shared
+            0 = lambda_variable_index: u64
+            while lambda_variable_index cloned_lambda.variables.length > do
+                lambda_variable_index cloned_lambda.variables.get_mut = lambda_variable
+                trait_subs lambda_variable.typ.substitute_t lambda_variable common::Variable::set_typ
+                1 += lambda_variable_index
+            done
+            0 = lambda_capture_index: u64
+            while lambda_capture_index cloned_lambda.captures.length > do
+                lambda_capture_index cloned_lambda.captures.get_mut = lambda_capture
+                trait_subs lambda_capture.typ.substitute_t lambda_capture common::Variable::set_typ
+                1 += lambda_capture_index
+            done
             0 = lambda_op_index: u64
             while lambda_op_index cloned_lambda.ops.length > do
                 lambda_op_index cloned_lambda.ops.get = lambda_op
@@ -10423,7 +10441,7 @@ fn instantiate_default_trait_method
                 fi
                 1 += lambda_op_index
             done
-            cloned_lambda store.set_function
+            cloned_lambda store.set_generated_recipe
             cloned_lambda_name common::OpValue::FnPush body_op common::Op::set_value
             1 += cloned_lambda_index
         fi
@@ -10433,9 +10451,12 @@ fn instantiate_default_trait_method
     # Create, register, and typecheck the function
     resolved_stack_effect common::empty_location synth_ops synth_fn_name.clone common::Function::with_stack_effect = synth_fn
     true = synth_fn.is_resolved
+    has_checked_recipe = synth_fn.is_typechecked
     synth_vars synth_fn common::Function::set_variables
-    synth_fn store.set_function
-    false true checks diagnostics store synth_fn_name.as_str ensure_checked_function drop
+    synth_fn store.set_generated_recipe
+    if has_checked_recipe ! then
+        false true checks diagnostics store synth_fn_name.as_str ensure_checked_function drop
+    fi
 
     synth_fn_name.clone std::Option::Some
 }
@@ -10658,10 +10679,6 @@ impl TypeChecker {
                     receiver method_name.as_str receiver_capability method_semantics.stack_effect
                     tc.check_method_receiver_capability = receiver_recovered
                     if method_kind rules::MethodSemanticsKind::TraitBound is then
-                        if receiver_recovered ! then
-                            tc.stack_pop_drop
-                            receiver tc.stack_push_type
-                        fi
                         function_opt emitted_ops op receiver method_semantics
                         tc.apply_trait_bound_method_semantics
                         return
@@ -10881,6 +10898,10 @@ fn ensure_checked_function
                 common::ErrorKind::TypeMismatch diagnostics.record_error_string
                 std::Option[CheckedFunction]::None return
             fi
+            existing checked_function_summary std::Option::Some return
+        fi
+        if existing.is_typechecked then
+            FunctionCheckStatus::Checked function_name.to_str checks.functions.set
             existing checked_function_summary std::Option::Some return
         fi
         if existing.extern_symbol.is_some then
@@ -12252,7 +12273,12 @@ impl common::SymbolStore {
             function_name.as_str source
                 .get_function
                 .unwrap
-                .clone_for_import cloned.set_function
+                .clone_for_import = function
+            if function_name.as_str source.is_generated_recipe then
+                function cloned.set_generated_recipe
+            else
+                function cloned.set_function
+            fi
         done
         source.variables.clone = cloned.variables
         source.constants.clone = cloned.constants
@@ -12426,6 +12452,114 @@ pub fn make_default_method_function
     effect common::empty_location function_operations name common::Function::with_stack_effect = function
     variables = function.variables
     function
+}
+
+fn inherit_default_lambda_effect
+    lambda_name:$str
+    effect:$common::StackEffect
+    store:mut$common::SymbolStore
+{
+    if lambda_name "lambda__" str::starts_with ! then
+        return
+    fi
+    if lambda_name store.take_function_for_update std::Option::Some(lambda) is then
+        lambda.stack_effect.clone = lambda_effect
+        for type_variable in effect.type_vars.iter do
+            type_variable.clone lambda_effect.type_vars.add
+        done
+        for pair in effect.trait_bounds.iter do
+            pair.second.clone pair.first.clone lambda_effect.trait_bounds.set
+        done
+        lambda_effect lambda common::Function::set_stack_effect
+        store effect lambda.ops inherit_default_lambda_context
+        lambda store.restore_function
+    fi
+}
+
+fn inherit_default_lambda_context
+    operations:$std::List[common::Op]
+    effect:$common::StackEffect
+    store:mut$common::SymbolStore
+{
+    for operation in operations.iter do
+        if operation.value common::OpValue::FnPush(lambda_name) is then
+            store effect lambda_name.as_str inherit_default_lambda_effect
+        elif operation.value common::OpValue::PushArray(items) is then
+            store effect items inherit_default_lambda_context
+        elif operation.value common::OpValue::ExprGroup(items) is then
+            store effect items inherit_default_lambda_context
+        elif operation.value common::OpValue::MatchArm(arm) is then
+            store effect arm.guard_ops inherit_default_lambda_context
+        fi
+    done
+}
+
+pub fn check_trait_default_bodies
+    store:common::SymbolStore
+    diagnostics:mut$error::Diagnostics
+-> common::SymbolStore {
+    for
+        trait_name in store
+            .traits
+            .keys
+            .iter
+    do
+        trait_name store
+            .traits
+            .get
+            .unwrap
+            .clone = casa_trait
+        std::List[common::Type]::new = trait_arguments
+        for type_parameter in casa_trait.type_params.iter do
+            type_parameter.clone common::Type::TypeVar trait_arguments.push
+        done
+        trait_arguments casa_trait.name.clone common::TraitBound = self_bound
+        0 = method_index: u64
+        while method_index casa_trait.methods.length > do
+            method_index casa_trait
+                .methods
+                .get
+                .clone = method
+            1 += method_index
+            if method.has_default_body ! then
+                continue
+            fi
+            method.stack_effect.clone = effect
+            common::TRAIT_SELF_TYPE.to_str effect.type_vars.add
+            for type_parameter in casa_trait.type_params.iter do
+                type_parameter.clone effect.type_vars.add
+            done
+            for type_parameter in method.type_vars.iter do
+                type_parameter.clone effect.type_vars.add
+            done
+            std::List[common::TraitBound]::new = bounds
+            self_bound.clone bounds.push
+            bounds common::TRAIT_SELF_TYPE.to_str effect.trait_bounds.set
+            f"{casa_trait.name}::{method.name}" = name
+            effect.clone method.default_ops.clone name.clone make_default_method_function = function
+            method.location.clone = function.location
+            for variable in method.default_variables.iter do
+                variable.clone function.variables.push
+            done
+            store effect method.default_ops inherit_default_lambda_context
+            function.clone store.set_generated_recipe
+            store SemanticSession::from_store = session
+            session function analyze_function_semantics_in_session = analysis
+            session.into_store = store
+            name.as_str store.remove_generated_recipe
+            if analysis.diagnostics.has_errors ! then
+                analysis
+                    .checked_function
+                    .clone
+                    .unwrap = checked_function
+                checked_function std::Option::Some = method.checked_default
+                method method_index 1 - casa_trait.methods.set
+            fi
+            analysis.diagnostics.clone diagnostics.merge
+        done
+        casa_trait.clone trait_name.clone store.traits.set
+    done
+    store
 }
 
 pub fn check_trait_impls store:mut$common::SymbolStore diagnostics:mut$error::Diagnostics {
