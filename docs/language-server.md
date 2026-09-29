@@ -87,7 +87,15 @@ safer.
 | Semantic tokens | Full-document token classification |
 
 Definitions and references can resolve imported declarations. Unsaved content
-from other open Casa documents is included in analysis.
+from other open Casa documents is included in analysis. Queries use a source
+index built during analysis. Replacing a document releases its old snapshot.
+Query results own their presentation text and source ranges.
+
+Source errors can leave independent hover, definition, completion, reference,
+and token facts available. Partial completion lists set `isIncomplete`.
+Completion edits replace the selected identifier range.
+References cover one compilation and show a notice when coverage is incomplete.
+Rename refuses incomplete coverage.
 
 ## Limitations
 
@@ -97,8 +105,8 @@ from other open Casa documents is included in analysis.
 - Completion is broad. The editor performs prefix filtering.
 - Dot completion does not support every arbitrary expression.
 - There are no code actions or formatting requests.
-- The server recompiles the document and does not free all session allocations,
-  so memory use can grow during a long session.
+- References and rename cover the analyzed root and imports. Workspace discovery
+  and document-version checks are not implemented.
 
 See [Compiler Diagnostics](errors.md) to interpret errors and [Casa Format
 Guide](FORMAT.md) to format source files.

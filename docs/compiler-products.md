@@ -6,7 +6,7 @@ Capsule migration in #700:
 | Operation | Input | Successful return |
 | --- | --- | --- |
 | `syntax` | One `SourceUnit` | Tokens, optional structural facts, and a report |
-| `analyze` | `CompilationInput` | An independent analysis snapshot with a report and semantic tokens |
+| `analyze` | `CompilationInput` | An independent analysis snapshot with a report and editor index |
 | `assembly` | `CompilationInput` and `Target` | `Produced(report, source)` or `Rejected(report)` |
 
 Each operation returns `std::Result` with `CompilerFailure` as its error type. Source errors
@@ -55,13 +55,39 @@ directly. Pending moves from stack values remain private to the body checker
 until it attaches them to their source operations. There is no ownership table
 in `SymbolStore`.
 
-The parser, checker, document projector, and emitter remain temporary adapters.
-Analysis releases their operations and declarations after projecting semantic
-tokens and cannot produce codegen input. Existing consumers retain their current
-interfaces. Shared root syntax and formatter migration belong to #701, full
-editor queries and verified partial facts to #713 and #714, and final consumer
-cutover to #715. Language behavior is unchanged. The [measurements](benchmarks/compiler-products/README.md)
-do not establish final redesign performance.
+`AnalysisSnapshot::get_index` borrows the source index. Its five `find_*` queries
+use a retained absolute file identity and byte offset. Hover and definition
+return `PointAnswer`: `Known`, `Absent`, or `Unavailable`. Completion and semantic
+tokens return `ListAnswer`: `Complete`, `Incomplete`, or `Unavailable`.
+References use the same availability variants in
+`ReferenceAnswer`. Completion items retain candidate presentation, insertion
+text, and the identifier replacement range. Reference results retain ranges,
+the declaration identity, covered files, and whether rename requires workspace
+coverage.
+
+An empty reference list can be complete. Invalid files and offsets are
+unavailable. Returned values own their text and locations and survive snapshot
+release. Convert locations with the originating report's retained sources.
+
+Projection records checker-verified source facts during construction and
+releases the compiler store and bodies before returning. Query execution reads
+source facts only. References cover this compilation's root and loaded imports,
+with sorted, deduplicated ranges and explicit declaration inclusion. Tokens are
+sorted, non-overlapping, and restricted to the requested file. Source failures
+preserve independent verified facts. Point availability tracks affected source
+regions. Tokens track requested-file coverage. References conservatively report
+compilation coverage for top-level symbols and body coverage for local bindings.
+A damaged construct cannot contribute an invented operation fact. Lexical token
+categories remain available after syntax rejection.
+
+Type references are incomplete while signature and field type occurrences are
+not represented. Rename must reject these answers. Snapshot release is measured
+by the [editor snapshot workload](benchmarks/editor-snapshots/README.md).
+
+Workspace aggregation and freshness checks belong to #714. Final consumer
+cutover belongs to #715. Language behavior is unchanged. The
+[request measurements](benchmarks/compiler-products/README.md) do not establish
+final redesign performance.
 
 `tests/compiler/test_products.casa` checks independent overrides, release order,
 source rejection, syntax products, retained failure context, and native output

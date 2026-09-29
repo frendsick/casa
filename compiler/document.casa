@@ -3,6 +3,9 @@ import "std" as std
 import "common" as common
 import "analysis" as analysis
 import "lexer" as lexer
+import "typechecker" as typechecker
+import "semantics" as semantics
+import "error" as error
 
 pub enum SymbolPart derives std::Eq std::Copy {
     Whole
@@ -19,31 +22,32 @@ pub enum DocumentSymbolKind derives std::Eq std::Copy {
     EnumVariant
 }
 
-pub struct AnalyzedDocument {
-    pub ops:       std::List[common::Op]
-    pub functions: std::Map[std::String common::Function]
-    pub structs:   std::Map[std::String common::CasaStruct]
-    pub enums:     std::Map[std::String common::CasaEnum]
-    pub variables: std::Map[std::String common::Variable]
-    pub sources:   lexer::SourceStore
-    pub source:    std::String
-    pub file_path: std::String
+struct IndexBuilder {
+    lexical_tokens: std::Map[std::String std::List[common::Token]]
+    declarations:   std::List[common::Location]
+    ops:            std::List[common::Op]
+    store:          common::SymbolStore
+    verified:       std::Set[i64]
+    diagnostics:    error::Diagnostics
+    sources:        lexer::SourceStore
+    source:         std::String
+    file_path:      std::String
 }
 
-pub struct DocumentElement {
-    pub op:                  common::Op
-    pub containing_function: std::Option[common::Function]
+struct DocumentElement {
+    pub op:                  $common::Op
+    pub containing_function: std::Option[std::String]
     pub part:                SymbolPart
     pub location:            common::Location
 }
 
-pub struct DocumentLocation {
+pub struct DocumentLocation derives std::Clone {
     pub file:   std::String
     pub offset: u64
     pub length: u64
 }
 
-pub struct DocumentHover {
+pub struct DocumentHover derives std::Clone {
     pub content:  std::String
     pub location: DocumentLocation
 }
@@ -61,18 +65,22 @@ pub enum DocumentTokenKind derives std::Eq std::Copy {
     Macro
 }
 
-pub struct DocumentToken {
+pub struct DocumentToken derives std::Clone {
     pub kind:     DocumentTokenKind
     pub location: DocumentLocation
 }
 
 impl DocumentToken {
     pub fn comes_before self:$DocumentToken pivot:$DocumentToken -> bool {
-        pivot.location.offset self.location.offset <
+        if pivot.location.offset self.location.offset == then
+            self.kind DocumentTokenKind::Function == pivot.kind DocumentTokenKind::Function != &&
+        else
+            pivot.location.offset self.location.offset <
+        fi
     }
 }
 
-pub enum CompletionCandidate {
+pub enum CompletionCandidate derives std::Clone {
     Function (std::String)
     Variable (common::Variable)
     Keyword (common::KeywordKind)
@@ -83,16 +91,11 @@ pub enum CompletionCandidate {
     Method (std::String)
 }
 
-pub struct DocumentSymbol {
+struct ProjectionSymbol {
     pub kind:        DocumentSymbolKind
     pub name:        std::String
     pub declaration: common::Location
-    pub owner:       std::Option[common::Function]
-}
-
-pub struct FindSymbolState {
-    pub best:        std::Option[DocumentElement]
-    pub best_length: u64
+    pub owner:       std::Option[common::Location]
 }
 
 impl common::Location {
@@ -111,17 +114,17 @@ impl common::Location {
     }
 }
 
-impl DocumentSymbol {
+impl ProjectionSymbol {
     pub fn new
         kind:DocumentSymbolKind
         name:$str
         declaration:$common::Location
-        owner:std::Option[common::Function]
-    -> DocumentSymbol {
-        owner declaration.clone name.to_str kind DocumentSymbol
+        owner:std::Option[common::Location]
+    -> ProjectionSymbol {
+        owner declaration.clone name.to_str kind ProjectionSymbol
     }
 
-    pub fn matches_identity self:$DocumentSymbol other:$DocumentSymbol -> bool {
+    pub fn matches_identity self:$ProjectionSymbol other:$ProjectionSymbol -> bool {
         if self.kind other.kind != self.name other.name != || then
             false return
         fi
@@ -130,14 +133,14 @@ impl DocumentSymbol {
         fi
         if self.owner std::Option::Some(self_owner) is then
             if other.owner std::Option::Some(other_owner) is then
-                other_owner.location self_owner.location.matches return
+                other_owner self_owner.matches return
             fi
             false return
         fi
         other.owner.is_none
     }
 
-    pub fn has_declaration_reference self:$DocumentSymbol -> bool {
+    pub fn has_declaration_reference self:$ProjectionSymbol -> bool {
         self.kind match
             DocumentSymbolKind::Function => true
             DocumentSymbolKind::Variable => false
@@ -208,57 +211,12 @@ pub fn get_symbol_location source:$str op:$common::Op part:$SymbolPart -> common
     end
 }
 
-pub fn find_best_spanning_symbol
-    ops:$std::List[common::Op]
-    file_path:$str
-    source:$str
-    offset:u64
-    function:$std::Option[common::Function]
-    find_state:FindSymbolState
--> FindSymbolState {
-    for op in ops.iter do
-        if op.location.file file_path != then
-            continue
-        fi
-        op
-            .location
-            .span
-            .offset = span_offset
-        op
-            .location
-            .span
-            .length = span_length
-        if 1 span_length < then
-            1 = span_length: u64
-        fi
-        if
-            span_offset offset >=
-            offset span_offset span_length + > &&
-            find_state.best.is_none span_length find_state.best_length > || &&
-        then
-            offset op source find_qualified_part = part
-            part op source get_symbol_location = location
-            span_length
-            location
-            part
-            std::Option[common::Function]::None = containing_function
-            if function std::Option::Some(value) is then
-                value.clone_for_import std::Option::Some = containing_function
-            fi
-            containing_function
-            op.clone
-            DocumentElement std::Option::Some FindSymbolState = find_state
-        fi
-    done
-    find_state
-}
-
 pub fn find_best_assignment
     name:$str
     ops:$std::List[common::Op]
     usage_offset:u64
-    best:std::Option[common::Op]
--> std::Option[common::Op] {
+    best:std::Option[common::Location]
+-> std::Option[common::Location] {
     0 = op_index: u64
     while op_index ops.length > do
         op_index ops.get = op
@@ -273,9 +231,9 @@ pub fn find_best_assignment
                     .span
                     .offset usage_offset >
             then
-                op.clone std::Option::Some = best
+                op.location.clone std::Option::Some = best
             elif best.is_none then
-                op.clone std::Option::Some = best
+                op.location.clone std::Option::Some = best
             fi
         fi
     done
@@ -543,13 +501,13 @@ pub fn find_keyword_before
 }
 
 impl common::Function {
-    pub fn format_hover self:$common::Function -> std::String {
+    pub fn format_hover self:$common::Function store:$common::SymbolStore file:$str -> std::String {
         std::String::new = builder
         if self.is_unsafe then
             "unsafe " builder.append
         fi
         "fn " builder.append
-        self.name.as_str builder.append
+        file self.name.as_str store.format_name_for_source.as_str builder.append
         if
             0 self
                 .stack_effect
@@ -565,9 +523,9 @@ impl common::Function {
                     .iter
             do
                 if "" parameter.name != then
-                    f"{parameter.name}:{parameter.typ.format}"
+                    f"{parameter.name}:{file parameter.typ store.format_type_for_source}"
                 else
-                    parameter.typ.format
+                    file parameter.typ store.format_type_for_source
                 fi
                 parameters.push
             done
@@ -587,7 +545,7 @@ impl common::Function {
                     .return_types
                     .iter
             do
-                return_type.format return_types.push
+                file return_type store.format_type_for_source return_types.push
             done
             " " return_types.join_strings.as_str builder.append
         else
@@ -703,48 +661,67 @@ impl common::OpValue {
     }
 }
 
-impl AnalyzedDocument {
+impl IndexBuilder {
+    fn project_failures self:$IndexBuilder index:mut$EditorIndex {
+        for
+            diagnostic in self
+                .diagnostics
+                .entries
+                .iter
+        do
+            if diagnostic error::Diagnostic::Error(failure) is then
+                failure classify_query_failure failure.location self.locate CoverageRegion index.unavailable.push
+            fi
+        done
+    }
+
     pub fn new
         analysis:analysis::AnalysisResult
         source:std::String
         file_path:std::String
-    -> AnalyzedDocument {
+    -> IndexBuilder {
         analysis.into_parts = typechecked = sources = diagnostics
         std::List[common::Op]::new = ops
-        std::Map[std::String common::Function]::new = functions
-        std::Map[std::String common::CasaStruct]::new = structs
-        std::Map[std::String common::CasaEnum]::new = enums
-        std::Map[std::String common::Variable]::new = variables
+        common::symbol_store_new = store
+        std::Set[i64]::new = verified
         typechecked match
-            std::Option::Some(typecheck_result) => {
-                typecheck_result.into_document_parts = variables = enums = structs = functions = ops
+            std::Option::Some(result) => {
+                result match
+                    typechecker::TypecheckResult {
+                        store: checked_store ops: checked_ops verified_operations: checked
+                    } => {
+                        checked_store = store
+                        checked_ops = ops
+                        checked = verified
+                    }
+                end
             }
             std::Option::None => {
             }
         end
-        diagnostics drop
-        file_path
-        source
-        sources
-        variables
-        enums
-        structs
-        functions
-        ops
-        AnalyzedDocument
+        file_path source sources diagnostics verified store ops std::List[common::Location]::new
+        std::Map[std::String std::List[common::Token]]::new IndexBuilder
     }
 
-    pub fn collect_document_functions self:$AnalyzedDocument -> std::List[common::Function] {
-        std::List[common::Function]::new = functions
+    pub fn collect_document_functions self:$IndexBuilder -> std::List[std::String] {
+        std::List[std::String]::new = functions
         for
             function_name in self
-                .functions
-                .keys
+                .store
+                .get_function_names
                 .iter
         do
-            function_name self
-                .functions
-                .get
+            if
+                function_name self
+                    .store
+                    .source_functions
+                    .has
+            then
+                continue
+            fi
+            function_name.as_str self
+                .store
+                .get_function
                 .unwrap = function
             if "" function.location.file == then
                 continue
@@ -752,17 +729,20 @@ impl AnalyzedDocument {
             if function.location.file self.file_path != then
                 continue
             fi
-            function.clone_for_import functions.push
+            function.name.clone functions.push
         done
         functions
     }
 
     pub fn collect_operation_tokens
-        self:$AnalyzedDocument
+        self:$IndexBuilder
         ops:$std::List[common::Op]
         tokens:mut$std::List[DocumentToken]
     {
         for op in ops.iter do
+            if op.id self.verified.has ! then
+                continue
+            fi
             if
                 op.location.file self.file_path != 0 op
                     .location
@@ -791,7 +771,7 @@ impl AnalyzedDocument {
     }
 
     pub fn collect_declaration_token
-        self:$AnalyzedDocument
+        self:$IndexBuilder
         location:$common::Location
         keyword:$str
         kind:DocumentTokenKind
@@ -808,15 +788,13 @@ impl AnalyzedDocument {
         fi
     }
 
-    pub fn find_semantic_tokens self:$AnalyzedDocument -> std::List[DocumentToken] {
+    pub fn find_semantic_tokens self:$IndexBuilder -> std::List[DocumentToken] {
         std::List[DocumentToken]::new = tokens
         tokens self.ops self.collect_operation_tokens
-        for function in self.collect_document_functions.iter do
+        for function_name in self.collect_document_functions.iter do
+            function_name.as_str self.lookup_function.unwrap = function
             tokens function.ops self.collect_operation_tokens
-            if
-                function.name.as_str "lambda__" str::starts_with !
-                function.name.as_str "__" str::starts_with ! &&
-            then
+            if function self.has_source_declaration then
                 tokens DocumentTokenKind::Function "fn" function.location self.collect_declaration_token
                 if function.is_unsafe then
                     if
@@ -833,11 +811,13 @@ impl AnalyzedDocument {
         done
         for
             enum_name in self
+                .store
                 .enums
                 .keys
                 .iter
         do
             enum_name self
+                .store
                 .enums
                 .get
                 .unwrap = casa_enum
@@ -845,11 +825,13 @@ impl AnalyzedDocument {
         done
         for
             struct_name in self
+                .store
                 .structs
                 .keys
                 .iter
         do
             struct_name self
+                .store
                 .structs
                 .get
                 .unwrap = casa_struct
@@ -859,42 +841,8 @@ impl AnalyzedDocument {
         tokens
     }
 
-    pub fn find_symbol_at
-        self:$AnalyzedDocument
-        position:$common::SourcePosition
-    -> std::Option[DocumentElement] {
-        position self.file_path.as_str self
-            .sources
-            .convert_position_to_offset
-            .unwrap = offset
-        0 std::Option[DocumentElement]::None FindSymbolState = find_state
-        find_state
-        std::Option[common::Function]::None
-        offset
-        self.source.as_str
-        self.file_path.as_str
-        self.ops
-        find_best_spanning_symbol = find_state
-        self.collect_document_functions = document_functions
-        0 = document_function_index: u64
-        while document_function_index document_functions.length > do
-            document_function_index document_functions.get = function
-            1 += document_function_index
-            find_state
-            function.clone_for_import std::Option::Some
-            offset
-            self.source.as_str
-            self.file_path.as_str
-            function.ops
-            find_best_spanning_symbol = find_state
-        done
-        find_state match
-            FindSymbolState { best: best } => best
-        end
-    }
-
     pub fn find_completion_candidates
-        self:$AnalyzedDocument
+        self:$IndexBuilder
         position:$common::SourcePosition
         trigger:$str
     -> std::List[CompletionCandidate] {
@@ -909,71 +857,71 @@ impl AnalyzedDocument {
         std::List[CompletionCandidate]::new = candidates
         for
             function_name in self
-                .functions
-                .keys
+                .store
+                .get_function_names
                 .iter
         do
             if
-                function_name.as_str "lambda__" str::starts_with
-                function_name.as_str "__" str::starts_with ||
-                function_name.as_str "::" str::contains ||
+                function_name self
+                    .store
+                    .source_functions
+                    .has
             then
                 continue
             fi
-            function_name self
-                .functions
-                .get
-                .unwrap
-                .name
-                .clone CompletionCandidate::Function candidates.push
+            if self.file_path.as_str function_name.as_str self.store.is_private_from then
+                continue
+            fi
+            self.file_path.as_str function_name.as_str self.store.format_name_for_source = source_name
+            if
+                source_name.as_str "lambda__" str::starts_with
+                source_name.as_str "__" str::starts_with ||
+                source_name.as_str "::" str::contains ||
+            then
+                continue
+            fi
+            source_name CompletionCandidate::Function candidates.push
         done
 
         for
             struct_name in self
+                .store
                 .structs
                 .keys
                 .iter
         do
+            if self.file_path.as_str struct_name.as_str self.store.is_private_from then
+                continue
+            fi
+            self.file_path.as_str struct_name.as_str self.store.format_name_for_source = source_name
+            if source_name.as_str "__" str::starts_with then
+                continue
+            fi
             struct_name self
+                .store
                 .structs
                 .get
                 .unwrap
-                .clone CompletionCandidate::Struct candidates.push
+                .clone = declaration
+            source_name = declaration.name
+            declaration CompletionCandidate::Struct candidates.push
         done
 
         for
             enum_name in self
+                .store
                 .enums
                 .keys
                 .iter
         do
-            enum_name self
-                .enums
-                .get
-                .unwrap
-                .name
-                .clone CompletionCandidate::Enum candidates.push
-        done
-
-        if cursor_offset self.find_containing_function std::Option::Some(function) is then
-            0 = variable_index: u64
-            while variable_index function.variables.length > do
-                variable_index function
-                    .variables
-                    .get
-                    .clone CompletionCandidate::Variable candidates.push
-                1 += variable_index
-            done
-        fi
-        for
-            variable_name in self
-                .variables
-                .keys
-                .iter
-        do
-            if variable_name self.variables.get std::Option::Some(variable) is then
-                variable.clone CompletionCandidate::Variable candidates.push
+            if self.file_path.as_str enum_name.as_str self.store.is_private_from then
+                continue
             fi
+            self.file_path.as_str enum_name.as_str self.store.format_name_for_source = source_name
+            if source_name.as_str "__" str::starts_with then
+                continue
+            fi
+            source_name CompletionCandidate::Enum candidates.push
         done
 
         [
@@ -1048,45 +996,61 @@ impl AnalyzedDocument {
         candidates
     }
 
-    pub fn find_methods_for_type
-        self:$AnalyzedDocument
-        receiver_type:$common::Type
-    -> std::List[CompletionCandidate] {
-        std::List[std::String]::new = method_prefixes
-        f"{receiver_type.format}::" = exact_prefix
-        exact_prefix.clone method_prefixes.push
-        f"{receiver_type.match_base}::" = base_prefix
-        if exact_prefix.as_str base_prefix.as_str != then
-            base_prefix method_prefixes.push
+    fn accepts_receiver
+        self:$IndexBuilder
+        function:$common::Function
+        receiver:$common::Type
+    -> bool {
+        function.stack_effect semantics::method_receiver_type = expected
+        if expected.is_none then
+            false return
         fi
+        receiver semantics::type_capability = capability
+        expected.unwrap capability semantics::capability_matches_receiver
+    }
+
+    pub fn find_methods_for_type
+        self:$IndexBuilder
+        receiver_type:$common::Type
+        require_receiver:bool
+    -> std::List[CompletionCandidate] {
+        receiver_type.clone receiver_type.borrow_target.unwrap_or = target
+        f"{target.format}::" = exact_prefix
+        f"{target.match_base}::" = base_prefix
         std::List[CompletionCandidate]::new = candidates
         std::Set[std::String]::new = method_names
-        for method_prefix in method_prefixes.iter do
-            for
-                function_name in self
-                    .functions
-                    .keys
-                    .iter
-            do
-                if function_name.as_str method_prefix.as_str str::starts_with then
-                    function_name.as_str "::" str::split.pop = method_name
-                    if method_name.as_str method_names.has_str ! then
-                        method_name method_names.add
-                        function_name self
-                            .functions
-                            .get
-                            .unwrap
-                            .name
-                            .clone CompletionCandidate::Method candidates.push
-                    fi
+        for
+            function_name in self
+                .store
+                .get_function_names
+                .iter
+        do
+            if
+                function_name.as_str exact_prefix.as_str str::starts_with ! function_name.as_str base_prefix.as_str str::starts_with ! &&
+            then
+                continue
+            fi
+            function_name.as_str self
+                .store
+                .get_function
+                .unwrap = function
+            if require_receiver then
+                if receiver_type function self.accepts_receiver ! then
+                    continue
                 fi
-            done
+            fi
+            function_name.as_str "::" str::split.pop = method_name
+            if method_name.as_str method_names.has_str then
+                continue
+            fi
+            method_name method_names.add
+            function.name.clone CompletionCandidate::Method candidates.push
         done
         candidates
     }
 
     pub fn find_qualified_completion_candidates
-        self:$AnalyzedDocument
+        self:$IndexBuilder
         type_name:$str
     -> std::List[CompletionCandidate] {
         std::List[CompletionCandidate]::new = candidates
@@ -1096,12 +1060,12 @@ impl AnalyzedDocument {
             done
         fi
         type_name common::parse_type_str = receiver_type
-        receiver_type self.find_methods_for_type candidates.append
+        false receiver_type self.find_methods_for_type candidates.append
         candidates
     }
 
     pub fn resolve_completion_chain_type
-        self:$AnalyzedDocument
+        self:$IndexBuilder
         parts:$std::List[std::String]
         offset:u64
     -> std::Option[common::Type] {
@@ -1110,7 +1074,7 @@ impl AnalyzedDocument {
         fi
         offset self.find_containing_function = containing_function
         0 parts.get = first_part
-        containing_function first_part.as_str self.find_variable_type = current_type
+        offset containing_function first_part.as_str self.find_variable_type = current_type
         if current_type.is_none then
             first_part.as_str infer_literal_type = current_type
         fi
@@ -1122,14 +1086,18 @@ impl AnalyzedDocument {
         1 = part_index: u64
         while part_index parts.length > do
             part_index parts.get = method_name
-            f"{resolved_type.format}::{method_name}" = exact_name
-            f"{resolved_type.match_base}::{method_name}" = base_name
+            resolved_type.clone resolved_type.borrow_target.unwrap_or = target
+            f"{target.format}::{method_name}" = exact_name
+            f"{target.match_base}::{method_name}" = base_name
             exact_name.as_str self.lookup_function = function_opt
             if function_opt.is_none then
                 base_name.as_str self.lookup_function = function_opt
             fi
             function_opt match
                 std::Option::Some(function) => {
+                    if resolved_type function self.accepts_receiver ! then
+                        std::Option[common::Type]::None return
+                    fi
                     if
                         0 function
                             .stack_effect
@@ -1152,7 +1120,7 @@ impl AnalyzedDocument {
     }
 
     pub fn find_triggered_completion_candidates
-        self:$AnalyzedDocument
+        self:$IndexBuilder
         offset:u64
     -> std::List[CompletionCandidate] {
         if 0 offset == then
@@ -1172,7 +1140,7 @@ impl AnalyzedDocument {
         if '.' position self.source.at == then
             position self.source.as_str extract_chain_before = chain
             if offset chain self.resolve_completion_chain_type std::Option::Some(receiver_type) is then
-                receiver_type self.find_methods_for_type return
+                true receiver_type self.find_methods_for_type return
             fi
         fi
 
@@ -1180,36 +1148,45 @@ impl AnalyzedDocument {
     }
 
     pub fn find_variable_owner
-        self:$AnalyzedDocument
+        self:$IndexBuilder
         name:$str
-        function:$std::Option[common::Function]
-    -> std::Option[common::Function] {
-        if function std::Option::Some(containing_function) is then
+        function:$std::Option[std::String]
+    -> std::Option[std::String] {
+        if function std::Option::Some(function_name) is then
+            function_name.as_str self.lookup_function.unwrap = containing_function
             if name containing_function.variables common::variable_list_contains then
-                containing_function.clone_for_import std::Option::Some return
+                containing_function.name.clone std::Option::Some return
             fi
             if name containing_function.captures common::variable_list_contains then
                 if containing_function self.find_parent_function std::Option::Some(parent) is then
-                    parent.clone_for_import std::Option::Some name self.find_variable_owner return
+                    parent std::Option::Some name self.find_variable_owner return
                 fi
             fi
         fi
-        std::Option[common::Function]::None
+        std::Option[std::String]::None
     }
 
     pub fn find_parent_function
-        self:$AnalyzedDocument
+        self:$IndexBuilder
         child:$common::Function
-    -> std::Option[common::Function] {
+    -> std::Option[std::String] {
         for
             function_name in self
-                .functions
-                .keys
+                .store
+                .get_function_names
                 .iter
         do
-            function_name self
-                .functions
-                .get
+            if
+                function_name self
+                    .store
+                    .source_functions
+                    .has
+            then
+                continue
+            fi
+            function_name.as_str self
+                .store
+                .get_function
                 .unwrap = function
             0 = op_index: u64
             while op_index function.ops.length > do
@@ -1220,325 +1197,246 @@ impl AnalyzedDocument {
                         .value common::OpValue::FnPush(pushed_name) is
                 then
                     if pushed_name child.name == then
-                        function.clone_for_import std::Option::Some return
+                        function.name.clone std::Option::Some return
                     fi
                 fi
                 1 += op_index
             done
         done
-        std::Option[common::Function]::None
+        std::Option[std::String]::None
     }
 
     pub fn find_callable_symbol
-        self:$AnalyzedDocument
+        self:$IndexBuilder
         name:$str
         part:$SymbolPart
-    -> std::Option[DocumentSymbol] {
+    -> std::Option[ProjectionSymbol] {
         if part SymbolPart::TypeName is then
             name "::" str::split = parts
             0 parts.get.as_str self.find_type_symbol return
         fi
         if part SymbolPart::Separator is then
-            std::Option[DocumentSymbol]::None return
+            std::Option[ProjectionSymbol]::None return
         fi
         if name self.lookup_function std::Option::Some(function) is then
-            std::Option[common::Function]::None
+            std::Option[common::Location]::None
             function.location
             name
             DocumentSymbolKind::Function
-            DocumentSymbol::new std::Option::Some return
+            ProjectionSymbol::new std::Option::Some return
         fi
-        std::Option[DocumentSymbol]::None
+        std::Option[ProjectionSymbol]::None
     }
 
     pub fn find_enum_variant_symbol
-        self:$AnalyzedDocument
+        self:$IndexBuilder
         variant:$common::EnumVariant
         part:$SymbolPart
-    -> std::Option[DocumentSymbol] {
+    -> std::Option[ProjectionSymbol] {
         if part SymbolPart::TypeName is then
             variant.enum_name.as_str self.find_type_symbol return
         fi
         if part SymbolPart::Separator is then
-            std::Option[DocumentSymbol]::None return
+            std::Option[ProjectionSymbol]::None return
         fi
         if variant.enum_name.as_str self.lookup_enum std::Option::Some(casa_enum) is then
             if variant.variant_name casa_enum.variant_locations.get std::Option::Some(declaration) is then
-                std::Option[common::Function]::None
+                std::Option[common::Location]::None
                 declaration
                 variant.variant_name.as_str
                 DocumentSymbolKind::EnumVariant
-                DocumentSymbol::new std::Option::Some return
+                ProjectionSymbol::new std::Option::Some return
             fi
         fi
-        std::Option[DocumentSymbol]::None
+        std::Option[ProjectionSymbol]::None
     }
 
-    pub fn find_variable_symbol
-        self:$AnalyzedDocument
+    fn find_parameter_location
+        self:$IndexBuilder
+        function:$common::Function
         name:$str
-        function:$std::Option[common::Function]
-    -> std::Option[DocumentSymbol] {
-        function name self.find_variable_owner = owner
-        if owner.clone std::Option::Some(owner_function) is then
-            owner_function.ops name find_first_assignment
-        else
-            self.ops name find_first_assignment
-        fi = declaration_opt
-        if declaration_opt std::Option::Some(declaration) is then
-            owner declaration name DocumentSymbolKind::Variable DocumentSymbol::new std::Option::Some return
-        fi
-        std::Option[DocumentSymbol]::None
-    }
-
-    pub fn find_symbol_identity
-        self:$AnalyzedDocument
-        element:$DocumentElement
-    -> std::Option[DocumentSymbol] {
-        element.op.value match
-            common::OpValue::FnCall(name) => element.part name.as_str self.find_callable_symbol
-            common::OpValue::FnPush(name) => element.part name.as_str self.find_callable_symbol
-            common::OpValue::PushEnumVariant(variant) => element.part variant self.find_enum_variant_symbol
-            common::OpValue::StructNew(casa_struct) => {
-                std::Option[common::Function]::None
-                casa_struct.location
-                casa_struct.name.as_str
-                DocumentSymbolKind::Struct
-                DocumentSymbol::new std::Option::Some
-            }
-            common::OpValue::PushVar(name) => element.containing_function name.as_str self.find_variable_symbol
-            common::OpValue::PushCapture(name) => element.containing_function name.as_str self.find_variable_symbol
-            common::OpValue::AssignVar(name) => element.containing_function name.as_str self.find_variable_symbol
-            common::OpValue::AssignInc(name) => element.containing_function name.as_str self.find_variable_symbol
-            common::OpValue::AssignDec(name) => element.containing_function name.as_str self.find_variable_symbol
-            _ => std::Option[DocumentSymbol]::None
-        end
-    }
-
-    pub fn find_type_symbol self:$AnalyzedDocument name:$str -> std::Option[DocumentSymbol] {
-        if name self.lookup_struct std::Option::Some(casa_struct) is then
-            std::Option[common::Function]::None
-            casa_struct.location
-            casa_struct.name.as_str
-            DocumentSymbolKind::Struct
-            DocumentSymbol::new std::Option::Some return
-        fi
-        if name self.lookup_enum std::Option::Some(casa_enum) is then
-            std::Option[common::Function]::None
-            casa_enum.location
-            casa_enum.name.as_str
-            DocumentSymbolKind::Enum
-            DocumentSymbol::new std::Option::Some return
-        fi
-        std::Option[DocumentSymbol]::None
-    }
-
-    pub fn find_symbol_identity_at
-        self:$AnalyzedDocument
-        position:$common::SourcePosition
-    -> std::Option[DocumentSymbol] {
-        if position self.find_function_at std::Option::Some(function) is then
-            std::Option[common::Function]::None
-            function.location
-            function.name.as_str
-            DocumentSymbolKind::Function
-            DocumentSymbol::new std::Option::Some return
-        fi
-        position self.find_declared_symbol_at match
-            std::Option::Some(symbol) => symbol std::Option::Some return
-            std::Option::None => {
-            }
-        end
-        if position self.find_symbol_at std::Option::Some(element) is then
-            element self.find_symbol_identity return
-        fi
-        std::Option[DocumentSymbol]::None
-    }
-
-    pub fn find_declared_symbol_at
-        self:$AnalyzedDocument
-        position:$common::SourcePosition
-    -> std::Option[DocumentSymbol] {
-        position self.file_path.as_str self
-            .sources
-            .convert_position_to_offset
-            .unwrap = offset
-        for
-            struct_name in self
-                .structs
-                .keys
-                .iter
-        do
-            struct_name self
-                .structs
-                .get
-                .unwrap = casa_struct
-            if offset self.file_path.as_str casa_struct.location.contains_offset then
-                struct_name.as_str self.find_type_symbol return
-            fi
-        done
-        for
-            enum_name in self
-                .enums
-                .keys
-                .iter
-        do
-            enum_name self
-                .enums
-                .get
-                .unwrap = casa_enum
-            offset casa_enum self.find_declared_enum_symbol_at match
-                std::Option::Some(symbol) => symbol std::Option::Some return
-                std::Option::None => {
-                }
-            end
-        done
-        std::Option[DocumentSymbol]::None
-    }
-
-    pub fn find_declared_enum_symbol_at
-        self:$AnalyzedDocument
-        casa_enum:$common::CasaEnum
-        offset:u64
-    -> std::Option[DocumentSymbol] {
-        if offset self.file_path.as_str casa_enum.location.contains_offset then
-            casa_enum.name.as_str self.find_type_symbol return
-        fi
-        for variant_name in casa_enum.variants.iter do
-            if variant_name casa_enum.variant_locations.get std::Option::Some(location) is then
-                if offset self.file_path.as_str location.contains_offset then
-                    std::Option[common::Function]::None
-                    location
-                    variant_name.as_str
-                    DocumentSymbolKind::EnumVariant
-                    DocumentSymbol::new std::Option::Some return
-                fi
-            fi
-        done
-        std::Option[DocumentSymbol]::None
-    }
-
-    pub fn collect_symbol_references
-        self:$AnalyzedDocument
-        symbol:$DocumentSymbol
-        ops:$std::List[common::Op]
-        function:$std::Option[common::Function]
-        references:mut$std::List[DocumentLocation]
-    {
-        for op in ops.iter do
-            if
-                op
-                    .location
-                    .file
-                    .as_str self.sources.get std::Option::Some(op_source) is
-            then
-                if op op_source.as_str is_qualified_operation then
-                    references op_source.as_str SymbolPart::TypeName op function symbol self.collect_element_reference
-                    references op_source.as_str SymbolPart::MemberName op function symbol self.collect_element_reference
-                else
-                    references op_source.as_str SymbolPart::Whole op function symbol self.collect_element_reference
-                fi
-            fi
-        done
-    }
-
-    pub fn collect_element_reference
-        self:$AnalyzedDocument
-        symbol:$DocumentSymbol
-        function:$std::Option[common::Function]
-        op:$common::Op
-        part:$SymbolPart
-        source:$str
-        references:mut$std::List[DocumentLocation]
-    {
-        part op source get_symbol_location = location
-        std::Option[common::Function]::None = containing_function
-        if function std::Option::Some(value) is then
-            value.clone_for_import std::Option::Some = containing_function
-        fi
-        location.clone part copy containing_function op.clone DocumentElement = element
-        if element self.find_symbol_identity std::Option::Some(reference_symbol) is then
-            if reference_symbol symbol.matches_identity then
-                if symbol.name.length location.span.length < then
-                    symbol.name.length
-                    location.span.offset location.span.length + symbol.name.length -
-                    location.file.clone
-                    common::Location::new = location
-                fi
-                location self.locate references.push
-            fi
-        fi
-    }
-
-    pub fn find_references_at
-        self:$AnalyzedDocument
-        position:$common::SourcePosition
-        include_declaration:bool
-    -> std::Option[std::List[DocumentLocation]] {
-        if position self.find_symbol_identity_at std::Option::Some(symbol) is then
-            std::List[DocumentLocation]::new = references
-            if include_declaration symbol.has_declaration_reference && then
-                symbol.declaration self.locate references.push
-            fi
-            references std::Option[common::Function]::None self.ops symbol self.collect_symbol_references
-            for
-                function_name in self
-                    .functions
-                    .keys
-                    .iter
-            do
-                function_name self
-                    .functions
-                    .get
-                    .unwrap = function
-                references function.clone_for_import std::Option::Some function.ops symbol self.collect_symbol_references
-            done
-            if 0 references.length != then
-                references std::Option::Some return
-            fi
-        fi
-        std::Option[std::List[DocumentLocation]]::None
-    }
-
-    pub fn find_function_at
-        self:$AnalyzedDocument
-        position:$common::SourcePosition
-    -> std::Option[common::Function] {
-        position self.file_path.as_str self
-            .sources
-            .convert_position_to_offset
-            .unwrap = offset
-        for function in self.collect_document_functions.iter do
-            if
-                function.name.as_str "lambda__" str::starts_with
-                function.name.as_str "__" str::starts_with ||
-            then
+    -> std::Option[common::Location] {
+        18446744073709551615 = header_end: u64
+        for declaration in self.declarations.iter do
+            if declaration.file function.location.file != then
                 continue
             fi
             if
                 function
                     .location
                     .span
-                    .offset offset >=
-                offset function
-                    .location
-                    .span
-                    .offset function
-                    .location
-                    .span
-                    .length + > &&
+                    .offset declaration.span.offset > header_end declaration.span.offset < &&
             then
-                function.clone_for_import std::Option::Some return
+                declaration.span.offset = header_end
             fi
         done
-        std::Option[common::Function]::None
+        std::Option[common::Location]::None = result
+        if
+            function
+                .location
+                .file
+                .as_str self.lexical_tokens.get_str std::Option::Some(tokens) is
+        then
+            std::Option[common::Location]::None = candidate
+            for token in tokens.iter do
+                if
+                    function
+                        .location
+                        .span
+                        .offset token
+                        .location
+                        .span
+                        .offset <=
+                then
+                    continue
+                fi
+                if
+                    token.value "{" == header_end token
+                        .location
+                        .span
+                        .offset >= ||
+                then
+                    break
+                fi
+                if token.kind common::TokenKind::Newline == token.kind common::TokenKind::Comment == || then
+                    continue
+                fi
+                if token.value ":" == candidate.is_some && then
+                    candidate.clone = result
+                fi
+                std::Option[common::Location]::None = candidate
+                if token.kind common::TokenKind::Identifier == token.value name == && then
+                    token.location.clone std::Option::Some = candidate
+                fi
+            done
+        fi
+        result
     }
 
-    pub fn find_containing_function
-        self:$AnalyzedDocument
-        offset:u64
-    -> std::Option[common::Function] {
-        for function in self.collect_document_functions.iter do
+    fn find_scoped_assignment
+        self:$IndexBuilder
+        name:$str
+        ops:$std::List[common::Op]
+        usage_offset:u64
+    -> std::Option[common::Location] {
+        for op in ops.iter do
+            if op.value common::OpValue::AssignVar(assigned) is then
+                if
+                    assigned name != op
+                        .location
+                        .span
+                        .offset usage_offset < ||
+                then
+                    continue
+                fi
+                18446744073709551615 op
+                    .location
+                    .span
+                    .offset ops self.find_binding_end = end_offset
+                if usage_offset end_offset > then
+                    op.location.clone std::Option::Some return
+                fi
+            fi
+        done
+        std::Option[common::Location]::None
+    }
+
+    pub fn find_variable_symbol
+        self:$IndexBuilder
+        name:$str
+        function:$std::Option[std::String]
+        usage_offset:u64
+    -> std::Option[ProjectionSymbol] {
+        function name self.find_variable_owner = owner
+        if owner.clone std::Option::Some(owner_name) is then
+            owner_name.as_str self.lookup_function.unwrap = owner_function
+            usage_offset owner_function.ops name self.find_scoped_assignment = found
+            if found std::Option::Some(location) is then
+                if location owner_function.location.matches then
+                    name owner_function self.find_parameter_location
+                else
+                    location.clone std::Option::Some
+                fi
+            else
+                std::Option[common::Location]::None
+            fi
+        else
+            usage_offset self.ops name self.find_scoped_assignment
+        fi = declaration_opt
+        if declaration_opt std::Option::Some(declaration) is then
+            std::Option[common::Location]::None = owner_location
+            if owner std::Option::Some(owner_name) is then
+                owner_name.as_str self
+                    .lookup_function
+                    .unwrap
+                    .location
+                    .clone std::Option::Some = owner_location
+            fi
+            owner_location declaration name DocumentSymbolKind::Variable ProjectionSymbol::new std::Option::Some return
+        fi
+        std::Option[ProjectionSymbol]::None
+    }
+
+    pub fn find_symbol_identity
+        self:$IndexBuilder
+        element:$DocumentElement
+    -> std::Option[ProjectionSymbol] {
+        element.op.value match
+            common::OpValue::FnCall(name) => element.part name.as_str self.find_callable_symbol
+            common::OpValue::FnPush(name) => element.part name.as_str self.find_callable_symbol
+            common::OpValue::PushEnumVariant(variant) => element.part variant self.find_enum_variant_symbol
+            common::OpValue::StructNew(casa_struct) => {
+                std::Option[common::Location]::None
+                casa_struct.location
+                casa_struct.name.as_str
+                DocumentSymbolKind::Struct
+                ProjectionSymbol::new std::Option::Some
+            }
+            common::OpValue::PushVar(name) => element
+                .location
+                .span
+                .offset element.containing_function name.as_str self.find_variable_symbol
+            common::OpValue::PushCapture(name) => element
+                .location
+                .span
+                .offset element.containing_function name.as_str self.find_variable_symbol
+            common::OpValue::AssignVar(name) => element
+                .location
+                .span
+                .offset element.containing_function name.as_str self.find_variable_symbol
+            common::OpValue::AssignInc(name) => element
+                .location
+                .span
+                .offset element.containing_function name.as_str self.find_variable_symbol
+            common::OpValue::AssignDec(name) => element
+                .location
+                .span
+                .offset element.containing_function name.as_str self.find_variable_symbol
+            _ => std::Option[ProjectionSymbol]::None
+        end
+    }
+
+    pub fn find_type_symbol self:$IndexBuilder name:$str -> std::Option[ProjectionSymbol] {
+        if name self.lookup_struct std::Option::Some(casa_struct) is then
+            std::Option[common::Location]::None
+            casa_struct.location
+            casa_struct.name.as_str
+            DocumentSymbolKind::Struct
+            ProjectionSymbol::new std::Option::Some return
+        fi
+        if name self.lookup_enum std::Option::Some(casa_enum) is then
+            std::Option[common::Location]::None
+            casa_enum.location
+            casa_enum.name.as_str
+            DocumentSymbolKind::Enum
+            ProjectionSymbol::new std::Option::Some return
+        fi
+        std::Option[ProjectionSymbol]::None
+    }
+
+    pub fn find_containing_function self:$IndexBuilder offset:u64 -> std::Option[std::String] {
+        for function_name in self.collect_document_functions.iter do
+            function_name.as_str self.lookup_function.unwrap = function
             if 0 function.ops.length == then
                 continue
             fi
@@ -1557,57 +1455,84 @@ impl AnalyzedDocument {
                 .span
                 .length + = end_offset
             if start_offset offset >= offset end_offset >= && then
-                function.clone_for_import std::Option::Some return
+                function.name.clone std::Option::Some return
             fi
         done
-        std::Option[common::Function]::None
+        std::Option[std::String]::None
     }
 
-    pub fn lookup_function self:$AnalyzedDocument name:$str -> std::Option[$common::Function] {
-        name self.functions.get_str
+    pub fn lookup_function self:$IndexBuilder name:$str -> std::Option[$common::Function] {
+        name self.store.get_function
     }
 
-    pub fn lookup_struct self:$AnalyzedDocument name:$str -> std::Option[$common::CasaStruct] {
-        name self.structs.get_str
+    pub fn lookup_struct self:$IndexBuilder name:$str -> std::Option[$common::CasaStruct] {
+        name self
+            .store
+            .structs
+            .get_str
     }
 
-    pub fn lookup_enum self:$AnalyzedDocument name:$str -> std::Option[$common::CasaEnum] {
-        name self.enums.get_str
+    pub fn lookup_enum self:$IndexBuilder name:$str -> std::Option[$common::CasaEnum] {
+        name self
+            .store
+            .enums
+            .get_str
     }
 
-    pub fn find_variable_type
-        self:$AnalyzedDocument
+    fn find_assignment_type
+        self:$IndexBuilder
         name:$str
-        function:$std::Option[common::Function]
+        ops:$std::List[common::Op]
+        offset:u64
     -> std::Option[common::Type] {
-        if function std::Option::Some(containing_function) is then
-            for variable in containing_function.variables.iter do
-                if variable.name name == variable.typ.is_unknown ! && then
-                    variable.typ.clone std::Option::Some return
-                fi
-            done
-            for capture in containing_function.captures.iter do
-                if capture.name name == capture.typ.is_unknown ! && then
-                    capture.typ.clone std::Option::Some return
-                fi
-            done
+        offset ops name self.find_scoped_assignment = declaration
+        if declaration.is_none then
+            std::Option[common::Type]::None return
         fi
-        if name self.variables.get_str std::Option::Some(variable) is then
-            if variable.typ.is_unknown ! then
-                variable.typ.clone std::Option::Some return
+        declaration.unwrap = location
+        for op in ops.iter do
+            if op.id self.verified.has ! then
+                continue
             fi
-        fi
+            if op.value common::OpValue::AssignVar(assigned) is then
+                if assigned name == op.location location.matches && then
+                    op.type_hint.clone return
+                fi
+            fi
+        done
         std::Option[common::Type]::None
     }
 
+    pub fn find_variable_type
+        self:$IndexBuilder
+        name:$str
+        function:$std::Option[std::String]
+        offset:u64
+    -> std::Option[common::Type] {
+        function name self.find_variable_owner = owner
+        if owner std::Option::Some(owner_name) is then
+            offset owner_name.as_str self
+                .lookup_function
+                .unwrap
+                .ops name self.find_assignment_type
+        else
+            offset self.ops name self.find_assignment_type
+        fi
+    }
+
     pub fn find_symbol_type
-        self:$AnalyzedDocument
+        self:$IndexBuilder
         symbol:$DocumentElement
     -> std::Option[common::Type] {
+        if
+            symbol.op.value common::OpValue::PushVar is symbol.op.value common::OpValue::PushCapture is || symbol.op.value common::OpValue::AssignVar is ||
+        then
+            symbol
+                .op
+                .type_hint
+                .clone return
+        fi
         symbol.op.value match
-            common::OpValue::PushVar(name) => symbol.containing_function name.as_str self.find_variable_type
-            common::OpValue::PushCapture(name) => symbol.containing_function name.as_str self.find_variable_type
-            common::OpValue::AssignVar(name) => symbol.containing_function name.as_str self.find_variable_type
             common::OpValue::PushInt(_) => {
                 if symbol.op.type_hint std::Option::Some(literal_type) is then
                     literal_type.clone std::Option::Some
@@ -1629,7 +1554,27 @@ impl AnalyzedDocument {
         end
     }
 
-    pub fn format_type_hover self:$AnalyzedDocument name:$str -> std::Option[std::String] {
+    fn format_function_hover
+        self:$IndexBuilder
+        function:$common::Function
+        file:$str
+    -> std::String {
+        if
+            function.name self
+                .store
+                .source_functions
+                .get std::Option::Some(source_name) is
+        then
+            source_name.as_str self
+                .store
+                .get_function
+                .unwrap = source
+            file self.store source.format_hover return
+        fi
+        file self.store function.format_hover
+    }
+
+    pub fn format_type_hover self:$IndexBuilder name:$str -> std::Option[std::String] {
         if name self.lookup_struct std::Option::Some(casa_struct) is then
             casa_struct.format_hover std::Option::Some return
         fi
@@ -1639,7 +1584,7 @@ impl AnalyzedDocument {
         std::Option[std::String]::None
     }
 
-    pub fn format_hover self:$AnalyzedDocument symbol:$DocumentElement -> std::Option[std::String] {
+    pub fn format_hover self:$IndexBuilder symbol:$DocumentElement -> std::Option[std::String] {
         if symbol.part SymbolPart::Separator is then
             std::Option[std::String]::None return
         fi
@@ -1664,7 +1609,10 @@ impl AnalyzedDocument {
         then
             symbol.op common::op_str_value = name
             if name.as_str self.lookup_function std::Option::Some(function) is then
-                function.format_hover std::Option::Some
+                symbol
+                    .location
+                    .file
+                    .as_str function self.format_function_hover std::Option::Some
             else
                 std::Option[std::String]::None
             fi
@@ -1723,16 +1671,18 @@ impl AnalyzedDocument {
     }
 
     pub fn find_enum_name_for_variant
-        self:$AnalyzedDocument
-        symbol:$DocumentSymbol
+        self:$IndexBuilder
+        symbol:$ProjectionSymbol
     -> std::Option[std::String] {
         for
             enum_name in self
+                .store
                 .enums
                 .keys
                 .iter
         do
             enum_name self
+                .store
                 .enums
                 .get
                 .unwrap = casa_enum
@@ -1746,13 +1696,16 @@ impl AnalyzedDocument {
     }
 
     pub fn format_declaration_hover
-        self:$AnalyzedDocument
-        symbol:$DocumentSymbol
+        self:$IndexBuilder
+        symbol:$ProjectionSymbol
     -> std::Option[std::String] {
         symbol.kind match
             DocumentSymbolKind::Function => {
                 if symbol.name.as_str self.lookup_function std::Option::Some(function) is then
-                    function.format_hover std::Option::Some
+                    symbol
+                        .declaration
+                        .file
+                        .as_str function self.format_function_hover std::Option::Some
                 else
                     std::Option[std::String]::None
                 fi
@@ -1782,63 +1735,34 @@ impl AnalyzedDocument {
         end
     }
 
-    pub fn find_declaration_hover_at
-        self:$AnalyzedDocument
-        position:$common::SourcePosition
-    -> std::Option[DocumentHover] {
-        if position self.find_declared_symbol_at std::Option::Some(symbol) is then
-            symbol self.format_declaration_hover match
-                std::Option::Some(content) => symbol.declaration self.locate content DocumentHover std::Option::Some return
-                std::Option::None => {
-                }
-            end
-        fi
-        if position self.find_function_at std::Option::Some(function) is then
-            function.location self.locate function.format_hover DocumentHover std::Option::Some return
-        fi
-        std::Option[DocumentHover]::None
-    }
-
-    pub fn find_hover_at
-        self:$AnalyzedDocument
-        position:$common::SourcePosition
-    -> std::Option[DocumentHover] {
-        position self.find_declaration_hover_at match
-            std::Option::Some(hover) => hover std::Option::Some return
-            std::Option::None => {
-            }
-        end
-        if position self.find_symbol_at std::Option::Some(symbol) is then
-            symbol self.format_hover match
-                std::Option::Some(content) => symbol.location self.locate content DocumentHover std::Option::Some return
-                std::Option::None => {
-                }
-            end
-        fi
-        std::Option[DocumentHover]::None
-    }
-
     pub fn find_variable_definition
-        self:$AnalyzedDocument
+        self:$IndexBuilder
         name:$str
-        function:$std::Option[common::Function]
+        function:$std::Option[std::String]
         usage_offset:u64
     -> std::Option[common::Location] {
-        std::Option[common::Op]::None = best
-        if function std::Option::Some(containing_function) is then
+        std::Option[common::Location]::None = best
+        function name self.find_variable_owner = owner
+        if owner std::Option::Some(function_name) is then
+            function_name.as_str self.lookup_function.unwrap = containing_function
             best usage_offset containing_function.ops name find_best_assignment = best
+            if best.clone std::Option::Some(location) is then
+                if location containing_function.location.matches then
+                    name containing_function self.find_parameter_location return
+                fi
+            fi
         fi
         if best.is_none then
             best usage_offset self.ops name find_best_assignment = best
         fi
         if best std::Option::Some(definition_op) is then
-            definition_op.location.clone std::Option::Some
+            definition_op.clone std::Option::Some
         else
             std::Option[common::Location]::None
         fi
     }
 
-    pub fn find_type_definition self:$AnalyzedDocument name:$str -> std::Option[common::Location] {
+    pub fn find_type_definition self:$IndexBuilder name:$str -> std::Option[common::Location] {
         if name self.lookup_struct std::Option::Some(casa_struct) is then
             casa_struct.location.clone std::Option::Some return
         fi
@@ -1849,7 +1773,7 @@ impl AnalyzedDocument {
     }
 
     pub fn find_callable_definition
-        self:$AnalyzedDocument
+        self:$IndexBuilder
         symbol:$DocumentElement
     -> std::Option[common::Location] {
         if symbol.part SymbolPart::TypeName is then
@@ -1865,7 +1789,7 @@ impl AnalyzedDocument {
     }
 
     pub fn find_enum_definition
-        self:$AnalyzedDocument
+        self:$IndexBuilder
         symbol:$DocumentElement
         variant:$common::EnumVariant
     -> std::Option[common::Location] {
@@ -1883,7 +1807,7 @@ impl AnalyzedDocument {
     }
 
     pub fn find_definition
-        self:$AnalyzedDocument
+        self:$IndexBuilder
         symbol:$DocumentElement
     -> std::Option[common::Location] {
         if symbol.part SymbolPart::Separator is then
@@ -1918,19 +1842,1164 @@ impl AnalyzedDocument {
         end
     }
 
+    pub fn locate self:$IndexBuilder location:$common::Location -> DocumentLocation {
+        location.span.length location.span.offset location.file.clone DocumentLocation
+    }
+}
+# Owned source facts. Neither the index nor any query answer contains compiler bodies.
+pub enum QueryReason derives std::Copy std::Eq {
+    InvalidInput
+    RejectedSyntax
+    UnresolvedDependency
+    MissingSemanticFact
+}
+
+pub enum PointAnswer[T] {
+    Known (T)
+    Absent
+    Unavailable (QueryReason)
+}
+
+pub enum ListAnswer[T] {
+    Complete (std::List[T])
+    Incomplete (std::List[T] QueryReason)
+    Unavailable (QueryReason)
+}
+
+pub struct DocumentCompletion {
+    pub candidate:      CompletionCandidate
+    pub insertion_text: std::String
+    pub replacement:    DocumentLocation
+}
+
+pub struct DocumentReferences {
+    pub ranges:                    std::List[DocumentLocation]
+    pub declaration:               DocumentLocation
+    pub files:                     std::List[std::String]
+    pub rename_requires_workspace: bool
+}
+
+impl DocumentReferences {
+    pub fn into_ranges self:DocumentReferences -> std::List[DocumentLocation] {
+        self match
+            DocumentReferences { ranges: ranges } => ranges
+        end
+    }
+}
+
+pub enum ReferenceAnswer {
+    Complete (DocumentReferences)
+    Incomplete (DocumentReferences QueryReason)
+    Unavailable (QueryReason)
+}
+
+pub struct DocumentSymbol derives std::Clone {
+    pub kind:        DocumentSymbolKind
+    pub name:        std::String
+    pub declaration: common::Location
+    pub owner:       std::Option[common::Location]
+}
+
+impl DocumentSymbol {
+    pub fn matches_identity self:$DocumentSymbol other:$DocumentSymbol -> bool {
+        self.kind other.kind == other.declaration self.declaration.matches &&
+    }
+}
+
+struct Occurrence {
+    location:         DocumentLocation
+    hover:            std::Option[std::String]
+    definition:       std::Option[DocumentLocation]
+    symbol:           std::Option[DocumentSymbol]
+    declaration:      bool
+    reference_offset: u64
+    reference_length: u64
+}
+
+struct CompletionScope {
+    location: DocumentLocation
+    items:    std::List[CompletionCandidate]
+}
+
+pub struct EditorIndex {
+    files:       std::List[DocumentLocation]
+    occurrences: std::List[Occurrence]
+    tokens:      std::List[DocumentToken]
+    completions: std::List[CompletionScope]
+    scopes:      std::List[CompletionScope]
+    triggers:    std::List[CompletionScope]
+    coverage:    std::Option[QueryReason]
+    unavailable: std::List[CoverageRegion]
+    words:       std::List[DocumentLocation]
+    bodies:      std::List[DocumentLocation]
+}
+
+pub struct AnalyzedDocument {
+    index:         EditorIndex
+    pub sources:   lexer::SourceStore
+    pub source:    std::String
+    pub file_path: std::String
+}
+
+impl DocumentLocation {
+    pub fn contains self:$DocumentLocation file:$str offset:u64 -> bool {
+        self.file file == self.offset offset >= && offset self.offset self.length + > &&
+    }
+
+    pub fn matches self:$DocumentLocation other:$DocumentLocation -> bool {
+        self.file other.file == self.offset other.offset == && self.length other.length == &&
+    }
+
+    pub fn comes_before self:$DocumentLocation other:$DocumentLocation -> bool {
+        if self.file other.file == then
+            other.offset self.offset <
+        else
+            0 = index: u64
+            while index self.file.length > index other.file.length > && do
+                index self.file.at = first
+                index other.file.at = second
+                if first second != then
+                    second first < return
+                fi
+                1 += index
+            done
+            other.file.length self.file.length <
+        fi
+    }
+}
+
+impl ProjectionSymbol {
+    fn project self:$ProjectionSymbol -> DocumentSymbol {
+        std::Option[common::Location]::None = owner
+        if self.owner std::Option::Some(function) is then
+            function.clone std::Option::Some = owner
+        fi
+        owner self.declaration.clone self.name.clone self.kind DocumentSymbol
+    }
+}
+
+impl IndexBuilder {
+    fn project_operation
+        self:$IndexBuilder
+        op:$common::Op
+        function:std::Option[std::String]
+        part:SymbolPart
+        index:mut$EditorIndex
+    {
+        if
+            op
+                .location
+                .file
+                .as_str self.sources.get std::Option::Some(source) is
+        then
+            part op source.as_str get_symbol_location = location
+            if 0 location.span.length == then
+                return
+            fi
+            location.clone part function op DocumentElement = element
+            std::Option[DocumentSymbol]::None = symbol
+            if element self.find_symbol_identity std::Option::Some(identity) is then
+                identity.project std::Option::Some = symbol
+            fi
+            std::Option[DocumentLocation]::None = definition
+            if element self.find_definition std::Option::Some(target) is then
+                target self.locate std::Option::Some = definition
+            fi
+            false = declaration
+            if symbol.clone std::Option::Some(identity) is then
+                if identity.kind DocumentSymbolKind::Variable == then
+                    location identity.declaration.matches = declaration
+                fi
+            fi
+            location.span.length = reference_length
+            location.span.offset = reference_offset
+            if '&' reference_offset source.at == then
+                1 += reference_offset
+                1 -= reference_length
+            fi
+            source.as_str reference_offset reference_length str::substring.as_str "[" str::find = type_arguments
+            if 0 type_arguments >= then
+                type_arguments u64::try_from.unwrap = reference_length
+            fi
+            reference_length reference_offset declaration symbol definition element self.format_hover location self.locate
+            Occurrence index.occurrences.push
+        fi
+    }
+
+    fn project_operations
+        self:$IndexBuilder
+        ops:$std::List[common::Op]
+        function:std::Option[std::String]
+        index:mut$EditorIndex
+    {
+        for op in ops.iter do
+            if function.clone std::Option::Some(name) is then
+                if
+                    op.location name.as_str self
+                        .lookup_function
+                        .unwrap
+                        .location
+                        .matches
+                then
+                    continue
+                fi
+            fi
+            if op.id self.verified.has ! then
+                QueryReason::MissingSemanticFact op.location self.locate CoverageRegion index.unavailable.push
+                continue
+            fi
+            if
+                op
+                    .location
+                    .file
+                    .as_str self.sources.get std::Option::Some(source) is
+            then
+                if op source.as_str is_qualified_operation then
+                    index SymbolPart::TypeName function.clone op self.project_operation
+                    index SymbolPart::MemberName function.clone op self.project_operation
+                else
+                    index SymbolPart::Whole function.clone op self.project_operation
+                fi
+            fi
+        done
+    }
+
+    fn project_declaration self:$IndexBuilder symbol:ProjectionSymbol index:mut$EditorIndex {
+        if
+            "" symbol.declaration.file == 0 symbol
+                .declaration
+                .span
+                .length == ||
+        then
+            return
+        fi
+        symbol
+            .declaration
+            .span
+            .length symbol
+            .declaration
+            .span
+            .offset
+        true symbol.project std::Option::Some
+        symbol.declaration self.locate std::Option::Some
+        symbol self.format_declaration_hover symbol.declaration self.locate
+        Occurrence index.occurrences.push
+    }
+
+    fn project_variables self:$IndexBuilder function:$common::Function index:mut$EditorIndex {
+        function
+            .location
+            .span
+            .offset function
+            .location
+            .span
+            .length + = end_offset
+        for op in function.ops.iter do
+            op
+                .location
+                .span
+                .offset op
+                .location
+                .span
+                .length + = after
+            if end_offset after > then
+                after = end_offset
+            fi
+        done
+        end_offset function
+            .location
+            .span
+            .offset - 1 + function
+            .location
+            .span
+            .offset function
+            .location
+            .file
+            .clone
+        DocumentLocation index.bodies.push
+        for op in function.ops.iter do
+            if op.value common::OpValue::AssignVar(name) is then
+                index end_offset function op name.as_str self.project_binding_scope
+            fi
+        done
+        for
+            parameter in function
+                .stack_effect
+                .parameters
+                .iter
+        do
+            if parameter.name.as_str function self.find_parameter_location std::Option::Some(location) is then
+                function.location.clone std::Option::Some location parameter.name.as_str
+                DocumentSymbolKind::Variable ProjectionSymbol::new = symbol
+                location.span.length location.span.offset true symbol.project std::Option::Some
+                location self.locate std::Option::Some
+                f"{parameter.name}: {parameter.typ.format}" std::Option::Some location self.locate
+                Occurrence index.occurrences.push
+            fi
+        done
+    }
+
+    fn project_binding_scope
+        self:$IndexBuilder
+        name:$str
+        op:$common::Op
+        function:$common::Function
+        end_offset:u64
+        index:mut$EditorIndex
+    {
+        if op.id self.verified.has ! then
+            return
+        fi
+        op
+            .location
+            .span
+            .offset function.ops name self.find_scoped_assignment = first
+        if first.is_none then
+            return
+        fi
+        if first.unwrap op.location.matches ! then
+            return
+        fi
+        op.location.clone = location
+        if location function.location.matches then
+            name function self.find_parameter_location = parameter
+            if parameter.is_none then
+                return
+            fi
+            parameter.unwrap = location
+        fi
+        end_offset op
+            .location
+            .span
+            .offset function.ops self.find_binding_end = scope_end
+        common::Type::Unknown op
+            .type_hint
+            .clone
+            .unwrap_or name.to_str common::Variable = variable
+        std::List[CompletionCandidate]::new = items
+        variable CompletionCandidate::Variable items.push
+        items scope_end location.span.offset - 1 + location.span.offset location.file.clone
+        DocumentLocation CompletionScope index.scopes.push
+    }
+
+    fn project_global_variables self:$IndexBuilder index:mut$EditorIndex {
+        for
+            variable in self
+                .store
+                .variables
+                .iter
+        do
+            self.ops variable.first.as_str self.find_verified_assignment = declared
+            if declared.is_none then
+                continue
+            fi
+            declared.unwrap = location
+            for file in index.files.iter do
+                if file.file location.file != then
+                    continue
+                fi
+                std::List[CompletionCandidate]::new = items
+                variable.second.clone CompletionCandidate::Variable items.push
+                items file.length location.span.offset - location.span.offset location.file.clone
+                DocumentLocation CompletionScope index.scopes.push
+            done
+        done
+    }
+
+    fn find_binding_end
+        self:$IndexBuilder
+        ops:$std::List[common::Op]
+        offset:u64
+        end_offset:u64
+    -> u64 {
+        0 = depth: u64
+        std::Option[u64]::None = binding_depth
+        for op in ops.iter do
+            if
+                offset op
+                    .location
+                    .span
+                    .offset > binding_depth.is_none &&
+            then
+                depth std::Option::Some = binding_depth
+            fi
+            if
+                op.value common::OpValue::IfStart is op.value common::OpValue::WhileStart is || op.value common::OpValue::MatchStart is ||
+            then
+                1 += depth
+                continue
+            fi
+            op.value common::OpValue::IfEnd is op.value common::OpValue::WhileEnd is || op.value common::OpValue::MatchEnd is || = closes
+            op.value common::OpValue::IfElse is op.value common::OpValue::IfElif is || op.value common::OpValue::MatchArm is || = changes_branch
+            if closes changes_branch || then
+                0 binding_depth.clone.unwrap_or = level
+                if 0 level != level depth == && then
+                    op
+                        .location
+                        .span
+                        .offset return
+                fi
+            fi
+            if closes 0 depth != && then
+                1 -= depth
+            fi
+        done
+        end_offset
+    }
+
+    fn has_source_declaration self:$IndexBuilder function:$common::Function -> bool {
+        for location in self.declarations.iter do
+            if location function.location.matches then
+                true return
+            fi
+        done
+        false
+    }
+
+    fn collect_source_declarations self:mut$IndexBuilder tokens:$std::List[common::Token] {
+        false = after_fn
+        for token in tokens.iter do
+            if token.kind common::TokenKind::Newline == token.kind common::TokenKind::Comment == || then
+                continue
+            fi
+            if after_fn token.kind common::TokenKind::Identifier == && then
+                token.location.clone self.declarations.push
+            fi
+            token.kind common::TokenKind::Keyword == token.value "fn" == && = after_fn
+        done
+    }
+
+    fn project_lexical_token self:$IndexBuilder token:$common::Token index:mut$EditorIndex {
+        if token.kind common::TokenKind::Identifier == then
+            token
+                .location
+                .span
+                .offset = start
+            start = offset
+            start token
+                .location
+                .span
+                .length + = end_offset
+            while end_offset offset < do
+                offset self.source.at = character
+                1 += offset
+                if ':' character != '.' character != && then
+                    continue
+                fi
+                if start offset 1 - > then
+                    offset 1 - start - start self.file_path.clone DocumentLocation index.words.push
+                fi
+                offset = start
+            done
+            if start end_offset > then
+                end_offset start - start self.file_path.clone DocumentLocation index.words.push
+            fi
+        fi
+        # These lexical categories do not need resolved symbol facts.
+        token.kind match
+            common::TokenKind::Keyword => DocumentTokenKind::Keyword
+            common::TokenKind::Operator => DocumentTokenKind::Operator
+            common::TokenKind::Intrinsic => DocumentTokenKind::Macro
+            common::TokenKind::FstringText => DocumentTokenKind::String
+            common::TokenKind::Literal => {
+                if token.value.as_str "\"" str::starts_with then
+                    DocumentTokenKind::String
+                elif token.value "true" == token.value "false" == || then
+                    DocumentTokenKind::Keyword
+                else
+                    DocumentTokenKind::Number
+                fi
+            }
+            _ => return
+        end = kind
+        token.location self.locate kind DocumentToken index.tokens.push
+    }
+
+    fn project_facts self:$IndexBuilder index:mut$EditorIndex {
+        index std::Option[std::String]::None self.ops self.project_operations
+        for
+            name in self
+                .store
+                .get_function_names
+                .iter
+        do
+            if
+                name self
+                    .store
+                    .source_functions
+                    .has
+            then
+                continue
+            fi
+            name.as_str self
+                .store
+                .get_function
+                .unwrap = function
+            index function.name.clone std::Option::Some function.ops self.project_operations
+            if function self.has_source_declaration then
+                index std::Option[common::Location]::None function.location function.name.as_str
+                DocumentSymbolKind::Function ProjectionSymbol::new self.project_declaration
+            fi
+            index function self.project_variables
+        done
+        for
+            entry in self
+                .store
+                .structs
+                .iter
+        do
+            index std::Option[common::Location]::None entry.second.location entry.first.as_str
+            DocumentSymbolKind::Struct ProjectionSymbol::new self.project_declaration
+        done
+        for
+            entry in self
+                .store
+                .enums
+                .iter
+        do
+            index std::Option[common::Location]::None entry.second.location entry.first.as_str
+            DocumentSymbolKind::Enum ProjectionSymbol::new self.project_declaration
+            for
+                variant in entry
+                    .second
+                    .variant_locations
+                    .iter
+            do
+                index std::Option[common::Location]::None variant.second variant.first.as_str
+                DocumentSymbolKind::EnumVariant ProjectionSymbol::new self.project_declaration
+            done
+        done
+    }
+
+    fn project self:IndexBuilder coverage:std::Option[QueryReason] -> AnalyzedDocument {
+        EditorIndex {
+            files: std::List[DocumentLocation]::new
+            occurrences: std::List[Occurrence]::new
+            tokens: std::List[DocumentToken]::new
+            completions: std::List[CompletionScope]::new
+            scopes: std::List[CompletionScope]::new
+            triggers: std::List[CompletionScope]::new
+            coverage: coverage
+            unavailable: std::List[CoverageRegion]::new
+            words: std::List[DocumentLocation]::new
+            bodies: std::List[DocumentLocation]::new
+        } = index
+        index self.project_failures
+        for
+            file in self
+                .sources
+                .sources
+                .keys
+                .iter
+        do
+            file.clone = self.file_path
+            file self
+                .sources
+                .sources
+                .get
+                .unwrap
+                .clone = self.source
+            self.source.length 1 + 0 file.clone DocumentLocation = file_range
+            file_range.clone index.files.push
+            "" 1 1 common::SourcePosition self.find_completion_candidates file_range
+            CompletionScope index.completions.push
+            self.file_path.as_str self.source.as_str lexer::lex_source.into_parts = lexical_diagnostics = lexical_tokens
+            lexical_tokens self.collect_source_declarations
+            self.find_semantic_tokens index.tokens.append
+            for token in lexical_tokens.iter do
+                index token self.project_lexical_token
+            done
+            lexical_tokens file.clone self.lexical_tokens.set
+            0 = offset: u64
+            while offset self.source.length > do
+                if '.' offset self.source.at == ':' offset self.source.at == || then
+                    offset 1 + self.find_triggered_completion_candidates
+                    1 offset 1 + self.file_path.clone DocumentLocation CompletionScope index.triggers.push
+                fi
+                1 += offset
+            done
+        done
+        index self.project_facts
+        index self.project_global_variables
+        # Move the retained text and index. The temporary compiler maps are destroyed here.
+        self match
+            IndexBuilder { sources: sources source: source file_path: file_path } => file_path source sources index AnalyzedDocument
+        end
+    }
+}
+
+impl EditorIndex {
+    fn contains self:$EditorIndex file:$str offset:u64 -> bool {
+        for range in self.files.iter do
+            if offset file range.contains then
+                true return
+            fi
+        done
+        false
+    }
+
+    fn find_occurrence self:$EditorIndex file:$str offset:u64 -> std::Option[u64] {
+        std::Option[u64]::None = best
+        0 = index: u64
+        while index self.occurrences.length > do
+            index self.occurrences.get = occurrence
+            index = current
+            1 += index
+            if offset file occurrence.location.contains ! then
+                continue
+            fi
+            if best std::Option::Some(previous) is then
+                previous copy self.occurrences.get = previous_occurrence
+                if previous_occurrence.declaration then
+                    continue
+                fi
+                if
+                    occurrence.declaration ! previous_occurrence.location.length occurrence.location.length >= &&
+                then
+                    continue
+                fi
+            fi
+            current std::Option::Some = best
+        done
+        best
+    }
+
+    pub fn find_hover self:$EditorIndex file:$str offset:u64 -> PointAnswer[DocumentHover] {
+        if offset file self.contains ! then
+            QueryReason::InvalidInput PointAnswer[DocumentHover]::Unavailable return
+        fi
+        if offset file self.find_occurrence std::Option::Some(index) is then
+            index copy self.occurrences.get = occurrence
+            if occurrence.hover std::Option::Some(content) is then
+                occurrence.location.clone content.clone DocumentHover PointAnswer::Known return
+            fi
+            PointAnswer[DocumentHover]::Absent return
+        fi
+        if offset file self.find_unavailable_reason std::Option::Some(reason) is then
+            reason copy PointAnswer[DocumentHover]::Unavailable
+        else
+            PointAnswer[DocumentHover]::Absent
+        fi
+    }
+
+    pub fn find_definition self:$EditorIndex file:$str offset:u64 -> PointAnswer[DocumentLocation] {
+        if offset file self.contains ! then
+            QueryReason::InvalidInput PointAnswer[DocumentLocation]::Unavailable return
+        fi
+        if offset file self.find_occurrence std::Option::Some(index) is then
+            index copy self.occurrences.get = occurrence
+            if occurrence.definition std::Option::Some(location) is then
+                location.clone PointAnswer::Known return
+            fi
+            PointAnswer[DocumentLocation]::Absent return
+        fi
+        if offset file self.find_unavailable_reason std::Option::Some(reason) is then
+            reason copy PointAnswer[DocumentLocation]::Unavailable
+        else
+            PointAnswer[DocumentLocation]::Absent
+        fi
+    }
+
+    fn find_candidates
+        self:$EditorIndex
+        file:$str
+        offset:u64
+        trigger:$str
+    -> ListAnswer[CompletionCandidate] {
+        if offset file self.contains ! then
+            QueryReason::InvalidInput ListAnswer[CompletionCandidate]::Unavailable return
+        fi
+        std::List[CompletionCandidate]::new = items
+        if trigger "." == trigger ":" == || then
+            for scope in self.triggers.iter do
+                if offset file scope.location.contains then
+                    scope.items.clone = items
+                    break
+                fi
+            done
+        else
+            for scope in self.completions.iter do
+                if offset file scope.location.contains then
+                    scope.items.clone items.append
+                fi
+            done
+            for scope in self.scopes.iter do
+                if offset file scope.location.contains then
+                    scope.items.clone items.append
+                fi
+            done
+        fi
+        if offset file self.find_completion_coverage std::Option::Some(reason) is then
+            reason copy items ListAnswer::Incomplete
+        else
+            items ListAnswer::Complete
+        fi
+    }
+
+    pub fn find_references
+        self:$EditorIndex
+        file:$str
+        offset:u64
+        include_declaration:bool
+    -> ReferenceAnswer {
+        if offset file self.contains ! then
+            QueryReason::InvalidInput ReferenceAnswer::Unavailable return
+        fi
+        offset file self.find_occurrence = selected
+        if selected.is_none then
+            QueryReason::MissingSemanticFact ReferenceAnswer::Unavailable return
+        fi
+        selected.unwrap self.occurrences.get = occurrence
+        if occurrence.symbol.is_none then
+            QueryReason::MissingSemanticFact ReferenceAnswer::Unavailable return
+        fi
+        occurrence
+            .symbol
+            .clone
+            .unwrap = symbol
+        std::List[DocumentLocation]::new = ranges
+        if include_declaration "" symbol.declaration.file != && then
+            symbol
+                .declaration
+                .span
+                .length symbol
+                .declaration
+                .span
+                .offset symbol
+                .declaration
+                .file
+                .clone
+            DocumentLocation ranges.push
+        fi
+        ranges include_declaration symbol self.collect_references
+        &DocumentLocation::comes_before ranges.sort_by
+        std::List[DocumentLocation]::new = unique
+        for range in ranges.iter do
+            if 0 unique.length != then
+                if range unique.length 1 - unique.get.matches then
+                    continue
+                fi
+            fi
+            range.clone unique.push
+        done
+        std::List[std::String]::new = files
+        for range in self.files.iter do
+            range.file.clone files.push
+        done
+        DocumentReferences {
+            ranges: unique
+            declaration: symbol
+                .declaration
+                .span
+                .length symbol
+                .declaration
+                .span
+                .offset symbol
+                .declaration
+                .file
+                .clone DocumentLocation
+            files: files
+            rename_requires_workspace: symbol.owner.is_none
+        } = result
+        if symbol self.find_reference_coverage std::Option::Some(reason) is then
+            reason copy result ReferenceAnswer::Incomplete
+        else
+            result ReferenceAnswer::Complete
+        fi
+    }
+
+    fn collect_references
+        self:$EditorIndex
+        symbol:$DocumentSymbol
+        include_declaration:bool
+        ranges:mut$std::List[DocumentLocation]
+    {
+        for occurrence in self.occurrences.iter do
+            if occurrence.declaration include_declaration ! && then
+                continue
+            fi
+            if occurrence.symbol.is_none then
+                continue
+            fi
+            occurrence
+                .symbol
+                .clone
+                .unwrap = candidate
+            if candidate symbol.matches_identity ! then
+                continue
+            fi
+            occurrence.location.clone = range
+            occurrence.reference_offset = range.offset
+            occurrence.reference_length = range.length
+            range ranges.push
+        done
+    }
+
+    pub fn find_semantic_tokens self:$EditorIndex file:$str -> ListAnswer[DocumentToken] {
+        if 0 file self.contains ! then
+            QueryReason::InvalidInput ListAnswer[DocumentToken]::Unavailable return
+        fi
+        std::List[DocumentToken]::new = tokens
+        for token in self.tokens.iter do
+            if token.location.file file == then
+                token.clone tokens.push
+            fi
+        done
+        &DocumentToken::comes_before tokens.sort_by
+        std::List[DocumentToken]::new = unique
+        0 = end_offset: u64
+        for token in tokens.iter do
+            if end_offset token.location.offset < then
+                continue
+            fi
+            token.location.offset token.location.length + = end_offset
+            token.clone unique.push
+        done
+        if file self.find_file_coverage std::Option::Some(reason) is then
+            reason copy unique ListAnswer::Incomplete
+        else
+            unique ListAnswer::Complete
+        fi
+    }
+}
+
+impl AnalyzedDocument {
+    pub fn new
+        analysis:analysis::AnalysisResult
+        source:std::String
+        file_path:std::String
+    -> AnalyzedDocument {
+        std::Option[QueryReason]::None = coverage
+        for
+            diagnostic in analysis
+                .diagnostics
+                .entries
+                .iter
+        do
+            if diagnostic error::Diagnostic::Error(failure) is then
+                failure classify_query_failure std::Option::Some = coverage
+            fi
+        done
+        file_path.as_str analysis.sources.retain_used
+        file_path.clone = root_file
+        source.clone = root_source
+        coverage file_path source analysis IndexBuilder::new.project = document
+        root_file = document.file_path
+        root_source = document.source
+        document
+    }
+
+    pub fn into_parts self:AnalyzedDocument -> EditorIndex lexer::SourceStore {
+        self match
+            AnalyzedDocument { index: index sources: sources } => index sources
+        end
+    }
+
+    pub fn get_index self:$AnalyzedDocument -> $EditorIndex { self.index }
+
+    pub fn is_incomplete self:$AnalyzedDocument -> bool { self.index.coverage.is_some }
+
+    fn query_offset self:$AnalyzedDocument position:$common::SourcePosition -> std::Option[u64] {
+        if 0 position.line == 0 position.column == || then
+            std::Option[u64]::None return
+        fi
+        if
+            self.file_path.as_str self
+                .sources
+                .line_starts
+                .get_str std::Option::Some(starts) is
+        then
+            if starts.length position.line > then
+                std::Option[u64]::None return
+            fi
+            position.line 1 - starts.get copy position.column 1 - + = offset
+            if self.source.length offset > then
+                std::Option[u64]::None return
+            fi
+            if starts.length position.line < then
+                if position.line starts.get copy offset >= then
+                    std::Option[u64]::None return
+                fi
+            fi
+            offset std::Option::Some
+        else
+            std::Option[u64]::None
+        fi
+    }
+
+    pub fn find_hover_at
+        self:$AnalyzedDocument
+        position:$common::SourcePosition
+    -> std::Option[DocumentHover] {
+        if position self.query_offset std::Option::Some(offset) is then
+            offset copy self.file_path.as_str self.index.find_hover match
+                PointAnswer::Known(hover) => hover std::Option::Some return
+                _ => {
+                }
+            end
+        fi
+        std::Option[DocumentHover]::None
+    }
+
     pub fn find_definition_at
         self:$AnalyzedDocument
         position:$common::SourcePosition
     -> std::Option[DocumentLocation] {
-        if position self.find_symbol_at std::Option::Some(symbol) is then
-            if symbol self.find_definition std::Option::Some(location) is then
-                location self.locate std::Option::Some return
-            fi
+        if position self.query_offset std::Option::Some(offset) is then
+            offset copy self.file_path.as_str self.index.find_definition match
+                PointAnswer::Known(location) => location std::Option::Some return
+                _ => {
+                }
+            end
         fi
         std::Option[DocumentLocation]::None
     }
 
-    pub fn locate self:$AnalyzedDocument location:$common::Location -> DocumentLocation {
-        location.span.length location.span.offset location.file.clone DocumentLocation
+    pub fn find_completion_candidates
+        self:$AnalyzedDocument
+        position:$common::SourcePosition
+        trigger:$str
+    -> std::List[CompletionCandidate] {
+        if position self.query_offset std::Option::Some(offset) is then
+            trigger offset copy self.file_path.as_str self.index.find_candidates match
+                ListAnswer::Complete(items) => items return
+                ListAnswer::Incomplete(items _) => items return
+                _ => {
+                }
+            end
+        fi
+        std::List[CompletionCandidate]::new
+    }
+
+    pub fn find_symbol_identity_at
+        self:$AnalyzedDocument
+        position:$common::SourcePosition
+    -> std::Option[DocumentSymbol] {
+        if position self.query_offset std::Option::Some(offset) is then
+            if offset copy self.file_path.as_str self.index.find_occurrence std::Option::Some(index) is then
+                index copy self
+                    .index
+                    .occurrences
+                    .get = occurrence
+                occurrence.symbol.clone return
+            fi
+        fi
+        std::Option[DocumentSymbol]::None
+    }
+
+    pub fn find_references_at
+        self:$AnalyzedDocument
+        position:$common::SourcePosition
+        include_declaration:bool
+    -> std::Option[std::List[DocumentLocation]] {
+        if position self.query_offset std::Option::Some(offset) is then
+            include_declaration offset copy self.file_path.as_str self.index.find_references match
+                ReferenceAnswer::Complete(result) => result.into_ranges std::Option::Some return
+                ReferenceAnswer::Incomplete(result _) => result.into_ranges std::Option::Some return
+                _ => {
+                }
+            end
+        fi
+        std::Option[std::List[DocumentLocation]]::None
+    }
+
+    pub fn find_semantic_tokens self:$AnalyzedDocument -> std::List[DocumentToken] {
+        self.file_path.as_str self.index.find_semantic_tokens match
+            ListAnswer::Complete(items) => items
+            ListAnswer::Incomplete(items _) => items
+            ListAnswer::Unavailable(_) => std::List[DocumentToken]::new
+        end
+    }
+}
+
+struct CoverageRegion {
+    location: DocumentLocation
+    reason:   QueryReason
+}
+
+fn classify_query_failure failure:$error::CasaError -> QueryReason {
+    if failure.message.as_str "not found, searched:" str::contains then
+        QueryReason::UnresolvedDependency return
+    fi
+    if
+        failure.kind common::ErrorKind::Syntax == failure.kind common::ErrorKind::UnexpectedToken == || failure.kind common::ErrorKind::UnmatchedBlock == ||
+    then
+        QueryReason::RejectedSyntax return
+    fi
+    QueryReason::MissingSemanticFact
+}
+
+impl IndexBuilder {
+    fn find_verified_assignment
+        self:$IndexBuilder
+        name:$str
+        ops:$std::List[common::Op]
+    -> std::Option[common::Location] {
+        for op in ops.iter do
+            if op.id self.verified.has ! then
+                continue
+            fi
+            if op.value common::OpValue::AssignVar(assigned) is then
+                if assigned name == then
+                    op.location.clone std::Option::Some return
+                fi
+            fi
+        done
+        std::Option[common::Location]::None
+    }
+}
+
+impl EditorIndex {
+    fn find_unavailable_reason self:$EditorIndex file:$str offset:u64 -> std::Option[QueryReason] {
+        for region in self.unavailable.iter do
+            if offset file region.location.contains then
+                region.reason std::Option::Some return
+            fi
+            if region.location.file file != then
+                continue
+            fi
+            if region.reason QueryReason::MissingSemanticFact != then
+                if region.location.offset offset >= then
+                    region.reason std::Option::Some return
+                fi
+            fi
+        done
+        std::Option[QueryReason]::None
+    }
+
+    fn find_file_coverage self:$EditorIndex file:$str -> std::Option[QueryReason] {
+        for region in self.unavailable.iter do
+            if region.location.file file == then
+                region.reason std::Option::Some return
+            fi
+        done
+        std::Option[QueryReason]::None
+    }
+}
+
+impl CompletionCandidate {
+    fn get_insertion_text self:$CompletionCandidate -> std::String {
+        self match
+            CompletionCandidate::Function(name) => name.clone
+            CompletionCandidate::Variable(variable) => variable.name.clone
+            CompletionCandidate::Keyword(keyword) => keyword.format_source.to_str
+            CompletionCandidate::Intrinsic(intrinsic) => intrinsic.format_source.to_str
+            CompletionCandidate::Struct(declaration) => declaration.name.clone
+            CompletionCandidate::Enum(name) => name.clone
+            CompletionCandidate::EnumVariant(name) => name.clone
+            CompletionCandidate::Method(name) => name.as_str "::" str::split.pop
+        end
+    }
+}
+
+impl EditorIndex {
+    fn find_replacement self:$EditorIndex file:$str offset:u64 -> DocumentLocation {
+        for word in self.words.iter do
+            if word.file file != then
+                continue
+            fi
+            if word.offset offset >= word.offset word.length + offset <= && then
+                word.clone return
+            fi
+        done
+        0 offset file.to_str DocumentLocation
+    }
+
+    pub fn find_completions
+        self:$EditorIndex
+        file:$str
+        offset:u64
+        trigger:$str
+    -> ListAnswer[DocumentCompletion] {
+        std::List[CompletionCandidate]::new = candidates
+        std::Option[QueryReason]::None = reason
+        trigger offset file self.find_candidates match
+            ListAnswer::Complete(items) => items = candidates
+            ListAnswer::Incomplete(items missing) => {
+                items = candidates
+                missing std::Option::Some = reason
+            }
+            ListAnswer::Unavailable(missing) => missing ListAnswer[DocumentCompletion]::Unavailable return
+        end
+        offset file self.find_replacement = replacement
+        std::List[DocumentCompletion]::new = result
+        for candidate in candidates.iter do
+            replacement.clone candidate.get_insertion_text candidate.clone DocumentCompletion result.push
+        done
+        if reason std::Option::Some(missing) is then
+            missing result ListAnswer::Incomplete
+        else
+            result ListAnswer::Complete
+        fi
+    }
+}
+
+impl EditorIndex {
+    fn find_reference_coverage
+        self:$EditorIndex
+        symbol:$DocumentSymbol
+    -> std::Option[QueryReason] {
+        # Signature and field type occurrences are not represented yet.
+        if symbol.kind DocumentSymbolKind::Struct == symbol.kind DocumentSymbolKind::Enum == || then
+            QueryReason::MissingSemanticFact std::Option::Some return
+        fi
+        if symbol.owner std::Option::Some(owner) is then
+            for body in self.bodies.iter do
+                if body.file owner.file != body.offset owner.span.offset != || then
+                    continue
+                fi
+                body self.find_region_coverage return
+            done
+        fi
+        self.coverage.clone
+    }
+
+    fn find_region_coverage self:$EditorIndex range:$DocumentLocation -> std::Option[QueryReason] {
+        for region in self.unavailable.iter do
+            if
+                region.location.offset region
+                    .location
+                    .file
+                    .as_str range.contains
+            then
+                region.reason std::Option::Some return
+            fi
+        done
+        std::Option[QueryReason]::None
+    }
+}
+
+impl AnalyzedDocument {
+    pub fn find_completions_at
+        self:$AnalyzedDocument
+        position:$common::SourcePosition
+        trigger:$str
+    -> ListAnswer[DocumentCompletion] {
+        if position self.query_offset std::Option::Some(offset) is then
+            trigger offset copy self.file_path.as_str self.index.find_completions return
+        fi
+        QueryReason::InvalidInput ListAnswer[DocumentCompletion]::Unavailable
+    }
+
+    pub fn find_reference_answer_at
+        self:$AnalyzedDocument
+        position:$common::SourcePosition
+        include_declaration:bool
+    -> ReferenceAnswer {
+        if position self.query_offset std::Option::Some(offset) is then
+            include_declaration offset copy self.file_path.as_str self.index.find_references return
+        fi
+        QueryReason::InvalidInput ReferenceAnswer::Unavailable
+    }
+}
+
+impl EditorIndex {
+    fn find_completion_coverage self:$EditorIndex file:$str offset:u64 -> std::Option[QueryReason] {
+        for region in self.unavailable.iter do
+            if region.location.file file == region.reason QueryReason::MissingSemanticFact != && then
+                region.reason std::Option::Some return
+            fi
+        done
+        offset file self.find_unavailable_reason
     }
 }
