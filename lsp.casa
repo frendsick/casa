@@ -45,6 +45,7 @@ pub struct LspDiagnostic {
 }
 
 pub struct CompletionItem {
+    pub edit:   std::Option[TextEdit]
     pub label:  std::String
     pub kind:   i64
     pub detail: std::String
@@ -220,6 +221,9 @@ impl CompletionItem {
         result_obj "kind".to_str item CompletionItem::kind json::JsonValue::JsonInt json::json_set = result_obj
         if "" item CompletionItem::detail != then
             result_obj "detail".to_str item CompletionItem::detail.clone json::JsonValue::JsonString json::json_set = result_obj
+        fi
+        if item.edit std::Option::Some(edit) is then
+            result_obj "textEdit".to_str edit.to_json json::json_set = result_obj
         fi
         result_obj json::JsonValue::JsonObject
     }
@@ -684,16 +688,16 @@ pub fn handle_hover message:$json::JsonValue state:$LspState {
 pub fn format_completion_candidate candidate:$document::CompletionCandidate -> CompletionItem {
     candidate match
         document::CompletionCandidate::Function(function_name) => {
-            "".to_str COMPLETION_FUNCTION function_name.clone CompletionItem
+            "".to_str COMPLETION_FUNCTION function_name.clone std::Option[TextEdit]::None CompletionItem
         }
         document::CompletionCandidate::Variable(variable) => {
-            variable.typ.format COMPLETION_VARIABLE variable.name.clone CompletionItem
+            variable.typ.format COMPLETION_VARIABLE variable.name.clone std::Option[TextEdit]::None CompletionItem
         }
         document::CompletionCandidate::Keyword(keyword) => {
-            "".to_str COMPLETION_KEYWORD keyword.format_source.to_str CompletionItem
+            "".to_str COMPLETION_KEYWORD keyword.format_source.to_str std::Option[TextEdit]::None CompletionItem
         }
         document::CompletionCandidate::Intrinsic(intrinsic) => {
-            "".to_str COMPLETION_KEYWORD intrinsic.format_source.to_str CompletionItem
+            "".to_str COMPLETION_KEYWORD intrinsic.format_source.to_str std::Option[TextEdit]::None CompletionItem
         }
         document::CompletionCandidate::Struct(casa_struct) => {
             std::String::new = member_builder
@@ -711,18 +715,48 @@ pub fn format_completion_candidate candidate:$document::CompletionCandidate -> C
                     .as_str member_builder.append
                 1 += member_index
             done
-            member_builder COMPLETION_STRUCT casa_struct.name.clone CompletionItem
+            member_builder COMPLETION_STRUCT casa_struct.name.clone std::Option[TextEdit]::None CompletionItem
         }
         document::CompletionCandidate::Enum(enum_name) => {
-            "".to_str COMPLETION_ENUM enum_name.clone CompletionItem
+            "".to_str COMPLETION_ENUM enum_name.clone std::Option[TextEdit]::None CompletionItem
         }
         document::CompletionCandidate::EnumVariant(variant_name) => {
-            "".to_str COMPLETION_ENUM_MEMBER variant_name.clone CompletionItem
+            "".to_str COMPLETION_ENUM_MEMBER variant_name.clone std::Option[TextEdit]::None CompletionItem
         }
         document::CompletionCandidate::Method(function_name) => {
-            "".to_str COMPLETION_METHOD function_name.as_str "::" str::split.pop CompletionItem
+            "".to_str COMPLETION_METHOD function_name.as_str "::" str::split.pop std::Option[TextEdit]::None CompletionItem
         }
     end
+}
+
+pub fn compute_completion_with_coverage
+    state:$document::AnalyzedDocument
+    line:i64
+    column:i64
+    trigger:$str
+-> std::List[CompletionItem] bool {
+    std::List[CompletionItem]::new = items
+    column line convert_lsp_position = position
+    std::List[document::DocumentCompletion]::new = candidates
+    false = incomplete
+    trigger position state.find_completions_at match
+        document::ListAnswer::Complete(values) => values = candidates
+        document::ListAnswer::Incomplete(values _) => {
+            values = candidates true = incomplete
+        }
+        document::ListAnswer::Unavailable(_) => true = incomplete
+    end
+    for candidate in candidates.iter do
+        candidate.candidate format_completion_candidate = item
+        candidate.replacement state.sources convert_document_location_to_lsp.range.clone = range
+        if 0 candidate.replacement.length == then
+            range.start_line = range.end_line
+            range.start_col = range.end_col
+        fi
+        candidate.insertion_text.clone range TextEdit std::Option::Some = item.edit
+        item items.push
+    done
+    items incomplete
 }
 
 pub fn compute_completion
@@ -731,13 +765,7 @@ pub fn compute_completion
     column:i64
     trigger:$str
 -> std::List[CompletionItem] {
-    std::List[CompletionItem]::new = items
-    column line convert_lsp_position = position
-    trigger position state.find_completion_candidates = candidates
-    for candidate in candidates.iter do
-        candidate format_completion_candidate items.push
-    done
-    items
+    trigger column line state compute_completion_with_coverage drop
 }
 
 pub fn handle_completion message:$json::JsonValue state:$LspState {
@@ -751,7 +779,7 @@ pub fn handle_completion message:$json::JsonValue state:$LspState {
     uri.as_str state.open_documents.get_str = document_opt
     if document_opt.is_none then
         json::json_object
-        "isIncomplete".to_str false json::JsonValue::JsonBool json::json_set
+        "isIncomplete".to_str true json::JsonValue::JsonBool json::json_set
         "items".to_str std::List[json::JsonValue]::new json::JsonValue::JsonArray json::json_set
         json::JsonValue::JsonObject request_id send_response
         return
@@ -774,7 +802,7 @@ pub fn handle_completion message:$json::JsonValue state:$LspState {
     fi
 
     message extract_position = position
-    trigger.as_str position LspRange::start_col position LspRange::start_line document compute_completion = items
+    trigger.as_str position LspRange::start_col position LspRange::start_line document compute_completion_with_coverage = incomplete = items
 
     # Build response
     std::List[json::JsonValue]::new = json_items
@@ -784,7 +812,7 @@ pub fn handle_completion message:$json::JsonValue state:$LspState {
         1 += item_index
     done
     json::json_object
-    "isIncomplete".to_str false json::JsonValue::JsonBool json::json_set
+    "isIncomplete".to_str incomplete json::JsonValue::JsonBool json::json_set
     "items".to_str json_items json::JsonValue::JsonArray json::json_set
     json::JsonValue::JsonObject request_id send_response
 }
@@ -793,23 +821,37 @@ pub fn handle_completion message:$json::JsonValue state:$LspState {
 # Find references handler
 # ============================================================================
 
+pub fn compute_references_with_coverage
+    state:$document::AnalyzedDocument
+    line:i64
+    column:i64
+    include_declaration:bool
+-> std::Option[std::List[LspLocation]] bool {
+    column line convert_lsp_position = position
+    false = incomplete
+    include_declaration position state.find_reference_answer_at match
+        document::ReferenceAnswer::Complete(result) => result
+        document::ReferenceAnswer::Incomplete(result _) => {
+            true = incomplete result
+        }
+        document::ReferenceAnswer::Unavailable(_) => {
+            std::Option[std::List[LspLocation]]::None true return
+        }
+    end = result
+    std::List[LspLocation]::new = references
+    for range in result.ranges.iter do
+        range state.sources convert_document_location_to_lsp references.push
+    done
+    references std::Option::Some incomplete
+}
+
 pub fn compute_references
     state:$document::AnalyzedDocument
     line:i64
     column:i64
     include_declaration:bool
 -> std::Option[std::List[LspLocation]] {
-    column line convert_lsp_position = position
-    if
-        include_declaration position state.find_references_at std::Option::Some(document_references) is
-    then
-        std::List[LspLocation]::new = references
-        for document_reference in document_references.iter do
-            document_reference state.sources convert_document_location_to_lsp references.push
-        done
-        references std::Option::Some return
-    fi
-    std::Option[std::List[LspLocation]]::None
+    include_declaration column line state compute_references_with_coverage drop
 }
 
 pub fn handle_references message:$json::JsonValue state:$LspState {
@@ -841,10 +883,17 @@ pub fn handle_references message:$json::JsonValue state:$LspState {
     fi
 
     message extract_position = position
-    include_decl position LspRange::start_col position LspRange::start_line document compute_references = refs_opt
+    include_decl position LspRange::start_col position LspRange::start_line document compute_references_with_coverage = incomplete = refs_opt
     if refs_opt.is_none then
         json::JsonValue::JsonNull request_id send_response
         return
+    fi
+    if incomplete then
+        json::json_object
+        "type".to_str 2 json::JsonValue::JsonInt json::json_set
+        "message".to_str "References cover verified uses in this compilation only. Some source uses are not represented.".to_str
+        json::JsonValue::JsonString json::json_set
+        json::JsonValue::JsonObject "window/showMessage" send_notification
     fi
     refs_opt.unwrap = refs
     std::List[json::JsonValue]::new = json_refs
@@ -867,7 +916,8 @@ pub fn compute_rename
     new_name:$str
 -> std::Option[std::Map[std::String std::List[TextEdit]]] {
     column line convert_lsp_position = position
-    if true position state.find_references_at std::Option::Some(document_references) is then
+    if true position state.find_reference_answer_at document::ReferenceAnswer::Complete(result) is then
+        result.into_ranges = document_references
         std::Map[std::String std::List[TextEdit]]::new = edits_map
         for document_reference in document_references.iter do
             document_reference state.sources convert_document_location_to_lsp.into_parts

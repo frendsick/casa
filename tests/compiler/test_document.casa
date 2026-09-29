@@ -203,4 +203,340 @@ test_analyzed_document_hover_returns_qualified_method_fact
 test_analyzed_document_hover_returns_enum_facts
 test_analyzed_document_hover_rejects_qualified_separator
 test_analyzed_document_hover_returns_none_for_unsupported_element
+
+fn test_owned_answers_and_recovery {
+    "owned_answers_and_recovery" test::test_start
+    for
+        suffix in [
+            "fn broken { true 1 + drop }",
+            "fn broken { \"unterminated",
+            "fn broken {",
+            "import \"missing_editor_dependency\"",
+        ].iter
+    do
+        "fn healthy -> i64 { 42 }\nhealthy drop\n" suffix str::concat.as_str make_analyzed_document = snapshot
+        "partial coverage" snapshot.is_incomplete test::assert_true
+        25 DOCUMENT_TEST_FILE snapshot.get_index.find_hover = hover
+        25 DOCUMENT_TEST_FILE snapshot.get_index.find_definition = definition
+        true 25 DOCUMENT_TEST_FILE snapshot.get_index.find_references = references
+        "" 0 DOCUMENT_TEST_FILE snapshot.get_index.find_completions = completion
+        DOCUMENT_TEST_FILE snapshot.get_index.find_semantic_tokens = tokens
+        snapshot drop
+        hover match
+            document::PointAnswer::Known(value) => "owned hover" "fn healthy -> i64" value.content test::assert_str_eq
+            _ => "independent hover retained" false test::assert_true
+        end
+        definition match
+            document::PointAnswer::Known(value) => "owned definition" 3 value.offset test::assert_eq
+            _ => "independent definition retained" false test::assert_true
+        end
+        references match
+            document::ReferenceAnswer::Incomplete(result _) => "declaration and call" 2 result.ranges.length test::assert_eq
+            _ => "references mark missing coverage" false test::assert_true
+        end
+        completion match
+            document::ListAnswer::Incomplete(items _) => "owned completion" 0 items.length > test::assert_true
+            document::ListAnswer::Complete(items) => "owned independent completion" 0 items.length > test::assert_true
+            _ => "completion remains available" false test::assert_true
+        end
+        tokens match
+            document::ListAnswer::Incomplete(items _) => "owned tokens" 0 items.length > test::assert_true
+            _ => "tokens mark missing coverage" false test::assert_true
+        end
+    done
+}
+
+fn test_query_availability {
+    "query_availability" test::test_start
+    "fn unused { }\n" make_analyzed_document = snapshot
+    "whitespace is absent" 13 DOCUMENT_TEST_FILE snapshot.get_index.find_hover document::PointAnswer::Absent is test::assert_true
+    "invalid offset unavailable" 100 DOCUMENT_TEST_FILE snapshot.get_index.find_hover document::PointAnswer::Unavailable is test::assert_true
+    "unknown file unavailable" "/not/used.casa" snapshot.get_index.find_semantic_tokens document::ListAnswer::Unavailable is test::assert_true
+    false 3 DOCUMENT_TEST_FILE snapshot.get_index.find_references match
+        document::ReferenceAnswer::Complete(result) => "complete empty references" 0 result.ranges.length test::assert_eq
+        _ => "unused declaration has complete coverage" false test::assert_true
+    end
+    "fn healthy { }\nfn bad { true 1 + drop }" make_analyzed_document = damaged
+    "failed operation unavailable" 31 DOCUMENT_TEST_FILE damaged.get_index.find_hover document::PointAnswer::Unavailable is test::assert_true
+    false 3 DOCUMENT_TEST_FILE damaged.get_index.find_references match
+        document::ReferenceAnswer::Incomplete(result _) => "incomplete empty references" 0 result.ranges.length test::assert_eq
+        _ => "failed body leaves incomplete coverage" false test::assert_true
+    end
+}
+
+fn test_reference_ranges_exclude_reference_sigil {
+    "reference_ranges_exclude_reference_sigil" test::test_start
+    "fn target { } &target drop" make_analyzed_document = snapshot
+    false 15 DOCUMENT_TEST_FILE snapshot.get_index.find_references match
+        document::ReferenceAnswer::Complete(result) => {
+            "one function reference" 1 result.ranges.length test::assert_eq
+            "reference starts after ampersand" 15 0 result
+                .ranges
+                .get
+                .offset test::assert_eq
+            "only name is replaced" 6 0 result
+                .ranges
+                .get
+                .length test::assert_eq
+        }
+        _ => "function reference is available" false test::assert_true
+    end
+}
+
+fn has_completion items:$std::List[document::DocumentCompletion] name:$str -> bool {
+    for item in items.iter do
+        if item.insertion_text name == then
+            true return
+        fi
+    done
+    false
+}
+
+fn test_source_generic_hover {
+    "source_generic_hover" test::test_start
+    "fn identity[T] value:T -> T { value }\n1 identity drop\ntrue identity drop" make_analyzed_document = snapshot
+    3 DOCUMENT_TEST_FILE snapshot.get_index.find_hover match
+        document::PointAnswer::Known(hover) => {
+            "source declaration spelling" "fn identity value:T -> T" hover.content test::assert_str_eq
+        }
+        _ => "generic declaration hover" false test::assert_true
+    end
+}
+
+fn test_scoped_completion_and_replacement {
+    "scoped_completion_and_replacement" test::test_start
+    "fn work { 1 = first 2 = later first later + drop }" make_analyzed_document = snapshot
+    "" 10 DOCUMENT_TEST_FILE snapshot.get_index.find_completions match
+        document::ListAnswer::Complete(items) => {
+            "first not declared" "first" items has_completion ! test::assert_true
+            "later not declared" "later" items has_completion ! test::assert_true
+        }
+        _ => "completion before declarations is complete" false test::assert_true
+    end
+    "" 20 DOCUMENT_TEST_FILE snapshot.get_index.find_completions match
+        document::ListAnswer::Complete(items) => {
+            "first is visible" "first" items has_completion test::assert_true
+            "later still not declared" "later" items has_completion ! test::assert_true
+        }
+        _ => "completion between declarations is complete" false test::assert_true
+    end
+    "" 32 DOCUMENT_TEST_FILE snapshot.get_index.find_completions match
+        document::ListAnswer::Complete(items) => {
+            "replacement begins at identifier" 30 0 items
+                .get
+                .replacement
+                .offset test::assert_eq
+            "replacement spans identifier" 5 0 items
+                .get
+                .replacement
+                .length test::assert_eq
+        }
+        _ => "replacement range available" false test::assert_true
+    end
+}
+
+fn test_reference_metadata_and_variable_declaration {
+    "reference_metadata_and_variable_declaration" test::test_start
+    "42 = x x drop" make_analyzed_document = snapshot
+    false 7 DOCUMENT_TEST_FILE snapshot.get_index.find_references match
+        document::ReferenceAnswer::Complete(result) => {
+            "declaration excluded" 1 result.ranges.length test::assert_eq
+            "use offset" 7 0 result
+                .ranges
+                .get
+                .offset test::assert_eq
+            "declaration identity retained" 5 result.declaration.offset test::assert_eq
+            "one source in compilation coverage" 1 result.files.length test::assert_eq
+            "exact compilation source" DOCUMENT_TEST_FILE 0 result.files.get test::assert_str_eq
+        }
+        _ => "variable references complete" false test::assert_true
+    end
+    true 7 DOCUMENT_TEST_FILE snapshot.get_index.find_references match
+        document::ReferenceAnswer::Complete(result) => "declaration included" 2 result.ranges.length test::assert_eq
+        _ => "variable references complete" false test::assert_true
+    end
+}
+
+fn test_query_specific_coverage {
+    "query_specific_coverage" test::test_start
+    "fn healthy { 42 = x x drop }\nfn bad { true 1 + drop }" make_analyzed_document = snapshot
+    "understood keyword is absent" 0 DOCUMENT_TEST_FILE snapshot.get_index.find_hover document::PointAnswer::Absent is test::assert_true
+    false 20 DOCUMENT_TEST_FILE snapshot.get_index.find_references match
+        document::ReferenceAnswer::Complete(result) => {
+            "healthy local coverage complete" 1 result.ranges.length test::assert_eq
+            "local rename scope" result.rename_requires_workspace ! test::assert_true
+        }
+        _ => "unrelated failure does not hide local uses" false test::assert_true
+    end
+    "import \"/tmp/editor_peer.casa\" as peer\ntrue 1 + drop".to_str DOCUMENT_TEST_FILE.to_str analysis::AnalysisInput::new = input
+    "pub fn exported { } fn local { }".to_str "/tmp/editor_peer.casa".to_str input.source_overrides.set
+    input analysis::analyze = result
+    DOCUMENT_TEST_FILE.to_str "import \"/tmp/editor_peer.casa\" as peer\ntrue 1 + drop".to_str result document::AnalyzedDocument::new = imported
+    "" 0 "/tmp/editor_peer.casa" imported.get_index.find_completions match
+        document::ListAnswer::Complete(items) => {
+            "imported file sees its public declaration" "exported" items has_completion test::assert_true
+            "imported file sees its private declaration" "local" items has_completion test::assert_true
+        }
+        _ => "imported completion independently complete" false test::assert_true
+    end
+    "imported function declaration hover"
+    7 "/tmp/editor_peer.casa" imported.get_index.find_hover document::PointAnswer::Known is test::assert_true
+    "/tmp/editor_peer.casa" imported.get_index.find_semantic_tokens match
+        document::ListAnswer::Complete(_) => {
+        }
+        _ => "healthy imported token coverage complete" false test::assert_true
+    end
+}
+
+fn test_qualified_completion_replacement {
+    "qualified_completion_replacement" test::test_start
+    "enum Color { Red Blue } Color::Red drop" make_analyzed_document = snapshot
+    ":" 31 DOCUMENT_TEST_FILE snapshot.get_index.find_completions match
+        document::ListAnswer::Complete(items) => {
+            "variants available" 0 items.length > test::assert_true
+            for item in items.iter do
+                "replace only member start" 31 item.replacement.offset test::assert_eq
+                "replace only member length" 3 item.replacement.length test::assert_eq
+            done
+        }
+        _ => "qualified completion complete" false test::assert_true
+    end
+}
+
+fn test_lexical_recovery_and_type_reference_coverage {
+    "lexical_recovery_and_type_reference_coverage" test::test_start
+    "fn broken { 42 \"unterminated" make_analyzed_document = damaged
+    DOCUMENT_TEST_FILE damaged.get_index.find_semantic_tokens match
+        document::ListAnswer::Incomplete(items _) => {
+            "keyword and number survive" 2 items.length >= test::assert_true
+            "keyword category" 0 items.get.kind document::DocumentTokenKind::Keyword == test::assert_true
+            "number category" 1 items.get.kind document::DocumentTokenKind::Number == test::assert_true
+        }
+        _ => "lexical failure has partial tokens" false test::assert_true
+    end
+    "struct Point { x:i64 } fn take value:Point { value drop }" make_analyzed_document = snapshot
+    "unrepresented annotations prevent complete references"
+    false 7 DOCUMENT_TEST_FILE snapshot.get_index.find_references document::ReferenceAnswer::Incomplete is test::assert_true
+}
+
+fn test_commented_function_declaration {
+    "commented_function_declaration" test::test_start
+    for source in ["fn # note\nhello { }", "fn\r\nhello { }"].iter do
+        source make_analyzed_document = snapshot
+        source "hello" str::find u64::try_from.unwrap = offset
+        "declaration hover" offset DOCUMENT_TEST_FILE snapshot.get_index.find_hover document::PointAnswer::Known is test::assert_true
+        "declaration definition" offset DOCUMENT_TEST_FILE snapshot.get_index.find_definition document::PointAnswer::Known is test::assert_true
+    done
+}
+
+fn test_binding_identities_and_global_visibility {
+    "binding_identities_and_global_visibility" test::test_start
+    "fn add x:i64 y:i64 -> i64 { x y + }" make_analyzed_document = parameters
+    true 28 DOCUMENT_TEST_FILE parameters.get_index.find_references match
+        document::ReferenceAnswer::Complete(result) => {
+            "only selected parameter" 2 result.ranges.length test::assert_eq
+            "parameter declaration range" 7 result.declaration.offset test::assert_eq
+            "parameter declaration length" 1 result.declaration.length test::assert_eq
+        }
+        _ => "parameter references complete" false test::assert_true
+    end
+    "fn work { true if then 1 = x x drop else 2 = x x drop fi }" make_analyzed_document = branches
+    true 29 DOCUMENT_TEST_FILE branches.get_index.find_references match
+        document::ReferenceAnswer::Complete(result) => {
+            "only first branch binding" 2 result.ranges.length test::assert_eq
+            "first branch declaration" 27 result.declaration.offset test::assert_eq
+        }
+        _ => "branch references complete" false test::assert_true
+    end
+    true 47 DOCUMENT_TEST_FILE branches.get_index.find_references match
+        document::ReferenceAnswer::Complete(result) => {
+            "only second branch binding" 2 result.ranges.length test::assert_eq
+            "second branch declaration" 45 result.declaration.offset test::assert_eq
+        }
+        _ => "second branch references complete" false test::assert_true
+    end
+    "" 48 DOCUMENT_TEST_FILE branches.get_index.find_completions match
+        document::ListAnswer::Complete(items) => "second branch variable visible" "x" items has_completion test::assert_true
+        _ => "branch completion complete" false test::assert_true
+    end
+    "42 = later later drop" make_analyzed_document = globals
+    "" 0 DOCUMENT_TEST_FILE globals.get_index.find_completions match
+        document::ListAnswer::Complete(items) => "future global hidden" "later" items has_completion ! test::assert_true
+        _ => "global completion complete" false test::assert_true
+    end
+    "" 11 DOCUMENT_TEST_FILE globals.get_index.find_completions match
+        document::ListAnswer::Complete(items) => "declared global visible" "later" items has_completion test::assert_true
+        _ => "global completion complete" false test::assert_true
+    end
+}
+
+fn assert_variable_completion_type
+    items:$std::List[document::DocumentCompletion]
+    name:$str
+    typ:$str
+{
+    for item in items.iter do
+        if item.candidate document::CompletionCandidate::Variable(variable) is then
+            if variable.name name == then
+                "binding completion type" typ variable.typ.format test::assert_str_eq
+                return
+            fi
+        fi
+    done
+    "variable completion present" false test::assert_true
+}
+
+fn test_scoped_variable_types_and_generic_references {
+    "scoped_variable_types_and_generic_references" test::test_start
+    "fn work { true if then 1 = x x drop else true = x x drop fi }" make_analyzed_document = snapshot
+    29 DOCUMENT_TEST_FILE snapshot.get_index.find_hover match
+        document::PointAnswer::Known(value) => "first binding type" "x: i64" value.content test::assert_str_eq
+        _ => "first hover available" false test::assert_true
+    end
+    50 DOCUMENT_TEST_FILE snapshot.get_index.find_hover match
+        document::PointAnswer::Known(value) => "second binding type" "x: bool" value.content test::assert_str_eq
+        _ => "second hover available" false test::assert_true
+    end
+    "" 50 DOCUMENT_TEST_FILE snapshot.get_index.find_completions match
+        document::ListAnswer::Complete(items) => {
+            "bool" "x" items assert_variable_completion_type
+        }
+        _ => "scoped completion available" false test::assert_true
+    end
+    "fn identity[T] value:T -> T { value } 1 identity drop true identity drop" make_analyzed_document = generic
+    true 3 DOCUMENT_TEST_FILE generic.get_index.find_references match
+        document::ReferenceAnswer::Complete(result) => "both specializations share declaration" 3 result.ranges.length test::assert_eq
+        _ => "generic references complete" false test::assert_true
+    end
+}
+
+fn test_capture_definition_and_borrowed_completion {
+    "capture_definition_and_borrowed_completion" test::test_start
+    "fn outer {\n    1 = value\n    { value print } = closure\n    value print\n}" make_analyzed_document = captured
+    31 DOCUMENT_TEST_FILE captured.get_index.find_definition match
+        document::PointAnswer::Known(location) => "enclosing binding definition" 19 location.offset test::assert_eq
+        _ => "captured definition available" false test::assert_true
+    end
+    "struct Item { value:i64 } impl Item { fn read self:$Item -> i64 { self.value } fn consume self:Item { self drop } } fn use item:$Item { item.read drop }" make_analyzed_document = borrowed
+    "." 141 DOCUMENT_TEST_FILE borrowed.get_index.find_completions match
+        document::ListAnswer::Complete(items) => {
+            "shared receiver read available" "read" items has_completion test::assert_true
+            "shared receiver cannot consume" "consume" items has_completion ! test::assert_true
+        }
+        _ => "borrowed completion complete" false test::assert_true
+    end
+}
+test_capture_definition_and_borrowed_completion
+test_scoped_variable_types_and_generic_references
+test_binding_identities_and_global_visibility
+test_commented_function_declaration
+test_qualified_completion_replacement
+test_lexical_recovery_and_type_reference_coverage
+test_source_generic_hover
+test_scoped_completion_and_replacement
+test_reference_metadata_and_variable_declaration
+test_query_specific_coverage
+test_reference_ranges_exclude_reference_sigil
+test_owned_answers_and_recovery
+test_query_availability
 test::test_summary
