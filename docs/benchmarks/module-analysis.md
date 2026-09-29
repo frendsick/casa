@@ -178,6 +178,10 @@ documented module contract
 ([ADR-0010](https://github.com/frendsick/casa/blob/0694ddd71d941f5d188bde0543142cd8089cefeb/docs/adr/0010-namespaced-private-modules.md),
 [`docs/modules.md` lines 34-95](https://github.com/frendsick/casa/blob/0694ddd71d941f5d188bde0543142cd8089cefeb/docs/modules.md#L34-L95)).
 
+ADR-0010 is now archived in git history. Its privacy and module-ownership contract
+continues in [ADR-0168](../adr/0168-imports-expose-qualified-names-only.md), which
+also replaces this baseline's selective-import behavior with qualified-only imports.
+
 The selective-retention graph must exclude declarations inherited from the
 importer and include declarations in the imported module's dependency graph.
 Source ownership should replace the current `inherited_symbols` and

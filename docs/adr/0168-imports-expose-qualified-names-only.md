@@ -30,6 +30,9 @@ use that namespace, including in type annotations and function references. Norma
 receiver method and field syntax remains available. An import never adds bare
 declaration names to the importing scope. This rule also applies to `std`.
 
+Casa adds no separate `module` declaration. An import alias cannot change the
+resolved module identity.
+
 Reject every `{ ... }` selection clause, including empty and multiline clauses,
 with a diagnostic at the clause that gives a replacement. For example, replace
 `import "std" { List }` with `import "std"` and use `std::List`. After an explicit
@@ -41,6 +44,13 @@ declarations, methods, and fields. Enum variants inherit their enum's visibility
 Private helpers and transitive dependencies remain available inside their defining
 modules but cannot be named by an importer. Imports do not re-export dependencies.
 Public structs with private fields still require a public construction interface.
+
+Inherent `impl` blocks may appear only in the type's defining module. Multiple
+blocks remain allowed there. Only the core library may extend compiler-owned
+built-in types. These ownership restrictions are accepted requirements even
+where implementation remains pending. Trait implementations follow the separate
+either-owner orphan rule in
+[ADR-0041](0041-trait-implementation-obeys-an-orphan-rule.md).
 
 Two modules may export the same declaration name because their namespaces differ.
 An alias cannot collide with a declaration in the importing scope or name two
@@ -92,6 +102,11 @@ preserve the language's validation and runtime behavior, and does not justify
 restoring selected-name syntax.
 
 ## Alternatives and cost
+
+Flat import merging creates name collisions and hides module boundaries as a
+program grows. Public-by-default namespaces expose helpers accidentally and
+make APIs harder to identify. Private-by-default declarations with explicit
+public access keep the module's intended interface visible.
 
 Visibility-only selection would preserve short unqualified names without retaining
 dependency pruning. It still needs selection grammar, selected-name bindings,
@@ -155,7 +170,10 @@ The completed compiler migration must pass focused import and formatter checks,
 the full CI suite, and bootstrap fixed-point validation. This decision adds no new
 source syntax that requires a compiler release today.
 
-This amends the selective-import provisions of ADR-0008 and ADR-0010. The single
-authoritative operation-semantics principle, namespace privacy, and the separate
-runtime-global removal decision remain in force. Exact module representation and
-semantic algorithms remain with the existing front-end and semantic-seam tickets.
+The earlier selective-import decisions are archived in git history with their
+surviving destinations listed in the [ADR index](README.md#retired-records).
+The single authoritative operation-semantics principle continues in
+[ADR-0173](0173-semantic-checking-owns-source-obligations.md). Namespace privacy
+and the separate runtime-global removal decision remain in force. Exact module
+representation and semantic algorithms remain with the existing front-end and
+semantic-seam tickets.

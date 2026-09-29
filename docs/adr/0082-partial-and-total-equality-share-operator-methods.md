@@ -18,6 +18,12 @@ The compiler validates effective trait shape after collecting inherited methods.
 
 Explicit implementation distinguishes semantic strength, so separate method names such as `partial_eq` are unnecessary. A float may implement PartialEq without adopting Eq, while a lawful total value explicitly implements both. Equality operators accept PartialEq and lower to `eq` or `ne`; Hashable requires Eq.
 
+[ADR-0083](0083-ordering-uses-inherited-operator-methods.md) applies the
+same refinement model to PartialOrd and Ord. Ordering operators accept PartialOrd,
+so floats retain IEEE partial comparison. Derived Eq and Ord supply their partial
+and total families, while types with partial semantics implement only partial
+traits. The explicit total implementation records the stronger semantic promise.
+
 ## Consequences
 
 - `Eq` promises that the inherited operations form lawful total equality but introduces no additional method name.

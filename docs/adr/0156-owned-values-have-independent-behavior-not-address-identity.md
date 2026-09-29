@@ -7,6 +7,13 @@ destroy the other's contents. These rules do not require distinct storage. The
 compiler may use inline storage, static storage, sharing, or copy-on-write when
 those choices preserve the required behavior.
 
+Each evaluation of an array literal produces an independent owned value.
+Writable sharing that changes another evaluation's mutation or destruction
+violates affine ownership. String literals remain copied `str` views of read-only
+static storage under [ADR-0023](0023-one-growable-text-type.md).
+Converting a literal to an owned `String` copies its bytes, preserving independent
+owners.
+
 A raw pointer obtained from a borrow identifies a storage location, not an
 owner. Comparing raw pointers remains safe, but pointers obtained from two
 independently owned values may compare equal or unequal. Programs cannot use
@@ -19,9 +26,9 @@ a minimum size and stride of one byte under ADR-0132. In particular,
 consecutive `array[T 0]` elements have nonzero stride. This layout rule does not
 require each standalone value to have a separate allocation or address.
 
-This amends ADR-0020: storage sharing need not hide raw address equality as long
-as mutation and destruction remain independent. It also amends ADR-0155's
-requirement that each zero-length array allocate storage at a distinct address.
+Storage sharing need not hide raw address equality as long as mutation and
+destruction remain independent. This amends ADR-0155's requirement that each
+zero-length array allocate storage at a distinct address.
 
 ## Consequences
 

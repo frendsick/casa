@@ -6,6 +6,12 @@ related issue: #478
 create aliases or require allocation. The compiler checks the value
 representation before it checks fields and trait bounds.
 
+The compiler integrates the canonical standard-library methodless Copy marker
+with implicit reuse, `dup`, and `over`. An unrelated trait named Copy does not
+gain that behavior. A freestanding `std` may provide the canonical declaration
+under [ADR-0080](0080-language-traits-use-minimum-contracts.md). Its bounds and
+supertraits use ordinary trait machinery.
+
 Casa represents ordinary structs and enums with payloads through an owned heap
 pointer. These types cannot implement `Copy`, even when their fields are Copy.
 Duplicating the pointer would create two apparent owners of one allocation.
@@ -26,8 +32,11 @@ weaken the allocation-free Copy contract.
 
 ## Consequences
 
-- `derives Copy` and explicit Copy implementations use the same representation
-  check.
+- User-defined structs and enums request Copy with `derives Copy` under
+  [ADR-0163](0163-standard-trait-derivation-is-a-complete-implementation.md).
+  Validation rejects exclusive borrows, owned indirection, and custom destruction.
+  Stored shared borrows preserve their origins without borrow Copy conformance
+  under [ADR-0150](0150-shared-borrow-duplication-is-not-copy-conformance.md).
 - Ordinary structs with only scalar fields and empty structs are non-Copy.
 - Extern structs are Copy-eligible when every field is Copy.
 - Enums with no payload can be Copy. Enums with any payload are non-Copy.

@@ -28,5 +28,7 @@ index size_of[T] * data + = element_address
 - `ptr::read[T]` and `ptr::write[T]` use the same compiler layout when moving values through calculated addresses.
 - Checked multiplication detects capacity-byte overflow before allocation.
 - `size_of[T]` does not promise a stable foreign or persistent ABI. Layout may change between compiler versions unless a separate ABI feature says otherwise.
-- Casa initially needs no `align_of[T]`: `alloc` provides sufficient base alignment and `size_of[T]` is a valid aligned array stride.
+- `size_of[T]` is the only initial layout query. Casa exposes no `align_of[T]`, field-offset query, or packed-layout control. `alloc` provides sufficient base alignment and `size_of[T]` is a valid aligned array stride.
+- Unsafe code obtains a field's actual address through typed field access followed by `ptr::from_ref`, rather than reconstructing its offset. Ordinary field access uses compiler-generated offsets.
+- A future alignment, offset, or explicit-layout feature requires a concrete FFI, arena, or hardware-layout need and its own stability contract.
 - Ordinary owned code does not need `size_of`; it is primarily a low-level implementation tool.

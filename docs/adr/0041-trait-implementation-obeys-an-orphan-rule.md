@@ -18,5 +18,5 @@ Each concrete receiver type and fully instantiated trait pair has at most one im
 - Duplicate and potentially overlapping implementations are compile-time errors with both declaration locations.
 - Casa initially has no trait implementation specialization, priority ordering, negative implementations, or unrestricted `impl[T] T: Trait` implementations for every type.
 - Trait implementation lookup is deterministic and can be indexed by fully instantiated trait and receiver type rather than searching for matching methods.
-- Derived implementations participate in overlap checks. One explicit implementation in the type's module may customize that derived implementation under ADR-0090; it merges with the derive rather than counting as a second implementation. Two explicit implementations remain duplicates.
+- Derived implementations participate in overlap checks. Explicit implementations cannot overlap their effective trait families or methods under [ADR-0163](0163-standard-trait-derivation-is-a-complete-implementation.md). Two explicit implementations remain duplicates.
 - Modules remain free to provide ordinary wrapper functions when the orphan rule prevents a trait implementation.

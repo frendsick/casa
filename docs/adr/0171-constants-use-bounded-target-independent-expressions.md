@@ -200,7 +200,9 @@ shape, imported visibility and ordering, failed declarations, named type
 arguments, complete integer ranges, symbolic forwarding, and layout exclusion.
 Remove tests that require `const fn` evaluation. Keep array-value behavior and
 static-data optimization coverage without requiring function execution or
-shared mutable array storage. ADR-0020 continues to govern array ownership.
+shared mutable array storage.
+[ADR-0156](0156-owned-values-have-independent-behavior-not-address-identity.md)
+continues to govern independent array ownership.
 
 The current evaluator uses `i64` intermediates and contextual result literals,
 does not compute floats or support stack intrinsics, and can reach runtime

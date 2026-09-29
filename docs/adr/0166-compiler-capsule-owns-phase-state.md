@@ -100,9 +100,11 @@ The generic contract follows
 [ADR-0170](0170-generics-specialize-after-symbolic-checking.md).
 Derivation, trait defaults, runtime-global removal, and ownership use the
 accepted contracts linked from the [map](https://github.com/frendsick/casa/issues/638). The older
-prototype's behavior examples do not override those decisions. ADR-0008's
-single authoritative operation-semantics principle remains applicable. Its
-selective-import protocol is amended by ADR-0168.
+prototype's behavior examples do not override those decisions. The single
+authoritative operation-semantics principle continues in
+[ADR-0173](0173-semantic-checking-owns-source-obligations.md). Qualified-only
+imports follow ADR-0168. The prototype's older decision identifiers have
+surviving destinations in the [ADR index](README.md#retired-records).
 
 Seam design proceeds from ADR-0167 within these limits. Proposals must
 label any assumption about an open contract and identify which result depends
