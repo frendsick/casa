@@ -11,7 +11,7 @@ import, constant, and tooling contracts in ADR-0168, ADR-0171, and ADR-0172.
 The semantic construction consumes these facts under
 [ADR-0173](0173-semantic-checking-owns-source-obligations.md).
 Shared syntax recognition is implemented. Semantic parsing still uses
-`legacy_parser.casa`, with full production cutover open in #715.
+`source_builder.casa`, with full production cutover open in #715.
 
 ## Evidence and alternatives
 

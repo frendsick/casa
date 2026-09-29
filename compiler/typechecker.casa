@@ -47,9 +47,10 @@ pub fn type_check ops:std::List[common::Op] store:common::SymbolStore -> Typeche
     store semantics::SemanticSession::from_store = semantic_session
     semantic_session ops semantics::analyze_root_semantics = root_semantics
     ops drop
-    root_semantics.operations.clone = checked_ops
-    root_semantics.inferred_effect.clone = global_stack_effect
-    root_semantics.diagnostics.clone diagnostics.merge
+    root_semantics match
+        semantics::FunctionSemantics { operations: operations inferred_effect: effect diagnostics: root_diagnostics } => operations effect root_diagnostics
+    end = root_diagnostics = global_stack_effect = checked_ops
+    root_diagnostics diagnostics.merge
     diagnostics semantic_session function_names schedule_functions
     checked_ops semantic_session.into_checked_parts = verified = checked_store
     diagnostics checked_store semantics::check_trait_impls
@@ -99,16 +100,16 @@ fn schedule_functions
         diagnostics.error_count = errors_before
         semantic_session current_function semantics::continue_function_semantics
         = function_semantics
-        function_semantics.diagnostics.clone diagnostics.merge
-        function_semantics
-            .checked_function
-            .clone
-            .unwrap = checked_function
+        function_semantics match
+            semantics::FunctionSemantics { diagnostics: function_diagnostics checked_function: function inferred_effect: effect } => function_diagnostics function effect
+        end = inferred_effect = checked_function_opt = function_diagnostics
+        function_diagnostics diagnostics.merge
+        checked_function_opt.unwrap = checked_function
         if
             diagnostics.error_count errors_before < !
             current_function.stack_effect.needs_inference &&
         then
-            function_semantics.inferred_effect.clone checked_function
+            inferred_effect checked_function
             common::Function::set_stack_effect
         fi
         checked_function semantic_session.commit_checked_function
@@ -145,4 +146,482 @@ pub fn function_receiver_bindings
     function:$common::Function
 -> std::Map[std::String common::Type] {
     function typ semantics::function_receiver_bindings
+}
+# Only successful checking can publish backend input. Reports and editor
+# snapshots have no route back to this product.
+pub struct CheckedProgram {
+    store: common::SymbolStore
+    ops:   std::List[common::Op]
+}
+
+impl CheckedProgram {
+    pub fn get_store self:$CheckedProgram -> $common::SymbolStore { self.store }
+    pub fn get_ops self:$CheckedProgram -> $std::List[common::Op] { self.ops }
+}
+
+struct ProgramCommit {
+    pending:         std::List[std::String]
+    seen:            std::Set[std::String]
+    temporary_names: std::Set[std::String]
+    checked_types:   std::Set[std::String]
+    drop_types:      std::Set[std::String]
+    failure:         std::Option[std::String]
+}
+
+impl ProgramCommit {
+    fn fail self:mut$ProgramCommit message:$str {
+        if self.failure.is_none then
+            message.to_str std::Option::Some = self.failure
+        fi
+    }
+
+    fn require_function self:mut$ProgramCommit name:$str store:$common::SymbolStore {
+        if name self.seen.has_str then
+            return
+        fi
+        name.to_str self.seen.add
+        if name store.get_function std::Option::Some(function) is then
+            # Legacy specialized lambdas can retain contextual return variables.
+            # Their checked operations remain concrete. The phase-valid body
+            # migration must replace this declaration metadata before acceptance.
+            if name "lambda__" str::starts_with ! then
+                store function.stack_effect self.check_effect
+            fi
+            # Scoped bindings retain legacy word-slot placeholders. Their
+            # operation hints carry the concrete use types until that schema moves.
+            for variable in function.variables.iter do
+                if variable.typ.is_unknown_placeholder ! then
+                    store variable.typ self.require_type
+                fi
+            done
+            for capture in function.captures.iter do
+                store capture.typ self.require_type
+            done
+            if self.failure std::Option::Some(message) is then
+                f"{name}: {message}" = detail
+                detail std::Option::Some = self.failure return
+            fi
+            if function.extern_symbol.is_some then
+                return
+            fi
+            function.is_typechecked = checked
+            function
+                .stack_effect
+                .type_vars
+                .is_empty ! function
+                .stack_effect
+                .const_params
+                .is_empty ! || = symbolic
+            if checked ! then
+                "Unchecked function in program commitment" self.fail return
+            fi
+            if symbolic then
+                "Unspecialized function in program commitment" self.fail return
+            fi
+            name.to_str self.pending.push
+        else
+            "Missing function in program commitment" self.fail
+        fi
+    }
+
+    fn check_effect self:mut$ProgramCommit effect:$common::StackEffect store:$common::SymbolStore {
+        for parameter in effect.parameters.iter do
+            store parameter.typ self.require_type
+        done
+        for typ in effect.return_types.iter do
+            store typ self.require_type
+        done
+    }
+
+    fn require_type self:mut$ProgramCommit typ:$common::Type store:$common::SymbolStore {
+        if typ.has_unresolved_type_var typ common::Type::Unknown is || then
+            f"Non-concrete type `{typ.format}` in program commitment" = message message.as_str self.fail return
+        fi
+        typ.format = key
+        if key self.checked_types.has then
+            return
+        fi
+        key self.checked_types.add
+        typ match
+            common::Type::Generic(generic) => {
+                for parameter in generic.params.iter do
+                    store parameter self.require_type
+                done
+            }
+            common::Type::Function(function) => {
+                for parameter in function.parameters.iter do
+                    store parameter self.require_type
+                done
+                for result in function.return_types.iter do
+                    store result self.require_type
+                done
+            }
+            _ => {
+            }
+        end
+    }
+
+    # Drop hooks are implicit call targets. Validate the same concrete receiver
+    # and nested fields that destruction will visit before publishing the seal.
+    fn require_destruction self:mut$ProgramCommit typ:$common::Type store:$common::SymbolStore {
+        store typ self.require_type
+        if typ.is_borrow self.failure.is_some || then
+            return
+        fi
+        typ.format = key
+        if key self.drop_types.has then
+            return
+        fi
+        key self.drop_types.add
+        if store typ common::find_drop_function_name std::Option::Some(name) is then
+            name.as_str store.get_function.unwrap = function
+            if
+                function
+                    .stack_effect
+                    .type_vars
+                    .is_empty ! function
+                    .stack_effect
+                    .const_params
+                    .is_empty ! ||
+            then
+                function typ function_receiver_bindings = bindings
+                bindings name.as_str monomorphized_function_name = specialized
+                store specialized.as_str self.require_function
+            else
+                store name.as_str self.require_function
+            fi
+        fi
+        if typ.array_element_type std::Option::Some(element) is then
+            store element self.require_destruction return
+        fi
+        typ.match_base = base
+        if base.as_str store.structs.get_str std::Option::Some(structure) is then
+            structure.type_vars typ common::aggregate_type_bindings = bindings
+            for member in structure.members.iter do
+                bindings member.typ.substitute_t = concrete
+                store concrete self.require_destruction
+            done
+        elif base.as_str store.enums.get_str std::Option::Some(enumeration) is then
+            enumeration.type_vars typ common::aggregate_type_bindings = bindings
+            for variant in enumeration.variant_types.iter do
+                for member in variant.second.iter do
+                    bindings member.substitute_t = concrete
+                    store concrete self.require_destruction
+                done
+            done
+        fi
+    }
+
+    fn require_binding_type
+        self:mut$ProgramCommit
+        variable:$common::Variable
+        hint:$std::Option[common::Type]
+        store:$common::SymbolStore
+    {
+        if variable.typ.is_unknown_placeholder ! then
+            store variable.typ self.require_type return
+        fi
+        if hint std::Option::Some(typ) is then
+            store typ self.require_type
+        else
+            f"Local `{variable.name}` lacks concrete use type" = message message.as_str self.fail
+        fi
+    }
+
+    fn require_local
+        self:mut$ProgramCommit
+        name:$str
+        context:$std::Option[$common::Function]
+        capture:bool
+        hint:$std::Option[common::Type]
+        store:$common::SymbolStore
+    {
+        if name self.temporary_names.has_str then
+            return
+        fi
+        if context std::Option::Some(body) is then
+            for variable in body.captures.iter do
+                if name variable.name.as_str == then
+                    store hint variable self.require_binding_type return
+                fi
+            done
+            if capture then
+                f"Missing capture `{name}` in program commitment" = message message.as_str self.fail return
+            fi
+            for variable in body.variables.iter do
+                if name variable.name.as_str == then
+                    store hint variable self.require_binding_type return
+                fi
+            done
+        elif capture ! then
+            if name store.variables.get_str std::Option::Some(variable) is then
+                store hint variable self.require_binding_type return
+            fi
+        fi
+        f"Missing local or capture `{name}` in program commitment" = message message.as_str self.fail
+    }
+
+    fn require_member
+        self:mut$ProgramCommit
+        access:$common::StructMemberAccess
+        store:$common::SymbolStore
+    {
+        if access.struct_name.as_str store.structs.get_str std::Option::Some(structure) is then
+            if access.member_index structure.members.length > then
+                return
+            fi
+        fi
+        "Missing struct member in program commitment" self.fail
+    }
+
+    fn require_struct self:mut$ProgramCommit name:$str store:$common::SymbolStore {
+        if name store.structs.has_str ! then
+            "Missing struct constructor in commitment" self.fail
+        fi
+    }
+
+    fn require_struct_fields
+        self:mut$ProgramCommit
+        name:$str
+        fields:$std::List[std::String]
+        store:$common::SymbolStore
+    {
+        name store.structs.get_str = found_structure
+        if found_structure.is_none then
+            "Missing struct in commitment" self.fail return
+        fi
+        found_structure.unwrap = structure
+        std::Set[std::String]::new = seen
+        for field in fields.iter do
+            if field seen.has then
+                "Repeated struct field in commitment" self.fail return
+            fi
+            field.clone seen.add
+            false = found
+            for member in structure.members.iter do
+                if field.as_str member.name.as_str == then
+                    true = found
+                fi
+            done
+            if found ! then
+                "Missing struct field in commitment" self.fail return
+            fi
+        done
+    }
+
+    fn require_variant
+        self:mut$ProgramCommit
+        variant:$common::EnumVariant
+        store:$common::SymbolStore
+    {
+        if common::MATCH_WILDCARD variant.variant_name.as_str == then
+            return
+        fi
+        variant.enum_name.as_str store.enums.get_str = found_enum
+        if found_enum std::Option::Some(enumeration) is then
+            variant.variant_name.as_str enumeration.variants common::string_list_index = index
+            if 0 index < then
+                "Missing variant in commitment" self.fail return
+            fi
+            if variant.ordinal.is_none then
+                "Missing variant ordinal in commitment" self.fail return
+            fi
+            if
+                index variant
+                    .ordinal
+                    .clone
+                    .unwrap !=
+            then
+                "Inconsistent variant ordinal in commitment" self.fail return
+            fi
+            if variant.bindings.is_empty then
+                return
+            fi
+            if variant.variant_name.as_str enumeration.variant_types.get_str std::Option::Some(payload) is then
+                if payload.length variant.bindings.length <= then
+                    return
+                fi
+            fi
+        fi
+        f"Missing or inconsistent variant `{variant.enum_name}::{variant.variant_name}` in commitment" = message message.as_str self.fail
+    }
+
+    fn require_pattern
+        self:mut$ProgramCommit
+        pattern:$common::PatternValue
+        store:$common::SymbolStore
+    {
+        pattern match
+            common::PatternValue::EnumVariant(variant) => store variant self.require_variant
+            common::PatternValue::Struct(structure) => {
+                structure.bindings.keys = fields
+                store fields structure.struct_name.as_str self.require_struct_fields
+            }
+            common::PatternValue::Literal(_) => {
+            }
+        end
+    }
+
+    fn check_body
+        self:mut$ProgramCommit
+        ops:$std::List[common::Op]
+        context:$std::Option[$common::Function]
+        store:$common::SymbolStore
+    {
+        for op in ops.iter do
+            if self.failure.is_some then
+                return
+            fi
+            if op.type_hint std::Option::Some(typ) is then
+                store typ self.require_type
+                if self.failure std::Option::Some(type_failure) is then
+                    f"{op.location.file} offset {op
+                        .location
+                        .span
+                        .offset}: {type_failure}" = detail
+                    detail std::Option::Some = self.failure return
+                fi
+            fi
+            if op.value common::OpValue::BindTemporary(binding) is then
+                binding.name.clone self.temporary_names.add
+            fi
+            if op.ownership std::Option::Some(ownership) is then
+                for assignment in ownership.assignments.iter do
+                    store assignment.typ self.require_type
+                    store assignment.typ.clone std::Option::Some false context assignment.name.as_str self.require_local
+                done
+                if ownership.conditional_move std::Option::Some(name) is then
+                    store op.type_hint false context name.as_str self.require_local
+                fi
+                for cleanup in ownership.cleanups.iter do
+                    store cleanup.typ self.require_destruction
+                    store cleanup.typ.clone std::Option::Some false context cleanup.name.as_str self.require_local
+                done
+            fi
+            if op.value.requires_checked_hint op.type_hint.is_none && then
+                f"Operation in {op.location.file} at offset {op
+                    .location
+                    .span
+                    .offset} lacks a required checked type" = message message.as_str self.fail return
+            fi
+            op.value match
+                common::OpValue::Drop => store op
+                    .type_hint
+                    .clone
+                    .unwrap self.require_destruction
+                common::OpValue::SizeOf(typ) => store typ self.require_type
+                common::OpValue::DestructionFn(typ) => store typ self.require_destruction
+                common::OpValue::PtrRead(typ) => store typ self.require_type
+                common::OpValue::PtrWrite(typ) => store typ self.require_type
+                common::OpValue::PtrAsRef(typ) => store typ self.require_type
+                common::OpValue::PtrAsMut(typ) => store typ self.require_type
+                common::OpValue::PtrFromRaw(typ) => store typ self.require_type
+                common::OpValue::Rejected => "Rejected operation in program commitment" self.fail
+                common::OpValue::Identifier(_) => "Unresolved identifier in program commitment" self.fail
+                common::OpValue::MethodCall(_) => "Unresolved method in program commitment" self.fail
+                common::OpValue::QualifiedMethodCall(_) => "Unresolved method in program commitment" self.fail
+                common::OpValue::TraitMethodCall(_) => "Unresolved trait dispatch in program commitment" self.fail
+                common::OpValue::TraitMethodRef(_) => "Unresolved trait reference in program commitment" self.fail
+                common::OpValue::Print => "Unresolved print in program commitment" self.fail
+                common::OpValue::NumericCall(_) => "Unresolved numeric dispatch in program commitment" self.fail
+                common::OpValue::FnCall(name) => store name.as_str self.require_function
+                common::OpValue::FnPush(name) => store name.as_str self.require_function
+                common::OpValue::PushArray(items) => store context items self.check_body
+                common::OpValue::ExprGroup(items) => store context items self.check_body
+                common::OpValue::MatchArm(arm) => {
+                    store arm.pattern_value self.require_pattern
+                    store context arm.guard_ops self.check_body
+                }
+                common::OpValue::PushEnumVariant(variant) => store variant self.require_variant
+                common::OpValue::IsCheck(variant) => store variant self.require_variant
+                common::OpValue::StructLiteral(literal) => store literal.field_order literal.struct_name.as_str self.require_struct_fields
+                common::OpValue::StructNew(structure) => store structure.name.as_str self.require_struct
+                common::OpValue::Question(name) => store op.type_hint false context name.as_str self.require_local
+                common::OpValue::PushVar(name) => store op.type_hint false context name.as_str self.require_local
+                common::OpValue::AssignVar(name) => store op.type_hint false context name.as_str self.require_local
+                common::OpValue::AssignInc(name) => store op.type_hint false context name.as_str self.require_local
+                common::OpValue::AssignDec(name) => store op.type_hint false context name.as_str self.require_local
+                common::OpValue::PushCapture(name) => store op.type_hint true context name.as_str self.require_local
+                common::OpValue::StructMemberProject(access) => store access self.require_member
+                common::OpValue::StructMemberStore(access) => store access self.require_member
+                common::OpValue::NumericTry(conversion) => {
+                    store conversion.source self.require_type
+                    f"{common::STD_NAMESPACE}__numeric_try_{conversion.target.format}" = wrapper
+                    store wrapper.as_str self.require_function
+                }
+                common::OpValue::IntegerTry(conversion) => {
+                    f"{common::STD_NAMESPACE}__numeric_try_{conversion.target.format}" = wrapper
+                    store wrapper.as_str self.require_function
+                }
+                _ => {
+                }
+            end
+        done
+    }
+}
+
+pub fn commit_program result:TypecheckResult -> std::Result[CheckedProgram std::String] {
+    if result.diagnostics.has_errors then
+        "Program commitment requires error-free checking".to_str std::Result::Error return
+    fi
+    std::Option[std::String]::None std::Set[std::String]::new std::Set[std::String]::new std::Set[std::String]::new std::Set[std::String]::new std::List[std::String]::new
+    ProgramCommit = commit
+    result.store result.global_stack_effect commit.check_effect
+
+    result.store std::Option[$common::Function]::None result.ops commit.check_body
+    while commit.pending.is_empty ! commit.failure.is_none && do
+        std::Set[std::String]::new = commit.temporary_names
+        commit.pending.pop = name
+        name.as_str result
+            .store
+            .get_function
+            .unwrap = function
+        for capture in function.captures.iter do
+            result.store capture.typ commit.require_destruction
+        done
+        result.store function std::Option::Some function.ops commit.check_body
+    done
+    if commit.failure std::Option::Some(message) is then
+        message.clone std::Result::Error return
+    fi
+    commit drop
+    result match
+        TypecheckResult { store: store ops: ops } => ops store CheckedProgram std::Result::Ok
+    end
+}
+
+impl common::OpValue {
+    fn requires_checked_hint self:$common::OpValue -> bool {
+        self match
+            common::OpValue::Drop => true
+            common::OpValue::Dup => true
+            common::OpValue::Copy => true
+            common::OpValue::Over => true
+            common::OpValue::Typeof => true
+            common::OpValue::PushArray(_) => true
+            common::OpValue::PushFloat(_) => true
+            common::OpValue::Add => true
+            common::OpValue::Sub => true
+            common::OpValue::Mul => true
+            common::OpValue::Div => true
+            common::OpValue::Mod => true
+            common::OpValue::WrappingAdd => true
+            common::OpValue::WrappingSub => true
+            common::OpValue::WrappingMul => true
+            common::OpValue::Shl => true
+            common::OpValue::Shr => true
+            common::OpValue::BitAnd => true
+            common::OpValue::BitOr => true
+            common::OpValue::BitXor => true
+            common::OpValue::BitNot => true
+            common::OpValue::Eq => true
+            common::OpValue::Ge => true
+            common::OpValue::Gt => true
+            common::OpValue::Le => true
+            common::OpValue::Lt => true
+            common::OpValue::Ne => true
+            common::OpValue::PrintInt => true
+            _ => false
+        end
+    }
 }

@@ -11,24 +11,25 @@ import "std" as std
 import "../../compiler/common.casa" as common
 import "../../compiler/error.casa" as error
 import "../../compiler/lexer.casa" as lexer
-import "../../compiler/legacy_parser.casa" as syntax
-import "../../compiler/bytecode.casa" as bytecode
+import "../../compiler/source_builder.casa" as syntax
+import "../../compiler/products.casa" as products
+import "../../compiler/backend.casa" as backend
 import "../../compiler/typechecker.casa" as typechecker
 import "../../lib/test.casa" as test
 
-pub fn compile_test_program
-    ops:$std::List[common::Op]
-    store:$common::SymbolStore
--> common::Program {
-    store.clone_for_typecheck = checked_store
-    ops.clone = checked_ops
-    std::Set[i64]::new
-    error::Diagnostics::new
-    checked_ops
-    common::empty_stack_effect
-    checked_store
-    typechecker::TypecheckResult = result
-    result bytecode::compile_typechecked.unwrap
+# End-to-end tests enter through the same product as the CLI.
+pub fn assemble_test_source code:$str diagnostics:mut$error::Diagnostics -> std::String {
+    "" lexer::absolute_normalize_path = base
+    code.to_str "test.casa".to_str products::SourceUnit base swap products::CompilationInput::new
+    products::Target::LinuxX86_64 swap products::assembly.unwrap = result
+    result
+        .get_report
+        .get_diagnostics
+        .clone diagnostics.merge
+    result match
+        products::AssemblyResult::Produced(_ assembly) => assembly.get_text.clone
+        products::AssemblyResult::Rejected(_) => "Expected valid assembly in test" panic
+    end
 }
 
 pub fn assert_has_errors [M:std::Display] message:$M diagnostics:$error::Diagnostics {
@@ -264,4 +265,34 @@ pub fn typecheck_test_source
 -> typechecker::TypecheckResult {
     diagnostics code parse_resolve_test_parts = store = ops
     store ops typechecker::type_check
+}
+# Private commitment tests can corrupt checked state, then use the constructing
+# interface to verify that no incomplete program reaches target planning.
+pub fn assemble_checked_test
+    result:typechecker::TypecheckResult
+-> std::Result[std::String std::String] {
+    result typechecker::commit_program match
+        std::Result::Ok(program) => {
+            program backend::compile_assembly match
+                std::Result::Ok(text) => text std::Result::Ok
+                std::Result::Error(failure) => failure.message.clone std::Result::Error
+            end
+        }
+        std::Result::Error(message) => message std::Result::Error
+    end
+}
+# The final text section contains generated functions and the root. Runtime
+# assembly precedes it, so tests cannot match runtime implementations by mistake.
+pub fn program_assembly assembly:$std::String -> std::String {
+    assembly.as_str ".section .text\n" str::split.pop
+}
+
+pub fn function_assembly assembly:$std::String name:$str -> std::String {
+    f"fn_{name}:\n" = marker
+    assembly.as_str marker.as_str str::split = functions
+    if 2 functions.length != then
+        "Expected exactly one generated function" panic
+    fi
+    1 functions.get.as_str "\n\n" str::split = sections
+    0 sections.get.clone
 }

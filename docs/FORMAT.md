@@ -239,7 +239,7 @@ Keep type arguments adjacent to a function reference: `&length[BUFFER_BYTES]`.
 
 ```casa
 struct Parser {
-    store:          SymbolStore
+    sources:        SourceStore
     included_files: Set[str]
 }
 
@@ -320,12 +320,12 @@ Keep `pub`, `unsafe`, or `extern` before `fn` on the first line.
 
 ```casa
 fn make_compiler_with_tables
-    store:SymbolStore
+    sources:SourceStore
     ops:List[Op]
     function:Option[Function]
     string_table:List[str]
     constants_table:List[str]
--> BytecodeCompiler {
+-> SourceReader {
     ...
 }
 ```

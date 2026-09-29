@@ -15,7 +15,17 @@ three runs.
 
 ## Commands
 
-Run these commands from the branch worktree:
+These instructions and results are historical. Run them from a detached
+checkout of `0f4013b`, which retains the original bytecode-only workloads and
+private GDB probe. The current `.casa` workloads use complete assembly requests
+through `products` and cannot reproduce the figures below.
+
+```sh
+git worktree add --detach /tmp/casa-control-flow-history 0f4013b
+cd /tmp/casa-control-flow-history
+```
+
+Run the following commands in that historical checkout:
 
 ```sh
 git worktree add --detach /tmp/casa-450-main f414a6e

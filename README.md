@@ -87,6 +87,7 @@ Library references:
 Tooling:
 
 - [Compiler diagnostics](docs/errors.md)
+- [Compiler request products](docs/compiler-products.md)
 - [Language server](docs/language-server.md)
 - [Formatter usage and rules](docs/FORMAT.md)
 - [Casa style](docs/STYLE.md)
