@@ -14,6 +14,7 @@ import "compiler/lexer.casa" as lexer
 import "compiler/legacy_parser.casa" as syntax
 import "compiler/typechecker.casa" as typechecker
 import "compiler/analysis.casa" as analysis
+import "compiler/products.casa" as products
 import "compiler/document.casa" as document
 import "workspace.casa" as workspace
 
@@ -40,9 +41,16 @@ pub struct LspLocation {
 }
 
 pub struct LspDiagnostic {
-    pub range:    LspRange
+    pub range:               std::Option[LspRange]
+    pub message:             std::String
+    pub severity:            i64
+    pub code:                str
+    pub related_information: std::List[LspDiagnosticRelatedInformation]
+}
+
+pub struct LspDiagnosticRelatedInformation {
+    pub location: LspLocation
     pub message:  std::String
-    pub severity: i64
 }
 
 pub struct CompletionItem {
@@ -382,13 +390,55 @@ impl LspLocation {
 }
 
 impl LspDiagnostic {
-    pub fn to_json diag:$LspDiagnostic -> json::JsonValue {
-        diag LspDiagnostic::range = diag_range: $LspRange
+    pub fn to_json self:$LspDiagnostic -> std::Option[json::JsonValue] {
+        if self.range std::Option::Some(range) is then
+            range.to_json
+        else
+            std::Option[json::JsonValue]::None return
+        fi = range_json
         json::json_object
-        "range".to_str diag_range.to_json json::json_set
-        "message".to_str diag LspDiagnostic::message.clone json::JsonValue::JsonString json::json_set
-        "severity".to_str diag LspDiagnostic::severity json::JsonValue::JsonInt json::json_set
+        "range".to_str range_json json::json_set
+        "message".to_str self.message.clone json::JsonValue::JsonString json::json_set
+        "severity".to_str self.severity json::JsonValue::JsonInt json::json_set
+        "code".to_str self.code.to_str json::JsonValue::JsonString json::json_set
         "source".to_str "casa".to_str json::JsonValue::JsonString json::json_set
+        if self.related_information.is_empty ! then
+            std::List[json::JsonValue]::new = related_information
+            for note in self.related_information.iter do
+                json::json_object
+                "location".to_str note.location.to_json json::json_set
+                "message".to_str note.message.clone json::JsonValue::JsonString json::json_set
+                json::JsonValue::JsonObject related_information.push
+            done
+            "relatedInformation".to_str related_information json::JsonValue::JsonArray json::json_set
+        fi
+        json::JsonValue::JsonObject std::Option::Some
+    }
+
+    pub fn to_message_json self:$LspDiagnostic -> json::JsonValue {
+        f"{self.code}: {self.message}" = message
+        for note in self.related_information.iter do
+            note
+                .location
+                .range
+                .start_line 1 + = start_line
+            note
+                .location
+                .range
+                .start_col 1 + = start_column
+            note
+                .location
+                .range
+                .end_line 1 + = end_line
+            note
+                .location
+                .range
+                .end_col 1 + = end_column
+            f"\n  Related: {note.message} ({note.location.uri}:{start_line}:{start_column}-{end_line}:{end_column})".as_str message.append
+        done
+        json::json_object
+        "type".to_str self.severity json::JsonValue::JsonInt json::json_set
+        "message".to_str message json::JsonValue::JsonString json::json_set
         json::JsonValue::JsonObject
     }
 }
@@ -506,9 +556,11 @@ pub fn compile_document_with_paths
             cached_state.source.clone cached_state.file_path.clone input.source_overrides.set
         fi
     done
-    input analysis::analyze = analysis
-
-    file_path analysis diagnostics_from = diagnostics
+    input analysis::analyze.into_parts = typechecked = sources = compiler_diagnostics
+    sources compiler_diagnostics products::Report::new = report
+    file_path report diagnostics_from = diagnostics
+    report.into_parts = sources = compiler_diagnostics
+    typechecked sources compiler_diagnostics analysis::AnalysisResult = analysis
     file_path.to_str source.to_str analysis document::AnalyzedDocument::new = state
 
     diagnostics
@@ -570,81 +622,78 @@ impl LspState {
     }
 }
 
-pub fn diagnostics_from analysis:$analysis::AnalysisResult path:$str -> std::List[LspDiagnostic] {
+pub fn diagnostics_from report:$products::Report path:$str -> std::List[LspDiagnostic] {
     std::List[LspDiagnostic]::new = diagnostics
-
-    for
-        diagnostic in analysis
-            .diagnostics
-            .entries
-            .iter
-    do
-        if diagnostic error::Diagnostic::Error(error) is then
-            if
-                "" error error::CasaError::location common::Location::file !=
-                error error::CasaError::location common::Location::file path != &&
-            then
+    0 = index: u64
+    while index report.count_diagnostics > do
+        index report.get_presentation = presentation
+        1 += index
+        if presentation.location std::Option::Some(location) is then
+            if location.file.as_str path != then
                 continue
             fi
-            error.location.clone = location
-            if
-                location.file.as_str analysis
-                    .sources
-                    .get
-                    .is_none
-            then
-                path.to_str = location.file
-            fi
+            location report.get_sources convert_location_to_lsp_range std::Option::Some
+        else
+            std::Option[LspRange]::None
+        fi = range
+        presentation.severity match
+            error::DiagnosticSeverity::Error => DIAGNOSTIC_ERROR
+            error::DiagnosticSeverity::Warning => DIAGNOSTIC_WARNING
+        end = severity
+        presentation.format_message = message
+        if presentation.notes std::Option::Some(notes) is then
+            message report.get_sources notes convert_diagnostic_notes
+        else
+            std::List[LspDiagnosticRelatedInformation]::new
+        fi = related_information
+        related_information presentation.code severity message range LspDiagnostic diagnostics.push
+    done
+    diagnostics
+}
 
-            # Build message
-            std::String::new = msg_builder
-            error error::CasaError::message.as_str msg_builder.append
-            if error.expected std::Option::Some(expected) is then
-                "\nExpected: " msg_builder.append
-                expected.as_str msg_builder.append
-            fi
-            if error error::CasaError::got std::Option::Some(got) is then
-                "\n" msg_builder.append
-                error error::CasaError::got_label.as_str msg_builder.append
-                ": " msg_builder.append
-                got.as_str msg_builder.append
-            fi
-
-            DIAGNOSTIC_ERROR
-            msg_builder
-            location analysis.sources convert_location_to_lsp_range
-            LspDiagnostic diagnostics.push
-        elif diagnostic error::Diagnostic::Warning(warning) is then
-            if
-                "" warning error::CasaWarning::location common::Location::file !=
-                warning error::CasaWarning::location common::Location::file path != &&
-            then
-                continue
-            fi
-            warning.location.clone = location
-            if
-                location.file.as_str analysis
-                    .sources
-                    .get
-                    .is_none
-            then
-                path.to_str = location.file
-            fi
-            DIAGNOSTIC_WARNING
-            warning error::CasaWarning::message.clone
-            location analysis.sources convert_location_to_lsp_range
-            LspDiagnostic diagnostics.push
+fn convert_diagnostic_notes
+    notes:$std::List[error::CasaNote]
+    sources:$lexer::SourceStore
+    message:mut$std::String
+-> std::List[LspDiagnosticRelatedInformation] {
+    std::List[LspDiagnosticRelatedInformation]::new = related_information
+    for note in notes.iter do
+        "\n  Note: " message.append
+        note.message.as_str message.append
+        if
+            note
+                .location
+                .file
+                .as_str sources.get.is_some
+        then
+            note.message.clone
+            note
+                .location
+                .span
+                .length note
+                .location
+                .span
+                .offset note
+                .location
+                .file
+                .clone
+            document::DocumentLocation sources convert_document_location_to_lsp
+            LspDiagnosticRelatedInformation related_information.push
         fi
     done
-
-    diagnostics
+    related_information
 }
 
 pub fn publish_diagnostics uri:$str diagnostics:std::List[LspDiagnostic] {
     std::List[json::JsonValue]::new = json_array
     0 = diagnostic_index: u64
     while diagnostic_index diagnostics.length > do
-        diagnostic_index diagnostics.get.to_json json_array.push
+        diagnostic_index diagnostics.get = diagnostic
+        if diagnostic.to_json std::Option::Some(value) is then
+            value json_array.push
+        else
+            diagnostic.to_message_json "window/showMessage" send_notification
+        fi
         1 += diagnostic_index
     done
     json::json_object
