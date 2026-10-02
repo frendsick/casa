@@ -52,7 +52,6 @@ See [README.md](./README.md) for basic info, language docs, and examples.
 
 Always load the relevant doc when the matching workflow comes up:
 
-- **Git** — `docs/agents/git.md`
 - **Testing** — `docs/agents/testing.md`
 - **Review** — `docs/agents/review.md`
 - **Examples** — `docs/agents/examples.md`
