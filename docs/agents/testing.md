@@ -134,4 +134,6 @@ fixed-point tests.
 
 ## When examples change
 
-See [examples.md](./examples.md).
+For changes to language features or standard library functions that affect
+example output, **MUST** regenerate the expected-output files used by
+`tests/test_examples.sh`. The test script will tell you which file to refresh.
