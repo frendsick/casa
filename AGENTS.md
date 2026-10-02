@@ -32,6 +32,11 @@ See [README.md](./README.md) for basic info, language docs, and examples.
 - **Path-style** (`import "lib/std.casa"`, `import "/abs/path.casa"`): contains `/` or ends with `.casa`. Resolved relative to the importing file (or used as-is when absolute). No search.
 - **Module-style** (`import "std"`): bare name. Resolved against the importing file's directory first, then each `-L`/`--library-path` directory in CLI order. First existing match wins.
 
+## Worktree setup
+
+In each new worktree, run `./install.sh` to download `casac` and `casafmt`
+from the release in `casa-release.env`.
+
 ## Bootstrap releases
 
 - When the newest stable compiler cannot compile valid Casa syntax used by
@@ -53,6 +58,7 @@ See [README.md](./README.md) for basic info, language docs, and examples.
 Always load the relevant doc when the matching workflow comes up:
 
 - **Testing** — `docs/agents/testing.md`
+- **Releases**: `docs/agents/testing.md#ci-bootstrap-compiler`
 - **Review** — `docs/agents/review.md`
 - **Examples** — `docs/agents/examples.md`
 - **Issue tracker** — `docs/agents/issue-tracker.md`

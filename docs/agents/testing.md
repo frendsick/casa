@@ -123,6 +123,9 @@ fixed-point tests.
   and `install.sh`.
 - The named release must contain `casac` and `casafmt`. `install.sh` downloads
   both, and the release `casafmt` must be built with that release's `casac`.
+- For manual release uploads, use files named exactly `casac` and `casafmt`,
+  without version suffixes. With `gh release create`, `#label` changes the display
+  label, not the asset filename.
 - Consumers must parse and validate `casa-release.env` as data. Do not source it or
   append it directly to `$GITHUB_ENV`.
 - PR CI should use a stable released bootstrap compiler by default.
