@@ -7,8 +7,7 @@ Issues and PRDs for this repo live as GitHub issues. Use the `gh` CLI for all op
 Search open and closed issues for matching work. Read the relevant issue body,
 comments, labels, and dependency state. Inspect the current code before
 accepting a suggested design. Record newly discovered blockers with native
-relationships and add material findings to the affected existing issue. Then
-follow the preflight in [git.md](./git.md#worktrees).
+relationships and add material findings to the affected existing issue.
 
 ## Conventions
 
