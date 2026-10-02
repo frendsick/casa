@@ -4,6 +4,9 @@ How to use Casa's domain documentation while exploring the codebase.
 
 ## Before domain work
 
+Casa's glossary is `CONTEXT.md`. Use it wherever skill instructions refer to
+`GLOSSARY.md`.
+
 - Read the relevant terms and relationships in `CONTEXT.md`.
 - Search `docs/adr/` for decisions that touch the work.
 - Treat ADRs as decisions, not implementation status. Verify current behavior in
