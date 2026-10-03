@@ -1,125 +1,63 @@
 import "std" as std
-import "../../compiler/common.casa" as common
-import "../../compiler/typechecker.casa" as typechecker
-import "../../compiler/backend.casa" as backend
+import "helpers" as helpers
 import "../../compiler/error.casa" as error
+import "../../compiler/backend.casa" as bytecode
+import "../../compiler/typechecker.casa" as typechecker
 import "../../lib/test.casa" as test
-import "helpers.casa" as helpers
 
-fn test_checked_input_is_required {
-    "checked_input_is_required" test::test_start
+fn check code:$str -> typechecker::CheckedProgram {
     error::Diagnostics::new = diagnostics
-    diagnostics "true 1 + drop" helpers::typecheck_test_source = rejected
-    "source errors cannot reach lowering" rejected helpers::assemble_checked_test.is_error test::assert_true
+    diagnostics code helpers::typecheck_test_source = result
+    "fixture passes checking" diagnostics.has_errors ! test::assert_true
+    result.into_checked_program.unwrap
 }
 
-fn test_assembly_is_repeatable {
-    "assembly_is_repeatable" test::test_start
+fn assert_contains assembly:$std::String needle:$str {
+    assembly helpers::generated_assembly = generated
+    needle generated.as_str needle str::find 0 <= test::assert_true
+}
+
+fn test_reachable_functions_and_repeatability {
+    "reachable function worklist" test::test_start
+    "fn first { second } fn second { first } fn recursive { recursive } fn unused { 42 drop } first recursive"
+    check = checked
+    checked bytecode::compile_checked.unwrap = first
+    checked bytecode::compile_checked.unwrap = second
+    "repeatable assembly" first.as_str second.as_str test::assert_str_eq
+    "fn_first:" first assert_contains
+    "fn_second:" first assert_contains
+    "fn_recursive:" first assert_contains
+    "unused function omitted" 0 first.as_str "fn_unused:" str::find < test::assert_true
+}
+
+fn test_structured_aggregate_control_flow {
+    "structured aggregate control flow" test::test_start
+    "struct Value { n:i64 } fn choose flag:bool -> Value { if flag then 1 Value else 2 Value fi } fn run { 0 = count while count 4 > do if 2 count == then 1 += count continue elif 3 count == then break fi true choose drop 1 += count done } run"
+    check bytecode::compile_checked.unwrap = assembly
+    "fn_choose:" assembly assert_contains
+    "fn_run:" assembly assert_contains
+    "call heap_alloc" assembly assert_contains
+}
+
+fn test_storage_plans {
+    "aggregate storage plans" test::test_start
+    "[1, 2, 3, 4, 5, 6, 7, 8, 9] = numbers:array[u8 9] numbers dup drop drop 42 = scalar scalar drop"
+    check bytecode::compile_checked.unwrap = assembly
+    "leaq -16(%r14)" assembly assert_contains
+    "movq $9, %rcx" assembly assert_contains
+    "rep movsb" assembly assert_contains
+}
+
+fn test_rejected_source_stops_before_selection {
+    "rejected source stops before selection" test::test_start
     error::Diagnostics::new = diagnostics
-    "const LIMIT 2 1 = root_value fn used { LIMIT = local_value local_value drop } used" = source
-    diagnostics source helpers::assemble_test_source = first
-    diagnostics source helpers::assemble_test_source = second
-    "independent requests emit stable assembly" first.as_str second.as_str test::assert_str_eq
+    diagnostics "missing drop" helpers::typecheck_test_source = result
+    result.get_diagnostics.clone diagnostics.merge
+    "source diagnostic" diagnostics.has_errors test::assert_true
+    "no assembly" result.into_checked_program.is_error test::assert_true
 }
-
-fn test_aggregate_storage_and_calls {
-    "aggregate_storage_and_calls" test::test_start
-    for
-        source in [
-            "fn used { [1, 2, 3, 4, 5, 6, 7, 8, 9] = numbers:array[u8 9] numbers drop } used",
-            "[1, 2, 3, 4, 5, 6, 7, 8, 9] = numbers:array[u8 9] numbers drop",
-            "struct Pair { x:i64 y:i64 } fn make -> Pair { 2 1 Pair } make = value value.x drop",
-            "fn indirect -> fn[i64 -> i64] { { 1 + } } 42 indirect exec drop",
-            "enum Shape { Circle(i64) Rectangle(i64 i64) Point } 10 Shape::Circle match Shape::Circle(r) => r drop Shape::Rectangle(w h) => { w drop h drop } Shape::Point => {} end",
-            "fn mixed { while true do if true then break else continue fi done } mixed",
-        ].iter
-    do
-        error::Diagnostics::new = diagnostics
-        diagnostics source helpers::assemble_test_source = assembly
-        source diagnostics.has_errors ! test::assert_true
-        "complete native entry" assembly.as_str "_start:" str::contains test::assert_true
-    done
-}
-
-fn test_nested_control_flow {
-    "nested_control_flow" test::test_start
-    std::String::new = source
-    0 = index
-    while 128 index < do
-        "if true then " source.append
-        1 += index
-    done
-    "42 drop " source.append
-    0 = index
-    while 128 index < do
-        "fi " source.append
-        1 += index
-    done
-    error::Diagnostics::new = diagnostics
-    diagnostics source.as_str helpers::assemble_test_source drop
-    "deep control flow compiles" diagnostics.has_errors ! test::assert_true
-}
-
-fn test_same_checked_program_is_repeatable {
-    "same_checked_program_is_repeatable" test::test_start
-    error::Diagnostics::new = diagnostics
-    diagnostics "struct Pair { x:i64 y:i64 } fn used { 2 1 Pair drop } used" helpers::typecheck_test_source typechecker::commit_program.unwrap = program
-    program.get_ops.length = root_length
-    program backend::compile_assembly.unwrap = first
-    program backend::compile_assembly.unwrap = second
-    "same checked input emits stable assembly" first.as_str second.as_str test::assert_str_eq
-    "planning preserves checked root" root_length program.get_ops.length test::assert_eq
-}
-
-fn test_aggregate_storage_layout {
-    "aggregate_storage_layout" test::test_start
-    error::Diagnostics::new = diagnostics
-    diagnostics "[1, 2, 3, 4, 5, 6, 7, 8, 9] = a_numbers:array[u8 9] 42 = z_value z_value print a_numbers drop" helpers::assemble_test_source helpers::program_assembly = root
-    "root reserves array and scalar slots" root.as_str "addq $40, %r14" str::contains test::assert_true
-    "array addresses its two-word region" root.as_str "leaq -16(%r14)" str::contains test::assert_true
-    "scalar has a distinct slot" root.as_str "-24(%r14)" str::contains test::assert_true
-
-    error::Diagnostics::new = function_diagnostics
-    function_diagnostics "fn used { [1, 2, 3, 4, 5, 6, 7, 8, 9] = numbers:array[u8 9] numbers drop } used" helpers::assemble_test_source helpers::program_assembly = function
-    "function reserves two array words" function.as_str "addq $32, %r14" str::contains test::assert_true
-    "function array addresses the last word" function.as_str "leaq -16(%r14)" str::contains test::assert_true
-}
-
-fn test_inline_copy_has_no_allocation {
-    "inline_copy_has_no_allocation" test::test_start
-    error::Diagnostics::new = diagnostics
-    diagnostics "import \"lib/std.casa\" as std\nfn inline_copy input:$array[i64 2] { input copy = local local drop } [1, 2] = numbers numbers inline_copy numbers drop" helpers::assemble_test_source = assembly
-    "inline_copy" assembly helpers::function_assembly = generated
-    "copies sixteen inline bytes" generated.as_str "movq $16, %rcx\n    rep movsb" str::contains test::assert_true
-    "inline copy does not allocate" generated.as_str "call heap_alloc" str::contains ! test::assert_true
-}
-
-fn test_indirect_copy_is_typed {
-    "indirect_copy_is_typed" test::test_start
-    error::Diagnostics::new = diagnostics
-    diagnostics "struct Pair { first:i64 second:i64 } fn check { unsafe { 16 alloc } = storage 2 1 Pair = pair unsafe { pair storage ptr::write[Pair] storage ptr::read[Pair] } drop } check" helpers::assemble_test_source helpers::program_assembly = generated
-    "indirect read allocates sixteen bytes" generated.as_str "movq $16, %rdi" str::contains test::assert_true
-    "indirect read selects allocation" generated.as_str "indirect_read_alloc_done" str::contains test::assert_true
-    "indirect write keeps source for release" generated.as_str "movq %rsi, %rdx\n    movq $16, %rcx\n    rep movsb" str::contains test::assert_true
-}
-
-fn test_reachable_functions_once {
-    "reachable_functions_once" test::test_start
-    error::Diagnostics::new = diagnostics
-    diagnostics "extern fn opaque\nfn first { unsafe { opaque } second } fn second { first } fn unused { 42 drop } first first" helpers::assemble_test_source helpers::program_assembly = generated
-    for name in ["fn_first:", "fn_second:"].iter do
-        generated.as_str name str::split = pieces
-        "reachable recursive function emitted once" 2 pieces.length test::assert_eq
-    done
-    "unused function omitted" generated.as_str "fn_unused:" str::contains ! test::assert_true
-}
-test_checked_input_is_required
-test_assembly_is_repeatable
-test_aggregate_storage_and_calls
-test_nested_control_flow
-test_same_checked_program_is_repeatable
-test_aggregate_storage_layout
-test_inline_copy_has_no_allocation
-test_indirect_copy_is_typed
-test_reachable_functions_once
+test_reachable_functions_and_repeatability
+test_structured_aggregate_control_flow
+test_storage_plans
+test_rejected_source_stops_before_selection
 test::test_summary

@@ -3,12 +3,13 @@
 # Maintains a virtual stack of types and validates that operations
 # are type-safe.
 import "std" as std
-import "abi" as abi
 import "common" as common
 import "error" as error
 import "block_scope" as block_scope
 import "semantic_rules" as rules
 import "pattern" as pattern
+import "source_body" as source_body
+import "semantic_body" as semantic_body
 
 # ============================================================================
 # TypedStack — typed values with source and unresolved-literal origins.
@@ -18,10 +19,16 @@ struct TypedStack {
     values: std::List[TypedValue]
 }
 
+enum LiteralKind derives std::Copy std::Eq {
+    Integer
+    Numeric
+    Aggregate
+}
+
 struct LiteralRef derives std::Clone {
     id:            i64
     integer_value: i64
-    is_integer:    bool
+    kind:          LiteralKind
 }
 
 enum ValueCapability derives std::Eq std::Copy {
@@ -422,51 +429,99 @@ impl VariableUses {
     }
 }
 
-pub fn collect_variable_uses ops:$std::List[common::Op] uses:VariableUses -> VariableUses {
-    0 = op_index: u64
-    while op_index ops.length > do
-        op_index ops.get = op
-        if op.value common::OpValue::PushVar(name) is then
-            false = cleanup_only
-            if op_index 1 + ops.length > then
-                op_index 1 + ops.get = next_op
-                if next_op.value common::OpValue::Drop is then
-                    true = cleanup_only
-                    op
-                        .location
+impl source_body::SourceNode {
+    fn is_drop self:$source_body::SourceNode -> bool {
+        if self source_body::SourceNode::Leaf(leaf) is then
+            if leaf.term source_body::SourceTerm::Intrinsic(kind) is then
+                kind common::IntrinsicKind::Drop == return
+            fi
+        fi
+        false
+    }
+}
+
+impl source_body::SourceLeaf {
+    fn record_uses
+        self:$source_body::SourceLeaf
+        uses:VariableUses
+        cleanup_only:bool
+    -> VariableUses {
+        if self.term source_body::SourceTerm::Binding(kind name _) is then
+            if kind source_body::BindingSyntax::Read == then
+                if cleanup_only then
+                    self
+                        .origin
                         .span
                         .offset i64::try_from.unwrap uses.cleanup_only_use_offsets.add
                 fi
+                cleanup_only ! 1 self.origin name.as_str uses.record
+                uses return
             fi
-            cleanup_only ! 1 op.location name.as_str uses.record
-        elif
-            op.value common::OpValue::AssignVar is
-            op.value common::OpValue::AssignInc is ||
-            op.value common::OpValue::AssignDec is ||
-        then
-            op common::op_str_value = target
-            target.as_str "." str::split = parts
-            if parts.length 1 < then
-                1 = occurrences: u64
-                if
-                    op.value common::OpValue::AssignInc is
-                    op.value common::OpValue::AssignDec is ||
-                then
-                    1 += occurrences
+            if
+                kind source_body::BindingSyntax::Assign !=
+                kind source_body::BindingSyntax::Increment != &&
+                kind source_body::BindingSyntax::Decrement != &&
+            then
+                uses return
+            fi
+            name.as_str "." str::split = parts
+            if parts.length 1 >= then
+                uses return
+            fi
+            if kind source_body::BindingSyntax::Assign == then 1 else 2 fi = occurrences: u64
+            true occurrences self.origin 0 parts.get.as_str uses.record
+        fi
+        uses
+    }
+}
+# Source uses are measured before checking, while lexical spelling is intact.
+fn collect_source_variable_uses body:$source_body::SourceBody uses:VariableUses -> VariableUses {
+    body.get_nodes = nodes
+    0 = index: u64
+    while index nodes.length > do
+        index nodes.get match
+            source_body::SourceNode::Rejected(_) => {
+            }
+            source_body::SourceNode::Leaf(leaf) => {
+                index 1 + nodes.length > = has_next
+                false = cleanup_only
+                if has_next then
+                    index 1 + nodes.get.is_drop = cleanup_only
                 fi
-                true occurrences op.location 0 parts.get.as_str uses.record
-            fi
-        fi
-        if op.value common::OpValue::PushArray(items) is then
-            uses items collect_variable_uses = uses
-        elif op.value common::OpValue::ExprGroup(items) is then
-            uses items collect_variable_uses = uses
-        elif op.value common::OpValue::MatchArm(arm) is then
-            uses arm.guard_ops collect_variable_uses = uses
-        fi
-        1 += op_index
+                cleanup_only uses leaf.record_uses = uses
+            }
+            source_body::SourceNode::Conditional(conditional) => {
+                for branch in conditional.branches.iter do
+                    uses branch.condition collect_source_variable_uses = uses
+                    uses branch.consequent collect_source_variable_uses = uses
+                done
+                if conditional.alternative std::Option::Some(alternative) is then
+                    uses alternative.body collect_source_variable_uses = uses
+                fi
+            }
+            source_body::SourceNode::Loop(loop) => {
+                uses loop.condition collect_source_variable_uses = uses
+                uses loop.body collect_source_variable_uses = uses
+            }
+            source_body::SourceNode::Match(match_body) => {
+                for arm in match_body.arms.iter do
+                    uses arm.guard collect_source_variable_uses = uses
+                    uses arm.body collect_source_variable_uses = uses
+                done
+            }
+            source_body::SourceNode::Unsafe(region) => uses region.body collect_source_variable_uses = uses
+            source_body::SourceNode::Array(compound) => uses compound.body collect_source_variable_uses = uses
+            source_body::SourceNode::Group(compound) => uses compound.body collect_source_variable_uses = uses
+        end
+        1 += index
     done
     uses
+}
+
+enum SourceWork {
+    Array (source_body::SourceBody)
+    Group (source_body::SourceBody)
+    Guard (source_body::SourceBody)
 }
 
 fn decrement_binding_use counts:mut$std::Map[std::String u64] name:$str {
@@ -797,6 +852,11 @@ impl TypedValue {
             borrowed_target.clone = resolved_target
         fi
         for literal in self.literals.iter do
+            if literal.kind LiteralKind::Aggregate == then
+                if self.type_value resolved_target common::stack_effect_type_matches ! then
+                    false return
+                fi
+            fi
             if 0 literal.id != then
                 resolved_target.clone literal.id resolutions.set
             fi
@@ -1352,7 +1412,6 @@ struct TypeChecker {
     pending_lambdas:            std::Map[i64 std::String]
     active_calls:               std::Set[std::String]
     checks:                     mut$SemanticChecks
-    clone_bodies:               bool
     infer_parameters:           bool
     ordered_facts:              std::List[SemanticDependency]
     seen_dependencies:          std::Set[std::String]
@@ -1382,10 +1441,75 @@ impl FunctionSemantics {
     }
 }
 
-enum FunctionCheckStatus derives std::Copy {
-    Checking
-    Checked
-    Rejected
+enum FunctionWork {
+    Pending (source_body::SourceBody)
+    Reserved (CheckedFunction)
+    Completed (CompletedFunction)
+    Rejected (RejectedBody)
+}
+
+enum RejectedBody {
+    Partial (std::List[common::Op])
+    Checked (CompletedFunction)
+}
+
+impl RejectedBody {
+    fn into_analysis
+        self:RejectedBody
+        checks:mut$SemanticChecks
+        rejected:$std::Set[std::String]
+    -> AnalysisBody {
+        self match
+            RejectedBody::Checked(completed) => {
+                checks.verified_operations rejected true completed.body.settle_facts drop
+                completed.into_body AnalysisBody::RejectedChecked
+            }
+            RejectedBody::Partial(partial) => {
+                rejected true partial checks.settle_operation_facts drop
+                partial AnalysisBody::Rejected
+            }
+        end
+    }
+
+    fn lower_operations self:$RejectedBody -> std::List[common::Op] {
+        self match
+            RejectedBody::Partial(operations) => operations.clone
+            RejectedBody::Checked(completed) => completed.body.lower_operations
+        end
+    }
+}
+
+impl FunctionWork {
+    fn into_analysis
+        self:FunctionWork
+        checks:mut$SemanticChecks
+        rejected:$std::Set[std::String]
+    -> AnalysisBody {
+        self match
+            FunctionWork::Completed(completed) => {
+                checks.verified_operations rejected true completed.body.settle_facts drop
+                completed.into_body AnalysisBody::Checked
+            }
+            FunctionWork::Rejected(rejection) => rejected checks rejection.into_analysis
+            FunctionWork::Pending(source) => source AnalysisBody::Source
+            FunctionWork::Reserved(_) => "Cannot finish semantics with active body work" panic
+        end
+    }
+
+    fn get_body self:$FunctionWork -> std::Option[$semantic_body::Body] {
+        self match
+            FunctionWork::Completed(completed) => completed.body std::Option[$semantic_body::Body]::Some
+            _ => std::Option[$semantic_body::Body]::None
+        end
+    }
+
+    fn get_signature self:$FunctionWork -> std::Option[$CheckedFunction] {
+        self match
+            FunctionWork::Reserved(signature) => signature std::Option::Some
+            FunctionWork::Completed(completed) => completed.signature std::Option[$CheckedFunction]::Some
+            _ => std::Option[$CheckedFunction]::None
+        end
+    }
 }
 
 struct FactBranch {
@@ -1394,7 +1518,7 @@ struct FactBranch {
 }
 
 struct SemanticChecks {
-    functions:           std::Map[std::String FunctionCheckStatus]
+    functions:           std::Map[std::String FunctionWork]
     verified_operations: std::Set[i64]
     return_summaries:    std::Map[std::String CallReturnSummary]
 }
@@ -1413,44 +1537,84 @@ impl SemanticChecks {
 
     fn function_is_rejected self:$SemanticChecks name:$str -> bool {
         if name self.functions.get_str std::Option::Some(status) is then
-            status FunctionCheckStatus::Rejected is return
+            status FunctionWork::Rejected is return
         fi
         false
     }
 
     fn body_has_rejected_target self:$SemanticChecks operations:$std::List[common::Op] -> bool {
         for operation in operations.iter do
-            if operation self.has_rejected_target then
+            if
+                operation.value common::OpValue::Rejected is
+                operation.value common::OpValue::Identifier is ||
+                operation self.has_rejected_target ||
+            then
                 true return
             fi
         done
         false
     }
 
-    # Recursion can use an active signature. Settle those obligations before publishing facts.
+    fn reject_dependent self:mut$SemanticChecks name:$str -> bool {
+        std::List[std::String]::new = callees
+        if name self.functions.get_str std::Option::Some(work) is then
+            if work FunctionWork::Completed(completed) is then
+                callees completed.body.collect_callees
+            fi
+        fi
+        for callee in callees.iter do
+            if callee.as_str self.function_is_rejected then
+                name self
+                    .functions
+                    .remove_str
+                    .unwrap match
+                    FunctionWork::Completed(completed) => {
+                        completed RejectedBody::Checked FunctionWork::Rejected name.to_str self.functions.set
+                        true return
+                    }
+                    _ => {
+                    }
+                end
+            fi
+        done
+        false
+    }
+
+    # Recursion can use a reserved signature. Settle its obligations before publishing facts.
     fn settle_function_rejections self:mut$SemanticChecks store:$common::SymbolStore {
         store.get_function_names = names
         true = changed
         while changed do
             false = changed
             for name in names.iter do
-                if name.as_str self.function_is_rejected then
-                    continue
-                fi
-                name.as_str store.get_function.unwrap = function
-                if function.ops self.body_has_rejected_target then
-                    FunctionCheckStatus::Rejected name.clone self.functions.set
+                if name.as_str self.reject_dependent then
                     true = changed
                 fi
             done
         done
     }
 
-    # Only propagate settled failures. Names, types and stack effects are already selected.
+    fn get_rejected_names self:$SemanticChecks -> std::Set[std::String] {
+        std::Set[std::String]::new = names
+        for
+            name in self
+                .functions
+                .keys
+                .iter
+        do
+            if name.as_str self.function_is_rejected then
+                name.clone names.add
+            fi
+        done
+        names
+    }
+
+    # Use retained rejections because publication consumes the function work registry.
     fn settle_operation_facts
         self:mut$SemanticChecks
         operations:$std::List[common::Op]
         available:bool
+        rejected:$std::Set[std::String]
     -> bool {
         std::List[FactBranch]::new = branches
         for operation in operations.iter do
@@ -1486,13 +1650,21 @@ impl SemanticChecks {
                     branches.pop = branch
                     available branch.entry_available && branch.branches_available && = available
                 }
-                common::OpValue::ExprGroup(items) => available items self.settle_operation_facts = available
-                common::OpValue::PushArray(items) => available items self.settle_operation_facts = available
-                common::OpValue::MatchArm(arm) => available arm.guard_ops self.settle_operation_facts = available
+                common::OpValue::Unreachable(items) => rejected available items self.settle_operation_facts = available
+                common::OpValue::ExprGroup(items) => rejected available items self.settle_operation_facts = available
+                common::OpValue::PushArray(items) => rejected available items self.settle_operation_facts = available
+                common::OpValue::MatchArm(arm) => rejected available arm.guard_ops self.settle_operation_facts = available
                 _ => {
                 }
             end
-            if operation.value common::OpValue::Rejected is operation self.has_rejected_target || then
+            operation.value match
+                common::OpValue::FnCall(name) => name rejected.has
+                common::OpValue::FnPush(name) => name rejected.has
+                common::OpValue::Rejected => true
+                common::OpValue::Identifier(_) => true
+                _ => false
+            end = rejected_target
+            if rejected_target then
                 false = available
             fi
             if available ! then
@@ -1502,78 +1674,228 @@ impl SemanticChecks {
         available
     }
 
-    fn new store:$common::SymbolStore -> SemanticChecks {
-        std::Map[std::String FunctionCheckStatus]::new = functions
-        # Already checked generated accessors and specialized bodies enter at the adapter boundary.
-        for name in store.get_function_names.iter do
-            if
-                name.as_str store
-                    .get_function
-                    .unwrap
-                    .is_typechecked
-            then
-                FunctionCheckStatus::Checked name.clone functions.set
-            fi
+    fn stage_sources self:mut$SemanticChecks bodies:std::Map[std::String source_body::SourceBody] {
+        for name in bodies.keys.iter do
+            name.as_str bodies.remove_str.unwrap FunctionWork::Pending name.clone self.functions.set
         done
-        std::Map[std::String CallReturnSummary]::new std::Set[i64]::new functions SemanticChecks
-    }
-}
-
-pub struct SemanticSession {
-    store:        common::SymbolStore
-    clone_bodies: bool
-    checks:       SemanticChecks
-}
-
-impl SemanticSession {
-    pub fn new store:$common::SymbolStore -> SemanticSession {
-        store SemanticChecks::new true store.clone_for_semantics SemanticSession
     }
 
-    pub fn from_store store:common::SymbolStore -> SemanticSession {
-        store SemanticChecks::new false store SemanticSession
+    fn stage_accessors self:mut$SemanticChecks store:mut$common::SymbolStore {
+        for
+            name in store
+                .member_accessors
+                .keys
+                .iter
+        do
+            if name.as_str self.functions.has_str then
+                continue
+            fi
+            name.as_str store
+                .get_function
+                .unwrap
+                .clone = declaration
+            name.as_str store
+                .member_accessors
+                .get_str
+                .unwrap
+                .clone = accessor
+            store declaration accessor semantic_body::make_accessor_body = body
+            body declaration checked_function_summary CompletedFunction FunctionWork::Completed name.clone self.functions.set
+        done
     }
 
-    pub fn has_checked_function self:$SemanticSession name:$str -> bool {
-        name self
-            .checks
+    # Reserve only the recursive signature. The returned private frame owns the body.
+    fn begin_function self:mut$SemanticChecks declaration:common::Function -> ActiveFunction {
+        declaration.name.as_str self
             .functions
-            .has_str
+            .remove_str
+            .unwrap match
+            FunctionWork::Pending(body) => {
+                declaration checked_function_summary FunctionWork::Reserved declaration.name.clone self.functions.set
+                body declaration ActiveFunction
+            }
+            _ => "Only pending source work can begin checking" panic
+        end
     }
 
-    pub fn clone_function self:$SemanticSession name:$str -> std::Option[common::Function] {
-        if name self.store.get_function std::Option::Some(function) is then
-            function.clone_for_import std::Option::Some return
+    fn begin_specialization self:mut$SemanticChecks name:$str -> std::Option[ActiveSpecialization] {
+        if name self.functions.get_str std::Option::Some(work) is then
+            if work FunctionWork::Completed is ! then
+                std::Option[ActiveSpecialization]::None return
+            fi
+        else
+            std::Option[ActiveSpecialization]::None return
         fi
-        std::Option[common::Function]::None
+        name self
+            .functions
+            .remove_str
+            .unwrap match
+            FunctionWork::Completed(completed) => {
+                completed.signature.clone FunctionWork::Reserved name.to_str self.functions.set
+                completed name.to_str ActiveSpecialization std::Option::Some
+            }
+            _ => "Only completed recipes can begin specialization" panic
+        end
     }
 
-    pub fn commit_checked_function self:mut$SemanticSession function:common::Function {
-        function self.store.restore_function
+    fn new -> SemanticChecks {
+        std::Map[std::String CallReturnSummary]::new std::Set[i64]::new
+        std::Map[std::String FunctionWork]::new SemanticChecks
     }
+}
+# Rejected analysis retains occurrences but cannot be committed as backend input.
+pub enum AnalysisBody {
+    Checked (semantic_body::Body)
+    RejectedChecked (semantic_body::Body)
+    Rejected (std::List[common::Op])
+    Source (source_body::SourceBody)
+}
 
-    pub fn into_checked_parts
-        self:SemanticSession
-        root_operations:$std::List[common::Op]
-    -> common::SymbolStore std::Set[i64] {
+impl AnalysisBody {
+    fn settle_facts self:$AnalysisBody checks:mut$SemanticChecks rejected:$std::Set[std::String] {
         self match
-            SemanticSession { store: store checks: checks } => {
-                store checks.settle_function_rejections
-                true root_operations checks.settle_operation_facts drop
-                for name in store.get_function_names.iter do
-                    true name.as_str store
-                        .get_function
-                        .unwrap
-                        .ops checks.settle_operation_facts drop
-                done
-                store checks.verified_operations.clone
+            AnalysisBody::Checked(body) => checks.verified_operations rejected true body.settle_facts drop
+            AnalysisBody::Rejected(operations) => rejected true operations checks.settle_operation_facts drop
+            _ => {
             }
         end
     }
 
-    pub fn into_store self:SemanticSession -> common::SymbolStore {
+    pub fn lower_operations self:$AnalysisBody -> std::List[common::Op] {
         self match
-            SemanticSession { store: store } => store
+            AnalysisBody::Checked(body) => body.lower_operations
+            AnalysisBody::RejectedChecked(body) => body.lower_operations
+            AnalysisBody::Rejected(operations) => operations.clone
+            AnalysisBody::Source(body) => body.lower_operations
+        end
+    }
+
+    pub fn into_checked self:AnalysisBody -> std::Result[semantic_body::Body std::String] {
+        self match
+            AnalysisBody::Checked(body) => body std::Result::Ok
+            _ => "Backend input requires a completed body".to_str std::Result::Error
+        end
+    }
+}
+
+pub struct SemanticSession {
+    store:  common::SymbolStore
+    checks: SemanticChecks
+}
+
+impl SemanticSession {
+    pub fn new
+        store:$common::SymbolStore
+        bodies:$std::Map[std::String source_body::SourceBody]
+    -> SemanticSession {
+        bodies.clone store.clone_for_semantics SemanticSession::from_store
+    }
+
+    pub fn from_store
+        store:common::SymbolStore
+        bodies:std::Map[std::String source_body::SourceBody]
+    -> SemanticSession {
+        SemanticChecks::new = checks
+        bodies checks.stage_sources
+        store checks.stage_accessors
+        checks store SemanticSession
+    }
+
+    pub fn from_source
+        source:source_body::SourceProgram
+    -> SemanticSession source_body::SourceBody {
+        source.into_parts = bodies = root = store
+        bodies store SemanticSession::from_store root
+    }
+
+    pub fn clone_function self:$SemanticSession name:$str -> std::Option[common::Function] {
+        if name self.store.get_function std::Option::Some(function) is then
+            function.clone std::Option::Some return
+        fi
+        std::Option[common::Function]::None
+    }
+
+    pub fn find_checked_body self:$SemanticSession name:$str -> std::Option[$semantic_body::Body] {
+        if
+            name self
+                .checks
+                .functions
+                .get_str std::Option::Some(work) is
+        then
+            work.get_body return
+        fi
+        std::Option[$semantic_body::Body]::None
+    }
+
+    # The scheduler asks for a completed result. Body ownership stays in the session.
+    pub fn check_declared_function
+        self:mut$SemanticSession
+        name:$str
+        diagnostics:mut$error::Diagnostics
+    {
+        if name "lambda__" str::starts_with then
+            return
+        fi
+        if
+            name self
+                .checks
+                .functions
+                .get_str std::Option::Some(work) is
+        then
+            if work FunctionWork::Pending is ! then
+                return
+            fi
+        fi
+        if name self.store.get_function std::Option::Some(function) is then
+            if function.extern_symbol.is_some then
+                return
+            fi
+        else
+            return
+        fi
+        false self.checks diagnostics self.store name ensure_checked_function drop
+    }
+
+    pub fn finish
+        self:SemanticSession
+        operations:std::List[common::Op]
+        diagnostics:mut$error::Diagnostics
+    -> common::SymbolStore AnalysisBody std::Map[std::String AnalysisBody] std::Set[i64] {
+        self match
+            SemanticSession { store: store checks: checks } => {
+                if diagnostics.has_errors operations checks.body_has_rejected_target || then
+                    operations AnalysisBody::Rejected
+                else
+                    store operations semantic_body::consume_body.unwrap = body
+                    std::Set[std::String]::new std::Set[std::String]::new diagnostics checks store
+                    SemanticSpecializer = specializer
+                    body specializer.visit_body
+                    body AnalysisBody::Checked
+                fi = root
+                store checks.settle_function_rejections
+                checks.get_rejected_names = rejected
+                rejected checks root.settle_facts
+                std::Map[std::String AnalysisBody]::new = bodies
+                for
+                    name in checks
+                        .functions
+                        .keys
+                        .iter
+                do
+                    rejected checks name.as_str checks
+                        .functions
+                        .remove_str
+                        .unwrap
+                        .into_analysis
+                    name.clone bodies.set
+                done
+                checks match
+                    SemanticChecks {
+                        verified_operations: verified
+                    } => verified
+                end = verified
+                store root bodies verified
+            }
         end
     }
 }
@@ -1636,7 +1958,6 @@ impl TypeChecker {
         diagnostics:mut$error::Diagnostics
         active_calls:std::Set[std::String]
         checks:mut$SemanticChecks
-        clone_bodies:bool
         infer_parameters:bool
     -> TypeChecker {
         true # facts_available
@@ -1644,7 +1965,6 @@ impl TypeChecker {
         std::Set[std::String]::new # seen_dependencies
         std::List[SemanticDependency]::new # ordered_facts
         infer_parameters # infer_parameters
-        clone_bodies # clone_bodies
         checks # checks
         active_calls # active_calls
         std::Map[i64 std::String]::new # pending_lambdas
@@ -1686,6 +2006,7 @@ impl TypeChecker {
 
     pub fn assign_op_id self:mut$TypeChecker op:mut$common::Op {
         std::Option[common::OpOwnership]::None = op.ownership
+        std::Option[std::List[common::BindingFact]]::None = op.bindings
         self.store.next_op_id = op.id
         1 += self.store.next_op_id
     }
@@ -1897,6 +2218,8 @@ pub fn resolve_default_literals ops:mut$std::List[common::Op] diagnostics:mut$er
                     fi
                 }
             end
+        elif op.value common::OpValue::Unreachable(items) is then
+            diagnostics items resolve_default_literals
         elif op_value common::OpValue::ExprGroup(items) is then
             items.clone = owned_items
             diagnostics owned_items resolve_default_literals
@@ -1940,6 +2263,8 @@ pub fn apply_resolved_literal_hints
             items.clone = owned_items
             resolutions owned_items apply_resolved_literal_hints
             owned_items common::OpValue::PushArray op common::Op::set_value
+        elif op.value common::OpValue::Unreachable(items) is then
+            resolutions items apply_resolved_literal_hints
         elif op_value.clone common::OpValue::ExprGroup(items) is then
             items.clone = owned_items
             resolutions owned_items apply_resolved_literal_hints
@@ -2226,6 +2551,7 @@ impl TypeChecker {
     }
 
     pub fn record_conditional_move tc:mut$TypeChecker op:mut$common::Op name:$str {
+        name op tc.record_named_binding
         true name tc.set_owner_moved
         name.to_str std::Option::Some = op.ensure_ownership.conditional_move
         tc
@@ -2604,6 +2930,9 @@ impl TypeChecker {
         function_opt:mut$std::Option[common::Function]
         is_global:bool
     {
+        if name tc.scope.find_binding std::Option::Some(binding) is then
+            binding common::BindingFact::Definition op.add_binding_fact
+        fi
         if is_global function_opt.is_some && then
             return
         fi
@@ -2618,8 +2947,14 @@ impl TypeChecker {
         if tc.store typ common::type_needs_destruction_in_store ! then
             return
         fi
+        if tc.path_continues ! then
+            return
+        fi
         1 += tc.next_owner_generation
         tc.next_owner_generation typ name common::OwnerEvent::new = event
+        if name tc.scope.resolve_binding_reference std::Option::Some(binding) is then
+            binding.storage_name.clone = event.storage_name
+        fi
         event.clone op
             .ensure_ownership
             .assignments
@@ -2825,14 +3160,14 @@ impl TypeChecker {
     }
 
     pub fn stack_push_literal tc:mut$TypeChecker type_value:$common::Type op:mut$common::Op {
-        false = is_integer
+        LiteralKind::Numeric = literal_kind
         0 = integer_value
         if op.value common::OpValue::PushInt(integer) is then
-            true = is_integer
+            LiteralKind::Integer = literal_kind
             integer.value = integer_value
         fi
         std::List[LiteralRef]::new = literals
-        is_integer integer_value op.id LiteralRef literals.push
+        literal_kind integer_value op.id LiteralRef literals.push
         std::Set[std::String]::new
         true std::Map[Origin std::Option[LoanSpan]]::new
         std::Option[std::List[Origin]]::None
@@ -4446,7 +4781,7 @@ impl TypeChecker {
             return
         fi
         0 index_value.literals.get = literal
-        if literal.is_integer then
+        if literal.kind LiteralKind::Integer == then
             literal.integer_value = index_constant
             if array_length i64::try_from.unwrap index_constant >= then
                 self.current_location f"Array index {index_constant} is out of bounds for `{array_type.format}`"
@@ -5539,18 +5874,31 @@ impl TypeChecker {
 # ============================================================================
 
 impl TypeChecker {
-    pub fn check_stack_ops tc:mut$TypeChecker op:mut$common::Op {
+    pub fn check_stack_ops
+        tc:mut$TypeChecker
+        op:mut$common::Op
+        function_opt:$std::Option[common::Function]
+    {
         if op.value common::OpValue::Drop is then
             "value for `drop`".to_str ExpectationContext::Text = tc.current_expect_ctx
-            if
-                0 tc
-                    .stack
-                    .values
-                    .length !=
-            then
-                tc.stack_peek_type.clone std::Option::Some op common::Op::set_type_hint
-            fi
             tc.stack_pop_value = value
+            value.type_value resolve_numeric_literal_default = final_type
+            false = pending_aggregate
+            for literal in value.literals.iter do
+                if literal.kind LiteralKind::Aggregate == then
+                    true = pending_aggregate break
+                fi
+            done
+            # A discarded constructor has no payload context. Retain formal recipe variables,
+            # and use the existing word default for parameters that no value constrained.
+            if pending_aggregate final_type.has_unresolved_type_var && then
+                function_opt final_type default_unconstrained_aggregate = final_type
+            fi
+            if value.literals.is_empty ! then
+                tc.literal_resolutions tc.diagnostics final_type value.resolve_literals drop
+            fi
+            final_type.clone = value.type_value
+            final_type std::Option::Some = op.type_hint
             value tc.finish_value_use
             return
         fi
@@ -6657,6 +7005,7 @@ impl TypeChecker {
 
         # PUSH_VARIABLE
         if push_value common::OpValue::PushVar(var_name) is then
+            var_name.as_str op tc.record_named_binding
             op var_name.as_str tc.use_binding
             if var_name.as_str tc.scope.is_expired then
                 op common::Op::location f"Variable `{var_name}` is not accessible outside its block scope" common::ErrorKind::UndefinedName tc.diagnostics.record_error_string
@@ -7316,7 +7665,7 @@ fn type_has_trait_shape
                 if method_semantics.kind rules::MethodSemanticsKind::DefaultMethod is then
                     continue
                 fi
-                false true checks diagnostics store method_semantics.function_name.as_str ensure_checked_function = fn_opt
+                false checks diagnostics store method_semantics.function_name.as_str ensure_checked_function = fn_opt
             fi
             if fn_opt.is_none then
                 # Default methods (with a body) don't require a concrete implementation
@@ -7355,9 +7704,13 @@ pub fn type_satisfies_trait
     function_opt:mut$std::Option[common::Function]
     store:mut$common::SymbolStore
     diagnostics:mut$error::Diagnostics
+    bodies:$std::Map[std::String source_body::SourceBody]
 -> bool {
-    store SemanticChecks::new = checks
-    checks diagnostics store function_opt trait_type receiver check_trait_satisfaction
+    SemanticChecks::new = checks
+    bodies.clone checks.stage_sources
+    store checks.stage_accessors
+    checks diagnostics store function_opt trait_type receiver check_trait_satisfaction = result
+    result
 }
 
 fn check_trait_satisfaction
@@ -7595,6 +7948,7 @@ pub fn ensure_function_clone_method
     store:mut$common::SymbolStore
     typ:$common::Type
     location:$common::Location
+    checks:mut$SemanticChecks
 {
     if typ common::Type::Function(_) is ! then
         return
@@ -7625,11 +7979,11 @@ pub fn ensure_function_clone_method
     std::List[common::Op]::new = ops
     location.clone "self".to_str common::OpValue::AssignVar common::Op::new ops.push
     location.clone "self".to_str common::OpValue::PushVar common::Op::new ops.push
-    effect location.clone ops function_name.clone common::Function::with_stack_effect = function
-    true = function.is_resolved
+    effect location.clone function_name.clone common::Function::with_stack_effect = function
     std::List[common::Variable]::new = variables
     typ.clone "self".to_str common::Variable variables.push
     variables function common::Function::set_variables
+    ops source_body::consume_source_body FunctionWork::Pending function_name.clone checks.functions.set
     function store.set_generated_recipe
 }
 
@@ -7888,9 +8242,18 @@ impl TypeChecker {
         lambda_name:std::String
         expected:std::Option[common::Type]
     {
-        if lambda_name.as_str self.store.take_function_for_update std::Option::Some(lambda) is then
+        if lambda_name.as_str self.store.get_function std::Option::Some(lambda) is then
             lambda.clone = owned_lambda
-            if expected std::Option::Some(expected_type) is then
+            false = completed
+            if
+                lambda_name.as_str self
+                    .checks
+                    .functions
+                    .get_str std::Option::Some(work) is
+            then
+                work FunctionWork::Completed is = completed
+            fi
+            if completed ! expected std::Option::Some(expected_type) is && then
                 expected_type.clone = callback_type
                 if callback_type.borrow_target std::Option::Some(target) is then
                     target.clone = callback_type
@@ -7912,9 +8275,9 @@ impl TypeChecker {
                     contextual_effect owned_lambda common::Function::set_stack_effect
                 fi
             fi
-            owned_lambda self.store.restore_function
+            owned_lambda self.store.set_function
             if
-                self.infer_parameters self.clone_bodies self.checks self.diagnostics self.store
+                self.infer_parameters self.checks self.diagnostics self.store
                 lambda_name.as_str ensure_checked_function std::Option::Some(checked) is
             then
                 checked.stack_effect common::stack_effect_to_function_type = lambda_type
@@ -7929,6 +8292,27 @@ impl TypeChecker {
                 false = self.facts_available
             fi
         fi
+    }
+
+    # Apply declared callback inputs before checking a returned closure's body.
+    fn materialize_return_lambdas self:mut$TypeChecker effect:$common::StackEffect {
+        0 = index: u64
+        while
+            index self
+                .stack
+                .values
+                .length >
+        do
+            std::Option[common::Type]::None = expected
+            if index effect.return_types.length > then
+                index effect
+                    .return_types
+                    .get
+                    .clone std::Option::Some = expected
+            fi
+            expected index self.materialize_pending_lambda_at
+            1 += index
+        done
     }
 
     fn materialize_pending_lambda_at
@@ -8337,7 +8721,7 @@ impl TypeChecker {
     # Owned captures keep their contained loans separate from their own storage.
     fn record_capture_origins self:mut$TypeChecker function:$common::Function {
         for capture in function.captures.iter do
-            capture.typ.clone capture.name.clone self
+            capture.name.clone capture.typ.clone block_scope::ScopedBinding capture.name.clone self
                 .scope
                 .function_bindings
                 .set
@@ -8491,7 +8875,9 @@ impl TypeChecker {
     }
 
     pub fn consume_question_owner checker:mut$TypeChecker op:mut$common::Op {
-        if op.value common::OpValue::QuestionMove(hidden_name) is then
+        op.value.clone = question_move
+        if question_move common::OpValue::QuestionMove(hidden_name) is then
+            hidden_name.as_str op checker.record_named_binding
             if hidden_name.as_str checker.owner_is_moved then
                 return
             fi
@@ -8518,7 +8904,7 @@ impl TypeChecker {
     {
         op.value.clone = fn_value
         if fn_value common::OpValue::FnCall(fn_name) is then
-            tc.infer_parameters tc.clone_bodies tc.checks tc.diagnostics tc.store fn_name.as_str
+            tc.infer_parameters tc.checks tc.diagnostics tc.store fn_name.as_str
             ensure_checked_function = fn_opt
             if fn_opt.is_some then
                 fn_opt.unwrap = function
@@ -8604,7 +8990,7 @@ impl TypeChecker {
                     continue
                 fi
                 if
-                    tc.infer_parameters tc.clone_bodies tc.checks tc.diagnostics tc.store callable.as_str
+                    tc.infer_parameters tc.checks tc.diagnostics tc.store callable.as_str
                     ensure_checked_function std::Option::Some(checked) is
                 then
                     checked.stack_effect.clone = candidate_effect
@@ -8681,13 +9067,14 @@ impl TypeChecker {
         elif fn_value common::OpValue::FnPush(push_name) is then
             std::Option[std::List[Origin]]::None = closure_origins
             std::Option[std::List[Origin]]::None = closure_cleanup_origins
-            push_name.as_str tc.store.take_function_for_update = pending_push_opt
+            push_name.as_str tc.store.get_function = pending_push_opt
             pending_push_opt match
-                std::Option::Some(pending_push_fn) => {
+                std::Option::Some(declaration) => {
+                    declaration.clone = pending_push_fn
                     function_opt pending_push_fn tc.sync_capture_types
                     function_opt op pending_push_fn tc.check_closure_captures
                     = closure_cleanup_origins = closure_origins
-                    pending_push_fn tc.store.restore_function
+                    pending_push_fn tc.store.set_function
                 }
                 std::Option::None => {
                 }
@@ -8712,7 +9099,7 @@ impl TypeChecker {
                 closure_cleanup_origins = pending_value.cleanup_origins
                 return
             fi
-            tc.infer_parameters tc.clone_bodies tc.checks tc.diagnostics tc.store push_name.as_str
+            tc.infer_parameters tc.checks tc.diagnostics tc.store push_name.as_str
             ensure_checked_function = push_fn_opt
             if push_fn_opt.is_some then
                 push_fn_opt.unwrap = push_fn
@@ -8826,6 +9213,7 @@ impl TypeChecker {
                 return
             fi
             if function_opt std::Option::Some(function) is then
+                function.stack_effect tc.materialize_return_lambdas
                 function tc.resolve_declared_return_borrow_capabilities
                 function tc.validate_borrow_returns
                 function tc.validate_return_stack
@@ -8906,6 +9294,68 @@ pub fn check_expression_group
 }
 
 impl TypeChecker {
+    fn finish_array_literal
+        self:mut$TypeChecker
+        op:mut$common::Op
+        checked_items:std::List[common::Op]
+    {
+        false = has_numeric_literal
+        for item in checked_items.iter do
+            if item.has_numeric_literal then
+                true = has_numeric_literal
+            fi
+        done
+        if 0 checked_items.length == then
+            0 common::make_unknown_type.clone common::make_array_type = empty_array_type
+            op empty_array_type self.stack_push_literal
+            checked_items common::OpValue::PushArray op common::Op::set_value
+            return
+        fi
+        common::make_unknown_type.clone = elem_type_t
+        std::Option[std::List[Origin]]::None = origins
+        std::Option[std::List[Origin]]::None = cleanup_origins
+        0 = items_idx: u64
+        while items_idx checked_items.length > do
+            self.stack_pop_value = item_value
+            item_value.type_value.clone = item_type_t
+            # The literal takes ownership of every element, so a moved
+            # owner must not stay usable through its old binding.
+            item_value.origins origins merge_origins = origins
+            item_value.cleanup_origins cleanup_origins merge_origins = cleanup_origins
+            if item_type_t.is_borrow item_value.origins.is_none && then
+                if item_value.place std::Option::Some(place) is then
+                    item_type_t.is_exclusive_borrow place origins add_origin = origins
+                fi
+            fi
+            item_value self.consume_value
+            self.store item_type_t elem_type_t rules::unify_type_t = unified_opt
+            unified_opt match
+                std::Option::Some(unified) => unified = elem_type_t
+                std::Option::None => {
+                    op common::Op::location f"Heterogeneous array literal: cannot unify `{elem_type_t.format}` and `{item_type_t.format}`" common::ErrorKind::TypeMismatch self.diagnostics.record_error_string
+                }
+            end
+            1 += items_idx
+        done
+        checked_items.length elem_type_t common::make_array_type = array_type
+        array_type.clone std::Option::Some op common::Op::set_type_hint
+        if has_numeric_literal then
+            op array_type self.stack_push_literal
+            self
+                .stack
+                .values
+                .length 1 - self
+                .stack
+                .values
+                .get_mut = pushed_value
+            origins = pushed_value.origins
+            cleanup_origins = pushed_value.cleanup_origins
+        else
+            cleanup_origins origins array_type self.push_value_origins
+        fi
+        checked_items common::OpValue::PushArray op common::Op::set_value
+    }
+
     pub fn check_literals
         tc:mut$TypeChecker
         op:mut$common::Op
@@ -8931,55 +9381,8 @@ impl TypeChecker {
             end
         elif op.value common::OpValue::PushArray is then
             op.value.clone_array_literal_items = checked_items
-            if 0 checked_items.length == then
-                0 common::make_unknown_type.clone common::make_array_type = empty_array_type
-                op empty_array_type tc.stack_push_literal
-            else
-                function_opt checked_items tc.run_type_check_ops
-                common::make_unknown_type.clone = elem_type_t
-                std::Option[std::List[Origin]]::None = origins
-                std::Option[std::List[Origin]]::None = cleanup_origins
-                0 = items_idx: u64
-                while items_idx checked_items.length > do
-                    tc.stack_pop_value = item_value
-                    item_value.type_value.clone = item_type_t
-                    # The literal takes ownership of every element, so a moved
-                    # owner must not stay usable through its old binding.
-                    item_value.origins origins merge_origins = origins
-                    item_value.cleanup_origins cleanup_origins merge_origins = cleanup_origins
-                    if item_type_t.is_borrow item_value.origins.is_none && then
-                        if item_value.place std::Option::Some(place) is then
-                            item_type_t.is_exclusive_borrow place origins add_origin = origins
-                        fi
-                    fi
-                    item_value tc.consume_value
-                    tc.store item_type_t elem_type_t rules::unify_type_t = unified_opt
-                    unified_opt match
-                        std::Option::Some(unified) => unified = elem_type_t
-                        std::Option::None => {
-                            op common::Op::location f"Heterogeneous array literal: cannot unify `{elem_type_t.format}` and `{item_type_t.format}`" common::ErrorKind::TypeMismatch tc.diagnostics.record_error_string
-                        }
-                    end
-                    1 += items_idx
-                done
-                checked_items.length elem_type_t common::make_array_type = array_type
-                array_type.clone std::Option::Some op common::Op::set_type_hint
-                if op.has_numeric_literal then
-                    op array_type tc.stack_push_literal
-                    tc
-                        .stack
-                        .values
-                        .length 1 - tc
-                        .stack
-                        .values
-                        .get_mut = pushed_value
-                    origins = pushed_value.origins
-                    cleanup_origins = pushed_value.cleanup_origins
-                else
-                    cleanup_origins origins array_type tc.push_value_origins
-                fi
-            fi
-            checked_items common::OpValue::PushArray op common::Op::set_value
+            function_opt checked_items tc.run_type_check_ops
+            checked_items op tc.finish_array_literal
         elif op.value common::OpValue::ExprGroup is then
             op function_opt tc check_expression_group
         fi
@@ -9060,6 +9463,25 @@ impl TypeChecker {
     }
 }
 
+impl TypeChecker {
+    # A constructor can leave unused type parameters for its assignment or return context.
+    fn record_aggregate_materialization self:mut$TypeChecker operation:$common::Op {
+        if operation.type_hint std::Option::Some(typ) is then
+            if typ.has_unresolved_type_var then
+                self
+                    .stack
+                    .values
+                    .length 1 - self
+                    .stack
+                    .values
+                    .get_mut = value
+                LiteralKind::Aggregate 0 operation.id LiteralRef value.literals.push
+                false = value.is_literal_constant
+            fi
+        fi
+    }
+}
+
 # ============================================================================
 # Check enum variant push
 # ============================================================================
@@ -9115,6 +9537,8 @@ impl TypeChecker {
                     else
                         enum_name common::GenericType::new common::Type::Generic tc.stack_push_type
                     fi
+                    tc.stack_peek_type.clone std::Option::Some = op.type_hint
+                    op tc.record_aggregate_materialization
                     # A payload-free variant proves that this value contains no loan.
                     std::List[Origin]::new std::Option::Some
                     tc
@@ -9144,10 +9568,13 @@ impl TypeChecker {
                 else
                     enum_name common::GenericType::new common::Type::Generic
                 fi = result_type
+                result_type.clone std::Option::Some = op.type_hint
                 tc.store cleanup_origins origins result_type resolve_cleanup_origins = cleanup_origins
                 cleanup_origins origins result_type tc.push_value_origins
+                op tc.record_aggregate_materialization
             else
                 enum_name common::GenericType::new common::Type::Generic tc.stack_push_type
+                tc.stack_peek_type.clone std::Option::Some = op.type_hint
             fi
         fi
     }
@@ -9512,18 +9939,12 @@ impl TypeChecker {
         subject_type.clone std::Option::Some op common::Op::set_type_hint
     }
 
-    # ============================================================================
-    # typecheck_match_op — per-arm typecheck entry point.
-    #
-    # Handles pattern-shape validation, duplicate-arm detection, match-arm
-    # stack unification, and binding-type registration for a single OpMatchArm.
-    # Callers (currently check_match) delegate the entire arm body to this
-    # function; start/end of the match block remain in check_match.
-
+    # Check one source match arm and its optional guard.
     fn typecheck_match_op
         self:mut$TypeChecker
         function_opt:mut$std::Option[common::Function]
         op:mut$common::Op
+        source_guard:std::Option[source_body::SourceBody]
     {
         if 0 self.branched_stacks.length == then
             return
@@ -9542,7 +9963,11 @@ impl TypeChecker {
                 match_ctx.entry_continues = self.path_continues
             fi
             match_ctx MatchContext::match_type.clone = match_subject_type
-            op pattern::pattern_covered_key = covered_key
+            if source_guard.is_some then
+                "".to_str
+            else
+                op pattern::pattern_covered_key
+            fi = covered_key
             match_subject_type.match_base = arm_base
 
             op common::pattern_value_of match
@@ -9584,22 +10009,23 @@ impl TypeChecker {
                 fi
             done
 
-            if op pattern::pattern_is_guarded then
-                op common::pattern_guard_ops = guard_ops
+            if source_guard std::Option::Some(guard_body) is then
                 self.scope.snapshot = guard_scope
                 self.current_ownership_flow = guard_flow
-                self.infer_parameters self.clone_bodies self.checks
+                self.infer_parameters self.checks
                 self.active_calls.clone self.diagnostics self.store TypeChecker::new = guard_checker
                 self.current_trait_bounds.clone = guard_checker.current_trait_bounds
                 guard_scope = guard_checker.scope
                 guard_flow guard_checker.restore_ownership_flow
                 self.contextual_callables.clone = guard_checker.contextual_callables
-                VariableUses::new guard_ops collect_variable_uses = variable_uses
+                VariableUses::new guard_body collect_source_variable_uses = variable_uses
                 variable_uses.counts.clone = guard_checker.remaining_uses
                 variable_uses.observing_counts.clone = guard_checker.remaining_observing_uses
                 variable_uses.cleanup_only_use_offsets.clone = guard_checker.cleanup_only_use_offsets
                 variable_uses.last_locations.clone = guard_checker.last_use_locations
-                function_opt guard_ops guard_checker.run_type_check_ops
+                std::List[common::Op]::new = guard_ops
+                std::List[common::Op]::new = pending
+                function_opt guard_ops pending guard_body guard_checker.check_source_sequence
                 guard_checker.path_continues = guard_continues
                 if guard_continues then
                     for name in guard_checker.moved_owners.iter do
@@ -9901,6 +10327,7 @@ impl TypeChecker {
                 fi
             fi
         fi
+        match_type.clone std::Option::Some = op.type_hint
         match_type MatchContext::new = match_ctx
         match_origins = match_ctx.match_origins
         match_place = match_ctx.match_place
@@ -10030,7 +10457,7 @@ impl TypeChecker {
     {
         op.value match
             common::OpValue::MatchStart => function_opt op self.begin_match
-            common::OpValue::MatchArm => op function_opt self.typecheck_match_op
+            common::OpValue::MatchArm => std::Option[source_body::SourceBody]::None op function_opt self.typecheck_match_op
             common::OpValue::MatchEnd => op self.finish_match
             _ => {
             }
@@ -10109,8 +10536,10 @@ impl TypeChecker {
             else
                 casa_struct common::CasaStruct::name.clone common::GenericType::new common::Type::Generic
             fi = result_type
+            result_type.clone std::Option::Some = op.type_hint
             tc.store cleanup_origins origins result_type resolve_cleanup_origins = cleanup_origins
             cleanup_origins origins result_type tc.push_value_origins
+            op tc.record_aggregate_materialization
         fi
     }
 }
@@ -10186,10 +10615,13 @@ impl TypeChecker {
                 else
                     name common::GenericType::new common::Type::Generic
                 fi = result_type
+                result_type.clone std::Option::Some = op.type_hint
                 tc.store cleanup_origins origins result_type resolve_cleanup_origins = cleanup_origins
                 cleanup_origins origins result_type tc.push_value_origins
+                op tc.record_aggregate_materialization
             else
                 name common::GenericType::new common::Type::Generic tc.stack_push_type
+                tc.stack_peek_type.clone std::Option::Some = op.type_hint
             fi
         fi
     }
@@ -10198,38 +10630,6 @@ impl TypeChecker {
 # ============================================================================
 # Instantiate default trait method for a concrete type
 # ============================================================================
-
-pub fn qualify_default_method_calls
-    ops:mut$std::List[common::Op]
-    trait_type:$common::Type
-    receiver:$common::Type
-    store:mut$common::SymbolStore
-{
-    0 = op_index: u64
-    while op_index ops.length > do
-        op_index ops.get_mut = body_op
-        body_op.value.clone = body_value
-        if body_value common::OpValue::MethodCall(method_name) is then
-            store receiver method_name.as_str rules::collect_method_qualifiers = qualifiers
-            if
-                store method_name.as_str trait_type rules::trait_type_has_method
-                qualifiers.length 1 < &&
-            then
-                method_name.clone trait_type.clone false common::QualifiedMethod common::OpValue::QualifiedMethodCall
-                body_op common::Op::set_value
-            fi
-        elif body_value common::OpValue::PushArray(items) is then
-            items.clone = owned_items
-            store receiver trait_type owned_items qualify_default_method_calls
-            owned_items common::OpValue::PushArray body_op common::Op::set_value
-        elif body_value common::OpValue::ExprGroup(items) is then
-            items.clone = owned_items
-            store receiver trait_type owned_items qualify_default_method_calls
-            owned_items common::OpValue::ExprGroup body_op common::Op::set_value
-        fi
-        1 += op_index
-    done
-}
 
 pub fn get_default_trait_specialization_parts
     trait_name:$str
@@ -10308,7 +10708,7 @@ fn instantiate_default_trait_method
                 rules::resolve_method_semantics = infer_method_opt
                 std::Option[CheckedFunction]::None = infer_fn_opt
                 if infer_method_opt std::Option::Some(infer_semantics) is then
-                    false true checks diagnostics store infer_semantics.function_name.as_str
+                    false checks diagnostics store infer_semantics.function_name.as_str
                     ensure_checked_function = infer_fn_opt
                 fi
                 if infer_fn_opt.is_some then
@@ -10348,115 +10748,111 @@ fn instantiate_default_trait_method
         method_type_var.clone resolved_stack_effect common::StackEffect::type_vars.add
     done
 
-    # The trait owns the checked body. Only its bindings change for a receiver.
-    std::List[common::Op]::new = synth_ops
-    default_method.checked_default.clone = checked_recipe_opt
-    checked_recipe_opt.is_some = has_checked_recipe
-    std::List[common::Variable]::new = synth_vars
-    std::List[common::Op]::new = cloned_body
-    if checked_recipe_opt std::Option::Some(checked_recipe) is then
-        checked_recipe.variables.clone = synth_vars
-        checked_recipe.ops.clone = cloned_body
-    else
-        default_method.default_variables.clone = synth_vars
-        default_method.default_ops.clone = cloned_body
+    default_method
+        .default_function
+        .clone
+        .unwrap = template_name
+    if false checks diagnostics store template_name.as_str ensure_checked_function.is_none then
+        std::Option[std::String]::None return
     fi
-    0 = variable_index: u64
-    while variable_index synth_vars.length > do
-        variable_index synth_vars.get_mut = variable
-        trait_subs variable.typ.substitute_t variable common::Variable::set_typ
-        1 += variable_index
-    done
-    if has_checked_recipe ! then
-        for synth_param in resolved_stack_effect common::StackEffect::parameters.iter do
-            if "" synth_param common::Parameter::name.as_str != then
-                common::empty_location synth_param common::Parameter::name.clone common::OpValue::AssignVar common::Op::new synth_ops.push
-            fi
-        done
-    fi
+    template_name.as_str checks
+        .functions
+        .get_str
+        .unwrap match
+        FunctionWork::Completed(completed) => completed.body.clone
+        _ => std::Option[std::String]::None return
+    end = body
+    store trait_subs body.substitute
+    DefaultSpecializer {
+        store: store
+        checks: checks
+        diagnostics: diagnostics
+        bindings: trait_subs
+        effect: resolved_stack_effect
+        owner: synth_fn_name
+        next_lambda: 0
+    } = specializer
+    body specializer.clone_closures
+    template_name.as_str store
+        .get_function
+        .unwrap
+        .clone = template
+    trait_subs synth_fn_name.clone template specialize_function_declaration = declaration
+    resolved_stack_effect = declaration.stack_effect
 
-    if 0 trait_subs.length != then
-        trait_subs cloned_body common::substitute_ops_types
-        store trait_subs cloned_body specialize_op_metadata
-    fi
-    if semantics.trait_type std::Option::Some(default_trait_type) is then
-        store receiver default_trait_type cloned_body qualify_default_method_calls
-    fi
-    0 = cloned_lambda_index: u64
-    0 = body_index: u64
-    while body_index cloned_body.length > do
-        body_index cloned_body.get_mut = body_op
-        1 += body_index
-        if body_op.value common::OpValue::FnPush(lambda_name) is then
-            if lambda_name.as_str "lambda__" str::starts_with ! then
-                continue
-            fi
-            lambda_name.as_str store.get_function = lambda_opt
-            if lambda_opt.is_none then
-                continue
-            fi
-            lambda_opt.unwrap.clone_for_import = lambda
-
-            f"{lambda_name}__{synth_fn_name}_{cloned_lambda_index}" = cloned_lambda_name
-            # The specialization mutates its cloned body and declaration independently.
-            lambda.split_body = lambda_ops = lambda
-            if 0 trait_subs.length != then
-                trait_subs lambda_ops common::substitute_ops_types
-                store trait_subs lambda_ops specialize_op_metadata
-            fi
-            if semantics.trait_type std::Option::Some(default_trait_type) is then
-                store receiver default_trait_type lambda_ops qualify_default_method_calls
-            fi
-            trait_subs lambda.stack_effect common::apply_type_subs_to_stack_effect = lambda_effect
-            resolved_stack_effect.type_vars.clone = lambda_effect.type_vars
-            lambda_effect lambda common::Function::location.clone lambda_ops cloned_lambda_name.clone common::Function::with_stack_effect = cloned_lambda
-            true = cloned_lambda.is_resolved
-            lambda.is_typechecked has_checked_recipe && = cloned_lambda.is_typechecked
-            lambda.variables.clone cloned_lambda common::Function::set_variables
-            lambda.captures.clone cloned_lambda common::Function::set_captures
-            lambda.owned_captures.clone = cloned_lambda.owned_captures
-            lambda.captures_by_move cloned_lambda common::Function::set_captures_by_move
-            lambda.captures_shared cloned_lambda common::Function::set_captures_shared
-            0 = lambda_variable_index: u64
-            while lambda_variable_index cloned_lambda.variables.length > do
-                lambda_variable_index cloned_lambda.variables.get_mut = lambda_variable
-                trait_subs lambda_variable.typ.substitute_t lambda_variable common::Variable::set_typ
-                1 += lambda_variable_index
-            done
-            0 = lambda_capture_index: u64
-            while lambda_capture_index cloned_lambda.captures.length > do
-                lambda_capture_index cloned_lambda.captures.get_mut = lambda_capture
-                trait_subs lambda_capture.typ.substitute_t lambda_capture common::Variable::set_typ
-                1 += lambda_capture_index
-            done
-            0 = lambda_op_index: u64
-            while lambda_op_index cloned_lambda.ops.length > do
-                lambda_op_index cloned_lambda.ops.get = lambda_op
-                if lambda_op.value common::OpValue::PushCapture(capture_name) is then
-                    if capture_name.as_str cloned_lambda.captures common::variable_list_contains ! then
-                        capture_name.as_str common::Variable::new cloned_lambda.captures.push
-                    fi
-                fi
-                1 += lambda_op_index
-            done
-            cloned_lambda store.set_generated_recipe
-            cloned_lambda_name common::OpValue::FnPush body_op common::Op::set_value
-            1 += cloned_lambda_index
-        fi
-    done
-    cloned_body synth_ops.append
-
-    # Create, register, and typecheck the function
-    resolved_stack_effect common::empty_location synth_ops synth_fn_name.clone common::Function::with_stack_effect = synth_fn
-    true = synth_fn.is_resolved
-    has_checked_recipe = synth_fn.is_typechecked
-    synth_vars synth_fn common::Function::set_variables
-    synth_fn store.set_generated_recipe
-    if has_checked_recipe ! then
-        false true checks diagnostics store synth_fn_name.as_str ensure_checked_function drop
-    fi
+    body declaration checked_function_summary CompletedFunction FunctionWork::Completed
+    synth_fn_name.clone checks.functions.set
+    declaration store.set_generated_recipe
 
     synth_fn_name.clone std::Option::Some
+}
+
+struct DefaultSpecializer {
+    store:       mut$common::SymbolStore
+    checks:      mut$SemanticChecks
+    diagnostics: mut$error::Diagnostics
+    bindings:    mut$std::Map[std::String common::Type]
+    effect:      $common::StackEffect
+    owner:       $std::String
+    next_lambda: u64
+}
+
+impl DefaultSpecializer {
+    fn clone_closures self:mut$DefaultSpecializer body:mut$semantic_body::Body {
+        {
+            = call: mut$semantic_body::Callable
+            call self.clone_closure
+        } = visitor
+        visitor body.visit_closures
+    }
+
+    fn clone_closure self:mut$DefaultSpecializer call:mut$semantic_body::Callable {
+        if call.name.as_str "lambda__" str::starts_with ! then
+            return
+        fi
+        if
+            false self.checks self.diagnostics self.store call.name.as_str ensure_checked_function.is_none
+        then
+            return
+        fi
+        call.name.as_str self
+            .checks
+            .functions
+            .get_str
+            .unwrap match
+            FunctionWork::Completed(completed) => completed.body.clone
+            _ => return
+        end = body
+        call.name.as_str self
+            .store
+            .get_function
+            .unwrap
+            .clone = template
+        f"{call.name}__{self.owner}_{self.next_lambda}" = name
+        1 += self.next_lambda
+        self.bindings name.clone template specialize_function_declaration = declaration
+        self
+            .effect
+            .type_vars
+            .clone = declaration.stack_effect.type_vars
+        self
+            .effect
+            .trait_bounds
+            .clone = declaration.stack_effect.trait_bounds
+        self
+            .effect
+            .const_params
+            .clone = declaration.stack_effect.const_params
+        self.store self.bindings body.substitute
+        body self.clone_closures
+        body declaration checked_function_summary CompletedFunction FunctionWork::Completed name.clone self
+            .checks
+            .functions
+            .set
+
+        declaration self.store.set_generated_recipe
+        name = call.name
+    }
 }
 
 impl TypeChecker {
@@ -10648,7 +11044,7 @@ impl TypeChecker {
                 fi
             fi
             if "clone" method_name.as_str == then
-                op.location lookup_receiver tc.store ensure_function_clone_method
+                tc.checks op.location lookup_receiver tc.store ensure_function_clone_method
             fi
             if method_value.clone common::OpValue::MethodCall is then
                 if method_name.as_str op tc.check_float_to_bits then
@@ -10715,7 +11111,7 @@ impl TypeChecker {
                             default_name.clone = fn_name
                         fi
                     fi
-                    tc.infer_parameters tc.clone_bodies tc.checks tc.diagnostics tc.store fn_name.as_str
+                    tc.infer_parameters tc.checks tc.diagnostics tc.store fn_name.as_str
                     ensure_checked_function = checked_function_opt
                     checked_function_opt match
                         std::Option::Some(function) => {
@@ -10846,8 +11242,40 @@ impl TypeChecker {
 # ============================================================================
 # Ensure a function is typechecked
 # ============================================================================
+# The private active owner keeps the recipe alive through recursive specialization.
+struct ActiveSpecialization {
+    name:     std::String
+    function: CompletedFunction
+}
 
-struct CheckedFunction {
+impl ActiveSpecialization {
+    fn complete self:ActiveSpecialization visitor:mut$SemanticSpecializer {
+        self match
+            ActiveSpecialization { name: name function: function } => {
+                function.body visitor.visit_body
+                function FunctionWork::Completed name visitor
+                    .checks
+                    .functions
+                    .set
+            }
+        end
+    }
+}
+
+struct CompletedFunction {
+    signature: CheckedFunction
+    body:      semantic_body::Body
+}
+
+impl CompletedFunction {
+    fn into_body self:CompletedFunction -> semantic_body::Body {
+        self match
+            CompletedFunction { body: body } => body
+        end
+    }
+}
+
+struct CheckedFunction derives std::Clone {
     stack_effect:     common::StackEffect
     is_unsafe:        bool
     is_non_returning: bool
@@ -10865,80 +11293,126 @@ fn checked_function_summary function:$common::Function -> CheckedFunction {
     CheckedFunction { stack_effect: function.stack_effect.clone is_unsafe: function.is_unsafe is_non_returning: function.is_non_returning }
 }
 
-fn ensure_typechecked
-    function_name:$str
-    store:mut$common::SymbolStore
-    diagnostics:mut$error::Diagnostics
-    clone_body:bool
-    infer_parameters:bool
--> std::Option[CheckedFunction] {
-    if function_name store.get_function std::Option::Some(existing) is then
-        if existing.is_typechecked existing.extern_symbol.is_some || then
-            existing checked_function_summary std::Option::Some return
-        fi
-    fi
-    store SemanticChecks::new = checks
-    infer_parameters clone_body checks diagnostics store function_name ensure_checked_function
-}
-
 fn ensure_checked_function
     function_name:$str
     store:mut$common::SymbolStore
     diagnostics:mut$error::Diagnostics
     checks:mut$SemanticChecks
-    clone_body:bool
     infer_parameters:bool
 -> std::Option[CheckedFunction] {
     if function_name store.get_function std::Option::Some(existing) is then
         if function_name checks.functions.get_str std::Option::Some(status) is then
-            if status FunctionCheckStatus::Rejected is then
-                existing.location f"Function `{function_name}` did not pass checking"
+            if status FunctionWork::Rejected is then
+                existing
+                    .location
+                    .file
+                    .as_str function_name store.format_name_for_source = source_name
+                existing.location f"Function `{source_name}` did not pass checking"
                 common::ErrorKind::TypeMismatch diagnostics.record_error_string
                 std::Option[CheckedFunction]::None return
             fi
-            existing checked_function_summary std::Option::Some return
-        fi
-        if existing.is_typechecked then
-            FunctionCheckStatus::Checked function_name.to_str checks.functions.set
-            existing checked_function_summary std::Option::Some return
+            if status.get_signature std::Option::Some(signature) is then
+                signature.clone std::Option::Some return
+            fi
         fi
         if existing.extern_symbol.is_some then
             existing checked_function_summary std::Option::Some return
         fi
-    fi
-    function_name store.take_function_for_typecheck = function_opt
-    if function_opt.is_none then
-        std::Option[CheckedFunction]::None return
-    fi
-    FunctionCheckStatus::Checking function_name.to_str checks.functions.set
-    function_opt.unwrap = source_function
-    clone_body source_function prepare_owned_function_for_semantics = function
-    function.split_body = function_ops = function
-    function std::Option::Some = active_function
-    infer_parameters clone_body checks std::Set[std::String]::new
-    std::Map[std::String std::Set[std::String]]::new
-    false diagnostics store active_function function_ops analyze_ops = checked
-    checked.inferred_effect.clone = inferred_stack_effect
-    active_function.unwrap = function
-    function_ops function common::Function::set_ops
-    if function.name.as_str "lambda__" str::starts_with then
-        inferred_stack_effect function common::Function::set_stack_effect
-    else
-        function common::Function::stack_effect common::stack_effect_to_str = effect_text
-        if effect_text.as_str "None -> None" == then
-            inferred_stack_effect function common::Function::set_stack_effect
+        if function_name store.member_accessors.get_str std::Option::Some(accessor) is then
+            existing checked_function_summary = signature
+            existing.clone = declaration
+            accessor.clone = member
+            store declaration member semantic_body::make_accessor_body = body
+            body signature.clone CompletedFunction FunctionWork::Completed function_name.to_str checks.functions.set
+            signature std::Option::Some return
         fi
     fi
-    function checked_function_summary = summary
-    function store.restore_function
+    function_name store.get_function match
+        std::Option::Some(declaration) => declaration.clone
+        std::Option::None => std::Option[CheckedFunction]::None return
+    end = function
+    function checks.begin_function = active
+    infer_parameters checks std::Set[std::String]::new
+    std::Map[std::String std::Set[std::String]]::new diagnostics store active.check = checked
     if checked.is_valid ! then
-        FunctionCheckStatus::Rejected function_name.to_str checks.functions.set
         std::Option[CheckedFunction]::None return
     fi
-    FunctionCheckStatus::Checked function_name.to_str checks.functions.set
-    checked.return_origin_summaries.clone checked.return_callables.clone CallReturnSummary
-    function_name.to_str checks.return_summaries.set
-    summary std::Option::Some
+    function_name checks
+        .functions
+        .get_str
+        .unwrap
+        .get_signature
+        .unwrap
+        .clone std::Option::Some
+}
+# The active frame consumes source and publishes the declaration with its completed body.
+# Recursion can observe the reserved signature, never this frame's mutable operations.
+struct ActiveFunction {
+    declaration: common::Function
+    source:      source_body::SourceBody
+}
+
+impl ActiveFunction {
+    fn check
+        self:ActiveFunction
+        store:mut$common::SymbolStore
+        diagnostics:mut$error::Diagnostics
+        argument_callables:$std::Map[std::String std::Set[std::String]]
+        active_calls:std::Set[std::String]
+        checks:mut$SemanticChecks
+        infer_parameters:bool
+    -> CheckedOperations {
+        self match
+            ActiveFunction { declaration: declaration source: source } => {
+                declaration std::Option::Some = function_opt
+                std::List[common::Op]::new = operations
+                infer_parameters checks active_calls argument_callables
+                false diagnostics store function_opt operations source analyze_ops = checked
+                function_opt.unwrap = function
+                if
+                    function.name.as_str "lambda__" str::starts_with
+                    function.stack_effect common::stack_effect_to_str.as_str "None -> None" == ||
+                then
+                    checked.inferred_effect.clone = function.stack_effect
+                fi
+                function.name.clone = name
+                function checked_function_summary = signature
+                function store.set_function
+                if checked.is_valid then
+                    store operations semantic_body::consume_body.unwrap = body
+                    body signature CompletedFunction FunctionWork::Completed name.clone checks.functions.set
+                    checked.return_origin_summaries.clone checked.return_callables.clone CallReturnSummary
+                    name checks.return_summaries.set
+                else
+                    operations RejectedBody::Partial FunctionWork::Rejected name checks.functions.set
+                fi
+                checked
+            }
+        end
+    }
+}
+
+fn default_unconstrained_aggregate
+    typ:$common::Type
+    function_opt:$std::Option[common::Function]
+-> common::Type {
+    std::Set[std::String]::new = variables
+    variables typ common::collect_stack_effect_type_vars
+    std::Map[std::String common::Type]::new = defaults
+    for name in variables.iter do
+        if function_opt std::Option::Some(function) is then
+            if
+                name function
+                    .stack_effect
+                    .type_vars
+                    .has
+            then
+                continue
+            fi
+        fi
+        common::make_i64_type name.clone defaults.set
+    done
+    defaults typ.substitute_t
 }
 
 pub fn implements_copy typ:$common::Type store:$common::SymbolStore -> bool {
@@ -10986,30 +11460,20 @@ pub fn validate_extern_functions store:mut$common::SymbolStore diagnostics:mut$e
                 .parameters
                 .iter
         do
-            store parameter.typ abi::classify_extern_type = classification
-            if classification.is_none then
-                function.location f"Extern parameter type `{parameter.typ.format}` is not C-ABI safe"
+            if store parameter.typ common::type_is_extern_parameter ! then
+                parameter.typ.format = type_name
+                function.location f"Extern parameter type `{type_name}` is not C-ABI safe"
                 common::ErrorKind::TypeMismatch diagnostics.record_error_string
                 continue
             fi
-            classification.unwrap.passing match
-                common::ExternAbiPassing::Scalar(_) => {
-                }
-                common::ExternAbiPassing::Registers(_) => {
-                    if store parameter.typ implements_copy ! then
-                        function.location
-                        f"Extern parameter type `{parameter.typ.format}` must implement `Copy` for by-value passing"
-                        common::ErrorKind::TypeMismatch diagnostics.record_error_string
-                    fi
-                }
-                common::ExternAbiPassing::Memory => {
-                    if store parameter.typ implements_copy ! then
-                        function.location
-                        f"Extern parameter type `{parameter.typ.format}` must implement `Copy` for by-value passing"
-                        common::ErrorKind::TypeMismatch diagnostics.record_error_string
-                    fi
-                }
-            end
+            if store parameter.typ common::type_is_extern_struct then
+                if store parameter.typ implements_copy ! then
+                    parameter.typ.format = type_name
+                    function.location
+                    f"Extern parameter type `{type_name}` must implement `Copy` for by-value passing"
+                    common::ErrorKind::TypeMismatch diagnostics.record_error_string
+                fi
+            fi
         done
         for
             return_type in function
@@ -11017,16 +11481,10 @@ pub fn validate_extern_functions store:mut$common::SymbolStore diagnostics:mut$e
                 .return_types
                 .iter
         do
-            if return_type.is_borrow then
-                function.location f"Extern return type `{return_type.format}` is not C-ABI safe"
+            if store return_type common::type_is_extern_value ! then
+                return_type.format = type_name
+                function.location f"Extern return type `{type_name}` is not C-ABI safe"
                 common::ErrorKind::TypeMismatch diagnostics.record_error_string
-                continue
-            fi
-            store return_type abi::classify_extern_type = classification
-            if classification.is_none then
-                function.location f"Extern return type `{return_type.format}` is not C-ABI safe"
-                common::ErrorKind::TypeMismatch diagnostics.record_error_string
-                continue
             fi
         done
     done
@@ -11428,7 +11886,9 @@ impl TypeChecker {
     }
 
     fn into_semantic_dependencies self:TypeChecker -> std::List[SemanticDependency] {
-        self.ordered_facts.clone
+        self match
+            TypeChecker { ordered_facts: facts } => facts
+        end
     }
 
     fn collect_pattern_dependency self:mut$TypeChecker pattern:$common::PatternValue {
@@ -11497,7 +11957,7 @@ impl TypeChecker {
         if returns_callable ! then
             std::List[std::Set[std::String]]::new return
         fi
-        std::List[common::Op]::new = default_ops
+        std::Option[std::String]::None = template_name
         if
             method.trait_name.as_str self
                 .store
@@ -11506,20 +11966,19 @@ impl TypeChecker {
         then
             for trait_method in casa_trait.methods.iter do
                 if trait_method.name.as_str method.method_name.as_str == then
-                    trait_method.default_ops.clone = default_ops
+                    trait_method.default_function.clone = template_name
                     break
                 fi
             done
         fi
-        f"default:{method.trait_name}:{method.method_name}" = function_name
-        if function_name.as_str self.active_calls.has_str then
-            std::List[std::Set[std::String]]::new return
+        if template_name std::Option::Some(name) is then
+            false self.checks self.diagnostics self.store name.as_str ensure_checked_function drop
+            argument_callables name.as_str self
+                .collect_function_return_summary
+                .callables
+                .clone return
         fi
-        method.stack_effect.clone default_ops function_name make_default_method_function = function
-        self.active_calls.clone = active_calls
-        function.name.clone active_calls.add
-        self.infer_parameters self.clone_bodies self.checks active_calls argument_callables self.store function
-        analyze_function_semantics_in_store.return_callables.clone
+        std::List[std::Set[std::String]]::new
     }
 
     fn record_decision_dependencies self:mut$TypeChecker decision:$rules::SemanticFacts {
@@ -11612,14 +12071,14 @@ impl TypeChecker {
         if op.value common::OpValue::Over is then
             if 2 depth < then
                 function_opt op tc.apply_fixed_semantics
-                tc.stack_peek_type resolve_numeric_literal_default std::Option::Some op common::Op::set_type_hint
+                tc.stack_peek_type.clone std::Option::Some = op.type_hint
                 return
             fi
             depth 2 - = copied_index
         else
             if 0 depth == then
                 function_opt op tc.apply_fixed_semantics
-                tc.stack_peek_type resolve_numeric_literal_default std::Option::Some op common::Op::set_type_hint
+                tc.stack_peek_type.clone std::Option::Some = op.type_hint
                 return
             fi
             depth 1 - = copied_index
@@ -11699,7 +12158,7 @@ impl TypeChecker {
             return
         fi
         if current_op.value common::OpValue::Drop is then
-            current_op self.check_stack_ops
+            function_opt current_op self.check_stack_ops
             return
         fi
         if current_op.value rules::operation_uses_fixed_typecheck_effect then
@@ -11782,26 +12241,80 @@ impl TypeChecker {
         end
     }
 
-    pub fn run_type_check_ops
+    # Capture storage facts while the current lexical scope is still open.
+    fn record_operation_binding_facts self:$TypeChecker operation:mut$common::Op {
+        operation.value match
+            common::OpValue::AssignInc(name) => name.clone
+            common::OpValue::AssignDec(name) => name.clone
+            common::OpValue::FnPush(name) => name.clone
+            _ => return
+        end = name
+        if operation.value common::OpValue::FnPush(_) is then
+            name.as_str operation self.record_capture_binding_facts
+        else
+            name.as_str operation self.record_named_binding
+        fi
+    }
+
+    fn record_capture_binding_facts self:$TypeChecker operation:mut$common::Op function_name:$str {
+        if function_name self.store.get_function std::Option::Some(function) is then
+            for capture in function.captures.iter do
+                capture.name.as_str operation self.record_named_binding
+            done
+        fi
+    }
+
+    fn record_named_binding self:$TypeChecker operation:mut$common::Op name:$str {
+        if name self.scope.is_block_binding ! then
+            return
+        fi
+        if name self.scope.resolve_binding_reference std::Option::Some(binding) is then
+            binding common::BindingFact::Reference operation.add_binding_fact
+        fi
+    }
+
+    fn check_work_operation
         self:mut$TypeChecker
-        ops:mut$std::List[common::Op]
+        operation:common::Op
+        source_work:std::Option[SourceWork]
+        pending_ops:mut$std::List[common::Op]
+        emitted_ops:mut$std::List[common::Op]
         function_opt:mut$std::Option[common::Function]
     {
-        # The reversed input is a worklist. Lowering pushes generated suffix
-        # operations onto its end, while the checked sequence only grows.
-        ops.reverse
-        std::List[common::Op]::new = emitted_ops
-        while ops.is_empty ! do
-            ops.pop = current_op
+        operation pending_ops.push
+        while pending_ops.is_empty ! do
+            pending_ops.pop = current_op
             current_op self.assign_op_id
+            current_op.id self.scope.begin_operation
             current_op common::Op::location.clone = self.current_location
             "".to_str ExpectationContext::Text = self.current_expect_ctx
             false = self.underflow_reported_this_op
             self.diagnostics.error_count = errors_before
             self.ordered_facts.length = facts_before
+            current_op self.record_operation_binding_facts
             current_op.value common::OpValue::IfElse is
             current_op.value common::OpValue::IfElif is || = restores_branch
-            function_opt emitted_ops ops current_op self.run_type_check_op
+            source_work match
+                std::Option::Some(work) => {
+                    work match
+                        SourceWork::Array(body) => {
+                            std::List[common::Op]::new = items
+                            function_opt items pending_ops body self.check_source_sequence
+                            items current_op self.finish_array_literal
+                        }
+                        SourceWork::Group(body) => {
+                            std::List[common::Op]::new = items
+                            function_opt items pending_ops body self.check_source_sequence
+                            items common::OpValue::ExprGroup = current_op.value
+                        }
+                        SourceWork::Guard(body) => {
+                            body std::Option::Some current_op function_opt self.typecheck_match_op
+                        }
+                    end
+                }
+                std::Option::None => function_opt emitted_ops pending_ops current_op self.run_type_check_op
+            end
+            std::Option[SourceWork]::None = source_work
             errors_before self.diagnostics.error_count == = succeeded
             if succeeded ! restores_branch ! && then
                 false = self.facts_available
@@ -11817,6 +12330,218 @@ impl TypeChecker {
             fi
             current_op emitted_ops.push
         done
+    }
+
+    fn check_source_boundary
+        self:mut$TypeChecker
+        origin:common::Location
+        value:common::OpValue
+        pending_ops:mut$std::List[common::Op]
+        emitted_ops:mut$std::List[common::Op]
+        function_opt:mut$std::Option[common::Function]
+    {
+        function_opt emitted_ops pending_ops std::Option[SourceWork]::None origin value common::Op::from_source self.check_work_operation
+    }
+
+    fn check_source_branch
+        self:mut$TypeChecker
+        branch:source_body::SourceBranch
+        pending:mut$std::List[common::Op]
+        emitted:mut$std::List[common::Op]
+        function:mut$std::Option[common::Function]
+        first:bool
+    {
+        branch match
+            source_body::SourceBranch { origin: origin condition_origin: test condition: condition consequent: consequent } => {
+                if first then common::OpValue::IfStart else common::OpValue::IfElif fi = boundary
+                function emitted pending boundary origin self.check_source_boundary
+                function emitted pending condition self.check_source_sequence
+                function emitted pending common::OpValue::IfCondition test self.check_source_boundary
+                function emitted pending consequent self.check_source_sequence
+            }
+        end
+    }
+
+    fn check_source_conditional
+        self:mut$TypeChecker
+        conditional:source_body::SourceConditional
+        pending:mut$std::List[common::Op]
+        emitted:mut$std::List[common::Op]
+        function:mut$std::Option[common::Function]
+    {
+        conditional match
+            source_body::SourceConditional { branches: branches alternative: alternative end_origin: end_origin } => {
+                true = first
+                branches.reverse
+                while branches.is_empty ! do
+                    first function emitted pending branches.pop self.check_source_branch
+                    false = first
+                done
+                alternative match
+                    std::Option::Some(branch) => {
+                        branch match
+                            source_body::SourceAlternative {
+                                origin: origin body: body
+                            } => {
+                                function emitted pending common::OpValue::IfElse origin self.check_source_boundary
+                                function emitted pending body self.check_source_sequence
+                            }
+                        end
+                    }
+                    std::Option::None => {
+                    }
+                end
+                function emitted pending common::OpValue::IfEnd end_origin self.check_source_boundary
+            }
+        end
+    }
+
+    fn check_source_arm
+        self:mut$TypeChecker
+        arm:source_body::SourceArm
+        pending:mut$std::List[common::Op]
+        emitted:mut$std::List[common::Op]
+        function:mut$std::Option[common::Function]
+    {
+        arm match
+            source_body::SourceArm { origin: origin pattern: pattern guard: guard body: body } => {
+                if guard.get_nodes.is_empty then
+                    std::Option[SourceWork]::None
+                else
+                    guard SourceWork::Guard std::Option::Some
+                fi = work
+                origin std::List[common::Op]::new pattern common::MatchArm common::OpValue::MatchArm common::Op::from_source = operation
+                function emitted pending work operation self.check_work_operation
+                function emitted pending body self.check_source_sequence
+            }
+        end
+    }
+
+    fn check_source_match
+        self:mut$TypeChecker
+        match_body:source_body::SourceMatch
+        pending:mut$std::List[common::Op]
+        emitted:mut$std::List[common::Op]
+        function:mut$std::Option[common::Function]
+    {
+        match_body match
+            source_body::SourceMatch { origin: origin arms: arms end_origin: end_origin } => {
+                function emitted pending common::OpValue::MatchStart origin self.check_source_boundary
+                arms.reverse
+                while arms.is_empty ! do
+                    function emitted pending arms.pop self.check_source_arm
+                done
+                function emitted pending common::OpValue::MatchEnd end_origin self.check_source_boundary
+            }
+        end
+    }
+
+    fn check_source_node
+        self:mut$TypeChecker
+        node:source_body::SourceNode
+        pending:mut$std::List[common::Op]
+        emitted:mut$std::List[common::Op]
+        function:mut$std::Option[common::Function]
+    {
+        node match
+            source_body::SourceNode::Rejected(rejection) => {
+                rejection match
+                    source_body::SourceRejection {
+                        origin: origin message: message
+                    } => {
+                        origin message common::ErrorKind::UnmatchedBlock self.diagnostics.record_error_string
+                        origin.clone common::OpValue::Rejected common::Op::from_source = operation
+                        function emitted pending std::Option[SourceWork]::None operation self.check_work_operation
+                    }
+                end
+            }
+            source_body::SourceNode::Leaf(leaf) => {
+                function emitted pending std::Option[SourceWork]::None leaf.into_operation self.check_work_operation
+            }
+            source_body::SourceNode::Conditional(conditional) => function emitted pending conditional self.check_source_conditional
+            source_body::SourceNode::Loop(loop) => {
+                loop match
+                    source_body::SourceLoop {
+                        origin: origin condition_origin: condition_origin condition: condition body: body end_origin: end_origin
+                    } => {
+                        function emitted pending common::OpValue::WhileStart origin self.check_source_boundary
+                        function emitted pending condition self.check_source_sequence
+                        function emitted pending common::OpValue::WhileCondition condition_origin self.check_source_boundary
+                        function emitted pending body self.check_source_sequence
+                        function emitted pending common::OpValue::WhileEnd end_origin self.check_source_boundary
+                    }
+                end
+            }
+            source_body::SourceNode::Match(match_body) => function emitted pending match_body self.check_source_match
+            source_body::SourceNode::Unsafe(region) => {
+                region match
+                    source_body::SourceRegion {
+                        origin: origin body: body end_origin: end_origin
+                    } => {
+                        function emitted pending common::OpValue::UnsafeStart origin self.check_source_boundary
+                        function emitted pending body self.check_source_sequence
+                        function emitted pending common::OpValue::UnsafeEnd end_origin self.check_source_boundary
+                    }
+                end
+            }
+            source_body::SourceNode::Array(compound) => {
+                compound match
+                    source_body::SourceCompound {
+                        origin: origin body: body
+                    } => {
+                        origin std::List[common::Op]::new common::OpValue::PushArray common::Op::from_source = operation
+                        function emitted pending body SourceWork::Array std::Option::Some operation self.check_work_operation
+                    }
+                end
+            }
+            source_body::SourceNode::Group(compound) => {
+                compound match
+                    source_body::SourceCompound {
+                        origin: origin body: body
+                    } => {
+                        origin std::List[common::Op]::new common::OpValue::ExprGroup common::Op::from_source = operation
+                        function emitted pending body SourceWork::Group std::Option::Some operation self.check_work_operation
+                    }
+                end
+            }
+        end
+    }
+
+    fn check_source_sequence
+        self:mut$TypeChecker
+        body:source_body::SourceBody
+        pending_ops:mut$std::List[common::Op]
+        emitted_ops:mut$std::List[common::Op]
+        function_opt:mut$std::Option[common::Function]
+    {
+        body.into_nodes = nodes
+        nodes.reverse
+        while nodes.is_empty ! do
+            if self.path_continues then
+                function_opt emitted_ops pending_ops nodes.pop self.check_source_node
+            else
+                std::List[common::Op]::new = unreachable
+                function_opt unreachable pending_ops nodes.pop self.check_source_node
+                if unreachable.is_empty ! then
+                    0 unreachable
+                        .get
+                        .location
+                        .clone = origin
+                    origin unreachable common::OpValue::Unreachable common::Op::from_source emitted_ops.push
+                fi
+            fi
+        done
+    }
+
+    pub fn run_type_check_ops
+        self:mut$TypeChecker
+        ops:mut$std::List[common::Op]
+        function_opt:mut$std::Option[common::Function]
+    {
+        ops source_body::consume_source_operations = body
+        std::List[common::Op]::new = pending_ops
+        std::List[common::Op]::new = emitted_ops
+        function_opt emitted_ops pending_ops body self.check_source_sequence
         emitted_ops ops.append
     }
 }
@@ -11976,6 +12701,7 @@ fn attach_checked_moves ops:mut$std::List[common::Op] moved:$std::Set[i64] {
             true = op.ensure_ownership.moves_owner
         fi
         op.value match
+            common::OpValue::Unreachable(items) => moved items attach_checked_moves
             common::OpValue::PushArray(items) => moved items attach_checked_moves
             common::OpValue::ExprGroup(items) => moved items attach_checked_moves
             common::OpValue::MatchArm(arm) => moved arm.guard_ops attach_checked_moves
@@ -11995,6 +12721,7 @@ struct CheckedOperations {
 }
 
 fn analyze_ops
+    source:source_body::SourceBody
     ops:mut$std::List[common::Op]
     function_opt:mut$std::Option[common::Function]
     store:mut$common::SymbolStore
@@ -12003,14 +12730,14 @@ fn analyze_ops
     argument_callables:$std::Map[std::String std::Set[std::String]]
     active_calls:std::Set[std::String]
     checks:mut$SemanticChecks
-    clone_bodies:bool
     infer_parameters:bool
 -> CheckedOperations {
     diagnostics.error_count = errors_before_check
-    infer_parameters clone_bodies checks active_calls diagnostics store TypeChecker::new = checker
+    infer_parameters checks active_calls diagnostics store TypeChecker::new = checker
     argument_callables.clone = checker.callable_bindings
     std::Option[u64]::None = budget
     if function_opt std::Option::Some(the_function) is then
+        the_function.location.clone = checker.current_location
         the_function checker.record_capture_origins
         the_function
             .stack_effect
@@ -12049,16 +12776,18 @@ fn analyze_ops
         done
     fi
     budget = checker.param_cap
-    VariableUses::new ops collect_variable_uses = variable_uses
+    VariableUses::new source collect_source_variable_uses = variable_uses
     variable_uses.counts.clone = checker.remaining_uses
     variable_uses.observing_counts.clone = checker.remaining_observing_uses
     variable_uses.cleanup_only_use_offsets.clone = checker.cleanup_only_use_offsets
     variable_uses.last_locations.clone = checker.last_use_locations
     checker.diagnostics.error_count = errors_before_ops
-    function_opt ops checker.run_type_check_ops
+    std::List[common::Op]::new = pending
+    function_opt ops pending source checker.check_source_sequence
 
     if function_opt std::Option::Some(checked_function) is then
         checker.path_continues ! checker.has_return_types ! && = checked_function.is_non_returning
+        checked_function.stack_effect checker.materialize_return_lambdas
         checked_function checker.resolve_declared_return_borrow_capabilities
         if checker.path_continues then
             checked_function checker.validate_borrow_returns
@@ -12164,7 +12893,13 @@ fn analyze_ops
                             inferred declared common::stack_effect_matches ! = invalid_effect
                         fi
                         if invalid_effect then
-                            declared_function common::Function::location f"Invalid stack effect for function `{declared_function common::Function::name}`: expected `{declared common::stack_effect_to_str}`, got `{inferred common::stack_effect_to_str}`" common::ErrorKind::SignatureMismatch checker.diagnostics.record_error_string
+                            declared_function
+                                .location
+                                .file
+                                .as_str declared_function.name.as_str checker.store.format_name_for_source = source_name
+                            declared common::stack_effect_to_str = expected
+                            inferred common::stack_effect_to_str = actual
+                            declared_function.location f"Invalid stack effect for function `{source_name}`: expected `{expected}`, got `{actual}`" common::ErrorKind::SignatureMismatch checker.diagnostics.record_error_string
                         fi
                     fi
                 fi
@@ -12198,10 +12933,10 @@ pub fn check_ops
     function_opt:mut$std::Option[common::Function]
     store:mut$common::SymbolStore
     diagnostics:mut$error::Diagnostics
+    bodies:$std::Map[std::String source_body::SourceBody]
     require_empty_final_stack:bool
 -> common::StackEffect {
-    false false
-    require_empty_final_stack diagnostics store function_opt ops check_ops_with_parameter_policy
+    false require_empty_final_stack bodies diagnostics store function_opt ops check_ops_with_parameter_policy
 }
 
 fn check_ops_with_parameter_policy
@@ -12209,62 +12944,20 @@ fn check_ops_with_parameter_policy
     function_opt:mut$std::Option[common::Function]
     store:mut$common::SymbolStore
     diagnostics:mut$error::Diagnostics
+    bodies:$std::Map[std::String source_body::SourceBody]
     require_empty_final_stack:bool
-    clone_bodies:bool
     infer_parameters:bool
 -> common::StackEffect {
-    store SemanticChecks::new = checks
-    infer_parameters clone_bodies checks
+    SemanticChecks::new = checks
+    bodies.clone checks.stage_sources
+    store checks.stage_accessors
+    infer_parameters checks
     std::Set[std::String]::new
     std::Map[std::String std::Set[std::String]]::new
-    require_empty_final_stack diagnostics store function_opt ops analyze_ops = checked
-    checked.inferred_effect.clone
-}
-
-fn clone_operations_for_semantics source:$std::List[common::Op] -> std::List[common::Op] {
-    std::List[common::Op]::new = cloned
-    for source_op in source.iter do
-        source_op.clone = op
-        op.value.clone = value
-        if value common::OpValue::PushArray(items) is then
-            items clone_operations_for_semantics common::OpValue::PushArray op common::Op::set_value
-        elif value common::OpValue::ExprGroup(items) is then
-            items clone_operations_for_semantics common::OpValue::ExprGroup op common::Op::set_value
-        elif value common::OpValue::MatchArm(arm) is then
-            arm.clone = cloned_arm
-            arm.guard_ops clone_operations_for_semantics = cloned_arm.guard_ops
-            cloned_arm common::OpValue::MatchArm op common::Op::set_value
-        fi
-        op cloned.push
-    done
-    cloned
-}
-
-fn clone_function_for_semantics source:$common::Function -> common::Function {
-    source.clone_for_import = cloned
-    source.ops clone_operations_for_semantics = cloned.ops
-    cloned
-}
-
-fn prepare_owned_function_for_semantics
-    source:common::Function
-    clone_body:bool
--> common::Function {
-    if clone_body then
-        source clone_function_for_semantics return
-    fi
-    source
-}
-
-fn select_function_for_semantics
-    fallback:$common::Function
-    stored:std::Option[common::Function]
-    clone_body:bool
--> common::Function {
-    if stored.is_some then
-        clone_body stored.unwrap prepare_owned_function_for_semantics return
-    fi
-    fallback clone_function_for_semantics
+    ops source_body::consume_source_operations = source
+    require_empty_final_stack diagnostics store function_opt ops source analyze_ops = checked
+    checked.inferred_effect.clone = effect
+    effect
 }
 
 impl common::SymbolStore {
@@ -12275,7 +12968,7 @@ impl common::SymbolStore {
             function_name.as_str source
                 .get_function
                 .unwrap
-                .clone_for_import = function
+                .clone = function
             if function_name.as_str source.is_generated_recipe then
                 function cloned.set_generated_recipe
             else
@@ -12287,6 +12980,7 @@ impl common::SymbolStore {
         source.enums.clone = cloned.enums
         source.structs.clone = cloned.structs
         source.traits.clone = cloned.traits
+        source.member_accessors.clone = cloned.member_accessors
         for implementation in source.clone_trait_impls.iter do
             implementation.clone cloned.set_trait_impl
         done
@@ -12317,36 +13011,33 @@ fn analyze_function_semantics_in_store
     argument_callables:$std::Map[std::String std::Set[std::String]]
     active_calls:std::Set[std::String]
     checks:mut$SemanticChecks
-    clone_body:bool
     infer_parameters:bool
 -> AnalyzedFunction {
-    FunctionCheckStatus::Checking function.name.clone checks.functions.set
-    function.name.as_str store.take_function_for_typecheck = stored_function
-    clone_body stored_function function select_function_for_semantics = checked_function
-    true = checked_function.is_typechecked
-    checked_function.split_body = checked_ops = checked_function
-    checked_function std::Option::Some = function_opt
+    if function.name.as_str store.has_function ! then
+        function.clone store.set_function
+    fi
+    function.name.as_str store
+        .get_function
+        .unwrap
+        .clone checks.begin_function = active
     error::Diagnostics::new = diagnostics
-    infer_parameters clone_body checks active_calls argument_callables
-    false diagnostics store function_opt checked_ops analyze_ops = checked
-    function_opt.unwrap = checked_function
-    checked_ops.clone checked_function common::Function::set_ops
-    if checked.is_valid ! then
-        FunctionCheckStatus::Rejected
-    else
-        FunctionCheckStatus::Checked
-    fi
-    checked_function.name.clone checks.functions.set
-    if checked.is_valid then
-        checked.return_origin_summaries.clone checked.return_callables.clone CallReturnSummary
-        checked_function.name.clone checks.return_summaries.set
-    fi
-    checked_function.clone store.restore_function
+    infer_parameters checks active_calls argument_callables diagnostics store active.check = checked
+    function.name.as_str checks
+        .functions
+        .get_str
+        .unwrap match
+        FunctionWork::Completed(completed) => completed.body.lower_operations
+        FunctionWork::Rejected(rejection) => rejection.lower_operations
+        _ => "Function checking did not publish its result" panic
+    end = operations
     AnalyzedFunction {
-        checked_function: checked_function
+        checked_function: function.name.as_str store
+            .get_function
+            .unwrap
+            .clone
         ordered_facts: checked.ordered_facts.clone
         inferred_effect: checked.inferred_effect.clone
-        operations: checked_ops
+        operations: operations
         diagnostics: diagnostics
         return_callables: checked.return_callables.clone
         return_origin_summaries: checked.return_origin_summaries.clone
@@ -12356,33 +13047,10 @@ fn analyze_function_semantics_in_store
 pub fn analyze_function_semantics
     function:$common::Function
     store:$common::SymbolStore
+    bodies:$std::Map[std::String source_body::SourceBody]
 -> FunctionSemantics {
-    store SemanticSession::new = session
-    session function analyze_function_semantics_in_session
-}
-
-pub fn analyze_function_semantics_in_session
-    function:$common::Function
-    session:mut$SemanticSession
--> FunctionSemantics {
+    bodies store SemanticSession::new = session
     std::Map[std::String std::Set[std::String]]::new = argument_callables
-    true argument_callables session function analyze_function_semantics_in_session_mode
-}
-
-pub fn analyze_function_semantics_with_callables
-    function:$common::Function
-    store:$common::SymbolStore
-    argument_callables:$std::Map[std::String std::Set[std::String]]
--> FunctionSemantics {
-    store SemanticSession::new = session
-    argument_callables session function analyze_function_semantics_with_callables_in_session
-}
-
-pub fn analyze_function_semantics_with_callables_in_session
-    function:$common::Function
-    session:mut$SemanticSession
-    argument_callables:$std::Map[std::String std::Set[std::String]]
--> FunctionSemantics {
     true argument_callables session function analyze_function_semantics_in_session_mode
 }
 
@@ -12394,7 +13062,7 @@ fn analyze_function_semantics_in_session_mode
 -> FunctionSemantics {
     std::Set[std::String]::new = active_calls
     function.name.clone active_calls.add
-    infer_parameters session.clone_bodies session.checks active_calls argument_callables
+    infer_parameters session.checks active_calls argument_callables
     session.store function analyze_function_semantics_in_store = analysis
     FunctionSemantics {
         ordered_facts: analysis.ordered_facts.clone
@@ -12406,10 +13074,12 @@ fn analyze_function_semantics_in_session_mode
     }
 }
 
-pub fn continue_function_semantics
+pub fn analyze_declared_function_semantics
     function:$common::Function
-    session:mut$SemanticSession
+    store:$common::SymbolStore
+    bodies:$std::Map[std::String source_body::SourceBody]
 -> FunctionSemantics {
+    bodies store SemanticSession::new = session
     std::Map[std::String std::Set[std::String]]::new = argument_callables
     false argument_callables session function analyze_function_semantics_in_session_mode
 }
@@ -12418,13 +13088,27 @@ pub fn analyze_root_semantics
     operations:$std::List[common::Op]
     session:mut$SemanticSession
 -> FunctionSemantics {
-    operations clone_operations_for_semantics = checked_ops
+    session operations.clone analyze_owned_root_semantics
+}
+
+pub fn analyze_owned_root_semantics
+    checked_ops:std::List[common::Op]
+    session:mut$SemanticSession
+-> FunctionSemantics {
+    session checked_ops source_body::consume_source_body analyze_source_root_semantics
+}
+
+pub fn analyze_source_root_semantics
+    source:source_body::SourceBody
+    session:mut$SemanticSession
+-> FunctionSemantics {
+    std::List[common::Op]::new = checked_ops
     std::Option[common::Function]::None = function_opt
     error::Diagnostics::new = diagnostics
-    false session.clone_bodies session.checks
+    false session.checks
     std::Set[std::String]::new
     std::Map[std::String std::Set[std::String]]::new
-    true diagnostics session.store function_opt checked_ops analyze_ops = checked
+    true diagnostics session.store function_opt checked_ops source analyze_ops = checked
     FunctionSemantics {
         ordered_facts: checked.ordered_facts.clone
         inferred_effect: checked.inferred_effect.clone
@@ -12435,136 +13119,11 @@ pub fn analyze_root_semantics
     }
 }
 
-pub fn make_default_method_function
-    name:std::String
-    operations:std::List[common::Op]
-    effect:common::StackEffect
--> common::Function {
-    std::List[common::Op]::new = function_operations
-    std::List[common::Variable]::new = variables
-    for parameter in effect.parameters.iter do
-        if "" parameter.name.as_str == then
-            continue
-        fi
-        parameter.typ.clone parameter.name.clone common::Variable variables.push
-        common::empty_location parameter.name.clone common::OpValue::AssignVar common::Op::new
-        function_operations.push
-    done
-    operations function_operations.append
-    effect common::empty_location function_operations name common::Function::with_stack_effect = function
-    variables = function.variables
-    function
-}
-
-fn inherit_default_lambda_effect
-    lambda_name:$str
-    effect:$common::StackEffect
+fn check_trait_impls
     store:mut$common::SymbolStore
-{
-    if lambda_name "lambda__" str::starts_with ! then
-        return
-    fi
-    if lambda_name store.take_function_for_update std::Option::Some(lambda) is then
-        lambda.stack_effect.clone = lambda_effect
-        for type_variable in effect.type_vars.iter do
-            type_variable.clone lambda_effect.type_vars.add
-        done
-        for pair in effect.trait_bounds.iter do
-            pair.second.clone pair.first.clone lambda_effect.trait_bounds.set
-        done
-        lambda_effect lambda common::Function::set_stack_effect
-        store effect lambda.ops inherit_default_lambda_context
-        lambda store.restore_function
-    fi
-}
-
-fn inherit_default_lambda_context
-    operations:$std::List[common::Op]
-    effect:$common::StackEffect
-    store:mut$common::SymbolStore
-{
-    for operation in operations.iter do
-        if operation.value common::OpValue::FnPush(lambda_name) is then
-            store effect lambda_name.as_str inherit_default_lambda_effect
-        elif operation.value common::OpValue::PushArray(items) is then
-            store effect items inherit_default_lambda_context
-        elif operation.value common::OpValue::ExprGroup(items) is then
-            store effect items inherit_default_lambda_context
-        elif operation.value common::OpValue::MatchArm(arm) is then
-            store effect arm.guard_ops inherit_default_lambda_context
-        fi
-    done
-}
-
-pub fn check_trait_default_bodies
-    store:common::SymbolStore
     diagnostics:mut$error::Diagnostics
--> common::SymbolStore {
-    for
-        trait_name in store
-            .traits
-            .keys
-            .iter
-    do
-        trait_name store
-            .traits
-            .get
-            .unwrap
-            .clone = casa_trait
-        std::List[common::Type]::new = trait_arguments
-        for type_parameter in casa_trait.type_params.iter do
-            type_parameter.clone common::Type::TypeVar trait_arguments.push
-        done
-        trait_arguments casa_trait.name.clone common::TraitBound = self_bound
-        0 = method_index: u64
-        while method_index casa_trait.methods.length > do
-            method_index casa_trait
-                .methods
-                .get
-                .clone = method
-            1 += method_index
-            if method.has_default_body ! then
-                continue
-            fi
-            method.stack_effect.clone = effect
-            common::TRAIT_SELF_TYPE.to_str effect.type_vars.add
-            for type_parameter in casa_trait.type_params.iter do
-                type_parameter.clone effect.type_vars.add
-            done
-            for type_parameter in method.type_vars.iter do
-                type_parameter.clone effect.type_vars.add
-            done
-            std::List[common::TraitBound]::new = bounds
-            self_bound.clone bounds.push
-            bounds common::TRAIT_SELF_TYPE.to_str effect.trait_bounds.set
-            f"{casa_trait.name}::{method.name}" = name
-            effect.clone method.default_ops.clone name.clone make_default_method_function = function
-            method.location.clone = function.location
-            for variable in method.default_variables.iter do
-                variable.clone function.variables.push
-            done
-            store effect method.default_ops inherit_default_lambda_context
-            function.clone store.set_generated_recipe
-            store SemanticSession::from_store = session
-            session function analyze_function_semantics_in_session = analysis
-            session.into_store = store
-            name.as_str store.remove_generated_recipe
-            if analysis.diagnostics.has_errors ! then
-                analysis
-                    .checked_function
-                    .clone
-                    .unwrap = checked_function
-                checked_function std::Option::Some = method.checked_default
-                method method_index 1 - casa_trait.methods.set
-            fi
-            analysis.diagnostics.clone diagnostics.merge
-        done
-        casa_trait.clone trait_name.clone store.traits.set
-    done
-    store
-}
-
-pub fn check_trait_impls store:mut$common::SymbolStore diagnostics:mut$error::Diagnostics {
+    checks:mut$SemanticChecks
+{
     for trait_impl in store.clone_trait_impls.iter do
         trait_impl.trait_bound common::trait_bound_to_type = trait_type
         std::Set[std::String]::new = checked_methods
@@ -12587,7 +13146,7 @@ pub fn check_trait_impls store:mut$common::SymbolStore diagnostics:mut$error::Di
                 store trait_impl.receiver method_name.as_str rules::find_semantic_method_function = function_name_opt
             fi
             if function_name_opt std::Option::Some(function_name) is then
-                false false diagnostics store function_name.as_str ensure_typechecked = function_opt
+                false checks diagnostics store function_name.as_str ensure_checked_function = function_opt
                 if function_opt.is_none then
                     false = valid continue
                 fi
@@ -12649,159 +13208,13 @@ pub fn identity_generic_bindings effect:$common::StackEffect -> std::Map[std::St
     bindings
 }
 
-pub fn validate_generic_cycle_call
-    op:$common::Op
-    substitutions:mut$std::Map[std::String common::Type]
-    active:mut$std::Map[std::String std::String]
-    path:mut$std::List[std::String]
-    store:$common::SymbolStore
-    diagnostics:mut$error::Diagnostics
-{
-    std::Option[std::String]::None = function_name_opt
-    if op.value common::OpValue::FnCall(function_name) is then
-        function_name.clone std::Option::Some = function_name_opt
-    elif op.value common::OpValue::FnPush(function_name) is then
-        function_name.clone std::Option::Some = function_name_opt
-    fi
-    if function_name_opt.is_none then
-        return
-    fi
-    function_name_opt.unwrap = function_name
-    function_name.as_str store.get_function = callee_opt
-    if callee_opt.is_none then
-        return
-    fi
-    callee_opt.unwrap = callee_ref
-    std::Map[std::String common::Type]::new = composed
-    for pair in op.call_bindings.iter do
-        substitutions pair.second.substitute_t pair.first.clone composed.set
-    done
-    composed generic_binding_key = key
-    if function_name active.get std::Option::Some(previous) is then
-        if previous.as_str key.as_str != then
-            path.clone = cycle
-            function_name.clone cycle.push
-            " -> " cycle.join_strings = cycle_text
-            op.location f"Polymorphic recursion changes the type arguments of `{function_name}`: `{previous}` becomes `{key}` (cycle: {cycle_text})"
-            common::ErrorKind::TypeMismatch diagnostics.record_error_string
-        fi
-        return
-    fi
-    key.clone function_name.clone active.set
-    function_name.clone path.push
-    diagnostics store path active composed callee_ref.ops validate_generic_cycles_in_ops
-    function_name.as_str active.delete_str
-    path.pop drop
-}
-
-pub fn validate_generic_cycles_in_ops
-    ops:$std::List[common::Op]
-    substitutions:mut$std::Map[std::String common::Type]
-    active:mut$std::Map[std::String std::String]
-    path:mut$std::List[std::String]
-    store:$common::SymbolStore
-    diagnostics:mut$error::Diagnostics
-{
-    for op in ops.iter do
-        diagnostics store path active substitutions op validate_generic_cycle_call
-        op.value match
-            common::OpValue::PushArray(items) => {
-                diagnostics store path active substitutions items validate_generic_cycles_in_ops
-            }
-            common::OpValue::ExprGroup(items) => {
-                diagnostics store path active substitutions items validate_generic_cycles_in_ops
-            }
-            common::OpValue::MatchArm(arm) => {
-                diagnostics store path active substitutions arm.guard_ops validate_generic_cycles_in_ops
-            }
-            _ => {
-            }
-        end
-    done
-}
-
-pub fn validate_generic_cycles store:$common::SymbolStore diagnostics:mut$error::Diagnostics {
-    for function_name in store.get_function_names.iter do
-        if function_name.as_str store.get_function std::Option::Some(function) is then
-            if
-                0 function
-                    .stack_effect
-                    .type_vars
-                    .length == 0 function
-                    .stack_effect
-                    .const_params
-                    .keys
-                    .length == &&
-            then
-                continue
-            fi
-            function.stack_effect identity_generic_bindings = bindings
-            std::Map[std::String std::String]::new = active
-            std::List[std::String]::new = path
-            function_name.clone path.push
-            bindings generic_binding_key function_name.clone active.set
-            diagnostics store path active bindings function.ops validate_generic_cycles_in_ops
-        fi
-    done
-}
-
-pub fn specialize_owner_event
-    event:$common::OwnerEvent
-    bindings:mut$std::Map[std::String common::Type]
--> common::OwnerEvent {
-    event.generation bindings event.typ.substitute_t event.name.clone common::OwnerEvent
-}
-
-pub fn specialize_op_metadata
-    ops:mut$std::List[common::Op]
-    bindings:mut$std::Map[std::String common::Type]
-    store:mut$common::SymbolStore
-{
-    0 = index: u64
-    while index ops.length > do
-        index ops.get_mut = op
-        store.next_op_id = op.id
-        1 += store.next_op_id
-        if op.ownership std::Option::Some(ownership) is then
-            std::List[common::OwnerEvent]::new = assignments
-            for event in ownership.assignments.iter do
-                bindings event specialize_owner_event assignments.push
-            done
-            std::List[common::OwnerEvent]::new = cleanups
-            for event in ownership.cleanups.iter do
-                bindings event specialize_owner_event cleanups.push
-            done
-            assignments = ownership.assignments
-            cleanups = ownership.cleanups
-        fi
-        op.value.clone = value
-        if value common::OpValue::PushArray(items) is then
-            items.clone = nested
-            store bindings nested specialize_op_metadata
-            nested common::OpValue::PushArray op common::Op::set_value
-        elif value common::OpValue::ExprGroup(items) is then
-            items.clone = nested
-            store bindings nested specialize_op_metadata
-            nested common::OpValue::ExprGroup op common::Op::set_value
-        elif value common::OpValue::MatchArm(arm) is then
-            arm.clone = specialized_arm
-            store bindings specialized_arm.guard_ops specialize_op_metadata
-            specialized_arm common::OpValue::MatchArm op common::Op::set_value
-        fi
-        1 += index
-    done
-}
-
-pub fn specialize_checked_function
+fn specialize_function_declaration
     source:common::Function
     name:std::String
     bindings:mut$std::Map[std::String common::Type]
-    store:mut$common::SymbolStore
 -> common::Function {
     source = specialized
     name = specialized.name
-    bindings specialized.ops common::substitute_ops_types
-    store bindings specialized.ops specialize_op_metadata
     0 = variable_index: u64
     while variable_index specialized.variables.length > do
         variable_index specialized.variables.get_mut = variable
@@ -12823,11 +13236,12 @@ pub fn specialize_checked_function
     specialized
 }
 
-pub fn resolve_specialized_trait_operation
+fn resolve_specialized_trait_operation_in_work
     op:mut$common::Op
     as_reference:bool
     store:mut$common::SymbolStore
     diagnostics:mut$error::Diagnostics
+    checks:mut$SemanticChecks
 {
     std::Option[common::DeferredTraitCall]::None = call_opt
     if op.value common::OpValue::TraitMethodCall(call) is then
@@ -12844,7 +13258,7 @@ pub fn resolve_specialized_trait_operation
         target.clone = lookup_receiver
     fi
     if "clone" call.method_name.as_str == then
-        op.location lookup_receiver store ensure_function_clone_method
+        checks op.location lookup_receiver store ensure_function_clone_method
     fi
     std::Option[rules::MethodSemantics]::None = semantics_opt
     if call.trait_type std::Option::Some(trait_type) is then
@@ -12868,13 +13282,12 @@ pub fn resolve_specialized_trait_operation
     semantics_opt.unwrap = semantics
     semantics.function_name.clone = function_name
     if semantics.kind rules::MethodSemanticsKind::DefaultMethod is then
-        store SemanticChecks::new = checks
         checks diagnostics store lookup_receiver semantics instantiate_default_trait_method = default_name_opt
         if default_name_opt std::Option::Some(default_name) is then
             default_name.clone = function_name
         fi
     fi
-    false false diagnostics store function_name.as_str ensure_typechecked drop
+    false checks diagnostics store function_name.as_str ensure_checked_function drop
     if
         0 op.call_bindings.length ==
         function_name.as_str store.get_function std::Option::Some(implementation) is &&
@@ -12936,219 +13349,359 @@ pub fn function_receiver_bindings
     bindings actual pattern rules::bind_trait_impl_type drop
     bindings
 }
-
-pub fn monomorphize_function_body
-    function_name:$str
-    processed:mut$std::Set[std::String]
-    drop_types:mut$std::Set[std::String]
-    store:mut$common::SymbolStore
-    diagnostics:mut$error::Diagnostics
-{
-    if function_name processed.has_str then
-        return
-    fi
-    function_name store.take_function_for_update = function_opt
-    function_opt match
-        std::Option::Some(function) => {
-            function.split_body = function_ops = function
-            function_name.to_str processed.add
-            diagnostics store drop_types processed function_ops monomorphize_ops
-            function_ops function common::Function::set_ops
-            function store.restore_function
-        }
-        std::Option::None => {
-        }
-    end
+# Recipes and concrete instances stay in the checking owner until publication.
+struct SemanticSpecializer {
+    store:       mut$common::SymbolStore
+    checks:      mut$SemanticChecks
+    diagnostics: mut$error::Diagnostics
+    processed:   std::Set[std::String]
+    drop_types:  std::Set[std::String]
 }
 
-pub fn monomorphize_drop_type
-    typ:$common::Type
-    processed:mut$std::Set[std::String]
-    drop_types:mut$std::Set[std::String]
-    store:mut$common::SymbolStore
-    diagnostics:mut$error::Diagnostics
-{
-    if typ.has_unresolved_type_var typ.is_borrow || then
-        return
-    fi
-    typ.format = type_key
-    if type_key.as_str drop_types.has_str then
-        return
-    fi
-    type_key.clone drop_types.add
-
-    if store typ common::find_drop_function_name std::Option::Some(drop_name) is then
-        drop_name.as_str store.get_function.unwrap = source_ref: $common::Function
-        source_ref.clone_for_import = source
+impl SemanticSpecializer {
+    fn select_target
+        self:mut$SemanticSpecializer
+        name:$str
+        bindings:mut$std::Map[std::String common::Type]
+        origin:$common::Location
+    -> std::String {
+        false self.checks self.diagnostics self.store name ensure_checked_function drop
         if
-            0 source
-                .stack_effect
-                .type_vars
-                .length != 0 source
-                .stack_effect
-                .const_params
-                .keys
-                .length != ||
+            name self
+                .store
+                .source_functions
+                .has_str
         then
-            source typ function_receiver_bindings = bindings
-            bindings drop_name.as_str monomorphized_function_name = specialized_name
-            if specialized_name.as_str store.has_function ! then
-                store bindings specialized_name.clone source specialize_checked_function = specialized
-                drop_name.as_str specialized store.set_specialized_function
-            fi
-            diagnostics store drop_types processed specialized_name.as_str monomorphize_function_body
-        else
-            diagnostics store drop_types processed drop_name.as_str monomorphize_function_body
+            name.to_str return
         fi
-    fi
+        name self.store.get_function match
+            std::Option::None => name.to_str return
+            std::Option::Some(declaration) => {
+                if
+                    declaration
+                        .stack_effect
+                        .type_vars
+                        .is_empty declaration
+                        .stack_effect
+                        .const_params
+                        .length 0 == && bindings.is_empty &&
+                then
+                    name.to_str return
+                fi
+            }
+        end
+        if bindings.is_empty then
+            origin f"Cannot monomorphize `{name}` without concrete type arguments"
+            common::ErrorKind::TypeMismatch self.diagnostics.record_error_string
+            name.to_str return
+        fi
+        for pair in bindings.iter do
+            if pair.second.has_unresolved_type_var then
+                origin f"Cannot monomorphize `{name}` with unresolved type arguments"
+                common::ErrorKind::TypeMismatch self.diagnostics.record_error_string
+                name.to_str return
+            fi
+        done
+        bindings name monomorphized_function_name = target
+        if target.as_str self.store.has_function ! then
+            name self
+                .store
+                .get_function
+                .unwrap
+                .clone = declaration
+            bindings target.clone declaration specialize_function_declaration = specialized
+            if
+                name self
+                    .checks
+                    .functions
+                    .get_str std::Option::Some(work) is
+            then
+                if work FunctionWork::Completed(completed) is then
+                    completed.body.clone = body
+                    self.store bindings body.substitute
+                    body specialized checked_function_summary CompletedFunction
+                    FunctionWork::Completed target.clone self
+                        .checks
+                        .functions
+                        .set
+                fi
+            fi
+            name specialized self.store.set_specialized_function
+        fi
+        target
+    }
 
-    std::List[common::Type]::new = child_types
-    if typ common::Type::Generic(generic) is then
+    fn visit_function self:mut$SemanticSpecializer name:$str {
+        if name self.processed.has_str then
+            return
+        fi
+        name.to_str self.processed.add
+        false self.checks self.diagnostics self.store name ensure_checked_function drop
+        if name self.store.get_function std::Option::Some(declaration) is then
+            declaration.captures.clone
+        else
+            std::List[common::Variable]::new
+        fi = captures
+        for capture in captures.iter do
+            capture.typ self.visit_drop_type
+        done
+        if name self.checks.begin_specialization std::Option::Some(active) is then
+            self active.complete
+        fi
+    }
+
+    fn visit_drop_type self:mut$SemanticSpecializer typ:$common::Type {
+        if typ.has_unresolved_type_var typ.is_borrow || then
+            return
+        fi
+        typ.format = key
+        if key self.drop_types.has then
+            return
+        fi
+        key self.drop_types.add
+        if self.store typ common::find_drop_function_name std::Option::Some(name) is then
+            name.as_str self
+                .store
+                .get_function
+                .unwrap = declaration
+            declaration typ function_receiver_bindings = bindings
+            common::empty_location bindings name.as_str self.select_target = target
+            target.as_str self.visit_function
+        fi
+        std::List[common::Type]::new = children
+        typ match
+            common::Type::Generic(generic) => generic
+            _ => return
+        end = generic
         if common::ARRAY_TYPE generic.base.as_str == then
-            if 0 generic.params.length != then
+            if generic.params.is_empty ! then
                 0 generic
                     .params
                     .get
-                    .clone child_types.push
+                    .clone children.push
             fi
-        elif generic.base.as_str store.structs.get_str std::Option::Some(casa_struct) is then
-            casa_struct.clone = owned_struct
-            owned_struct.type_vars typ common::aggregate_type_bindings = bindings
-            for member in owned_struct.members.iter do
-                bindings member.typ.substitute_t child_types.push
+        elif
+            generic.base.as_str self
+                .store
+                .structs
+                .get_str std::Option::Some(shape) is
+        then
+            shape.type_vars typ common::aggregate_type_bindings = bindings
+            for member in shape.members.iter do
+                bindings member.typ.substitute_t children.push
             done
-        elif generic.base.as_str store.enums.get_str std::Option::Some(casa_enum) is then
-            casa_enum.clone = owned_enum
-            owned_enum.type_vars typ common::aggregate_type_bindings = bindings
-            for pair in owned_enum.variant_types.iter do
-                for payload in pair.second.iter do
-                    bindings payload.substitute_t child_types.push
+        elif
+            generic.base.as_str self
+                .store
+                .enums
+                .get_str std::Option::Some(shape) is
+        then
+            shape.type_vars typ common::aggregate_type_bindings = bindings
+            for variant in shape.variant_types.iter do
+                for member in variant.second.iter do
+                    bindings member.substitute_t children.push
                 done
             done
         fi
-    fi
-    for child_type in child_types.iter do
-        diagnostics store drop_types processed child_type monomorphize_drop_type
-    done
-}
+        for child in children.iter do
+            child self.visit_drop_type
+        done
+    }
 
-pub fn monomorphize_named_operation
-    op:mut$common::Op
-    processed:mut$std::Set[std::String]
-    drop_types:mut$std::Set[std::String]
-    store:mut$common::SymbolStore
-    diagnostics:mut$error::Diagnostics
-{
-    op common::op_str_value = function_name
-    op.value common::OpValue::FnCall is = call_operation
-    if function_name.as_str store.has_function ! then
-        return
-    fi
-    0 op.call_bindings.length != = has_bindings
-    0 function_name.as_str store
-        .get_function
-        .unwrap
-        .stack_effect
-        .type_vars
-        .length != 0 function_name.as_str store
-        .get_function
-        .unwrap
-        .stack_effect
-        .const_params
-        .keys
-        .length != ||
-    has_bindings ||
-    = generic_source
-    if generic_source ! then
-        diagnostics store drop_types processed function_name.as_str monomorphize_function_body
-        return
-    fi
-    if has_bindings ! then
-        op.location f"Cannot monomorphize `{function_name}` without concrete type arguments"
-        common::ErrorKind::TypeMismatch diagnostics.record_error_string
-        return
-    fi
-    op.call_bindings.clone = bindings
-    for pair in bindings.iter do
-        if pair.second.has_unresolved_type_var then
-            op.location f"Cannot monomorphize `{function_name}` with unresolved type arguments"
-            common::ErrorKind::TypeMismatch diagnostics.record_error_string
-            return
-        fi
-    done
-    bindings function_name.as_str monomorphized_function_name = specialized_name
-    if call_operation then
-        specialized_name.clone common::OpValue::FnCall op common::Op::set_value
-    else
-        specialized_name.clone common::OpValue::FnPush op common::Op::set_value
-    fi
-    if specialized_name.as_str store.has_function ! then
-        function_name.as_str store
-            .get_function
-            .unwrap
-            .clone_for_import = generic_function
-        store bindings specialized_name.clone generic_function specialize_checked_function = specialized
-        function_name.as_str specialized store.set_specialized_function
-    fi
-    diagnostics store drop_types processed specialized_name.as_str monomorphize_function_body
-}
-
-pub fn monomorphize_ops
-    ops:mut$std::List[common::Op]
-    processed:mut$std::Set[std::String]
-    drop_types:mut$std::Set[std::String]
-    store:mut$common::SymbolStore
-    diagnostics:mut$error::Diagnostics
-{
-    0 = index: u64
-    while index ops.length > do
-        index ops.get_mut = op
-        if op.value common::OpValue::TraitMethodCall is then
-            diagnostics store false op resolve_specialized_trait_operation
-        elif op.value common::OpValue::TraitMethodRef is then
-            diagnostics store true op resolve_specialized_trait_operation
-        fi
-        if
-            op.value common::OpValue::FnCall is
-            op.value common::OpValue::FnPush is ||
-        then
-            diagnostics store drop_types processed op monomorphize_named_operation
-        fi
-        if op.value common::OpValue::Drop is then
-            if op.type_hint std::Option::Some(drop_type) is then
-                diagnostics store drop_types processed drop_type monomorphize_drop_type
-            fi
-        fi
-        if op.ownership std::Option::Some(ownership) is then
-            for event in ownership.cleanups.iter do
-                diagnostics store drop_types processed event.typ monomorphize_drop_type
+    fn visit_facts self:mut$SemanticSpecializer facts:$semantic_body::OperationFacts {
+        if facts.effects std::Option::Some(effects) is then
+            for event in effects.cleanups.iter do
+                event.typ self.visit_drop_type
             done
         fi
-        op.value.clone = nested_value
-        if nested_value common::OpValue::PushArray(items) is then
-            items.clone = nested
-            diagnostics store drop_types processed nested monomorphize_ops
-            nested common::OpValue::PushArray op common::Op::set_value
-        elif nested_value common::OpValue::ExprGroup(items) is then
-            items.clone = nested
-            diagnostics store drop_types processed nested monomorphize_ops
-            nested common::OpValue::ExprGroup op common::Op::set_value
-        elif nested_value common::OpValue::MatchArm(arm) is then
-            arm.clone = specialized_arm
-            diagnostics store drop_types processed specialized_arm.guard_ops monomorphize_ops
-            specialized_arm common::OpValue::MatchArm op common::Op::set_value
+    }
+
+    fn visit_leaf self:mut$SemanticSpecializer leaf:mut$semantic_body::Leaf {
+        if
+            leaf.action semantic_body::Action::ConstrainedCall is leaf.action semantic_body::Action::ConstrainedClosure is ||
+        then
+            leaf.action semantic_body::Action::ConstrainedClosure is = as_reference
+            leaf.lower = operation
+            self.checks self.diagnostics self.store as_reference operation resolve_specialized_trait_operation_in_work
+            operation common::op_str_value = name
+            operation match
+                common::Op { call_bindings: bindings } => bindings
+            end = bindings
+            semantic_body::Callable { name: name substitutions: bindings } = call
+            if as_reference then
+                call semantic_body::Action::Closure
+            else
+                call semantic_body::Action::Call
+            fi = leaf.action
         fi
-        1 += index
-    done
+        leaf.action match
+            semantic_body::Action::Call(call) => {
+                leaf.facts.origin call.substitutions call.name.as_str self.select_target = target
+                target.clone = call.name
+                target.as_str self.visit_function
+            }
+            semantic_body::Action::Closure(call) => {
+                leaf.facts.origin call.substitutions call.name.as_str self.select_target = target
+                target.clone = call.name
+                target.as_str self.visit_function
+            }
+            semantic_body::Action::Primitive(kind typ) => {
+                if kind semantic_body::PrimitiveKind::Drop == then
+                    typ self.visit_drop_type
+                fi
+            }
+            semantic_body::Action::DestructionFn(typ) => typ self.visit_drop_type
+            semantic_body::Action::NumericTry(conversion wrapper) => wrapper.as_str self.visit_function
+            semantic_body::Action::IntegerTry(conversion wrapper) => wrapper.as_str self.visit_function
+            _ => {
+            }
+        end
+        leaf.facts self.visit_facts
+    }
+
+    fn visit_body self:mut$SemanticSpecializer body:mut$semantic_body::Body {
+        body.get_nodes_mut = nodes
+        0 = index: u64
+        while index nodes.length > do
+            index nodes.get_mut match
+                semantic_body::Node::Unreachable(_) => {
+                }
+                semantic_body::Node::Leaf(leaf) => leaf self.visit_leaf
+                semantic_body::Node::Conditional(conditional) => {
+                    0 = branch_index: u64
+                    while branch_index conditional.branches.length > do
+                        branch_index conditional.branches.get_mut = branch
+                        branch.entry self.visit_facts
+                        branch.test self.visit_facts
+                        branch.condition self.visit_body
+                        branch.consequent self.visit_body
+                        1 += branch_index
+                    done
+                    if conditional.alternative std::Option::Some(alternative) is then
+                        alternative.entry self.visit_facts
+                        alternative.body self.visit_body
+                    fi
+                    conditional.exit self.visit_facts
+                }
+                semantic_body::Node::Loop(loop) => {
+                    loop.entry self.visit_facts
+                    loop.test self.visit_facts
+                    loop.condition self.visit_body
+                    loop.body self.visit_body
+                    loop.exit self.visit_facts
+                }
+                semantic_body::Node::Match(match_body) => {
+                    match_body.entry self.visit_facts
+                    0 = arm_index: u64
+                    while arm_index match_body.arms.length > do
+                        arm_index match_body.arms.get_mut = arm
+                        arm.entry self.visit_facts
+                        arm.guard self.visit_body
+                        arm.body self.visit_body
+                        1 += arm_index
+                    done
+                    match_body.exit self.visit_facts
+                }
+                semantic_body::Node::Region(region) => {
+                    region.entry self.visit_facts
+                    region.body self.visit_body
+                    region.exit self.visit_facts
+                }
+                semantic_body::Node::Array(compound) => {
+                    compound.facts self.visit_facts
+                    compound.body self.visit_body
+                }
+                semantic_body::Node::Group(compound) => {
+                    compound.facts self.visit_facts
+                    compound.body self.visit_body
+                }
+            end
+            1 += index
+        done
+    }
 }
 
-pub fn monomorphize_checked_generics
-    ops:mut$std::List[common::Op]
-    store:mut$common::SymbolStore
+fn validate_recipe_cycle
+    body:$semantic_body::Body
+    substitutions:mut$std::Map[std::String common::Type]
+    active:mut$std::Map[std::String std::String]
+    path:mut$std::List[std::String]
+    checks:$SemanticChecks
     diagnostics:mut$error::Diagnostics
 {
-    std::Set[std::String]::new = processed
-    # Concrete cleanup dependencies are fixed during this pass. Discover each type once.
-    std::Set[std::String]::new = drop_types
-    diagnostics store drop_types processed ops monomorphize_ops
+    {
+        = call: $semantic_body::Callable
+        = origin: $common::Location
+        std::Map[std::String common::Type]::new = composed
+        for pair in call.substitutions.iter do
+            substitutions pair.second.substitute_t pair.first.clone composed.set
+        done
+        composed generic_binding_key = key
+        if call.name active.get std::Option::Some(previous) is then
+            if previous.as_str key.as_str != then
+                path.clone = cycle
+                call.name.clone cycle.push
+                " -> " cycle.join_strings = cycle_text
+                origin f"Polymorphic recursion changes the type arguments of `{call.name}`: `{previous}` becomes `{key}` (cycle: {cycle_text})"
+                common::ErrorKind::TypeMismatch diagnostics.record_error_string
+            fi
+        else
+            if call.name.as_str checks.functions.get_str std::Option::Some(work) is then
+                if work FunctionWork::Completed(completed) is then
+                    key call.name.clone active.set
+                    call.name.clone path.push
+                    diagnostics checks path active composed completed.body validate_recipe_cycle
+                    call.name.as_str active.delete_str
+                    path.pop drop
+                fi
+            fi
+        fi
+    } = visitor
+    visitor body.visit_calls
+}
+
+impl SemanticSession {
+    pub fn validate_checked_declarations
+        self:mut$SemanticSession
+        diagnostics:mut$error::Diagnostics
+    {
+        self.checks diagnostics self.store check_trait_impls
+        for
+            name in self
+                .store
+                .get_function_names
+                .iter
+        do
+            name.as_str self
+                .store
+                .get_function
+                .unwrap = declaration
+            if
+                declaration
+                    .stack_effect
+                    .type_vars
+                    .is_empty declaration
+                    .stack_effect
+                    .const_params
+                    .length 0 == &&
+            then
+                continue
+            fi
+            if
+                name.as_str self
+                    .checks
+                    .functions
+                    .get_str std::Option::Some(work) is
+            then
+                if work FunctionWork::Completed(completed) is then
+                    declaration.stack_effect identity_generic_bindings = bindings
+                    std::Map[std::String std::String]::new = active
+                    std::List[std::String]::new = path
+                    name.clone path.push
+                    bindings generic_binding_key name.clone active.set
+                    diagnostics self.checks path active bindings completed.body validate_recipe_cycle
+                fi
+            fi
+        done
+    }
 }

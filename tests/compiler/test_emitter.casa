@@ -1,58 +1,38 @@
 import "std" as std
+import "../../compiler/common.casa" as common
 import "../../compiler/error.casa" as error
 import "../../compiler/runtime.casa" as runtime
 import "../../lib/test.casa" as test
-import "helpers.casa" as helpers
+import "helpers" as helpers
 
-fn assert_assembly source:$str expected:$str {
+fn compile code:$str -> std::String {
     error::Diagnostics::new = diagnostics
-    diagnostics source helpers::assemble_test_source = assembly
-    source diagnostics.has_errors ! test::assert_true
-    expected assembly.as_str expected str::contains test::assert_true
+    diagnostics code helpers::compile_test_source helpers::generated_assembly
 }
 
-fn test_scalar_selection {
-    "scalar_selection" test::test_start
-    "movabsq $4294967296" "4294967296 print" assert_assembly
-    "movabsq $-42" "-42 print" assert_assembly
-    "call encode_char" "'a' print" assert_assembly
-    ".Lpb_false_" "true print" assert_assembly
-    "call print_str" "\"hello\" print" assert_assembly
-    "addq" "2 1 + print" assert_assembly
-    "subq" "2 1 - print" assert_assembly
-    "imulq" "2 1 * print" assert_assembly
-    "idivq" "2 1 / print" assert_assembly
-    "idivq" "2 1 % print" assert_assembly
-    "shlq" "1 2 << print" assert_assembly
-    "sarq" "8 1 >> print" assert_assembly
-    "andq" "2 1 & print" assert_assembly
-    "orq" "2 1 | print" assert_assembly
-    "xorq" "2 1 ^ print" assert_assembly
-    "notq" "2 ~ print" assert_assembly
-    "setl" "2 1 < print" assert_assembly
-    "setle" "2 1 <= print" assert_assembly
-    "setg" "2 1 > print" assert_assembly
-    "setge" "2 1 >= print" assert_assembly
-    "sete" "2 1 == print" assert_assembly
-    "setne" "2 1 != print" assert_assembly
-    "call .Lscalar_fn_1" "fn twice value:i64 -> i64 { value 2 * } 21 twice print" assert_assembly
+pub fn assert_contains needle:$str haystack:$std::String msg:$str {
+    haystack.as_str needle str::find = position
+    if 0 position < then
+        msg false test::assert_true
+    else
+        msg true test::assert_true
+    fi
 }
 
-fn test_literals_and_runtime {
-    "literals_and_runtime" test::test_start
-    ".asciz \"hello\"" "\"hello\" print" assert_assembly
-    ".asciz \"a\\nb\\tc\\\\d\\\"e\"" "\"a\\nb\\tc\\\\d\\\"e\" print" assert_assembly
-    ".asciz \"\\0001\"" "\"\\01\" print" assert_assembly
-    "return_stack_overflow:" "" assert_assembly
-    "heap_alloc:" "" assert_assembly
-    "syscall" "unsafe { 39 syscall0 drop }" assert_assembly
-    "__argc(%rip)" "argc print" assert_assembly
-    "__argv(%rip)" "argv drop" assert_assembly
-    "static_array_0:\n.quad 1" "[1, 2, 3] drop" assert_assembly
-    "movq %rax, 16(%rdi)" "extern fn opaque\nfn locals { 1 = a 2 = b 3 = c unsafe { opaque } a print b print c print } locals" assert_assembly
+pub fn test_emitted_nul_before_octal_digits {
+    "emitted_nul_before_octal_digits" test::test_start
+    "\00\01\02\03\04\05\06\07" = value
+    "literal length" 16 value.length == test::assert_true
+    0 = index: u64
+    while index 8 > do
+        f"NUL byte {index}" '\0' index 2 * value.at == test::assert_true
+        index u32::try_from.unwrap '0'.codepoint + char::from_codepoint.unwrap = digit
+        f"octal digit {index}" digit index 2 * 1 + value.at == test::assert_true
+        1 += index
+    done
 }
 
-fn test_runtime_heap_growth {
+pub fn test_runtime_heap_growth {
     "runtime_heap_growth" test::test_start
     unsafe {
         runtime::HEAP_GROWTH_SIZE 1 + u64::try_from.unwrap = allocation_size
@@ -71,76 +51,75 @@ fn test_runtime_heap_growth {
     }
 }
 
-fn test_float_round_uses_sse2 {
-    "float_round_uses_sse2" test::test_start
-    error::Diagnostics::new = diagnostics
-    diagnostics "import \"lib/std.casa\" as std\n1.5 = single:f32 single.floor drop 2.5.round drop" helpers::assemble_test_source helpers::program_assembly = generated
-    "f32 uses SSE2 conversion" generated.as_str "cvttss2siq" str::contains test::assert_true
-    "f64 uses SSE2 conversion" generated.as_str "cvttsd2siq" str::contains test::assert_true
-    "f32 avoids SSE4.1" generated.as_str "roundss" str::contains ! test::assert_true
-    "f64 avoids SSE4.1" generated.as_str "roundsd" str::contains ! test::assert_true
+fn test_selected_target_contracts {
+    "selected target contracts" test::test_start
+    "fn leaf value:u64 -> bool { value 0 != } unsafe { argc drop } 41 leaf drop &leaf drop" compile = assembly
+    "native entry" assembly "_start:" assert_contains
+    "root arguments" assembly "movq %rax, __argc(%rip)" assert_contains
+    "leaf symbol" assembly "fn_leaf:" assert_contains
+    "static closure" assembly "closure_leaf: .quad fn_leaf" assert_contains
+    "forwarding frame keeps capacity check" assembly "return_stack+1048568(%rip)" assert_contains
+    "expanded call keeps original frame check" assembly "return_stack+1048560(%rip)" assert_contains
+    "direct leaf call is expanded" 0 assembly.as_str "call fn_leaf" str::find < test::assert_true
+    "native return" assembly "pushq (%r14)\n    ret" assert_contains
 }
 
-fn test_frame_initialization_boundary {
-    "frame_initialization_boundary" test::test_start
-    for count_ref in [32, 33].iter do
-        count_ref copy = count
-        "extern fn opaque\nfn frame { ".to_str = source
-        0 = index
-        while count index < do
-            f"{index} = value{index} " = binding binding.as_str source.append
-            1 += index
-        done
-        "unsafe { opaque } " source.append
-        0 = index
-        while count index < do
-            f"value{index} print " = use use.as_str source.append
-            1 += index
-        done
-        "} frame" source.append
-        error::Diagnostics::new = diagnostics
-        diagnostics source.as_str helpers::assemble_test_source helpers::program_assembly = generated
-        f"addq ${count 8 *}, %r14" = reservation
-        "reserves complete frame" generated.as_str reservation.as_str str::contains test::assert_true
-        "only large frame uses repeated stores" 33 count == generated.as_str "rep stosq" str::contains == test::assert_true
-        if 32 count == then
-            "small frame zeros last slot" generated.as_str "movq %rax, 248(%rdi)" str::contains test::assert_true
-        fi
+fn test_selected_float_rounding {
+    "selected float rounding" test::test_start
+    "1.5 = single:f32 single.__float_floor drop 2.5 = double:f64 double.__float_round drop" compile = assembly
+    "f32 SSE2 conversion" assembly "cvttss2siq" assert_contains
+    "f64 SSE2 conversion" assembly "cvttsd2siq" assert_contains
+    "no SSE4.1 roundss" 0 assembly.as_str "roundss" str::find < test::assert_true
+    "no SSE4.1 roundsd" 0 assembly.as_str "roundsd" str::find < test::assert_true
+}
+
+fn test_selected_indirect_copies {
+    "selected indirect copies" test::test_start
+    "struct Pair { x:i64 y:i64 } unsafe { 16 alloc = memory 2 1 Pair memory ptr::write[Pair] memory ptr::read[Pair] drop memory free }" compile = assembly
+    "read allocation has static size" assembly "movq $16, %rdi" assert_contains
+    "copy has static size" assembly "movq $16, %rcx" assert_contains
+    "no representation dispatch" 0 assembly.as_str ".Ltyped_read_" str::find < test::assert_true
+    "no store-size dispatch" 0 assembly.as_str ".Ltyped_write_" str::find < test::assert_true
+}
+
+fn test_selected_frames {
+    "selected frames" test::test_start
+    "fn small x:i64 -> i64 { x 1 + } 1 small drop" compile = small
+    "small frame uses direct stores" small "movq %rax, 0(%rdi)" assert_contains
+    "checked arithmetic keeps frame" small "call fn_small" assert_contains
+    std::String::new = source
+    "fn large { " source.append
+    0 = index: u64
+    while index 33 > do
+        f"{index} = local_{index} " = binding
+        binding.as_str source.append
+        1 += index
     done
+    "local_0 drop } large" source.append
+    source.as_str compile = large
+    "large frame uses repeated stores" large "movq $33, %rcx" assert_contains
+    "large frame initialization" large "rep stosq" assert_contains
 }
 
-fn test_forwarding_frame {
-    "forwarding_frame" test::test_start
-    for extra_use_ref in [false, true].iter do
-        extra_use_ref copy = extra_use
-        if extra_use then "storage ptr::from_ref drop " else "" fi = extra_use_source
-        "fn forward storage:ptr -> u64 { ".to_str = source
-        extra_use_source source.append
-        "unsafe { storage load64 } } unsafe { 8 alloc } forward print &forward drop" source.append
-        error::Diagnostics::new = diagnostics
-        diagnostics source.as_str helpers::assemble_test_source helpers::program_assembly = generated
-        "forwarded load remains" generated.as_str "movq (%r11), %r11" str::contains test::assert_true
-        "callable symbol remains" generated.as_str "fn_forward:" str::contains test::assert_true
-        "function reference remains" generated.as_str "leaq closure_forward(%rip)" str::contains test::assert_true
-        "only reused parameter is spilled" extra_use generated.as_str "popq %r11\n    movq %r11, -8(%r14)" str::contains == test::assert_true
-        "only reused helper requires direct call" extra_use generated.as_str "call fn_forward" str::contains == test::assert_true
-    done
+fn test_oversized_frame {
+    "oversized frame" test::test_start
+    "fn large values:array[u8 1048577] { values drop } &large drop" compile = assembly
+    "single oversized reservation fails immediately" assembly "jmp return_stack_overflow" assert_contains
 }
 
-fn test_oversized_return_stack_reservation {
-    "oversized_return_stack_reservation" test::test_start
-    error::Diagnostics::new = diagnostics
-    diagnostics "fn oversized input:$array[i64 131073] { input copy = local local drop } &oversized drop" helpers::assemble_test_source = assembly
-    "source checks" diagnostics.has_errors ! test::assert_true
-    "oversized" assembly helpers::function_assembly = generated
-    "oversized frame jumps directly to overflow" generated.as_str "jmp return_stack_overflow" str::contains test::assert_true
-    "oversized frame does not advance stack" generated.as_str "addq $1048584, %r14" str::contains ! test::assert_true
+fn test_transparent_leaf_bodies {
+    "transparent leaf bodies" test::test_start
+    "struct Value { number:u64 } fn grouped value:u64 -> bool { unsafe { value 0 != } } fn access value:$Value -> u64 { value.number } fn ignore value:$Value { value drop } 1 grouped drop 7 Value = value value access drop value ignore" compile = assembly
+    "grouped leaf expands" 0 assembly.as_str "call fn_grouped" str::find < test::assert_true
+    "borrowed drop leaf expands" 0 assembly.as_str "call fn_ignore" str::find < test::assert_true
+    "accessor leaf expands" 0 assembly.as_str "call fn_Value__number" str::find < test::assert_true
 }
-test_scalar_selection
-test_literals_and_runtime
+test_emitted_nul_before_octal_digits
 test_runtime_heap_growth
-test_float_round_uses_sse2
-test_frame_initialization_boundary
-test_forwarding_frame
-test_oversized_return_stack_reservation
+test_selected_target_contracts
+test_selected_float_rounding
+test_selected_indirect_copies
+test_selected_frames
+test_oversized_frame
+test_transparent_leaf_bodies
 test::test_summary

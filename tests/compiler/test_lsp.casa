@@ -1,10 +1,11 @@
 import "std" as std
 import "../../compiler/products.casa" as products
+import "../../compiler/lexer.casa" as lexer
+import "../../compiler/error.casa" as error
 import "../../compiler/document.casa" as document
 import "../../lib/io.casa" as io
 import "../../lib/json.casa" as json
 import "../../compiler/common.casa" as common
-import "../../compiler/lexer.casa" as lexer
 import "../../lsp.casa" as lsp
 import "../../lib/test.casa" as test
 
@@ -159,6 +160,119 @@ pub fn test_ingest_document_invalid_code_produces_error_diagnostics {
     documents drop
     "has diagnostics" 0 diagnostics.length > test::assert_true
     "first is error severity" lsp::DIAGNOSTIC_ERROR 0 diagnostics.get lsp::LspDiagnostic::severity test::assert_eq
+    "compiler code exposed" "TYPE_MISMATCH" 0 diagnostics.get.code test::assert_str_eq
+}
+
+pub fn test_report_presentation_preserves_notes_codes_and_locations {
+    "report_presentation_preserves_notes_codes_and_locations" test::test_start
+    "/tmp/related space.casa" = related_path
+    lexer::SourceStore::new = sources
+    "42\nwrong" LSP_TEST_FILE sources.add
+    "first\nä😀second" related_path sources.add
+    error::Diagnostics::new = compiler_diagnostics
+    "str".to_str "i64".to_str
+    5 3 LSP_TEST_FILE.to_str common::Location::new
+    "Type mismatch".to_str common::ErrorKind::TypeMismatch error::CasaError::with_expected = failure
+    "Inferred".to_str = failure.got_label
+    6 12 related_path.to_str common::Location::new "imported declaration".to_str error::CasaNote failure.notes.push
+    common::empty_location "request note".to_str error::CasaNote failure.notes.push
+    2 0 LSP_TEST_FILE.to_str common::Location::new "root value".to_str error::CasaNote failure.notes.push
+    1 0 "/tmp/missing.casa".to_str common::Location::new "unavailable source".to_str error::CasaNote failure.notes.push
+    failure compiler_diagnostics.push_error
+    2 0 LSP_TEST_FILE.to_str common::Location::new "Unused parameter".to_str common::WarningKind::UnusedParameter
+    error::CasaWarning compiler_diagnostics.push_warning
+    1 0 related_path.to_str common::Location::new "Imported error".to_str common::ErrorKind::Syntax
+    error::CasaError::new compiler_diagnostics.push_error
+    common::empty_location "Request error".to_str common::ErrorKind::Syntax
+    error::CasaError::new = request_failure
+    common::empty_location "request context".to_str error::CasaNote request_failure.notes.push
+    2 0 LSP_TEST_FILE.to_str common::Location::new "request origin".to_str error::CasaNote request_failure.notes.push
+    request_failure compiler_diagnostics.push_error
+    sources compiler_diagnostics products::Report::new = report
+
+    0 report.get_presentation = presentation
+    "presentation code" "TYPE_MISMATCH" presentation.code test::assert_str_eq
+    if presentation.location std::Option::Some(location) is then
+        "presentation primary offset" 3 location.span.offset test::assert_eq
+    else
+        "primary location missing" false test::assert_true
+    fi
+    if presentation.notes std::Option::Some(notes) is then
+        "presentation note order" "request note" 1 notes.get.message test::assert_str_eq
+    else
+        "ordered notes missing" false test::assert_true
+    fi
+    "shared message details" "Type mismatch\n  Expected: i64\n  Inferred: str"
+    presentation.format_message test::assert_str_eq
+    presentation report.get_sources.format_diagnostic = cli_message
+    "CLI keeps primary context before details" cli_message.as_str
+    "  --> /tmp/lsp_test.casa:2:1\n  |\n2 | wrong\n  | ^^^^^\n  Expected: i64\n  Inferred: str" str::contains test::assert_true
+
+    LSP_TEST_FILE report lsp::diagnostics_from = diagnostics
+    "imported primary remains filtered" 3 diagnostics.length test::assert_eq
+    0 diagnostics.get = diagnostic
+    "all notes in encounter order" "Type mismatch\n  Expected: i64\n  Inferred: str\n  Note: imported declaration\n  Note: request note\n  Note: root value\n  Note: unavailable source"
+    diagnostic.message test::assert_str_eq
+    if diagnostic.range std::Option::Some(range) is then
+        "primary line unchanged" 1 range.start_line test::assert_eq
+        "primary end unchanged" 5 range.end_col test::assert_eq
+    else
+        "primary range missing" false test::assert_true
+    fi
+    "only retained note locations" 2 diagnostic.related_information.length test::assert_eq
+    0 diagnostic.related_information.get = related
+    "imported note URI" "file:///tmp/related%20space.casa" related.location.uri test::assert_str_eq
+    "imported note line" 1 related
+        .location
+        .range
+        .start_line test::assert_eq
+    "imported note UTF-16 column" 3 related
+        .location
+        .range
+        .start_col test::assert_eq
+    "imported note UTF-16 end" 9 related
+        .location
+        .range
+        .end_col test::assert_eq
+    "root note order" "root value" 1 diagnostic
+        .related_information
+        .get
+        .message test::assert_str_eq
+    "warning severity" lsp::DIAGNOSTIC_WARNING 1 diagnostics.get.severity test::assert_eq
+    "warning code" "UNUSED_PARAMETER" 1 diagnostics.get.code test::assert_str_eq
+    "request diagnostic has no fabricated range" 2 diagnostics
+        .get
+        .range
+        .is_none test::assert_true
+    "request location explicitly absent" 3 report
+        .get_presentation
+        .location
+        .is_none test::assert_true
+
+    "request diagnostic has no file JSON" 2 diagnostics
+        .get
+        .to_json
+        .is_none test::assert_true
+    2 diagnostics.get.to_message_json = request_message
+    "request message type" lsp::DIAGNOSTIC_ERROR "type" request_message json::json_get_int.unwrap test::assert_eq
+    "request message code, note order and location"
+    "SYNTAX: Request error\n  Note: request context\n  Note: request origin\n  Related: request origin (file:///tmp/lsp_test.casa:1:1-1:3)"
+    "message" request_message json::json_get_str.unwrap test::assert_str_eq
+    diagnostic.to_json.unwrap = encoded
+    "JSON code" "TYPE_MISMATCH" "code" encoded json::json_get_str.unwrap test::assert_str_eq
+    "relatedInformation" encoded json::json_get_array.unwrap = encoded_notes
+    "related count" 2 encoded_notes.length test::assert_eq
+    "related message" "imported declaration" "message" 0 encoded_notes.get json::json_get_str.unwrap test::assert_str_eq
+    "location" 0 encoded_notes.get json::json_get_object.unwrap = encoded_location
+    "related URI" "file:///tmp/related%20space.casa" "uri" encoded_location json::json_get_str.unwrap test::assert_str_eq
+    "warnings omit empty related information" "relatedInformation" 1 diagnostics
+        .get
+        .to_json
+        .unwrap json::json_get_array.is_none test::assert_true
+    "report retains exact imported text" "first\nä😀second" related_path report
+        .get_sources
+        .get
+        .unwrap test::assert_str_eq
 }
 
 pub fn test_ingest_document_returns_updated_open_documents {
@@ -818,13 +932,13 @@ pub fn test_compute_semantic_tokens_adapts_query_tokens {
 pub fn test_analyzed_document_semantic_tokens_classify_int_literal {
     "analyzed_document_semantic_tokens_classify_int_literal" test::test_start
     "42 print" lsp_test_state = state
-    state.find_semantic_tokens = tokens
+    state.get_semantic_tokens = tokens
     "first is number" 0 tokens.get.kind document::DocumentTokenKind::Number == test::assert_true
 }
 
 pub fn test_analyzed_document_semantic_tokens_classify_operations {
     "analyzed_document_semantic_tokens_classify_operations" test::test_start
-    "1 2 + print\n\"text\" print" lsp_test_state.find_semantic_tokens collect_document_token_kinds = kinds
+    "1 2 + print\n\"text\" print" lsp_test_state.get_semantic_tokens collect_document_token_kinds = kinds
     "has number" document::DocumentTokenKind::Number kinds has_document_token_kind test::assert_true
     "has string" document::DocumentTokenKind::String kinds has_document_token_kind test::assert_true
     "has operator" document::DocumentTokenKind::Operator kinds has_document_token_kind test::assert_true
@@ -833,7 +947,7 @@ pub fn test_analyzed_document_semantic_tokens_classify_operations {
 
 pub fn test_analyzed_document_semantic_tokens_classify_function_and_keyword {
     "analyzed_document_semantic_tokens_classify_function_and_keyword" test::test_start
-    "fn greet { 42 print }\ngreet" lsp_test_state.find_semantic_tokens collect_document_token_kinds = kinds
+    "fn greet { 42 print }\ngreet" lsp_test_state.get_semantic_tokens collect_document_token_kinds = kinds
     "has function" document::DocumentTokenKind::Function kinds has_document_token_kind test::assert_true
     "has keyword" document::DocumentTokenKind::Keyword kinds has_document_token_kind test::assert_true
     "has function literal" document::DocumentTokenKind::Number kinds has_document_token_kind test::assert_true
@@ -842,7 +956,7 @@ pub fn test_analyzed_document_semantic_tokens_classify_function_and_keyword {
 
 pub fn test_analyzed_document_semantic_tokens_classify_declarations {
     "analyzed_document_semantic_tokens_classify_declarations" test::test_start
-    "enum Color { Red }\nstruct Point {\n    x: i64\n}" lsp_test_state.find_semantic_tokens = tokens
+    "enum Color { Red }\nstruct Point {\n    x: i64\n}" lsp_test_state.get_semantic_tokens = tokens
     tokens collect_document_token_kinds = kinds
     "first is enum keyword" document::DocumentTokenKind::Keyword 0 tokens.get.kind == test::assert_true
     "enum keyword offset" 0 0 tokens
@@ -855,7 +969,7 @@ pub fn test_analyzed_document_semantic_tokens_classify_declarations {
 
 pub fn test_analyzed_document_semantic_tokens_split_qualified_name {
     "analyzed_document_semantic_tokens_split_qualified_name" test::test_start
-    "enum Color { Red }\nColor::Red print" lsp_test_state.find_semantic_tokens = tokens
+    "enum Color { Red }\nColor::Red print" lsp_test_state.get_semantic_tokens = tokens
     false = found_type
     false = found_member
     for token in tokens.iter do
@@ -879,7 +993,7 @@ pub fn test_analyzed_document_semantic_tokens_filter_imported_sources {
     source.clone LSP_TEST_FILE.to_str products::SourceUnit
     "" lexer::absolute_normalize_path swap products::CompilationInput::new = input
     "pub fn dependency { 1 print }".to_str dependency_path.to_str input.source_overrides.set
-    input products::analyze.unwrap.find_semantic_tokens = tokens
+    input products::analyze.unwrap.get_semantic_tokens = tokens
     "has root call" 0 tokens.length > test::assert_true
     for token in tokens.iter do
         "root token" LSP_TEST_FILE token.location.file test::assert_str_eq
@@ -889,14 +1003,14 @@ pub fn test_analyzed_document_semantic_tokens_filter_imported_sources {
 pub fn test_analyzed_document_semantic_tokens_skip_internal_declarations {
     "analyzed_document_semantic_tokens_skip_internal_declarations" test::test_start
     "fn apply func:fn[i64 -> i64] x:i64 -> i64 { x func exec }\n5 { 2 * } apply print"
-    lsp_test_state.find_semantic_tokens collect_document_token_kinds = kinds
+    lsp_test_state.get_semantic_tokens collect_document_token_kinds = kinds
     "only user-visible functions" 3 document::DocumentTokenKind::Function kinds count_document_token_kind test::assert_eq
 }
 
 pub fn test_analyzed_document_semantic_tokens_classify_control_flow {
     "analyzed_document_semantic_tokens_classify_control_flow" test::test_start
     "if true then 42 else 0 fi print\n0 = i\nwhile 10 i < do i 1 + = i done"
-    lsp_test_state.find_semantic_tokens collect_document_token_kinds = kinds
+    lsp_test_state.get_semantic_tokens collect_document_token_kinds = kinds
     "has control-flow keywords" 6 document::DocumentTokenKind::Keyword kinds count_document_token_kind >= test::assert_true
     "has operators" document::DocumentTokenKind::Operator kinds has_document_token_kind test::assert_true
 }
@@ -1183,4 +1297,5 @@ fn test_uri_escape_round_trip {
     "invalid escape retained" "/tmp/%zz.casa" "file:///tmp/%zz.casa" lsp::uri_to_path test::assert_str_eq
 }
 test_uri_escape_round_trip
+test_report_presentation_preserves_notes_codes_and_locations
 test::test_summary

@@ -3,6 +3,7 @@ import "../../compiler/common.casa" as common
 import "../../compiler/error.casa" as error
 import "../../lib/test.casa" as test
 import "../../compiler/typechecker.casa" as typechecker
+import "../../compiler/backend.casa" as bytecode
 import "helpers.casa" as helpers
 
 # ============================================================================
@@ -23,7 +24,7 @@ pub fn test_parse_code_parts
     code:$str
     diagnostics:mut$error::Diagnostics
 -> std::List[common::Op] common::SymbolStore {
-    diagnostics code helpers::parse_resolve_test_parts
+    diagnostics code helpers::parse_resolve_test_parts drop
 }
 
 pub fn test_parse_code code:$str diagnostics:mut$error::Diagnostics -> std::List[common::Op] {
@@ -36,7 +37,7 @@ pub fn resolve_enum_parts
     code:$str
     diagnostics:mut$error::Diagnostics
 -> std::List[common::Op] common::SymbolStore {
-    diagnostics code helpers::parse_resolve_test_parts
+    diagnostics code helpers::parse_resolve_test_parts drop
 }
 
 pub fn resolve_enum code:$str diagnostics:mut$error::Diagnostics -> std::List[common::Op] {
@@ -49,8 +50,8 @@ pub fn tc_enum_parts
     code:$str
     diagnostics:mut$error::Diagnostics
 -> common::StackEffect common::SymbolStore {
-    diagnostics code helpers::parse_resolve_test_parts = store = ops
-    false diagnostics store std::Option[common::Function]::None ops typechecker::check_ops = effect
+    diagnostics code helpers::parse_resolve_test_parts = source_bodies = store = ops
+    false source_bodies diagnostics store std::Option[common::Function]::None ops typechecker::check_ops = effect
     effect
     store
 }
@@ -63,11 +64,11 @@ pub fn tc_enum code:$str diagnostics:mut$error::Diagnostics -> common::StackEffe
 
 pub fn typecheck_enum_source code:$str diagnostics:mut$error::Diagnostics {
     diagnostics code helpers::typecheck_test_source = checked
-    checked.diagnostics.clone diagnostics.merge
+    checked.get_diagnostics.clone diagnostics.merge
 }
 
 pub fn compile_enum code:$str diagnostics:mut$error::Diagnostics -> std::String {
-    diagnostics code helpers::assemble_test_source
+    diagnostics code helpers::compile_test_source helpers::generated_assembly
 }
 
 pub fn is_push_enum_variant value:$common::OpValue -> bool {
@@ -536,6 +537,59 @@ pub fn test_match_result_used_in_function {
 # ============================================================================
 # Bytecode tests
 # ============================================================================
+
+pub fn test_enum_variant_compiles_to_push_ordinal_0 {
+    error::Diagnostics::new = diagnostics
+    "enum_variant_compiles_to_push_ordinal_0" test::test_start
+    diagnostics "enum Color { Red Green Blue }\nColor::Red drop\n" compile_enum = prog
+    "ordinal 0" prog.as_str "$0, %r8" str::find 0 <= test::assert_true
+}
+
+pub fn test_enum_variant_compiles_to_push_ordinal_1 {
+    error::Diagnostics::new = diagnostics
+    "enum_variant_compiles_to_push_ordinal_1" test::test_start
+    diagnostics "enum Color { Red Green Blue }\nColor::Green drop\n" compile_enum = prog
+    "ordinal 1" prog.as_str "$1, %r8" str::find 0 <= test::assert_true
+}
+
+pub fn test_enum_variant_compiles_to_push_ordinal_2 {
+    error::Diagnostics::new = diagnostics
+    "enum_variant_compiles_to_push_ordinal_2" test::test_start
+    diagnostics "enum Color { Red Green Blue }\nColor::Blue drop\n" compile_enum = prog
+    "ordinal 2" prog.as_str "$2, %r8" str::find 0 <= test::assert_true
+}
+
+pub fn test_match_compiles_to_dup_eq_jump_pattern {
+    error::Diagnostics::new = diagnostics
+    "match_compiles_to_dup_eq_jump_pattern" test::test_start
+    diagnostics "enum Color { Red Green Blue }\nColor::Red match\n    Color::Red => 1 drop\n    Color::Green => 2 drop\n    Color::Blue => 3 drop\nend\n" compile_enum = prog
+    "has DUP" prog.as_str "movq %r8, %r9" str::find 0 <= test::assert_true
+    "has EQ" prog.as_str "sete %al" str::find 0 <= test::assert_true
+    "has JUMP_NE" prog.as_str "jz .L" str::find 0 <= test::assert_true
+}
+
+pub fn test_enum_print_compiles_via_display {
+    error::Diagnostics::new = diagnostics
+    "enum_print_compiles_via_display" test::test_start
+    diagnostics "struct __casa_std__String { value: str }\ntrait __casa_std__Display { fn to_str self:self -> __casa_std__String }\nenum Color { Red Green Blue }\nimpl Color: __casa_std__Display { fn to_str c:Color -> __casa_std__String { \"red\" __casa_std__String } }\nColor::Red print\n" compile_enum = prog
+    diagnostics "Display implementation typechecks" helpers::assert_no_errors
+    "has PRINT_STRING" prog.as_str ".Lprint_string_wrapper_free_done_" str::find 0 <= test::assert_true
+}
+
+pub fn test_data_enum_variant_compiles_to_heap_alloc {
+    error::Diagnostics::new = diagnostics
+    "data_enum_variant_compiles_to_heap_alloc" test::test_start
+    diagnostics "enum Shape { Circle(i64) Rectangle(i64 i64) Point }\n10 Shape::Circle drop\n" compile_enum = prog
+    "has HEAP_ALLOC" prog.as_str "call heap_alloc" str::find 0 <= test::assert_true
+}
+
+pub fn test_data_enum_stores_ordinal {
+    error::Diagnostics::new = diagnostics
+    "data_enum_stores_ordinal" test::test_start
+    diagnostics "enum Shape { Circle(i64) Rectangle(i64 i64) Point }\n10 Shape::Circle drop\n" compile_enum = prog
+    "has STORE64" prog.as_str "movq %r11, (%r8)" str::find 0 <= test::assert_true
+}
+
 # ============================================================================
 # Match parsing tests
 # ============================================================================
@@ -967,6 +1021,13 @@ pub fn test_is_check_multiple_bindings_parsed {
 # Additional bytecode tests
 # ============================================================================
 
+pub fn test_data_enum_match_loads_ordinal {
+    error::Diagnostics::new = diagnostics
+    "data_enum_match_loads_ordinal" test::test_start
+    diagnostics "enum Shape { Circle(i64) Rectangle(i64 i64) Point }\n10 Shape::Circle match\n    Shape::Circle(r) => r drop\n    Shape::Rectangle(w h) => w drop\n    Shape::Point => 0 drop\nend\n" compile_enum = prog
+    "compares the loaded ordinal" prog.as_str "movq (%r8), %r8\n    movq $0, %r9\n    cmpq %r8, %r9" str::find 0 <= test::assert_true
+}
+
 pub fn test_braced_arm_as_expression_typechecks {
     error::Diagnostics::new = diagnostics
     "braced_arm_as_expression_typechecks" test::test_start
@@ -1058,6 +1119,13 @@ test_generic_enum_in_function_return
 test_match_inside_function
 test_match_result_used_in_function
 # Bytecode
+test_enum_variant_compiles_to_push_ordinal_0
+test_enum_variant_compiles_to_push_ordinal_1
+test_enum_variant_compiles_to_push_ordinal_2
+test_match_compiles_to_dup_eq_jump_pattern
+test_enum_print_compiles_via_display
+test_data_enum_variant_compiles_to_heap_alloc
+test_data_enum_stores_ordinal
 # Match parsing
 test_parse_match_produces_match_ops
 test_parse_match_arm_count
@@ -1092,6 +1160,7 @@ test_is_check_resolves_ordinal
 test_is_check_with_bindings_parsed
 test_is_check_multiple_bindings_parsed
 # Additional bytecode
+test_data_enum_match_loads_ordinal
 test_braced_arm_as_expression_typechecks
 # Conformance
 test_plain_enum_has_no_implicit_methods

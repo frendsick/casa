@@ -57,8 +57,7 @@ Casa tests.
     round.
 11. Repeat until no Must fix or Prerequisite assigned to the current work
     remains, then follow the selected tier's final validation rules in
-    [testing.md](./testing.md) and open or update the pull request. See
-    [git.md](./git.md) for the PR workflow.
+    [testing.md](./testing.md) and open or update the pull request.
 
 ## Why no pausing
 

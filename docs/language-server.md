@@ -86,6 +86,15 @@ safer.
 | Rename | Validated workspace edits for functions and bindings |
 | Semantic tokens | Full-document token classification |
 
+Diagnostics expose the same error and warning codes as the compiler CLI.
+Their messages include expected and actual values and all notes in compiler
+encounter order. Notes with retained source text also appear as LSP
+`relatedInformation`, including locations in imported files. Notes without
+available source text remain in the message.
+Diagnostics without a primary source location appear as `window/showMessage`
+notifications instead of file diagnostics.
+The notification text includes any available note locations.
+
 Definitions and references can resolve imported declarations. Unsaved content
 from other open Casa documents is included in analysis. Queries use a source
 index built during analysis. Replacing a document releases its old snapshot.

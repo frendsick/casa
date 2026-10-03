@@ -13,7 +13,7 @@ their grammatical position.
 The formatter checks tokens, comment attachment, and structural relationships
 against the formatted candidate. If recognition fails or these facts change,
 it returns the original source and a failure status. Analysis and assembly
-still use the private semantic parser while their consumers migrate.
+use the source builder to resolve declarations and check structured bodies.
 
 Build a current compiler first, then build the formatter:
 

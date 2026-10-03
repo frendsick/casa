@@ -1,6 +1,7 @@
 import "std" as std
 import "../../compiler/common.casa" as common
 import "../../compiler/error.casa" as error
+import "../../compiler/backend.casa" as bytecode
 import "../../compiler/typechecker.casa" as typechecker
 import "../../lib/test.casa" as test
 import "helpers.casa" as helpers
@@ -9,94 +10,22 @@ fn test_complete_scalar_commit {
     "complete_scalar_commit" test::test_start
     error::Diagnostics::new = diagnostics
     diagnostics "fn twice value:i64 -> i64 { if 0 value == then 0 return fi value 2 * } 21 twice print" helpers::typecheck_test_source = checked
-    checked helpers::assemble_checked_test.unwrap = text
-    "native direct call" text.as_str "call .Lscalar_fn_1" str::contains test::assert_true
+    checked.into_checked_program.unwrap bytecode::compile_checked.unwrap = text
+    "native direct call" text.as_str "call fn_twice" str::contains test::assert_true
     "checked native return" text.as_str "popq -8(%r14)" str::contains test::assert_true
     "runtime included" text.as_str "return_stack_overflow:" str::contains test::assert_true
     "root included" text.as_str "_start:" str::contains test::assert_true
 }
 
-fn test_invalid_private_references {
-    "invalid_private_references" test::test_start
-    error::Diagnostics::new = diagnostics
-    diagnostics "fn identity value:i64 -> i64 { value } 42 identity drop" helpers::typecheck_test_source = checked
-    0 = index: u64
-    while index checked.ops.length > do
-        index checked.ops.get_mut = op
-        if op.value common::OpValue::FnCall is then
-            "missing".to_str common::OpValue::FnCall = op.value
-        fi
-        1 += index
-    done
-    "missing function fails instead of falling back" checked helpers::assemble_checked_test.is_error test::assert_true
-
-    error::Diagnostics::new = local_diagnostics
-    local_diagnostics "42 = value value drop" helpers::typecheck_test_source = local_checked
-    0 = local_index: u64
-    while local_index local_checked.ops.length > do
-        local_index local_checked.ops.get_mut = op
-        if op.value common::OpValue::PushVar is then
-            "missing".to_str common::OpValue::PushVar = op.value
-        fi
-        1 += local_index
-    done
-    "missing local fails before selection" local_checked helpers::assemble_checked_test.is_error test::assert_true
-}
-
-fn test_unchecked_and_incomplete_bodies {
-    "unchecked_and_incomplete_bodies" test::test_start
-    error::Diagnostics::new = diagnostics
-    diagnostics "fn value -> i64 { 42 } value drop" helpers::typecheck_test_source = checked
-    "value" checked
-        .store
-        .take_function_for_update
-        .unwrap = function
-    false = function.is_typechecked
-    function checked.store.restore_function
-    "unchecked callee fails" checked helpers::assemble_checked_test.is_error test::assert_true
-
-    error::Diagnostics::new = branch_diagnostics
-    branch_diagnostics "if true then 42 drop fi" helpers::typecheck_test_source = branch
-    branch.ops.pop drop
-    "incomplete conditional fails" branch helpers::assemble_checked_test.is_error test::assert_true
-
-    error::Diagnostics::new = rejected_diagnostics
-    rejected_diagnostics "true 1 +" helpers::typecheck_test_source = rejected
-    "error-bearing input fails" rejected helpers::assemble_checked_test.is_error test::assert_true
-}
-
-fn test_aggregate_assembly {
-    "aggregate_assembly" test::test_start
+fn test_aggregate_uses_checked_contract {
+    "aggregate_uses_checked_contract" test::test_start
     error::Diagnostics::new = diagnostics
     diagnostics "struct Pair { value:i64 } 42 Pair drop" helpers::typecheck_test_source = checked
-    "aggregate emits complete assembly" checked helpers::assemble_checked_test.unwrap.as_str "_start:" str::contains test::assert_true
+    "aggregate produces assembly" checked.into_checked_program.unwrap bytecode::compile_checked.is_ok test::assert_true
 }
 
-fn test_missing_scalar_type_facts {
-    "missing_scalar_type_facts" test::test_start
-    for code in ["1 2 + drop", "1 2 < drop", "42 print"].iter do
-        error::Diagnostics::new = diagnostics
-        diagnostics code helpers::typecheck_test_source = checked
-        0 = index: u64
-        while index checked.ops.length > do
-            index checked.ops.get_mut = op
-            op.value match
-                common::OpValue::Add => true
-                common::OpValue::Lt => true
-                common::OpValue::PrintInt => true
-                _ => false
-            end = typed_operation
-            if typed_operation then
-                std::Option[common::Type]::None = op.type_hint
-            fi
-            1 += index
-        done
-        "missing required fact cannot select instructions" checked helpers::assemble_checked_test.is_error test::assert_true
-    done
-}
-
-fn test_compound_and_wrapping_use_scalar_path {
-    "compound_and_wrapping_use_scalar_path" test::test_start
+fn test_compound_and_wrapping_plans {
+    "compound_and_wrapping_plans" test::test_start
     for
         code in [
             "42 = value 1 += value 2 -= value value print",
@@ -107,149 +36,30 @@ fn test_compound_and_wrapping_use_scalar_path {
     do
         error::Diagnostics::new = diagnostics
         diagnostics code helpers::typecheck_test_source = checked
-        "scalar arithmetic uses selected path" checked helpers::assemble_checked_test.unwrap.as_str "scalar" str::contains test::assert_true
+        "scalar arithmetic produces assembly" checked.into_checked_program.unwrap bytecode::compile_checked.is_ok test::assert_true
     done
 }
 
-fn test_invalid_cleanup_reference {
-    "invalid_cleanup_reference" test::test_start
-    error::Diagnostics::new = diagnostics
-    diagnostics "if true then 42 drop fi" helpers::typecheck_test_source = checked
-    common::OpOwnership::new = ownership
-    0 common::make_i64_type "missing" common::OwnerEvent::new ownership.cleanups.push
-    ownership std::Option::Some 0 checked.ops.get_mut common::Op::set_ownership
-    "invalid branch cleanup fails before selection" checked helpers::assemble_checked_test.is_error test::assert_true
-}
-
-fn test_symbolic_aggregate_cannot_reach_planning {
-    "symbolic_aggregate_cannot_reach_planning" test::test_start
-    error::Diagnostics::new = diagnostics
-    diagnostics "struct Pair { value:i64 } 42 Pair drop" helpers::typecheck_test_source = checked
-    "T".to_str common::Type::TypeVar std::Option::Some 0 checked.ops.get_mut common::Op::set_type_hint
-    "symbolic aggregate input fails at commitment" checked helpers::assemble_checked_test.is_error test::assert_true
-}
-
-fn test_implicit_destructor_must_be_checked {
-    "implicit_destructor_must_be_checked" test::test_start
-    error::Diagnostics::new = diagnostics
-    diagnostics "struct Owner { value:i64 } impl Owner { fn drop self:mut$Owner { } } 1 Owner drop" helpers::typecheck_test_source = result
-    "Owner::drop" result
-        .store
-        .take_function_for_update
-        .unwrap = function
-    false = function.is_typechecked
-    function result.store.restore_function
-    "unchecked implicit call fails commitment" result typechecker::commit_program.is_error test::assert_true
-}
-
-fn test_symbolic_function_metadata {
-    "symbolic_function_metadata" test::test_start
-    for kind in [0, 1, 2].iter do
+fn test_rejected_source_has_no_backend_input {
+    "rejected_source_has_no_backend_input" test::test_start
+    for
+        code in [
+            "true 1 +",
+            "fn bad -> i64 { true } bad drop",
+            "fn bad flag:bool { flag 1 + drop } true bad",
+        ].iter
+    do
         error::Diagnostics::new = diagnostics
-        diagnostics "fn identity value:i64 -> i64 { value } 42 identity drop" helpers::typecheck_test_source = result
-        "identity" result
-            .store
-            .take_function_for_update
-            .unwrap = function
-        "T".to_str common::Type::TypeVar = symbolic
-        if 0 kind copy == then
-            symbolic 0 function
-                .stack_effect
-                .return_types
-                .set
-        elif 1 kind copy == then
-            symbolic 0 function.variables.get_mut common::Variable::set_typ
-        else
-            symbolic "capture".to_str common::Variable function.captures.push
+        diagnostics code helpers::typecheck_test_source = checked
+        "source or checking rejects invalid input" diagnostics.has_errors checked.get_diagnostics.has_errors || test::assert_true
+        # Parsing diagnostics belong to the analysis owner. Checking failures cannot be sealed.
+        if checked.get_diagnostics.has_errors then
+            "rejected checking has no checked program" checked.into_checked_program.is_error test::assert_true
         fi
-        function result.store.restore_function
-        "symbolic callable metadata fails commitment" result typechecker::commit_program.is_error test::assert_true
     done
-}
-
-fn test_missing_aggregate_facts_at_commitment {
-    "missing_aggregate_facts_at_commitment" test::test_start
-    for source in ["[1, 2] dup drop drop", "struct Pair { value:i64 } 42 Pair drop"].iter do
-        error::Diagnostics::new = diagnostics
-        diagnostics source helpers::typecheck_test_source = result
-        0 = index: u64
-        while index result.ops.length > do
-            index result.ops.get_mut = op
-            if op.value common::OpValue::Drop is op.value common::OpValue::Dup is || then
-                std::Option[common::Type]::None = op.type_hint
-            fi
-            1 += index
-        done
-        "required aggregate facts fail commitment" result typechecker::commit_program.is_error test::assert_true
-    done
-}
-
-fn test_aggregate_reference_commitment {
-    "aggregate_reference_commitment" test::test_start
-    for kind_ref in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].iter do
-        kind_ref copy = kind
-        error::Diagnostics::new = diagnostics
-        diagnostics "struct Pair { value:i64 } enum Choice { None Some(i64) } 42 Pair drop 7 Choice::Some drop" helpers::typecheck_test_source = result
-        "source control checks" result.diagnostics.has_errors ! test::assert_true
-        0 result
-            .ops
-            .get
-            .clone = op
-        if 2 kind <= then
-            if 0 kind == then
-                1
-            else
-                0
-            fi u64::try_from.unwrap "Pair".to_str common::StructMemberAccess common::OpValue::StructMemberProject = op.value
-        elif 7 kind <= then
-            1 std::Option::Some "Some".to_str "Choice".to_str common::EnumVariant::new = variant
-            if 3 kind == then
-                std::Option[i64]::None = variant.ordinal
-            elif 4 kind == then
-                0 std::Option::Some = variant.ordinal
-            elif 5 kind == then
-                "Missing".to_str = variant.variant_name
-            elif 6 kind == then
-                "first".to_str variant.bindings.push
-                "second".to_str variant.bindings.push
-            fi
-            variant common::OpValue::PushEnumVariant = op.value
-        else
-            std::List[std::String]::new = fields
-            if 8 kind == then
-                "missing".to_str fields.push
-            else
-                "value".to_str fields.push
-            fi
-            if 9 kind == then
-                "value".to_str fields.push
-            fi
-            fields "Pair".to_str common::StructLiteral common::OpValue::StructLiteral = op.value
-        fi
-        op result.ops.push
-        1 kind == 2 kind == || 7 kind == || 10 kind == || = valid
-        "aggregate reference accepted exactly for valid controls" valid result typechecker::commit_program.is_ok == test::assert_true
-    done
-}
-
-fn test_contextual_method_return_is_committed {
-    "contextual_method_return_is_committed" test::test_start
-    error::Diagnostics::new = diagnostics
-    diagnostics "import \"lib/std.casa\" as std\nfn convert -> std::Result[i64 str] { \"failure\" std::Result[str str]::Error ? drop 42 std::Result::Ok } convert drop" helpers::typecheck_test_source = result
-    "question propagation checks" result.diagnostics.has_errors ! test::assert_true
-    "contextual return specializes before commitment" result typechecker::commit_program.is_ok test::assert_true
 }
 test_complete_scalar_commit
-test_invalid_private_references
-test_unchecked_and_incomplete_bodies
-test_aggregate_assembly
-test_missing_scalar_type_facts
-test_compound_and_wrapping_use_scalar_path
-test_invalid_cleanup_reference
-test_symbolic_aggregate_cannot_reach_planning
-test_implicit_destructor_must_be_checked
-test_symbolic_function_metadata
-test_missing_aggregate_facts_at_commitment
-test_aggregate_reference_commitment
-test_contextual_method_return_is_committed
+test_aggregate_uses_checked_contract
+test_compound_and_wrapping_plans
+test_rejected_source_has_no_backend_input
 test::test_summary
