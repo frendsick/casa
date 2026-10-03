@@ -58,6 +58,13 @@ resolution, checking, and specialization frames own each body until they publish
 the completed result. Recursive calls can read a reserved signature while the
 body remains private to its frame.
 
+Shared syntax retains unresolved struct, enum, and trait headers, including
+member types, generic parameters, derives, and method signatures. Source
+construction consumes these facts after constant elaboration. It resolves names
+and types, checks duplicates, and creates field accessors. Trait default bodies
+use the existing body-construction and specialization paths. Ordinary function
+and implementation-block headers still use the source builder's token parser.
+
 `constant_eval.casa` executes complete parsed initializers and validates the
 final stack and value type. It stops at the first failed term and resolves
 references in encounter order through a source-builder callback. Source
