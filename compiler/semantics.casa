@@ -430,53 +430,6 @@ impl VariableUses {
     }
 }
 
-pub fn collect_variable_uses ops:$std::List[common::Op] uses:VariableUses -> VariableUses {
-    0 = op_index: u64
-    while op_index ops.length > do
-        op_index ops.get = op
-        if op.value common::OpValue::PushVar(name) is then
-            false = cleanup_only
-            if op_index 1 + ops.length > then
-                op_index 1 + ops.get = next_op
-                if next_op.value common::OpValue::Drop is then
-                    true = cleanup_only
-                    op
-                        .location
-                        .span
-                        .offset i64::try_from.unwrap uses.cleanup_only_use_offsets.add
-                fi
-            fi
-            cleanup_only ! 1 op.location name.as_str uses.record
-        elif
-            op.value common::OpValue::AssignVar is
-            op.value common::OpValue::AssignInc is ||
-            op.value common::OpValue::AssignDec is ||
-        then
-            op common::op_str_value = target
-            target.as_str "." str::split = parts
-            if parts.length 1 < then
-                1 = occurrences: u64
-                if
-                    op.value common::OpValue::AssignInc is
-                    op.value common::OpValue::AssignDec is ||
-                then
-                    1 += occurrences
-                fi
-                true occurrences op.location 0 parts.get.as_str uses.record
-            fi
-        fi
-        if op.value common::OpValue::PushArray(items) is then
-            uses items collect_variable_uses = uses
-        elif op.value common::OpValue::ExprGroup(items) is then
-            uses items collect_variable_uses = uses
-        elif op.value common::OpValue::MatchArm(arm) is then
-            uses arm.guard_ops collect_variable_uses = uses
-        fi
-        1 += op_index
-    done
-    uses
-}
-
 impl source_body::SourceNode {
     fn is_drop self:$source_body::SourceNode -> bool {
         if self source_body::SourceNode::Leaf(leaf) is then
@@ -564,20 +517,6 @@ fn collect_source_variable_uses body:$source_body::SourceBody uses:VariableUses 
         1 += index
     done
     uses
-}
-
-enum GuardBody {
-    Operations (std::List[common::Op])
-    Source (source_body::SourceBody)
-}
-
-impl GuardBody {
-    fn get_uses self:$GuardBody -> VariableUses {
-        self match
-            GuardBody::Operations(operations) => VariableUses::new operations collect_variable_uses
-            GuardBody::Source(body) => VariableUses::new body collect_source_variable_uses
-        end
-    }
 }
 
 enum SourceWork {
@@ -1800,8 +1739,7 @@ impl SemanticChecks {
         end
     }
 
-    fn new store:$common::SymbolStore -> SemanticChecks {
-        store drop
+    fn new -> SemanticChecks {
         std::Map[std::String CallReturnSummary]::new std::Set[i64]::new
         std::Map[std::String FunctionWork]::new SemanticChecks
     }
@@ -1858,7 +1796,7 @@ impl SemanticSession {
         store:common::SymbolStore
         bodies:std::Map[std::String source_body::SourceBody]
     -> SemanticSession {
-        store SemanticChecks::new = checks
+        SemanticChecks::new = checks
         bodies checks.stage_sources
         store checks.stage_accessors
         checks store SemanticSession
@@ -7769,7 +7707,7 @@ pub fn type_satisfies_trait
     diagnostics:mut$error::Diagnostics
     bodies:$std::Map[std::String source_body::SourceBody]
 -> bool {
-    store SemanticChecks::new = checks
+    SemanticChecks::new = checks
     bodies.clone checks.stage_sources
     store checks.stage_accessors
     checks diagnostics store function_opt trait_type receiver check_trait_satisfaction = result
@@ -10002,14 +9940,7 @@ impl TypeChecker {
         subject_type.clone std::Option::Some op common::Op::set_type_hint
     }
 
-    # ============================================================================
-    # typecheck_match_op — per-arm typecheck entry point.
-    #
-    # Handles pattern-shape validation, duplicate-arm detection, match-arm
-    # stack unification, and binding-type registration for a single OpMatchArm.
-    # Callers (currently check_match) delegate the entire arm body to this
-    # function; start/end of the match block remain in check_match.
-
+    # Check one source match arm and its optional guard.
     fn typecheck_match_op
         self:mut$TypeChecker
         function_opt:mut$std::Option[common::Function]
@@ -10079,11 +10010,7 @@ impl TypeChecker {
                 fi
             done
 
-            if op pattern::pattern_is_guarded source_guard.is_some || then
-                source_guard match
-                    std::Option::Some(body) => body GuardBody::Source
-                    std::Option::None => op common::pattern_guard_ops GuardBody::Operations
-                end = guard_body
+            if source_guard std::Option::Some(guard_body) is then
                 self.scope.snapshot = guard_scope
                 self.current_ownership_flow = guard_flow
                 self.infer_parameters self.checks
@@ -10092,22 +10019,14 @@ impl TypeChecker {
                 guard_scope = guard_checker.scope
                 guard_flow guard_checker.restore_ownership_flow
                 self.contextual_callables.clone = guard_checker.contextual_callables
-                guard_body.get_uses = variable_uses
+                VariableUses::new guard_body collect_source_variable_uses = variable_uses
                 variable_uses.counts.clone = guard_checker.remaining_uses
                 variable_uses.observing_counts.clone = guard_checker.remaining_observing_uses
                 variable_uses.cleanup_only_use_offsets.clone = guard_checker.cleanup_only_use_offsets
                 variable_uses.last_locations.clone = guard_checker.last_use_locations
                 std::List[common::Op]::new = guard_ops
-                guard_body match
-                    GuardBody::Operations(operations) => {
-                        operations = guard_ops
-                        function_opt guard_ops guard_checker.run_type_check_ops
-                    }
-                    GuardBody::Source(body) => {
-                        std::List[common::Op]::new = pending
-                        function_opt guard_ops pending body guard_checker.check_source_sequence
-                    }
-                end
+                std::List[common::Op]::new = pending
+                function_opt guard_ops pending guard_body guard_checker.check_source_sequence
                 guard_checker.path_continues = guard_continues
                 if guard_continues then
                     for name in guard_checker.moved_owners.iter do
@@ -13046,7 +12965,7 @@ fn check_ops_with_parameter_policy
     require_empty_final_stack:bool
     infer_parameters:bool
 -> common::StackEffect {
-    store SemanticChecks::new = checks
+    SemanticChecks::new = checks
     bodies.clone checks.stage_sources
     store checks.stage_accessors
     infer_parameters checks
