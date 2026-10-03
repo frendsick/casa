@@ -10,8 +10,8 @@ This completes the front-end responsibilities of ADR-0167 under the
 import, constant, and tooling contracts in ADR-0168, ADR-0171, and ADR-0172.
 The semantic construction consumes these facts under
 [ADR-0173](0173-semantic-checking-owns-source-obligations.md).
-Shared syntax recognition is implemented. Semantic parsing still uses
-`legacy_parser.casa`, with full production cutover open in #715.
+Shared syntax recognition feeds `source_builder.casa`. Production consumers
+use typed requests in `products.casa`.
 
 ## Evidence and alternatives
 

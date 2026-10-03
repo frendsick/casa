@@ -37,6 +37,31 @@ fn test_invalid_static_references {
     "missing pool reference prevents publication" selector.finish.is_error test::assert_true
 }
 
+pub fn test_sanitize_name {
+    "sanitize_name" test::test_start
+    "simple name" "foo" "foo" sanitize_name.as_str test::assert_str_eq
+    "double colon" "Foo__bar" "Foo::bar" sanitize_name.as_str test::assert_str_eq
+    "multiple" "A__B__C" "A::B::C" sanitize_name.as_str test::assert_str_eq
+    "no colons" "hello_world" "hello_world" sanitize_name.as_str test::assert_str_eq
+    "single colon preserved" "a:b" "a:b" sanitize_name.as_str test::assert_str_eq
+}
+
+pub fn test_escape_string {
+    "escape_string" test::test_start
+    "plain" "hello" "hello" escape_string.as_str test::assert_str_eq
+    "newline" "a\\nb" "a\nb" escape_string.as_str test::assert_str_eq
+    "tab" "a\\tb" "a\tb" escape_string.as_str test::assert_str_eq
+    "backslash" "\\\\" "\\" escape_string.as_str test::assert_str_eq
+    "quote" "\\\"" "\"" escape_string.as_str test::assert_str_eq
+    std::String::new = nul_then_digit
+    '\0' nul_then_digit.push
+    '1' nul_then_digit.push
+    "NUL before octal digit" "\\0001" nul_then_digit.as_str
+    escape_string.as_str test::assert_str_eq
+}
+
+test_sanitize_name
+test_escape_string
 test_invalid_machine_references
 test_invalid_static_references
 test::test_summary

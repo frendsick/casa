@@ -136,7 +136,7 @@ if [ "$TEST_CATEGORY" = all ] || [ "$TEST_CATEGORY" = compiler_integration ]; th
         matched=true
         fixture="$TEST_TMP/backend_invariants.casa"
         binary="$TEST_TMP/backend_invariants"
-        cat "$ROOT_DIR/compiler/bytecode.casa" \
+        cat "$ROOT_DIR/compiler/backend.casa" \
             "$TESTS_DIR/fixtures/backend_invariants.inc" > "$fixture"
         printf "Running: backend_invariants ... "
         if ! $COMPILER -L "$LIB_DIR" -L "$ROOT_DIR/compiler" "$fixture" -o "$binary" \

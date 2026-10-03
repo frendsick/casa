@@ -1,7 +1,8 @@
 # Compiler request products
 
-`compiler/products.casa` provides three request operations for the Compiler
-Capsule migration in #700:
+`compiler/products.casa` provides three request operations. The CLI requests
+assembly, the LSP and workspace request analysis snapshots, and the formatter
+requests syntax:
 
 | Operation | Input | Successful return |
 | --- | --- | --- |
@@ -12,7 +13,7 @@ Capsule migration in #700:
 Each operation returns `std::Result` with `CompilerFailure` as its error type. Source errors
 return ordinary products. Rejected syntax has no structural facts, and rejected
 assembly has no assembly text. `CompilerFailure` retains the accumulated report,
-phase, message, and optional location. Current failures cover bytecode errors
+phase, message, and optional location. Current failures cover backend errors
 and invalid request bases. Process termination and allocation failure are excluded.
 
 `CompilationInput` owns root text, its file identity, an absolute base directory,
@@ -46,9 +47,8 @@ runtime asset from the checkout. `keep_asm` retains the complete `<output>.s` on
 success and native failure. Otherwise the adapter removes it after the driver
 returns. The compiler creates no intermediate object file.
 
-`AssemblySource::new` wraps completed backend text with its target for
-the CLI during consumer migration. Request products construct the same type
-inside `assembly`.
+The CLI passes the assembly product to the native driver and retains its report
+until diagnostics have been presented. It does not coordinate compiler phases.
 
 `SourceProgram` owns declaration metadata and structured source bodies. Function
 records contain signatures, variables, captures, and linkage metadata. Source
@@ -75,8 +75,8 @@ type and structural checks. It retains source occurrences for editor queries,
 without executable operands or ownership actions.
 
 Scalar and aggregate programs use one backend entry. Physical instructions,
-function plans, pools, and selection are private to `bytecode.casa`.
-`emitter.casa` contains only symbol and string spelling helpers. A deterministic worklist
+function plans, pools, selection, and spelling helpers are private to
+`backend.casa`. A deterministic worklist
 plans each reachable function from its structured body. Each function plan fixes
 storage actions, frame size, ownership flags, cleanup, and concrete call targets
 before instruction selection. Native calls share one request-owned ABI plan per
@@ -130,7 +130,7 @@ phase transitions.
 
 Semantic operations own their assignment, move, and cleanup actions. Operations
 that need none omit them. Specialization substitutes cleanup types within the
-body, and bytecode lowering reads the actions directly. Pending moves from stack values remain private to the body checker
+body, and backend lowering reads the actions directly. Pending moves from stack values remain private to the body checker
 until it attaches them to their source operations. There is no ownership table
 in `SymbolStore`.
 
@@ -162,13 +162,16 @@ categories remain available after syntax rejection.
 Type references are incomplete while signature and field type occurrences are
 not represented. Rename must reject these answers. Snapshot release is measured
 by the [editor snapshot workload](benchmarks/editor-snapshots/README.md). The
-[structured aggregate backend measurements](benchmarks/structured-aggregate-backend/README.md)
-record the current compilation cost and repeated-request lifetime.
+[cutover measurements](benchmarks/compiler-cutover.md) record the final consumer
+interfaces, compilation cost, and repeated-request lifetimes.
 
 `workspace.casa` aggregates owned answers across fresh snapshots, retains exact
 source revisions, and validates proposed rename bindings through reanalysis.
 Workspace discovery and LSP document versions stay outside the compiler products.
-Final consumer cutover belongs to #715. Language behavior is unchanged. The
+The LSP stores `AnalysisSnapshot` values. Position-based queries convert through
+the snapshot's retained sources and return owned answers. The caller must check
+document versions before applying results to newer text. `AnalysisResult` and
+`AnalyzedDocument` are removed. Language behavior is unchanged. The
 [request measurements](benchmarks/compiler-products/README.md) do not establish
 final redesign performance.
 

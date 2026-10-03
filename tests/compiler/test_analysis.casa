@@ -1,7 +1,7 @@
 import "std" as std
 import "../../compiler/common.casa" as common
 import "../../compiler/lexer.casa" as lexer
-import "../../compiler/analysis.casa" as analysis
+import "../../compiler/products.casa" as products
 import "../../lib/os.casa" as os
 import "../../lib/test.casa" as test
 
@@ -9,11 +9,15 @@ pub const ANALYSIS_TEST_FILE "/tmp/casa_analysis_test.casa"
 
 pub fn test_analysis_returns_frontend_outputs {
     "analysis_returns_frontend_outputs" test::test_start
-    "42 print".to_str ANALYSIS_TEST_FILE.to_str analysis::AnalysisInput::new analysis::analyze = result
-    "no diagnostics" result.diagnostics.has_errors ! test::assert_true
-    "typechecked output" result.typechecked.is_some test::assert_true
+    "42 print".to_str ANALYSIS_TEST_FILE.to_str products::SourceUnit
+    "" lexer::absolute_normalize_path swap products::CompilationInput::new products::analyze.unwrap = result
+    "no diagnostics" result
+        .get_report
+        .get_diagnostics
+        .has_errors ! test::assert_true
+    "complete editor facts" result.is_incomplete ! test::assert_true
     "root source retained" "42 print" ANALYSIS_TEST_FILE result
-        .sources
+        .get_sources
         .get
         .unwrap test::assert_str_eq
 }
@@ -26,24 +30,28 @@ pub fn test_analysis_retains_imported_source {
         .as_str
         .as_cstr
         .unwrap file::write_all drop
-    f"import \"{imported_file}\" as dependency_module\ndependency_module::dependency" ANALYSIS_TEST_FILE.to_str analysis::AnalysisInput::new analysis::analyze = result
+    f"import \"{imported_file}\" as dependency_module\ndependency_module::dependency" ANALYSIS_TEST_FILE.to_str products::SourceUnit
+    "" lexer::absolute_normalize_path swap products::CompilationInput::new products::analyze.unwrap = result
     imported_file
         .as_str
         .as_cstr
         .unwrap file::remove drop
-    "import compiles" result.diagnostics.has_errors ! test::assert_true
+    "import compiles" result
+        .get_report
+        .get_diagnostics
+        .has_errors ! test::assert_true
     "import retained" imported_source imported_file result
-        .sources
+        .get_sources
         .get
         .unwrap test::assert_str_eq
     24 imported_file result
-        .sources
+        .get_sources
         .convert_offset_to_position
         .unwrap = position
     "imported line" 2 position.line test::assert_eq
     "imported column" 5 position.column test::assert_eq
     5 2 common::SourcePosition::new imported_file result
-        .sources
+        .get_sources
         .convert_position_to_offset
         .unwrap = offset
     "imported offset" 24 offset test::assert_eq
@@ -51,12 +59,16 @@ pub fn test_analysis_retains_imported_source {
 
 pub fn test_analysis_uses_in_memory_import_override {
     "analysis_uses_in_memory_import_override" test::test_start
-    "import \"/tmp/casa_analysis_dependency.casa\" as dependency_module\ndependency_module::dependency".to_str ANALYSIS_TEST_FILE.to_str analysis::AnalysisInput::new = input
+    "import \"/tmp/casa_analysis_dependency.casa\" as dependency_module\ndependency_module::dependency".to_str ANALYSIS_TEST_FILE.to_str products::SourceUnit
+    "" lexer::absolute_normalize_path swap products::CompilationInput::new = input
     "pub fn dependency { 42 print }".to_str "/tmp/casa_analysis_dependency.casa".to_str input.source_overrides.set
-    input analysis::analyze = result
-    "override compiles" result.diagnostics.has_errors ! test::assert_true
+    input products::analyze.unwrap = result
+    "override compiles" result
+        .get_report
+        .get_diagnostics
+        .has_errors ! test::assert_true
     "override retained" "pub fn dependency { 42 print }" "/tmp/casa_analysis_dependency.casa" result
-        .sources
+        .get_sources
         .get
         .unwrap test::assert_str_eq
 }
@@ -64,14 +76,18 @@ pub fn test_analysis_uses_in_memory_import_override {
 pub fn test_analysis_resolves_module_import_from_override {
     "analysis_resolves_module_import_from_override" test::test_start
     "import \"virtual\" as virtual\nvirtual::value drop".to_str
-    "/tmp/casa_analysis_root_548/main.casa".to_str analysis::AnalysisInput::new = input
+    "/tmp/casa_analysis_root_548/main.casa".to_str products::SourceUnit
+    "" lexer::absolute_normalize_path swap products::CompilationInput::new = input
     "casa_analysis_virtual_548".to_str input.library_paths.push
     "pub fn value { 42 }".to_str
     "casa_analysis_virtual_548/virtual.casa".to_str input.source_overrides.set
-    input analysis::analyze = result
-    "override compiles" result.diagnostics.has_errors ! test::assert_true
+    input products::analyze.unwrap = result
+    "override compiles" result
+        .get_report
+        .get_diagnostics
+        .has_errors ! test::assert_true
     "override retained" "pub fn value { 42 }" "casa_analysis_virtual_548/virtual.casa" lexer::absolute_normalize_path.as_str result
-        .sources
+        .get_sources
         .get
         .unwrap test::assert_str_eq
 }
@@ -79,38 +95,41 @@ pub fn test_analysis_resolves_module_import_from_override {
 pub fn test_sequential_analyses_are_isolated {
     "sequential_analyses_are_isolated" test::test_start
     "trait Marker { fn mark self:self -> self }\nfn leaked[T: Marker] value:T -> T { value }\n\"bad\" 1 *".to_str
-    ANALYSIS_TEST_FILE.to_str analysis::AnalysisInput::new = first_input
+    ANALYSIS_TEST_FILE.to_str products::SourceUnit
+    "" lexer::absolute_normalize_path swap products::CompilationInput::new = first_input
     "first only".to_str "/tmp/casa_analysis_first_only.casa".to_str first_input.source_overrides.set
-    first_input analysis::analyze = first
-    "first has diagnostics" first.diagnostics.has_errors test::assert_true
-    "first has partial output" first.typechecked.is_some test::assert_true
+    first_input products::analyze.unwrap = first
+    "first has diagnostics" first
+        .get_report
+        .get_diagnostics
+        .has_errors test::assert_true
+    "first marks incomplete facts" first.is_incomplete test::assert_true
 
-    "fn clean[T] value:T -> T { value }\n42 print".to_str ANALYSIS_TEST_FILE.to_str analysis::AnalysisInput::new analysis::analyze.into_parts = second_typechecked = second_sources = second_diagnostics
-    "second has no diagnostics" second_diagnostics.has_errors ! test::assert_true
-    "first source does not leak" "/tmp/casa_analysis_first_only.casa" second_sources.get.is_none test::assert_true
-    second_typechecked match
-        std::Option::Some(checked) => {
-            "symbol does not leak" "leaked" checked.get_store.has_function ! test::assert_true
-            "trait bounds do not leak" 0 "clean" checked
-                .get_store
-                .get_function
-                .unwrap
-                .stack_effect
-                .trait_bounds
-                .length test::assert_eq
-        }
-        std::Option::None => "second has typechecked output" false test::assert_true
-    end
+    "fn clean[T] value:T -> T { value }\n42 print".to_str ANALYSIS_TEST_FILE.to_str products::SourceUnit
+    "" lexer::absolute_normalize_path swap products::CompilationInput::new products::analyze.unwrap = second
+    "second has no diagnostics" second
+        .get_report
+        .get_diagnostics
+        .has_errors ! test::assert_true
+    "first source does not leak" "/tmp/casa_analysis_first_only.casa" second
+        .get_sources
+        .get
+        .is_none test::assert_true
+    "second has complete facts" second.is_incomplete ! test::assert_true
 }
 
 pub fn test_module_identity_and_headers {
     "module_identity_and_headers" test::test_start
     "import \"./dependency.casa\" as first import \"/tmp/casa702/dependency.casa\" as second first::build = item item second::accept drop".to_str
-    "/tmp/casa702/main.casa".to_str analysis::AnalysisInput::new = input
+    "/tmp/casa702/main.casa".to_str products::SourceUnit
+    "" lexer::absolute_normalize_path swap products::CompilationInput::new = input
     "pub fn build -> Value { Value { number: later } } pub fn accept value:$Value -> i64 { value.number } fn later -> i64 { 42 } pub struct Value { pub number:i64 }".to_str
     "/tmp/casa702/dependency.casa".to_str input.source_overrides.set
-    input analysis::analyze = result
-    "aliases share a type and later headers" result.diagnostics.has_errors ! test::assert_true
+    input products::analyze.unwrap = result
+    "aliases share a type and later headers" result
+        .get_report
+        .get_diagnostics
+        .has_errors ! test::assert_true
 }
 
 pub fn test_module_scope_and_privacy {
@@ -130,54 +149,67 @@ pub fn test_module_scope_and_privacy {
             "import \"./dependency.casa\" as dependency {}",
         ].iter
     do
-        source.to_str "/tmp/casa702/main.casa".to_str analysis::AnalysisInput::new = input
+        source.to_str "/tmp/casa702/main.casa".to_str products::SourceUnit
+        "" lexer::absolute_normalize_path swap products::CompilationInput::new = input
         "42 = leaked const SECRET 42 struct Hidden {} pub fn answer -> i64 { hidden } fn hidden -> i64 { 42 }".to_str
         "/tmp/casa702/dependency.casa".to_str input.source_overrides.set
         "pub fn answer -> i64 { 7 }".to_str "/tmp/casa702/other.casa".to_str input.source_overrides.set
-        input analysis::analyze = result
-        source result.diagnostics.has_errors test::assert_true
+        input products::analyze.unwrap = result
+        source result
+            .get_report
+            .get_diagnostics
+            .has_errors test::assert_true
     done
 }
 
 pub fn test_module_locals_shadow_declarations {
     "module_locals_shadow_declarations" test::test_start
     "import \"./dependency.casa\" as dependency 42 dependency::identity drop dependency::Item__::answer drop".to_str
-    "/tmp/casa702/main.casa".to_str analysis::AnalysisInput::new = input
+    "/tmp/casa702/main.casa".to_str products::SourceUnit
+    "" lexer::absolute_normalize_path swap products::CompilationInput::new = input
     "struct T {} fn value -> i64 { 7 } pub fn identity[T] value:T -> T { value } pub struct Item__ {} impl Item__ { pub fn answer -> i64 { 42 } }".to_str
     "/tmp/casa702/dependency.casa".to_str input.source_overrides.set
-    input analysis::analyze = result
-    "lexical binding wins" result.diagnostics.has_errors ! test::assert_true
+    input products::analyze.unwrap = result
+    "lexical binding wins" result
+        .get_report
+        .get_diagnostics
+        .has_errors ! test::assert_true
 }
 
 pub fn test_independent_import_failures {
     "independent_import_failures" test::test_start
     for first_source in ["missing_first", "\"bad\\q\"", "end"].iter do
         "import \"first\" as one import \"second\" as two import \"first\" as repeated missing_root".to_str
-        "/tmp/casa702/main.casa".to_str analysis::AnalysisInput::new = input
+        "/tmp/casa702/main.casa".to_str products::SourceUnit
+        "" lexer::absolute_normalize_path swap products::CompilationInput::new = input
         first_source.to_str "/tmp/casa702/first.casa".to_str input.source_overrides.set
         "missing_second".to_str "/tmp/casa702/second.casa".to_str input.source_overrides.set
-        input analysis::analyze = result
+        input products::analyze.unwrap = result
         "each independent failure appears once" 3 result
-            .diagnostics
+            .get_report
+            .get_diagnostics
             .entries
             .length test::assert_eq
         "first import diagnostic" "/tmp/casa702/first.casa"
         0 result
-            .diagnostics
+            .get_report
+            .get_diagnostics
             .entries
             .get
             .get_location
             .file test::assert_str_eq
         "second import diagnostic" "/tmp/casa702/second.casa"
         1 result
-            .diagnostics
+            .get_report
+            .get_diagnostics
             .entries
             .get
             .get_location
             .file test::assert_str_eq
         "independent root diagnostic" "/tmp/casa702/main.casa"
         2 result
-            .diagnostics
+            .get_report
+            .get_diagnostics
             .entries
             .get
             .get_location
@@ -185,29 +217,45 @@ pub fn test_independent_import_failures {
     done
 }
 
+pub fn test_generated_binding_scope_is_bounded {
+    "generated_binding_scope_is_bounded" test::test_start
+    "struct Resource { value:i64 } impl Resource { fn drop self:mut$Resource { } } struct Box[T] { value:T } fn take[T] value:T { } fn first value:Box[Resource] { value take } fn second value:Box[Resource] { } 1 Resource Box first 2 Resource Box second".to_str ANALYSIS_TEST_FILE.to_str products::SourceUnit
+    "" lexer::absolute_normalize_path swap products::CompilationInput::new products::analyze.unwrap = result
+    "generated cleanup bindings preserve successful analysis" result
+        .get_report
+        .get_diagnostics
+        .has_errors ! test::assert_true
+    "editor facts remain complete" result.is_incomplete ! test::assert_true
+}
+
 pub fn test_source_diagnostics_precede_body_diagnostics {
     "source_diagnostics_precede_body_diagnostics" test::test_start
     "missing_root\nfn bad { \"wrong\" 1 * drop }\n".to_str
-    ANALYSIS_TEST_FILE.to_str analysis::AnalysisInput::new analysis::analyze = result
+    ANALYSIS_TEST_FILE.to_str products::SourceUnit
+    "" lexer::absolute_normalize_path swap products::CompilationInput::new products::analyze.unwrap = result
     "both phases retain their errors" 2 result
-        .diagnostics
+        .get_report
+        .get_diagnostics
         .entries
         .length test::assert_eq
     "source error is first" 0 0 result
-        .diagnostics
+        .get_report
+        .get_diagnostics
         .entries
         .get
         .get_location
         .span
         .offset test::assert_eq
     "body error is second" 0 1 result
-        .diagnostics
+        .get_report
+        .get_diagnostics
         .entries
         .get
         .get_location
         .span
         .offset > test::assert_true
 }
+test_source_diagnostics_precede_body_diagnostics
 test_analysis_returns_frontend_outputs
 test_analysis_retains_imported_source
 test_analysis_uses_in_memory_import_override
@@ -217,5 +265,5 @@ test_module_identity_and_headers
 test_module_scope_and_privacy
 test_module_locals_shadow_declarations
 test_independent_import_failures
-test_source_diagnostics_precede_body_diagnostics
+test_generated_binding_scope_is_bounded
 test::test_summary

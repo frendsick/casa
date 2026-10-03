@@ -1,12 +1,13 @@
-# Request-owned compiler products. Legacy phases remain private adapters here.
+# Request-owned syntax, editor analysis, and assembly products.
 import "std" as std
 import "common" as common
 import "error" as error
 import "lexer" as lexer
 import "syntax" as grammar
-import "analysis" as frontend
+import "source_builder" as parser
+import "typechecker" as typechecker
 import "document" as document
-import "bytecode" as bytecode
+import "backend" as backend
 
 pub struct SourceUnit {
     pub file: std::String
@@ -78,24 +79,6 @@ impl CompilationInput {
         done
         std::Option[CompilerFailure]::None
     }
-
-    fn into_frontend self:CompilationInput -> frontend::AnalysisInput {
-        self
-            .root
-            .file
-            .as_str self.resolve_path = root_file
-        self
-            .root
-            .text
-            .clone root_file frontend::AnalysisInput::new = input
-        for path in self.library_paths.iter do
-            path.as_str self.resolve_path input.library_paths.push
-        done
-        for override in self.source_overrides.iter do
-            override.second.clone override.first.as_str self.resolve_path input.source_overrides.set
-        done
-        input
-    }
 }
 
 pub struct Report {
@@ -131,7 +114,7 @@ impl Report {
 pub enum CompilerPhase derives std::Copy std::Eq {
     Input
     Checking
-    Bytecode
+    Backend
 }
 
 pub struct CompilerFailure {
@@ -221,12 +204,13 @@ pub fn analyze input:CompilationInput -> std::Result[AnalysisSnapshot CompilerFa
     if input.validate std::Option::Some(failure) is then
         failure std::Result::Error return
     fi
-    input.into_frontend = frontend_input
-    frontend_input.root_file.clone = root_file
-    frontend_input.root_source.clone = root_source
-    frontend_input frontend::analyze.into_parts = checked = sources = diagnostics
-    checked sources diagnostics.clone frontend::AnalysisResult = legacy
-    root_file.clone root_source legacy document::AnalyzedDocument::new.into_parts = sources = index
+    input
+        .root
+        .file
+        .as_str input.resolve_path = root_file
+    input check.into_parts = checked = sources = diagnostics
+    root_file.clone diagnostics sources checked document::project_index
+    = diagnostics = sources = index
     root_file index sources diagnostics Report AnalysisSnapshot std::Result::Ok
 }
 # Source errors cannot reach emission. Native assembly, linking and launch are caller work.
@@ -237,27 +221,36 @@ pub fn assembly
     if input.validate std::Option::Some(failure) is then
         failure std::Result::Error return
     fi
-    input.into_frontend = frontend_input
-    frontend_input.root_file.clone = root_file
-    frontend_input frontend::analyze.into_parts = checked = sources = diagnostics
+    input
+        .root
+        .file
+        .as_str input.resolve_path = root_file
+    input check.into_parts = checked = sources = diagnostics
     root_file.as_str sources.retain_used
     sources diagnostics Report = report
     if report.diagnostics.has_errors then
         report AssemblyResult::Rejected std::Result::Ok return
     fi
     if checked std::Option::Some(program_input) is then
-        program_input bytecode::compile_assembly match
-            std::Result::Ok(program) => {
-                program target AssemblySource = source
+        program_input.into_checked_program match
+            std::Result::Ok(program) => program
+            std::Result::Error(message) => {
+                std::Option[common::Location]::None message CompilerPhase::Checking report
+                CompilerFailure std::Result::Error return
+            }
+        end = program
+        program backend::compile_checked match
+            std::Result::Ok(text) => {
+                text target AssemblySource = source
                 source report AssemblyResult::Produced std::Result::Ok
             }
             std::Result::Error(problem) => problem match
-                bytecode::AssemblyError::Rejected(target_diagnostics) => {
+                backend::AssemblyError::Rejected(target_diagnostics) => {
                     target_diagnostics report.diagnostics.merge
                     report AssemblyResult::Rejected std::Result::Ok
                 }
-                bytecode::AssemblyError::Internal(failure) => {
-                    std::Option[common::Location]::None failure.message.clone CompilerPhase::Bytecode report
+                backend::AssemblyError::Internal(failure) => {
+                    std::Option[common::Location]::None failure.message.clone CompilerPhase::Backend report
                     CompilerFailure std::Result::Error
                 }
             end
@@ -267,4 +260,203 @@ pub fn assembly
         "Checking returned no program without source diagnostics".to_str CompilerPhase::Checking report
         CompilerFailure std::Result::Error
     fi
+}
+
+struct CheckingResult {
+    diagnostics: error::Diagnostics
+    sources:     lexer::SourceStore
+    typechecked: std::Option[typechecker::TypecheckResult]
+}
+
+impl CheckingResult {
+    fn into_parts
+        self:CheckingResult
+    -> error::Diagnostics lexer::SourceStore std::Option[typechecker::TypecheckResult] {
+        self match
+            CheckingResult { diagnostics: diagnostics sources: sources typechecked: typechecked } => diagnostics sources typechecked
+        end
+    }
+}
+
+fn check input:CompilationInput -> CheckingResult {
+    input
+        .root
+        .file
+        .as_str input.resolve_path = root_file
+    lexer::SourceStore::new = sources
+    for override in input.source_overrides.iter do
+        override.second.as_str override.first.as_str input.resolve_path.as_str sources.add
+    done
+    input
+        .root
+        .text
+        .as_str root_file.as_str sources.add
+    std::List[std::String]::new = resolved_library_paths
+    for path in input.library_paths.iter do
+        path.as_str input.resolve_path resolved_library_paths.push
+    done
+    input match
+        CompilationInput { root: root } => {
+            root match
+                SourceUnit {
+                    text: text
+                } => text
+            end
+        }
+    end = root_source
+
+    root_file.as_str root_source.as_str lexer::lex_source = lex_result
+    lex_result.into_parts = diagnostics = tokens
+    sources diagnostics resolved_library_paths tokens parser::parse_and_resolve = parse_result
+    parse_result.into_parts = diagnostics = parsed_source
+    parsed_source match
+        std::Option::Some(source) => {
+            diagnostics source typechecker::type_check.with_source_diagnostics = typecheck_result
+            typecheck_result.get_diagnostics.clone = diagnostics
+            typecheck_result std::Option::Some
+        }
+        std::Option::None => std::Option[typechecker::TypecheckResult]::None
+    end
+    = typechecked
+
+    typechecked
+    sources
+    diagnostics
+    CheckingResult
+}
+
+impl AnalysisSnapshot {
+    fn query_offset self:$AnalysisSnapshot position:$common::SourcePosition -> std::Option[u64] {
+        if 0 position.line == 0 position.column == || then
+            std::Option[u64]::None return
+        fi
+        if
+            self.root_file.as_str self
+                .get_sources
+                .line_starts
+                .get_str std::Option::Some(starts) is
+        then
+            if starts.length position.line > then
+                std::Option[u64]::None return
+            fi
+            position.line 1 - starts.get copy position.column 1 - + = offset
+            if self.get_source.length offset > then
+                std::Option[u64]::None return
+            fi
+            if starts.length position.line < then
+                if position.line starts.get copy offset >= then
+                    std::Option[u64]::None return
+                fi
+            fi
+            offset std::Option::Some
+        else
+            std::Option[u64]::None
+        fi
+    }
+
+    pub fn find_hover_at
+        self:$AnalysisSnapshot
+        position:$common::SourcePosition
+    -> std::Option[document::DocumentHover] {
+        if position self.query_offset std::Option::Some(offset) is then
+            offset copy self.root_file.as_str self.index.find_hover match
+                document::PointAnswer::Known(hover) => hover std::Option::Some return
+                _ => {
+                }
+            end
+        fi
+        std::Option[document::DocumentHover]::None
+    }
+
+    pub fn find_definition_at
+        self:$AnalysisSnapshot
+        position:$common::SourcePosition
+    -> std::Option[document::DocumentLocation] {
+        if position self.query_offset std::Option::Some(offset) is then
+            offset copy self.root_file.as_str self.index.find_definition match
+                document::PointAnswer::Known(location) => location std::Option::Some return
+                _ => {
+                }
+            end
+        fi
+        std::Option[document::DocumentLocation]::None
+    }
+
+    pub fn find_completion_candidates
+        self:$AnalysisSnapshot
+        position:$common::SourcePosition
+        trigger:$str
+    -> std::List[document::CompletionCandidate] {
+        if position self.query_offset std::Option::Some(offset) is then
+            trigger offset copy self.root_file.as_str self.index.find_candidates match
+                document::ListAnswer::Complete(items) => items return
+                document::ListAnswer::Incomplete(items _) => items return
+                _ => {
+                }
+            end
+        fi
+        std::List[document::CompletionCandidate]::new
+    }
+
+    pub fn find_references_at
+        self:$AnalysisSnapshot
+        position:$common::SourcePosition
+        include_declaration:bool
+    -> std::Option[std::List[document::DocumentLocation]] {
+        if position self.query_offset std::Option::Some(offset) is then
+            include_declaration offset copy self.root_file.as_str self.index.find_references match
+                document::ReferenceAnswer::Complete(result) => result.into_ranges std::Option::Some return
+                document::ReferenceAnswer::Incomplete(result _) => result.into_ranges std::Option::Some return
+                _ => {
+                }
+            end
+        fi
+        std::Option[std::List[document::DocumentLocation]]::None
+    }
+}
+
+impl AnalysisSnapshot {
+    pub fn find_completions_at
+        self:$AnalysisSnapshot
+        position:$common::SourcePosition
+        trigger:$str
+    -> document::ListAnswer[document::DocumentCompletion] {
+        if position self.query_offset std::Option::Some(offset) is then
+            trigger offset copy self.root_file.as_str self.index.find_completions return
+        fi
+        document::QueryReason::InvalidInput document::ListAnswer[document::DocumentCompletion]::Unavailable
+    }
+
+    pub fn find_reference_answer_at
+        self:$AnalysisSnapshot
+        position:$common::SourcePosition
+        include_declaration:bool
+    -> document::ReferenceAnswer {
+        if position self.query_offset std::Option::Some(offset) is then
+            include_declaration offset copy self.root_file.as_str self.index.find_references return
+        fi
+        document::QueryReason::InvalidInput document::ReferenceAnswer::Unavailable
+    }
+}
+
+impl AnalysisSnapshot {
+    pub fn get_file_path self:$AnalysisSnapshot -> $std::String { self.root_file }
+    pub fn get_sources self:$AnalysisSnapshot -> $lexer::SourceStore { self.report.sources }
+    pub fn get_source self:$AnalysisSnapshot -> $std::String {
+        self.root_file.as_str self
+            .report
+            .sources
+            .get
+            .unwrap
+    }
+    pub fn is_incomplete self:$AnalysisSnapshot -> bool { self.index.is_incomplete }
+    pub fn find_symbol_identity_at
+        self:$AnalysisSnapshot
+        position:$common::SourcePosition
+    -> std::Option[document::DocumentSymbol] {
+        if position self.query_offset std::Option::Some(offset) is then
+            offset copy self.root_file.as_str self.index.find_symbol_identity return
+        fi
+        std::Option[document::DocumentSymbol]::None
+    }
 }

@@ -11,9 +11,6 @@ import "lib/io.casa" as io
 import "compiler/common.casa" as common
 import "compiler/error.casa" as error
 import "compiler/lexer.casa" as lexer
-import "compiler/legacy_parser.casa" as syntax
-import "compiler/typechecker.casa" as typechecker
-import "compiler/analysis.casa" as analysis
 import "compiler/products.casa" as products
 import "compiler/document.casa" as document
 import "workspace.casa" as workspace
@@ -79,13 +76,13 @@ pub struct HoverContent {
 }
 
 pub struct CompileResult {
-    pub document:    document::AnalyzedDocument
+    pub document:    products::AnalysisSnapshot
     pub diagnostics: std::List[LspDiagnostic]
 }
 
 pub struct LspState {
     pub library_paths:   std::List[std::String]
-    pub open_documents:  std::Map[std::String document::AnalyzedDocument]
+    pub open_documents:  std::Map[std::String products::AnalysisSnapshot]
     pub workspace:       workspace::Workspace
     pub versions:        std::Map[std::String i64]
     pub versioned_edits: bool
@@ -93,7 +90,7 @@ pub struct LspState {
 }
 
 impl CompileResult {
-    pub fn into_parts self:CompileResult -> document::AnalyzedDocument std::List[LspDiagnostic] {
+    pub fn into_parts self:CompileResult -> products::AnalysisSnapshot std::List[LspDiagnostic] {
         self match
             CompileResult { document: document diagnostics: diagnostics } => document diagnostics
         end
@@ -104,7 +101,7 @@ impl LspState {
     pub fn new -> LspState {
         LspState {
             library_paths: std::List[std::String]::new
-            open_documents: std::Map[std::String document::AnalyzedDocument]::new
+            open_documents: std::Map[std::String products::AnalysisSnapshot]::new
             workspace: workspace::Workspace::new
             versions: std::Map[std::String i64]::new
             versioned_edits: false
@@ -544,24 +541,41 @@ pub fn send_notification method:str params:json::JsonValue {
 pub fn compile_document_with_paths
     file_path:$str
     source:$str
-    open_docs:$std::Map[std::String document::AnalyzedDocument]
+    open_docs:$std::Map[std::String products::AnalysisSnapshot]
     library_paths:$std::List[std::String]
 -> CompileResult {
-    source.to_str file_path.to_str analysis::AnalysisInput::new = input
+    source.to_str file_path.to_str products::SourceUnit
+    "" lexer::absolute_normalize_path swap products::CompilationInput::new = input
     library_paths.clone = input.library_paths
     open_docs.keys = uris
     for uri in uris.iter do
         uri open_docs.get.unwrap = cached_state
-        if cached_state.file_path file_path != then
-            cached_state.source.clone cached_state.file_path.clone input.source_overrides.set
+        if cached_state.get_file_path file_path != then
+            cached_state.get_source.clone cached_state.get_file_path.clone input.source_overrides.set
         fi
     done
-    input analysis::analyze.into_parts = typechecked = sources = compiler_diagnostics
-    sources compiler_diagnostics products::Report::new = report
-    file_path report diagnostics_from = diagnostics
-    report.into_parts = sources = compiler_diagnostics
-    typechecked sources compiler_diagnostics analysis::AnalysisResult = analysis
-    file_path.to_str source.to_str analysis document::AnalyzedDocument::new = state
+    input products::analyze match
+        std::Result::Ok(snapshot) => snapshot
+        std::Result::Error(failure) => {
+            for
+                diagnostic in failure
+                    .get_report
+                    .get_diagnostics
+                    .entries
+                    .iter
+            do
+                if diagnostic error::Diagnostic::Error(source_error) is then
+                    source_error failure
+                        .get_report
+                        .get_sources
+                        .format_error std::eprintln_string
+                fi
+            done
+            failure.get_message = message
+            f"internal compiler error: {message}".as_str exit_with_lsp_error
+        }
+    end = state
+    file_path state.get_report diagnostics_from = diagnostics
 
     diagnostics
     state
@@ -571,7 +585,7 @@ pub fn compile_document_with_paths
 pub fn compile_document
     file_path:$str
     source:$str
-    open_docs:$std::Map[std::String document::AnalyzedDocument]
+    open_docs:$std::Map[std::String products::AnalysisSnapshot]
 -> CompileResult {
     std::List[std::String]::new = library_paths
     library_paths open_docs source file_path compile_document_with_paths
@@ -580,8 +594,8 @@ pub fn compile_document
 pub fn ingest_document_into
     uri:$str
     source:$str
-    open_docs:std::Map[std::String document::AnalyzedDocument]
--> std::List[LspDiagnostic] std::Map[std::String document::AnalyzedDocument] {
+    open_docs:std::Map[std::String products::AnalysisSnapshot]
+-> std::List[LspDiagnostic] std::Map[std::String products::AnalysisSnapshot] {
     uri uri_to_path = path
     open_docs source path.as_str compile_document.into_parts = diagnostics = document
     document uri.to_str open_docs.set
@@ -859,13 +873,13 @@ pub fn handle_did_close message:$json::JsonValue state:mut$LspState {
 # ============================================================================
 
 pub fn compute_definition
-    state:$document::AnalyzedDocument
+    state:$products::AnalysisSnapshot
     line:i64
     column:i64
 -> std::Option[LspLocation] {
     column line convert_lsp_position = position
     if position state.find_definition_at std::Option::Some(location) is then
-        location state.sources convert_document_location_to_lsp std::Option::Some
+        location state.get_sources convert_document_location_to_lsp std::Option::Some
     else
         std::Option[LspLocation]::None
     fi
@@ -908,13 +922,13 @@ pub fn convert_document_hover_to_lsp
 }
 
 pub fn compute_hover
-    state:$document::AnalyzedDocument
+    state:$products::AnalysisSnapshot
     line:i64
     column:i64
 -> std::Option[HoverContent] {
     column line convert_lsp_position = position
     if position state.find_hover_at std::Option::Some(hover) is then
-        hover state.sources convert_document_hover_to_lsp std::Option::Some
+        hover state.get_sources convert_document_hover_to_lsp std::Option::Some
     else
         std::Option[HoverContent]::None
     fi
@@ -1000,7 +1014,7 @@ pub fn format_completion_candidate candidate:$document::CompletionCandidate -> C
 }
 
 pub fn compute_completion_with_coverage
-    state:$document::AnalyzedDocument
+    state:$products::AnalysisSnapshot
     line:i64
     column:i64
     trigger:$str
@@ -1018,7 +1032,7 @@ pub fn compute_completion_with_coverage
     end
     for candidate in candidates.iter do
         candidate.candidate format_completion_candidate = item
-        candidate.replacement state.sources convert_document_location_to_lsp.range.clone = range
+        candidate.replacement state.get_sources convert_document_location_to_lsp.range.clone = range
         if 0 candidate.replacement.length == then
             range.start_line = range.end_line
             range.start_col = range.end_col
@@ -1030,7 +1044,7 @@ pub fn compute_completion_with_coverage
 }
 
 pub fn compute_completion
-    state:$document::AnalyzedDocument
+    state:$products::AnalysisSnapshot
     line:i64
     column:i64
     trigger:$str
@@ -1092,7 +1106,7 @@ pub fn handle_completion message:$json::JsonValue state:$LspState {
 # ============================================================================
 
 pub fn compute_references_with_coverage
-    state:$document::AnalyzedDocument
+    state:$products::AnalysisSnapshot
     line:i64
     column:i64
     include_declaration:bool
@@ -1110,13 +1124,13 @@ pub fn compute_references_with_coverage
     end = result
     std::List[LspLocation]::new = references
     for range in result.ranges.iter do
-        range state.sources convert_document_location_to_lsp references.push
+        range state.get_sources convert_document_location_to_lsp references.push
     done
     references std::Option::Some incomplete
 }
 
 pub fn compute_references
-    state:$document::AnalyzedDocument
+    state:$products::AnalysisSnapshot
     line:i64
     column:i64
     include_declaration:bool
@@ -1331,11 +1345,11 @@ pub fn map_document_token_type kind:document::DocumentTokenKind -> i64 {
     end
 }
 
-pub fn compute_semantic_tokens state:$document::AnalyzedDocument -> std::List[SemanticToken] {
+pub fn compute_semantic_tokens state:$products::AnalysisSnapshot -> std::List[SemanticToken] {
     std::List[SemanticToken]::new = tokens
-    for document_token in state.find_semantic_tokens.iter do
+    for document_token in state.get_semantic_tokens.iter do
         document_token.location = location: $document::DocumentLocation
-        location state.sources convert_document_location_to_lsp.range.clone = range
+        location state.get_sources convert_document_location_to_lsp.range.clone = range
         0
         document_token.kind copy map_document_token_type
         location.length

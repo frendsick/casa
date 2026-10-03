@@ -1,7 +1,6 @@
 # Semantic queries over one analyzed source document.
 import "std" as std
 import "common" as common
-import "analysis" as analysis
 import "lexer" as lexer
 import "typechecker" as typechecker
 import "semantics" as semantics
@@ -565,11 +564,15 @@ impl IndexBuilder {
     }
 
     pub fn new
-        analysis:analysis::AnalysisResult
-        source:std::String
+        typechecked:std::Option[typechecker::TypecheckResult]
+        sources:lexer::SourceStore
+        diagnostics:error::Diagnostics
         file_path:std::String
     -> IndexBuilder {
-        analysis.into_parts = typechecked = sources = diagnostics
+        file_path.as_str sources
+            .get
+            .unwrap
+            .clone = source
         std::List[ProjectionOperation]::new = root_occurrences
         std::Map[std::String std::List[ProjectionOperation]]::new = body_occurrences
         common::symbol_store_new = store
@@ -1788,13 +1791,6 @@ pub struct EditorIndex {
     bodies:      std::List[DocumentLocation]
 }
 
-pub struct AnalyzedDocument {
-    index:         EditorIndex
-    pub sources:   lexer::SourceStore
-    pub source:    std::String
-    pub file_path: std::String
-}
-
 impl DocumentLocation {
     pub fn contains self:$DocumentLocation file:$str offset:u64 -> bool {
         self.file file == self.offset offset >= && offset self.offset self.length + > &&
@@ -2026,6 +2022,10 @@ impl IndexBuilder {
             .location
             .span
             .offset function.name.as_str self.get_function_occurrences self.find_binding_end = scope_end
+        # Generated cleanup bindings can follow their closing source location.
+        if scope_end location.span.offset > then
+            return
+        fi
         common::Type::Unknown op
             .type_hint
             .clone
@@ -2225,7 +2225,10 @@ impl IndexBuilder {
         done
     }
 
-    fn project self:IndexBuilder coverage:std::Option[QueryReason] -> AnalyzedDocument {
+    fn project
+        self:IndexBuilder
+        coverage:std::Option[QueryReason]
+    -> EditorIndex lexer::SourceStore error::Diagnostics {
         EditorIndex {
             files: std::List[DocumentLocation]::new
             occurrences: std::List[Occurrence]::new
@@ -2277,7 +2280,7 @@ impl IndexBuilder {
         index self.project_global_variables
         # Move the retained text and index. The temporary compiler maps are destroyed here.
         self match
-            IndexBuilder { sources: sources source: source file_path: file_path } => file_path source sources index AnalyzedDocument
+            IndexBuilder { sources: sources diagnostics: diagnostics } => index sources diagnostics
         end
     }
 }
@@ -2354,7 +2357,7 @@ impl EditorIndex {
         fi
     }
 
-    fn find_candidates
+    pub fn find_candidates
         self:$EditorIndex
         file:$str
         offset:u64
@@ -2517,153 +2520,20 @@ impl EditorIndex {
     }
 }
 
-impl AnalyzedDocument {
-    pub fn new
-        analysis:analysis::AnalysisResult
-        source:std::String
-        file_path:std::String
-    -> AnalyzedDocument {
-        std::Option[QueryReason]::None = coverage
-        for
-            diagnostic in analysis
-                .diagnostics
-                .entries
-                .iter
-        do
-            if diagnostic error::Diagnostic::Error(failure) is then
-                failure classify_query_failure std::Option::Some = coverage
-            fi
-        done
-        file_path.as_str analysis.sources.retain_used
-        file_path.clone = root_file
-        source.clone = root_source
-        coverage file_path source analysis IndexBuilder::new.project = document
-        root_file = document.file_path
-        root_source = document.source
-        document
-    }
-
-    pub fn into_parts self:AnalyzedDocument -> EditorIndex lexer::SourceStore {
-        self match
-            AnalyzedDocument { index: index sources: sources } => index sources
-        end
-    }
-
-    pub fn get_index self:$AnalyzedDocument -> $EditorIndex { self.index }
-
-    pub fn is_incomplete self:$AnalyzedDocument -> bool { self.index.coverage.is_some }
-
-    fn query_offset self:$AnalyzedDocument position:$common::SourcePosition -> std::Option[u64] {
-        if 0 position.line == 0 position.column == || then
-            std::Option[u64]::None return
+pub fn project_index
+    checked:std::Option[typechecker::TypecheckResult]
+    sources:lexer::SourceStore
+    diagnostics:error::Diagnostics
+    root_file:std::String
+-> EditorIndex lexer::SourceStore error::Diagnostics {
+    std::Option[QueryReason]::None = coverage
+    for diagnostic in diagnostics.entries.iter do
+        if diagnostic error::Diagnostic::Error(failure) is then
+            failure classify_query_failure std::Option::Some = coverage
         fi
-        if
-            self.file_path.as_str self
-                .sources
-                .line_starts
-                .get_str std::Option::Some(starts) is
-        then
-            if starts.length position.line > then
-                std::Option[u64]::None return
-            fi
-            position.line 1 - starts.get copy position.column 1 - + = offset
-            if self.source.length offset > then
-                std::Option[u64]::None return
-            fi
-            if starts.length position.line < then
-                if position.line starts.get copy offset >= then
-                    std::Option[u64]::None return
-                fi
-            fi
-            offset std::Option::Some
-        else
-            std::Option[u64]::None
-        fi
-    }
-
-    pub fn find_hover_at
-        self:$AnalyzedDocument
-        position:$common::SourcePosition
-    -> std::Option[DocumentHover] {
-        if position self.query_offset std::Option::Some(offset) is then
-            offset copy self.file_path.as_str self.index.find_hover match
-                PointAnswer::Known(hover) => hover std::Option::Some return
-                _ => {
-                }
-            end
-        fi
-        std::Option[DocumentHover]::None
-    }
-
-    pub fn find_definition_at
-        self:$AnalyzedDocument
-        position:$common::SourcePosition
-    -> std::Option[DocumentLocation] {
-        if position self.query_offset std::Option::Some(offset) is then
-            offset copy self.file_path.as_str self.index.find_definition match
-                PointAnswer::Known(location) => location std::Option::Some return
-                _ => {
-                }
-            end
-        fi
-        std::Option[DocumentLocation]::None
-    }
-
-    pub fn find_completion_candidates
-        self:$AnalyzedDocument
-        position:$common::SourcePosition
-        trigger:$str
-    -> std::List[CompletionCandidate] {
-        if position self.query_offset std::Option::Some(offset) is then
-            trigger offset copy self.file_path.as_str self.index.find_candidates match
-                ListAnswer::Complete(items) => items return
-                ListAnswer::Incomplete(items _) => items return
-                _ => {
-                }
-            end
-        fi
-        std::List[CompletionCandidate]::new
-    }
-
-    pub fn find_symbol_identity_at
-        self:$AnalyzedDocument
-        position:$common::SourcePosition
-    -> std::Option[DocumentSymbol] {
-        if position self.query_offset std::Option::Some(offset) is then
-            if offset copy self.file_path.as_str self.index.find_occurrence std::Option::Some(index) is then
-                index copy self
-                    .index
-                    .occurrences
-                    .get = occurrence
-                occurrence.symbol.clone return
-            fi
-        fi
-        std::Option[DocumentSymbol]::None
-    }
-
-    pub fn find_references_at
-        self:$AnalyzedDocument
-        position:$common::SourcePosition
-        include_declaration:bool
-    -> std::Option[std::List[DocumentLocation]] {
-        if position self.query_offset std::Option::Some(offset) is then
-            include_declaration offset copy self.file_path.as_str self.index.find_references match
-                ReferenceAnswer::Complete(result) => result.into_ranges std::Option::Some return
-                ReferenceAnswer::Incomplete(result _) => result.into_ranges std::Option::Some return
-                _ => {
-                }
-            end
-        fi
-        std::Option[std::List[DocumentLocation]]::None
-    }
-
-    pub fn find_semantic_tokens self:$AnalyzedDocument -> std::List[DocumentToken] {
-        self.file_path.as_str self.index.find_semantic_tokens match
-            ListAnswer::Complete(items) => items
-            ListAnswer::Incomplete(items _) => items
-            ListAnswer::Unavailable(_) => std::List[DocumentToken]::new
-        end
-    }
+    done
+    root_file.as_str sources.retain_used
+    coverage root_file diagnostics sources checked IndexBuilder::new.project
 }
 
 struct CoverageRegion {
@@ -2823,30 +2693,6 @@ impl EditorIndex {
     }
 }
 
-impl AnalyzedDocument {
-    pub fn find_completions_at
-        self:$AnalyzedDocument
-        position:$common::SourcePosition
-        trigger:$str
-    -> ListAnswer[DocumentCompletion] {
-        if position self.query_offset std::Option::Some(offset) is then
-            trigger offset copy self.file_path.as_str self.index.find_completions return
-        fi
-        QueryReason::InvalidInput ListAnswer[DocumentCompletion]::Unavailable
-    }
-
-    pub fn find_reference_answer_at
-        self:$AnalyzedDocument
-        position:$common::SourcePosition
-        include_declaration:bool
-    -> ReferenceAnswer {
-        if position self.query_offset std::Option::Some(offset) is then
-            include_declaration offset copy self.file_path.as_str self.index.find_references return
-        fi
-        QueryReason::InvalidInput ReferenceAnswer::Unavailable
-    }
-}
-
 impl EditorIndex {
     fn find_completion_coverage self:$EditorIndex file:$str offset:u64 -> std::Option[QueryReason] {
         for region in self.unavailable.iter do
@@ -2855,5 +2701,24 @@ impl EditorIndex {
             fi
         done
         offset file self.find_unavailable_reason
+    }
+}
+
+impl EditorIndex {
+    pub fn is_incomplete self:$EditorIndex -> bool { self.coverage.is_some }
+
+    pub fn find_symbol_identity
+        self:$EditorIndex
+        file:$str
+        offset:u64
+    -> std::Option[DocumentSymbol] {
+        if offset file self.find_occurrence std::Option::Some(index) is then
+            index copy self
+                .occurrences
+                .get
+                .symbol
+                .clone return
+        fi
+        std::Option[DocumentSymbol]::None
     }
 }
