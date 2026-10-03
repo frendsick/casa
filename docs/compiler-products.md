@@ -154,8 +154,8 @@ categories remain available after syntax rejection.
 Type references are incomplete while signature and field type occurrences are
 not represented. Rename must reject these answers. Snapshot release is measured
 by the [editor snapshot workload](benchmarks/editor-snapshots/README.md). The
-[phase-valid body measurements](benchmarks/phase-valid-bodies/README.md) record
-the current compilation cost and repeated-request lifetime.
+[structured aggregate backend measurements](benchmarks/structured-aggregate-backend/README.md)
+record the current compilation cost and repeated-request lifetime.
 
 `workspace.casa` aggregates owned answers across fresh snapshots, retains exact
 source revisions, and validates proposed rename bindings through reanalysis.
