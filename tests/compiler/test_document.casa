@@ -554,10 +554,10 @@ fn test_retained_parameter_ranges {
     "retained_parameter_ranges" test::test_start
     for
         source in [
-        "fn identity value:i64 -> i64 { value }",
-        "fn identity # header\nvalue # name\n: # type\ni64 -> i64 { value }",
-        "fn identity\r\nvalue\r\n: i64 -> i64 { value }",
-        "fn identity value:i64 -> i64 { value }\nfn broken { true 1 + drop }",
+            "fn identity value:i64 -> i64 { value }",
+            "fn identity # header\nvalue # name\n: # type\ni64 -> i64 { value }",
+            "fn identity\r\nvalue\r\n: i64 -> i64 { value }",
+            "fn identity value:i64 -> i64 { value }\nfn broken { true 1 + drop }",
         ].iter
     do
         source make_analyzed_document = snapshot
@@ -721,4 +721,202 @@ test_query_availability
 test_unreachable_reference_coverage
 test_verified_prefix_survives_rejected_control_flow
 test_rejected_recursive_call_withholds_dependent_facts
+
+fn assert_binding_definition index:$document::EditorIndex usage:u64 declaration:u64 {
+    usage DOCUMENT_TEST_FILE index.find_definition match
+        document::PointAnswer::Known(location) => {
+            "binding declaration offset" declaration location.offset test::assert_eq
+            "binding declaration length" 5 location.length test::assert_eq
+        }
+        _ => "checked binding definition available" false test::assert_true
+    end
+}
+
+fn assert_binding_references index:$document::EditorIndex usage:u64 declaration:u64 count:u64 {
+    true usage DOCUMENT_TEST_FILE index.find_references match
+        document::ReferenceAnswer::Complete(result) => result
+        document::ReferenceAnswer::Incomplete(result _) => result
+        _ => {
+            "checked binding references available" false test::assert_true return
+        }
+    end = result
+    "binding reference count" count result.ranges.length test::assert_eq
+    "binding reference declaration" declaration result.declaration.offset test::assert_eq
+}
+
+fn assert_binding_visibility index:$document::EditorIndex offset:u64 visible:bool {
+    "" offset DOCUMENT_TEST_FILE index.find_completions match
+        document::ListAnswer::Complete(items) => items
+        document::ListAnswer::Incomplete(items _) => items
+        _ => {
+            "checked binding completion available" false test::assert_true return
+        }
+    end = items
+    f"binding lexical visibility at {offset}, expected {visible}" visible "value" items has_completion test::assert_eq
+}
+
+fn test_checked_reassignment_identity {
+    "checked_reassignment_identity" test::test_start
+    "1 = value 2 = value 1 += value value drop" make_analyzed_document = snapshot
+    "valid binding source" snapshot.is_incomplete ! test::assert_true
+    4 4 snapshot.get_index assert_binding_definition
+    4 14 snapshot.get_index assert_binding_definition
+    4 25 snapshot.get_index assert_binding_definition
+    4 31 snapshot.get_index assert_binding_definition
+    4 4 31 snapshot.get_index assert_binding_references
+}
+test_checked_reassignment_identity
+
+fn test_checked_root_loop_visibility {
+    "checked_root_loop_visibility" test::test_start
+    "while false do 1 = value value drop done 0 drop" make_analyzed_document = snapshot
+    "valid binding source" snapshot.is_incomplete ! test::assert_true
+    19 25 snapshot.get_index assert_binding_definition
+    2 19 25 snapshot.get_index assert_binding_references
+    false 0 snapshot.get_index assert_binding_visibility
+    true 25 snapshot.get_index assert_binding_visibility
+    false 41 snapshot.get_index assert_binding_visibility
+}
+test_checked_root_loop_visibility
+
+fn test_checked_local_loop_visibility {
+    "checked_local_loop_visibility" test::test_start
+    "fn work { while false do 1 = value value drop done 0 drop }" make_analyzed_document = snapshot
+    "valid binding source" snapshot.is_incomplete ! test::assert_true
+    29 35 snapshot.get_index assert_binding_definition
+    2 29 35 snapshot.get_index assert_binding_references
+    false 0 snapshot.get_index assert_binding_visibility
+    true 35 snapshot.get_index assert_binding_visibility
+    false 51 snapshot.get_index assert_binding_visibility
+}
+test_checked_local_loop_visibility
+
+fn test_checked_branch_captures {
+    "checked_branch_captures" test::test_start
+    "fn work { if true then 1 = value { value drop } exec else false = value { value drop } exec fi }" make_analyzed_document = snapshot
+    "valid binding source" snapshot.is_incomplete ! test::assert_true
+    27 35 snapshot.get_index assert_binding_definition
+    2 27 35 snapshot.get_index assert_binding_references
+    66 74 snapshot.get_index assert_binding_definition
+    2 66 74 snapshot.get_index assert_binding_references
+}
+test_checked_branch_captures
+
+fn test_checked_enum_pattern {
+    "checked_enum_pattern" test::test_start
+    "enum Choice { Some(i64) None } fn work { 1 Choice::Some match Choice::Some(value) => value drop Choice::None => { } end 0 drop }" make_analyzed_document = snapshot
+    "valid binding source" snapshot.is_incomplete ! test::assert_true
+    75 75 snapshot.get_index assert_binding_definition
+    75 85 snapshot.get_index assert_binding_definition
+    2 75 85 snapshot.get_index assert_binding_references
+    true 85 snapshot.get_index assert_binding_visibility
+    false 120 snapshot.get_index assert_binding_visibility
+    75 DOCUMENT_TEST_FILE snapshot.get_index.find_hover match
+        document::PointAnswer::Known(hover) => "pattern declaration type" "value: i64" hover.content test::assert_str_eq
+        _ => "pattern declaration hover available" false test::assert_true
+    end
+}
+test_checked_enum_pattern
+
+fn test_checked_is_pattern {
+    "checked_is_pattern" test::test_start
+    "enum Choice { Some(i64) None } fn work { if 1 Choice::Some Choice::Some(value) is then value drop else 0 drop fi 0 drop }" make_analyzed_document = snapshot
+    "valid binding source" snapshot.is_incomplete ! test::assert_true
+    72 72 snapshot.get_index assert_binding_definition
+    72 87 snapshot.get_index assert_binding_definition
+    2 72 87 snapshot.get_index assert_binding_references
+    true 87 snapshot.get_index assert_binding_visibility
+    false 113 snapshot.get_index assert_binding_visibility
+    72 DOCUMENT_TEST_FILE snapshot.get_index.find_hover match
+        document::PointAnswer::Known(hover) => "pattern declaration type" "value: i64" hover.content test::assert_str_eq
+        _ => "pattern declaration hover available" false test::assert_true
+    end
+}
+test_checked_is_pattern
+
+fn test_checked_struct_pattern {
+    "checked_struct_pattern" test::test_start
+    "struct Item { number:i64 } fn work { 1 Item match Item { number:value } => value drop end 0 drop }" make_analyzed_document = snapshot
+    "valid binding source" snapshot.is_incomplete ! test::assert_true
+    64 64 snapshot.get_index assert_binding_definition
+    64 75 snapshot.get_index assert_binding_definition
+    2 64 75 snapshot.get_index assert_binding_references
+    true 75 snapshot.get_index assert_binding_visibility
+    false 90 snapshot.get_index assert_binding_visibility
+    64 DOCUMENT_TEST_FILE snapshot.get_index.find_hover match
+        document::PointAnswer::Known(hover) => "pattern declaration type" "value: i64" hover.content test::assert_str_eq
+        _ => "pattern declaration hover available" false test::assert_true
+    end
+}
+test_checked_struct_pattern
+
+fn test_checked_binding_recovery {
+    "checked_binding_recovery" test::test_start
+    "fn work { if true then true 1 + = bad else 2 = value value drop fi }" make_analyzed_document = snapshot
+    "bad branch rejected" snapshot.is_incomplete test::assert_true
+    47 53 snapshot.get_index assert_binding_definition
+    "dependent binding withheld" 34 DOCUMENT_TEST_FILE snapshot.get_index.find_definition document::PointAnswer::Known is ! test::assert_true
+    "" 53 DOCUMENT_TEST_FILE snapshot.get_index.find_completions match
+        document::ListAnswer::Complete(items) => {
+            "independent declaration visible" "value" items has_completion test::assert_true
+            "dependent declaration hidden" "bad" items has_completion ! test::assert_true
+        }
+        _ => "independent completion complete" false test::assert_true
+    end
+}
+test_checked_binding_recovery
+
+fn test_checked_function_extent {
+    "checked_function_extent" test::test_start
+    "fn work { 1 = value value drop     } 0 drop" make_analyzed_document = local
+    true 32 local.get_index assert_binding_visibility
+    false 36 local.get_index assert_binding_visibility
+    "fn work value:i64 {     }" make_analyzed_document = parameter
+    true 21 parameter.get_index assert_binding_visibility
+}
+test_checked_function_extent
+
+fn test_checked_for_binding {
+    "checked_for_binding" test::test_start
+    "import \"std\" as std for value in [1, 2].iter do value drop done".to_str
+    DOCUMENT_TEST_FILE.to_str products::SourceUnit
+    "" lexer::absolute_normalize_path swap products::CompilationInput::new = input
+    "lib".to_str input.library_paths.push
+    input products::analyze.unwrap = snapshot
+    "valid for source" snapshot.is_incomplete ! test::assert_true
+    24 48 snapshot.get_index assert_binding_definition
+    2 24 48 snapshot.get_index assert_binding_references
+    false 34 snapshot.get_index assert_binding_visibility
+    true 48 snapshot.get_index assert_binding_visibility
+    false 59 snapshot.get_index assert_binding_visibility
+}
+test_checked_for_binding
+
+fn test_checked_guard_binding {
+    "checked_guard_binding" test::test_start
+    "enum Choice { Some(i64) None } fn work { 1 Choice::Some match Choice::Some(value) if 1 = guard guard 1 == => value drop _ => {} end }" make_analyzed_document = snapshot
+    89 95 snapshot.get_index assert_binding_definition
+    "" 94 DOCUMENT_TEST_FILE snapshot.get_index.find_completions match
+        document::ListAnswer::Complete(items) => {
+            "guard lexical visibility" true "guard" items has_completion test::assert_eq
+            "pattern scope remains open" "value" items has_completion test::assert_true
+        }
+        _ => "guard completion complete" false test::assert_true
+    end
+    "" 105 DOCUMENT_TEST_FILE snapshot.get_index.find_completions match
+        document::ListAnswer::Complete(items) => {
+            "guard lexical visibility" true "guard" items has_completion test::assert_eq
+            "pattern scope remains open" "value" items has_completion test::assert_true
+        }
+        _ => "guard completion complete" false test::assert_true
+    end
+    "" 109 DOCUMENT_TEST_FILE snapshot.get_index.find_completions match
+        document::ListAnswer::Complete(items) => {
+            "guard lexical visibility" false "guard" items has_completion test::assert_eq
+            "pattern scope remains open" "value" items has_completion test::assert_true
+        }
+        _ => "guard completion complete" false test::assert_true
+    end
+}
+test_checked_guard_binding
 test::test_summary

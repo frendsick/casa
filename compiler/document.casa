@@ -1,6 +1,7 @@
 # Semantic queries over one analyzed source document.
 import "std" as std
 import "common" as common
+import "binding" as binding
 import "lexer" as lexer
 import "typechecker" as typechecker
 import "semantics" as semantics
@@ -24,6 +25,7 @@ pub enum DocumentSymbolKind derives std::Eq std::Copy {
 
 # Facts needed while building the index. No ownership effects, substitutions, or executable bodies survive here.
 struct ProjectionOperation {
+    identity:   i64
     location:   common::Location
     value:      occurrences::Value
     type_hint:  std::Option[common::Type]
@@ -132,7 +134,7 @@ fn project_source_occurrence
         .clone
         .map = token_kind
     occurrence.identity verified.has occurrence.hover.clone token_kind occurrence.type_hint.clone
-    occurrence.value.clone occurrence.location.clone ProjectionOperation output.push
+    occurrence.value.clone occurrence.location.clone occurrence.identity ProjectionOperation output.push
 }
 
 struct IndexBuilder {
@@ -145,13 +147,13 @@ struct IndexBuilder {
     sources:           lexer::SourceStore
     source:            std::String
     file_path:         std::String
+    bindings:          binding::BindingStore
 }
 
 struct DocumentElement {
-    pub op:                  $ProjectionOperation
-    pub containing_function: std::Option[std::String]
-    pub part:                SymbolPart
-    pub location:            common::Location
+    pub op:       $ProjectionOperation
+    pub part:     SymbolPart
+    pub location: common::Location
 }
 
 pub struct DocumentLocation derives std::Clone {
@@ -209,14 +211,6 @@ struct ProjectionSymbol {
     pub name:        std::String
     pub declaration: common::Location
     pub owner:       std::Option[common::Location]
-}
-
-impl common::Location {
-    pub fn matches self:$common::Location other:$common::Location -> bool {
-        self.file other.file ==
-        self.span.offset other.span.offset == &&
-        self.span.length other.span.length == &&
-    }
 }
 
 impl ProjectionSymbol {
@@ -280,35 +274,6 @@ fn get_symbol_location source:$str op:$ProjectionOperation part:$SymbolPart -> c
         }
         SymbolPart::Whole => op.location.clone
     end
-}
-
-fn find_best_assignment
-    name:$str
-    ops:$std::List[ProjectionOperation]
-    usage_offset:u64
-    best:std::Option[common::Location]
--> std::Option[common::Location] {
-    0 = op_index: u64
-    while op_index ops.length > do
-        op_index ops.get = op
-        1 += op_index
-        if op.value occurrences::Value::AssignVar(assign_name) is then
-            if assign_name name != then
-                continue
-            fi
-            if
-                op
-                    .location
-                    .span
-                    .offset usage_offset >
-            then
-                op.location.clone std::Option::Some = best
-            elif best.is_none then
-                op.location.clone std::Option::Some = best
-            fi
-        fi
-    done
-    best
 }
 
 pub fn extract_word_before source:$str offset:u64 -> std::String {
@@ -461,20 +426,6 @@ pub fn find_keyword_before
 }
 
 impl common::Function {
-    fn find_parameter_location self:$common::Function name:$str -> std::Option[common::Location] {
-        for
-            parameter in self
-                .stack_effect
-                .parameters
-                .iter
-        do
-            if parameter.name name == then
-                parameter.location.clone return
-            fi
-        done
-        std::Option[common::Location]::None
-    }
-
     pub fn format_hover self:$common::Function store:$common::SymbolStore file:$str -> std::String {
         std::String::new = builder
         if self.is_unsafe then
@@ -571,15 +522,17 @@ impl IndexBuilder {
         std::List[ProjectionOperation]::new = root_occurrences
         std::Map[std::String std::List[ProjectionOperation]]::new = body_occurrences
         common::symbol_store_new = store
+        binding::BindingStore::new = bindings
         if typechecked std::Option::Some(result) is then
-            result.into_analysis_parts = verified = bodies = root = checked_store
+            result.into_analysis_parts = checked_bindings = verified = bodies = root = checked_store
             verified root project_body = root_occurrences
             for entry in bodies.iter do
                 verified entry.second project_body entry.first.clone body_occurrences.set
             done
             checked_store = store
+            checked_bindings = bindings
         fi
-        file_path source sources diagnostics store std::List[ProjectionOperation]::new body_occurrences root_occurrences
+        bindings file_path source sources diagnostics store std::List[ProjectionOperation]::new body_occurrences root_occurrences
         std::List[common::Location]::new IndexBuilder
     }
 
@@ -959,9 +912,8 @@ impl IndexBuilder {
         if 0 parts.length == then
             std::Option[common::Type]::None return
         fi
-        offset self.find_containing_function = containing_function
         0 parts.get = first_part
-        offset containing_function first_part.as_str self.find_variable_type = current_type
+        offset first_part.as_str self.find_variable_type = current_type
         if current_type.is_none then
             first_part.as_str infer_literal_type = current_type
         fi
@@ -1034,65 +986,6 @@ impl IndexBuilder {
         std::List[CompletionCandidate]::new
     }
 
-    pub fn find_variable_owner
-        self:$IndexBuilder
-        name:$str
-        function:$std::Option[std::String]
-    -> std::Option[std::String] {
-        if function std::Option::Some(function_name) is then
-            function_name.as_str self.lookup_function.unwrap = containing_function
-            if name containing_function.variables common::variable_list_contains then
-                containing_function.name.clone std::Option::Some return
-            fi
-            if name containing_function.captures common::variable_list_contains then
-                if containing_function self.find_parent_function std::Option::Some(parent) is then
-                    parent std::Option::Some name self.find_variable_owner return
-                fi
-            fi
-        fi
-        std::Option[std::String]::None
-    }
-
-    pub fn find_parent_function
-        self:$IndexBuilder
-        child:$common::Function
-    -> std::Option[std::String] {
-        for
-            function_name in self
-                .store
-                .get_source_function_names
-                .iter
-        do
-            if
-                function_name self
-                    .store
-                    .source_functions
-                    .has
-            then
-                continue
-            fi
-            function_name.as_str self
-                .store
-                .get_function
-                .unwrap = function
-            0 = op_index: u64
-            while op_index function.name.as_str self.get_function_occurrences.length > do
-                if
-                    op_index function.name.as_str self
-                        .get_function_occurrences
-                        .get_ref
-                        .value occurrences::Value::FnPush(pushed_name) is
-                then
-                    if pushed_name child.name == then
-                        function.name.clone std::Option::Some return
-                    fi
-                fi
-                1 += op_index
-            done
-        done
-        std::Option[std::String]::None
-    }
-
     pub fn find_callable_symbol
         self:$IndexBuilder
         name:$str
@@ -1138,70 +1031,6 @@ impl IndexBuilder {
         std::Option[ProjectionSymbol]::None
     }
 
-    fn find_scoped_assignment
-        self:$IndexBuilder
-        name:$str
-        ops:$std::List[ProjectionOperation]
-        usage_offset:u64
-    -> std::Option[common::Location] {
-        for op in ops.iter do
-            if op.value occurrences::Value::AssignVar(assigned) is then
-                if
-                    assigned name != op
-                        .location
-                        .span
-                        .offset usage_offset < ||
-                then
-                    continue
-                fi
-                18446744073709551615 op
-                    .location
-                    .span
-                    .offset ops self.find_binding_end = end_offset
-                if usage_offset end_offset > then
-                    op.location.clone std::Option::Some return
-                fi
-            fi
-        done
-        std::Option[common::Location]::None
-    }
-
-    pub fn find_variable_symbol
-        self:$IndexBuilder
-        name:$str
-        function:$std::Option[std::String]
-        usage_offset:u64
-    -> std::Option[ProjectionSymbol] {
-        function name self.find_variable_owner = owner
-        if owner.clone std::Option::Some(owner_name) is then
-            owner_name.as_str self.lookup_function.unwrap = owner_function
-            usage_offset owner_function.name.as_str self.get_function_occurrences name self.find_scoped_assignment = found
-            if found std::Option::Some(location) is then
-                if location owner_function.location.matches then
-                    name owner_function.find_parameter_location
-                else
-                    location.clone std::Option::Some
-                fi
-            else
-                std::Option[common::Location]::None
-            fi
-        else
-            usage_offset self.root_occurrences name self.find_scoped_assignment
-        fi = declaration_opt
-        if declaration_opt std::Option::Some(declaration) is then
-            std::Option[common::Location]::None = owner_location
-            if owner std::Option::Some(owner_name) is then
-                owner_name.as_str self
-                    .lookup_function
-                    .unwrap
-                    .location
-                    .clone std::Option::Some = owner_location
-            fi
-            owner_location declaration name DocumentSymbolKind::Variable ProjectionSymbol::new std::Option::Some return
-        fi
-        std::Option[ProjectionSymbol]::None
-    }
-
     pub fn find_symbol_identity
         self:$IndexBuilder
         element:$DocumentElement
@@ -1217,26 +1046,11 @@ impl IndexBuilder {
                 DocumentSymbolKind::Struct
                 ProjectionSymbol::new std::Option::Some
             }
-            occurrences::Value::PushVar(name) => element
-                .location
-                .span
-                .offset element.containing_function name.as_str self.find_variable_symbol
-            occurrences::Value::PushCapture(name) => element
-                .location
-                .span
-                .offset element.containing_function name.as_str self.find_variable_symbol
-            occurrences::Value::AssignVar(name) => element
-                .location
-                .span
-                .offset element.containing_function name.as_str self.find_variable_symbol
-            occurrences::Value::AssignInc(name) => element
-                .location
-                .span
-                .offset element.containing_function name.as_str self.find_variable_symbol
-            occurrences::Value::AssignDec(name) => element
-                .location
-                .span
-                .offset element.containing_function name.as_str self.find_variable_symbol
+            occurrences::Value::PushVar(_) => element.op self.find_binding_symbol
+            occurrences::Value::PushCapture(_) => element.op self.find_binding_symbol
+            occurrences::Value::AssignVar(_) => element.op self.find_binding_symbol
+            occurrences::Value::AssignInc(_) => element.op self.find_binding_symbol
+            occurrences::Value::AssignDec(_) => element.op self.find_binding_symbol
             _ => std::Option[ProjectionSymbol]::None
         end
     }
@@ -1259,33 +1073,6 @@ impl IndexBuilder {
         std::Option[ProjectionSymbol]::None
     }
 
-    pub fn find_containing_function self:$IndexBuilder offset:u64 -> std::Option[std::String] {
-        for function_name in self.collect_document_functions.iter do
-            function_name.as_str self.lookup_function.unwrap = function
-            if 0 function.name.as_str self.get_function_occurrences.length == then
-                continue
-            fi
-            0 function.name.as_str self
-                .get_function_occurrences
-                .get
-                .location
-                .span
-                .offset = start_offset
-            function.name.as_str self.get_function_occurrences.length 1 - function.name.as_str self.get_function_occurrences.get = last_op
-            last_op
-                .location
-                .span
-                .offset last_op
-                .location
-                .span
-                .length + = end_offset
-            if start_offset offset >= offset end_offset >= && then
-                function.name.clone std::Option::Some return
-            fi
-        done
-        std::Option[std::String]::None
-    }
-
     pub fn lookup_function self:$IndexBuilder name:$str -> std::Option[$common::Function] {
         name self.store.get_function
     }
@@ -1302,44 +1089,6 @@ impl IndexBuilder {
             .store
             .enums
             .get_str
-    }
-
-    fn find_assignment_type
-        self:$IndexBuilder
-        name:$str
-        ops:$std::List[ProjectionOperation]
-        offset:u64
-    -> std::Option[common::Type] {
-        offset ops name self.find_scoped_assignment = declaration
-        if declaration.is_none then
-            std::Option[common::Type]::None return
-        fi
-        declaration.unwrap = location
-        for op in ops.iter do
-            if op.verified ! then
-                continue
-            fi
-            if op.value occurrences::Value::AssignVar(assigned) is then
-                if assigned name == op.location location.matches && then
-                    op.type_hint.clone return
-                fi
-            fi
-        done
-        std::Option[common::Type]::None
-    }
-
-    pub fn find_variable_type
-        self:$IndexBuilder
-        name:$str
-        function:$std::Option[std::String]
-        offset:u64
-    -> std::Option[common::Type] {
-        function name self.find_variable_owner = owner
-        if owner std::Option::Some(owner_name) is then
-            offset owner_name.as_str self.get_function_occurrences name self.find_assignment_type
-        else
-            offset self.root_occurrences name self.find_assignment_type
-        fi
     }
 
     pub fn find_symbol_type
@@ -1517,33 +1266,6 @@ impl IndexBuilder {
         end
     }
 
-    pub fn find_variable_definition
-        self:$IndexBuilder
-        name:$str
-        function:$std::Option[std::String]
-        usage_offset:u64
-    -> std::Option[common::Location] {
-        std::Option[common::Location]::None = best
-        function name self.find_variable_owner = owner
-        if owner std::Option::Some(function_name) is then
-            function_name.as_str self.lookup_function.unwrap = containing_function
-            best usage_offset containing_function.name.as_str self.get_function_occurrences name find_best_assignment = best
-            if best.clone std::Option::Some(location) is then
-                if location containing_function.location.matches then
-                    name containing_function.find_parameter_location return
-                fi
-            fi
-        fi
-        if best.is_none then
-            best usage_offset self.root_occurrences name find_best_assignment = best
-        fi
-        if best std::Option::Some(definition_op) is then
-            definition_op.clone std::Option::Some
-        else
-            std::Option[common::Location]::None
-        fi
-    }
-
     pub fn find_type_definition self:$IndexBuilder name:$str -> std::Option[common::Location] {
         if name self.lookup_struct std::Option::Some(casa_struct) is then
             casa_struct.location.clone std::Option::Some return
@@ -1606,26 +1328,11 @@ impl IndexBuilder {
         symbol.op.value match
             occurrences::Value::FnCall(_) => symbol self.find_callable_definition
             occurrences::Value::FnPush(_) => symbol self.find_callable_definition
-            occurrences::Value::PushVar(name) => {
-                symbol
-                    .op
-                    .location
-                    .span
-                    .offset
-                symbol.containing_function
-                name.as_str
-                self.find_variable_definition
-            }
-            occurrences::Value::PushCapture(name) => {
-                symbol
-                    .op
-                    .location
-                    .span
-                    .offset
-                symbol.containing_function
-                name.as_str
-                self.find_variable_definition
-            }
+            occurrences::Value::PushVar(_) => symbol.op self.find_binding_definition
+            occurrences::Value::PushCapture(_) => symbol.op self.find_binding_definition
+            occurrences::Value::AssignVar(_) => symbol.op self.find_binding_definition
+            occurrences::Value::AssignInc(_) => symbol.op self.find_binding_definition
+            occurrences::Value::AssignDec(_) => symbol.op self.find_binding_definition
             occurrences::Value::StructNew(casa_struct) => casa_struct.location.clone std::Option::Some
             occurrences::Value::PushEnumVariant(variant) => variant symbol self.find_enum_definition
             _ => std::Option[common::Location]::None
@@ -1765,7 +1472,6 @@ impl IndexBuilder {
     fn project_operation
         self:$IndexBuilder
         op:$ProjectionOperation
-        function:std::Option[std::String]
         part:SymbolPart
         index:mut$EditorIndex
     {
@@ -1779,7 +1485,7 @@ impl IndexBuilder {
             if 0 location.span.length == then
                 return
             fi
-            location.clone part function op DocumentElement = element
+            location.clone part op DocumentElement = element
             std::Option[DocumentSymbol]::None = symbol
             if element self.find_symbol_identity std::Option::Some(identity) is then
                 identity.project std::Option::Some = symbol
@@ -1838,10 +1544,10 @@ impl IndexBuilder {
                     .as_str self.sources.get std::Option::Some(source) is
             then
                 if op source.as_str is_qualified_operation then
-                    index SymbolPart::TypeName function.clone op self.project_operation
-                    index SymbolPart::MemberName function.clone op self.project_operation
+                    index SymbolPart::TypeName op self.project_operation
+                    index SymbolPart::MemberName op self.project_operation
                 else
-                    index SymbolPart::Whole function.clone op self.project_operation
+                    index SymbolPart::Whole op self.project_operation
                 fi
             fi
         done
@@ -1876,23 +1582,15 @@ impl IndexBuilder {
             .offset function
             .location
             .span
-            .length + = end_offset
-        for op in function.name.as_str self.get_function_occurrences.iter do
-            op
-                .location
-                .span
-                .offset op
-                .location
-                .span
-                .length + = after
-            if end_offset after > then
-                after = end_offset
-            fi
-        done
+            .length + 1 + = end_offset
+        end_offset function
+            .body_end
+            .clone
+            .unwrap_or = end_offset
         end_offset function
             .location
             .span
-            .offset - 1 + function
+            .offset - function
             .location
             .span
             .offset function
@@ -1900,11 +1598,6 @@ impl IndexBuilder {
             .file
             .clone
         DocumentLocation index.bodies.push
-        for op in function.name.as_str self.get_function_occurrences.iter do
-            if op.value occurrences::Value::AssignVar(name) is then
-                index end_offset function op name.as_str self.project_binding_scope
-            fi
-        done
         for
             parameter in function
                 .stack_effect
@@ -1921,118 +1614,6 @@ impl IndexBuilder {
                 Occurrence index.occurrences.push
             fi
         done
-    }
-
-    fn project_binding_scope
-        self:$IndexBuilder
-        name:$str
-        op:$ProjectionOperation
-        function:$common::Function
-        end_offset:u64
-        index:mut$EditorIndex
-    {
-        if op.verified ! then
-            return
-        fi
-        op
-            .location
-            .span
-            .offset function.name.as_str self.get_function_occurrences name self.find_scoped_assignment = first
-        if first.is_none then
-            return
-        fi
-        if first.unwrap op.location.matches ! then
-            return
-        fi
-        op.location.clone = location
-        if location function.location.matches then
-            name function.find_parameter_location = parameter
-            if parameter.is_none then
-                return
-            fi
-            parameter.unwrap = location
-        fi
-        end_offset op
-            .location
-            .span
-            .offset function.name.as_str self.get_function_occurrences self.find_binding_end = scope_end
-        # Generated cleanup bindings can follow their closing source location.
-        if scope_end location.span.offset > then
-            return
-        fi
-        common::Type::Unknown op
-            .type_hint
-            .clone
-            .unwrap_or name.to_str common::Variable = variable
-        std::List[CompletionCandidate]::new = items
-        variable CompletionCandidate::Variable items.push
-        items scope_end location.span.offset - 1 + location.span.offset location.file.clone
-        DocumentLocation CompletionScope index.scopes.push
-    }
-
-    fn project_global_variables self:$IndexBuilder index:mut$EditorIndex {
-        for
-            variable in self
-                .store
-                .variables
-                .iter
-        do
-            self.root_occurrences variable.first.as_str self.find_verified_assignment = declared
-            if declared.is_none then
-                continue
-            fi
-            declared.unwrap = location
-            for file in index.files.iter do
-                if file.file location.file != then
-                    continue
-                fi
-                std::List[CompletionCandidate]::new = items
-                variable.second.clone CompletionCandidate::Variable items.push
-                items file.length location.span.offset - location.span.offset location.file.clone
-                DocumentLocation CompletionScope index.scopes.push
-            done
-        done
-    }
-
-    fn find_binding_end
-        self:$IndexBuilder
-        ops:$std::List[ProjectionOperation]
-        offset:u64
-        end_offset:u64
-    -> u64 {
-        0 = depth: u64
-        std::Option[u64]::None = binding_depth
-        for op in ops.iter do
-            if
-                offset op
-                    .location
-                    .span
-                    .offset > binding_depth.is_none &&
-            then
-                depth std::Option::Some = binding_depth
-            fi
-            if
-                op.value occurrences::Value::IfStart is op.value occurrences::Value::WhileStart is || op.value occurrences::Value::MatchStart is ||
-            then
-                1 += depth
-                continue
-            fi
-            op.value occurrences::Value::IfEnd is op.value occurrences::Value::WhileEnd is || op.value occurrences::Value::MatchEnd is || = closes
-            op.value occurrences::Value::IfElse is op.value occurrences::Value::IfElif is || op.value occurrences::Value::MatchArm is || = changes_branch
-            if closes changes_branch || then
-                0 binding_depth.clone.unwrap_or = level
-                if 0 level != level depth == && then
-                    op
-                        .location
-                        .span
-                        .offset return
-                fi
-            fi
-            if closes 0 depth != && then
-                1 -= depth
-            fi
-        done
-        end_offset
     }
 
     fn has_source_declaration self:$IndexBuilder function:$common::Function -> bool {
@@ -2210,7 +1791,7 @@ impl IndexBuilder {
             done
         done
         index self.project_facts
-        index self.project_global_variables
+        index self.project_bindings
         # Move the retained text and index. The temporary compiler maps are destroyed here.
         self match
             IndexBuilder { sources: sources diagnostics: diagnostics } => index sources diagnostics
@@ -2486,26 +2067,6 @@ fn classify_query_failure failure:$error::CasaError -> QueryReason {
     QueryReason::MissingSemanticFact
 }
 
-impl IndexBuilder {
-    fn find_verified_assignment
-        self:$IndexBuilder
-        name:$str
-        ops:$std::List[ProjectionOperation]
-    -> std::Option[common::Location] {
-        for op in ops.iter do
-            if op.verified ! then
-                continue
-            fi
-            if op.value occurrences::Value::AssignVar(assigned) is then
-                if assigned name == then
-                    op.location.clone std::Option::Some return
-                fi
-            fi
-        done
-        std::Option[common::Location]::None
-    }
-}
-
 impl EditorIndex {
     fn find_unavailable_reason self:$EditorIndex file:$str offset:u64 -> std::Option[QueryReason] {
         for region in self.unavailable.iter do
@@ -2653,5 +2214,84 @@ impl EditorIndex {
                 .clone return
         fi
         std::Option[DocumentSymbol]::None
+    }
+}
+
+impl IndexBuilder {
+    fn find_binding_symbol
+        self:$IndexBuilder
+        operation:$ProjectionOperation
+    -> std::Option[ProjectionSymbol] {
+        if operation.identity self.bindings.find_reference std::Option::Some(binding) is then
+            binding.owner.clone binding.declaration binding.name.as_str
+            DocumentSymbolKind::Variable ProjectionSymbol::new std::Option::Some return
+        fi
+        std::Option[ProjectionSymbol]::None
+    }
+
+    fn find_binding_definition
+        self:$IndexBuilder
+        operation:$ProjectionOperation
+    -> std::Option[common::Location] {
+        if operation.identity self.bindings.find_reference std::Option::Some(binding) is then
+            binding.declaration.clone std::Option::Some return
+        fi
+        std::Option[common::Location]::None
+    }
+
+    fn find_variable_type self:$IndexBuilder name:$str offset:u64 -> std::Option[common::Type] {
+        for
+            binding in self
+                .bindings
+                .declarations
+                .iter
+        do
+            if binding.verified ! binding.name name != || then
+                continue
+            fi
+            if binding.visibility.file self.file_path != then
+                continue
+            fi
+            if offset self.file_path.as_str binding.visibility self.locate.contains then
+                binding.typ.clone std::Option::Some return
+            fi
+        done
+        std::Option[common::Type]::None
+    }
+
+    fn project_bindings self:$IndexBuilder index:mut$EditorIndex {
+        for
+            binding in self
+                .bindings
+                .declarations
+                .iter
+        do
+            if binding.verified ! then
+                continue
+            fi
+            binding.owner.clone binding.declaration binding.name.as_str
+            DocumentSymbolKind::Variable ProjectionSymbol::new = symbol
+            binding.typ.format = type_name
+            f"{binding.name}: {type_name}" = hover
+            binding
+                .declaration
+                .span
+                .length binding
+                .declaration
+                .span
+                .offset true
+            symbol.project std::Option::Some binding.declaration self.locate std::Option::Some
+            hover std::Option::Some binding.declaration self.locate Occurrence index.occurrences.push
+            std::List[CompletionCandidate]::new = items
+            binding.typ.clone binding.name.clone common::Variable CompletionCandidate::Variable items.push
+            binding.visibility self.locate = visibility
+            if visibility.file.as_str self.sources.get std::Option::Some(source) is then
+                source.length 1 + visibility.offset - = remaining
+                if remaining visibility.length > then
+                    remaining = visibility.length
+                fi
+            fi
+            items visibility CompletionScope index.scopes.push
+        done
     }
 }
