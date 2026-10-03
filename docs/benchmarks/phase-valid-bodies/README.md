@@ -50,9 +50,11 @@ not overlap. The candidate uses more memory without a speed gain, so it does
 not meet the general memory tradeoff requirement. Every run stays below the
 1 GiB ceiling. Self-compilation exceeds 10 seconds, which the protocol permits
 temporarily for intermediate #699 work. The common-source regression and memory
-increase still require an explicit decision under the
+increase require an explicit decision under the
 [measurement protocol](../compiler-simplification-measurements.md).
-Performance acceptance is pending.
+On 2026-10-03, the maintainer accepted the measured time and memory costs for
+#732 after reviewing this evidence. This exception applies to #732. The general
+performance gates remain unchanged.
 
 The [native checkpoint](../compiler-self-compilation-target.md#current-evidence)
 recorded 9.710 seconds and 283.2 MiB. The candidate's own-source result is
