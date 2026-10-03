@@ -1961,38 +1961,16 @@ pub fn parse_stack_effect
     returns params common::StackEffect::new
 }
 
-# ============================================================================
-# parse_literal_to_constant_value - parse a raw literal string to ConstantValue
-# ============================================================================
-
-pub fn parse_literal_to_constant_value raw:$str -> common::ConstantValue {
-    if "true" raw == then
-        1 common::ConstantValue::Bool return
-    fi
-    if "false" raw == then
-        0 common::ConstantValue::Bool return
-    fi
-    if '"' 0 raw.at == then
-        raw 1 raw.length 2 - str::substring common::ConstantValue::Str return
-    fi
-    if raw char_literal_codepoint std::Option::Some(codepoint) is then
-        codepoint common::ConstantValue::Char return
-    fi
-    if raw lexer::is_float_literal then
-        raw.to_str common::ConstantValue::Float return
-    fi
-    raw parser::str_to_int raw.to_str common::IntegerLiteral::new common::ConstantValue::Int
-}
-
 fn read_constant_reference
-    parser:mut$Parser
-    cursor:$TokenCursor
     term:$grammar::ConstantTerm
+    cursor:$TokenCursor
+    store:$common::SymbolStore
+    nonconstant_names:$std::Set[std::String]
+    diagnostics:mut$error::Diagnostics
 -> std::Option[constant_eval::EvalValue] {
     term.spelling.as_str cursor.resolve_name = name
     if
-        name.as_str parser
-            .store
+        name.as_str store
             .constants
             .get_str std::Option::Some(found) is
     then
@@ -2000,119 +1978,53 @@ fn read_constant_reference
             term
                 .location
                 .file
-                .as_str name.as_str parser.store.is_private_from
+                .as_str name.as_str store.is_private_from
         then
-            term.location f"Constant `{term.spelling}` is private" common::ErrorKind::InvalidScope parser.state.record_error_string
+            term.location f"Constant `{term.spelling}` is private" common::ErrorKind::InvalidScope diagnostics.record_error_string
             std::Option[constant_eval::EvalValue]::None return
         fi
         term.location.clone found.typ.clone found.value.clone constant_eval::EvalValue::new std::Option::Some return
     fi
     if
-        term.spelling.as_str parser
-            .current_module
-            .nonconstant_names
+        term.spelling.as_str nonconstant_names
             .has_str
-        name.as_str parser
-            .store
+        name.as_str store
             .get_function
             .is_some ||
-        name.as_str parser
-            .store
+        name.as_str store
             .structs
             .has_str ||
-        name.as_str parser
-            .store
+        name.as_str store
             .enums
             .has_str ||
-        name.as_str parser
-            .store
+        name.as_str store
             .traits
             .has_str ||
-        name.as_str parser
-            .store
+        name.as_str store
             .variables
             .has_str ||
     then
-        term.location f"`{term.spelling}` is not a constant" common::ErrorKind::TypeMismatch parser.state.record_error_string
+        term.location f"`{term.spelling}` is not a constant" common::ErrorKind::TypeMismatch diagnostics.record_error_string
     elif
-        name.as_str parser
-            .store
+        name.as_str store
             .failed_constants
             .has_str
         term
             .location
             .file
-            .as_str name.as_str parser.store.is_private_from &&
+            .as_str name.as_str store.is_private_from &&
     then
-        term.location f"Constant `{term.spelling}` is private" common::ErrorKind::InvalidScope parser.state.record_error_string
+        term.location f"Constant `{term.spelling}` is private" common::ErrorKind::InvalidScope diagnostics.record_error_string
     elif
-        name.as_str parser
-            .store
+        name.as_str store
             .failed_constants
             .has_str term.spelling.as_str cursor.names.has_str ||
     then
-        term.location f"Constant `{term.spelling}` is unavailable" common::ErrorKind::UndefinedName parser.state.record_error_string
+        term.location f"Constant `{term.spelling}` is unavailable" common::ErrorKind::UndefinedName diagnostics.record_error_string
     else
-        term.location f"Unknown constant `{term.spelling}`" common::ErrorKind::UndefinedName parser.state.record_error_string
+        term.location f"Unknown constant `{term.spelling}`" common::ErrorKind::UndefinedName diagnostics.record_error_string
     fi
     std::Option[constant_eval::EvalValue]::None
-}
-# Evaluate only the closed terms produced by the shared grammar. The cursor supplies
-# source-name bindings, while the symbol store owns completed and failed constants.
-fn evaluate_constant_initializer
-    parser:mut$Parser
-    cursor:$TokenCursor
-    initializer:$grammar::ConstantSyntax
-    annotation:std::Option[common::BuiltinType]
--> std::Option[constant_eval::EvalValue] {
-    std::List[constant_eval::EvalValue]::new = stack
-    for term in initializer.terms.iter do
-        term.kind match
-            grammar::ConstantTermKind::Literal => {
-                term.spelling.as_str parse_literal_to_constant_value = value
-                term.location.clone std::Option[common::BuiltinType]::None value constant_eval::EvalValue::new stack.push
-            }
-            grammar::ConstantTermKind::Reference => {
-                if term cursor parser read_constant_reference std::Option::Some(value) is then
-                    value stack.push
-                else
-                    std::Option[constant_eval::EvalValue]::None return
-                fi
-            }
-            grammar::ConstantTermKind::Operator(operator) => {
-                if
-                    parser.state.diagnostics term.location annotation.clone operator copy stack constant_eval::apply_operator !
-                then
-                    std::Option[constant_eval::EvalValue]::None return
-                fi
-            }
-            grammar::ConstantTermKind::StackIntrinsic => {
-                parser
-                    .state
-                    .diagnostics
-                    .error_count = errors_before
-                parser.state.diagnostics term.location term.spelling.as_str stack constant_eval::apply_stack_intrinsic drop
-                if
-                    errors_before parser
-                        .state
-                        .diagnostics
-                        .error_count >
-                then
-                    std::Option[constant_eval::EvalValue]::None return
-                fi
-            }
-            grammar::ConstantTermKind::Unsupported => {
-                term.location f"Unsupported token `{term.spelling}` in constant block" common::ErrorKind::Syntax parser.state.record_error_string
-                std::Option[constant_eval::EvalValue]::None return
-            }
-        end
-    done
-    if 1 stack.length != then
-        stack.length = value_count
-        initializer.end_location f"Constant block must leave exactly one value, got {value_count}" common::ErrorKind::Syntax parser.state.record_error_string
-        std::Option[constant_eval::EvalValue]::None return
-    fi
-    stack.pop std::Option::Some
 }
 
 impl Parser {
@@ -2151,24 +2063,26 @@ impl Parser {
                 return
             fi
         fi
+        self.store = store: $common::SymbolStore
+        self.current_module.nonconstant_names = nonconstant_names: $std::Set[std::String]
+        {
+            = term: $grammar::ConstantTerm = diagnostics: mut$error::Diagnostics
+            diagnostics nonconstant_names store cursor term read_constant_reference
+        } = resolve_reference
         if
-            annotation.clone initializer cursor self evaluate_constant_initializer std::Option::Some(value) is
+            self.state.diagnostics resolve_reference declaration.location annotation initializer constant_eval::evaluate_initializer std::Option::Some(checked) is
         then
             if
-                self.state.diagnostics declaration.location initializer.block annotation value constant_eval::constrain std::Option::Some(checked) is
+                name.as_str self
+                    .store
+                    .constants
+                    .has_str
             then
-                if
-                    name.as_str self
-                        .store
-                        .constants
-                        .has_str
-                then
-                    declaration.location f"Constant `{declaration.name}` is already defined" common::ErrorKind::DuplicateName self.state.record_error_string
-                    return
-                fi
-                declaration.location.clone checked.typ.clone checked.value.clone name.clone common::Constant = constant
-                constant name self.put_constant
+                declaration.location f"Constant `{declaration.name}` is already defined" common::ErrorKind::DuplicateName self.state.record_error_string
+                return
             fi
+            declaration.location.clone checked.typ.clone checked.value.clone name.clone common::Constant = constant
+            constant name self.put_constant
         fi
     }
 }

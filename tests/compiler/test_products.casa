@@ -404,24 +404,36 @@ fn test_scalar_independent_regions {
 
 fn test_constant_failure_keeps_independent_facts {
     "constant_failure_keeps_independent_facts" test::test_start
-    "const BAD { 1 0 / }\nfn good -> i64 { 41 }\ngood print" = source
-    source make_input products::analyze.unwrap = snapshot
-    "constant error reported" snapshot
-        .get_report
-        .get_diagnostics
-        .has_errors test::assert_true
-    source "good print" str::find u64::try_from.unwrap = independent_offset
-    false = found_independent
-    for token in snapshot.get_semantic_tokens.iter do
-        if independent_offset token.location.offset == then
-            true = found_independent
-        fi
+    for
+        declaration in [
+            "const BAD { 1 0 / }",
+            "const BAD { dup MISSING }",
+            "const BAD { 1 2 }",
+            "const BAD { }",
+            "const BAD:u8 256",
+            "const BAD:u8 { 256 }",
+            "const BAD:bool { 1 }",
+        ].iter
+    do
+        f"{declaration}\nconst GOOD \{ 40 1 + \}\nfn good -> i64 \{ GOOD \}\ngood print" = source
+        source.as_str make_input products::analyze.unwrap = snapshot
+        "constant error reported" snapshot
+            .get_report
+            .get_diagnostics
+            .has_errors test::assert_true
+        source.as_str "good print" str::find u64::try_from.unwrap = independent_offset
+        false = found_independent
+        for token in snapshot.get_semantic_tokens.iter do
+            if independent_offset token.location.offset == then
+                true = found_independent
+            fi
+        done
+        "verified call retained" found_independent test::assert_true
+        products::Target::LinuxX86_64 source.as_str make_input products::assembly.unwrap match
+            products::AssemblyResult::Rejected(report) => "failed constant rejects assembly" report.get_diagnostics.has_errors test::assert_true
+            products::AssemblyResult::Produced(_) => "failed constant rejects assembly" false test::assert_true
+        end
     done
-    "verified call retained" found_independent test::assert_true
-    products::Target::LinuxX86_64 source make_input products::assembly.unwrap match
-        products::AssemblyResult::Rejected(report) => "failed constant rejects assembly" report.get_diagnostics.has_errors test::assert_true
-        products::AssemblyResult::Produced(_) => "failed constant rejects assembly" false test::assert_true
-    end
 }
 
 fn test_private_failed_import_report {
@@ -513,6 +525,51 @@ fn test_imported_nonconstant_initializer {
             end
         fi
     done
+}
+
+fn test_constant_import_failure_order {
+    "constant_import_failure_order" test::test_start
+    "import \"dependency.casa\" as dep\nconst UNDERFLOW { dup dep::BAD }\nconst REFERENCE { dep::BAD dup }\nconst NUMERIC { 1 0 / dep::BAD }\nconst GOOD { 40 1 + }\nfn good -> i64 { GOOD }\ngood print" = source
+    source make_input = input
+    "pub const BAD { 1 0 / MISSING }".to_str "dependency.casa".to_str input.source_overrides.set
+    input products::analyze.unwrap = snapshot
+    snapshot.get_report.get_diagnostics = diagnostics: $error::Diagnostics
+    "four independent failures" 4 diagnostics.error_count == test::assert_true
+    for
+        expected in [
+            "Constant `1 0 /` overflows or has an invalid divisor",
+            "Stack underflow at `dup` in constant expression",
+            "Constant `dep::BAD` is unavailable",
+            "Constant `1 0 /` overflows or has an invalid divisor",
+        ].iter.enumerate
+    do
+        expected.first u64::try_from.unwrap diagnostics.entries.get = diagnostic
+        if diagnostic error::Diagnostic::Error(failure) is then
+            "diagnostics follow evaluation order" expected.second failure.message.as_str test::assert_str_eq
+            if 0 expected.first == then
+                "imported failure attribution" "/tmp/casa_products/dependency.casa"
+                failure
+                    .location
+                    .file
+                    .as_str test::assert_str_eq
+            else
+                "local failure attribution" "/tmp/casa_products/main.casa"
+                failure
+                    .location
+                    .file
+                    .as_str test::assert_str_eq
+            fi
+        fi
+    done
+    source "GOOD }" str::find u64::try_from.unwrap = independent_offset
+    "independent constant use retained" independent_offset "/tmp/casa_products/main.casa"
+    snapshot.get_index.find_hover document::PointAnswer::Known is test::assert_true
+    source make_input = assembly_input
+    "pub const BAD { 1 0 / MISSING }".to_str "dependency.casa".to_str assembly_input.source_overrides.set
+    products::Target::LinuxX86_64 assembly_input products::assembly.unwrap match
+        products::AssemblyResult::Rejected(report) => "same source rejects assembly" report.get_diagnostics.has_errors test::assert_true
+        products::AssemblyResult::Produced(_) => "same source rejects assembly" false test::assert_true
+    end
 }
 
 fn test_qualified_failure_keeps_independent_constants {
@@ -821,6 +878,7 @@ test_scalar_independent_regions
 test_constant_failure_keeps_independent_facts
 test_private_failed_import_report
 test_imported_nonconstant_initializer
+test_constant_import_failure_order
 test_qualified_failure_keeps_independent_constants
 test_scalar_branch_execution
 test_independent_requests

@@ -1,6 +1,9 @@
 import "std" as std
 import "common" as common
 import "error" as error
+import "lexer" as lexer
+import "parser" as parser
+import "syntax" as grammar
 
 # A value in a bounded constant block. Numeric literals have no width until an
 # annotation or an operation supplies one.
@@ -20,7 +23,7 @@ impl EvalValue {
     }
 }
 
-pub fn check_numeric
+fn check_numeric
     value:$EvalValue
     typ:common::BuiltinType
     location:$common::Location
@@ -69,7 +72,7 @@ pub fn check_numeric
     true
 }
 
-pub fn select_numeric_type
+fn select_numeric_type
     left:$EvalValue
     right:$EvalValue
     annotation:std::Option[common::BuiltinType]
@@ -115,7 +118,7 @@ fn select_integer_type
     common::BuiltinType::I64
 }
 
-pub fn make_integer value:i64 typ:common::BuiltinType -> EvalValue {
+fn make_integer value:i64 typ:common::BuiltinType -> EvalValue {
     std::String::new = raw
     if typ.is_unsigned then
         value u64::wrapping_from.to_str = raw
@@ -125,7 +128,7 @@ pub fn make_integer value:i64 typ:common::BuiltinType -> EvalValue {
     common::empty_location typ std::Option::Some value raw common::IntegerLiteral::new common::ConstantValue::Int EvalValue::new
 }
 
-pub fn normalize_integer value:i64 typ:common::BuiltinType -> i64 {
+fn normalize_integer value:i64 typ:common::BuiltinType -> i64 {
     typ.bit_width = width
     if 64 width == then
         value return
@@ -140,7 +143,7 @@ pub fn normalize_integer value:i64 typ:common::BuiltinType -> i64 {
     result
 }
 
-pub fn apply_stack_intrinsic
+fn apply_stack_intrinsic
     stack:mut$std::List[EvalValue]
     name:$str
     location:$common::Location
@@ -157,11 +160,12 @@ pub fn apply_stack_intrinsic
         3 u64::try_from.unwrap = required
     fi
     if 0 required == then
+        location f"Unsupported stack intrinsic `{name}` in constant expression" common::ErrorKind::Syntax diagnostics.record_error_string
         false return
     fi
     if stack.length required > then
         location f"Stack underflow at `{name}` in constant expression" common::ErrorKind::Syntax diagnostics.record_error_string
-        true return
+        false return
     fi
     if "dup" name == then
         stack.length 1 - stack.get.clone stack.push
@@ -513,7 +517,7 @@ fn evaluate_integer_operator
     std::Option[EvalValue]::None
 }
 
-pub fn apply_operator
+fn apply_operator
     stack:mut$std::List[EvalValue]
     operator:common::OperatorKind
     annotation:std::Option[common::BuiltinType]
@@ -612,7 +616,7 @@ pub fn apply_operator
 }
 # Finish an initializer. A block fixes unconstrained numeric widths once;
 # a direct literal or alias remains contextual when it has no annotation.
-pub fn constrain
+fn constrain
     value:EvalValue
     annotation:std::Option[common::BuiltinType]
     block:bool
@@ -695,4 +699,70 @@ pub fn constrain
         }
     end
     value std::Option::Some
+}
+
+fn parse_literal raw:$str -> common::ConstantValue {
+    if "true" raw == then
+        1 common::ConstantValue::Bool return
+    fi
+    if "false" raw == then
+        0 common::ConstantValue::Bool return
+    fi
+    if '"' 0 raw.at == then
+        raw 1 raw.length 2 - str::substring common::ConstantValue::Str return
+    fi
+    if '\'' 0 raw.at == then
+        raw 1 lexer::decode_utf8_scalar.unwrap = decoded
+        decoded lexer::DecodedUtf8Scalar::codepoint i64::from common::ConstantValue::Char return
+    fi
+    if raw lexer::is_float_literal then
+        raw.to_str common::ConstantValue::Float return
+    fi
+    raw parser::str_to_int raw.to_str common::IntegerLiteral::new common::ConstantValue::Int
+}
+# Evaluates terms in encounter order and returns only a valid final value.
+# The resolver records reference failures in the supplied diagnostics.
+pub fn evaluate_initializer
+    initializer:$grammar::ConstantSyntax
+    annotation:std::Option[common::BuiltinType]
+    location:$common::Location
+    resolve_reference:$fn[$grammar::ConstantTerm mut$error::Diagnostics -> std::Option[EvalValue]]
+    diagnostics:mut$error::Diagnostics
+-> std::Option[EvalValue] {
+    std::List[EvalValue]::new = stack
+    for term in initializer.terms.iter do
+        term.kind match
+            grammar::ConstantTermKind::Literal => {
+                term.spelling.as_str parse_literal = value
+                term.location.clone std::Option[common::BuiltinType]::None value EvalValue::new stack.push
+            }
+            grammar::ConstantTermKind::Reference => {
+                if diagnostics term resolve_reference exec std::Option::Some(value) is then
+                    value stack.push
+                else
+                    std::Option[EvalValue]::None return
+                fi
+            }
+            grammar::ConstantTermKind::Operator(operator) => {
+                if diagnostics term.location annotation.clone operator copy stack apply_operator ! then
+                    std::Option[EvalValue]::None return
+                fi
+            }
+            grammar::ConstantTermKind::StackIntrinsic => {
+                if diagnostics term.location term.spelling.as_str stack apply_stack_intrinsic ! then
+                    std::Option[EvalValue]::None return
+                fi
+            }
+            grammar::ConstantTermKind::Unsupported => {
+                term.location f"Unsupported token `{term.spelling}` in constant block" common::ErrorKind::Syntax diagnostics.record_error_string
+                std::Option[EvalValue]::None return
+            }
+        end
+    done
+    if 1 stack.length != then
+        stack.length = value_count
+        initializer.end_location f"Constant block must leave exactly one value, got {value_count}" common::ErrorKind::Syntax diagnostics.record_error_string
+        std::Option[EvalValue]::None return
+    fi
+    diagnostics location initializer.block annotation stack.pop constrain
 }

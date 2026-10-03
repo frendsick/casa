@@ -58,6 +58,14 @@ resolution, checking, and specialization frames own each body until they publish
 the completed result. Recursive calls can read a reserved signature while the
 body remains private to its frame.
 
+`constant_eval.casa` executes complete parsed initializers and validates the
+final stack and value type. It stops at the first failed term and resolves
+references in encounter order through a source-builder callback. Source
+construction owns annotation lookup, source-order visibility, declaration
+commit, and failed constant identities. Evaluation reports diagnostics and
+returns either a validated value or `None`, so the caller needs no execution
+stack or diagnostic-count comparison.
+
 Checking consumes structured source and produces semantic branches, loops,
 match arms, and operations. Generic recipes and concrete instances share the
 semantic vocabulary. Specialization substitutes types, ownership actions, and
