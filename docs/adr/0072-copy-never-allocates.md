@@ -15,8 +15,7 @@ fixed representation.
 ## Consequences
 
 - `Copy` remains safe to invoke implicitly because it cannot hide allocator or user-defined work.
-- Large inline aggregates may still make copying expensive; benchmarks must cover large copies in long loops.
+- Large inline aggregates may still make copying expensive.
 - Arrays with non-`Copy` elements remain affine and use explicit `Clone` when
   their elements implement `Clone`.
-- The implementation must verify with allocation instrumentation that copying an already placed value requests no allocation.
 - Explicit duplication that may allocate belongs to `Clone` and is never selected by stack intrinsics or implicit reuse.

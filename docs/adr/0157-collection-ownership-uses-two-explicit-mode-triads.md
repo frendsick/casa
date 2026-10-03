@@ -1,40 +1,24 @@
-# Collection ownership uses two explicit mode triads
+# Collection access and iteration expose ownership
 related issue: #369
 
-This refines the collection consequences of
+Checked collection access borrows elements. Removal transfers ownership where
+its return type supplies an owned value. Iteration borrows the source and its
+elements. These distinctions follow
 [ADR-0013](0013-affine-ownership-with-automatic-storage.md) and
 [ADR-0014](0014-explicit-unsafe-boundary.md).
 
-Casa keeps `get`, `get_mut`, and `remove` for checked element access, and
-`iter`, `iter_mut`, and `into_iter` for traversal. The names stay familiar while
-their return types expose the ownership mode. Renaming the methods to repeat
-`borrow` or `own` adds words without adding information, while one overloaded
-method would hide the ownership choice.
+`List.get` and `List.get_ref` return `$T`. `List.get_mut` returns `mut$T`.
+These operations terminate on an invalid index. `List.remove` returns `Option[T]`.
 
-For `List[T]`, access returns `Option[$T]`, `Option[mut$T]`, or `Option[T]`.
-For `Map[K V]`, the corresponding value returns have the same shapes.
-`Map::iter` yields `Pair[$K $V]`, `Map::iter_mut` yields
-`Pair[$K mut$V]`, and `Map::into_iter` yields `Pair[K V]`. Map keys never receive
-mutable access while stored because changing equality or hashing could invalidate
-their placement.
+`Map.get`, `Map.get_mut`, and `Map.remove` return `Option[$V]`,
+`Option[mut$V]`, and `Option[V]`. Missing keys return `Option::None`.
+`Map.iter` yields `Pair[$K $V]`. Stored keys receive no mutable access because
+changing equality or hashing could invalidate their placement.
 
-`Set[K]` keeps `has` for observation. Its `remove` returns `Option[K]`, `iter`
-yields `$K`, and `into_iter` yields `K`. It has no `get_mut` or `iter_mut`.
-Mutation that can change equality or hashing removes the owned value, changes it,
-and inserts it again.
+`Set.has` observes membership. `Set.remove` removes and destroys a value without
+returning it. `Set.iter` yields `$K`. It has no mutable element access.
+To change equality or hashing, remove the value and insert a replacement.
 
-## Consequences
-
-- Missing keys and out-of-range indexes return `Option::None`. A caller whose
-  index is an established invariant uses `.unwrap`. Casa adds no parallel `at`
-  or `at_mut` surface.
-- `get_ref` is not a second List access mode. `get` already supplies the shared
-  borrow.
-- `iter_mut` keeps the complete source exclusively loaned and yields at most one
-  live mutable element borrow at a time.
-- `into_iter` consumes the source and moves each element exactly once. Destroying
-  the iterator early destroys every remaining element exactly once.
-- List traversal preserves index order. Map and Set traversal order remains
-  unspecified.
-- Entry-returning removal and key, value, or consuming projection iterators stay
-  deferred until real callers justify the larger interface.
+List traversal preserves index order. Map and Set traversal order is unspecified.
+All three borrow their elements during iteration. They provide no `iter_mut`
+or `into_iter` methods.

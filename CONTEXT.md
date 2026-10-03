@@ -69,7 +69,7 @@ A compiler phase that takes its context as explicit input and returns its output
 _Avoid_: Pure compiler rewrite, immutable compiler
 
 **Typecheck result**:
-The explicit output of typechecking: updated symbols, checked global stack effect, and any resolved operation changes produced during typechecking.
+The owned output of typechecking: symbols, checked root and function bodies, diagnostics, verified-operation facts, and the global stack effect.
 _Avoid_: Hidden typechecker side effects, global typechecker state
 
 **Operation semantics**:
@@ -97,7 +97,7 @@ The exact source contents and compiler results owned by one syntax, analysis, or
 _Avoid_: Shared compiler session, mutable document cache
 
 **Checked program**:
-A complete, target-neutral semantic representation whose source checking, ownership validation, concrete specialization, and trait dispatch have finished. Target-specific layout and ABI restrictions remain separate.
+A complete semantic representation whose source checking, ownership validation, concrete specialization, and trait dispatch have finished. Physical storage and native-call planning belong to the backend.
 _Avoid_: Partial analysis product, backend layout
 
 **Editor index**:
@@ -108,17 +108,13 @@ _Avoid_: Checked operations, declaration-store snapshot
 The first explicit compiler boundary that keeps parser internals private while returning resolved operations and symbols needed by later phases.
 _Avoid_: Parser result, resolver-owned parser
 
-**Default parser**:
-The current process-global parser instance used as implicit compiler state before explicit pass boundaries replace it.
-_Avoid_: Shared compiler context, hidden parser dependency
-
 **Compiler diagnostics schema**:
 The data-only representation and flow for compiler diagnostics across lexer, parser, typechecker, and later phases. Each phase owns recovery; callers decide whether usable output permits the next phase.
 _Avoid_: Typechecker-only diagnostics refactor, phase-local error schema
 
-**Analysis result**:
-The shared front-end compiler output containing exact compiler sources, collected diagnostics, and optional typechecked output for CLI, LSP, and tests.
-_Avoid_: CLI compile result, LSP compiler snapshot, global compiler result
+**Analysis snapshot**:
+The independent result of one analysis request. It owns a report with exact source text and diagnostics, plus an editor index with verified source facts.
+_Avoid_: Shared compiler session, analysis result, global compiler result
 
 **Array literal**:
 A bracket-delimited list of values (`[1, 2, 3]`, `["a", "b"]`, `[[1], [2]]`, `[my_fn]`) that produces an independent owned `array[T N]`, where the element count `N` is part of the type. Elements may be primitive literals, enum variants, nested array literals, function references, lambda expressions, or struct literals. Storage placement and behavior-preserving sharing remain compiler decisions.
@@ -293,25 +289,6 @@ _Avoid_: Release lint, tag lint
 - A **Lex result** always contains tokens; file loading remains a separate fallible OS operation returning **IoError**.
 - A **Compiler dependency** should be returned as its own value only when a later boundary uses it now; unused phase-private state should stay private until needed.
 - The **Compiler source store** is separate from the **Compiler diagnostics schema**; diagnostics carry locations, while reporting adapters use the store to resolve source text.
-- CLI, LSP, and tests share one compiler-analysis seam returning an **Analysis result**; root source is explicit input, while root file I/O remains owned by the caller.
-- The **Parse-and-resolve boundary** should hide `Parser` and return only resolved operations plus symbols until parsing and identifier resolution can be split cleanly.
-- The **Parse-and-resolve boundary** returns partial output only after recovery at a known structural delimiter; ambiguous parser state produces no usable output.
-- The **Default parser** should trend toward zero use as explicit pass boundaries mature; if a slice can remove it fully, it should.
-- A **Typecheck result** may return the same **SymbolStore** reference it received, as long as mutations are represented at the pass boundary.
-- **Operation semantics** are computed once below the **Parse-and-resolve boundary** and typechecking; each phase consumes data-only facts while keeping its mutable state private.
-- A **Typecheck result** with diagnostics may remain usable by editor adapters, but any type error prevents bytecode compilation.
-- Bytecode compilation runs only after error-free typechecking and produces either a complete program or an internal compiler failure; user-facing validation belongs in earlier phases.
-- The **Compiler diagnostics schema** should be refactored once across the compiler, not as part of the first **Typecheck result** boundary.
-- A **Functional compiler pass** may return partial output after recoverable diagnostics only when that phase guarantees the output remains usable; unrecoverable diagnostics produce no usable output.
-- Unrecoverable phase state is represented by the **Pass result**, not by a separate diagnostic severity.
-- Diagnostics produced by completed or recoverable work remain visible regardless of severity; unusable output prevents later compiler phases and therefore their diagnostics.
-- Imported-file diagnostics join the same compilation diagnostic stream at the import encounter point, preserving emission order; core diagnostics are not sorted by file or severity.
-- A failed import ends the **Parse-and-resolve boundary** with no usable output after its diagnostics are merged; import expansion and identifier resolution do not continue with incomplete symbols.
-- Recording a diagnostic does not control compiler flow; fallible phase helpers represent missing or failed values explicitly with `Option` or `Result`.
-- Diagnostics collection does not decide whether to print, exit, or run another compiler phase.
-- The **Compiler diagnostics schema** preserves emission order in one diagnostic list; error and warning variants encode severity without a separate severity field while retaining their different payload shapes.
-- CLI reporting, LSP conversion, and test inspection are adapters outside the **Compiler diagnostics schema**.
-- Diagnostics migration is complete only when compiler-global diagnostics, source, and mode state is deleted and all adapters consume explicit results; snapshot or copy bridges do not satisfy the deletion test.
 - Each evaluation of an **Array literal** has independent owned-value semantics. The compiler may share or statically emit backing data when mutation and destruction still behave independently. Raw address equality is a representation detail.
 - **Root-owned runtime state** follows ordinary move, borrow, and LIFO destruction rules. Imports do not construct it.
 - A **Text view** never releases storage. An **Owned text** value releases its storage exactly once.
@@ -335,7 +312,7 @@ _Avoid_: Release lint, tag lint
 - Every closure is repeatable. Invoking it may consume explicit arguments but may not leave a captured non-`Copy` owner consumed; Casa has no single-use function type.
 - Standard `Copy` is a methodless marker extending Clone; it may be used implicitly and never allocates or calls user code. A user-defined aggregate can implement it only with `derives Copy`. The compiler validates its raw value representation, fields or payloads, borrows, owned indirection, and destruction, then supplies structural Clone behavior. Compiler-provided implementations for eligible built-in types remain unchanged.
 - A type with custom duplication implements Clone and remains non-Copy. A non-Copy type may use `derives Clone` for structural duplication. Generated aggregate Clone calls field Clone methods and preserves stored shared borrows with their origins, while implicit Copy remains allocation-free.
-- Reserved language-integrated traits use minimum compiler-validated **Language trait method** contracts while allowing additional default methods and supertraits. Primitive operations remain available without importing those declarations.
+- Reserved language-integrated traits use minimum compiler-validated **Language trait method** contracts while allowing additional default methods and supertraits. Primitive arithmetic and comparison operators remain available without importing those declarations.
 - `!=` lowers to the active equality trait's `ne` operator method. The standard default negates `eq`; overrides must preserve that semantic inverse.
 - PartialEq owns the shared `eq` and `ne` operator methods; Eq extends PartialEq as the explicit lawful-total marker. The compiler validates Eq's effective inherited shape, and `derives Eq` implements both traits.
 - PartialOrd owns `partial_cmp` and the `lt`, `le`, `gt`, and `ge` operator methods; Ord extends PartialOrd and Eq, adds `cmp`, and provides the inherited `partial_cmp` default. The compiler validates the complete effective inherited shape.
@@ -350,7 +327,7 @@ _Avoid_: Release lint, tag lint
 - Map and Set preserve correctness under hash collisions by comparing keys with Eq. Their traversal order is unspecified, and the unkeyed standard hashes do not provide adversarial collision resistance.
 - Finite recursive owned types may derive Clone. Trait implementation checking resolves recursive obligations as one dependency cycle; runtime cloning traverses and may allocate for the complete structure.
 - Finite recursive owned types may also derive Eq, Ord, and Hashable through cycle-aware trait implementation checking. Generated operations recursively traverse finite payloads.
-- Recursive destruction initially uses call-stack recursion and preserves the order of the **Compiler-called cleanup method** and reverse-field destruction. Deep-chain tests and benchmarks report the practical stack limit before iterative lowering is considered.
+- Recursive destruction uses call-stack recursion and preserves the order of the **Compiler-called cleanup method** and reverse-field destruction.
 - `Ordering` is the ordinary standard enum `Less`, `Equal`, `Greater`; it is compiler-validated only when generated Ord behavior needs it. Option remains ordinary library code.
 - Standard Ordering initially derives Eq and Copy, but not Ord or Hashable.
 - A subtrait may provide a matching default body for an inherited bodyless requirement; Ord uses this to adapt `cmp` into PartialOrd's `partial_cmp` without compiler knowledge of Option.
@@ -407,7 +384,7 @@ _Avoid_: Release lint, tag lint
 - Floating-point execution fixes rounding to nearest with ties-to-even, preserves subnormals and signed zero, and initially forbids reassociation, silent fused operations, ambient rounding modes, and fast-math assumptions.
 - Floating-point literals use decimal-point or exponent notation, require digits on both sides of a decimal point, and add no hexadecimal, suffix, NaN, or infinity syntax.
 - Safe `Target::trunc_from` converts floats to integers by truncating toward zero and terminates on invalid or out-of-range inputs; stdlib validation builds exact `try_from -> Option[Target]` without compiler knowledge of Option.
-- Initial stdlib floats expose special values, classification, absolute value, and basic rounding only; transcendental math, `total_cmp`, and a comprehensive math module remain deferred.
+- Initial stdlib floats expose special values, classification, absolute value, and basic rounding only.
 - Float parsing is locale-independent and returns ordinary Option; formatting emits shortest same-width round-trippable decimal text, preserves negative zero, and canonicalizes special-value spellings without preserving NaN payloads.
 - Custom destruction is the reserved inherent `drop` method, not a trait implementation. It is compiler-invoked, cannot be called directly, and makes the type non-`Copy`.
 - Borrow types use prefix sigils: `T` is owned, `$T` is shared, and `mut$T` is exclusive. Receivers use `self`, `$self`, and `mut$self` respectively.
@@ -439,29 +416,3 @@ _Avoid_: Release lint, tag lint
 - All fallible OS operations return `Result[T IoError]`; **IoError** is the single error type for file, directory, and environment failures.
 - **FileStat** is returned by `file::stat` and provides both raw metadata fields and convenience query methods.
 - `env::get` returns `Option[Bytes]`, not `Result` — a missing environment variable is absence, not an error, and a present Linux value is not guaranteed to be UTF-8.
-
-## Example Dialogue
-
-> **Dev:** "Can this PR depend on a temporary release so CI passes?"
-> **Domain expert:** "No. By default, the **Bootstrap compiler** must build the **Branch compiler** from the latest stable release, and that compiler must reach a **Fixed point**."
-
-> **Dev:** "Should I document `fn foo a:i64 b:str -> bool` as the signature?"
-> **Domain expert:** "No. That is the **Function declaration**. The public stack contract is the **Stack effect**: `i64 str -> bool`, where `i64` is consumed from the top of the stack and `str` below it."
-
-## Flagged Ambiguities
-
-- "`Op.type_annotation` / `Op.deferred_return_type` as source text" was used to justify keeping parsed type metadata as strings. Resolved: user-written type expressions are **Source type syntax** only before parsing; after parsing, compiler-owned metadata should use the **Type AST**.
-- "functional programming concepts" was broad enough to imply a full immutable rewrite. Resolved: the target is **Functional compiler pass** boundaries, with local mutation still allowed inside phases.
-- "`LexResult`" was proposed while it would only wrap `List[Token]`. Resolved: **Lex result** became justified only once recoverable lexical diagnostics were made explicit alongside tokens; file loading remains separate.
-- "`ParseResult` returning `Parser`" leaked a parser-owned object past parsing, while returning every parser field exposed unused state. Resolved: return only the **Compiler dependencies** later boundaries use now, and migrate call sites instead of keeping the old API.
-- Parse and identifier resolution both need import state today, so a standalone parse result is premature. Resolved: start with a **Parse-and-resolve boundary** that keeps import state private.
-- "`DEFAULT_PARSER`" was treated as convenient shared context. Resolved: call it the **Default parser** and remove uses as explicit pass boundaries replace hidden compiler state.
-- "return updated SymbolStore" could imply deep-copying the symbol table. Resolved: **Typecheck result** may return the same reference after mutation; explicit pass output is the important boundary.
-- "typechecker diagnostics" was treated as a typechecker-specific refactor. Resolved: diagnostics belong to a compiler-wide **Compiler diagnostics schema** refactor, tracked in issue #219.
-- "glossary" was considered as a complete keyword or syntax catalog. Resolved: the **Documentation glossary** covers only project-specific concepts whose terminology must stay stable.
-- "function signature" and "stack effect" were treated as interchangeable in docs. Resolved: use **Stack effect** for public stack contracts; reserve "signature" only where the compiler's internal function type model is meant.
-- "`fn foo a:i64 b:str -> bool`" was called a signature. Resolved: call it a **Function declaration** when bodyless, and a **Function definition** when paired with a body.
-- "top on right" was used to explain **Stack effect** notation. Resolved: inputs are topmost-first and outputs are push-order.
-- "`None`" in **Stack effect** notation can be confused with `Option::None`. Resolved: `None` means no stack values in notation only.
-- "release compiler" was used to mean both the stable compiler downloaded by CI and an ad hoc temporary compiler. Resolved: use **Bootstrap compiler** for the CI role and **Stable Casa release** for the public release; temporary releases are exceptional escape hatches.
-- "temporary release" was considered as a normal CI mechanism. Resolved: use **Temporary compiler release** only as an exception, not as the default bootstrap path.

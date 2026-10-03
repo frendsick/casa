@@ -161,36 +161,21 @@ A damaged construct cannot contribute an invented operation fact. Lexical token
 categories remain available after syntax rejection.
 
 Type references are incomplete while signature and field type occurrences are
-not represented. Rename must reject these answers. Snapshot release is measured
-by the [editor snapshot workload](benchmarks/editor-snapshots/README.md). The
-[cutover measurements](benchmarks/compiler-cutover.md) record the final consumer
-interfaces, compilation cost, and repeated-request lifetimes.
-The [final acceptance record](benchmarks/compiler-capsule-acceptance.md) measures
-the completed redesign and records the child-review decisions.
+not represented. Rename must reject these answers. The
+[editor lifetime workload](../tests/benchmarks/editor-lifetime.casa) checks
+storage reclamation after repeated replacements.
 
 `workspace.casa` aggregates owned answers across fresh snapshots, retains exact
 source revisions, and validates proposed rename bindings through reanalysis.
 Workspace discovery and LSP document versions stay outside the compiler products.
 The LSP stores `AnalysisSnapshot` values. Position-based queries convert through
 the snapshot's retained sources and return owned answers. The caller must check
-document versions before applying results to newer text. `AnalysisResult` and
-`AnalyzedDocument` are removed. Language behavior is unchanged. The
-[request measurements](benchmarks/compiler-products/README.md) do not establish
-final redesign performance.
+document versions before applying results to newer text.
 
 `tests/compiler/test_products.casa` checks independent overrides, release order,
 source rejection, syntax products, retained failure context, and native output
 from requested assembly. The private-field fixture checks the product boundary.
 
-The [native build lifetime workload](benchmarks/native-build-lifetime.casa)
-repeats missing-tool, nonzero-tool, and successful-build paths for 30 rounds.
-The [allocator samples](benchmarks/native-build-lifetime.json) show zero live
-allocations between rounds. After warm-up, reusable storage remains at 43 blocks
-and 1,296 payload bytes, with 68 KiB RSS and one retained 64 MiB mapped chunk.
-These measurements cover adapter ownership, not compiler speed.
-
-```sh
-./casac -L lib casa.casa -o casac_new
-./casac_new -L lib docs/benchmarks/native-build-lifetime.casa -o /tmp/casa-native-build-lifetime
-python3 docs/benchmarks/compiler-reductions/lifetime.py /tmp/casa-native-build-lifetime docs/benchmarks/native-build-lifetime.json
-```
+The [native build lifetime workload](../tests/benchmarks/native-build-lifetime.casa)
+checks storage reclamation across missing-tool, nonzero-tool, and successful-build
+paths. See the [measurement instructions](../tests/benchmarks/README.md).

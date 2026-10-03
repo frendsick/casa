@@ -3,20 +3,9 @@
 related issue: [Choose compiler products for editor and formatter tooling](https://github.com/frendsick/casa/issues/650).
 
 This completes the tooling contract for the independent snapshots in
-[ADR-0167](0167-compiler-products-own-independent-snapshots.md). It requires target-neutral analysis, debounced full reanalysis, useful partial
-results, and workspace-wide references and rename on demand.
+[ADR-0167](0167-compiler-products-own-independent-snapshots.md). Analysis retains useful partial
+results and supports workspace-wide references and rename on demand.
 Workspace scope is the editor's opened folders with explicit exclusions.
-Editor and workspace snapshot interfaces are implemented. LSP and formatter
-consumer cutover remains open in #715.
-
-## Verified starting point
-
-The [original decision](https://github.com/frendsick/casa/blob/e9a258837d40185376c97e4fd03fccb98d238d82/docs/adr/0172-editor-products-retain-verified-source-facts.md#verified-starting-point)
-records the pre-migration implementation. Current
-[editor snapshot](../benchmarks/editor-snapshots/README.md) and
-[workspace snapshot](../benchmarks/workspace-snapshots/README.md) evidence covers
-the delivered products. Remaining consumer cutover does not remove any recovery,
-freshness, rename-safety, or formatter-equivalence requirement below.
 
 ## Products and query answers
 
@@ -198,9 +187,8 @@ invalidate all cached analyses in that workspace. This also catches newly
 created import candidates, deleted files, and changed search precedence
 without a separate public dependency graph.
 
-Debounce and coalesce edits, then construct independent snapshots from the
-latest inputs. Use one analysis worker initially, retaining at most one pending
-replacement per root. Reanalyze open roots for diagnostics and local queries.
+The LSP constructs replacements synchronously when document inputs change.
+Reanalyze open roots for diagnostics and local queries.
 Discover and analyze remaining workspace roots when references or rename needs
 them. Do not rescan and compile the entire workspace on every keystroke.
 Before publishing, compare the captured generation and document versions with
@@ -236,20 +224,9 @@ discarding them. This is not a claim that assembly builds the index for free.
 Any later omission of unused projections must keep the shared semantic owner.
 Syntax requests do no semantic analysis or editor-index construction.
 
-Measure full request time, index construction, retained source/index bytes,
-peak replacement memory, and release after repeated edits. Include a small
-file, imported unsaved files, the compiler source, and errors from each recovery
-class. Measure end-to-end edit latency, already-built index queries, workspace
-discovery, and cold/warm reference and rename requests separately. Include two
-roots importing one declaration, unopened files, and rejected workspace inputs.
-Report debounce time separately from computation. Set numerical
-latency and memory gates from executable evidence through the existing
-simplification-target and blueprint decisions. No numerical gate or performance
-gain is established here.
-
-Analysis validates target-neutral source obligations, including language-level
-extern admissibility. It does not validate physical layouts, ABI placement,
-runtime availability, or native tool success. Assembly repeats source checking
+Analysis validates source obligations, including language-level
+extern admissibility and known inline sizes for concrete `size_of` queries.
+It does not validate ABI placement, runtime availability, or native tool success. Assembly repeats source checking
 for its independent inputs and adds target diagnostics. With identical inputs,
 source diagnostic codes and attribution must agree across analysis and
 assembly. A clean analysis report does not promise a successful build. Target
@@ -278,41 +255,3 @@ grammar-authorized whitespace, newline, comma, and comment-prefix spacing
 normalization. A mismatch, candidate rejection, or reportable internal failure
 returns the original input and failure status. Keep idempotence and paired
 layout convergence checks. Token/comment comparison alone does not establish structural equivalence.
-
-## Migration and validation
-
-| Retired coupling | Replacement and retained behavior |
-| --- | --- |
-| `AnalyzedDocument` operations and function/struct/enum/variable maps, `DocumentElement` and `DocumentSymbol` owning functions | Private source index and owned query payloads. Keep exact hover, qualified-name ranges, navigation, and visibility behavior. |
-| Document `OpValue` classifiers, query-time `clone_for_import`, scans of function bodies | One projection from shared semantic facts. Keep intrinsic stack-effect and contextual-literal presentation. |
-| `TypecheckResult.into_document_parts`, `SymbolStore.into_document_facts`, discarded document diagnostics | Analysis directly owns its report and index. No adapter extracts phase-private compiler state. |
-| Analysis's cloned diagnostic list, three adapters interpreting diagnostic variants, formatter's temporary source store for reporting | One report and diagnostic presentation. Keep distinct text and LSP transport adapters. |
-| Formatter `syntax_only` flag paths and semantic `SymbolStore` construction | Shared syntax recognition and facts, followed by separate semantic analysis when requested. Keep formatter safety. |
-| Reverse source-name maps and test-facing typechecker clone/commit/forwarding protocols | Source spelling separate from identity, and tests through typed products. Removal is shared with the front-end and semantic migrations. |
-
-Replace tests that mirror private operations, declaration maps, take/restore
-ordering, or cloned metadata with observable behavior checks through products.
-Preserve semantic and ownership coverage regardless of the old fixture's internals.
-
-Required migration checks cover every query against each recovery class, with
-an unaffected declaration and a dependent damaged region. Distinguish absent,
-unavailable, incomplete-empty, and complete-empty answers. Check a missing
-import, an imported-file diagnostic, shadowed locals, captures, qualified-name
-segments, source spelling after specialization, and requested-file token ranges.
-
-Check unsaved imported overrides, normalized aliases, conflicts, Unicode range
-conversion, replacement during queries, stale worker completion, imported-file
-changes with unchanged root text, close/save, file creation after a failed
-import, changed library search order, and storage release after repeated edits.
-References must report compilation coverage internally and workspace coverage
-after aggregation. Test public rename across two roots and an unopened importer,
-explicit exclusions, external read-only libraries, incomplete discovery,
-different root contexts, and edits during a workspace request. Rename must
-reject incomplete required coverage, stale inputs, invalid names, scope
-collisions, and changed bindings or dispatch after candidate reanalysis.
-
-Keep source-to-assembly rejection and report-lifetime checks, formatter golden
-outputs, safe refusal, token/comment/structure equivalence, idempotence, and
-paired layouts. These are requirements for the executable slice and production
-migration, not tests supplied by this documentation change. Source reduction is
-unmeasured. Do not count moved presentation code or shared removals twice.

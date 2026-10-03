@@ -18,4 +18,3 @@ The initial analysis tracks complete bindings rather than independently movable 
 - Every loop back-edge and `continue` must restore the ownership state required at the loop header. Loop exits merge the zero-iteration path with every reachable `break` and normal exit.
 - A loan that may still be live on any incoming path is treated as live after the join; function-local last-use analysis may end it before then.
 - The compiler destroys each value exactly once. It may emit a hidden drop flag only when conditional initialization makes the value's existence runtime-dependent.
-- The implementation tracks a small state per binding and must be checked against the compiler self-compilation benchmark so ownership safety does not introduce an unexpectedly large compile-time cost.

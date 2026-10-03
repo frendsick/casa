@@ -8,17 +8,13 @@ Typed operations and private semantic construction remove caller-managed phase
 protocols under [ADR-0166](0166-compiler-capsule-owns-phase-state.md).
 ADR-0172 refines the editor answers below, and
 [ADR-0169](0169-backend-plans-and-renders-one-function-at-a-time.md) defines the backend.
-The generic and constant contracts retain target-neutral checking.
-
-Implementation: typed products and snapshots exist. Final consumer cutover and
-performance gates remain with [#715](https://github.com/frendsick/casa/issues/715).
 
 ## Selected model
 
 Use three typed operations for syntax, analysis, and assembly. Each request owns an
 independent snapshot. Inside the compiler, retain a source representation and one
 semantic body representation. Private builders establish validity before publishing
-immutable products. The backend receives a sealed, target-neutral `CheckedProgram`
+immutable products. The backend receives a sealed `CheckedProgram`
 containing concrete semantic bodies and their required declarations.
 
 Represent structured control flow directly. Put cleanup actions on the operations and
@@ -75,19 +71,6 @@ survive each source failure and distinguishes absent, unavailable, incomplete, a
 complete answers. It also defines workspace reference aggregation and rename through
 these same queries. Incomplete facts cannot masquerade as checked codegen input.
 
-### Caller knowledge comparison
-
-| Surface | Broad prototype protocol | Typed operations |
-| --- | --- | --- |
-| Compiler intent | 3 request variants and 4 product variants. Only 4 of the 12 request/product combinations are meaningful. | 3 operations whose return types encode the requested product. |
-| Tool query | 6 request variants and 6 answer variants. Only 6 of the 36 combinations are meaningful. | 5 editor operations plus report access. Each query has its own answer type. |
-| Failure | Request-specific rejection plus outer internal failure. The prototype's internal error omits the report. | Same necessary distinction between source rejection and internal failure. Both preserve sources and diagnostics. |
-| Ordering | Caller chooses a request, matches a product, then performs matching queries. | No phase ordering or product-tag agreement. Formatter equivalence checking remains a real two-input operation. |
-| Ownership | Caller still needs report, source, index, and query lifetime rules. | The same necessary snapshot lifetime rule, with no retained compiler session. |
-
-The typed interface adds callable names but removes tag-pairing rules. It does not claim
-that ownership and failure rules disappear. References also supplies rename, so rename needs no second symbol-analysis operation.
-
 ## Independent snapshots
 
 `CompilationInput` owns the root source, root identity, ordered library paths, and
@@ -114,10 +97,7 @@ appropriate.
 
 Replacing an editor snapshot releases its source and index storage when no query still
 borrows it. Producing a replacement while retaining the old snapshot can temporarily
-retain both. ADR-0172 specifies workspace invalidation and measurement of debounced
-reanalysis and on-demand workspace queries. Numerical latency and memory gates remain
-with the performance and executable-blueprint decisions. If those requirements cannot
-be met, revisit this choice using measurements.
+retain both.
 
 ## Private representations
 
@@ -157,7 +137,7 @@ Stable leaf concepts include structural types, declaration identity, binding ide
 source origin, field path, and operation kind. Source spelling is never overwritten with
 an internal name. A source node vocabulary describes grammar, while the semantic
 vocabulary describes established behavior. There is no separate
-parsed/resolved/typed/specialized/backend copy of the current 128-variant enum.
+parsed/resolved/typed/specialized/backend copy of the operation vocabulary.
 
 A generic recipe may contain type parameters and already-checked constrained dispatch.
 Specialization substitutes those terms and resolves concrete dispatch within the same
@@ -225,9 +205,9 @@ caller-supplied store. There is no public mutable access or public constructor. 
 partial analysis nor a report can yield this product.
 
 The backend owns target layouts, field storage plans, ABI plans, labels, pools, runtime
-selection, and assembly construction. `size_of` remains a typed symbolic query until
-target planning supplies its value. Constant evaluation must not require a physical
-target value to claim that a target-neutral product is complete.
+selection, and assembly construction. The backend lowers typed `size_of` queries
+using its layout plan. Source checking also consults the current physical layout
+to validate concrete `size_of` queries.
 [ADR-0171](0171-constants-use-bounded-target-independent-expressions.md) excludes
 layout queries from constant initializers and constant type arguments.
 
@@ -243,16 +223,16 @@ which validates instruction families, labels, and pools before publishing assemb
 | `SourceProgram` | Module/parser builder. Shared semantic checker consumes it. | Owns module visibility, declarations, scopes, and source bodies. Body work items move out internally. Released when semantic construction no longer needs it, or on failure. |
 | Semantic work | Checker and specialization worklist. Private builders only. | Owns local stack/loan state, recipes, pending instances, and checked facts. Moves concrete bodies into `CheckedProgram`. Releases temporary state on every return path. |
 | `CheckedProgram` | Successful semantic commit. Analysis orchestration may discard it, assembly transfers it to the backend. | Owns all paired body/declaration facts. Backend borrows read-only during lowering, then releases the product. No public retained borrow. |
-| `EditorIndex` | Shared source and semantic traversal. Analysis queries consume projected facts only. | Owned by `AnalysisSnapshot`. Assembly releases its editor facts. Storage and formatting costs must be measured. This decision does not claim they are free. |
+| `EditorIndex` | Shared source and semantic traversal. Analysis queries consume projected facts only. | Owned by `AnalysisSnapshot`. Assembly releases its editor facts. |
 | `SyntaxResult` | Syntax entry operation. Formatter and syntax tests. | Owns report, tokens, and any usable structural facts. Borrowed views cannot outlive it. Dropping it releases all retained storage. |
 | `AnalysisSnapshot` | Analysis entry operation on accepted or rejected source. LSP and query tests. | Owns one report and index, with no compiler bodies. Queries borrow temporarily and return owned values. Replacement releases the old snapshot when borrows end. |
 | Backend work | Backend receives `CheckedProgram` and target. Target planner and lowering use private state. | Owns layout/ABI caches and any machine form. Releases them on success, target rejection, or internal failure. |
 | `AssemblyResult` | Assembly entry operation after target processing. CLI/native build adapter. | Owns report and, only on success, target-tagged assembly. Source and compiler state need not remain borrowed during native process execution. |
 | `CompilerFailure` | Entry operation packages private failure with the still-owned report. CLI/LSP/formatter inspect it. | Owns all retained error context. No dangling phase borrow or partially valid backend product. |
 
-## Eight invalid-state families
+## Product boundaries
 
-| Baseline family | What prevents or contains it |
+| Invalid state | What prevents or contains it |
 | --- | --- |
 | Source spelling versus internal name | Immutable source tokens and separate declaration identities. No reverse mapping compensates for token rewriting. |
 | Parser/module collections and flags | Private request-local builder. Commit validates discovery, visibility, and required declaration relationships. These are private consistency checks, not invariants claimed to be enforced entirely by types. |
@@ -263,7 +243,7 @@ which validates instruction families, labels, and pools before publishing assemb
 | Error-bearing typecheck output accepted by backend | Partial `AnalysisSnapshot` and private `CheckedProgram` are different products. Only successful semantic commit creates backend input. Target rejection remains valid afterward. |
 | Mismatched machine program fields or instruction family | Machine state is backend-private. Its builder validates labels, pools, and family inputs. The backend decision chooses the representation, without exposing unchecked construction to callers. |
 
-## Validation and remaining decisions
+## Validation
 
 Tests cross the typed compiler and editor interfaces. Keep source-to-behavior coverage
 for branch joins, loops, matches, returned borrows, cleanup order, generic dispatch, and
@@ -275,23 +255,4 @@ Private tests may exercise semantic commits and backend plans through their actu
 constructing interfaces. Keep focused checks that reject unfinished instances,
 unresolved dispatch, invalid references, and mismatched machine state. Replace tests
 whose sole purpose is to mirror public fields, clone lists, take/restore ordering, or
-operation-ID transfer. Implementation and executable validation remain with the
-blueprint and production migration.
-
-The existing executable-blueprint decision must demonstrate all six representation cases
-above, including conditional cleanup and a borrowed generic result. It must measure
-retained memory and repeated-request cost, and show that editor queries no longer retain
-or interpret compiler bodies. No source reduction or performance gain is established by
-this decision.
-
-The front-end, semantic, tooling, backend, constant, and generic seam contracts
-are settled in ADR-0168 through ADR-0174. Numerical performance gates and final
-migration evidence remain with the blueprint and #715.
-
-## Evidence
-
-The [pinned architecture comparison](https://github.com/frendsick/casa/blob/bd3516658e11b4a1544562a552ae47e37329c073/compiler/compiler_architecture_prototype.html)
-contains the broad request/query protocols. The
-[pinned complexity baseline](https://github.com/frendsick/casa/blob/539d13953c189d2d12be1e8daf3cbf9947fc977d/docs/benchmarks/compiler-complexity-baseline.md#L158)
-identifies the eight invalid-state families. Historical implementation traces
-remain in [the original decision](https://github.com/frendsick/casa/blob/e9a258837d40185376c97e4fd03fccb98d238d82/docs/adr/0167-compiler-products-own-independent-snapshots.md#evidence).
+operation-ID transfer.

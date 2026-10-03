@@ -18,4 +18,3 @@ The trait implementation checker resolves mutually recursive derivations as stro
 - Recursive equality and ordering remain subject to the same semantic laws and explicit-customization rules as non-recursive derivation.
 - Runtime work and call depth may be proportional to the complete recursive structure.
 - Tests must cover direct and mutual recursion, unequal deep leaves, ordering across variants and payloads, stable equal hashes, and an external field lacking the requested capability.
-- Iterative generation remains a later optimization if deep-structure benchmarks justify it.

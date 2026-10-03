@@ -6,9 +6,7 @@ Importing a module exposes its public declarations through a local namespace.
 Qualified-only imports remove selective clauses and their dependency-retention
 contract. Visibility gives no source-level code-size guarantee.
 
-Implementation: the qualified-import language migration is complete.
 [Compiler products](../compiler-products.md) describe the delivered interfaces.
-Remaining compiler consumer cutover belongs to #715.
 
 ## Source contract
 
@@ -46,11 +44,7 @@ Private helpers and transitive dependencies remain available inside their defini
 modules but cannot be named by an importer. Imports do not re-export dependencies.
 Public structs with private fields still require a public construction interface.
 
-Inherent `impl` blocks may appear only in the type's defining module. Multiple
-blocks remain allowed there. Only the core library may extend compiler-owned
-built-in types. These ownership restrictions are accepted requirements even
-where implementation remains pending. Trait implementations follow the separate
-either-owner orphan rule in
+Trait implementations follow the either-owner orphan rule in
 [ADR-0041](0041-trait-implementation-obeys-an-orphan-rule.md).
 
 Two modules may export the same declaration name because their namespaces differ.
@@ -112,13 +106,7 @@ public access keep the module's intended interface visible.
 Visibility-only selection would preserve short unqualified names without retaining
 dependency pruning. It still needs selection grammar, selected-name bindings,
 visibility checks, and collision diagnostics. Qualified-only imports give up that
-convenience. Current selective imports additionally require requested roots,
-dependency closure, retention state, and selection-specific failure handling.
-
-The [front-end audit](../audits/front-end-complexity.md) records historical
-estimates. They are not measured savings and overlap runtime-state and module-seam
-work. Qualified imports sacrifice selected-name convenience without promising
-compile-time, memory, or binary-size improvements.
+convenience without promising compile-time, memory, or binary-size improvements.
 
 ## Validation
 
@@ -128,9 +116,3 @@ full-import validation, complete cycle paths, ordered lookup, canonical identity
 repeated imports, overrides, diagnostic order, and import non-execution.
 Check the removed-clause diagnostic in both analysis and syntax-only formatting.
 Formatting valid imports does not require dependencies to exist on disk.
-
-The migration's deletion targets and source conversion steps remain in
-[the original decision](https://github.com/frendsick/casa/blob/e9a258837d40185376c97e4fd03fccb98d238d82/docs/adr/0168-imports-expose-qualified-names-only.md#atomic-migration).
-The [qualified-import evidence](../benchmarks/qualified-imports/README.md)
-records the delivered work. The operation-semantics principle follows
-[ADR-0173](0173-semantic-checking-owns-source-obligations.md).

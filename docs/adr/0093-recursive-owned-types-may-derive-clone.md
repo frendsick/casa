@@ -17,5 +17,4 @@ The trait implementation checker treats a recursive derivation dependency as one
 
 - Compiler-managed indirection does not prevent Clone derivation, although it makes the recursive type non-Copy.
 - A deep recursive clone may exhaust call-stack space or allocation capacity; allocation failure terminates under the established model.
-- A measured deep-structure workload may justify an iterative handwritten Clone implementation or later compiler optimization.
 - Tests must cover direct recursion, mutual recursion, a non-Clone external field, and a long finite chain.
