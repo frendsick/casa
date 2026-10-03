@@ -466,6 +466,145 @@ fn test_commented_function_declaration {
         "declaration definition" offset DOCUMENT_TEST_FILE snapshot.get_index.find_definition document::PointAnswer::Known is test::assert_true
     done
 }
+# Check source identity through all parameter queries after analysis has released its bodies.
+fn assert_parameter_queries
+    index:$document::EditorIndex
+    source:$str
+    file:$str
+    name:$str
+    typ:$str
+    incomplete:bool
+{
+    source name str::find u64::try_from.unwrap = declaration_offset
+    f"\{ {name}" = body_prefix
+    source body_prefix.as_str str::find u64::try_from.unwrap 2 + = usage_offset
+    f"{name}: {typ}" = expected_hover
+    for offset in [declaration_offset, usage_offset].iter do
+        offset copy file index.find_definition match
+            document::PointAnswer::Known(location) => {
+                "parameter source file" file location.file test::assert_str_eq
+                "parameter definition offset" declaration_offset location.offset test::assert_eq
+                "parameter definition length" name.length location.length test::assert_eq
+            }
+            _ => "parameter definition available" false test::assert_true
+        end
+        offset copy file index.find_hover match
+            document::PointAnswer::Known(hover) => {
+                "parameter hover" expected_hover hover.content test::assert_str_eq
+                "parameter hover offset" offset copy hover.location.offset test::assert_eq
+                "parameter hover length" name.length hover.location.length test::assert_eq
+            }
+            _ => "parameter hover available" false test::assert_true
+        end
+        true offset copy file index.find_references match
+            document::ReferenceAnswer::Complete(result) => {
+                "parameter reference coverage" incomplete ! test::assert_true result
+            }
+            document::ReferenceAnswer::Incomplete(result reason) => {
+                "parameter reference coverage" incomplete test::assert_true result
+            }
+            _ => {
+                "parameter references available" false test::assert_true return
+            }
+        end = references
+        "parameter declarations are unique" 2 references.ranges.length test::assert_eq
+        "parameter reference declaration file" file references.declaration.file test::assert_str_eq
+        "parameter reference declaration offset" declaration_offset references.declaration.offset test::assert_eq
+        "parameter reference declaration length" name.length references.declaration.length test::assert_eq
+        "parameter use range" usage_offset 1 references
+            .ranges
+            .get
+            .offset test::assert_eq
+    done
+    false usage_offset file index.find_references match
+        document::ReferenceAnswer::Complete(result) => {
+            "parameter reference coverage" incomplete ! test::assert_true result
+        }
+        document::ReferenceAnswer::Incomplete(result reason) => {
+            "parameter reference coverage" incomplete test::assert_true result
+        }
+        _ => {
+            "parameter uses available" false test::assert_true return
+        }
+    end = references
+    "parameter declaration excluded" 1 references.ranges.length test::assert_eq
+    "" usage_offset file index.find_completions match
+        document::ListAnswer::Complete(items) => {
+            "parameter completion coverage" incomplete ! test::assert_true items
+        }
+        document::ListAnswer::Incomplete(items reason) => {
+            "parameter completion coverage" incomplete test::assert_true items
+        }
+        _ => {
+            "parameter completion available" false test::assert_true return
+        }
+    end = items
+    typ name items assert_variable_completion_type
+    for item in items.iter do
+        if item.candidate document::CompletionCandidate::Variable(variable) is then
+            if variable.name name == then
+                "parameter completion replacement" usage_offset item.replacement.offset test::assert_eq
+                "parameter completion length" name.length item.replacement.length test::assert_eq
+            fi
+        fi
+    done
+}
+
+fn test_retained_parameter_ranges {
+    "retained_parameter_ranges" test::test_start
+    for
+        source in [
+        "fn identity value:i64 -> i64 { value }",
+        "fn identity # header\nvalue # name\n: # type\ni64 -> i64 { value }",
+        "fn identity\r\nvalue\r\n: i64 -> i64 { value }",
+        "fn identity value:i64 -> i64 { value }\nfn broken { true 1 + drop }",
+        ].iter
+    do
+        source make_analyzed_document = snapshot
+        false "i64" "value" DOCUMENT_TEST_FILE source snapshot.get_index assert_parameter_queries
+    done
+    "fn identity[T] value:T -> T { value } 1 identity drop true identity drop" = generic_source
+    generic_source make_analyzed_document = generic
+    true "T" "value" DOCUMENT_TEST_FILE generic_source generic.get_index assert_parameter_queries
+    "fn identity[const N:u64] value:array[i64 N] -> array[i64 N] { value } [1] identity drop" = constant_source
+    constant_source make_analyzed_document = constant
+    false "array[i64 N]" "value" DOCUMENT_TEST_FILE constant_source constant.get_index assert_parameter_queries
+    "struct Item { number:i64 } impl Item { fn read self:$Item -> $Item { self } }" = method_source
+    method_source make_analyzed_document = method
+    false "$Item" "self" DOCUMENT_TEST_FILE method_source method.get_index assert_parameter_queries
+    "import \"/tmp/editor_parameters.casa\" as peer\n1 peer::identity drop true peer::identity drop".to_str
+    DOCUMENT_TEST_FILE.to_str products::SourceUnit
+    "" lexer::absolute_normalize_path swap products::CompilationInput::new = input
+    "pub fn identity[T] value:T -> T { value }" = imported_source
+    imported_source.to_str "/tmp/editor_parameters.casa".to_str input.source_overrides.set
+    input products::analyze.unwrap = imported
+    true "T" "value" "/tmp/editor_parameters.casa" imported_source imported.get_index assert_parameter_queries
+}
+
+fn test_parameter_declaration_recovery {
+    "parameter_declaration_recovery" test::test_start
+    "extern fn read value:i64 -> i64" make_analyzed_document = external
+    15 DOCUMENT_TEST_FILE external.get_index.find_hover match
+        document::PointAnswer::Known(hover) => "extern parameter hover" "value: i64" hover.content test::assert_str_eq
+        _ => "extern parameter declaration available" false test::assert_true
+    end
+    15 DOCUMENT_TEST_FILE external.get_index.find_definition match
+        document::PointAnswer::Known(location) => {
+            "extern parameter offset" 15 location.offset test::assert_eq
+            "extern parameter length" 5 location.length test::assert_eq
+        }
+        _ => "extern parameter definition available" false test::assert_true
+    end
+    "fn broken value:i64 { true 1 + drop }" make_analyzed_document = broken_body
+    10 DOCUMENT_TEST_FILE broken_body.get_index.find_hover match
+        document::PointAnswer::Known(hover) => "written parameter survives body error" "value: i64" hover.content test::assert_str_eq
+        _ => "written parameter remains available" false test::assert_true
+    end
+    "fn broken value: { value }\nfn healthy { }" make_analyzed_document = rejected
+    "rejected parameter has no definition" 10 DOCUMENT_TEST_FILE rejected.get_index.find_definition document::PointAnswer::Known is ! test::assert_true
+    "rejected parameter has no hover" 10 DOCUMENT_TEST_FILE rejected.get_index.find_hover document::PointAnswer::Known is ! test::assert_true
+    "rejected parameter has no identity" true 10 DOCUMENT_TEST_FILE rejected.get_index.find_references document::ReferenceAnswer::Unavailable is test::assert_true
+}
 
 fn test_binding_identities_and_global_visibility {
     "binding_identities_and_global_visibility" test::test_start
@@ -564,6 +703,8 @@ fn test_capture_definition_and_borrowed_completion {
         _ => "borrowed completion complete" false test::assert_true
     end
 }
+test_parameter_declaration_recovery
+test_retained_parameter_ranges
 test_capture_definition_and_borrowed_completion
 test_scoped_variable_types_and_generic_references
 test_binding_identities_and_global_visibility

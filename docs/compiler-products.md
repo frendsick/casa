@@ -159,7 +159,12 @@ release. Convert locations with the originating report's retained sources.
 
 Projection records checker-verified source facts during construction and
 releases the compiler store and bodies before returning. Query execution reads
-source facts only. References cover this compilation's root and loaded imports,
+source facts only. Named parameters retain their written name ranges from parsing,
+including method receivers. Type substitution preserves this attribution.
+Parameter queries use these retained ranges, and generated parameters have no
+source declaration. Established parameter declarations survive independent body
+errors. Local binding scopes still use source occurrence reconstruction.
+References cover this compilation's root and loaded imports,
 with sorted, deduplicated ranges and explicit declaration inclusion. Tokens are
 sorted, non-overlapping, and restricted to the requested file. Source failures
 preserve independent verified facts. Point availability tracks affected source
