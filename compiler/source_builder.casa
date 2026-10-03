@@ -107,18 +107,20 @@ pub struct ImportedModule {
 }
 
 pub struct ModuleContext {
-    pub included_files:    std::Set[std::String]
-    pub declared_names:    std::Set[std::String]
-    pub nonconstant_names: std::Set[std::String]
-    pub names:             std::Map[std::String common::SourceBinding]
-    pub import_ends:       std::Map[std::String u64]
-    pub header_ends:       std::Map[std::String u64]
-    pub complete_until:    std::Option[u64]
+    pub included_files:        std::Set[std::String]
+    pub declared_names:        std::Set[std::String]
+    pub nonconstant_names:     std::Set[std::String]
+    pub names:                 std::Map[std::String common::SourceBinding]
+    pub import_ends:           std::Map[std::String u64]
+    pub header_ends:           std::Map[std::String u64]
+    pub rejected_declarations: std::Map[std::String u64]
+    pub rejected_references:   std::Map[std::String u64]
+    pub complete_until:        std::Option[u64]
 }
 
 impl ModuleContext {
     pub fn new -> ModuleContext {
-        std::Option[u64]::None
+        std::Option[u64]::None std::Map[std::String u64]::new std::Map[std::String u64]::new
         std::Map[std::String u64]::new std::Map[std::String u64]::new std::Map[std::String common::SourceBinding]::new
         std::Set[std::String]::new std::Set[std::String]::new std::Set[std::String]::new ModuleContext
     }
@@ -6128,6 +6130,58 @@ pub fn public_declaration_name
 }
 
 impl Parser {
+    # Skip rejected declarations before their headers or generated symbols are published.
+    fn reject_declaration
+        self:mut$Parser
+        token:$common::Token
+        cursor:mut$TokenCursor
+        ops:mut$std::List[common::Op]
+    -> bool {
+        if
+            self
+                .current_module
+                .rejected_declarations
+                .is_empty
+        then
+            false return
+        fi
+        token
+            .location
+            .span
+            .offset
+            .to_str = key
+        if
+            key.as_str self
+                .current_module
+                .rejected_declarations
+                .get_str std::Option::Some(close) is
+        then
+            close copy = close_offset
+            while cursor.is_finished ! do
+                cursor.pos cursor
+                    .tokens
+                    .get
+                    .location
+                    .span
+                    .offset = next_offset
+                if close_offset next_offset > then
+                    break
+                fi
+                cursor.advance
+            done
+            token.location.clone = location
+            cursor.pos 1 - cursor
+                .tokens
+                .get
+                .location
+                .span = last_span: $common::Span
+            last_span.offset last_span.length + location.span.offset - = location.span.length
+            location common::OpValue::Rejected common::Op::new ops.push
+            true return
+        fi
+        false
+    }
+
     # unsafe function declaration or lexical block
     fn handle_keyword_unsafe
         self:mut$Parser
@@ -6139,6 +6193,9 @@ impl Parser {
         cursor.peek = unsafe_next_opt
         if unsafe_next_opt std::Option::Some(unsafe_next) is then
             if "fn" unsafe_next common::Token::value.as_str == then
+                if ops cursor unsafe_next self.reject_declaration then
+                    return
+                fi
                 self token common::Token::location "Functions" function_name require_global_scope
                 cursor self parse_function = function
                 true function.declaration common::Function::set_is_unsafe
@@ -6256,6 +6313,9 @@ pub fn get_op_keyword
     function_name:$str
     ops:mut$std::List[common::Op]
 {
+    if ops cursor token parser.reject_declaration then
+        return
+    fi
     if
         cursor.pos 1 - u64::to_str parser
             .current_module
@@ -6743,6 +6803,27 @@ pub fn token_to_op
     function_name:$str
     ops:mut$std::List[common::Op]
 {
+    if
+        parser
+            .current_module
+            .rejected_references
+            .is_empty !
+    then
+        token
+            .location
+            .span
+            .offset
+            .to_str = reference_key
+        if
+            reference_key.as_str parser
+                .current_module
+                .rejected_references
+                .has_str
+        then
+            token.location.clone common::OpValue::Rejected common::Op::new ops.push
+            return
+        fi
+    fi
     token common::Token::kind = kind
 
     # Source newlines do not interrupt an accessor chain.
@@ -8284,6 +8365,50 @@ impl Parser {
         done
     }
 
+    # Syntax ranges include nested declarations and implementation blocks.
+    fn reject_declaration_ranges
+        self:mut$Parser
+        regions:$std::List[grammar::SyntaxSpan]
+        tokens:$std::List[common::Token]
+    {
+        if
+            self
+                .current_module
+                .rejected_references
+                .is_empty
+        then
+            return
+        fi
+        for region in regions.iter do
+            if region.kind grammar::SyntaxSpanKind::Declaration != then
+                continue
+            fi
+            false = rejected
+            for
+                reference in self
+                    .current_module
+                    .rejected_references
+                    .iter
+            do
+                reference.second copy tokens
+                    .get
+                    .location
+                    .span
+                    .offset = offset
+                if region.start offset >= region.close offset <= && then
+                    true = rejected
+                    break
+                fi
+            done
+            if rejected then
+                region.close region.start.to_str self
+                    .current_module_mut
+                    .rejected_declarations
+                    .set
+            fi
+        done
+    }
+
     fn prepare_module self:mut$Parser tokens:$std::List[common::Token] module_prefix:$str {
         if tokens.is_empty then
             self.state.mark_output_unusable return
@@ -8420,33 +8545,34 @@ impl Parser {
             parsed.declarations names self.reserve_root_names
         fi
         for position in parsed.references.iter do
-            names position copy tokens.get self.check_qualified_access
-        done
-        if
             self
                 .state
                 .diagnostics
-                .has_errors
-        then
-            0 self.state.diagnostics take_diagnostics_since = qualified_diagnostics
-            diagnostics.clone self
-                .state
-                .diagnostics
-                .merge
-            qualified_diagnostics self
-                .state
-                .diagnostics
-                .merge
-            lexical_diagnostics.clone self
-                .state
-                .diagnostics
-                .merge
-            parsed.diagnostics.clone self
-                .state
-                .diagnostics
-                .merge
-            self.state.mark_output_unusable return
-        fi
+                .error_count = errors_before_access
+            names position copy tokens.get self.check_qualified_access
+            if
+                errors_before_access self
+                    .state
+                    .diagnostics
+                    .error_count >
+            then
+                position copy position copy tokens
+                    .get
+                    .location
+                    .span
+                    .offset
+                    .to_str self
+                    .current_module_mut
+                    .rejected_references
+                    .set
+            fi
+        done
+        tokens parsed.spans self.reject_declaration_ranges
+        0 self.state.diagnostics take_diagnostics_since diagnostics.merge
+        diagnostics self
+            .state
+            .diagnostics
+            .merge
         file.as_str names self.store.record_source_names
         names.clone = self.current_module_mut.names
         # Source spellings classify local declarations before their headers exist.
@@ -8506,7 +8632,20 @@ impl Parser {
                     .state
                     .diagnostics
                     .error_count = errors_before_constant
-                declaration constant_cursor self.evaluate_constant_declaration
+                if
+                    declaration.first_token tokens
+                        .get
+                        .location
+                        .span
+                        .offset
+                        .to_str
+                        .as_str self
+                        .current_module
+                        .rejected_declarations
+                        .has_str !
+                then
+                    declaration constant_cursor self.evaluate_constant_declaration
+                fi
                 self
                     .state
                     .diagnostics
@@ -8528,10 +8667,6 @@ impl Parser {
             fi
         done
         tokens parsed.declarations self.collect_headers
-        diagnostics self
-            .state
-            .diagnostics
-            .merge
         lexical_diagnostics.clone self
             .state
             .diagnostics
@@ -8565,6 +8700,20 @@ impl Parser {
             .clone = cursor.names
         self.source_prefixes cursor.copy_module_prefixes
         for declaration in declarations.iter do
+            if
+                declaration.first_token tokens
+                    .get
+                    .location
+                    .span
+                    .offset
+                    .to_str
+                    .as_str self
+                    .current_module
+                    .rejected_declarations
+                    .has_str
+            then
+                continue
+            fi
             declaration.first_token = cursor.pos
             if "struct" declaration.kind.as_str == then
                 declaration.external cursor self parse_struct = structure
@@ -8601,6 +8750,20 @@ impl Parser {
                 .set
         done
         for declaration in declarations.iter do
+            if
+                declaration.first_token tokens
+                    .get
+                    .location
+                    .span
+                    .offset
+                    .to_str
+                    .as_str self
+                    .current_module
+                    .rejected_declarations
+                    .has_str
+            then
+                continue
+            fi
             if "trait" declaration.kind.as_str == then
                 declaration.first_token = cursor.pos
                 cursor self parse_trait = casa_trait
