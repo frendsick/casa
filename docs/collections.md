@@ -86,7 +86,8 @@ returns a slice over the complete list.
 
 ## Lists
 
-`List[T]` is a growable sequence:
+`List[T]` is a growable sequence. `List[T]::new` starts without element storage.
+The first `push`, `insert`, or nonempty `append` allocates that storage:
 
 ```casa
 [3, 1, 2] List::from_array = numbers
@@ -165,7 +166,8 @@ See [`examples/bytes.casa`](../examples/bytes.casa) for a runnable example.
 
 ## Maps
 
-`Map[K V]` associates unique keys with values. `K` must implement `Hashable`:
+`Map[K V]` associates unique keys with values. `K` must implement `Hashable`.
+A new map allocates its buckets when the first entry is inserted:
 
 ```casa
 Map[str i64]::new = scores
