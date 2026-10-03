@@ -4,13 +4,14 @@ import "../../compiler/error.casa" as error
 import "../../compiler/typechecker.casa" as typechecker
 import "../../lib/test.casa" as test
 import "helpers.casa" as helpers
+import "../../compiler/source_body.casa" as source_body
 
 pub fn typecheck_source
     code:$str
     diagnostics:mut$error::Diagnostics
 -> typechecker::TypecheckResult {
-    diagnostics code helpers::parse_resolve_test_parts = store = ops
-    store ops typechecker::type_check
+    diagnostics code helpers::parse_resolve_test_parts = source_bodies = store = ops
+    source_bodies store ops helpers::type_check_parts
 }
 
 pub fn test_fstring_capture_uses_inferred_parameter_type {
@@ -20,22 +21,28 @@ pub fn test_fstring_capture_uses_inferred_parameter_type {
     false = found_conversion
     for
         function_name in result
-            .store
+            .get_store
             .get_function_names
             .iter
     do
         function_name.as_str result
-            .store
+            .get_store
             .get_function
             .unwrap = function
-        for op in function.ops.iter do
+        for
+            op in function.name.as_str result
+                .find_body
+                .unwrap
+                .lower_operations
+                .iter
+        do
             if op.value common::OpValue::PrimitiveToStr is then
                 true = found_conversion
             fi
         done
     done
     "captured i64 is converted to str" found_conversion test::assert_true
-    result.diagnostics.clone diagnostics.merge
+    result.get_diagnostics.clone diagnostics.merge
     diagnostics "captured parameter keeps inferred type" helpers::assert_no_errors
 }
 
@@ -44,20 +51,18 @@ pub fn test_typecheck_result_exposes_phase_outputs {
     "typecheck_result_exposes_phase_outputs" test::test_start
     diagnostics "42 = answer answer print" typecheck_source = result
     "no diagnostics" 0 result
-        .diagnostics
+        .get_diagnostics
         .entries
         .length test::assert_eq
     "global stack is empty" 0 result
-        .global_stack_effect
+        .get_effect
         .return_types
         .length test::assert_eq
-    "ops returned" 4 result.ops.length test::assert_eq
-    "print resolved" 3 result
-        .ops
-        .get
-        .value common::OpValue::PrintInt is test::assert_true
+    result.get_root.lower_operations = operations
+    "ops returned" 4 operations.length test::assert_eq
+    "print resolved" 3 operations.get.value common::OpValue::PrintInt is test::assert_true
     "updated store returned" "i64" "answer" result
-        .store
+        .get_store
         .variables
         .get_str
         .unwrap
@@ -71,25 +76,25 @@ pub fn test_non_returning_paths_propagate_through_direct_calls {
     diagnostics
     "enum Maybe { Some(i64) None } fn fatal message:$str { message panic } fn stop { \"stopped\" fatal } fn never value:i64 -> i64 { value drop stop } fn choose flag:bool -> i64 { if flag then stop else 42 fi } fn inferred { if true then stop else 42 fi } fn unwrap value:Maybe -> i64 { value match Maybe::Some(inner) => inner Maybe::None => \"missing\" panic end } fn call_indirect callback:fn[i64 -> i64] -> i64 { 1 callback exec } true choose drop inferred drop 1 Maybe::Some unwrap drop &never call_indirect drop"
     typecheck_source = result
-    result.diagnostics.clone diagnostics.merge
+    result.get_diagnostics.clone diagnostics.merge
     diagnostics "terminating branch is excluded from the join" helpers::assert_no_errors
     "fatal is non-returning" "fatal" result
-        .store
+        .get_store
         .get_function
         .unwrap
         .is_non_returning test::assert_true
     "direct wrapper is non-returning" "stop" result
-        .store
+        .get_store
         .get_function
         .unwrap
         .is_non_returning test::assert_true
     "function with a continuing branch returns" "choose" result
-        .store
+        .get_store
         .get_function
         .unwrap
         .is_non_returning ! test::assert_true
     "inferred join keeps the continuing result" "i64" 0 "inferred" result
-        .store
+        .get_store
         .get_function
         .unwrap
         .stack_effect
@@ -97,7 +102,7 @@ pub fn test_non_returning_paths_propagate_through_direct_calls {
         .get
         .format test::assert_str_eq
     "match excludes its terminating arm" "i64" 0 "unwrap" result
-        .store
+        .get_store
         .get_function
         .unwrap
         .stack_effect
@@ -105,7 +110,7 @@ pub fn test_non_returning_paths_propagate_through_direct_calls {
         .get
         .format test::assert_str_eq
     "indirect calls are assumed to return" "call_indirect" result
-        .store
+        .get_store
         .get_function
         .unwrap
         .is_non_returning ! test::assert_true
@@ -115,10 +120,10 @@ pub fn test_non_returning_function_satisfies_declared_output {
     "non_returning_function_satisfies_declared_output" test::test_start
     error::Diagnostics::new = diagnostics
     diagnostics "fn impossible -> i64 { \"stopped\" panic } impossible" typecheck_source = result
-    result.diagnostics.clone diagnostics.merge
+    result.get_diagnostics.clone diagnostics.merge
     diagnostics "non-returning function needs no invented output" helpers::assert_no_errors
     "function is non-returning" "impossible" result
-        .store
+        .get_store
         .get_function
         .unwrap
         .is_non_returning test::assert_true
@@ -130,43 +135,74 @@ pub fn test_non_returning_structural_inputs {
     diagnostics
     "fn if_condition { if \"if condition\" panic then 1 drop fi } fn while_condition { while \"while condition\" panic do done } fn match_subject { \"match subject\" panic match _ => { } end } fn match_guard -> i64 { true match true if \"match guard\" panic => 1 _ => 2 end }"
     typecheck_source = result
-    result.diagnostics.clone diagnostics.merge
+    result.get_diagnostics.clone diagnostics.merge
     diagnostics "structural inputs can terminate" helpers::assert_no_errors
     "if condition terminates" "if_condition" result
-        .store
+        .get_store
         .get_function
         .unwrap
         .is_non_returning test::assert_true
     "while condition terminates" "while_condition" result
-        .store
+        .get_store
         .get_function
         .unwrap
         .is_non_returning test::assert_true
     "match subject terminates" "match_subject" result
-        .store
+        .get_store
         .get_function
         .unwrap
         .is_non_returning test::assert_true
     "match guard needs no boolean result" "match_guard" result
-        .store
+        .get_store
         .get_function
         .unwrap
         .is_non_returning ! test::assert_true
 }
 
-pub fn test_monomorphization_restores_recursive_body {
+pub fn test_non_returning_structures_reach_backend {
+    "non_returning_structures_reach_backend" test::test_start
+    error::Diagnostics::new = diagnostics
+    diagnostics
+    "enum Maybe { Item(i64) None } fn conditional { if \"stop\" panic then 1 drop fi } fn loop { while \"stop\" panic do done } fn wildcard { \"stop\" panic match _ => { } end } fn payload { \"stop\" panic match Maybe::Item(n) => n drop _ => { } end } &conditional drop &loop drop &wildcard drop &payload drop struct Item { value:i64 } fn inspect item:$Item { item drop } fn dead_temporary { return 1 Item inspect } &dead_temporary drop"
+    typecheck_source = result
+    result.get_diagnostics "terminating structures check" helpers::assert_no_errors
+    "unreachable operands are absent from backend input" result.into_checked_program.is_ok test::assert_true
+}
+
+pub fn test_unreachable_source_preserves_type_errors {
+    "unreachable_source_preserves_type_errors" test::test_start
+    error::Diagnostics::new = diagnostics
+    diagnostics "fn stopped { return \"wrong\" 1 * drop }" typecheck_source = result
+    "unreachable arithmetic is checked" common::ErrorKind::TypeMismatch result.get_diagnostics helpers::diagnostics_has_error_kind test::assert_true
+    "rejected dead source cannot commit" result.into_checked_program.is_error test::assert_true
+}
+
+pub fn test_unreachable_generic_reference_preserves_cycle_error {
+    "unreachable_generic_reference_preserves_cycle_error" test::test_start
+    error::Diagnostics::new = diagnostics
+    diagnostics "fn recurse_ref[T U] first:T second:U { first drop second drop return &recurse_ref[U T] drop }" typecheck_source = result
+    "unreachable reference cannot change recursive type arguments" common::ErrorKind::TypeMismatch result.get_diagnostics helpers::diagnostics_has_error_kind test::assert_true
+}
+
+pub fn test_recursive_checked_body_preserves_call {
     "monomorphization_restores_recursive_body" test::test_start
     error::Diagnostics::new = diagnostics
     diagnostics "fn recurse -> i64 { recurse } recurse drop" typecheck_source = result
-    result.diagnostics.clone diagnostics.merge
+    result.get_diagnostics.clone diagnostics.merge
     diagnostics "recursive function typechecks" helpers::assert_no_errors
     "recurse" result
-        .store
+        .get_store
         .get_function
         .unwrap = recurse
-    "recursive body restored" 1 recurse.ops.length test::assert_eq
-    "recursive call preserved" 0 recurse
-        .ops
+    "recursive body completed" 1 "recurse" result
+        .find_body
+        .unwrap
+        .lower_operations
+        .length test::assert_eq
+    "recursive call preserved" 0 "recurse" result
+        .find_body
+        .unwrap
+        .lower_operations
         .get
         .value common::OpValue::FnCall is test::assert_true
 }
@@ -175,26 +211,27 @@ pub fn test_typecheck_collects_independent_errors {
     error::Diagnostics::new = diagnostics
     "typecheck_collects_independent_errors" test::test_start
     diagnostics "\"first\" 1 * true 2 *" typecheck_source = result
-    "two independent errors" 2 result.diagnostics.error_count test::assert_eq
-    "bytecode blocked" result.diagnostics.has_errors test::assert_true
+    "two independent errors" 2 result.get_diagnostics.error_count test::assert_eq
+    "bytecode blocked" result.get_diagnostics.has_errors test::assert_true
 }
 
 pub fn test_typecheck_missing_sentinel_suppresses_cascade {
     error::Diagnostics::new = diagnostics
     "typecheck_missing_sentinel_suppresses_cascade" test::test_start
     diagnostics "fn broken -> i64 { 1 * }" typecheck_source = result
-    "one underflow error" 1 result.diagnostics.error_count test::assert_eq
+    "one underflow error" 1 result.get_diagnostics.error_count test::assert_eq
 }
 
 pub fn test_typecheck_unknown_sentinel_suppresses_display_cascade {
     "typecheck_unknown_sentinel_suppresses_display_cascade" test::test_start
     common::symbol_store_new = store
+    std::Map[std::String source_body::SourceBody]::new = source_bodies
     std::List[common::Op]::new = ops
     common::empty_location "missing".to_str common::OpValue::PushVar common::Op::new ops.push
     common::empty_location common::OpValue::Print common::Op::new ops.push
-    store ops typechecker::type_check = result
-    "undefined variable is the only error" 1 result.diagnostics.error_count test::assert_eq
-    "unknown value adds no display error" "Display" result.diagnostics helpers::diagnostics_error_contains ! test::assert_true
+    source_bodies store ops helpers::type_check_parts = result
+    "undefined variable is the only error" 1 result.get_diagnostics.error_count test::assert_eq
+    "unknown value adds no display error" "Display" result.get_diagnostics helpers::diagnostics_error_contains ! test::assert_true
 }
 
 pub fn test_typechecker_preserves_warning_error_order {
@@ -202,11 +239,12 @@ pub fn test_typechecker_preserves_warning_error_order {
     error::Diagnostics::new = diagnostics
     common::empty_location "completed warning".to_str common::WarningKind::UnusedParameter error::CasaWarning diagnostics.push_warning
     common::symbol_store_new = store
+    std::Map[std::String source_body::SourceBody]::new = source_bodies
     std::List[common::Op]::new = ops
     common::empty_location "bad".to_str common::OpValue::PushStr common::Op::new ops.push
     common::empty_location 1 common::make_integer_op_value common::Op::new ops.push
     common::empty_location common::OpValue::Mul common::Op::new ops.push
-    false diagnostics store std::Option[common::Function]::None ops typechecker::check_ops drop
+    false source_bodies diagnostics store std::Option[common::Function]::None ops typechecker::check_ops drop
     "warning and error retained" 2 diagnostics.entries.length test::assert_eq
     "warning remains first" 0 diagnostics.entries.get error::Diagnostic::Warning is test::assert_true
     "error remains second" 1 diagnostics.entries.get error::Diagnostic::Error is test::assert_true
@@ -216,7 +254,10 @@ test_typecheck_result_exposes_phase_outputs
 test_non_returning_paths_propagate_through_direct_calls
 test_non_returning_function_satisfies_declared_output
 test_non_returning_structural_inputs
-test_monomorphization_restores_recursive_body
+test_non_returning_structures_reach_backend
+test_unreachable_source_preserves_type_errors
+test_unreachable_generic_reference_preserves_cycle_error
+test_recursive_checked_body_preserves_call
 test_typecheck_collects_independent_errors
 test_typecheck_missing_sentinel_suppresses_cascade
 test_typecheck_unknown_sentinel_suppresses_display_cascade

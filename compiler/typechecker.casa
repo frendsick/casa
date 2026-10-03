@@ -3,61 +3,237 @@ import "std" as std
 import "common" as common
 import "error" as error
 import "semantics" as semantics
+import "semantic_body" as semantic_body
+import "bindings" as bindings
+import "source_body" as source_body
 
 pub struct TypecheckResult {
-    pub store:               common::SymbolStore
-    pub global_stack_effect: common::StackEffect
-    pub ops:                 std::List[common::Op]
-    pub diagnostics:         error::Diagnostics
-    pub verified_operations: std::Set[i64]
+    store:               common::SymbolStore
+    global_stack_effect: common::StackEffect
+    root:                semantics::AnalysisBody
+    bodies:              std::Map[std::String semantics::AnalysisBody]
+    diagnostics:         error::Diagnostics
+    verified_operations: std::Set[i64]
 }
 
-fn commit_semantic_store target:mut$common::SymbolStore source:$common::SymbolStore {
-    source.next_op_id = target.next_op_id
-    for function_name in source.get_function_names.iter do
-        function_name.as_str source
-            .get_function
-            .unwrap
-            .clone_for_import = function
-        if function_name.as_str source.is_generated_recipe then
-            function target.set_generated_recipe
+# Only this module can construct backend input. Bodies and their declarations transfer together.
+pub struct CheckedProgram {
+    store:  common::SymbolStore
+    root:   semantic_body::Body
+    bodies: std::Map[std::String semantic_body::Body]
+}
+
+impl CheckedProgram {
+    pub fn get_store self:$CheckedProgram -> $common::SymbolStore { self.store }
+    pub fn get_root self:$CheckedProgram -> $semantic_body::Body { self.root }
+
+    pub fn find_body self:$CheckedProgram name:$str -> std::Option[$semantic_body::Body] {
+        name self.bodies.get_str
+    }
+}
+
+impl TypecheckResult {
+    pub fn get_store self:$TypecheckResult -> $common::SymbolStore { self.store }
+    pub fn get_effect self:$TypecheckResult -> $common::StackEffect { self.global_stack_effect }
+    pub fn get_diagnostics self:$TypecheckResult -> $error::Diagnostics { self.diagnostics }
+    pub fn with_source_diagnostics
+        self:TypecheckResult
+        diagnostics:error::Diagnostics
+    -> TypecheckResult {
+        self match
+            TypecheckResult { store: store global_stack_effect: effect root: root bodies: bodies diagnostics: checked verified_operations: verified } => {
+                checked diagnostics.merge
+                verified diagnostics bodies root effect store TypecheckResult
+            }
+        end
+    }
+
+    pub fn get_root self:$TypecheckResult -> $semantics::AnalysisBody { self.root }
+
+    pub fn find_body self:$TypecheckResult name:$str -> std::Option[$semantics::AnalysisBody] {
+        name self.bodies.get_str
+    }
+
+    pub fn into_analysis_parts
+        self:TypecheckResult
+    -> common::SymbolStore semantics::AnalysisBody std::Map[std::String semantics::AnalysisBody] std::Set[i64] {
+        self match
+            TypecheckResult { store: store root: root bodies: bodies verified_operations: verified } => store root bodies verified
+        end
+    }
+
+    pub fn into_checked_program self:TypecheckResult -> std::Result[CheckedProgram std::String] {
+        self match
+            TypecheckResult { store: store root: root bodies: bodies diagnostics: diagnostics } => {
+                if diagnostics.has_errors then
+                    "Backend input requires error-free checking".to_str std::Result::Error return
+                fi
+                bodies root store commit_checked_program
+            }
+        end
+    }
+}
+
+fn collect_drop_dependencies
+    typ:$common::Type
+    store:$common::SymbolStore
+    callees:mut$std::List[std::String]
+    visited:mut$std::Set[std::String]
+-> std::Result[bool std::String] {
+    typ semantic_body::validate_type ? drop
+    if typ.is_borrow then
+        true std::Result::Ok return
+    fi
+    typ.format = key
+    if key visited.has then
+        true std::Result::Ok return
+    fi
+    key visited.add
+    if store typ common::find_drop_function_name std::Option::Some(name) is then
+        name.as_str store.get_function.unwrap = declaration
+        if
+            declaration
+                .stack_effect
+                .type_vars
+                .is_empty ! declaration
+                .stack_effect
+                .const_params
+                .length 0 != ||
+        then
+            declaration typ semantics::function_receiver_bindings = substitutions
+            substitutions name.as_str semantics::monomorphized_function_name callees.push
         else
-            function target.set_function
+            name.clone callees.push
         fi
-    done
-    source.variables.clone = target.variables
-    source.constants.clone = target.constants
-    source.enums.clone = target.enums
-    source.structs.clone = target.structs
-    source.traits.clone = target.traits
-    source.builtins.clone = target.builtins
-    source.copy_types.clone = target.copy_types
-    source.borrow_shapes.clone = target.borrow_shapes
-    source.public_symbols.clone = target.public_symbols
-    source.private_symbols.clone = target.private_symbols
-    source.module_private_symbols.clone = target.module_private_symbols
+    fi
+    typ match
+        common::Type::Generic(generic) => generic
+        _ => true std::Result::Ok return
+    end = generic
+    if common::ARRAY_TYPE generic.base.as_str == then
+        if generic.params.is_empty ! then
+            visited callees store 0 generic.params.get collect_drop_dependencies ? drop
+        fi
+    elif generic.base.as_str store.structs.get_str std::Option::Some(shape) is then
+        shape.type_vars typ common::aggregate_type_bindings = substitutions
+        for member in shape.members.iter do
+            substitutions member.typ.substitute_t = child_type
+            visited callees store child_type collect_drop_dependencies ? drop
+        done
+    elif generic.base.as_str store.enums.get_str std::Option::Some(shape) is then
+        shape.type_vars typ common::aggregate_type_bindings = substitutions
+        for variant in shape.variant_types.iter do
+            for member in variant.second.iter do
+                substitutions member.substitute_t = child_type
+                visited callees store child_type collect_drop_dependencies ? drop
+            done
+        done
+    fi
+    true std::Result::Ok
 }
 
-pub fn type_check ops:std::List[common::Op] store:common::SymbolStore -> TypecheckResult {
+fn validate_concrete_body
+    body:$semantic_body::Body
+    store:$common::SymbolStore
+    callees:mut$std::List[std::String]
+    drop_types:mut$std::Set[std::String]
+    owner:$str
+-> std::Result[bool std::String] {
+    std::List[common::Type]::new = drops
+    std::List[common::Variable]::new = empty_variables
+    if owner store.get_function std::Option::Some(declaration) is then
+        declaration.captures declaration.variables store semantic_body::BodyReferences::new = references
+        references drops callees body.validate_concrete ? drop
+    else
+        store.variables.values = root_variables
+        empty_variables root_variables store semantic_body::BodyReferences::new = references
+        references drops callees body.validate_concrete ? drop
+    fi
+    for typ in drops.iter do
+        drop_types callees store typ collect_drop_dependencies ? drop
+    done
+    true std::Result::Ok
+}
+
+fn prepare_body_storage
+    function:mut$common::Function
+    body:$semantic_body::Body
+-> std::Result[bool std::String] {
+    function.variables body.collect_storage_variables = locals
+    for variable in locals.iter do
+        variable.typ semantic_body::validate_type ? drop
+    done
+    locals = function.variables
+    true std::Result::Ok
+}
+
+fn commit_checked_program
+    store:common::SymbolStore
+    root_analysis:semantics::AnalysisBody
+    available:std::Map[std::String semantics::AnalysisBody]
+-> std::Result[CheckedProgram std::String] {
+    std::Map[std::String semantic_body::Body]::new = bodies
+    std::List[std::String]::new = callees
+    std::Set[std::String]::new = drop_types
+    std::Set[std::String]::new = visited
+    root_analysis.into_checked ? = root
+    store.variables.values = declarations
+    declarations root.collect_storage_variables = root_variables
+    std::Map[std::String common::Variable]::new = variables
+    for variable in root_variables.iter do
+        variable.typ semantic_body::validate_type ? drop
+        variable.clone variable.name.clone variables.set
+    done
+    variables = store.variables
+    common::GLOBAL_SCOPE_LABEL drop_types callees store root validate_concrete_body ? drop
+    while callees.is_empty ! do
+        callees.pop = name
+        if name visited.has then
+            continue
+        fi
+        name.clone visited.add
+        name.as_str store.get_function match
+            std::Option::Some(declaration) => {
+                declaration.stack_effect semantic_body::validate_effect ? drop
+                if declaration.extern_symbol.is_some then
+                    continue
+                fi
+            }
+            std::Option::None => f"Missing checked function `{name}`" std::Result::Error return
+        end
+        name.as_str available.remove_str match
+            std::Option::Some(body) => body.into_checked ?
+            std::Option::None => f"Missing checked body `{name}`" std::Result::Error return
+        end = body
+        body name.as_str store.get_function_mut.unwrap prepare_body_storage ? drop
+        name.as_str store.get_function.unwrap = declaration
+        for capture in declaration.captures.iter do
+            capture.typ semantic_body::validate_type ? drop
+            drop_types callees store capture.typ collect_drop_dependencies ? drop
+        done
+        name.as_str drop_types callees store body validate_concrete_body ? drop
+        body name bodies.set
+    done
+    bodies root store CheckedProgram std::Result::Ok
+}
+
+pub fn type_check source:source_body::SourceProgram -> TypecheckResult {
     error::Diagnostics::new = diagnostics
+    source.into_parts = source_bodies = source_root = store
     diagnostics store semantics::validate_extern_structs
     diagnostics store semantics::validate_extern_functions
-    diagnostics store semantics::check_trait_default_bodies = store
     store.get_function_names = function_names
-    store semantics::SemanticSession::from_store = semantic_session
-    semantic_session ops semantics::analyze_root_semantics = root_semantics
-    ops drop
-    root_semantics.operations.clone = checked_ops
-    root_semantics.inferred_effect.clone = global_stack_effect
-    root_semantics.diagnostics.clone diagnostics.merge
+    source_bodies source_root store source_body::SourceProgram::new semantics::SemanticSession::from_source = root_body = semantic_session
+    semantic_session root_body semantics::analyze_source_root_semantics match
+        semantics::FunctionSemantics { operations: operations inferred_effect: effect diagnostics: root_diagnostics } => {
+            root_diagnostics diagnostics.merge
+            effect operations
+        }
+    end = checked_ops = global_stack_effect
     diagnostics semantic_session function_names schedule_functions
-    checked_ops semantic_session.into_checked_parts = verified = checked_store
-    diagnostics checked_store semantics::check_trait_impls
-    diagnostics checked_store semantics::validate_generic_cycles
-    if diagnostics.has_errors ! then
-        diagnostics checked_store checked_ops semantics::monomorphize_checked_generics
-    fi
-    verified diagnostics checked_ops global_stack_effect checked_store TypecheckResult
+    diagnostics semantic_session.validate_checked_declarations
+    diagnostics checked_ops semantic_session.finish = verified = bodies = root = checked_store
+    verified diagnostics bodies root global_stack_effect checked_store TypecheckResult
 }
 
 pub fn check_ops
@@ -65,17 +241,10 @@ pub fn check_ops
     function_opt:mut$std::Option[common::Function]
     store:mut$common::SymbolStore
     diagnostics:mut$error::Diagnostics
+    bodies:$std::Map[std::String source_body::SourceBody]
     require_empty_final_stack:bool
 -> common::StackEffect {
-    require_empty_final_stack diagnostics store function_opt ops semantics::check_ops
-}
-
-pub fn check_functions store:mut$common::SymbolStore diagnostics:mut$error::Diagnostics {
-    store.get_function_names = function_names
-    store semantics::SemanticSession::new = semantic_session
-    diagnostics semantic_session function_names schedule_functions
-    semantic_session.into_store = checked_store
-    checked_store store commit_semantic_store
+    require_empty_final_stack bodies diagnostics store function_opt ops semantics::check_ops
 }
 
 fn schedule_functions
@@ -84,34 +253,7 @@ fn schedule_functions
     diagnostics:mut$error::Diagnostics
 {
     for function_name in function_names.iter do
-        function_name.as_str semantic_session.clone_function = current_function_opt
-        if current_function_opt.is_none then
-            continue
-        fi
-        current_function_opt.unwrap = current_function
-        if
-            function_name.as_str semantic_session.has_checked_function
-            current_function.extern_symbol.is_some ||
-            function_name.as_str "lambda__" str::starts_with ||
-        then
-            continue
-        fi
-        diagnostics.error_count = errors_before
-        semantic_session current_function semantics::continue_function_semantics
-        = function_semantics
-        function_semantics.diagnostics.clone diagnostics.merge
-        function_semantics
-            .checked_function
-            .clone
-            .unwrap = checked_function
-        if
-            diagnostics.error_count errors_before < !
-            current_function.stack_effect.needs_inference &&
-        then
-            function_semantics.inferred_effect.clone checked_function
-            common::Function::set_stack_effect
-        fi
-        checked_function semantic_session.commit_checked_function
+        diagnostics function_name.as_str semantic_session.check_declared_function
     done
 }
 
@@ -121,8 +263,9 @@ pub fn type_satisfies_trait
     function_opt:mut$std::Option[common::Function]
     store:mut$common::SymbolStore
     diagnostics:mut$error::Diagnostics
+    bodies:$std::Map[std::String source_body::SourceBody]
 -> bool {
-    diagnostics store function_opt trait_type typ semantics::type_satisfies_trait
+    bodies diagnostics store function_opt trait_type typ semantics::type_satisfies_trait
 }
 
 pub fn method_receiver_type effect:$common::StackEffect -> std::Option[common::Type] {

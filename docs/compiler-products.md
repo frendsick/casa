@@ -50,11 +50,36 @@ returns. The compiler creates no intermediate object file.
 the CLI during consumer migration. Request products construct the same type
 inside `assembly`.
 
-Scalar checking uses one request-owned function state to distinguish active,
-accepted, and rejected bodies. Operation handlers record dependencies from the
-same selected target and receiver that they use to check the stack. The editor
-projection includes only operation identities verified by that request, after
-literal checks and recursive call obligations have settled.
+`SourceProgram` owns declaration metadata and structured source bodies. Function
+records contain signatures, variables, captures, and linkage metadata. Source
+resolution elaborates names and declarations without checking function bodies.
+Pending source and checked recipes belong to private work registries. Active
+resolution, checking, and specialization frames own each body until they publish
+the completed result. Recursive calls can read a reserved signature while the
+body remains private to its frame.
+
+Checking consumes structured source and produces semantic branches, loops,
+match arms, and operations. Generic recipes and concrete instances share the
+semantic vocabulary. Specialization substitutes types, ownership actions, and
+call targets without checking source again. Pattern and loop bindings retain
+source names for diagnostics and separate checked storage identities for layout.
+Closure signatures receive the concrete argument and result types established
+by checking.
+
+`CheckedProgram` can be constructed only after all reachable bodies, signatures,
+local and capture types, storage references, and dispatch targets are complete.
+Both backend paths consume that product and reuse its finalized storage
+declarations. They lower one semantic body at a time into their private operation
+stream and rewrite storage names in place. Rejected source retains diagnostics and
+editor facts but cannot produce backend input. Unreachable source still receives
+type and structural checks. It retains source occurrences for editor queries,
+without executable operands or ownership actions.
+
+Operation handlers record dependencies from the selected target and receiver
+used to check the stack. The editor projection retains only source occurrences
+and presentation facts. It traverses completed semantic bodies directly and
+releases all compiler bodies before returning the index. Verified operation
+identities are settled after literal checks and recursive call obligations.
 A failed operation withholds facts that depend on its recovered stack. An
 independent sibling branch or function can still contribute verified facts.
 A return-signature error rejects assembly without erasing established calls.
@@ -76,13 +101,14 @@ Each explicit return checks its declared stack effect. Both early returns and
 fallthrough validate borrowed origins and restore owned captures for repeatable
 closures. A payload-free enum variant establishes an empty origin set. Recursive
 borrowed callable results retain conservative input origins when a recursive
-summary is still active. Callable-summary analysis still revisits bodies. The
-source-once dependency and fixed-point migration in ADR-0173 remains pending.
+summary is still active. Calls reuse completed callable summaries. Independent
+function-analysis queries create their own source snapshots. Session consumers
+request completed declarations and borrow checked bodies without managing body
+phase transitions.
 
-Checked operations own their assignment, move, and cleanup actions. Ownership
-actions are optional on operations that need none. Specialization substitutes
-cleanup types within those operations, and bytecode lowering reads the actions
-directly. Pending moves from stack values remain private to the body checker
+Semantic operations own their assignment, move, and cleanup actions. Operations
+that need none omit them. Specialization substitutes cleanup types within the
+body, and bytecode lowering reads the actions directly. Pending moves from stack values remain private to the body checker
 until it attaches them to their source operations. There is no ownership table
 in `SymbolStore`.
 
@@ -113,7 +139,9 @@ categories remain available after syntax rejection.
 
 Type references are incomplete while signature and field type occurrences are
 not represented. Rename must reject these answers. Snapshot release is measured
-by the [editor snapshot workload](benchmarks/editor-snapshots/README.md).
+by the [editor snapshot workload](benchmarks/editor-snapshots/README.md). The
+[phase-valid body measurements](benchmarks/phase-valid-bodies/README.md) record
+the current compilation cost and repeated-request lifetime.
 
 `workspace.casa` aggregates owned answers across fresh snapshots, retains exact
 source revisions, and validates proposed rename bindings through reanalysis.

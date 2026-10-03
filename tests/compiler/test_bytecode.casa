@@ -7,40 +7,7 @@ import "../../compiler/typechecker.casa" as typechecker
 import "../../compiler/analysis.casa" as analysis
 import "../../compiler/bytecode.casa" as bytecode
 import "../../lib/test.casa" as test
-
-# ============================================================================
-# Test helpers
-# ============================================================================
-
-pub fn make_test_location -> common::Location {
-    # Location::new file:String offset:i64 length:i64
-    # param1=file, param2=offset, param3=length -> length offset file Location::new
-    1 0 "test.casa".to_str common::Location::new
-}
-# Helper to create an op with the unified OpValue payload.
-
-pub fn test_make_op value:common::OpValue -> common::Op { make_test_location value common::Op::new }
-
-pub fn test_make_op_with_type_hint value:common::OpValue type_hint:common::Type -> common::Op {
-    make_test_location value common::Op::new = op
-    type_hint std::Option::Some = op.type_hint
-    op
-}
-
-fn compile_test_program
-    store:$common::SymbolStore
-    ops:$std::List[common::Op]
--> std::Result[common::Program bytecode::BytecodeFailure] {
-    store.clone_for_typecheck = checked_store
-    ops.clone = checked_ops
-    std::Set[i64]::new
-    error::Diagnostics::new
-    checked_ops
-    common::empty_stack_effect
-    checked_store
-    typechecker::TypecheckResult = result
-    result bytecode::compile_typechecked
-}
+import "helpers" as helpers
 
 # ============================================================================
 # Tests
@@ -48,36 +15,14 @@ fn compile_test_program
 
 pub fn test_intern_string {
     "intern_string" test::test_start
-    std::List[common::Op]::new = ops
-    "hello".to_str common::OpValue::PushStr test_make_op ops.push
-    "hello".to_str common::OpValue::PushStr test_make_op ops.push
-    "world".to_str common::OpValue::PushStr test_make_op ops.push
-    "".to_str common::OpValue::PushStr test_make_op ops.push
-    "hyvä".to_str common::OpValue::PushStr test_make_op ops.push
-    "world".to_str common::OpValue::PushStr test_make_op ops.push
-
-    ops common::symbol_store_new compile_test_program.unwrap = program
-
+    "\"hello\" drop \"hello\" drop \"world\" drop \"\" drop \"hyvä\" drop \"world\" drop" compile_bytecode_source = program
     "table has four entries" 4 program.strings.length test::assert_eq
     "first table entry" "hello" 0 program.strings.get test::assert_str_eq
     "second table entry" "world" 1 program.strings.get test::assert_str_eq
     "empty table entry" "" 2 program.strings.get test::assert_str_eq
     "non-ASCII table entry" "hyvä" 3 program.strings.get test::assert_str_eq
-    if 1 program.bytecode.get common::InstValue::PushStr(first) is then
-        "first string index" 0 first test::assert_eq
-    else
-        "first string instruction" false test::assert_true
-    fi
-    if 2 program.bytecode.get common::InstValue::PushStr(second) is then
-        "repeated string index" 0 second test::assert_eq
-    else
-        "repeated string instruction" false test::assert_true
-    fi
-    if 6 program.bytecode.get common::InstValue::PushStr(last) is then
-        "repeated second string index" 1 last test::assert_eq
-    else
-        "last string instruction" false test::assert_true
-    fi
+    "first string" 0 common::InstValue::PushStr program.bytecode assert_instruction_present
+    "last repeated string" 1 common::InstValue::PushStr program.bytecode assert_instruction_present
 }
 
 pub fn test_fixed_array_local_slots {
@@ -132,30 +77,18 @@ pub fn test_fixed_array_root_slots {
 
 pub fn test_fixed_array_copy_uses_local_storage {
     "fixed_array_copy_uses_local_storage" test::test_start
-    std::List[common::Op]::new = ops
-    "array[i64 2]" common::parse_type_str common::OpValue::Dup test_make_op_with_type_hint
-    ops.push
-    ops common::symbol_store_new compile_test_program.unwrap = program
-    false = has_allocation
-    false = has_copy
+    "[1, 2] = numbers:array[i64 2] numbers dup drop drop" compile_bytecode_source = program
+    "copies inline bytes" 16 common::InstValue::MoveBytes program.bytecode assert_instruction_present
     for instruction in program.bytecode.iter do
-        if instruction common::InstValue::HeapAlloc is then
-            true = has_allocation
-        elif instruction common::InstValue::MoveBytes(copy_size) is then
-            if 16 copy_size == then
-                true = has_copy
-            fi
-        fi
+        "copy does not allocate" instruction common::InstValue::HeapAlloc is test::assert_false
     done
-    "copies inline bytes" has_copy test::assert_true
-    "copy does not allocate" has_allocation test::assert_false
 }
 
 pub fn test_typed_raw_aggregate_uses_indirect_copy_instructions {
     "typed_raw_aggregate_uses_indirect_copy_instructions" test::test_start
     "struct Pair { first: i64 second: i64 } fn check { unsafe { 16 alloc } = storage 2 1 Pair = pair unsafe { pair storage ptr::write[Pair] storage ptr::read[Pair] } drop } check"
     typecheck_bytecode_source = result
-    "typed raw aggregate typechecks" result.diagnostics.has_errors ! test::assert_true
+    "typed raw aggregate typechecks" result.get_diagnostics.has_errors ! test::assert_true
     result bytecode::compile_typechecked.unwrap = program
     false = has_read
     false = has_write
@@ -178,29 +111,41 @@ pub fn test_typed_raw_aggregate_uses_indirect_copy_instructions {
 
 pub fn test_compile_push_int {
     "compile_push_int" test::test_start
-
-    std::List[common::Op]::new = ops
-    42 common::make_integer_op_value test_make_op ops.push
-
-    ops common::symbol_store_new compile_test_program.unwrap = program
-
-    # Should have: LABEL, PUSH(42)
-    "push_int bytecode length" 2 program.bytecode.length test::assert_eq
-    "push_int label kind" 0 program.bytecode.get common::InstValue::Label is test::assert_true
-    if 1 program.bytecode.get common::InstValue::Push(value) is then
-        "push_int value" 42 value test::assert_eq
-    else
-        "push_int inst kind" false test::assert_true
-    fi
+    "42 drop" compile_bytecode_source = program
+    "integer value" 42 common::InstValue::Push program.bytecode assert_instruction_present
 }
 
 pub fn typecheck_bytecode_source code:$str -> typechecker::TypecheckResult {
     "test" code.clone lexer::lex_source = lex_result
     lex_result.into_parts = lex_diagnostics = tokens
-    lexer::SourceStore::new lex_diagnostics std::List[std::String]::new tokens syntax::parse_and_resolve = result
-    result.into_parts = parse_diagnostics = store = ops
-    parse_diagnostics drop
-    store ops.unwrap typechecker::type_check
+    lexer::SourceStore::new lex_diagnostics std::List[std::String]::new tokens syntax::parse_and_resolve helpers::project_test_source = result
+    result.into_parts = parse_diagnostics = source_bodies = store = ops
+    source_bodies store std::List[common::Op]::new ops.unwrap_or helpers::type_check_parts = checked
+    parse_diagnostics checked.with_source_diagnostics = checked
+    checked
+}
+
+fn compile_bytecode_source code:$str -> common::Program {
+    code typecheck_bytecode_source = checked
+    if checked.get_diagnostics.has_errors then
+        for
+            diagnostic in checked
+                .get_diagnostics
+                .entries
+                .iter
+        do
+            if diagnostic error::Diagnostic::Error(failure) is then
+                failure.message print "\n" print
+            fi
+        done
+        "Bytecode fixture must pass checking\n" panic
+    fi
+    checked bytecode::compile_typechecked match
+        std::Result::Ok(program) => program
+        std::Result::Error(failure) => {
+            failure.message print "\n" print "Bytecode fixture must compile\n" panic
+        }
+    end
 }
 
 pub fn does_instruction_match
@@ -273,8 +218,146 @@ pub fn does_instruction_match
                 false
             fi
         }
+        common::InstValue::Dup => actual common::InstValue::Dup is
+        common::InstValue::Over => actual common::InstValue::Over is
+        common::InstValue::Rot => actual common::InstValue::Rot is
+        common::InstValue::Swap => actual common::InstValue::Swap is
+        common::InstValue::PrintBool => actual common::InstValue::PrintBool is
+        common::InstValue::PrintChar => actual common::InstValue::PrintChar is
+        common::InstValue::PrintCstr => actual common::InstValue::PrintCstr is
+        common::InstValue::PrintInt => actual common::InstValue::PrintInt is
+        common::InstValue::PrintStr => actual common::InstValue::PrintStr is
+        common::InstValue::HeapAlloc => actual common::InstValue::HeapAlloc is
+        common::InstValue::HeapFree => actual common::InstValue::HeapFree is
+        common::InstValue::Load8 => actual common::InstValue::Load8 is
+        common::InstValue::Load16 => actual common::InstValue::Load16 is
+        common::InstValue::Load32 => actual common::InstValue::Load32 is
+        common::InstValue::Load64 => actual common::InstValue::Load64 is
+        common::InstValue::Store8 => actual common::InstValue::Store8 is
+        common::InstValue::Store16 => actual common::InstValue::Store16 is
+        common::InstValue::Store32 => actual common::InstValue::Store32 is
+        common::InstValue::Store64 => actual common::InstValue::Store64 is
+        common::InstValue::And => actual common::InstValue::And is
+        common::InstValue::Or => actual common::InstValue::Or is
+        common::InstValue::Not => actual common::InstValue::Not is
+        common::InstValue::Eq => actual common::InstValue::Eq is
+        common::InstValue::Ge => actual common::InstValue::Ge is
+        common::InstValue::Gt => actual common::InstValue::Gt is
+        common::InstValue::Le => actual common::InstValue::Le is
+        common::InstValue::Lt => actual common::InstValue::Lt is
+        common::InstValue::Ne => actual common::InstValue::Ne is
+        common::InstValue::StrEq => actual common::InstValue::StrEq is
+        common::InstValue::BitAnd => actual common::InstValue::BitAnd is
+        common::InstValue::BitOr => actual common::InstValue::BitOr is
+        common::InstValue::BitXor => actual common::InstValue::BitXor is
+        common::InstValue::BitNot => actual common::InstValue::BitNot is
+        common::InstValue::FnExec => actual common::InstValue::FnExec is
+        common::InstValue::Syscall0 => actual common::InstValue::Syscall0 is
+        common::InstValue::Syscall1 => actual common::InstValue::Syscall1 is
+        common::InstValue::Syscall2 => actual common::InstValue::Syscall2 is
+        common::InstValue::Syscall3 => actual common::InstValue::Syscall3 is
+        common::InstValue::Syscall4 => actual common::InstValue::Syscall4 is
+        common::InstValue::Syscall5 => actual common::InstValue::Syscall5 is
+        common::InstValue::Syscall6 => actual common::InstValue::Syscall6 is
+        common::InstValue::PushStr(expected) => {
+            if actual common::InstValue::PushStr(value) is then
+                expected value ==
+            else
+                false
+            fi
+        }
+        common::InstValue::PushChar(expected) => {
+            if actual common::InstValue::PushChar(value) is then
+                expected value ==
+            else
+                false
+            fi
+        }
+        common::InstValue::CaptureLoad(expected) => {
+            if actual common::InstValue::CaptureLoad(value) is then
+                expected value ==
+            else
+                false
+            fi
+        }
+        common::InstValue::FstringConcat(expected) => {
+            if actual common::InstValue::FstringConcat(value) is then
+                expected value ==
+            else
+                false
+            fi
+        }
+        common::InstValue::MoveBytes(expected) => {
+            if actual common::InstValue::MoveBytes(value) is then
+                expected value ==
+            else
+                false
+            fi
+        }
+        common::InstValue::CheckedAdd(expected) => {
+            if actual common::InstValue::CheckedAdd(value) is then
+                expected value ==
+            else
+                false
+            fi
+        }
+        common::InstValue::CheckedSub(expected) => {
+            if actual common::InstValue::CheckedSub(value) is then
+                expected value ==
+            else
+                false
+            fi
+        }
+        common::InstValue::CheckedMul(expected) => {
+            if actual common::InstValue::CheckedMul(value) is then
+                expected value ==
+            else
+                false
+            fi
+        }
+        common::InstValue::CheckedDiv(expected) => {
+            if actual common::InstValue::CheckedDiv(value) is then
+                expected value ==
+            else
+                false
+            fi
+        }
+        common::InstValue::CheckedMod(expected) => {
+            if actual common::InstValue::CheckedMod(value) is then
+                expected value ==
+            else
+                false
+            fi
+        }
+        common::InstValue::CheckedShl(expected) => {
+            if actual common::InstValue::CheckedShl(value) is then
+                expected value ==
+            else
+                false
+            fi
+        }
+        common::InstValue::CheckedShr(expected) => {
+            if actual common::InstValue::CheckedShr(value) is then
+                expected value ==
+            else
+                false
+            fi
+        }
         _ => false
     end
+}
+
+fn assert_instruction_present
+    instructions:$std::List[common::InstValue]
+    expected:$common::InstValue
+    message:$str
+{
+    for instruction in instructions.iter do
+        if expected instruction does_instruction_match then
+            message true test::assert_true return
+        fi
+    done
+    message false test::assert_true
 }
 
 pub fn does_bytecode_match
@@ -355,7 +438,7 @@ fn assert_jump_ne_targets_label
 pub fn test_invalid_program_stops_before_bytecode {
     "invalid_program_stops_before_bytecode" test::test_start
     "\"bad\" 1 *" typecheck_bytecode_source = result
-    "type error returned upstream" result.diagnostics.has_errors test::assert_true
+    "type error returned upstream" result.get_diagnostics.has_errors test::assert_true
     result bytecode::compile_typechecked = compile_result
     "no program returned" compile_result.is_error test::assert_true
     "bytecode not entered" compile_result
@@ -366,49 +449,18 @@ pub fn test_invalid_program_stops_before_bytecode {
 
 pub fn test_compile_invariant_failure_is_not_diagnostic {
     "compile_invariant_failure_is_not_diagnostic" test::test_start
-    std::List[common::Op]::new = ops
-    "missing".to_str common::OpValue::PushVar test_make_op ops.push
-
-    ops common::symbol_store_new compile_test_program = result
-
-    "invariant failure returned" result.is_error test::assert_true
-    "missing variable named" result
-        .unwrap_error
-        .message
-        .as_str "missing" str::find 0 <= test::assert_true
+    "missing drop" typecheck_bytecode_source = checked
+    "missing reference is rejected" checked.get_diagnostics.has_errors test::assert_true
+    "rejected input cannot reach bytecode" checked bytecode::compile_typechecked.is_error test::assert_true
 }
 
-pub fn test_compile_typechecked_is_repeatable {
-    "compile_typechecked_is_repeatable" test::test_start
+pub fn test_compile_checked_is_repeatable {
+    "compile_checked_is_repeatable" test::test_start
     "const LIMIT 2\n1 = global_value\nfn used { LIMIT = local_value local_value drop }\nused"
-    typecheck_bytecode_source = result
-    result.ops.length = input_ops_length
-    result
-        .diagnostics
-        .entries
-        .length = diagnostic_count
-    result.store.count_functions = function_count
-    result
-        .store
-        .variables
-        .length = variable_count
-    result
-        .store
-        .constants
-        .length = constant_count
-    "used" result
-        .store
-        .get_function
-        .unwrap = input_function
-    input_function.ops.length = function_ops_length
-    input_function.variables.length = local_count
-    input_function.is_typechecked = was_typechecked
-
-    result bytecode::compile_typechecked.unwrap = first_program
-    result bytecode::compile_typechecked.unwrap = second_program
-
-    second_program.bytecode first_program.bytecode does_bytecode_match = root_bytecode_matches
-    "root bytecode is stable" root_bytecode_matches test::assert_true
+    typecheck_bytecode_source.into_checked_program.unwrap = checked
+    checked bytecode::compile_checked.unwrap = first_program
+    checked bytecode::compile_checked.unwrap = second_program
+    "root bytecode is stable" second_program.bytecode first_program.bytecode does_bytecode_match test::assert_true
     "used" first_program
         .functions
         .get_str
@@ -418,332 +470,136 @@ pub fn test_compile_typechecked_is_repeatable {
         .get_str
         .unwrap = second_function
     "function bytecode is stable" second_function first_function does_bytecode_match test::assert_true
-    "input operations preserved" input_ops_length result.ops.length test::assert_eq
-    "input diagnostics preserved" diagnostic_count result
-        .diagnostics
-        .entries
-        .length test::assert_eq
-    "input functions preserved" function_count result.store.count_functions test::assert_eq
-    "input variables preserved" variable_count result
-        .store
-        .variables
-        .length test::assert_eq
-    "input constants preserved" constant_count result
-        .store
-        .constants
-        .length test::assert_eq
-    "used" result
-        .store
-        .get_function
-        .unwrap = output_function
-    "function operations preserved" function_ops_length output_function.ops.length test::assert_eq
-    "function locals preserved" local_count output_function.variables.length test::assert_eq
-    "function typecheck preserved" was_typechecked output_function.is_typechecked == test::assert_true
 }
 
 pub fn test_compile_functions_once_per_pass {
     "compile_functions_once_per_pass" test::test_start
-    common::symbol_store_new = store
-
-    std::List[common::Op]::new = first_ops
-    "second".to_str common::OpValue::FnCall test_make_op first_ops.push
-    make_test_location first_ops "first".to_str common::Function::new = first
-    first store.set_function
-
-    std::List[common::Op]::new = second_ops
-    "first".to_str common::OpValue::FnCall test_make_op second_ops.push
-    make_test_location second_ops "second".to_str common::Function::new = second
-    second store.set_function
-
-    std::List[common::Op]::new = recursive_ops
-    "recursive".to_str common::OpValue::FnCall test_make_op recursive_ops.push
-    make_test_location recursive_ops "recursive".to_str common::Function::new = recursive
-    recursive store.set_function
-
-    std::List[common::Op]::new = unused_ops
-    42 common::make_integer_op_value test_make_op unused_ops.push
-    make_test_location unused_ops "unused".to_str common::Function::new = unused
-    unused store.set_function
-
-    std::List[common::Op]::new = ops
-    "first".to_str common::OpValue::FnCall test_make_op ops.push
-    "recursive".to_str common::OpValue::FnCall test_make_op ops.push
-    ops store compile_test_program.unwrap = program
-
+    "fn first { second } fn second { first } fn recursive { recursive } fn unused { 42 drop } first recursive" compile_bytecode_source = program
     "called functions emitted once" 3 program.functions.length test::assert_eq
     "first function emitted" "first" program.functions.has_str test::assert_true
     "second function emitted" "second" program.functions.has_str test::assert_true
     "recursive function emitted" "recursive" program.functions.has_str test::assert_true
     "unused function omitted" "unused" program.functions.has_str test::assert_false
-    "front-end functions preserved" 4 store.count_functions test::assert_eq
-    "first operations preserved" 1 "first" store
-        .get_function
-        .unwrap
-        .ops
-        .length test::assert_eq
-    "second operations preserved" 1 "second" store
-        .get_function
-        .unwrap
-        .ops
-        .length test::assert_eq
-    "recursive operations preserved" 1 "recursive" store
-        .get_function
-        .unwrap
-        .ops
-        .length test::assert_eq
 }
 
 pub fn test_compile_push_bool {
     "compile_push_bool" test::test_start
-
-    std::List[common::Op]::new = ops
-    1 common::OpValue::PushBool test_make_op ops.push
-
-    ops common::symbol_store_new compile_test_program.unwrap = program
-    program.bytecode = bytecode: $std::List[common::InstValue]
-
-    if 1 bytecode.get common::InstValue::Push(value) is then
-        "push_bool true value" 1 value test::assert_eq
-    else
-        "push_bool inst kind" false test::assert_true
-    fi
+    "true drop" compile_bytecode_source = program
+    "boolean value" 1 common::InstValue::Push program.bytecode assert_instruction_present
 }
 
 pub fn test_compile_push_str {
     "compile_push_str" test::test_start
-
-    std::List[common::Op]::new = ops
-    "hello".to_str common::OpValue::PushStr test_make_op ops.push
-
-    ops common::symbol_store_new compile_test_program.unwrap = program
-    program.bytecode = bytecode: $std::List[common::InstValue]
-
-    if 1 bytecode.get common::InstValue::PushStr(string_index) is then
-        "push_str string index" 0 string_index test::assert_eq
-    else
-        "push_str inst kind" false test::assert_true
-    fi
+    "\"hello\" drop" compile_bytecode_source = program
+    "string reference" 0 common::InstValue::PushStr program.bytecode assert_instruction_present
     "string table entry" "hello" 0 program.strings.get test::assert_str_eq
 }
 
 pub fn test_compile_push_char {
     "compile_push_char" test::test_start
-
-    std::List[common::Op]::new = ops
-    'A'.codepoint i64::from common::OpValue::PushChar test_make_op ops.push
-
-    ops common::symbol_store_new compile_test_program.unwrap = program
-    program.bytecode = bytecode: $std::List[common::InstValue]
-
-    if 1 bytecode.get common::InstValue::PushChar(char_value) is then
-        "push_char value" 65 char_value test::assert_eq
-    else
-        "push_char inst kind" false test::assert_true
-    fi
+    "'A' drop" compile_bytecode_source = program
+    "character value" 65 common::InstValue::PushChar program.bytecode assert_instruction_present
 }
 
 pub fn test_compile_direct_ops {
     "compile_direct_ops" test::test_start
-
-    std::List[common::Op]::new = ops
-    common::OpValue::Add test_make_op ops.push
-    common::OpValue::Sub test_make_op ops.push
-    common::OpValue::Dup test_make_op ops.push
-    common::OpValue::Drop test_make_op ops.push
-
-    ops common::symbol_store_new compile_test_program.unwrap = program
-    program.bytecode = bytecode: $std::List[common::InstValue]
-
-    # Index 0 is label
-    "add inst" 1 bytecode.get common::InstValue::Add is test::assert_true
-    "sub inst" 2 bytecode.get common::InstValue::Sub is test::assert_true
-    "dup inst" 3 bytecode.get common::InstValue::Dup is test::assert_true
-    "drop inst" 4 bytecode.get common::InstValue::Drop is test::assert_true
+    "1 2 + drop 4 1 - drop 42 dup drop drop" compile_bytecode_source = program
+    "checked add" common::BuiltinType::I64 common::InstValue::CheckedAdd program.bytecode assert_instruction_present
+    "checked subtract" common::BuiltinType::I64 common::InstValue::CheckedSub program.bytecode assert_instruction_present
+    "dup instruction" common::InstValue::Dup program.bytecode assert_instruction_present
+    "drop instruction" common::InstValue::Drop program.bytecode assert_instruction_present
 }
 
 pub fn test_compile_variable_assign_and_push {
     "compile_variable_assign_and_push" test::test_start
-
-    # Set up a root binding.
-    common::symbol_store_new = store
-    "" common::Variable::new "x".to_str store.variables.set
-
-    std::List[common::Op]::new = ops
-    "x".to_str common::OpValue::AssignVar test_make_op ops.push
-    "x".to_str common::OpValue::PushVar test_make_op ops.push
-
-    ops store compile_test_program.unwrap = program
-    program.bytecode = bytecode: $std::List[common::InstValue]
-
-    "root locals init kind" 0 bytecode.get common::InstValue::LocalsInit is test::assert_true
-    "assign var kind" 2 bytecode.get common::InstValue::LocalSet is test::assert_true
-    "push var kind" 3 bytecode.get common::InstValue::LocalGet is test::assert_true
+    "42 = x x drop" compile_bytecode_source = program
+    "root local write" 0 common::InstValue::LocalSet program.bytecode assert_instruction_present
+    "root local read" 0 common::InstValue::LocalGet program.bytecode assert_instruction_present
 }
 
 pub fn test_compile_local_variable {
     "compile_local_variable" test::test_start
-
-    # Create a function with a variable
-    std::List[common::Op]::new = fn_ops
-    "y".to_str common::OpValue::AssignVar test_make_op fn_ops.push
-    "y".to_str common::OpValue::PushVar test_make_op fn_ops.push
-
-    # Function::new name:String ops:List[Op] location:Location
-    # param1=name, param2=ops, param3=location
-    common::symbol_store_new = store
-    make_test_location fn_ops.clone "test_fn".to_str common::Function::new = func
-    "y" common::Variable::new func common::Function::variables.push
-    func store.set_function
-
-    std::List[common::Op]::new = ops
-    "test_fn".to_str common::OpValue::FnCall test_make_op ops.push
-    ops store compile_test_program.unwrap = program
+    "fn test_fn i64 -> i64 { = y y } 42 test_fn drop" compile_bytecode_source = program
     "test_fn" program
         .functions
         .get_str
-        .unwrap = bytecode
-
-    # Index 0 initializes locals, index 1 is the function label.
-    if 2 bytecode.get common::InstValue::LocalSet(set_index) is then
-        "local assign index" 0 set_index test::assert_eq
-    else
-        "local assign kind" false test::assert_true
-    fi
-    if 3 bytecode.get common::InstValue::LocalGet(get_index) is then
-        "local push index" 0 get_index test::assert_eq
-    else
-        "local push kind" false test::assert_true
-    fi
+        .unwrap = instructions
+    "local write" 0 common::InstValue::LocalSet instructions assert_instruction_present
+    "local read" 0 common::InstValue::LocalGet instructions assert_instruction_present
 }
 
 pub fn test_precomputed_variable_slots {
     "precomputed_variable_slots" test::test_start
-    common::symbol_store_new = store
-
-    std::List[common::Op]::new = fn_ops
-    "shared".to_str common::OpValue::AssignVar test_make_op fn_ops.push
-    "local_zero".to_str common::OpValue::PushVar test_make_op fn_ops.push
-    "capture_one".to_str common::OpValue::PushCapture test_make_op fn_ops.push
-
-    make_test_location fn_ops.clone "slot_test".to_str common::Function::new = function
-    "local_zero" common::Variable::new function.variables.push
-    "shared" common::Variable::new function.variables.push
-    "capture_zero" common::Variable::new function.captures.push
-    "capture_one" common::Variable::new function.captures.push
-    "capture_one" common::Variable::new function.captures.push
-    function store.set_function
-
-    std::List[common::Op]::new = ops
-    "slot_test".to_str common::OpValue::FnCall test_make_op ops.push
-    ops store compile_test_program.unwrap = program
-    "slot_test" program
-        .functions
-        .get_str
-        .unwrap = bytecode
-
-    if 0 bytecode.get common::InstValue::LocalsInit(locals_count) is then
-        "two local slots" 2 locals_count test::assert_eq
-    else
-        "local initialization kind" false test::assert_true
-    fi
-    if 2 bytecode.get common::InstValue::LocalSet(local_set) is then
-        "local shadows global" 1 local_set test::assert_eq
-    else
-        "shadowed local set kind" false test::assert_true
-    fi
-    if 3 bytecode.get common::InstValue::LocalGet(local_get) is then
-        "first local slot" 0 local_get test::assert_eq
-    else
-        "local get kind" false test::assert_true
-    fi
-    if 4 bytecode.get common::InstValue::CaptureLoad(capture_load) is then
-        "second capture slot" 1 capture_load test::assert_eq
-    else
-        "capture load kind" false test::assert_true
-    fi
+    "fn slots { 1 = first 2 = second { first second + } exec drop } slots" compile_bytecode_source = program
+    false = found_capture
+    for
+        name in program
+            .functions
+            .keys
+            .iter
+    do
+        if name.as_str "lambda__" str::starts_with then
+            name program
+                .functions
+                .get
+                .unwrap = instructions
+            "first capture slot" 0 common::InstValue::CaptureLoad instructions assert_instruction_present
+            "second capture slot" 1 common::InstValue::CaptureLoad instructions assert_instruction_present
+            true = found_capture
+        fi
+    done
+    "checked closure emitted" found_capture test::assert_true
 }
 
 pub fn test_compile_fstring_concat {
     "compile_fstring_concat" test::test_start
-
-    std::List[common::Op]::new = ops
-    3 common::OpValue::FstringConcat test_make_op ops.push
-
-    ops common::symbol_store_new compile_test_program.unwrap = program
-    program.bytecode = bytecode: $std::List[common::InstValue]
-
-    if 1 bytecode.get common::InstValue::FstringConcat(fstring_count) is then
-        "fstring concat count" 3 fstring_count test::assert_eq
-    else
-        "fstring concat kind" false test::assert_true
-    fi
+    "import \"lib/std.casa\" as std f\"a{1}b\" drop" compile_bytecode_source = program
+    "three fstring segments" 3 common::InstValue::FstringConcat program.bytecode assert_instruction_present
 }
 
 pub fn test_compile_if_block {
     "compile_if_block" test::test_start
-
-    std::List[common::Op]::new = ops
-    common::OpValue::IfStart test_make_op ops.push
-    common::OpValue::IfCondition test_make_op ops.push
-    common::OpValue::IfEnd test_make_op ops.push
-
-    "ops has 3 elements" 3 ops.length test::assert_eq
-    "op 0 is if_start" 0 ops.get.value common::OpValue::IfStart is test::assert_true
-    "op 2 is if_end" 2 ops.get.value common::OpValue::IfEnd is test::assert_true
-
-    ops common::symbol_store_new compile_test_program.unwrap = program
-    program.bytecode = bytecode: $std::List[common::InstValue]
-
-    # Expected: LABEL, JUMP_NE(end_label), LABEL(end_label)
-    "if block bytecode length" 3 bytecode.length test::assert_eq
-    "if block has label" 0 bytecode.get common::InstValue::Label is test::assert_true
-    "if condition jump_ne" 1 bytecode.get common::InstValue::JumpNe is test::assert_true
-    "if end label" 2 bytecode.get common::InstValue::Label is test::assert_true
+    "if true then fi" compile_bytecode_source = program
+    std::List[common::InstValue]::new = control_flow
+    control_flow program.bytecode append_control_flow_instructions
+    "control-flow instruction count" 3 control_flow.length test::assert_eq
+    "control-flow instruction 0" 0 control_flow.get common::InstValue::Label is test::assert_true
+    "control-flow instruction 1" 1 control_flow.get common::InstValue::JumpNe is test::assert_true
+    "control-flow instruction 2" 2 control_flow.get common::InstValue::Label is test::assert_true
 }
 
 pub fn test_compile_while_block {
     "compile_while_block" test::test_start
-
-    std::List[common::Op]::new = ops
-    common::OpValue::WhileStart test_make_op ops.push
-    common::OpValue::WhileCondition test_make_op ops.push
-    common::OpValue::WhileEnd test_make_op ops.push
-
-    ops common::symbol_store_new compile_test_program.unwrap = program
-    program.bytecode = bytecode: $std::List[common::InstValue]
-
-    # Expected: LABEL(fn), LABEL(start), JUMP_NE(end), JUMP(start), LABEL(end)
-    "while block bytecode length" 5 bytecode.length test::assert_eq
-    "while fn label" 0 bytecode.get common::InstValue::Label is test::assert_true
-    "while start label" 1 bytecode.get common::InstValue::Label is test::assert_true
-    "while condition jump_ne" 2 bytecode.get common::InstValue::JumpNe is test::assert_true
-    "while end jump" 3 bytecode.get common::InstValue::Jump is test::assert_true
-    "while end label" 4 bytecode.get common::InstValue::Label is test::assert_true
+    "while false do done" compile_bytecode_source = program
+    std::List[common::InstValue]::new = control_flow
+    control_flow program.bytecode append_control_flow_instructions
+    "control-flow instruction count" 5 control_flow.length test::assert_eq
+    "control-flow instruction 0" 0 control_flow.get common::InstValue::Label is test::assert_true
+    "control-flow instruction 1" 1 control_flow.get common::InstValue::Label is test::assert_true
+    "control-flow instruction 2" 2 control_flow.get common::InstValue::JumpNe is test::assert_true
+    "control-flow instruction 3" 3 control_flow.get common::InstValue::Jump is test::assert_true
+    "control-flow instruction 4" 4 control_flow.get common::InstValue::Label is test::assert_true
 }
 
 pub fn test_deep_control_flow_targets {
     "deep_control_flow_targets" test::test_start
     128 = depth: u64
-    std::List[common::Op]::new = ops
+    std::String::new = source
     0 = index: u64
     while index depth > do
-        common::OpValue::IfStart test_make_op ops.push
-        common::OpValue::IfCondition test_make_op ops.push
-        1 += index
+        "if true then " source.append 1 += index
     done
     0 = index: u64
     while index depth > do
-        common::OpValue::IfEnd test_make_op ops.push
-        1 += index
+        "fi " source.append 1 += index
     done
-
-    ops common::symbol_store_new compile_test_program = result
-    "deep nesting compiles" result.is_ok test::assert_true
-    result.unwrap = program
-    "each nested if emits one jump and label" depth 2 * 1 + program.bytecode.length test::assert_eq
+    source.as_str compile_bytecode_source = program
+    std::List[common::InstValue]::new = control_flow
+    control_flow program.bytecode append_control_flow_instructions
+    "each nested if emits one jump and label" depth 2 * 1 + control_flow.length test::assert_eq
     0 = index: u64
     while index depth > do
-        depth 2 * index - index 1 + program.bytecode assert_jump_ne_targets_label
+        depth 2 * index - index 1 + control_flow assert_jump_ne_targets_label
         1 += index
     done
 }
@@ -752,7 +608,7 @@ pub fn test_mixed_control_flow_targets {
     "mixed_control_flow_targets" test::test_start
     "enum Choice { A B } fn mixed choice:Choice flag:bool { while flag do if flag then continue else break fi done choice match Choice::A if flag => { } Choice::A => { } Choice::B => { } end } true Choice::A mixed"
     typecheck_bytecode_source = result
-    "mixed control flow typechecks" result.diagnostics.has_errors ! test::assert_true
+    "mixed control flow typechecks" result.get_diagnostics.has_errors ! test::assert_true
     result bytecode::compile_typechecked = compiled
     "mixed control flow compiles" compiled.is_ok test::assert_true
     compiled.unwrap = program
@@ -784,377 +640,154 @@ pub fn test_mixed_control_flow_targets {
     "first match arm reaches match end" match_end 13 control_flow assert_jump_at
     "second match pattern reaches third arm" third_arm 15 control_flow assert_jump_ne_at
     "second match arm reaches match end" match_end 16 control_flow assert_jump_at
-
-    std::List[common::Op]::new = invalid_ops
-    common::OpValue::IfCondition test_make_op invalid_ops.push
-    invalid_ops common::symbol_store_new compile_test_program = invalid
-    "unmatched control flow fails" invalid.is_error test::assert_true
-    "unmatched control flow keeps its diagnostic" invalid
-        .unwrap_error
-        .message
-        .as_str "`then` without matching `if`" == test::assert_true
-
-    std::List[common::Op]::new = crossed_ops
-    common::OpValue::IfStart test_make_op crossed_ops.push
-    common::OpValue::WhileStart test_make_op crossed_ops.push
-    common::OpValue::IfEnd test_make_op crossed_ops.push
-    common::OpValue::WhileEnd test_make_op crossed_ops.push
-    crossed_ops common::symbol_store_new compile_test_program = crossed
-    "crossed control flow fails" crossed.is_error test::assert_true
-    "crossed control flow keeps its diagnostic" crossed
-        .unwrap_error
-        .message
-        .as_str "`if` without matching `fi`" == test::assert_true
-
-    std::List[common::Op]::new = nested_invalid_ops
-    common::OpValue::IfStart test_make_op nested_invalid_ops.push
-    common::OpValue::WhileStart test_make_op nested_invalid_ops.push
-    common::OpValue::WhileCondition test_make_op nested_invalid_ops.push
-    nested_invalid_ops common::symbol_store_new compile_test_program = nested_invalid
-    "innermost unmatched control flow fails" nested_invalid.is_error test::assert_true
-    "innermost unmatched control flow keeps its diagnostic" nested_invalid
-        .unwrap_error
-        .message
-        .as_str "`do` without matching `done`" == test::assert_true
 }
 
 pub fn test_compile_string_eq {
     "compile_string_eq" test::test_start
-
-    std::List[common::Op]::new = ops
-    common::make_str_type.clone common::OpValue::Eq test_make_op_with_type_hint ops.push
-
-    ops common::symbol_store_new compile_test_program.unwrap = program
-    program.bytecode = bytecode: $std::List[common::InstValue]
-
-    "str_eq inst" 1 bytecode.get common::InstValue::StrEq is test::assert_true
+    "\"a\" \"b\" == drop" compile_bytecode_source = program
+    "streq instruction" common::InstValue::StrEq program.bytecode assert_instruction_present
 }
 
 pub fn test_compile_string_ne {
     "compile_string_ne" test::test_start
-
-    std::List[common::Op]::new = ops
-    common::make_str_type.clone common::OpValue::Ne test_make_op_with_type_hint ops.push
-
-    ops common::symbol_store_new compile_test_program.unwrap = program
-    program.bytecode = bytecode: $std::List[common::InstValue]
-
-    # Should emit STR_EQ + NOT
-    "str_ne has str_eq" 1 bytecode.get common::InstValue::StrEq is test::assert_true
-    "str_ne has not" 2 bytecode.get common::InstValue::Not is test::assert_true
+    "\"a\" \"b\" != drop" compile_bytecode_source = program
+    "streq instruction" common::InstValue::StrEq program.bytecode assert_instruction_present
+    "not instruction" common::InstValue::Not program.bytecode assert_instruction_present
 }
 
 pub fn test_compile_assign_increment {
     "compile_assign_increment" test::test_start
-
-    common::symbol_store_new = store
-    "" common::Variable::new "counter".to_str store.variables.set
-
-    std::List[common::Op]::new = ops
-    "counter".to_str common::OpValue::AssignInc test_make_op ops.push
-
-    ops store compile_test_program.unwrap = program
-    program.bytecode = bytecode: $std::List[common::InstValue]
-
-    # Expected: LOCALS_INIT, LABEL, LOCAL_GET, ADD, LOCAL_SET, LOCALS_UNINIT
-    "inc bytecode length" 6 bytecode.length test::assert_eq
-    "inc get" 2 bytecode.get common::InstValue::LocalGet is test::assert_true
-    "inc add" 3 bytecode.get common::InstValue::Add is test::assert_true
-    "inc set" 4 bytecode.get common::InstValue::LocalSet is test::assert_true
+    "42 = counter 1 += counter" compile_bytecode_source = program
+    "compound assignment" common::BuiltinType::I64 common::InstValue::CheckedAdd program.bytecode assert_instruction_present
+    "compound storage" 0 common::InstValue::LocalSet program.bytecode assert_instruction_present
 }
 
 pub fn test_compile_assign_decrement {
     "compile_assign_decrement" test::test_start
-
-    common::symbol_store_new = store
-    "" common::Variable::new "counter".to_str store.variables.set
-
-    std::List[common::Op]::new = ops
-    "counter".to_str common::OpValue::AssignDec test_make_op ops.push
-
-    ops store compile_test_program.unwrap = program
-    program.bytecode = bytecode: $std::List[common::InstValue]
-
-    # Expected: LOCALS_INIT, LABEL, LOCAL_GET, SWAP, SUB, LOCAL_SET, LOCALS_UNINIT
-    "dec bytecode length" 7 bytecode.length test::assert_eq
-    "dec get" 2 bytecode.get common::InstValue::LocalGet is test::assert_true
-    "dec swap" 3 bytecode.get common::InstValue::Swap is test::assert_true
-    "dec sub" 4 bytecode.get common::InstValue::Sub is test::assert_true
-    "dec set" 5 bytecode.get common::InstValue::LocalSet is test::assert_true
+    "42 = counter 1 -= counter" compile_bytecode_source = program
+    "compound assignment" common::BuiltinType::I64 common::InstValue::CheckedSub program.bytecode assert_instruction_present
+    "compound storage" 0 common::InstValue::LocalSet program.bytecode assert_instruction_present
 }
 
 pub fn test_compile_push_bool_false {
     "compile_push_bool_false" test::test_start
-
-    std::List[common::Op]::new = ops
-    0 common::OpValue::PushBool test_make_op ops.push
-
-    ops common::symbol_store_new compile_test_program.unwrap = program
-    program.bytecode = bytecode: $std::List[common::InstValue]
-
-    if 1 bytecode.get common::InstValue::Push(value) is then
-        "push_bool_false value" 0 value test::assert_eq
-    else
-        "push_bool_false inst kind" false test::assert_true
-    fi
+    "false drop" compile_bytecode_source = program
+    "boolean value" 0 common::InstValue::Push program.bytecode assert_instruction_present
 }
 
 pub fn test_compile_more_direct_ops {
     "compile_more_direct_ops" test::test_start
-
-    std::List[common::Op]::new = ops
-    common::OpValue::Mul test_make_op ops.push
-    common::OpValue::Div test_make_op ops.push
-    common::OpValue::Mod test_make_op ops.push
-    common::OpValue::Shl test_make_op ops.push
-    common::OpValue::Shr test_make_op ops.push
-    common::OpValue::And test_make_op ops.push
-    common::OpValue::Or test_make_op ops.push
-    common::OpValue::Not test_make_op ops.push
-    common::OpValue::Eq test_make_op ops.push
-    common::OpValue::Ne test_make_op ops.push
-    common::OpValue::Gt test_make_op ops.push
-    common::OpValue::Ge test_make_op ops.push
-    common::OpValue::Lt test_make_op ops.push
-    common::OpValue::Le test_make_op ops.push
-    common::OpValue::Swap test_make_op ops.push
-    common::OpValue::Over test_make_op ops.push
-    common::OpValue::Rot test_make_op ops.push
-
-    ops common::symbol_store_new compile_test_program.unwrap = program
-    program.bytecode = bytecode: $std::List[common::InstValue]
-
-    # Index 0 is label
-    "mul inst" 1 bytecode.get common::InstValue::Mul is test::assert_true
-    "div inst" 2 bytecode.get common::InstValue::Div is test::assert_true
-    "mod inst" 3 bytecode.get common::InstValue::Mod is test::assert_true
-    "shl inst" 4 bytecode.get common::InstValue::Shl is test::assert_true
-    "shr inst" 5 bytecode.get common::InstValue::Shr is test::assert_true
-    "and inst" 6 bytecode.get common::InstValue::And is test::assert_true
-    "or inst" 7 bytecode.get common::InstValue::Or is test::assert_true
-    "not inst" 8 bytecode.get common::InstValue::Not is test::assert_true
-    "eq inst" 9 bytecode.get common::InstValue::Eq is test::assert_true
-    "ne inst" 10 bytecode.get common::InstValue::Ne is test::assert_true
-    "gt inst" 11 bytecode.get common::InstValue::Gt is test::assert_true
-    "ge inst" 12 bytecode.get common::InstValue::Ge is test::assert_true
-    "lt inst" 13 bytecode.get common::InstValue::Lt is test::assert_true
-    "le inst" 14 bytecode.get common::InstValue::Le is test::assert_true
-    "swap inst" 15 bytecode.get common::InstValue::Swap is test::assert_true
-    "over inst" 16 bytecode.get common::InstValue::Over is test::assert_true
-    "rot inst" 17 bytecode.get common::InstValue::Rot is test::assert_true
+    "2 3 * drop 8 2 / drop 8 3 % drop 1 2 << drop 8 2 >> drop true false && drop true false || drop true ! drop 1 2 == drop 1 2 != drop 1 2 > drop 1 2 >= drop 1 2 < drop 1 2 <= drop 1 2 swap drop drop 1 2 over drop drop drop 1 2 3 rot drop drop drop" compile_bytecode_source = program
+    "checked mul" common::BuiltinType::I64 common::InstValue::CheckedMul program.bytecode assert_instruction_present
+    "checked div" common::BuiltinType::I64 common::InstValue::CheckedDiv program.bytecode assert_instruction_present
+    "checked mod" common::BuiltinType::I64 common::InstValue::CheckedMod program.bytecode assert_instruction_present
+    "checked shl" common::BuiltinType::I64 common::InstValue::CheckedShl program.bytecode assert_instruction_present
+    "checked shr" common::BuiltinType::I64 common::InstValue::CheckedShr program.bytecode assert_instruction_present
+    "and instruction" common::InstValue::And program.bytecode assert_instruction_present
+    "or instruction" common::InstValue::Or program.bytecode assert_instruction_present
+    "not instruction" common::InstValue::Not program.bytecode assert_instruction_present
+    "eq instruction" common::InstValue::Eq program.bytecode assert_instruction_present
+    "ne instruction" common::InstValue::Ne program.bytecode assert_instruction_present
+    "gt instruction" common::InstValue::Gt program.bytecode assert_instruction_present
+    "ge instruction" common::InstValue::Ge program.bytecode assert_instruction_present
+    "lt instruction" common::InstValue::Lt program.bytecode assert_instruction_present
+    "le instruction" common::InstValue::Le program.bytecode assert_instruction_present
+    "swap instruction" common::InstValue::Swap program.bytecode assert_instruction_present
+    "over instruction" common::InstValue::Over program.bytecode assert_instruction_present
+    "rot instruction" common::InstValue::Rot program.bytecode assert_instruction_present
 }
 
 pub fn test_compile_direct_ops_bitwise {
     "compile_direct_ops_bitwise" test::test_start
-
-    std::List[common::Op]::new = ops
-    common::OpValue::BitAnd test_make_op ops.push
-    common::OpValue::BitOr test_make_op ops.push
-    common::OpValue::BitXor test_make_op ops.push
-    common::OpValue::BitNot test_make_op ops.push
-
-    ops common::symbol_store_new compile_test_program.unwrap = program
-    program.bytecode = bytecode: $std::List[common::InstValue]
-
-    "bit_and inst" 1 bytecode.get common::InstValue::BitAnd is test::assert_true
-    "bit_or inst" 2 bytecode.get common::InstValue::BitOr is test::assert_true
-    "bit_xor inst" 3 bytecode.get common::InstValue::BitXor is test::assert_true
-    "bit_not inst" 4 bytecode.get common::InstValue::BitNot is test::assert_true
+    "1 2 & drop 1 2 | drop 1 2 ^ drop 1 ~ drop" compile_bytecode_source = program
+    "bitand instruction" common::InstValue::BitAnd program.bytecode assert_instruction_present
+    "bitor instruction" common::InstValue::BitOr program.bytecode assert_instruction_present
+    "bitxor instruction" common::InstValue::BitXor program.bytecode assert_instruction_present
+    "bitnot instruction" common::InstValue::BitNot program.bytecode assert_instruction_present
 }
 
 pub fn test_compile_direct_ops_memory {
     "compile_direct_ops_memory" test::test_start
-
-    std::List[common::Op]::new = ops
-    common::OpValue::HeapAlloc test_make_op ops.push
-    common::OpValue::Load8 test_make_op ops.push
-    common::OpValue::Load16 test_make_op ops.push
-    common::OpValue::Load32 test_make_op ops.push
-    common::OpValue::Load64 test_make_op ops.push
-    common::OpValue::Store8 test_make_op ops.push
-    common::OpValue::Store16 test_make_op ops.push
-    common::OpValue::Store32 test_make_op ops.push
-    common::OpValue::Store64 test_make_op ops.push
-
-    ops common::symbol_store_new compile_test_program.unwrap = program
-    program.bytecode = bytecode: $std::List[common::InstValue]
-
-    "heap_alloc inst" 1 bytecode.get common::InstValue::HeapAlloc is test::assert_true
-    "load8 inst" 2 bytecode.get common::InstValue::Load8 is test::assert_true
-    "load16 inst" 3 bytecode.get common::InstValue::Load16 is test::assert_true
-    "load32 inst" 4 bytecode.get common::InstValue::Load32 is test::assert_true
-    "load64 inst" 5 bytecode.get common::InstValue::Load64 is test::assert_true
-    "store8 inst" 6 bytecode.get common::InstValue::Store8 is test::assert_true
-    "store16 inst" 7 bytecode.get common::InstValue::Store16 is test::assert_true
-    "store32 inst" 8 bytecode.get common::InstValue::Store32 is test::assert_true
-    "store64 inst" 9 bytecode.get common::InstValue::Store64 is test::assert_true
+    "unsafe { 8 alloc = storage storage load8 drop storage load16 drop storage load32 drop storage load64 drop 1 storage store8 1 storage store16 1 storage store32 1 storage store64 storage free }" compile_bytecode_source = program
+    "heapalloc instruction" common::InstValue::HeapAlloc program.bytecode assert_instruction_present
+    "load8 instruction" common::InstValue::Load8 program.bytecode assert_instruction_present
+    "load16 instruction" common::InstValue::Load16 program.bytecode assert_instruction_present
+    "load32 instruction" common::InstValue::Load32 program.bytecode assert_instruction_present
+    "load64 instruction" common::InstValue::Load64 program.bytecode assert_instruction_present
+    "store8 instruction" common::InstValue::Store8 program.bytecode assert_instruction_present
+    "store16 instruction" common::InstValue::Store16 program.bytecode assert_instruction_present
+    "store32 instruction" common::InstValue::Store32 program.bytecode assert_instruction_present
+    "store64 instruction" common::InstValue::Store64 program.bytecode assert_instruction_present
+    "heapfree instruction" common::InstValue::HeapFree program.bytecode assert_instruction_present
 }
 
 pub fn test_compile_direct_ops_syscall {
     "compile_direct_ops_syscall" test::test_start
-
-    std::List[common::Op]::new = ops
-    common::OpValue::Syscall0 test_make_op ops.push
-    common::OpValue::Syscall1 test_make_op ops.push
-    common::OpValue::Syscall2 test_make_op ops.push
-    common::OpValue::Syscall3 test_make_op ops.push
-    common::OpValue::Syscall4 test_make_op ops.push
-    common::OpValue::Syscall5 test_make_op ops.push
-    common::OpValue::Syscall6 test_make_op ops.push
-
-    ops common::symbol_store_new compile_test_program.unwrap = program
-    program.bytecode = bytecode: $std::List[common::InstValue]
-
-    "syscall0 inst" 1 bytecode.get common::InstValue::Syscall0 is test::assert_true
-    "syscall1 inst" 2 bytecode.get common::InstValue::Syscall1 is test::assert_true
-    "syscall2 inst" 3 bytecode.get common::InstValue::Syscall2 is test::assert_true
-    "syscall3 inst" 4 bytecode.get common::InstValue::Syscall3 is test::assert_true
-    "syscall4 inst" 5 bytecode.get common::InstValue::Syscall4 is test::assert_true
-    "syscall5 inst" 6 bytecode.get common::InstValue::Syscall5 is test::assert_true
-    "syscall6 inst" 7 bytecode.get common::InstValue::Syscall6 is test::assert_true
+    "unsafe { 39 syscall0 drop 0 39 syscall1 drop 0 0 39 syscall2 drop 0 0 0 39 syscall3 drop 0 0 0 0 39 syscall4 drop 0 0 0 0 0 39 syscall5 drop 0 0 0 0 0 0 39 syscall6 drop }" compile_bytecode_source = program
+    "syscall0 instruction" common::InstValue::Syscall0 program.bytecode assert_instruction_present
+    "syscall1 instruction" common::InstValue::Syscall1 program.bytecode assert_instruction_present
+    "syscall2 instruction" common::InstValue::Syscall2 program.bytecode assert_instruction_present
+    "syscall3 instruction" common::InstValue::Syscall3 program.bytecode assert_instruction_present
+    "syscall4 instruction" common::InstValue::Syscall4 program.bytecode assert_instruction_present
+    "syscall5 instruction" common::InstValue::Syscall5 program.bytecode assert_instruction_present
+    "syscall6 instruction" common::InstValue::Syscall6 program.bytecode assert_instruction_present
 }
 
 pub fn test_compile_direct_ops_print {
     "compile_direct_ops_print" test::test_start
-
-    std::List[common::Op]::new = ops
-    common::OpValue::PrintInt test_make_op ops.push
-    common::OpValue::PrintStr test_make_op ops.push
-    common::OpValue::PrintChar test_make_op ops.push
-    common::OpValue::PrintCstr test_make_op ops.push
-    common::OpValue::PrintBool test_make_op ops.push
-
-    ops common::symbol_store_new compile_test_program.unwrap = program
-    program.bytecode = bytecode: $std::List[common::InstValue]
-
-    "print_int inst" 1 bytecode.get common::InstValue::PrintInt is test::assert_true
-    "print_str inst" 2 bytecode.get common::InstValue::PrintStr is test::assert_true
-    "print_char inst" 3 bytecode.get common::InstValue::PrintChar is test::assert_true
-    "print_cstr inst" 4 bytecode.get common::InstValue::PrintCstr is test::assert_true
-    "print_bool inst" 5 bytecode.get common::InstValue::PrintBool is test::assert_true
+    "42 print \"hi\" print 'A' print true print" compile_bytecode_source = program
+    "printint instruction" common::InstValue::PrintInt program.bytecode assert_instruction_present
+    "printstr instruction" common::InstValue::PrintStr program.bytecode assert_instruction_present
+    "printchar instruction" common::InstValue::PrintChar program.bytecode assert_instruction_present
+    "printbool instruction" common::InstValue::PrintBool program.bytecode assert_instruction_present
 }
 
 pub fn test_compile_direct_ops_fn {
     "compile_direct_ops_fn" test::test_start
-
-    std::List[common::Op]::new = ops
-    common::OpValue::FnExec test_make_op ops.push
-    common::OpValue::FnReturn test_make_op ops.push
-
-    ops common::symbol_store_new compile_test_program.unwrap = program
-    program.bytecode = bytecode: $std::List[common::InstValue]
-
-    "fn_exec inst" 1 bytecode.get common::InstValue::FnExec is test::assert_true
-    "fn_return inst" 2 bytecode.get common::InstValue::FnReturn is test::assert_true
+    "{ } exec fn returns { return } returns" compile_bytecode_source = program
+    "fnexec instruction" common::InstValue::FnExec program.bytecode assert_instruction_present
+    "returns" program
+        .functions
+        .get_str
+        .unwrap = instructions
+    "native return" common::InstValue::FnReturn instructions assert_instruction_present
 }
 
 pub fn test_compile_push_array {
     "compile_push_array" test::test_start
-
-    # Create array items: [1, 2, 3]
-    std::List[common::Op]::new = items
-    1 common::make_integer_op_value test_make_op items.push
-    2 common::make_integer_op_value test_make_op items.push
-    3 common::make_integer_op_value test_make_op items.push
-
-    # Create a PushArray op with the items list as value
-    std::List[common::Op]::new = ops
-    make_test_location items common::OpValue::PushArray common::Op::new ops.push
-
-    ops common::symbol_store_new compile_test_program.unwrap = program
-    program.bytecode = bytecode: $std::List[common::InstValue]
-
-    0 = has_static_array
-    0 = has_alloc
-    0 = i: u64
-    while i bytecode.length > do
-        i bytecode.get = inst_value
-        if inst_value common::InstValue::PushStaticArray is then
-            1 = has_static_array
-        elif inst_value common::InstValue::HeapAlloc is then
-            1 = has_alloc
-        fi
-        1 += i
+    "[1, 2, 3] drop" compile_bytecode_source = program
+    "static array is stored in program" 1 program.static_arrays.length test::assert_eq
+    for instruction in program.bytecode.iter do
+        "literal array has no heap allocation" instruction common::InstValue::HeapAlloc is test::assert_false
     done
-    "literal array emits PushStaticArray" 1 has_static_array test::assert_eq
-    "literal array has no HeapAlloc" 0 has_alloc test::assert_eq
-    "literal array is stored in Program" 1 program.static_arrays.length test::assert_eq
 }
 
 pub fn test_compile_if_elif_else {
     "compile_if_elif_else" test::test_start
-
-    std::List[common::Op]::new = ops
-    # if ... then ... elif ... then ... else ... fi
-    common::OpValue::IfStart test_make_op ops.push
-    common::OpValue::IfCondition test_make_op ops.push
-    common::OpValue::IfElif test_make_op ops.push
-    common::OpValue::IfCondition test_make_op ops.push
-    common::OpValue::IfElse test_make_op ops.push
-    common::OpValue::IfEnd test_make_op ops.push
-
-    ops common::symbol_store_new compile_test_program.unwrap = program
-    program.bytecode = bytecode: $std::List[common::InstValue]
-
-    # Expected bytecode layout:
-    # 0: LABEL (fn)
-    # 1: JUMP_NE (if condition -> jump to elif label)
-    # 2: JUMP (jump to fi from then-block)
-    # 3: LABEL (elif label)
-    # 4: JUMP_NE (elif condition -> jump to else label)
-    # 5: JUMP (jump to fi from elif-block)
-    # 6: LABEL (else label)
-    # 7: LABEL (fi label)
-    "elif bytecode length" 8 bytecode.length test::assert_eq
-    "elif fn label" 0 bytecode.get common::InstValue::Label is test::assert_true
-    "elif if jump_ne" 1 bytecode.get common::InstValue::JumpNe is test::assert_true
-    "elif jump to fi" 2 bytecode.get common::InstValue::Jump is test::assert_true
-    "elif label" 3 bytecode.get common::InstValue::Label is test::assert_true
-    "elif cond jump_ne" 4 bytecode.get common::InstValue::JumpNe is test::assert_true
-    "else jump to fi" 5 bytecode.get common::InstValue::Jump is test::assert_true
-    "else label" 6 bytecode.get common::InstValue::Label is test::assert_true
-    "fi label" 7 bytecode.get common::InstValue::Label is test::assert_true
+    "if true then elif false then else fi" compile_bytecode_source = program
+    std::List[common::InstValue]::new = control_flow
+    control_flow program.bytecode append_control_flow_instructions
+    "control-flow instruction count" 8 control_flow.length test::assert_eq
+    "control-flow instruction 0" 0 control_flow.get common::InstValue::Label is test::assert_true
+    "control-flow instruction 1" 1 control_flow.get common::InstValue::JumpNe is test::assert_true
+    "control-flow instruction 2" 2 control_flow.get common::InstValue::Jump is test::assert_true
+    "control-flow instruction 3" 3 control_flow.get common::InstValue::Label is test::assert_true
+    "control-flow instruction 4" 4 control_flow.get common::InstValue::JumpNe is test::assert_true
+    "control-flow instruction 5" 5 control_flow.get common::InstValue::Jump is test::assert_true
+    "control-flow instruction 6" 6 control_flow.get common::InstValue::Label is test::assert_true
+    "control-flow instruction 7" 7 control_flow.get common::InstValue::Label is test::assert_true
 }
 
 pub fn test_compile_fn_call {
     "compile_fn_call" test::test_start
-
-    # Register a function in the local store.
-    common::symbol_store_new = store
-    std::List[common::Op]::new = fn_ops
-    make_test_location fn_ops "greet".to_str common::Function::new = func
-    func store.set_function
-
-    std::List[common::Op]::new = ops
-    "greet".to_str common::OpValue::FnCall test_make_op ops.push
-
-    ops store compile_test_program.unwrap = program
-    program.bytecode = bytecode: $std::List[common::InstValue]
-
-    # Should have: LABEL, FN_CALL
-    "fn_call bytecode length" 2 bytecode.length test::assert_eq
-    "fn_call inst kind" 1 bytecode.get common::InstValue::FnCall is test::assert_true
+    "fn greet { } greet" compile_bytecode_source = program
+    "named call" "greet".to_str common::InstValue::FnCall program.bytecode assert_instruction_present
 }
 
 pub fn test_compile_fn_push {
     "compile_fn_push" test::test_start
-
-    # Register a function in the local store.
-    common::symbol_store_new = store
-    std::List[common::Op]::new = fn_ops
-    1 common::make_integer_op_value test_make_op fn_ops.push
-    make_test_location fn_ops "adder".to_str common::Function::new = func
-    func store.set_function
-
-    std::List[common::Op]::new = ops
-    "adder".to_str common::OpValue::FnPush test_make_op ops.push
-
-    ops store compile_test_program.unwrap = program
-    program.bytecode = bytecode: $std::List[common::InstValue]
-
-    # FnPush should emit FN_PUSH instruction with function name
-    # Find FN_PUSH instruction in bytecode
-    "fn_push has instrs" 0 bytecode.length != test::assert_true
+    "fn adder -> i64 { 1 } &adder exec drop" compile_bytecode_source = program
+    "referenced function emitted" "adder" program.functions.has_str test::assert_true
 }
 
 # ============================================================================
@@ -1169,7 +802,7 @@ test_bytecode_comparison_checks_payloads
 test_compile_push_int
 test_invalid_program_stops_before_bytecode
 test_compile_invariant_failure_is_not_diagnostic
-test_compile_typechecked_is_repeatable
+test_compile_checked_is_repeatable
 test_compile_functions_once_per_pass
 test_compile_push_bool
 test_compile_push_str

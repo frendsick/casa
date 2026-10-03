@@ -8,7 +8,7 @@ import "common" as common
 import "constant_eval" as constant_eval
 import "error" as error
 import "lexer" as lexer
-import "semantics" as semantics
+import "source_body" as source_body
 import "semantic_rules" as rules
 import "syntax" as grammar
 
@@ -122,8 +122,146 @@ impl ModuleContext {
         std::Set[std::String]::new std::Set[std::String]::new ModuleContext
     }
 }
+# A source declaration builder owns syntax separately from callable metadata.
+struct FunctionSource {
+    declaration: common::Function
+    operations:  std::List[common::Op]
+}
+
+impl FunctionSource {
+    fn new
+        name:std::String
+        operations:std::List[common::Op]
+        location:common::Location
+    -> FunctionSource {
+        location name common::Function::new = declaration
+        operations declaration FunctionSource
+    }
+
+    fn with_stack_effect
+        name:std::String
+        operations:std::List[common::Op]
+        location:common::Location
+        effect:common::StackEffect
+    -> FunctionSource {
+        effect location name common::Function::with_stack_effect = declaration
+        operations declaration FunctionSource
+    }
+
+    fn into_parts self:FunctionSource -> common::Function std::List[common::Op] {
+        self match
+            FunctionSource { declaration: declaration operations: operations } => declaration operations
+        end
+    }
+}
+
+enum SourceBodyWork {
+    Pending (std::List[common::Op])
+    Reserved
+    Completed (source_body::SourceBody)
+}
+
+impl SourceBodyWork {
+    fn get_completed self:$SourceBodyWork -> std::Option[$source_body::SourceBody] {
+        self match
+            SourceBodyWork::Completed(body) => body std::Option[$source_body::SourceBody]::Some
+            _ => std::Option[$source_body::SourceBody]::None
+        end
+    }
+}
+
+struct SourceBodies {
+    work: std::Map[std::String SourceBodyWork]
+}
+
+impl SourceBodies {
+    fn new -> SourceBodies { std::Map[std::String SourceBodyWork]::new SourceBodies }
+
+    fn add self:mut$SourceBodies name:std::String operations:std::List[common::Op] {
+        operations SourceBodyWork::Pending name self.work.set
+    }
+
+    fn get_completed self:$SourceBodies name:$str -> std::Option[$source_body::SourceBody] {
+        if name self.work.get_str std::Option::Some(work) is then
+            work.get_completed return
+        fi
+        std::Option[$source_body::SourceBody]::None
+    }
+
+    fn clone_operations self:$SourceBodies name:$str -> std::List[common::Op] {
+        if name self.work.get_str std::Option::Some(work) is then
+            work match
+                SourceBodyWork::Pending(operations) => operations.clone return
+                SourceBodyWork::Completed(body) => body.lower_operations return
+                SourceBodyWork::Reserved => "Cannot copy source while resolving its body" panic
+            end
+        fi
+        std::List[common::Op]::new
+    }
+
+    fn begin self:mut$SourceBodies declaration:common::Function -> std::Option[FunctionSource] {
+        if declaration.name.as_str self.work.get_str std::Option::Some(work) is then
+            if work SourceBodyWork::Pending is ! then
+                std::Option[FunctionSource]::None return
+            fi
+        else
+            std::Option[FunctionSource]::None return
+        fi
+        declaration.name.as_str self
+            .work
+            .remove_str
+            .unwrap match
+            SourceBodyWork::Pending(operations) => {
+                SourceBodyWork::Reserved declaration.name.clone self.work.set
+                operations declaration FunctionSource std::Option::Some
+            }
+            _ => "Only pending source can begin resolution" panic
+        end
+    }
+
+    fn into_bodies self:SourceBodies -> std::Map[std::String source_body::SourceBody] {
+        std::Map[std::String source_body::SourceBody]::new = bodies
+        for
+            name in self
+                .work
+                .keys
+                .iter
+        do
+            name.as_str self
+                .work
+                .remove_str
+                .unwrap match
+                SourceBodyWork::Pending(operations) => operations source_body::consume_source_body
+                SourceBodyWork::Completed(body) => body
+                SourceBodyWork::Reserved => "Cannot finish source with active resolution" panic
+            end
+            name.clone bodies.set
+        done
+        bodies
+    }
+}
+
+impl FunctionSource {
+    # The source frame owns declaration and syntax until both are published together.
+    fn resolve
+        self:FunctionSource
+        store:mut$common::SymbolStore
+        diagnostics:mut$error::Diagnostics
+        bodies:mut$SourceBodies
+        allow_root_local_capture:bool
+    {
+        self match
+            FunctionSource { declaration: declaration operations: operations } => {
+                bodies diagnostics allow_root_local_capture declaration operations store resolve_identifiers
+                operations source_body::consume_source_body SourceBodyWork::Completed declaration.name.clone bodies.work.set
+                declaration store.set_function
+            }
+        end
+    }
+}
 
 pub struct Parser {
+    bodies:              SourceBodies
     pub store:           common::SymbolStore
     pub import_stack:    std::List[std::String]
     pub analyzed_files:  std::Set[std::String]
@@ -136,17 +274,16 @@ pub struct Parser {
 }
 
 pub struct ParseResolveResult {
-    pub ops:         std::Option[std::List[common::Op]]
-    pub store:       common::SymbolStore
+    source:          std::Option[source_body::SourceProgram]
     pub diagnostics: error::Diagnostics
 }
 
 impl ParseResolveResult {
     pub fn into_parts
         self:ParseResolveResult
-    -> std::Option[std::List[common::Op]] common::SymbolStore error::Diagnostics {
+    -> std::Option[source_body::SourceProgram] error::Diagnostics {
         self match
-            ParseResolveResult { ops: ops store: store diagnostics: diagnostics } => ops store diagnostics
+            ParseResolveResult { source: source diagnostics: diagnostics } => source diagnostics
         end
     }
 }
@@ -169,13 +306,16 @@ impl Parser {
         std::Set[std::String]::new
         std::List[std::String]::new
         store
+        SourceBodies::new
         Parser
     }
 
-    pub fn into_parts self:Parser -> common::SymbolStore std::Set[std::String] ParseState {
+    pub fn into_parts
+        self:Parser
+    -> common::SymbolStore std::Set[std::String] ParseState std::Map[std::String source_body::SourceBody] {
         self match
-            Parser { store: store analyzed_files: analyzed_files module_contexts: module_contexts state: state } => {
-                store analyzed_files state
+            Parser { store: store analyzed_files: analyzed_files state: state bodies: bodies } => {
+                store analyzed_files state bodies.into_bodies
             }
         end
     }
@@ -189,7 +329,7 @@ impl Parser {
     }
 
     pub fn into_diagnostics self:Parser -> error::Diagnostics {
-        self.into_parts = state = included_files = store
+        self.into_parts = resolved_bodies = state = included_files = store
         state.into_diagnostics
     }
 
@@ -197,17 +337,21 @@ impl Parser {
         self:Parser
         ops:std::Option[std::List[common::Op]]
     -> ParseResolveResult std::List[std::String] {
-        self.into_parts = state = included_files = store
+        self.into_parts = resolved_bodies = state = included_files = store
         included_files.to_list = included_file_list
-        state.into_diagnostics store ops ParseResolveResult
+        ops match
+            std::Option::Some(operations) => resolved_bodies operations source_body::consume_source_body store source_body::SourceProgram::new std::Option::Some
+            std::Option::None => std::Option[source_body::SourceProgram]::None
+        end = source
+        state.into_diagnostics source ParseResolveResult
         included_file_list
     }
 
     pub fn into_failed_result self:Parser -> ParseResolveResult std::List[std::String] {
-        self.into_parts = state = included_files = store
+        self.into_parts = resolved_bodies = state = included_files = store
         store drop
         included_files.to_list = included_file_list
-        state.into_diagnostics common::symbol_store_new std::Option[std::List[common::Op]]::None ParseResolveResult
+        state.into_diagnostics std::Option[source_body::SourceProgram]::None ParseResolveResult
         included_file_list
     }
 
@@ -227,9 +371,28 @@ impl Parser {
             .add
     }
 
-    pub fn put_function self:mut$Parser name:std::String function:common::Function {
+    pub fn put_function self:mut$Parser name:std::String function:FunctionSource {
         name.as_str self.register_private_declaration
-        function self.store.set_function
+        function.into_parts = operations = declaration
+        if
+            name.as_str self
+                .store
+                .member_accessors
+                .has_str ! declaration.extern_symbol.is_none &&
+        then
+            operations name.clone self.bodies.add
+        fi
+        declaration self.store.set_function
+    }
+
+    fn put_generated_function self:mut$Parser function:FunctionSource {
+        function.into_parts = operations = declaration
+        operations declaration.name.clone self.bodies.add
+        declaration self.store.set_generated_recipe
+    }
+
+    fn clone_source_operations self:$Parser name:$str -> std::List[common::Op] {
+        name self.bodies.clone_operations
     }
 
     pub fn put_constant self:mut$Parser name:std::String constant:common::Constant {
@@ -329,7 +492,7 @@ impl common::SymbolStore {
             name.as_str self
                 .get_function
                 .unwrap
-                .clone_for_import = function
+                .clone = function
             if name.as_str self.is_generated_recipe then
                 function cloned.set_generated_recipe
             else
@@ -342,6 +505,7 @@ impl common::SymbolStore {
         self.enums.clone = cloned.enums
         self.structs.clone = cloned.structs
         self.traits.clone = cloned.traits
+        self.member_accessors.clone = cloned.member_accessors
         for name in self.get_trait_impl_names.iter do
             name.as_str self
                 .get_trait_impl
@@ -971,7 +1135,7 @@ pub fn parse_array_lambda
     cursor.retreat
     f"lambda__{function_name}_o{brace_token common::Token::location common::Location::span common::Span::offset}" = arr_lam_name
     arr_lam_name.as_str cursor parser parse_block_ops = arr_lam_ops
-    brace_token common::Token::location.clone arr_lam_ops arr_lam_name.clone common::Function::new = arr_lam_fn
+    brace_token common::Token::location.clone arr_lam_ops arr_lam_name.clone FunctionSource::new = arr_lam_fn
     arr_lam_fn arr_lam_name.clone parser.put_function
     brace_token common::Token::location.clone arr_lam_name common::OpValue::FnPush common::Op::new items.push
 }
@@ -1135,8 +1299,8 @@ pub fn handle_fstring
             function_name cursor parser parse_fstring_expr = expr_ops
             token common::Token::location.clone common::OpValue::FstringToStr common::Op::new expr_ops.push
             f"lambda__{function_name}_o{token common::Token::location common::Location::span common::Span::offset}" = lambda_name
-            token common::Token::location.clone expr_ops lambda_name.clone common::Function::new = lambda_function
-            true lambda_function common::Function::set_captures_shared
+            token common::Token::location.clone expr_ops lambda_name.clone FunctionSource::new = lambda_function
+            true lambda_function.declaration common::Function::set_captures_shared
             lambda_function lambda_name.clone parser.put_function
             token common::Token::location.clone lambda_name common::OpValue::FnPush common::Op::new ops.push
             token common::Token::location.clone common::OpValue::FnExec common::Op::new ops.push
@@ -1180,7 +1344,7 @@ pub fn get_op_delimiter
         cursor.retreat
         f"lambda__{function_name}_o{token common::Token::location common::Location::span common::Span::offset}" = lambda_name
         lambda_name.as_str cursor parser parse_block_ops = lambda_ops
-        token common::Token::location.clone lambda_ops lambda_name.clone common::Function::new = lambda_function
+        token common::Token::location.clone lambda_ops lambda_name.clone FunctionSource::new = lambda_function
         lambda_function lambda_name.clone parser.put_function
         token common::Token::location lambda_name common::OpValue::FnPush common::Op::new ops.push
         return
@@ -2003,13 +2167,16 @@ pub fn expect_function_name cursor:mut$TokenCursor state:mut$ParseState -> commo
     fallback_token state common::TokenKind::Identifier cursor expect_token_kind.unwrap_or
 }
 
-pub fn parse_function parser:mut$Parser cursor:mut$TokenCursor -> common::Function {
+pub fn parse_function parser:mut$Parser cursor:mut$TokenCursor -> FunctionSource {
     cursor parser parse_function_definition = function
-    function.name.as_str cursor.resolve_name = function.name
+    function
+        .declaration
+        .name
+        .as_str cursor.resolve_name = function.declaration.name
     function
 }
 
-pub fn parse_function_definition parser:mut$Parser cursor:mut$TokenCursor -> common::Function {
+pub fn parse_function_definition parser:mut$Parser cursor:mut$TokenCursor -> FunctionSource {
     cursor.type_bindings.length = inherited_bindings
     fallback_token parser.state "fn" cursor expect_token_value.unwrap_or = fn_token
     parser.state cursor expect_function_name = name_token
@@ -2074,9 +2241,9 @@ pub fn parse_function_definition parser:mut$Parser cursor:mut$TokenCursor -> com
     effect.const_params body_ops rewrite_operation_constant_parameters
     body_ops ops.append
 
-    effect name_token common::Token::location.clone ops name_token common::Token::value.clone common::Function::with_stack_effect = function
-    generic_params function common::Function::set_generic_params
-    variables function common::Function::set_variables
+    effect name_token common::Token::location.clone ops name_token common::Token::value.clone FunctionSource::with_stack_effect = function
+    generic_params function.declaration common::Function::set_generic_params
+    variables function.declaration common::Function::set_variables
     function
     inherited_bindings cursor.restore_type_bindings
 }
@@ -2100,7 +2267,7 @@ pub fn does_extern_declaration_end_before parser:$Parser token:$common::Token ->
     end
 }
 
-pub fn parse_extern_function parser:mut$Parser cursor:mut$TokenCursor -> common::Function {
+pub fn parse_extern_function parser:mut$Parser cursor:mut$TokenCursor -> FunctionSource {
     fallback_token parser.state "extern" cursor expect_token_value.unwrap_or drop
     fallback_token parser.state "fn" cursor expect_token_value.unwrap_or drop
     parser.state cursor expect_function_name = name_token
@@ -2174,9 +2341,9 @@ pub fn parse_extern_function parser:mut$Parser cursor:mut$TokenCursor -> common:
 
     return_types parameters common::StackEffect::new = effect
     effect name_token.location.clone std::List[common::Op]::new name_token.value.as_str cursor.resolve_name
-    common::Function::with_stack_effect = function
-    true = function.is_unsafe
-    name_token.value.clone std::Option::Some = function.extern_symbol
+    FunctionSource::with_stack_effect = function
+    true = function.declaration.is_unsafe
+    name_token.value.clone std::Option::Some = function.declaration.extern_symbol
 
     function
 }
@@ -2546,7 +2713,7 @@ pub fn make_derived_borrow_method
     body_ops:std::List[common::Op]
     function_name:$str
     location:$common::Location
--> common::Function {
+-> FunctionSource {
     std::List[common::Parameter]::new = parameters
     std::List[common::Variable]::new = variables
     std::List[common::Op]::new = ops
@@ -2562,8 +2729,8 @@ pub fn make_derived_borrow_method
     returns parameters common::StackEffect::new = effect
     type_vars common::string_list_to_set = effect.type_vars
     trait_bounds effect common::StackEffect::set_trait_bounds
-    effect location.clone ops function_name.to_str common::Function::with_stack_effect = function
-    variables function common::Function::set_variables
+    effect location.clone ops function_name.to_str FunctionSource::with_stack_effect = function
+    variables function.declaration common::Function::set_variables
     function
 }
 
@@ -2814,7 +2981,7 @@ pub fn make_derived_eq_function
     type_vars:$std::List[std::String]
     required_type_vars:$std::Set[std::String]
     location:$common::Location
--> common::Function {
+-> FunctionSource {
     std::List[common::Op]::new = ops
     receiver.match_base = receiver_name
     if
@@ -2853,7 +3020,7 @@ pub fn make_derived_cmp_function
     type_vars:$std::List[std::String]
     required_type_vars:$std::Set[std::String]
     location:$common::Location
--> common::Function {
+-> FunctionSource {
     std::List[common::Op]::new = ops
     receiver.match_base = receiver_name
     if
@@ -2893,7 +3060,7 @@ pub fn make_derived_hash_function
     type_vars:$std::List[std::String]
     required_type_vars:$std::Set[std::String]
     location:$common::Location
--> common::Function {
+-> FunctionSource {
     std::List[common::Op]::new = ops
     receiver.match_base = receiver_name
     if
@@ -2931,7 +3098,7 @@ pub fn make_derived_clone_function
     type_vars:$std::List[std::String]
     required_type_vars:$std::Set[std::String]
     location:$common::Location
--> common::Function {
+-> FunctionSource {
     required_type_vars type_vars common::STD_CLONE_TRAIT make_derived_trait_bounds = bounds
     location.clone
     std::Map[std::String std::String]::new
@@ -3084,7 +3251,7 @@ pub fn derive_traits_for_aggregate
         fi
         if function_name.as_str parser.store.has_function ! then
             location clone_required_type_vars type_vars receiver parser make_derived_clone_function = function
-            function parser.store.set_generated_recipe
+            function parser.put_generated_function
         fi
         function_name std::Option::Some = clone_function
     fi
@@ -3100,7 +3267,7 @@ pub fn derive_traits_for_aggregate
         fi
         if function_name.as_str parser.store.has_function ! then
             location required_type_vars type_vars receiver parser make_derived_eq_function = function
-            function parser.store.set_generated_recipe
+            function parser.put_generated_function
         fi
         function_name std::Option::Some = eq_function
     fi
@@ -3116,7 +3283,7 @@ pub fn derive_traits_for_aggregate
         fi
         if function_name.as_str parser.store.has_function ! then
             location required_type_vars type_vars receiver parser make_derived_hash_function = function
-            function parser.store.set_generated_recipe
+            function parser.put_generated_function
         fi
         function_name std::Option::Some = hash_function
     fi
@@ -3133,7 +3300,7 @@ pub fn derive_traits_for_aggregate
             fi
             if function_name.as_str parser.store.has_function ! then
                 location required_type_vars type_vars receiver parser make_derived_cmp_function = function
-                function parser.store.set_generated_recipe
+                function parser.put_generated_function
             fi
             function_name std::Option::Some = cmp_function
         fi
@@ -3278,12 +3445,11 @@ pub fn create_member_accessor
     # Getter
     f"{struct_name}::{member_name}" = getter_name
     std::List[common::Op]::new = getter_ops
-    location.clone common::OpValue::UnsafeStart common::Op::new getter_ops.push
-    location.clone common::OpValue::PtrFromRef common::Op::new getter_ops.push
-    prior_members.length struct_name.to_str common::StructMemberAccess
-    common::OpValue::StructMemberProject = project_op
-    location.clone project_op common::Op::new getter_ops.push
-    location.clone common::OpValue::UnsafeEnd common::Op::new getter_ops.push
+    common::MemberAccessKind::Read prior_members.length struct_name.to_str common::StructMemberAccess
+    common::MemberAccessor getter_name.clone parser
+        .store
+        .member_accessors
+        .set
 
     std::List[common::Parameter]::new = getter_params
     "".to_str common::SHARED_BORROW_TYPE param_type.clone common::apply_borrow_type common::Parameter::named getter_params.push
@@ -3293,8 +3459,7 @@ pub fn create_member_accessor
     effect_type_vars.clone getter_stack_effect common::StackEffect::set_type_vars
     effect_type_vars getter_stack_effect common::canonicalize_stack_effect_type_vars
     getter_stack_effect location.clone getter_ops getter_name.clone
-    common::Function::with_stack_effect = getter
-    true getter common::Function::set_is_typechecked
+    FunctionSource::with_stack_effect = getter
 
     if
         getter_name.as_str parser
@@ -3309,19 +3474,11 @@ pub fn create_member_accessor
     # Setter
     f"{struct_name}::set_{member_name}" = setter_name
     std::List[common::Op]::new = setter_ops
-    location.clone common::OpValue::UnsafeStart common::Op::new setter_ops.push
-    location.clone common::OpValue::PtrFromRef common::Op::new setter_ops.push
-    location.clone common::OpValue::Dup common::Op::new setter_ops.push
-    prior_members.length struct_name.to_str common::StructMemberAccess
-    common::OpValue::StructMemberProject = project_op
-    location.clone project_op common::Op::new setter_ops.push
-    location.clone common::OpValue::Drop common::Op::new = drop_op
-    member_type.clone std::Option::Some drop_op common::Op::set_type_hint
-    drop_op setter_ops.push
-    prior_members.length struct_name.to_str common::StructMemberAccess
-    common::OpValue::StructMemberStore = store_op
-    location.clone store_op common::Op::new setter_ops.push
-    location.clone common::OpValue::UnsafeEnd common::Op::new setter_ops.push
+    common::MemberAccessKind::Write prior_members.length struct_name.to_str common::StructMemberAccess
+    common::MemberAccessor setter_name.clone parser
+        .store
+        .member_accessors
+        .set
 
     std::List[common::Parameter]::new = setter_params
     "".to_str common::EXCLUSIVE_BORROW_TYPE param_type.clone common::apply_borrow_type common::Parameter::named setter_params.push
@@ -3331,8 +3488,7 @@ pub fn create_member_accessor
     effect_type_vars.clone setter_stack_effect common::StackEffect::set_type_vars
     effect_type_vars setter_stack_effect common::canonicalize_stack_effect_type_vars
     setter_stack_effect location.clone setter_ops setter_name.clone
-    common::Function::with_stack_effect = setter
-    true setter common::Function::set_is_typechecked
+    FunctionSource::with_stack_effect = setter
 
     if
         setter_name.as_str parser
@@ -3607,20 +3763,11 @@ pub fn parse_trait parser:mut$Parser cursor:mut$TokenCursor -> common::CasaTrait
                 done
                 trait_tv_set method_stack_effect common::canonicalize_stack_effect_type_vars
 
-                # Parse optional default method body
-                std::List[common::Op]::new = default_ops
-                false = has_default_body
-                if cursor.peek std::Option::Some(body_peek) is then
-                    if "{" body_peek common::Token::value.as_str == then
-                        true = has_default_body
-                        f"{name_token common::Token::value.as_str cursor.resolve_name.as_str}::{method_name common::Token::value.as_str}" = default_name
-                        default_name.as_str cursor parser parse_block_ops = default_ops
-                        trait_tv_set default_ops common::canonicalize_operation_type_vars
-                    fi
-                fi
+                type_params trait_tv_set method_stack_effect method_name name_token cursor parser parse_default_method = default_function
 
                 inherited_method_bindings cursor.restore_type_bindings
-                has_default_body method_name.location.clone std::Option[common::Function]::None method_type_vars false std::List[common::Variable]::new default_ops method_stack_effect method_name common::Token::value.clone common::TraitMethod methods.push
+                method_name.location.clone default_function method_type_vars method_stack_effect method_name.value.clone
+                common::TraitMethod methods.push
             fi
         else
             false = parse_trait_loop
@@ -3631,37 +3778,111 @@ pub fn parse_trait parser:mut$Parser cursor:mut$TokenCursor -> common::CasaTrait
     inherited_bindings cursor.restore_type_bindings
 }
 
+fn parse_default_method
+    parser:mut$Parser
+    cursor:mut$TokenCursor
+    trait_token:$common::Token
+    method_token:$common::Token
+    effect:$common::StackEffect
+    type_vars:$std::Set[std::String]
+    type_parameters:$std::List[std::String]
+-> std::Option[std::String] {
+    if
+        { common::Token::value.as_str "{" == } cursor
+            .peek
+            .filter
+            .is_none
+    then
+        std::Option[std::String]::None return
+    fi
+    trait_token.value.as_str cursor.resolve_name = trait_name
+    f"{trait_name}::{method_token.value}" = default_name
+    default_name.as_str cursor parser parse_block_ops = operations
+    type_vars operations common::canonicalize_operation_type_vars
+    effect.clone = default_effect
+    type_vars.clone = default_effect.type_vars
+    std::List[common::Type]::new = arguments
+    for parameter in type_parameters.iter do
+        parameter.clone common::Type::TypeVar arguments.push
+    done
+    std::List[common::TraitBound]::new = bounds
+    arguments trait_name common::TraitBound bounds.push
+    bounds common::TRAIT_SELF_TYPE.to_str default_effect.trait_bounds.set
+    f"default:{default_name}" = recipe_name
+    default_effect operations recipe_name.clone make_default_method_function = recipe
+    method_token.location.clone = recipe.declaration.location
+    recipe parser.put_generated_function
+    recipe_name std::Option::Some
+}
+
 # ============================================================================
 # parse_impl_block - parse impl Type { fn methods... }
 # ============================================================================
 
+fn make_default_method_function
+    name:std::String
+    operations:std::List[common::Op]
+    effect:common::StackEffect
+-> FunctionSource {
+    std::List[common::Op]::new = function_operations
+    std::List[common::Variable]::new = variables
+    for parameter in effect.parameters.iter do
+        if "" parameter.name.as_str == then
+            continue
+        fi
+        parameter.typ.clone parameter.name.clone common::Variable variables.push
+        common::empty_location parameter.name.clone common::OpValue::AssignVar common::Op::new
+        function_operations.push
+    done
+    operations function_operations.append
+    effect common::empty_location function_operations name FunctionSource::with_stack_effect = function
+    variables = function.declaration.variables
+    function
+}
+
 pub fn inject_implementation_parameters
     parser:mut$Parser
-    function:mut$common::Function
+    function:mut$FunctionSource
     type_vars:$std::List[std::String]
     generic_params:$std::List[std::String]
     trait_bounds:$std::Map[std::String std::List[common::TraitBound]]
     constant_parameters:$std::Map[std::String common::BuiltinType]
 {
-    function.stack_effect.clone = effect
+    function
+        .declaration
+        .stack_effect
+        .clone = effect
     std::List[std::String]::new = combined_generic_params
     for parameter_name in generic_params.iter do
         parameter_name.clone combined_generic_params.push
     done
-    for parameter_name in function.generic_params.iter do
+    for
+        parameter_name in function
+            .declaration
+            .generic_params
+            .iter
+    do
         parameter_name.clone combined_generic_params.push
     done
-    combined_generic_params function common::Function::set_generic_params
+    combined_generic_params function.declaration common::Function::set_generic_params
 
     # Merge the impl block's constant parameters (ADR-0152) and rewrite the
     # method declaration and body so their names read as constants, not type
     # variables.
     if 0 constant_parameters.keys.length != then
         constant_parameters effect rewrite_stack_effect_constant_parameters
-        constant_parameters function.ops rewrite_operation_constant_parameters
+        constant_parameters function.operations rewrite_operation_constant_parameters
         0 = variable_index: u64
-        while variable_index function.variables.length > do
-            variable_index function.variables.get_mut = variable
+        while
+            variable_index function
+                .declaration
+                .variables
+                .length >
+        do
+            variable_index function
+                .declaration
+                .variables
+                .get_mut = variable
             constant_parameters variable.typ rules::rewrite_type_const_params = rewritten_variable_type
             rewritten_variable_type variable common::Variable::set_typ
             1 += variable_index
@@ -3679,16 +3900,25 @@ pub fn inject_implementation_parameters
     done
     effect.type_vars.clone = active_impl_type_vars
     active_impl_type_vars effect common::canonicalize_stack_effect_type_vars
-    active_impl_type_vars function.ops common::canonicalize_operation_type_vars
+    active_impl_type_vars function.operations common::canonicalize_operation_type_vars
     0 = variable_index: u64
-    while variable_index function.variables.length > do
+    while
         variable_index function
+            .declaration
+            .variables
+            .length >
+    do
+        variable_index function
+            .declaration
             .variables
             .get
             .clone = variable
         active_impl_type_vars variable.typ common::canonicalize_type_var = variable_type
         variable_type variable common::Variable::set_typ
-        variable variable_index function.variables.set
+        variable variable_index function
+            .declaration
+            .variables
+            .set
         1 += variable_index
     done
 
@@ -3702,13 +3932,16 @@ pub fn inject_implementation_parameters
 
     0 = insert_pos: u64
     # Register the implementation's symbolic constant parameters.
-    function.location.clone function.variables effect inject_constant_parameters = constant_assignments
+    function
+        .declaration
+        .location
+        .clone function.declaration.variables effect inject_constant_parameters = constant_assignments
     while 0 constant_assignments.length != do
         constant_assignments.pop = assignment
-        insert_pos assignment function.ops.insert
+        insert_pos assignment function.operations.insert
     done
 
-    effect function common::Function::set_stack_effect
+    effect function.declaration common::Function::set_stack_effect
 }
 
 pub fn namespace_trait_impl_type
@@ -4721,7 +4954,7 @@ pub fn make_copy_clone_fallback
     parser:mut$Parser
     trait_impl:mut$common::TraitImpl
     function_name:$str
--> common::Function {
+-> FunctionSource {
     std::List[common::Parameter]::new = parameters
     common::SHARED_BORROW_TYPE trait_impl.receiver.clone common::apply_borrow_type = receiver
     "self".to_str receiver common::Parameter::named parameters.push
@@ -4755,8 +4988,8 @@ pub fn make_copy_clone_fallback
         trait_impl.location.clone common::OpValue::Copy common::Op::new ops.push
     fi
 
-    effect trait_impl.location.clone ops function_name.to_str common::Function::with_stack_effect = function
-    variables function common::Function::set_variables
+    effect trait_impl.location.clone ops function_name.to_str FunctionSource::with_stack_effect = function
+    variables function.declaration common::Function::set_variables
     function
 }
 # Generic impls share the base receiver identity. Fully concrete impls use the
@@ -4807,7 +5040,7 @@ pub fn synthesize_copy_clone_fallbacks parser:mut$Parser {
         f"{receiver_name}::{common::STD_COPY_TRAIT}::clone" = function_name
         if function_name.as_str parser.store.has_function ! then
             function_name.as_str trait_impl parser make_copy_clone_fallback = function
-            function parser.store.set_generated_recipe
+            function parser.put_generated_function
         fi
         function_name.clone "clone".to_str trait_impl.methods.set
         trait_impl parser.store.set_trait_impl
@@ -4910,8 +5143,9 @@ pub fn finalize_trait_impl_methods parser:mut$Parser skip_functions:$std::Set[st
             f"{receiver_name}::{method_name}" = inherent_name
             if inherent_name.as_str parser.store.has_function ! then
                 if function_name.as_str parser.store.get_function std::Option::Some(function) is then
-                    function.clone_for_import = inherent_function
-                    inherent_name.clone inherent_function common::Function::set_name
+                    function.clone = declaration
+                    inherent_name.clone = declaration.name
+                    function_name.as_str parser.clone_source_operations declaration FunctionSource = inherent_function
                     inherent_function inherent_name.clone parser.put_function
                     if
                         function_name.as_str parser
@@ -5048,10 +5282,13 @@ pub fn parse_impl_block parser:mut$Parser cursor:mut$TokenCursor {
             break
         fi
         cursor parser parse_function_definition = function
-        is_unsafe_method function common::Function::set_is_unsafe
-        function common::Function::name = method_name: $std::String
+        is_unsafe_method function.declaration common::Function::set_is_unsafe
+        function
+            .declaration
+            .name
+            .clone = method_name
         if "drop" method_name.as_str == 0 implemented_traits.length != && then
-            function.location "`drop` must be declared in an inherent implementation" common::ErrorKind::InvalidScope parser.state.record_error
+            function.declaration.location "`drop` must be declared in an inherent implementation" common::ErrorKind::InvalidScope parser.state.record_error
         fi
         std::String::new = fn_name
         if 0 implemented_traits.length != then
@@ -5061,7 +5298,7 @@ pub fn parse_impl_block parser:mut$Parser cursor:mut$TokenCursor {
         else
             f"{impl_name}::{method_name}" = fn_name
         fi
-        fn_name.clone function common::Function::set_name
+        fn_name.clone function.declaration common::Function::set_name
         # Merge inherited type vars, trait bounds, and constant parameters
         if 0 type_vars.length != 0 const_params.keys.length != || then
             const_params trait_bounds generic_params type_vars function parser inject_implementation_parameters
@@ -5072,7 +5309,7 @@ pub fn parse_impl_block parser:mut$Parser cursor:mut$TokenCursor {
                 .get_function
                 .is_some
         then
-            function common::Function::location f"Identifier `{fn_name}` is already defined" common::ErrorKind::DuplicateName parser.state.record_error_string
+            function.declaration common::Function::location f"Identifier `{fn_name}` is already defined" common::ErrorKind::DuplicateName parser.state.record_error_string
         fi
         function fn_name.clone parser.put_function
         if is_public_method then
@@ -5895,16 +6132,16 @@ impl Parser {
             if "fn" unsafe_next common::Token::value.as_str == then
                 self token common::Token::location "Functions" function_name require_global_scope
                 cursor self parse_function = function
-                true function common::Function::set_is_unsafe
+                true function.declaration common::Function::set_is_unsafe
                 if
-                    function common::Function::name.as_str self
+                    function.declaration common::Function::name.as_str self
                         .store
                         .get_function
                         .is_some
                 then
-                    function common::Function::location f"Identifier `{function common::Function::name}` is already defined" common::ErrorKind::DuplicateName self.state.record_error_string
+                    function.declaration common::Function::location f"Identifier `{function.declaration common::Function::name}` is already defined" common::ErrorKind::DuplicateName self.state.record_error_string
                 fi
-                function common::Function::name.clone = unsafe_function_name
+                function.declaration common::Function::name.clone = unsafe_function_name
                 function unsafe_function_name.clone self.put_function
                 return
             fi
@@ -5932,8 +6169,8 @@ impl Parser {
             if "{" move_next common::Token::value.as_str == then
                 f"lambda__{function_name}_o{token common::Token::location common::Location::span common::Span::offset}" = lambda_name
                 lambda_name.as_str cursor self parse_block_ops = lambda_ops
-                token common::Token::location.clone lambda_ops lambda_name.clone common::Function::new = lambda_function
-                true lambda_function common::Function::set_captures_by_move
+                token common::Token::location.clone lambda_ops lambda_name.clone FunctionSource::new = lambda_function
+                true lambda_function.declaration common::Function::set_captures_by_move
                 lambda_function lambda_name.clone self.put_function
                 token common::Token::location lambda_name common::OpValue::FnPush common::Op::new ops.push
                 return
@@ -6058,15 +6295,21 @@ pub fn get_op_keyword
                 cursor.retreat
                 cursor parser parse_extern_function = function
                 if
-                    function.name.as_str parser
+                    function
+                        .declaration
+                        .name
+                        .as_str parser
                         .store
                         .get_function
                         .is_some
                 then
-                    function.location f"Identifier `{function.name}` is already defined"
+                    function.declaration.location f"Identifier `{function.declaration.name}` is already defined"
                     common::ErrorKind::DuplicateName parser.state.record_error_string
                 fi
-                function.name.clone = extern_function_name
+                function
+                    .declaration
+                    .name
+                    .clone = extern_function_name
                 function extern_function_name parser.put_function
                 return
             fi
@@ -6136,14 +6379,14 @@ pub fn get_op_keyword
         cursor.retreat
         cursor parser parse_function = function
         if
-            function common::Function::name.as_str parser
+            function.declaration common::Function::name.as_str parser
                 .store
                 .get_function
                 .is_some
         then
-            function common::Function::location f"Identifier `{function common::Function::name}` is already defined" common::ErrorKind::DuplicateName parser.state.record_error_string
+            function.declaration common::Function::location f"Identifier `{function.declaration common::Function::name}` is already defined" common::ErrorKind::DuplicateName parser.state.record_error_string
         fi
-        function common::Function::name.clone = parsed_function_name
+        function.declaration common::Function::name.clone = parsed_function_name
         function parsed_function_name.clone parser.put_function
         return
     fi
@@ -6665,13 +6908,31 @@ pub fn parse_ops parser:mut$Parser tokens:std::List[common::Token] -> std::List[
 }
 
 impl Parser {
-    pub fn resolve_trait_default_bodies self:mut$Parser skip_traits:$std::Set[std::String] {
-        self
+    fn inherit_default_lambda_context self:mut$Parser name:$str {
+        name self
             .store
-            .traits
-            .keys = trait_names
-        for trait_name in trait_names.iter do
-            if trait_name.as_str skip_traits.has_str then
+            .get_function
+            .unwrap
+            .stack_effect
+            .clone = effect
+        if name self.bodies.get_completed std::Option::Some(body) is then
+            {
+                = closure: $str
+                effect self.bodies self.store closure inherit_source_lambda_effect
+            } = visitor
+            visitor body.visit_closures
+        fi
+    }
+
+    fn inherit_trait_default_context self:mut$Parser skip_traits:$std::Set[std::String] {
+        for
+            trait_name in self
+                .store
+                .traits
+                .keys
+                .iter
+        do
+            if trait_name skip_traits.has then
                 continue
             fi
             trait_name self
@@ -6680,26 +6941,11 @@ impl Parser {
                 .get
                 .unwrap
                 .clone = casa_trait
-            0 = method_index: u64
-            while method_index casa_trait.methods.length > do
-                method_index casa_trait.methods.get = method
-                if method.has_default_body method.default_is_resolved ! && then
-                    method.default_ops.clone = resolved_ops
-                    method.stack_effect.clone
-                    std::List[common::Op]::new
-                    f"{trait_name}::{method.name}"
-                    semantics::make_default_method_function = function
-                    self.state.diagnostics false function resolved_ops self.store resolve_identifiers
-                    method.has_default_body method.location.clone std::Option[common::Function]::None method.type_vars.clone true function.variables.clone resolved_ops method.stack_effect.clone method.name.clone
-                    common::TraitMethod = resolved_method
-                    resolved_method method_index casa_trait.methods.set
+            for method in casa_trait.methods.iter do
+                if method.default_function std::Option::Some(name) is then
+                    name.as_str self.inherit_default_lambda_context
                 fi
-                1 += method_index
             done
-            casa_trait trait_name.clone self
-                .store
-                .traits
-                .set
         done
     }
 
@@ -6724,26 +6970,17 @@ impl Parser {
             if function_name.as_str "lambda__" str::starts_with then
                 continue
             fi
-            if
-                function_name.as_str self
-                    .store
-                    .get_function
-                    .unwrap
-                    .is_resolved
-            then
-                continue
-            fi
             function_name.as_str self
                 .store
-                .take_function_for_update
-                .unwrap = function
-            function.split_body = function_ops = function
-            self.state.diagnostics false function function_ops self.store resolve_identifiers
-            true = function.is_resolved
-            function_ops function.set_ops
-            function self.store.restore_function
+                .get_function
+                .unwrap
+                .clone self.bodies.begin match
+                std::Option::Some(active) => false self.bodies self.state.diagnostics self.store active.resolve
+                std::Option::None => {
+                }
+            end
         done
-        skip_traits self.resolve_trait_default_bodies
+        skip_traits self.inherit_trait_default_context
         if self.state.has_usable_output then
             resolved_ops std::Option::Some
         else
@@ -6766,6 +7003,38 @@ impl Parser {
         fi
         result_ops self.into_result
     }
+}
+
+fn inherit_source_lambda_effect
+    name:$str
+    store:mut$common::SymbolStore
+    bodies:$SourceBodies
+    effect:$common::StackEffect
+{
+    if name "lambda__" str::starts_with ! then
+        return
+    fi
+    if name store.get_function_mut std::Option::Some(lambda) is then
+        for variable in effect.type_vars.iter do
+            variable.clone lambda
+                .stack_effect
+                .type_vars
+                .add
+        done
+        for bound in effect.trait_bounds.iter do
+            bound.second.clone bound.first.clone lambda
+                .stack_effect
+                .trait_bounds
+                .set
+        done
+    fi
+    if name bodies.get_completed std::Option::Some(body) is then
+        {
+            = closure: $str
+            effect bodies store closure inherit_source_lambda_effect
+        } = visitor
+        visitor body.visit_closures
+    fi
 }
 
 pub fn parse_and_resolve
@@ -6800,9 +7069,10 @@ pub fn gather_captures
     store:mut$common::SymbolStore
     lambda_function:mut$common::Function
     function:mut$common::Function
+    operations:$std::List[common::Op]
     allow_root_local_capture:bool
 {
-    for op in lambda_function common::Function::ops.iter do
+    for op in operations.iter do
         std::Option[std::String]::None = name_opt
         if op.value common::OpValue::Identifier(identifier_name) is then
             identifier_name.clone std::Option::Some = name_opt
@@ -6922,6 +7192,7 @@ pub fn resolve_array_identifiers
     allow_root_local_capture:bool
     errors:mut$std::List[error::CasaError]
     diagnostics:mut$error::Diagnostics
+    bodies:mut$SourceBodies
 {
     0 = item_index: u64
     while item_index items.length > do
@@ -6929,11 +7200,11 @@ pub fn resolve_array_identifiers
         rai_item.value.clone = rai_value
         if rai_value common::OpValue::PushArray(inner_items) is then
             inner_items.clone = owned_inner_items
-            diagnostics errors allow_root_local_capture function owned_inner_items store resolve_array_identifiers
+            bodies diagnostics errors allow_root_local_capture function owned_inner_items store resolve_array_identifiers
             owned_inner_items common::OpValue::PushArray rai_item common::Op::set_value
         elif rai_value common::OpValue::ExprGroup(group_inner) is then
             group_inner.clone = owned_group_inner
-            diagnostics allow_root_local_capture function owned_group_inner store resolve_identifiers
+            bodies diagnostics allow_root_local_capture function owned_group_inner store resolve_identifiers
             owned_group_inner common::OpValue::ExprGroup rai_item common::Op::set_value
         elif rai_value common::OpValue::Identifier(rai_name_ref) is then
             rai_item
@@ -7173,8 +7444,8 @@ pub fn resolve_identifiers_global
     if parser.state.has_usable_output ! then
         std::List[common::Op]::new return
     fi
-    common::empty_location std::List[common::Op]::new common::GLOBAL_SCOPE_LABEL.to_str common::Function::new = dummy
-    parser.state.diagnostics true dummy expanded_ops parser.store resolve_identifiers
+    common::empty_location common::GLOBAL_SCOPE_LABEL.to_str common::Function::new = dummy
+    parser.bodies parser.state.diagnostics true dummy expanded_ops parser.store resolve_identifiers
     expanded_ops
 }
 
@@ -7184,6 +7455,7 @@ pub fn resolve_identifiers
     function:mut$common::Function
     allow_root_local_capture:bool
     diagnostics:mut$error::Diagnostics
+    bodies:mut$SourceBodies
 {
     0 = op_index: u64
     std::List[error::CasaError]::new = resolve_errors
@@ -7287,15 +7559,13 @@ pub fn resolve_identifiers
 
         if current_op.value common::OpValue::FnPush(fn_name_ref) is then
             fn_name_ref.clone = fn_name
-            fn_name.as_str store.take_function_for_update = lambda_opt
-            lambda_opt match
-                std::Option::Some(lambda) => {
-                    allow_root_local_capture function lambda store gather_captures
-                    lambda.split_body = lambda_ops = lambda
-                    diagnostics allow_root_local_capture lambda lambda_ops store resolve_identifiers
-                    true = lambda.is_resolved
-                    lambda_ops lambda common::Function::set_ops
-                    lambda store.restore_function
+            fn_name.as_str store
+                .get_function
+                .unwrap
+                .clone bodies.begin match
+                std::Option::Some(active) => {
+                    allow_root_local_capture active.operations function active.declaration store gather_captures
+                    allow_root_local_capture bodies diagnostics store active.resolve
                 }
                 std::Option::None => {
                 }
@@ -7306,7 +7576,7 @@ pub fn resolve_identifiers
 
         if current_op.value common::OpValue::PushArray(items_inner) is then
             items_inner.clone = owned_items_inner
-            diagnostics resolve_errors allow_root_local_capture function owned_items_inner store resolve_array_identifiers
+            bodies diagnostics resolve_errors allow_root_local_capture function owned_items_inner store resolve_array_identifiers
             owned_items_inner common::OpValue::PushArray current_op common::Op::set_value
             current_op op_index 1 - ops.set
             continue
@@ -7314,7 +7584,7 @@ pub fn resolve_identifiers
 
         if current_op.value common::OpValue::ExprGroup(group_inner) is then
             group_inner.clone = owned_group_inner
-            diagnostics allow_root_local_capture function owned_group_inner store resolve_identifiers
+            bodies diagnostics allow_root_local_capture function owned_group_inner store resolve_identifiers
             owned_group_inner common::OpValue::ExprGroup current_op common::Op::set_value
             current_op op_index 1 - ops.set
             continue
@@ -7387,7 +7657,7 @@ pub fn resolve_identifiers
         fi
 
         if current_op.value common::OpValue::MatchArm is then
-            diagnostics resolve_errors allow_root_local_capture current_op function store resolve_match_op
+            bodies diagnostics resolve_errors allow_root_local_capture current_op function store resolve_match_op
             current_op op_index 1 - ops.set
             continue
         fi
@@ -7524,6 +7794,7 @@ pub fn resolve_match_op
     allow_root_local_capture:bool
     errors:mut$std::List[error::CasaError]
     diagnostics:mut$error::Diagnostics
+    bodies:mut$SourceBodies
 {
     op common::pattern_value_of match
         common::PatternValue::Struct(struct_pattern) => {
@@ -7546,7 +7817,7 @@ pub fn resolve_match_op
     if op.value common::OpValue::MatchArm(arm) is then
         if arm.guard_ops.length 0 != then
             arm.clone = resolved_arm
-            diagnostics allow_root_local_capture function resolved_arm.guard_ops store resolve_identifiers
+            bodies diagnostics allow_root_local_capture function resolved_arm.guard_ops store resolve_identifiers
             resolved_arm common::OpValue::MatchArm op common::Op::set_value
         fi
     fi

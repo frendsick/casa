@@ -5,6 +5,7 @@
 import "std" as std
 import "abi" as abi
 import "common" as common
+import "bindings" as bindings
 import "error" as error
 import "pattern" as pattern
 import "semantic_rules" as semantics
@@ -185,6 +186,7 @@ fn make_match_target_frames capacity:u64 -> std::List[MatchTargetFrame] {
 
 struct BytecodeState {
     store:           $common::SymbolStore
+    checked:         $typechecker::CheckedProgram
     program:         common::Program
     failure:         std::Option[BytecodeFailure]
     constants_table: std::List[std::String]
@@ -210,19 +212,19 @@ struct ResolvedStructField {
 fn resolve_struct_field
     member:$common::StructMemberAccess
     store:$common::SymbolStore
+    checked_type:$std::Option[common::Type]
 -> std::Option[ResolvedStructField] {
+    checked_type match
+        std::Option::Some(typ) => typ
+        std::Option::None => std::Option[ResolvedStructField]::None return
+    end = typ
     if member.struct_name store.structs.get std::Option::Some(casa_struct) is then
         if member.member_index casa_struct.members.length > then
             if
                 store member.member_index casa_struct common::plan_struct_member_storage
                 std::Option::Some(storage) is
             then
-                member.member_index casa_struct
-                    .members
-                    .get
-                    .typ
-                    .clone = typ
-                typ storage.clone ResolvedStructField std::Option::Some return
+                typ.clone storage.clone ResolvedStructField std::Option::Some return
             fi
         fi
     fi
@@ -230,7 +232,8 @@ fn resolve_struct_field
 }
 
 impl BytecodeState {
-    fn new store:$common::SymbolStore -> BytecodeState {
+    fn new checked:$typechecker::CheckedProgram -> BytecodeState {
+        checked.get_store = store
         std::Map[i64 u64]::new
         0
         std::List[std::String]::new
@@ -243,6 +246,7 @@ impl BytecodeState {
         std::List[common::InstValue]::new
         std::Map[std::String common::NativeCallPlan]::new
         common::Program
+        checked
         store
         BytecodeState
     }
@@ -283,7 +287,7 @@ impl BytecodeCompiler {
         locals_count
         function.captures index_variable_list
         local_slots
-        function.clone_declaration std::Option::Some
+        function.clone std::Option::Some
         ops
         BytecodeCompiler
     }
@@ -868,8 +872,7 @@ impl BytecodeCompiler {
             .functions
             .set
 
-        std::List[common::Op]::new = empty_ops
-        common::empty_location empty_ops function_name.clone common::Function::new = function
+        common::empty_location function_name.clone common::Function::new = function
         std::List[common::Op]::new = destructor_ops
         destructor_ops function compiler.child = destructor
         std::List[common::InstValue]::new = body
@@ -2503,7 +2506,18 @@ impl BytecodeCompiler {
             .program
             .functions
             .set
-        function.ops function compiler.child = function_compiler
+        function.name.as_str compiler
+            .state
+            .checked
+            .find_body match
+            std::Option::Some(body) => body.lower_operations
+            std::Option::None => {
+                "Missing completed body during bytecode selection" compiler.record_failure
+                return
+            }
+        end = operations
+        operations bindings::lower_binding_storage
+        operations function compiler.child = function_compiler
         function_bytecode function_compiler.compile_ops
         if function_compiler.has_failed then
             return
@@ -2562,7 +2576,8 @@ impl BytecodeCompiler {
             .set
 
         std::List[common::InstValue]::new = body
-        lambda.ops lambda compiler.child = destructor
+        std::List[common::Op]::new = operations
+        operations lambda compiler.child = destructor
         0 = capture_index: u64
         while capture_index lambda.captures.length > do
             capture_index lambda.captures.get = capture
@@ -2643,12 +2658,13 @@ impl BytecodeCompiler {
                                 capture_index common::InstValue::CaptureFlagClear bytecode.push
                             fi
                         else
-                            bytecode owns_capture copies_aggregate ! && capture_name.as_str
+                            capture_name op.resolve_binding_storage_name = storage_name
+                            bytecode owns_capture copies_aggregate ! && storage_name.as_str
                             compiler.emit_variable_get
                             if copies_aggregate then
                                 bytecode capture.typ compiler.emit_typed_load
                             elif owns_capture then
-                                if capture_name.as_str compiler.owner_flags.get_copy_str std::Option::Some(flag) is then
+                                if storage_name.as_str compiler.owner_flags.get_copy_str std::Option::Some(flag) is then
                                     0 common::InstValue::Push bytecode.push
                                     flag common::InstValue::LocalSet bytecode.push
                                 fi
@@ -3315,7 +3331,7 @@ impl BytecodeCompiler {
             }
             common::OpValue::StructMemberProject(member) => {
                 if
-                    self.state.store member resolve_struct_field
+                    op.type_hint self.state.store member resolve_struct_field
                     std::Option::Some(field) is
                 then
                     if 0 field.storage.offset != then
@@ -3332,7 +3348,7 @@ impl BytecodeCompiler {
             }
             common::OpValue::StructMemberStore(member) => {
                 if
-                    self.state.store member resolve_struct_field
+                    op.type_hint self.state.store member resolve_struct_field
                     std::Option::Some(field) is
                 then
                     if 0 field.storage.offset != then
@@ -3611,40 +3627,41 @@ fn compile_bytecode_into ops:$std::List[common::Op] state:mut$BytecodeState {
         .constants_count
 }
 
-fn compile_bytecode
-    store:$common::SymbolStore
-    ops:$std::List[common::Op]
+pub fn compile_checked
+    checked:$typechecker::CheckedProgram
 -> std::Result[common::Program BytecodeFailure] {
-    store BytecodeState::new = state
-    state ops compile_bytecode_into
+    checked BytecodeState::new = state
+    checked.get_root.lower_operations = operations
+    operations bindings::lower_binding_storage
+    state operations compile_bytecode_into
     state.into_result
 }
 
 pub fn compile_typechecked
-    result:mut$typechecker::TypecheckResult
+    result:typechecker::TypecheckResult
 -> std::Result[common::Program BytecodeFailure] {
-    if result.diagnostics.has_errors then
-        "Bytecode compilation requires error-free typechecking".to_str BytecodeFailure::new std::Result::Error
-        return
-    fi
-    result.ops result.store compile_bytecode
-}
-# Keep path selection private to backend orchestration. A failed commitment
-# must never retry the legacy path or publish partial assembly.
-pub fn compile_assembly
-    result:mut$typechecker::TypecheckResult
--> std::Result[std::String BytecodeFailure] {
-    result emitter::compile_scalar match
+    result.into_checked_program match
         std::Result::Error(message) => message BytecodeFailure::new std::Result::Error
-        std::Result::Ok(candidate) => {
-            if candidate std::Option::Some(assembly) is then
-                assembly std::Result::Ok
-            else
-                result compile_typechecked match
-                    std::Result::Ok(program) => program emitter::emit std::Result::Ok
-                    std::Result::Error(failure) => failure std::Result::Error
-                end
-            fi
-        }
+        std::Result::Ok(checked) => checked compile_checked
+    end
+}
+# Both target paths receive only completed concrete bodies.
+pub fn compile_assembly
+    result:typechecker::TypecheckResult
+-> std::Result[std::String BytecodeFailure] {
+    result.into_checked_program match
+        std::Result::Error(message) => message BytecodeFailure::new std::Result::Error return
+        std::Result::Ok(program) => program
+    end = checked
+    checked emitter::compile_scalar match
+        std::Result::Error(message) => message BytecodeFailure::new std::Result::Error return
+        std::Result::Ok(assembly_option) => assembly_option
+    end = candidate
+    if candidate std::Option::Some(assembly) is then
+        assembly std::Result::Ok return
+    fi
+    checked compile_checked match
+        std::Result::Ok(program) => program emitter::emit std::Result::Ok
+        std::Result::Error(failure) => failure std::Result::Error
     end
 }
