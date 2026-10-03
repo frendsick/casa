@@ -832,44 +832,45 @@ fn read_constant_type_argument
     std::Option[common::Type]::None
 }
 
-pub fn parse_type_ast
-    cursor:mut$TokenCursor
+fn validate_type_literal token:$common::Token state:mut$ParseState -> bool {
+    if common::TokenKind::Literal token.kind != then
+        true return
+    fi
+    if 0 token.value.length != then
+        if
+            0 token
+                .value
+                .at
+                .is_digit token.value.as_str common::try_parse_uint_literal.is_none &&
+        then
+            token.location f"Integer type argument `{token.value}` is outside `u64` range" common::ErrorKind::TypeMismatch state.record_error_string
+            false return
+        fi
+    fi
+    if token.value.as_str lexer::is_negative_integer_literal then
+        token.value.as_str parser::str_to_int token.value.clone common::IntegerLiteral::new = literal
+        if common::make_i64_type literal.fits ! then
+            token.location f"Integer type argument `{token.value}` is outside `i64` range" common::ErrorKind::TypeMismatch state.record_error_string
+            false return
+        fi
+    fi
+    true
+}
+# Share type-name lookup and literal validation with parsed declaration types.
+fn resolve_type_head
+    token:$common::Token
+    cursor:$TokenCursor
     state:mut$ParseState
     store:$common::SymbolStore
--> common::Type {
-    cursor.peek = peek_opt
-    if peek_opt.is_none then
-        common::empty_location "Expected type" common::ErrorKind::UnexpectedToken state.record_error
-        common::Type::Unknown return
-    fi
-    peek_opt.unwrap = peek
-
+-> std::String str std::Option[common::Type] {
     "" = borrow_prefix
     std::String::new = base
-    if "fn" peek common::Token::value.as_str == then
-        cursor.pop drop
+    if "fn" token common::Token::value.as_str == then
         "fn".to_str = base
     else
-        fallback_token state cursor expect_token.unwrap_or = base_token
-        if base_token.kind common::TokenKind::Literal == then
-            if 0 base_token.value.length != then
-                if
-                    0 base_token
-                        .value
-                        .at
-                        .is_digit base_token.value.as_str common::try_parse_uint_literal.is_none &&
-                then
-                    base_token.location f"Integer type argument `{base_token.value}` is outside `u64` range" common::ErrorKind::TypeMismatch state.record_error_string
-                    common::Type::Unknown return
-                fi
-            fi
-            if base_token.value.as_str lexer::is_negative_integer_literal then
-                base_token.value.as_str parser::str_to_int base_token.value.clone common::IntegerLiteral::new = signed_literal
-                if common::make_i64_type signed_literal.fits ! then
-                    base_token.location f"Integer type argument `{base_token.value}` is outside `i64` range" common::ErrorKind::TypeMismatch state.record_error_string
-                    common::Type::Unknown return
-                fi
-            fi
+        token = base_token
+        if state base_token validate_type_literal ! then
+            std::String::new "" common::Type::Unknown std::Option::Some return
         fi
         if
             common::TokenKind::Identifier base_token common::Token::kind !=
@@ -892,25 +893,48 @@ pub fn parse_type_ast
         base.as_str 1 base_length 1 - str::substring = base
     fi
     if base.as_str "$" str::starts_with base.as_str "mut$" str::starts_with || then
-        peek.location "Nested borrow qualifiers are not supported" common::ErrorKind::Syntax
+        token.location "Nested borrow qualifiers are not supported" common::ErrorKind::Syntax
         state.record_error
-        common::Type::Unknown return
+        std::String::new "" common::Type::Unknown std::Option::Some return
     fi
 
     if base.as_str cursor.type_bindings common::string_list_contains then
-        borrow_prefix base common::Type::TypeVar common::apply_borrow_type return
+        borrow_prefix base.clone common::Type::TypeVar common::apply_borrow_type = resolved
+        base borrow_prefix resolved std::Option::Some return
     fi
 
     # Char constant (ADR-0153): built here rather than in `parse_type_str`,
     # which cannot decode the codepoint.
     if base.as_str char_literal_codepoint std::Option::Some(char_codepoint) is then
-        common::BuiltinType::Char char_codepoint common::ConstType::concrete common::Type::Const return
+        common::BuiltinType::Char char_codepoint common::ConstType::concrete common::Type::Const = resolved
+        base borrow_prefix resolved std::Option::Some return
     fi
 
     if
-        state store peek.location peek.value.as_str base.as_str read_constant_type_argument std::Option::Some(constant_type) is
+        state store token.location token.value.as_str base.as_str read_constant_type_argument std::Option::Some(constant_type) is
     then
-        constant_type return
+        base borrow_prefix constant_type std::Option::Some return
+    fi
+
+    base borrow_prefix std::Option[common::Type]::None
+}
+
+pub fn parse_type_ast
+    cursor:mut$TokenCursor
+    state:mut$ParseState
+    store:$common::SymbolStore
+-> common::Type {
+    cursor.peek = peek_opt
+    if peek_opt.is_none then
+        common::empty_location "Expected type" common::ErrorKind::UnexpectedToken state.record_error
+        common::Type::Unknown return
+    fi
+    peek_opt.unwrap = peek
+
+    cursor.advance
+    store state cursor peek resolve_type_head = resolved = borrow_prefix = base
+    if resolved std::Option::Some(typ) is then
+        typ return
     fi
 
     cursor.peek = next_opt
@@ -968,6 +992,80 @@ pub fn parse_type_ast
         common::empty_location f"Expected type parameter inside `{base}[...]`" common::ErrorKind::UnexpectedToken state.record_error_string
     fi
     borrow_prefix inner_types base common::GenericType common::Type::Generic common::apply_borrow_type
+}
+# Resolve a parsed type without consuming or repositioning the source cursor.
+fn resolve_parsed_type
+    parsed:$grammar::TypeSyntax
+    cursor:$TokenCursor
+    state:mut$ParseState
+    store:$common::SymbolStore
+-> common::Type {
+    parsed.token cursor.tokens.get = token
+    store state cursor token resolve_type_head = resolved = borrow_prefix = base
+    if resolved std::Option::Some(typ) is then
+        if parsed.arguments.is_some then
+            token.location "Unexpected type arguments" common::ErrorKind::UnexpectedToken state.record_error
+        fi
+        typ return
+    fi
+    if parsed.arguments std::Option::Some(arguments) is then
+        false store state cursor arguments.parameters resolve_parsed_arguments = parameters
+        if "fn" base.as_str == then
+            std::List[common::Type]::new = returns
+            for result in arguments.returns.iter do
+                store state cursor result resolve_parsed_type returns.push
+            done
+            borrow_prefix returns parameters common::FunctionType common::Type::Function common::apply_borrow_type return
+        fi
+        if 0 parameters.length == then
+            common::empty_location f"Expected type parameter inside `{base}[...]`" common::ErrorKind::UnexpectedToken state.record_error_string
+        fi
+        borrow_prefix parameters base common::GenericType common::Type::Generic common::apply_borrow_type return
+    fi
+    borrow_prefix base.as_str common::parse_type_str common::apply_borrow_type
+}
+# Separators are legal in trait bounds. Other applied types diagnose them in place.
+fn resolve_parsed_arguments
+    arguments:$std::List[grammar::TypeArgumentSyntax]
+    cursor:$TokenCursor
+    state:mut$ParseState
+    store:$common::SymbolStore
+    allow_separators:bool
+-> std::List[common::Type] {
+    std::List[common::Type]::new = types
+    for argument in arguments.iter do
+        argument match
+            grammar::TypeArgumentSyntax::Type(typ) => {
+                store state cursor typ resolve_parsed_type types.push
+            }
+            grammar::TypeArgumentSyntax::Separator(position) => {
+                if allow_separators ! then
+                    position cursor.tokens.get = token
+                    token.location "Expected type name" common::ErrorKind::UnexpectedToken state.record_error
+                    token.value.as_str common::parse_type_str types.push
+                fi
+            }
+        end
+    done
+    types
+}
+
+fn resolve_parsed_bound
+    parsed:$grammar::TypeSyntax
+    cursor:$TokenCursor
+    state:mut$ParseState
+    store:$common::SymbolStore
+-> common::TraitBound {
+    parsed.token cursor.tokens.get = token
+    token.value.as_str cursor.resolve_name = name
+    if common::TokenKind::Identifier token.kind != then
+        token.location "Expected trait name" common::ErrorKind::UnexpectedToken state.record_error
+    fi
+    std::List[common::Type]::new = arguments
+    if parsed.arguments std::Option::Some(types) is then
+        true store state cursor types.parameters resolve_parsed_arguments = arguments
+    fi
+    arguments name common::TraitBound
 }
 
 # ============================================================================
@@ -2283,125 +2381,186 @@ pub fn parse_extern_function parser:mut$Parser cursor:mut$TokenCursor -> Functio
     function
 }
 
-# ============================================================================
-# parse_enum - parse enum definition
-# ============================================================================
-
-pub fn parse_derived_traits cursor:mut$TokenCursor state:mut$ParseState -> std::List[std::String] {
-    std::List[std::String]::new = derived_traits
-    std::Set[std::String]::new = seen
-    if cursor.peek std::Option::Some(token) is then
-        if "derives" token.value.as_str != then
-            derived_traits return
-        fi
-        cursor.pop drop
-        while true do
-            if cursor.peek std::Option::Some(derived) is then
-                if "{" derived.value.as_str == then
-                    break
-                fi
-                fallback_token state common::TokenKind::Identifier cursor expect_token_kind.unwrap_or = trait_token
-                trait_token.value.as_str cursor.resolve_name = trait_name
-                if trait_name.as_str seen.has_str then
-                    trait_token.location f"Trait `{trait_name}` is derived more than once" common::ErrorKind::DuplicateName state.record_error_string
-                else
-                    trait_name.clone seen.add
-                    trait_name derived_traits.push
-                fi
-            else
-                break
-            fi
-        done
+fn resolve_constant_parameter
+    parameter:$grammar::GenericParameterSyntax
+    token:$common::Token
+    cursor:$TokenCursor
+    state:mut$ParseState
+-> std::Option[common::BuiltinType] {
+    if 1 parameter.bounds.length != then
+        token.location "Expected a constant parameter type" common::ErrorKind::Syntax state.record_error
+        std::Option[common::BuiltinType]::None return
     fi
-    derived_traits
+    0 parameter.bounds.get = annotation
+    annotation.token cursor.tokens.get = type_token
+    if annotation.arguments.is_some then
+        type_token.location "Expected a constant parameter type" common::ErrorKind::Syntax state.record_error
+    fi
+    if type_token.value.as_str common::parse_builtin std::Option::Some(builtin) is then
+        if builtin const_type_parameter_type_allowed ! then
+            type_token.location f"Constant parameter `{token.value}` cannot have type `{type_token.value}`: only integer, `bool`, and `char` constants are allowed" common::ErrorKind::Syntax state.record_error_string
+        fi
+        builtin std::Option::Some return
+    fi
+    type_token.location f"Constant parameter `{token.value}` has unknown type `{type_token.value}`" common::ErrorKind::Syntax state.record_error_string
+    std::Option[common::BuiltinType]::None
 }
 
-pub fn parse_enum parser:mut$Parser cursor:mut$TokenCursor -> common::CasaEnum {
-    cursor.type_bindings.length = inherited_bindings
-    fallback_token parser.state "enum" cursor expect_token_value.unwrap_or drop
-    fallback_token parser.state common::TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
-
-    # Parse optional type parameters
-    std::List[std::String]::new = type_vars
-    cursor.peek = tvars_opt
-    if tvars_opt std::Option::Some(tvars) is then
-        if "[" tvars common::Token::value.as_str == then
-            cursor parser parse_type_variables = parsed_type_variables
-            parsed_type_variables.into_parts = parsed_const_params = parsed_bounds = type_vars
-            parsed_const_params drop
-            parsed_bounds drop
+fn resolve_parameter_bounds
+    parser:mut$Parser
+    parameter:$grammar::GenericParameterSyntax
+    token:$common::Token
+    cursor:$TokenCursor
+-> std::List[common::TraitBound] {
+    std::List[common::TraitBound]::new = bounds
+    for parsed_bound in parameter.bounds.iter do
+        parsed_bound.token cursor.tokens.get = bound_token
+        bound_token.value.as_str cursor.resolve_name = bound_name
+        bound_name parser
+            .store
+            .traits
+            .get = definition
+        # Name lookup precedes argument resolution in diagnostic encounter order.
+        if definition.is_none then
+            bound_token.location f"Trait `{bound_name}` is not defined" common::ErrorKind::UndefinedName parser.state.record_error_string
         fi
+        parser.store parser.state cursor parsed_bound resolve_parsed_bound = bound
+        if definition std::Option::Some(trait_definition) is then
+            trait_definition.type_params.length
+        else
+            continue
+        fi = expected
+        bound.type_args.length = actual
+        if actual expected != then
+            bound_token.location f"Trait `{bound.name}` expects {expected} type argument(s), got {actual}" common::ErrorKind::Syntax parser.state.record_error_string
+        fi
+        false = duplicate
+        for existing in bounds.iter do
+            if bound existing common::trait_bound_eq then
+                true = duplicate
+            fi
+        done
+        if duplicate then
+            continue
+        fi
+        if bound bounds token.value.as_str parser bound_is_compatible ! then
+            bound_token.location f"Bounds on `{token.value}` have incompatible requirements for the same method" common::ErrorKind::TraitSignatureMismatch parser.state.record_error_string
+        fi
+        bound bounds.push
+    done
+    bounds
+}
+# Establish declaration-local bindings in source order, then validate their bounds.
+fn resolve_generic_parameters
+    parser:mut$Parser
+    parsed:$std::Option[grammar::GenericParametersSyntax]
+    cursor:mut$TokenCursor
+-> ParsedTypeVariables {
+    std::List[std::String]::new = names
+    std::Set[std::String]::new = seen
+    std::Map[std::String std::List[common::TraitBound]]::new = trait_bounds
+    std::Map[std::String common::BuiltinType]::new = constants
+    if parsed std::Option::Some(parameters) is then
+        parameters
+    else
+        constants trait_bounds names ParsedTypeVariables return
+    fi = parameters
+    if 0 parameters.parameters.length == then
+        parameters.close_token cursor
+            .tokens
+            .get
+            .location "Empty type parameter list `[]` is not allowed" common::ErrorKind::Syntax parser.state.record_error
     fi
+    for parameter in parameters.parameters.iter do
+        parameter.name_token cursor
+            .tokens
+            .get
+            .clone = token
+        if
+            token.value.as_str parser
+                .store
+                .builtins
+                .has_str
+        then
+            if parameter.constant.is_some then "Constant parameter" else "Type variable" fi = kind
+            token.location f"{kind} `{token.value}` shadows built-in type" common::ErrorKind::DuplicateName parser.state.record_error_string
+        fi
+        if token.value.as_str seen.has_str then
+            token.location f"Duplicate type variable `{token.value}`" common::ErrorKind::DuplicateName parser.state.record_error_string
+        fi
+        token.value.clone cursor.type_bindings.push
+        token.value.clone names.push
+        token.value.clone seen.add
+        if parameter.constant.is_some then
+            if parser.state cursor token parameter resolve_constant_parameter std::Option::Some(builtin) is then
+                builtin token.value.clone constants.set
+            fi
+        elif 0 parameter.bounds.length != then
+            cursor token parameter parser resolve_parameter_bounds token.value.clone trait_bounds.set
+        fi
+    done
+    constants trait_bounds names ParsedTypeVariables
+}
 
-    parser.state cursor parse_derived_traits = derived_traits
+fn resolve_derived_traits
+    derives:$std::List[u64]
+    cursor:$TokenCursor
+    state:mut$ParseState
+-> std::List[std::String] {
+    std::List[std::String]::new = traits
+    for position in derives.iter do
+        position copy cursor.tokens.get = token
+        token.value.as_str cursor.resolve_name = name
+        if name.as_str traits common::string_list_contains then
+            token.location f"Trait `{name}` is derived more than once" common::ErrorKind::DuplicateName state.record_error_string
+        else
+            name traits.push
+        fi
+    done
+    traits
+}
 
-    fallback_token parser.state "{" cursor expect_token_value.unwrap_or = enum_open_token
+fn construct_enum
+    parser:mut$Parser
+    declaration:$grammar::DeclarationSyntax
+    parsed:$grammar::AggregateSyntax
+    cursor:mut$TokenCursor
+-> common::CasaEnum {
+    cursor.type_bindings.length = inherited_bindings
+    cursor parsed.parameters parser resolve_generic_parameters = generic_parameters
+    generic_parameters.into_parts = constant_parameters = bounds = type_vars
+    parser.state cursor parsed.derives resolve_derived_traits = derived_traits
     std::List[std::String]::new = variants
     std::Map[std::String std::List[common::Type]]::new = variant_types
     std::Map[std::String common::Location]::new = variant_locations
-
-    while true do
-        fallback_token parser.state cursor expect_token.unwrap_or = variant_token
-        if "}" variant_token common::Token::value.as_str == then
-            break
+    type_vars common::string_list_to_set = type_variables
+    for variant in parsed.members.iter do
+        variant.name_token cursor.tokens.get = token
+        if variant.public then
+            token.location "Expected variant name" common::ErrorKind::UnexpectedToken parser.state.record_error
         fi
-        if common::TokenKind::Identifier variant_token common::Token::kind != then
-            variant_token common::Token::location "Expected variant name" common::ErrorKind::UnexpectedToken parser.state.record_error
+        if token.value.as_str variants common::string_list_contains then
+            token.location f"Duplicate variant `{token.value}`" common::ErrorKind::DuplicateName parser.state.record_error_string
         fi
-        if variant_token common::Token::value.as_str variants common::string_list_contains then
-            variant_token common::Token::location f"Duplicate variant `{variant_token common::Token::value.as_str}`" common::ErrorKind::DuplicateName parser.state.record_error_string
-        fi
-        variant_token common::Token::value.clone variants.push
-        variant_token common::Token::location.clone variant_token common::Token::value.clone variant_locations.set
-
-        # Parse optional inner types: Variant(type1 type2)
+        token.value.clone variants.push
+        token.location.clone token.value.clone variant_locations.set
         std::List[common::Type]::new = inner_types
-        cursor.peek = paren_opt
-        if paren_opt std::Option::Some(paren) is then
-            if "(" paren common::Token::value.as_str == then
-                cursor.pop drop # consume (
-                while true do
-                    cursor.peek = inner_opt
-                    if inner_opt.is_none then
-                        variant_token common::Token::location "Unexpected end of input in variant inner types" common::ErrorKind::UnexpectedToken parser.state.record_error
-                        parser.state.mark_output_unusable
-                        break
-                    fi
-                    if inner_opt std::Option::Some(inner) is then
-                        if ")" inner common::Token::value.as_str == then
-                            cursor.pop drop # consume )
-                            break
-                        fi
-                    fi
-                    parser.store parser.state cursor parse_type_ast inner_types.push
-                done
-                if 0 inner_types.length == then
-                    variant_token common::Token::location "Variant inner types cannot be empty" common::ErrorKind::Syntax parser.state.record_error
-                fi
+        if variant.payload std::Option::Some(payload) is then
+            for typ in payload.iter do
+                parser.store parser.state cursor typ resolve_parsed_type = resolved
+                type_variables resolved common::canonicalize_type_var inner_types.push
+            done
+            if 0 inner_types.length == then
+                token.location "Variant inner types cannot be empty" common::ErrorKind::Syntax parser.state.record_error
             fi
         fi
-        inner_types variant_token common::Token::value.clone variant_types.set
+        inner_types token.value.clone variant_types.set
     done
-
     if 0 variants.length == then
-        name_token common::Token::location "Enum must have at least one variant" common::ErrorKind::Syntax parser.state.record_error
+        declaration.location "Enum must have at least one variant" common::ErrorKind::Syntax parser.state.record_error
     fi
-
-    type_vars common::string_list_to_set = tv_set
-    for variant_name in variants.iter do
-        variant_name variant_types.get_mut = vt_opt
-        if vt_opt.is_some then
-            vt_opt.unwrap = vt_inner
-            0 = vt_index: u64
-            while vt_index vt_inner.length > do
-                tv_set vt_index vt_inner.get.clone common::canonicalize_type_var vt_index vt_inner.set
-                1 += vt_index
-            done
-        fi
-    done
-
-    variant_locations derived_traits type_vars variant_types name_token common::Token::location.clone variants
-    name_token common::Token::value.as_str cursor.resolve_name common::CasaEnum
+    declaration.name.as_str cursor.resolve_name = name
+    variant_locations derived_traits type_vars variant_types declaration.location.clone variants name common::CasaEnum
     inherited_bindings cursor.restore_type_bindings
 }
 pub const DERIVED_HASH_SEED 5381
@@ -3435,302 +3594,207 @@ pub fn create_member_accessor
     setter setter_name parser.put_function
 }
 
-# ============================================================================
-# parse_struct - parse struct definition
-# ============================================================================
-
-pub fn parse_struct parser:mut$Parser cursor:mut$TokenCursor is_extern:bool -> common::CasaStruct {
+fn construct_struct
+    parser:mut$Parser
+    declaration:$grammar::DeclarationSyntax
+    parsed:$grammar::AggregateSyntax
+    cursor:mut$TokenCursor
+-> common::CasaStruct {
     cursor.type_bindings.length = inherited_bindings
-    if is_extern then
-        fallback_token parser.state "extern" cursor expect_token_value.unwrap_or drop
+    cursor parsed.parameters parser resolve_generic_parameters = generic_parameters
+    generic_parameters.into_parts = constant_parameters = bounds = type_vars
+    if 0 bounds.length != then
+        declaration.location "Trait bounds are not allowed on struct definitions. Use `impl[K: Bound] StructName[K]` instead" common::ErrorKind::UnexpectedToken parser.state.record_error
     fi
-    fallback_token parser.state "struct" cursor expect_token_value.unwrap_or drop
-    fallback_token parser.state common::TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
-
-    # Parse optional type parameters
-    std::List[std::String]::new = type_vars
-    cursor.peek = tvars_opt
-    if tvars_opt std::Option::Some(tvars) is then
-        if "[" tvars common::Token::value.as_str == then
-            cursor parser parse_type_variables = parsed_type_variables
-            parsed_type_variables.into_parts = parsed_const_params = parsed_bounds = type_vars
-            parsed_const_params drop
-            # Trait bounds are not allowed on struct definitions
-            if 0 parsed_bounds.length != then
-                name_token common::Token::location "Trait bounds are not allowed on struct definitions. Use `impl[K: Bound] StructName[K]` instead" common::ErrorKind::UnexpectedToken parser.state.record_error
-            fi
-        fi
-    fi
-
-    parser.state cursor parse_derived_traits = derived_traits
-
+    parser.state cursor parsed.derives resolve_derived_traits = derived_traits
     std::List[common::Member]::new = members
-    type_vars common::string_list_to_set = struct_type_vars
-    fallback_token parser.state "{" cursor expect_token_value.unwrap_or = struct_open_token
-
-    while true do
-        fallback_token parser.state cursor expect_token.unwrap_or = member_token
-        if "}" member_token common::Token::value.as_str == then
-            break
+    type_vars common::string_list_to_set = type_variables
+    declaration.name.as_str cursor.resolve_name = name
+    for member in parsed.members.iter do
+        member.name_token cursor.tokens.get = token
+        if member.payload std::Option::Some(types) is then
+            parser.store parser.state cursor 0 types.get resolve_parsed_type = member_type
+            type_variables member_type common::canonicalize_type_var = member_type
+            type_vars token.location members member_type token.value.as_str name.as_str parser create_member_accessor
+            if member.public then
+                f"{name}::{token.value}" = getter_name
+                f"{name}::set_{token.value}" = setter_name
+                getter_name.as_str parser
+                    .store
+                    .module_private_symbols
+                    .remove_str
+                setter_name.as_str parser
+                    .store
+                    .module_private_symbols
+                    .remove_str
+                getter_name parser
+                    .store
+                    .public_symbols
+                    .add
+                setter_name parser
+                    .store
+                    .public_symbols
+                    .add
+            fi
+            member_type token.value.clone common::Member members.push
         fi
-        false = member_is_public
-        if "pub" member_token.value.as_str == then
-            true = member_is_public
-            fallback_token parser.state common::TokenKind::Identifier cursor expect_token_kind.unwrap_or = member_token
-        fi
-        if common::TokenKind::Identifier member_token common::Token::kind != then
-            member_token common::Token::location "Expected member name" common::ErrorKind::UnexpectedToken parser.state.record_error
-        fi
-        fallback_token parser.state ":" cursor expect_token_value.unwrap_or drop
-        parser.store parser.state cursor parse_type_ast = member_type
-        struct_type_vars member_type common::canonicalize_type_var = member_type
-
-        type_vars member_token common::Token::location members member_type
-        member_token common::Token::value.as_str name_token common::Token::value.as_str cursor.resolve_name.as_str parser
-        create_member_accessor
-        if member_is_public then
-            f"{name_token.value.as_str cursor.resolve_name}::{member_token.value}" = getter_name
-            f"{name_token.value.as_str cursor.resolve_name}::set_{member_token.value}" = setter_name
-            getter_name.as_str parser
-                .store
-                .module_private_symbols
-                .remove_str
-            setter_name.as_str parser
-                .store
-                .module_private_symbols
-                .remove_str
-            getter_name parser
-                .store
-                .public_symbols
-                .add
-            setter_name parser
-                .store
-                .public_symbols
-                .add
-        fi
-        member_type member_token common::Token::value.clone common::Member members.push
     done
-
-    is_extern derived_traits type_vars name_token common::Token::location.clone members
-    name_token common::Token::value.as_str cursor.resolve_name common::CasaStruct
+    declaration.external derived_traits type_vars declaration.location.clone members name common::CasaStruct
     inherited_bindings cursor.restore_type_bindings
 }
-
-# ============================================================================
-# parse_trait - parse trait definition
-# ============================================================================
-
-pub fn parse_trait_method_stack_effect
+# Trait parameters retain their identifier-only contract. Bounds belong to impls.
+fn resolve_simple_parameters
+    parsed:$std::Option[grammar::GenericParametersSyntax]
     cursor:mut$TokenCursor
+    state:mut$ParseState
+    context:str
+-> std::List[std::String] {
+    std::List[std::String]::new = names
+    if parsed std::Option::Some(parameters) is then parameters else names return fi = parameters
+    f"Expected type parameter identifier in {context}" = message
+    for parameter in parameters.parameters.iter do
+        if parameters.separator std::Option::Some(separator) is then
+            if parameter.name_token separator < then
+                separator cursor
+                    .tokens
+                    .get
+                    .location message.as_str common::ErrorKind::UnexpectedToken state.record_error
+                names return
+            fi
+        fi
+        if parameter.constant std::Option::Some(position) is then
+            position cursor
+                .tokens
+                .get
+                .location message.as_str common::ErrorKind::UnexpectedToken state.record_error
+            names return
+        fi
+        parameter.name_token cursor
+            .tokens
+            .get
+            .value
+            .clone = name
+        name.clone cursor.type_bindings.push
+        name names.push
+        if 0 parameter.bounds.length != then
+            # Source construction tokens omit trivia, so the colon follows the name.
+            parameter.name_token 1 + cursor
+                .tokens
+                .get
+                .location message.as_str common::ErrorKind::UnexpectedToken state.record_error
+            names return
+        fi
+    done
+    if parameters.separator std::Option::Some(separator) is then
+        separator cursor
+            .tokens
+            .get
+            .location message.as_str common::ErrorKind::UnexpectedToken state.record_error
+    fi
+    names
+}
+
+fn resolve_method_signature
+    signature:$grammar::SignatureSyntax
+    cursor:$TokenCursor
     state:mut$ParseState
     store:$common::SymbolStore
 -> common::StackEffect {
-    std::List[common::Parameter]::new = params
-
-    # Parse parameters, stopping at ->, fn, or }
-    while true do
-        cursor.peek = peek_opt
-        if peek_opt.is_none then
-            break
-        fi
-        peek_opt.unwrap = peek
+    std::List[common::Parameter]::new = parameters
+    for parsed in signature.parameters.iter do
+        parsed.typ.token cursor.tokens.get = type_token
         if
-            "->" peek common::Token::value.as_str ==
-            "{" peek common::Token::value.as_str == ||
-            "fn" peek common::Token::value.as_str == ||
-            "}" peek common::Token::value.as_str == ||
+            parsed.name_token.is_none common::TokenKind::Identifier type_token.kind != && "fn" type_token.value.as_str != &&
         then
-            break
+            type_token.location "Unexpected token in trait method parameter list" common::ErrorKind::UnexpectedToken state.record_error
         fi
-        cursor.pop drop
-
-        if
-            common::TokenKind::Identifier peek common::Token::kind !=
-            "fn" peek common::Token::value.as_str != &&
-        then
-            peek common::Token::location "Unexpected token in trait method parameter list" common::ErrorKind::UnexpectedToken state.record_error
+        store state cursor parsed.typ resolve_parsed_type = typ
+        "".to_str typ common::Parameter::named = parameter
+        if parsed.name_token std::Option::Some(position) is then
+            position cursor.tokens.get = token
+            token.value.clone = parameter.name
+            token.location.clone std::Option::Some = parameter.location
         fi
-
-        store state peek cursor parse_parameter_maybe_named params.push
+        parameter parameters.push
     done
-
     std::List[common::Type]::new = returns
-    cursor.peek = arrow_opt
-    if arrow_opt std::Option::Some(arrow) is then
-        if "->" arrow common::Token::value.as_str == then
-            cursor.pop drop # consume ->
-            while true do
-                cursor.peek = return_opt
-                if return_opt.is_none then
-                    break
-                fi
-                return_opt.unwrap = return_token
-                if
-                    "fn" return_token common::Token::value.as_str ==
-                    "}" return_token common::Token::value.as_str == ||
-                    "{" return_token common::Token::value.as_str == ||
-                then
-                    break
-                fi
-                store state cursor parse_type_ast returns.push
-            done
-        fi
-    fi
-
-    returns params common::StackEffect::new
-}
-# Parse a bracket-delimited identifier-only type-parameter list:
-# `[T1 T2 ...]`. `context` (e.g. "trait", "trait method") is interpolated
-# into error messages. Does *not* accept trait bounds; for those use
-# `parse_type_variables`.
-
-pub fn parse_simple_type_vars
-    cursor:mut$TokenCursor
-    context:str
-    state:mut$ParseState
--> std::List[std::String] {
-    cursor.pop drop # consume [
-    std::List[std::String]::new = collected
-    true = loop_flag
-    while loop_flag do
-        cursor.peek = token_opt
-        if token_opt.is_none then
-            common::empty_location f"Unclosed {context} type parameter list" common::ErrorKind::UnmatchedBlock state.record_error_string
-            state.mark_output_unusable
-            false = loop_flag
-        else
-            token_opt.unwrap = token
-            if "]" token common::Token::value.as_str == then
-                cursor.pop drop
-                false = loop_flag
-            elif common::TokenKind::Identifier token common::Token::kind != then
-                token common::Token::location f"Expected type parameter identifier in {context}" common::ErrorKind::UnexpectedToken state.record_error_string
-                false = loop_flag
-            else
-                cursor.pop drop
-                token common::Token::value.clone cursor.type_bindings.push
-                token common::Token::value.clone collected.push
-            fi
-        fi
+    for parsed in signature.returns.iter do
+        store state cursor parsed resolve_parsed_type returns.push
     done
-    collected
+    returns parameters common::StackEffect::new
 }
 
-pub fn parse_trait parser:mut$Parser cursor:mut$TokenCursor -> common::CasaTrait {
+fn construct_trait
+    parser:mut$Parser
+    declaration:$grammar::DeclarationSyntax
+    parsed:$grammar::TraitSyntax
+    cursor:mut$TokenCursor
+-> common::CasaTrait {
     cursor.type_bindings.length = inherited_bindings
-    fallback_token parser.state "trait" cursor expect_token_value.unwrap_or drop
-    fallback_token parser.state common::TokenKind::Identifier cursor expect_token_kind.unwrap_or = name_token
-
-    std::List[std::String]::new = type_params
-    cursor.peek = bracket_opt
-    if { common::Token::value.as_str "[" == } bracket_opt.filter.is_some then
-        parser.state "trait" cursor parse_simple_type_vars = type_params
-    fi
-
+    "trait" parser.state cursor parsed.parameters resolve_simple_parameters = type_params
     std::List[common::TraitBound]::new = supertraits
-    cursor.peek = colon_opt
-    if { common::Token::value.as_str ":" == } colon_opt.filter.is_some then
-        cursor.pop drop
-        true = parse_super_loop
-        while parse_super_loop do
-            fallback_token parser.state common::TokenKind::Identifier cursor expect_token_kind.unwrap_or = super_token
-            super_token common::Token::value.as_str cursor.resolve_name = super_name
-            super_name parser
+    for parsed_bound in parsed.supertraits.iter do
+        parser.store parser.state cursor parsed_bound resolve_parsed_bound = bound
+        if
+            bound.name parser
                 .store
                 .traits
-                .get = super_def_opt
-            parser.store parser.state super_token cursor parse_bound_type_args = super_args
-            if super_def_opt std::Option::Some(super_def) is then
-                super_def common::CasaTrait::type_params = super_params: $std::List[std::String]
-                if super_args.length super_params.length != then
-                    super_token common::Token::location f"Supertrait `{super_name}` expects {super_params.length} type argument(s), got {super_args.length}" common::ErrorKind::Syntax parser.state.record_error_string
-                fi
+                .get std::Option::Some(supertrait) is
+        then
+            if bound.type_args.length supertrait.type_params.length != then
+                parsed_bound.token cursor.tokens.get = token
+                supertrait.type_params.length = expected
+                bound.type_args.length = actual
+                token.location f"Supertrait `{bound.name}` expects {expected} type argument(s), got {actual}" common::ErrorKind::Syntax parser.state.record_error_string
             fi
-            super_args super_name common::TraitBound supertraits.push
-            cursor.peek = plus_opt
-            if { common::Token::value.as_str "+" == } plus_opt.filter.is_some then
-                cursor.pop drop
-            else
-                false = parse_super_loop
-            fi
-        done
-    fi
-
-    std::List[common::TraitMethod]::new = methods
-    fallback_token parser.state "{" cursor expect_token_value.unwrap_or drop
-
-    true = parse_trait_loop
-    while parse_trait_loop do
-        cursor.peek = next_opt
-        if next_opt.is_none then
-            name_token common::Token::location "Unclosed trait block" common::ErrorKind::UnmatchedBlock parser.state.record_error
-            parser.state.mark_output_unusable
-            false = parse_trait_loop
-        elif next_opt std::Option::Some(next) is then
-            if "}" next common::Token::value.as_str == then
-                cursor.pop drop
-                false = parse_trait_loop
-            elif "fn" next common::Token::value.as_str != then
-                next common::Token::location "Expected method declaration in trait" common::ErrorKind::UnexpectedToken parser.state.record_error
-                false = parse_trait_loop
-            else
-                cursor.pop drop # consume fn
-                parser.state cursor expect_function_name = method_name
-                if "drop" method_name common::Token::value.as_str == then
-                    method_name common::Token::location "`drop` is reserved for inherent cleanup methods" common::ErrorKind::InvalidScope parser.state.record_error
-                fi
-
-                cursor.type_bindings.length = inherited_method_bindings
-                # Parse optional method-level type parameters (e.g., fn map[U])
-                std::List[std::String]::new = method_type_vars
-                if cursor.peek std::Option::Some(mtv_bracket) is then
-                    if "[" mtv_bracket common::Token::value.as_str == then
-                        parser.state "trait method" cursor parse_simple_type_vars = method_type_vars
-                    fi
-                fi
-
-                parser.store parser.state cursor parse_trait_method_stack_effect = method_stack_effect
-
-                type_params common::string_list_to_set = trait_tv_set
-                common::TRAIT_SELF_TYPE trait_tv_set.add_str
-                for mtv in method_type_vars.iter do
-                    mtv.clone trait_tv_set.add
-                done
-                trait_tv_set method_stack_effect common::canonicalize_stack_effect_type_vars
-
-                type_params trait_tv_set method_stack_effect method_name name_token cursor parser parse_default_method = default_function
-
-                inherited_method_bindings cursor.restore_type_bindings
-                method_name.location.clone default_function method_type_vars method_stack_effect method_name.value.clone
-                common::TraitMethod methods.push
-            fi
-        else
-            false = parse_trait_loop
         fi
+        bound supertraits.push
     done
-
-    name_token common::Token::location.clone supertraits methods type_params name_token common::Token::value.as_str cursor.resolve_name common::CasaTrait
+    std::List[common::TraitMethod]::new = methods
+    for method in parsed.methods.iter do
+        method.first_token cursor.tokens.get = first_token
+        if "fn" first_token.value.as_str != then
+            first_token.location "Expected method declaration in trait" common::ErrorKind::UnexpectedToken parser.state.record_error
+        fi
+        method.name_token cursor
+            .tokens
+            .get
+            .clone = name_token
+        if "drop" name_token.value.as_str == then
+            name_token.location "`drop` is reserved for inherent cleanup methods" common::ErrorKind::InvalidScope parser.state.record_error
+        fi
+        cursor.type_bindings.length = inherited_method_bindings
+        "trait method" parser.state cursor method.parameters resolve_simple_parameters = method_type_vars
+        parser.store parser.state cursor method.signature resolve_method_signature = effect
+        type_params common::string_list_to_set = type_variables
+        common::TRAIT_SELF_TYPE type_variables.add_str
+        for variable in method_type_vars.iter do
+            variable.clone type_variables.add
+        done
+        type_variables effect common::canonicalize_stack_effect_type_vars
+        std::Option[std::String]::None = default_function
+        if method.body_token std::Option::Some(body_token) is then
+            body_token = cursor.pos
+            type_params type_variables effect name_token declaration cursor parser parse_default_method = default_function
+        fi
+        inherited_method_bindings cursor.restore_type_bindings
+        name_token.location.clone default_function method_type_vars effect name_token.value.clone common::TraitMethod methods.push
+    done
+    declaration.name.as_str cursor.resolve_name = name
+    declaration.location.clone supertraits methods type_params name common::CasaTrait
     inherited_bindings cursor.restore_type_bindings
 }
 
 fn parse_default_method
     parser:mut$Parser
     cursor:mut$TokenCursor
-    trait_token:$common::Token
+    declaration:$grammar::DeclarationSyntax
     method_token:$common::Token
     effect:$common::StackEffect
     type_vars:$std::Set[std::String]
     type_parameters:$std::List[std::String]
 -> std::Option[std::String] {
-    if
-        { common::Token::value.as_str "{" == } cursor
-            .peek
-            .filter
-            .is_none
-    then
-        std::Option[std::String]::None return
-    fi
-    trait_token.value.as_str cursor.resolve_name = trait_name
+    declaration.name.as_str cursor.resolve_name = trait_name
     f"{trait_name}::{method_token.value}" = default_name
     default_name.as_str cursor parser parse_block_ops = operations
     type_vars operations common::canonicalize_operation_type_vars
@@ -6308,10 +6372,8 @@ pub fn get_op_keyword
                 return
             fi
             if "struct" declaration.value.as_str == then
-                cursor.retreat
-                true cursor parser parse_struct = casa_struct
-                casa_struct.name.clone = extern_struct_name
-                casa_struct extern_struct_name parser.put_struct
+                token.location "Struct declarations must be constructed from module syntax" common::ErrorKind::InvalidScope parser.state.record_error
+                parser.state.mark_output_unusable
                 return
             fi
         fi
@@ -6348,22 +6410,9 @@ pub fn get_op_keyword
         token common::Token::location "`end` without matching `match`" common::ErrorKind::UnmatchedBlock parser.state.record_error
     fi
 
-    # enum
     if common::KeywordKind::EnumKw keyword == then
-        parser token common::Token::location "Enums" function_name require_global_scope
-        cursor.retreat
-        cursor parser parse_enum = casa_enum
-        if
-            casa_enum common::CasaEnum::name parser
-                .store
-                .enums
-                .get
-                .is_some
-        then
-            casa_enum common::CasaEnum::location f"Enum `{casa_enum common::CasaEnum::name}` is already defined" common::ErrorKind::DuplicateName parser.state.record_error_string
-        fi
-        casa_enum common::CasaEnum::name.clone = enum_name
-        casa_enum enum_name.clone parser.put_enum
+        token.location "Enums must be declared at module scope" common::ErrorKind::InvalidScope parser.state.record_error
+        parser.state.mark_output_unusable
         return
     fi
 
@@ -6413,13 +6462,9 @@ pub fn get_op_keyword
         return
     fi
 
-    # struct
     if common::KeywordKind::StructKw keyword == then
-        parser token common::Token::location "Structs" function_name require_global_scope
-        cursor.retreat
-        false cursor parser parse_struct = casa_struct
-        casa_struct common::CasaStruct::name.clone = parsed_struct_name
-        casa_struct parsed_struct_name parser.put_struct
+        token.location "Structs must be declared at module scope" common::ErrorKind::InvalidScope parser.state.record_error
+        parser.state.mark_output_unusable
         return
     fi
 
@@ -6446,22 +6491,9 @@ pub fn get_op_keyword
         return
     fi
 
-    # trait
     if common::KeywordKind::TraitKw keyword == then
-        parser token common::Token::location "Traits" function_name require_global_scope
-        cursor.retreat
-        cursor parser parse_trait = casa_trait
-        if
-            casa_trait common::CasaTrait::name parser
-                .store
-                .traits
-                .get
-                .is_some
-        then
-            casa_trait common::CasaTrait::location f"Trait `{casa_trait common::CasaTrait::name}` is already defined" common::ErrorKind::DuplicateName parser.state.record_error_string
-        fi
-        casa_trait common::CasaTrait::name.clone = parsed_trait_name
-        casa_trait parsed_trait_name.clone parser.put_trait
+        token.location "Traits must be declared at module scope" common::ErrorKind::InvalidScope parser.state.record_error
+        parser.state.mark_output_unusable
         return
     fi
 }
@@ -8592,6 +8624,32 @@ impl Parser {
 }
 
 impl Parser {
+    fn finish_declaration_header
+        self:mut$Parser
+        declaration:$grammar::DeclarationSyntax
+        cursor:$TokenCursor
+    {
+        declaration.after_token declaration.first_token.to_str self
+            .current_module_mut
+            .header_ends
+            .set
+        if declaration.public_token std::Option::Some(position) is then
+            declaration.name.as_str cursor.resolve_name = name
+            name.as_str self
+                .store
+                .module_private_symbols
+                .remove_str
+            name self
+                .store
+                .public_symbols
+                .add
+            declaration.after_token position.to_str self
+                .current_module_mut
+                .header_ends
+                .set
+        fi
+    }
+
     # Aggregates and traits establish complete headers before ordinary bodies are decoded.
     fn collect_headers
         self:mut$Parser
@@ -8619,9 +8677,13 @@ impl Parser {
             then
                 continue
             fi
-            declaration.first_token = cursor.pos
+            if declaration.header std::Option::Some(header) is then header else continue fi = header
             if "struct" declaration.kind.as_str == then
-                declaration.external cursor self parse_struct = structure
+                if header grammar::DeclarationHeader::Aggregate(aggregate) is then
+                    cursor aggregate declaration self construct_struct
+                else
+                    continue
+                fi = structure
                 if
                     structure.name.as_str self
                         .store
@@ -8634,7 +8696,11 @@ impl Parser {
                 structure.name.clone = name
                 structure name self.put_struct
             elif "enum" declaration.kind.as_str == then
-                cursor self parse_enum = enumeration
+                if header grammar::DeclarationHeader::Aggregate(aggregate) is then
+                    cursor aggregate declaration self construct_enum
+                else
+                    continue
+                fi = enumeration
                 if
                     enumeration.name.as_str self
                         .store
@@ -8649,10 +8715,7 @@ impl Parser {
             else
                 continue
             fi
-            declaration.after_token declaration.first_token.to_str self
-                .current_module_mut
-                .header_ends
-                .set
+            cursor declaration self.finish_declaration_header
         done
         for declaration in declarations.iter do
             if
@@ -8669,9 +8732,13 @@ impl Parser {
             then
                 continue
             fi
+            if declaration.header std::Option::Some(header) is then header else continue fi = header
             if "trait" declaration.kind.as_str == then
-                declaration.first_token = cursor.pos
-                cursor self parse_trait = casa_trait
+                if header grammar::DeclarationHeader::Trait(trait_header) is then
+                    cursor trait_header declaration self construct_trait
+                else
+                    continue
+                fi = casa_trait
                 if
                     casa_trait.name.as_str self
                         .store
@@ -8683,10 +8750,7 @@ impl Parser {
                 fi
                 casa_trait.name.clone = name
                 casa_trait name self.put_trait
-                declaration.after_token declaration.first_token.to_str self
-                    .current_module_mut
-                    .header_ends
-                    .set
+                cursor declaration self.finish_declaration_header
             fi
         done
     }
