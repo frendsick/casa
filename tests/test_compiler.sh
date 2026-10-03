@@ -130,6 +130,31 @@ for f in "$TESTS_DIR"/test_*.casa; do
     rm -f "$binary"
 done
 
+# Append invariant checks inside the backend module so its machine types stay private.
+if [ "$TEST_CATEGORY" = all ] || [ "$TEST_CATEGORY" = compiler_integration ]; then
+    if matches_filter "backend_invariants" "$@"; then
+        matched=true
+        fixture="$TEST_TMP/backend_invariants.casa"
+        binary="$TEST_TMP/backend_invariants"
+        cat "$ROOT_DIR/compiler/bytecode.casa" \
+            "$TESTS_DIR/fixtures/backend_invariants.inc" > "$fixture"
+        printf "Running: backend_invariants ... "
+        if ! $COMPILER -L "$LIB_DIR" -L "$ROOT_DIR/compiler" "$fixture" -o "$binary" \
+            2>"$TEST_TMP/compile_err"; then
+            printf "${RED}COMPILE FAIL${RESET}\n"
+            cat "$TEST_TMP/compile_err"
+            fail=$((fail+1))
+        elif ! "$binary" >"$TEST_TMP/backend_invariants.log" 2>&1 < /dev/null; then
+            printf "${RED}RUNTIME FAIL${RESET}\n"
+            cat "$TEST_TMP/backend_invariants.log"
+            fail=$((fail+1))
+        else
+            printf "${GREEN}OK${RESET}\n"
+            pass=$((pass+1))
+        fi
+    fi
+fi
+
 # Error-fixture tests: files in errors/ must fail to compile with a specific tag
 for f in "$TESTS_DIR"/errors/*.casa; do
     [ -f "$f" ] || continue

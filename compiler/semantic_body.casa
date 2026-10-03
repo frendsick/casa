@@ -117,8 +117,8 @@ pub enum Action derives std::Clone {
     StructMemberStore (common::StructMemberAccess common::Type)
     DestructionFn (common::Type)
     NumericConvert (common::NumericConversion)
-    NumericTry (common::NumericTry)
-    IntegerTry (common::IntegerTry)
+    NumericTry (common::NumericTry std::String)
+    IntegerTry (common::IntegerTry std::String)
     FloatRound (common::FloatRound)
     FstringConcat (u64)
     PrimitiveToStr (common::BuiltinType)
@@ -508,8 +508,8 @@ fn select_action
         common::OpValue::StructMemberStore(value) => facts.origin hint require_type ? value Action::StructMemberStore
         common::OpValue::DestructionFn(value) => value Action::DestructionFn
         common::OpValue::NumericConvert(value) => value Action::NumericConvert
-        common::OpValue::NumericTry(value) => value Action::NumericTry
-        common::OpValue::IntegerTry(value) => value Action::IntegerTry
+        common::OpValue::NumericTry(value) => value.target select_numeric_wrapper value Action::NumericTry
+        common::OpValue::IntegerTry(value) => value.target select_numeric_wrapper value Action::IntegerTry
         common::OpValue::FloatRound(value) => value Action::FloatRound
         common::OpValue::FstringConcat(value) => value Action::FstringConcat
         common::OpValue::PrimitiveToStr(value) => value Action::PrimitiveToStr
@@ -768,7 +768,7 @@ pub fn consume_body
 }
 
 impl OperationFacts {
-    fn lower
+    pub fn lower
         self:$OperationFacts
         value:common::OpValue
         hint:std::Option[common::Type]
@@ -925,8 +925,8 @@ impl Leaf {
             }
             Action::DestructionFn(value) => value.clone common::OpValue::DestructionFn
             Action::NumericConvert(value) => value.clone common::OpValue::NumericConvert
-            Action::NumericTry(value) => value.clone common::OpValue::NumericTry
-            Action::IntegerTry(value) => value.clone common::OpValue::IntegerTry
+            Action::NumericTry(value _) => value.clone common::OpValue::NumericTry
+            Action::IntegerTry(value _) => value.clone common::OpValue::IntegerTry
             Action::FloatRound(value) => value.clone common::OpValue::FloatRound
             Action::FstringConcat(value) => value copy common::OpValue::FstringConcat
             Action::PrimitiveToStr(value) => value copy common::OpValue::PrimitiveToStr
@@ -1379,14 +1379,12 @@ impl Leaf {
             Action::DestructionFn(typ) => {
                 typ validate_type ? drop typ.clone drops.push
             }
-            Action::NumericTry(conversion) => {
+            Action::NumericTry(conversion wrapper) => {
                 conversion.source validate_type ? drop
-                conversion.target.format = target_name
-                f"{common::STD_NAMESPACE}__numeric_try_{target_name}" callees.push
+                wrapper.clone callees.push
             }
-            Action::IntegerTry(operation) => {
-                operation.target.format = target_name
-                f"{common::STD_NAMESPACE}__numeric_try_{target_name}" callees.push
+            Action::IntegerTry(operation wrapper) => {
+                wrapper.clone callees.push
             }
             Action::ConstrainedCall(_) => "Deferred trait dispatch in concrete body".to_str std::Result::Error return
             Action::ConstrainedClosure(_) => "Deferred trait dispatch in concrete body".to_str std::Result::Error return
@@ -1706,7 +1704,7 @@ impl Action {
             Action::DestructionFn(typ) => bindings typ.substitute_t Action::DestructionFn
             Action::StructMemberProject(member typ) => bindings typ.substitute_t member.clone Action::StructMemberProject
             Action::StructMemberStore(member typ) => bindings typ.substitute_t member.clone Action::StructMemberStore
-            Action::NumericTry(conversion) => conversion.target bindings conversion.source.substitute_t common::NumericTry Action::NumericTry
+            Action::NumericTry(conversion wrapper) => wrapper.clone conversion.target bindings conversion.source.substitute_t common::NumericTry Action::NumericTry
             _ => std::Option[Action]::None return
         end
         std::Option::Some
@@ -1963,4 +1961,108 @@ pub fn make_accessor_body
     declaration.location store make_accessor_facts operations Body declaration.location store make_accessor_facts
     Region Node::Region nodes.push
     nodes Body
+}
+
+impl OperationFacts {
+    fn visit_types self:$OperationFacts visitor:$fn[$common::Type] {
+        if self.effects std::Option::Some(effects) is then
+            for event in effects.cleanups.iter do
+                event.typ visitor exec
+            done
+            for event in effects.assignments.iter do
+                event.typ visitor exec
+            done
+        fi
+    }
+}
+
+impl Body {
+    pub fn visit_types self:$Body visitor:$fn[$common::Type] {
+        for node in self.nodes.iter do
+            visitor node.visit_types
+        done
+    }
+}
+
+impl Node {
+    fn visit_types self:$Node visitor:$fn[$common::Type] {
+        self match
+            Node::Unreachable(_) => {
+            }
+            Node::Leaf(leaf) => {
+                visitor leaf.facts.visit_types
+                leaf.action match
+                    Action::Primitive(_ typ) => typ visitor exec
+                    Action::Integer(_ typ) => typ visitor exec
+                    Action::Float(_ typ) => typ visitor exec
+                    Action::Binding(kind binding typ) => typ visitor exec
+                    Action::Enum(_ typ) => typ visitor exec
+                    Action::PatternTest(_ typ) => typ visitor exec
+                    Action::Struct(_ typ) => typ visitor exec
+                    Action::StructFields(_ typ) => typ visitor exec
+                    Action::SizeOf(typ) => typ visitor exec
+                    Action::PtrAsRef(typ) => typ visitor exec
+                    Action::PtrAsMut(typ) => typ visitor exec
+                    Action::PtrFromRaw(typ) => typ visitor exec
+                    Action::PtrRead(typ) => typ visitor exec
+                    Action::PtrWrite(typ) => typ visitor exec
+                    Action::StructMemberProject(_ typ) => typ visitor exec
+                    Action::StructMemberStore(_ typ) => typ visitor exec
+                    Action::DestructionFn(typ) => typ visitor exec
+                    _ => {
+                    }
+                end
+            }
+            Node::Conditional(conditional) => {
+                for branch in conditional.branches.iter do
+                    visitor branch.entry.visit_types
+                    visitor branch.test.visit_types
+                    visitor branch.condition.visit_types
+                    visitor branch.consequent.visit_types
+                done
+                if conditional.alternative std::Option::Some(alternative) is then
+                    visitor alternative.entry.visit_types
+                    visitor alternative.body.visit_types
+                fi
+                visitor conditional.exit.visit_types
+            }
+            Node::Loop(loop) => {
+                visitor loop.entry.visit_types
+                visitor loop.test.visit_types
+                visitor loop.condition.visit_types
+                visitor loop.body.visit_types
+                visitor loop.exit.visit_types
+            }
+            Node::Match(match_body) => {
+                visitor match_body.entry.visit_types
+                match_body.subject_type visitor exec
+                for arm in match_body.arms.iter do
+                    visitor arm.entry.visit_types
+                    arm.subject_type visitor exec
+                    visitor arm.guard.visit_types
+                    visitor arm.body.visit_types
+                done
+                visitor match_body.exit.visit_types
+            }
+            Node::Region(region) => {
+                visitor region.entry.visit_types
+                visitor region.body.visit_types
+                visitor region.exit.visit_types
+            }
+            Node::Group(group) => {
+                visitor group.facts.visit_types
+                visitor group.body.visit_types
+            }
+            Node::Array(array) => {
+                visitor array.facts.visit_types
+                array.typ visitor exec
+                visitor array.body.visit_types
+            }
+        end
+    }
+}
+
+fn select_numeric_wrapper target:$common::BuiltinType -> std::String {
+    target.format = target_name
+    f"{common::STD_NAMESPACE}__numeric_try_{target_name}"
 }

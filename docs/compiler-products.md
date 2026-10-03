@@ -46,7 +46,7 @@ runtime asset from the checkout. `keep_asm` retains the complete `<output>.s` on
 success and native failure. Otherwise the adapter removes it after the driver
 returns. The compiler creates no intermediate object file.
 
-`AssemblySource::new` wraps completed legacy backend text with its target for
+`AssemblySource::new` wraps completed backend text with its target for
 the CLI during consumer migration. Request products construct the same type
 inside `assembly`.
 
@@ -68,12 +68,26 @@ by checking.
 
 `CheckedProgram` can be constructed only after all reachable bodies, signatures,
 local and capture types, storage references, and dispatch targets are complete.
-Both backend paths consume that product and reuse its finalized storage
-declarations. They lower one semantic body at a time into their private operation
-stream and rewrite storage names in place. Rejected source retains diagnostics and
-editor facts but cannot produce backend input. Unreachable source still receives
+It also owns the selected copy behavior, value categories, and concrete drop
+hooks for each used type. The backend consumes these facts without trait queries.
+Rejected source retains diagnostics and editor facts but cannot produce backend input. Unreachable source still receives
 type and structural checks. It retains source occurrences for editor queries,
 without executable operands or ownership actions.
+
+Scalar and aggregate programs use one backend entry. Physical instructions,
+function plans, pools, and selection are private to `bytecode.casa`.
+`emitter.casa` contains only symbol and string spelling helpers. A deterministic worklist
+plans each reachable function from its structured body. Each function plan fixes
+storage actions, frame size, ownership flags, cleanup, and concrete call targets
+before instruction selection. Native calls share one request-owned ABI plan per
+concrete extern function. Recursive calls refer to reserved identities.
+
+Selection validates local labels, storage slots, captures, calls, and literal
+references. It produces one completed native instruction buffer, renders it, and
+releases it before planning the next function. Bounded leaf templates, literal
+pools, native-call plans, and symbol identities live until the request ends.
+Publication also checks completed function definitions and static pool references.
+An invariant failure discards the private output. It never retries another backend.
 
 Operation handlers record dependencies from the selected target and receiver
 used to check the stack. The editor projection retains only source occurrences
