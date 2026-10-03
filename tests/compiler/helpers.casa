@@ -14,21 +14,23 @@ import "../../compiler/lexer.casa" as lexer
 import "../../compiler/legacy_parser.casa" as syntax
 import "../../compiler/bytecode.casa" as bytecode
 import "../../compiler/typechecker.casa" as typechecker
+import "../../compiler/source_body.casa" as source_body
 import "../../lib/test.casa" as test
 
-pub fn compile_test_program
-    ops:$std::List[common::Op]
-    store:$common::SymbolStore
--> common::Program {
-    store.clone_for_typecheck = checked_store
-    ops.clone = checked_ops
-    std::Set[i64]::new
-    error::Diagnostics::new
-    checked_ops
-    common::empty_stack_effect
-    checked_store
-    typechecker::TypecheckResult = result
-    result bytecode::compile_typechecked.unwrap
+pub fn compile_test_source code:$str diagnostics:mut$error::Diagnostics -> common::Program {
+    diagnostics code typecheck_test_source = checked
+    checked.get_diagnostics.clone diagnostics.merge
+    if diagnostics.has_errors then
+        for diagnostic in diagnostics.entries.iter do
+            if diagnostic error::Diagnostic::Error(failure) is then
+                failure.message.as_str std::eprintln
+            fi
+        done
+    fi
+    checked bytecode::compile_typechecked match
+        std::Result::Ok(program) => program
+        std::Result::Error(failure) => failure.message.as_str panic
+    end
 }
 
 pub fn assert_has_errors [M:std::Display] message:$M diagnostics:$error::Diagnostics {
@@ -190,35 +192,16 @@ pub fn store_has_function_suffix store:$common::SymbolStore suffix:$str -> bool 
     false
 }
 
-pub fn store_function_suffix_is_resolved store:$common::SymbolStore suffix:$str -> bool {
-    store.get_function_names = names
-    for name in names.iter do
-        if name.as_str suffix str::ends_with then
-            name.as_str store
-                .get_function
-                .unwrap
-                .is_resolved return
-        fi
-    done
-    false
-}
-
 pub fn type_check_ops_for_test
     ops:mut$std::List[common::Op]
     function_opt:$std::Option[common::Function]
     store:$common::SymbolStore
     diagnostics:mut$error::Diagnostics
+    source_bodies:$std::Map[std::String source_body::SourceBody]
 -> common::StackEffect {
     function_opt.clone = mutable_function_opt
     store.clone_for_typecheck = mutable_store
-    false diagnostics mutable_store mutable_function_opt ops typechecker::check_ops
-}
-
-pub fn type_check_functions_for_test
-    store:mut$common::SymbolStore
-    diagnostics:mut$error::Diagnostics
-{
-    diagnostics store typechecker::check_functions
+    false source_bodies diagnostics mutable_store mutable_function_opt ops typechecker::check_ops
 }
 
 pub fn type_satisfies_trait_for_test
@@ -227,22 +210,57 @@ pub fn type_satisfies_trait_for_test
     function_opt:$std::Option[common::Function]
     store:$common::SymbolStore
     diagnostics:mut$error::Diagnostics
+    source_bodies:$std::Map[std::String source_body::SourceBody]
 -> bool {
     function_opt.clone = mutable_function_opt
     store.clone_for_typecheck = mutable_store
-    diagnostics mutable_store mutable_function_opt trait_name common::parse_type_str type_name
+    source_bodies diagnostics mutable_store mutable_function_opt trait_name common::parse_type_str type_name
     typechecker::type_satisfies_trait
 }
+# Parser unit tests inspect an owned projection of resolved source, never checked work state.
+pub struct ParsedTestSource {
+    pub ops:           std::Option[std::List[common::Op]]
+    pub store:         common::SymbolStore
+    pub source_bodies: std::Map[std::String source_body::SourceBody]
+    pub diagnostics:   error::Diagnostics
+}
 
-pub fn parse_resolve_test_source
-    code:$str
-    diagnostics:mut$error::Diagnostics
--> syntax::ParseResolveResult {
+impl ParsedTestSource {
+    pub fn into_parts
+        self:ParsedTestSource
+    -> std::Option[std::List[common::Op]] common::SymbolStore std::Map[std::String source_body::SourceBody] error::Diagnostics {
+        self match
+            ParsedTestSource { ops: ops store: store source_bodies: bodies diagnostics: diagnostics } => ops store bodies diagnostics
+        end
+    }
+}
+
+pub fn project_test_source parsed:syntax::ParseResolveResult -> ParsedTestSource {
+    parsed.into_parts = diagnostics = source
+    source match
+        std::Option::Some(program) => {
+            program.into_parts = bodies = root = store
+            diagnostics bodies store root.lower_operations std::Option::Some ParsedTestSource
+        }
+        std::Option::None => diagnostics std::Map[std::String source_body::SourceBody]::new common::symbol_store_new std::Option[std::List[common::Op]]::None ParsedTestSource
+    end
+}
+
+pub fn type_check_parts
+    operations:std::List[common::Op]
+    store:common::SymbolStore
+    source_bodies:std::Map[std::String source_body::SourceBody]
+-> typechecker::TypecheckResult {
+    source_bodies operations source_body::consume_source_body store
+    source_body::SourceProgram::new typechecker::type_check
+}
+
+pub fn parse_resolve_test_source code:$str diagnostics:mut$error::Diagnostics -> ParsedTestSource {
     "test" code.clone lexer::lex_source = lex_result
     lex_result.into_parts = lex_diagnostics = tokens
     lexer::SourceStore::new = sources
     code "test" sources.add
-    sources lex_diagnostics std::List[std::String]::new tokens syntax::parse_and_resolve = result
+    sources lex_diagnostics std::List[std::String]::new tokens syntax::parse_and_resolve project_test_source = result
     result.diagnostics.clone diagnostics.merge
     result
 }
@@ -250,18 +268,26 @@ pub fn parse_resolve_test_source
 pub fn parse_resolve_test_parts
     code:$str
     diagnostics:mut$error::Diagnostics
--> std::List[common::Op] common::SymbolStore {
+-> std::List[common::Op] common::SymbolStore std::Map[std::String source_body::SourceBody] {
     diagnostics code parse_resolve_test_source = result
-    result.into_parts = parse_diagnostics = store = ops
+    result.into_parts = parse_diagnostics = source_bodies = store = ops
     parse_diagnostics drop
     ops.unwrap
     store
+    source_bodies
 }
 
 pub fn typecheck_test_source
     code:$str
     diagnostics:mut$error::Diagnostics
 -> typechecker::TypecheckResult {
-    diagnostics code parse_resolve_test_parts = store = ops
-    store ops typechecker::type_check
+    "test" code.clone lexer::lex_source.into_parts = lex_diagnostics = tokens
+    lexer::SourceStore::new = sources
+    code "test" sources.add
+    sources lex_diagnostics std::List[std::String]::new tokens syntax::parse_and_resolve.into_parts
+    = parse_diagnostics = source
+    parse_diagnostics.clone diagnostics.merge
+    source.unwrap typechecker::type_check = checked
+    parse_diagnostics checked.with_source_diagnostics = checked
+    checked
 }

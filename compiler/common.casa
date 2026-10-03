@@ -473,17 +473,52 @@ pub struct Op derives std::Clone {
     pub call_bindings:        std::Map[std::String Type]
     pub value:                OpValue
     pub ownership:            std::Option[OpOwnership]
+    pub bindings:             std::Option[std::List[BindingFact]]
+}
+
+# A binding occurrence retains source spelling and a checker-selected storage identity.
+pub struct CheckedBinding derives std::Clone {
+    pub name:         std::String
+    pub storage_name: std::String
+    pub typ:          Type
+}
+
+pub struct BindingReference derives std::Clone {
+    pub name:         std::String
+    pub storage_name: std::String
+}
+
+pub enum BindingFact derives std::Clone {
+    Definition (CheckedBinding)
+    Reference (BindingReference)
+}
+
+impl BindingFact {
+    pub fn get_name self:$BindingFact -> $std::String {
+        self match
+            BindingFact::Definition(binding) => binding.name
+            BindingFact::Reference(binding) => binding.name
+        end
+    }
+
+    pub fn get_storage_name self:$BindingFact -> $std::String {
+        self match
+            BindingFact::Definition(binding) => binding.storage_name
+            BindingFact::Reference(binding) => binding.storage_name
+        end
+    }
 }
 
 pub struct OwnerEvent derives std::Clone {
-    pub name:       std::String
-    pub typ:        Type
-    pub generation: u64
+    pub name:         std::String
+    pub typ:          Type
+    pub generation:   u64
+    pub storage_name: std::String
 }
 
 impl OwnerEvent {
     pub fn new name:$str typ:$Type generation:u64 -> OwnerEvent {
-        generation typ.clone name.to_str OwnerEvent
+        name.to_str generation typ.clone name.to_str OwnerEvent
     }
 }
 
@@ -555,6 +590,16 @@ pub struct TemporaryBinding derives std::Clone {
 # relocate their elements, so metadata must not use element addresses.
 
 impl Op {
+    pub fn add_binding_fact self:mut$Op fact:BindingFact {
+        if self.bindings.is_none then
+            [fact] std::List::from_array std::Option::Some = self.bindings
+            return
+        fi
+        if self.bindings std::Option::Some(facts) is then
+            fact facts.push
+        fi
+    }
+
     pub fn ensure_ownership self:mut$Op -> mut$OpOwnership {
         if self.ownership.is_none then
             OpOwnership::new std::Option::Some = self.ownership
@@ -573,7 +618,12 @@ impl Op {
     }
 
     pub fn new value:OpValue location:$Location -> Op {
-        std::Option[OpOwnership]::None value std::Map[std::String Type]::new std::Option[Type]::None std::Option[Type]::None location.clone 0 Op
+        std::Option[std::List[BindingFact]]::None std::Option[OpOwnership]::None value std::Map[std::String Type]::new std::Option[Type]::None std::Option[Type]::None location.clone 0 Op
+    }
+
+    # The source builder transfers its origin into checker-owned work.
+    pub fn from_source value:OpValue location:Location -> Op {
+        std::Option[std::List[BindingFact]]::None std::Option[OpOwnership]::None value std::Map[std::String Type]::new std::Option[Type]::None std::Option[Type]::None location 0 Op
     }
 }
 
@@ -808,6 +858,16 @@ pub struct StructMemberAccess derives std::Clone {
     pub member_index: u64
 }
 
+pub enum MemberAccessKind derives std::Copy std::Eq {
+    Read
+    Write
+}
+
+pub struct MemberAccessor derives std::Clone {
+    pub member: StructMemberAccess
+    pub kind:   MemberAccessKind
+}
+
 pub struct StructPattern derives std::Clone {
     pub struct_name: std::String
     pub bindings:    std::Map[std::String std::String]
@@ -922,6 +982,8 @@ pub enum PatternValue derives std::Clone {
 # typed inner value directly so call sites can destructure with `is`/`match`.
 
 pub enum OpValue derives std::Clone {
+    # Checked only for diagnostics and source occurrences. Never emitted by a backend.
+    Unreachable (std::List[Op])
     # A rejected source operation, with its diagnostic retained.
     Rejected
     # Stack
@@ -1305,15 +1367,15 @@ pub struct CasaStruct derives std::Clone {
 # ============================================================================
 
 pub struct TraitMethod derives std::Clone {
-    pub name:                std::String
-    pub stack_effect:        StackEffect
-    pub default_ops:         std::List[Op]
-    pub default_variables:   std::List[Variable]
-    pub default_is_resolved: bool
-    pub type_vars:           std::List[std::String]
-    pub checked_default:     std::Option[Function]
-    pub location:            Location
-    pub has_default_body:    bool
+    pub name:             std::String
+    pub stack_effect:     StackEffect
+    pub type_vars:        std::List[std::String]
+    pub default_function: std::Option[std::String]
+    pub location:         Location
+}
+
+impl TraitMethod {
+    pub fn has_default_body self:$TraitMethod -> bool { self.default_function.is_some }
 }
 
 pub struct CasaTrait derives std::Clone {
@@ -1392,11 +1454,8 @@ pub fn trait_bound_eq a:$TraitBound b:$TraitBound -> bool {
 
 pub struct Function derives std::Clone {
     pub name:             std::String
-    pub ops:              std::List[Op]
     pub location:         Location
     pub stack_effect:     StackEffect
-    pub is_resolved:      bool
-    pub is_typechecked:   bool
     pub variables:        std::List[Variable]
     pub captures:         std::List[Variable]
     pub owned_captures:   std::List[std::String]
@@ -1409,69 +1468,13 @@ pub struct Function derives std::Clone {
 }
 
 impl Function {
-    pub fn new name:std::String ops:std::List[Op] location:Location -> Function {
-        std::List[std::String]::new std::Option[std::String]::None false false false false std::List[std::String]::new std::List[Variable]::new std::List[Variable]::new false false empty_stack_effect location ops name Function
+    pub fn new name:std::String location:Location -> Function {
+        empty_stack_effect location name Function::with_stack_effect
     }
 
-    pub fn with_stack_effect
-        name:std::String
-        ops:std::List[Op]
-        location:Location
-        effect:StackEffect
-    -> Function {
-        std::List[std::String]::new std::Option[std::String]::None false false false false std::List[std::String]::new std::List[Variable]::new std::List[Variable]::new false false effect location ops name Function
-    }
-
-    pub fn clone_for_import self:$Function -> Function {
-        self.generic_params.clone
-        self.extern_symbol.clone
-        self.is_non_returning
-        self.is_unsafe
-        self.captures_shared
-        self.captures_by_move
-        self.owned_captures.clone
-        self.captures.clone
-        self.variables.clone
-        self.is_typechecked
-        self.is_resolved
-        self.stack_effect.clone
-        self.location.clone
-        self.ops.clone
-        self.name.clone
-        Function
-    }
-
-    # Preserve callable metadata while an owned function body is updated or compiled.
-    pub fn clone_declaration self:$Function -> Function {
-        self.generic_params.clone
-        self.extern_symbol.clone
-        self.is_non_returning
-        self.is_unsafe
-        self.captures_shared
-        self.captures_by_move
-        self.owned_captures.clone
-        self.captures.clone
-        self.variables.clone
-        self.is_typechecked
-        self.is_resolved
-        self.stack_effect.clone
-        self.location.clone
-        std::List[Op]::new
-        self.name.clone
-        Function
-    }
-
-    # Split an owned function into its declaration and body.
-    pub fn split_body self:Function -> Function std::List[Op] {
-        self match
-            Function { name: name ops: ops location: location stack_effect: stack_effect is_resolved: is_resolved is_typechecked: is_typechecked variables: variables captures: captures owned_captures: owned_captures captures_by_move: captures_by_move captures_shared: captures_shared is_unsafe: is_unsafe is_non_returning: is_non_returning extern_symbol: extern_symbol generic_params: generic_params } => {
-                generic_params extern_symbol
-                is_non_returning is_unsafe captures_shared captures_by_move
-                owned_captures captures variables is_typechecked is_resolved
-                stack_effect location std::List[Op]::new name Function
-                ops
-            }
-        end
+    pub fn with_stack_effect name:std::String location:Location effect:StackEffect -> Function {
+        std::List[std::String]::new std::Option[std::String]::None false false false false
+        std::List[std::String]::new std::List[Variable]::new std::List[Variable]::new effect location name Function
     }
 }
 
@@ -3359,6 +3362,7 @@ pub fn string_list_contains items:$std::List[std::String] value:$str -> bool {
 # ============================================================================
 
 pub struct SymbolStore {
+    pub member_accessors:       std::Map[std::String MemberAccessor]
     pub source_functions:       std::Map[std::String std::String]
     pub next_op_id:             i64
     functions:                  std::Map[std::String Function]
@@ -3488,6 +3492,10 @@ impl SymbolStore {
     }
 
     pub fn format_name_for_source self:$SymbolStore name:$str file:$str -> std::String {
+        if name "default:" str::starts_with then
+            name 8 name.length 8 - str::substring = method_name
+            file method_name.as_str self.format_name_for_source return
+        fi
         for mapping in self.source_names.iter do
             if
                 file mapping.file.as_str ==
@@ -3568,6 +3576,13 @@ impl SymbolStore {
         name self.generated_recipes.get_str
     }
 
+    pub fn get_function_mut self:mut$SymbolStore name:$str -> std::Option[mut$Function] {
+        if name self.functions.get_mut_str std::Option::Some(function) is then
+            function std::Option[mut$Function]::Some return
+        fi
+        name self.generated_recipes.get_mut_str
+    }
+
     pub fn has_function self:$SymbolStore name:$str -> bool {
         name self.functions.has_str name self.generated_recipes.has_str ||
     }
@@ -3608,45 +3623,10 @@ impl SymbolStore {
         self.functions.length self.generated_recipes.length +
     }
 
-    # Transfer a definition for mutation while keeping its declaration visible.
-    pub fn take_function_for_update self:mut$SymbolStore name:$str -> std::Option[Function] {
-        if name self.generated_recipes.remove_str std::Option::Some(recipe) is then
-            recipe.clone_declaration self.set_generated_recipe
-            recipe std::Option::Some return
-        fi
-        name self.functions.remove_str = function_opt
-        if function_opt.is_none then
-            std::Option[Function]::None return
-        fi
-        function_opt.unwrap = function
-        function.clone_declaration self.set_function
-        function std::Option::Some
-    }
-
-    pub fn take_function_for_typecheck self:mut$SymbolStore name:$str -> std::Option[Function] {
-        if name self.generated_recipes.remove_str std::Option::Some(recipe) is then
-            true = recipe.is_typechecked
-            recipe.clone_declaration self.set_generated_recipe
-            recipe std::Option::Some return
-        fi
-        name self.functions.remove_str = function_opt
-        if function_opt.is_none then
-            std::Option[Function]::None return
-        fi
-        function_opt.unwrap = function
-        true = function.is_typechecked
-        function.clone_declaration self.set_function
-        function std::Option::Some
-    }
-
     pub fn set_specialized_function self:mut$SymbolStore function:Function source_name:$str {
         source_name.to_str function.name.clone self.source_functions.set
-        true = function.is_resolved
-        true = function.is_typechecked
         function self.set_function
     }
-
-    pub fn restore_function self:mut$SymbolStore function:Function { function self.set_function }
 
     pub fn get_trait_impl self:$SymbolStore name:$str -> std::Option[$TraitImpl] {
         name self.trait_impls.get_str
@@ -3776,6 +3756,7 @@ pub fn symbol_store_new -> SymbolStore {
     std::Map[std::String Function]::new
     1
     std::Map[std::String std::String]::new
+    std::Map[std::String MemberAccessor]::new
     SymbolStore
 }
 

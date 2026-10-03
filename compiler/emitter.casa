@@ -1,6 +1,7 @@
 # x86-64 GNU assembly emitter for the Casa compiler.
 import "std" as std
 import "common" as common
+import "bindings" as bindings
 import "typechecker" as typechecker
 import "runtime" as runtime
 
@@ -2586,6 +2587,7 @@ struct ScalarCursor {
 
 struct ScalarCommit {
     source:     $common::SymbolStore
+    checked:    $typechecker::CheckedProgram
     names:      std::List[std::String]
     identities: std::Map[std::String u64]
     strings:    std::List[std::String]
@@ -2614,10 +2616,13 @@ impl ScalarCommit {
         fi
         if name self.source.get_function std::Option::Some(function) is then
             function.extern_symbol.is_some = external
-            function.is_typechecked = checked
+            name self
+                .checked
+                .find_body
+                .is_some = completed
             if external then
                 false = self.supported
-            elif checked ! then
+            elif completed ! then
                 "Unchecked function in scalar commitment" self.fail
             fi
         else
@@ -2864,7 +2869,7 @@ impl ScalarCommit {
 
     fn commit_function
         self:mut$ScalarCommit
-        ops:$std::List[common::Op]
+        ops:std::List[common::Op]
         variables:$std::List[common::Variable]
     -> CheckedScalarFunction {
         std::Map[std::String u64]::new = locals
@@ -2877,6 +2882,7 @@ impl ScalarCommit {
         if self.supported ! then
             locals.length std::List[CheckedScalarOp]::new CheckedScalarBody CheckedScalarFunction return
         fi
+        ops bindings::lower_binding_storage
         0 ScalarCursor = cursor
         locals cursor ops self.commit_body = body
         if cursor.position ops.length != then
@@ -2918,38 +2924,41 @@ impl ScalarCommit {
         for capture in function.captures.iter do
             capture.clone variables.push
         done
-        variables function.ops self.commit_function
+        function.name.as_str self
+            .checked
+            .find_body
+            .unwrap
+            .lower_operations = lowered_operations
+        variables lowered_operations self.commit_function
     }
 }
 
 fn commit_scalar
-    result:$typechecker::TypecheckResult
+    checked:$typechecker::CheckedProgram
 -> std::Result[std::Option[CheckedScalarProgram] std::String] {
-    if result.diagnostics.has_errors then
-        "Scalar commitment requires error-free checking".to_str std::Result::Error return
-    fi
     std::Option[std::String]::None true std::List[std::String]::new
-    std::Map[std::String u64]::new std::List[std::String]::new result.store ScalarCommit = commit
+    std::Map[std::String u64]::new std::List[std::String]::new checked checked.get_store ScalarCommit = commit
     # Identity zero belongs to root execution. Callees receive identities before any body is built.
     "".to_str commit.names.push
     std::List[common::Variable]::new = root_variables
     for
-        variable in result
-            .store
+        variable in checked
+            .get_store
             .variables
             .iter
     do
         variable.second.clone root_variables.push
     done
     std::List[CheckedScalarFunction]::new = functions
-    root_variables result.ops commit.commit_function functions.push
+    checked.get_root.lower_operations = lowered_operations
+    root_variables lowered_operations commit.commit_function functions.push
     1 = index: u64
     while index commit.names.length > commit.failure.is_none && commit.supported && do
         index commit
             .names
             .get
             .clone = name
-        if name.as_str result.store.get_function std::Option::Some(function) is then
+        if name.as_str checked.get_store.get_function std::Option::Some(function) is then
             function commit.commit_named_function functions.push
         fi
         1 += index
@@ -3495,9 +3504,9 @@ impl Emitter {
 # Returns None only for a complete checked program requiring the legacy target path.
 # An invalid private reference or incomplete check is always a failure.
 pub fn compile_scalar
-    result:$typechecker::TypecheckResult
+    checked:$typechecker::CheckedProgram
 -> std::Result[std::Option[std::String] std::String] {
-    result commit_scalar match
+    checked commit_scalar match
         std::Result::Error(message) => message std::Result::Error
         std::Result::Ok(candidate) => {
             if candidate std::Option::Some(program) is then

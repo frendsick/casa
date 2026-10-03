@@ -6,6 +6,7 @@ import "lexer" as lexer
 import "typechecker" as typechecker
 import "semantics" as semantics
 import "error" as error
+import "occurrences" as occurrences
 
 pub enum SymbolPart derives std::Eq std::Copy {
     Whole
@@ -22,20 +23,134 @@ pub enum DocumentSymbolKind derives std::Eq std::Copy {
     EnumVariant
 }
 
+# Facts needed while building the index. No ownership effects, substitutions, or executable bodies survive here.
+struct ProjectionOperation {
+    location:   common::Location
+    value:      occurrences::Value
+    type_hint:  std::Option[common::Type]
+    token_kind: std::Option[DocumentTokenKind]
+    hover:      std::Option[std::String]
+    verified:   bool
+}
+
+impl ProjectionOperation {
+    fn get_symbol_name self:$ProjectionOperation -> std::String {
+        self.value match
+            occurrences::Value::AssignDec(name) => name.clone
+            occurrences::Value::AssignInc(name) => name.clone
+            occurrences::Value::AssignVar(name) => name.clone
+            occurrences::Value::FnCall(name) => name.clone
+            occurrences::Value::FnPush(name) => name.clone
+            occurrences::Value::PushCapture(name) => name.clone
+            occurrences::Value::PushVar(name) => name.clone
+            _ => std::String::new
+        end
+    }
+}
+
+fn project_body
+    body:$semantics::AnalysisBody
+    verified:$std::Set[i64]
+-> std::List[ProjectionOperation] {
+    std::List[ProjectionOperation]::new = occurrences
+    body match
+        semantics::AnalysisBody::Checked(checked) => {
+            {
+                = occurrence: $occurrences::Occurrence
+                verified occurrences occurrence project_source_occurrence
+            } = visitor
+            visitor checked.visit_occurrences
+        }
+        semantics::AnalysisBody::RejectedChecked(checked) => {
+            {
+                = occurrence: $occurrences::Occurrence
+                verified occurrences occurrence project_source_occurrence
+            } = visitor
+            visitor checked.visit_occurrences
+        }
+        semantics::AnalysisBody::Rejected(operations) => verified occurrences operations project_occurrences
+        semantics::AnalysisBody::Source(source) => {
+            source.lower_operations = operations
+            verified occurrences operations project_occurrences
+        }
+    end
+    occurrences
+}
+
+fn project_occurrences
+    operations:$std::List[common::Op]
+    occurrences:mut$std::List[ProjectionOperation]
+    verified:$std::Set[i64]
+{
+    for operation in operations.iter do
+        operation.value match
+            common::OpValue::Unreachable(items) => {
+                verified occurrences items project_occurrences
+                continue
+            }
+            common::OpValue::ExprGroup(items) => verified occurrences items project_occurrences
+            common::OpValue::PushArray(items) => verified occurrences items project_occurrences
+            common::OpValue::MatchArm(arm) => verified occurrences arm.guard_ops project_occurrences
+            _ => {
+            }
+        end
+        verified occurrences operation project_occurrence
+    done
+}
+
+impl occurrences::TokenKind {
+    fn into_document_kind self:occurrences::TokenKind -> DocumentTokenKind {
+        self match
+            occurrences::TokenKind::Function => DocumentTokenKind::Function
+            occurrences::TokenKind::Variable => DocumentTokenKind::Variable
+            occurrences::TokenKind::String => DocumentTokenKind::String
+            occurrences::TokenKind::Number => DocumentTokenKind::Number
+            occurrences::TokenKind::Keyword => DocumentTokenKind::Keyword
+            occurrences::TokenKind::Operator => DocumentTokenKind::Operator
+            occurrences::TokenKind::Type => DocumentTokenKind::Type
+            occurrences::TokenKind::EnumMember => DocumentTokenKind::EnumMember
+            occurrences::TokenKind::Struct => DocumentTokenKind::Struct
+            occurrences::TokenKind::Macro => DocumentTokenKind::Macro
+        end
+    }
+}
+
+fn project_occurrence
+    operation:$common::Op
+    output:mut$std::List[ProjectionOperation]
+    verified:$std::Set[i64]
+{
+    verified output operation occurrences::from_operation project_source_occurrence
+}
+
+fn project_source_occurrence
+    occurrence:$occurrences::Occurrence
+    output:mut$std::List[ProjectionOperation]
+    verified:$std::Set[i64]
+{
+    { = kind: occurrences::TokenKind kind.into_document_kind } occurrence
+        .token_kind
+        .clone
+        .map = token_kind
+    occurrence.identity verified.has occurrence.hover.clone token_kind occurrence.type_hint.clone
+    occurrence.value.clone occurrence.location.clone ProjectionOperation output.push
+}
+
 struct IndexBuilder {
-    lexical_tokens: std::Map[std::String std::List[common::Token]]
-    declarations:   std::List[common::Location]
-    ops:            std::List[common::Op]
-    store:          common::SymbolStore
-    verified:       std::Set[i64]
-    diagnostics:    error::Diagnostics
-    sources:        lexer::SourceStore
-    source:         std::String
-    file_path:      std::String
+    lexical_tokens:    std::Map[std::String std::List[common::Token]]
+    declarations:      std::List[common::Location]
+    root_occurrences:  std::List[ProjectionOperation]
+    body_occurrences:  std::Map[std::String std::List[ProjectionOperation]]
+    empty_occurrences: std::List[ProjectionOperation]
+    store:             common::SymbolStore
+    diagnostics:       error::Diagnostics
+    sources:           lexer::SourceStore
+    source:            std::String
+    file_path:         std::String
 }
 
 struct DocumentElement {
-    pub op:                  $common::Op
+    pub op:                  $ProjectionOperation
     pub containing_function: std::Option[std::String]
     pub part:                SymbolPart
     pub location:            common::Location
@@ -151,7 +266,7 @@ impl ProjectionSymbol {
     }
 }
 
-pub fn find_qualified_part source:$str op:$common::Op cursor_offset:u64 -> SymbolPart {
+fn find_qualified_part source:$str op:$ProjectionOperation cursor_offset:u64 -> SymbolPart {
     op
         .location
         .span
@@ -175,7 +290,7 @@ pub fn find_qualified_part source:$str op:$common::Op cursor_offset:u64 -> Symbo
     fi
 }
 
-pub fn get_symbol_location source:$str op:$common::Op part:$SymbolPart -> common::Location {
+fn get_symbol_location source:$str op:$ProjectionOperation part:$SymbolPart -> common::Location {
     if part SymbolPart::Whole is then
         op.location.clone return
     fi
@@ -211,9 +326,9 @@ pub fn get_symbol_location source:$str op:$common::Op part:$SymbolPart -> common
     end
 }
 
-pub fn find_best_assignment
+fn find_best_assignment
     name:$str
-    ops:$std::List[common::Op]
+    ops:$std::List[ProjectionOperation]
     usage_offset:u64
     best:std::Option[common::Location]
 -> std::Option[common::Location] {
@@ -221,7 +336,7 @@ pub fn find_best_assignment
     while op_index ops.length > do
         op_index ops.get = op
         1 += op_index
-        if op.value common::OpValue::AssignVar(assign_name) is then
+        if op.value occurrences::Value::AssignVar(assign_name) is then
             if assign_name name != then
                 continue
             fi
@@ -340,9 +455,12 @@ pub fn infer_literal_type text:$str -> std::Option[common::Type] {
     std::Option[common::Type]::None
 }
 
-pub fn find_first_assignment name:$str ops:$std::List[common::Op] -> std::Option[common::Location] {
+fn find_first_assignment
+    name:$str
+    ops:$std::List[ProjectionOperation]
+-> std::Option[common::Location] {
     for op in ops.iter do
-        if op.value common::OpValue::AssignVar(assign_name) is then
+        if op.value occurrences::Value::AssignVar(assign_name) is then
             if assign_name name == then
                 op.location.clone std::Option::Some return
             fi
@@ -351,7 +469,7 @@ pub fn find_first_assignment name:$str ops:$std::List[common::Op] -> std::Option
     std::Option[common::Location]::None
 }
 
-pub fn is_qualified_operation source:$str op:$common::Op -> bool {
+fn is_qualified_operation source:$str op:$ProjectionOperation -> bool {
     if
         0 op
             .location
@@ -369,108 +487,8 @@ pub fn is_qualified_operation source:$str op:$common::Op -> bool {
         .length str::substring.as_str "::" str::contains
 }
 
-pub fn find_document_token_kind op_value:$common::OpValue -> std::Option[DocumentTokenKind] {
-    op_value match
-        common::OpValue::FnCall(_) => DocumentTokenKind::Function std::Option::Some
-        common::OpValue::FnPush(_) => DocumentTokenKind::Function std::Option::Some
-        common::OpValue::MethodCall(_) => DocumentTokenKind::Function std::Option::Some
-        common::OpValue::TraitMethodCall(_) => DocumentTokenKind::Function std::Option::Some
-        common::OpValue::TraitMethodRef(_) => DocumentTokenKind::Function std::Option::Some
-        common::OpValue::PushVar(_) => DocumentTokenKind::Variable std::Option::Some
-        common::OpValue::PushCapture(_) => DocumentTokenKind::Variable std::Option::Some
-        common::OpValue::AssignVar(_) => DocumentTokenKind::Variable std::Option::Some
-        common::OpValue::AssignInc(_) => DocumentTokenKind::Variable std::Option::Some
-        common::OpValue::AssignDec(_) => DocumentTokenKind::Variable std::Option::Some
-        common::OpValue::PushStr(_) => DocumentTokenKind::String std::Option::Some
-        common::OpValue::PushInt(_) => DocumentTokenKind::Number std::Option::Some
-        common::OpValue::PushFloat(_) => DocumentTokenKind::Number std::Option::Some
-        common::OpValue::PushChar(_) => DocumentTokenKind::Number std::Option::Some
-        common::OpValue::PushBool(_) => DocumentTokenKind::Keyword std::Option::Some
-        common::OpValue::FnExec => DocumentTokenKind::Keyword std::Option::Some
-        common::OpValue::FnExecOwned => DocumentTokenKind::Keyword std::Option::Some
-        common::OpValue::IfStart => DocumentTokenKind::Keyword std::Option::Some
-        common::OpValue::IfCondition => DocumentTokenKind::Keyword std::Option::Some
-        common::OpValue::IfElif => DocumentTokenKind::Keyword std::Option::Some
-        common::OpValue::IfElse => DocumentTokenKind::Keyword std::Option::Some
-        common::OpValue::IfEnd => DocumentTokenKind::Keyword std::Option::Some
-        common::OpValue::WhileStart => DocumentTokenKind::Keyword std::Option::Some
-        common::OpValue::WhileCondition => DocumentTokenKind::Keyword std::Option::Some
-        common::OpValue::WhileEnd => DocumentTokenKind::Keyword std::Option::Some
-        common::OpValue::WhileBreak => DocumentTokenKind::Keyword std::Option::Some
-        common::OpValue::WhileContinue => DocumentTokenKind::Keyword std::Option::Some
-        common::OpValue::MatchStart => DocumentTokenKind::Keyword std::Option::Some
-        common::OpValue::MatchArm(_) => DocumentTokenKind::Keyword std::Option::Some
-        common::OpValue::MatchEnd => DocumentTokenKind::Keyword std::Option::Some
-        common::OpValue::FnReturn => DocumentTokenKind::Keyword std::Option::Some
-        common::OpValue::Question(_) => DocumentTokenKind::Operator std::Option::Some
-        common::OpValue::UnsafeStart => DocumentTokenKind::Keyword std::Option::Some
-        common::OpValue::Add => DocumentTokenKind::Operator std::Option::Some
-        common::OpValue::Sub => DocumentTokenKind::Operator std::Option::Some
-        common::OpValue::Mul => DocumentTokenKind::Operator std::Option::Some
-        common::OpValue::Div => DocumentTokenKind::Operator std::Option::Some
-        common::OpValue::Mod => DocumentTokenKind::Operator std::Option::Some
-        common::OpValue::Shl => DocumentTokenKind::Operator std::Option::Some
-        common::OpValue::Shr => DocumentTokenKind::Operator std::Option::Some
-        common::OpValue::BitAnd => DocumentTokenKind::Operator std::Option::Some
-        common::OpValue::BitOr => DocumentTokenKind::Operator std::Option::Some
-        common::OpValue::BitXor => DocumentTokenKind::Operator std::Option::Some
-        common::OpValue::BitNot => DocumentTokenKind::Operator std::Option::Some
-        common::OpValue::And => DocumentTokenKind::Operator std::Option::Some
-        common::OpValue::Or => DocumentTokenKind::Operator std::Option::Some
-        common::OpValue::Not => DocumentTokenKind::Operator std::Option::Some
-        common::OpValue::Eq => DocumentTokenKind::Operator std::Option::Some
-        common::OpValue::Ne => DocumentTokenKind::Operator std::Option::Some
-        common::OpValue::Lt => DocumentTokenKind::Operator std::Option::Some
-        common::OpValue::Le => DocumentTokenKind::Operator std::Option::Some
-        common::OpValue::Gt => DocumentTokenKind::Operator std::Option::Some
-        common::OpValue::Ge => DocumentTokenKind::Operator std::Option::Some
-        common::OpValue::PushEnumVariant(_) => DocumentTokenKind::EnumMember std::Option::Some
-        common::OpValue::StructNew(_) => DocumentTokenKind::Struct std::Option::Some
-        common::OpValue::Drop => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::Dup => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::Copy => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::Swap => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::Over => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::Rot => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::Print => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::PrintInt => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::PrintStr => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::PrintString => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::PrintBool => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::PrintChar => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::HeapAlloc => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::HeapFree => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::Load8 => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::Load16 => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::Load32 => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::Load64 => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::PtrAsRef(_) => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::PtrAsMut(_) => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::PtrFromRaw(_) => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::PtrFromRef => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::PtrIntoRaw => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::PtrNull => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::PtrRead(_) => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::Store8 => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::Store16 => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::Store32 => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::Store64 => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::PtrWrite(_) => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::Syscall0 => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::Syscall1 => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::Syscall2 => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::Syscall3 => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::Syscall4 => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::Syscall5 => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::Syscall6 => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::Typeof => DocumentTokenKind::Macro std::Option::Some
-        common::OpValue::SizeOf(_) => DocumentTokenKind::Macro std::Option::Some
-        _ => std::Option[DocumentTokenKind]::None
-    end
-}
-
-pub fn classify_qualified_member op_value:$common::OpValue -> DocumentTokenKind {
-    if op_value common::OpValue::PushEnumVariant is then
+fn classify_qualified_member op_value:$occurrences::Value -> DocumentTokenKind {
+    if op_value occurrences::Value::PushEnumVariant is then
         DocumentTokenKind::EnumMember
     else
         DocumentTokenKind::Function
@@ -555,25 +573,6 @@ impl common::Function {
     }
 }
 
-impl common::CasaStruct {
-    pub fn format_hover self:$common::CasaStruct -> std::String {
-        std::String::new = builder
-        if self.is_extern then
-            "extern " builder.append
-        fi
-        "struct " builder.append
-        self.name.as_str builder.append
-        " { " builder.append
-        std::List[std::String]::new = members
-        for member in self.members.iter do
-            f"{member.name}: {member.typ.format}" members.push
-        done
-        ", " members.join_strings.as_str builder.append
-        " }" builder.append
-        builder
-    }
-}
-
 impl common::CasaEnum {
     pub fn format_hover self:$common::CasaEnum -> std::String {
         std::String::new = builder
@@ -586,78 +585,6 @@ impl common::CasaEnum {
             .as_str builder.append
         " }" builder.append
         builder
-    }
-}
-
-impl common::OpValue {
-    pub fn format_hover self:$common::OpValue -> std::Option[std::String] {
-        self match
-            common::OpValue::Add => "+: T T -> T (same-width integers)".to_str std::Option::Some
-            common::OpValue::Sub => "-: T T -> T (same-width integers)".to_str std::Option::Some
-            common::OpValue::Mul => "*: T T -> T (same-width integers)".to_str std::Option::Some
-            common::OpValue::Div => "/: T T -> T (same-width integers)".to_str std::Option::Some
-            common::OpValue::Mod => "%: T T -> T (same-width integers)".to_str std::Option::Some
-            common::OpValue::Shl => "<<: T u64 -> T (integer T)".to_str std::Option::Some
-            common::OpValue::Shr => ">>: T u64 -> T (integer T)".to_str std::Option::Some
-            common::OpValue::BitAnd => "&: T T -> T (same-width integers)".to_str std::Option::Some
-            common::OpValue::BitOr => "|: T T -> T (same-width integers)".to_str std::Option::Some
-            common::OpValue::BitXor => "^: T T -> T (same-width integers)".to_str std::Option::Some
-            common::OpValue::BitNot => "~: T -> T (integer T)".to_str std::Option::Some
-            common::OpValue::Not => "!: bool -> bool".to_str std::Option::Some
-            common::OpValue::Eq => "==: [T: PartialEq] T T -> bool".to_str std::Option::Some
-            common::OpValue::Ne => "!=: [T: PartialEq] T T -> bool".to_str std::Option::Some
-            common::OpValue::Lt => "<: [T: PartialOrd] T T -> bool".to_str std::Option::Some
-            common::OpValue::Le => "<=: [T: PartialOrd] T T -> bool".to_str std::Option::Some
-            common::OpValue::Gt => ">: [T: PartialOrd] T T -> bool".to_str std::Option::Some
-            common::OpValue::Ge => ">=: [T: PartialOrd] T T -> bool".to_str std::Option::Some
-            common::OpValue::And => "&&: bool bool -> bool".to_str std::Option::Some
-            common::OpValue::Or => "||: bool bool -> bool".to_str std::Option::Some
-            common::OpValue::Drop => "drop: T -> None".to_str std::Option::Some
-            common::OpValue::Dup => "dup: [T: Copy] T -> T T".to_str std::Option::Some
-            common::OpValue::Copy => "copy: [T: Copy] T -> T".to_str std::Option::Some
-            common::OpValue::Swap => "swap: T1 T2 -> T2 T1".to_str std::Option::Some
-            common::OpValue::Over => "over: [T2: Copy] T1 T2 -> T2 T1 T2".to_str std::Option::Some
-            common::OpValue::Rot => "rot: T1 T2 T3 -> T3 T1 T2".to_str std::Option::Some
-            common::OpValue::Print => "print: [T: Display] T -> None".to_str std::Option::Some
-            common::OpValue::PrintInt => "print: [T: Display] T -> None".to_str std::Option::Some
-            common::OpValue::PrintStr => "print: [T: Display] T -> None".to_str std::Option::Some
-            common::OpValue::PrintBool => "print: [T: Display] T -> None".to_str std::Option::Some
-            common::OpValue::PrintChar => "print: [T: Display] T -> None".to_str std::Option::Some
-            common::OpValue::FnExec => "exec: fn[...] -> ...".to_str std::Option::Some
-            common::OpValue::FnExecOwned => "exec: fn[...] -> ...".to_str std::Option::Some
-            common::OpValue::Typeof => "typeof: T -> str".to_str std::Option::Some
-            common::OpValue::SizeOf(_) => "size_of[T]: None -> u64".to_str std::Option::Some
-            common::OpValue::AssignDec(_) => "-=: T -> None (integer T)".to_str std::Option::Some
-            common::OpValue::AssignInc(_) => "+=: T -> None (integer T)".to_str std::Option::Some
-            common::OpValue::HeapAlloc => "alloc: u64 -> ptr".to_str std::Option::Some
-            common::OpValue::HeapFree => "free: ptr -> None".to_str std::Option::Some
-            common::OpValue::Load8 => "load8: ptr -> u8".to_str std::Option::Some
-            common::OpValue::Load16 => "load16: ptr -> u16".to_str std::Option::Some
-            common::OpValue::Load32 => "load32: ptr -> u32".to_str std::Option::Some
-            common::OpValue::Load64 => "load64: ptr -> u64".to_str std::Option::Some
-            common::OpValue::PtrAsRef(target) => f"ptr::as_ref[{target.format}]: ptr -> ${target.format}" std::Option::Some
-            common::OpValue::PtrAsMut(target) => f"ptr::as_mut[{target.format}]: ptr -> mut${target.format}" std::Option::Some
-            common::OpValue::PtrFromRaw(target) => f"ptr::from_raw[{target.format}]: ptr -> {target.format}" std::Option::Some
-            common::OpValue::PtrFromRef => "ptr::from_ref: $T -> ptr".to_str std::Option::Some
-            common::OpValue::PtrIntoRaw => "ptr::into_raw: T -> ptr".to_str std::Option::Some
-            common::OpValue::PtrNull => "ptr::null: None -> ptr".to_str std::Option::Some
-            common::OpValue::PtrRead(target) => f"ptr::read[{target.format}]: ptr -> {target.format}" std::Option::Some
-            common::OpValue::Store8 => "store8: u8 ptr -> None".to_str std::Option::Some
-            common::OpValue::Store16 => "store16: u16 ptr -> None".to_str std::Option::Some
-            common::OpValue::Store32 => "store32: u32 ptr -> None".to_str std::Option::Some
-            common::OpValue::Store64 => "store64: u64 ptr -> None".to_str std::Option::Some
-            common::OpValue::PtrWrite(target) => f"ptr::write[{target.format}]: ptr {target.format} -> None" std::Option::Some
-            common::OpValue::Syscall0 => "syscall0: i64 -> i64".to_str std::Option::Some
-            common::OpValue::Syscall1 => "syscall1[A1: Word]: A1 i64 -> i64".to_str std::Option::Some
-            common::OpValue::Syscall2 => "syscall2[A1: Word A2: Word]: A1 A2 i64 -> i64".to_str std::Option::Some
-            common::OpValue::Syscall3 => "syscall3[A1: Word A2: Word A3: Word]: A1 A2 A3 i64 -> i64".to_str std::Option::Some
-            common::OpValue::Syscall4 => "syscall4[A1: Word A2: Word A3: Word A4: Word]: A1 A2 A3 A4 i64 -> i64".to_str std::Option::Some
-            common::OpValue::Syscall5 => "syscall5[A1: Word A2: Word A3: Word A4: Word A5: Word]: A1 A2 A3 A4 A5 i64 -> i64".to_str std::Option::Some
-            common::OpValue::Syscall6 => "syscall6[A1: Word A2: Word A3: Word A4: Word A5: Word A6: Word]: A1 A2 A3 A4 A5 A6 i64 -> i64".to_str std::Option::Some
-            common::OpValue::Argc => "argc: None -> i64".to_str std::Option::Some
-            common::OpValue::Argv => "argv: None -> ptr".to_str std::Option::Some
-            _ => std::Option[std::String]::None
-        end
     }
 }
 
@@ -681,26 +608,26 @@ impl IndexBuilder {
         file_path:std::String
     -> IndexBuilder {
         analysis.into_parts = typechecked = sources = diagnostics
-        std::List[common::Op]::new = ops
+        std::List[ProjectionOperation]::new = root_occurrences
+        std::Map[std::String std::List[ProjectionOperation]]::new = body_occurrences
         common::symbol_store_new = store
-        std::Set[i64]::new = verified
-        typechecked match
-            std::Option::Some(result) => {
-                result match
-                    typechecker::TypecheckResult {
-                        store: checked_store ops: checked_ops verified_operations: checked
-                    } => {
-                        checked_store = store
-                        checked_ops = ops
-                        checked = verified
-                    }
-                end
-            }
-            std::Option::None => {
-            }
-        end
-        file_path source sources diagnostics verified store ops std::List[common::Location]::new
-        std::Map[std::String std::List[common::Token]]::new IndexBuilder
+        if typechecked std::Option::Some(result) is then
+            result.into_analysis_parts = verified = bodies = root = checked_store
+            verified root project_body = root_occurrences
+            for entry in bodies.iter do
+                verified entry.second project_body entry.first.clone body_occurrences.set
+            done
+            checked_store = store
+        fi
+        file_path source sources diagnostics store std::List[ProjectionOperation]::new body_occurrences root_occurrences
+        std::List[common::Location]::new std::Map[std::String std::List[common::Token]]::new IndexBuilder
+    }
+
+    fn get_function_occurrences self:$IndexBuilder name:$str -> $std::List[ProjectionOperation] {
+        if name self.body_occurrences.get_str std::Option::Some(occurrences) is then
+            occurrences return
+        fi
+        self.empty_occurrences
     }
 
     pub fn collect_document_functions self:$IndexBuilder -> std::List[std::String] {
@@ -736,11 +663,11 @@ impl IndexBuilder {
 
     pub fn collect_operation_tokens
         self:$IndexBuilder
-        ops:$std::List[common::Op]
+        ops:$std::List[ProjectionOperation]
         tokens:mut$std::List[DocumentToken]
     {
         for op in ops.iter do
-            if op.id self.verified.has ! then
+            if op.verified ! then
                 continue
             fi
             if
@@ -751,11 +678,11 @@ impl IndexBuilder {
             then
                 continue
             fi
-            if op.value find_document_token_kind std::Option::Some(kind) is then
+            if op.token_kind.clone std::Option::Some(kind) is then
                 if
-                    op.value common::OpValue::FnCall is
-                    op.value common::OpValue::FnPush is ||
-                    op.value common::OpValue::PushEnumVariant is ||
+                    op.value occurrences::Value::FnCall is
+                    op.value occurrences::Value::FnPush is ||
+                    op.value occurrences::Value::PushEnumVariant is ||
                     op self.source.as_str is_qualified_operation &&
                 then
                     SymbolPart::TypeName op self.source.as_str get_symbol_location self.locate
@@ -790,10 +717,10 @@ impl IndexBuilder {
 
     pub fn find_semantic_tokens self:$IndexBuilder -> std::List[DocumentToken] {
         std::List[DocumentToken]::new = tokens
-        tokens self.ops self.collect_operation_tokens
+        tokens self.root_occurrences self.collect_operation_tokens
         for function_name in self.collect_document_functions.iter do
             function_name.as_str self.lookup_function.unwrap = function
-            tokens function.ops self.collect_operation_tokens
+            tokens function.name.as_str self.get_function_occurrences self.collect_operation_tokens
             if function self.has_source_declaration then
                 tokens DocumentTokenKind::Function "fn" function.location self.collect_declaration_token
                 if function.is_unsafe then
@@ -1189,12 +1116,12 @@ impl IndexBuilder {
                 .get_function
                 .unwrap = function
             0 = op_index: u64
-            while op_index function.ops.length > do
+            while op_index function.name.as_str self.get_function_occurrences.length > do
                 if
-                    op_index function
-                        .ops
+                    op_index function.name.as_str self
+                        .get_function_occurrences
                         .get_ref
-                        .value common::OpValue::FnPush(pushed_name) is
+                        .value occurrences::Value::FnPush(pushed_name) is
                 then
                     if pushed_name child.name == then
                         function.name.clone std::Option::Some return
@@ -1230,7 +1157,7 @@ impl IndexBuilder {
 
     pub fn find_enum_variant_symbol
         self:$IndexBuilder
-        variant:$common::EnumVariant
+        variant:$occurrences::Variant
         part:$SymbolPart
     -> std::Option[ProjectionSymbol] {
         if part SymbolPart::TypeName is then
@@ -1316,11 +1243,11 @@ impl IndexBuilder {
     fn find_scoped_assignment
         self:$IndexBuilder
         name:$str
-        ops:$std::List[common::Op]
+        ops:$std::List[ProjectionOperation]
         usage_offset:u64
     -> std::Option[common::Location] {
         for op in ops.iter do
-            if op.value common::OpValue::AssignVar(assigned) is then
+            if op.value occurrences::Value::AssignVar(assigned) is then
                 if
                     assigned name != op
                         .location
@@ -1350,7 +1277,7 @@ impl IndexBuilder {
         function name self.find_variable_owner = owner
         if owner.clone std::Option::Some(owner_name) is then
             owner_name.as_str self.lookup_function.unwrap = owner_function
-            usage_offset owner_function.ops name self.find_scoped_assignment = found
+            usage_offset owner_function.name.as_str self.get_function_occurrences name self.find_scoped_assignment = found
             if found std::Option::Some(location) is then
                 if location owner_function.location.matches then
                     name owner_function self.find_parameter_location
@@ -1361,7 +1288,7 @@ impl IndexBuilder {
                 std::Option[common::Location]::None
             fi
         else
-            usage_offset self.ops name self.find_scoped_assignment
+            usage_offset self.root_occurrences name self.find_scoped_assignment
         fi = declaration_opt
         if declaration_opt std::Option::Some(declaration) is then
             std::Option[common::Location]::None = owner_location
@@ -1382,33 +1309,33 @@ impl IndexBuilder {
         element:$DocumentElement
     -> std::Option[ProjectionSymbol] {
         element.op.value match
-            common::OpValue::FnCall(name) => element.part name.as_str self.find_callable_symbol
-            common::OpValue::FnPush(name) => element.part name.as_str self.find_callable_symbol
-            common::OpValue::PushEnumVariant(variant) => element.part variant self.find_enum_variant_symbol
-            common::OpValue::StructNew(casa_struct) => {
+            occurrences::Value::FnCall(name) => element.part name.as_str self.find_callable_symbol
+            occurrences::Value::FnPush(name) => element.part name.as_str self.find_callable_symbol
+            occurrences::Value::PushEnumVariant(variant) => element.part variant self.find_enum_variant_symbol
+            occurrences::Value::StructNew(casa_struct) => {
                 std::Option[common::Location]::None
                 casa_struct.location
                 casa_struct.name.as_str
                 DocumentSymbolKind::Struct
                 ProjectionSymbol::new std::Option::Some
             }
-            common::OpValue::PushVar(name) => element
+            occurrences::Value::PushVar(name) => element
                 .location
                 .span
                 .offset element.containing_function name.as_str self.find_variable_symbol
-            common::OpValue::PushCapture(name) => element
+            occurrences::Value::PushCapture(name) => element
                 .location
                 .span
                 .offset element.containing_function name.as_str self.find_variable_symbol
-            common::OpValue::AssignVar(name) => element
+            occurrences::Value::AssignVar(name) => element
                 .location
                 .span
                 .offset element.containing_function name.as_str self.find_variable_symbol
-            common::OpValue::AssignInc(name) => element
+            occurrences::Value::AssignInc(name) => element
                 .location
                 .span
                 .offset element.containing_function name.as_str self.find_variable_symbol
-            common::OpValue::AssignDec(name) => element
+            occurrences::Value::AssignDec(name) => element
                 .location
                 .span
                 .offset element.containing_function name.as_str self.find_variable_symbol
@@ -1437,16 +1364,16 @@ impl IndexBuilder {
     pub fn find_containing_function self:$IndexBuilder offset:u64 -> std::Option[std::String] {
         for function_name in self.collect_document_functions.iter do
             function_name.as_str self.lookup_function.unwrap = function
-            if 0 function.ops.length == then
+            if 0 function.name.as_str self.get_function_occurrences.length == then
                 continue
             fi
-            0 function
-                .ops
+            0 function.name.as_str self
+                .get_function_occurrences
                 .get
                 .location
                 .span
                 .offset = start_offset
-            function.ops.length 1 - function.ops.get = last_op
+            function.name.as_str self.get_function_occurrences.length 1 - function.name.as_str self.get_function_occurrences.get = last_op
             last_op
                 .location
                 .span
@@ -1482,7 +1409,7 @@ impl IndexBuilder {
     fn find_assignment_type
         self:$IndexBuilder
         name:$str
-        ops:$std::List[common::Op]
+        ops:$std::List[ProjectionOperation]
         offset:u64
     -> std::Option[common::Type] {
         offset ops name self.find_scoped_assignment = declaration
@@ -1491,10 +1418,10 @@ impl IndexBuilder {
         fi
         declaration.unwrap = location
         for op in ops.iter do
-            if op.id self.verified.has ! then
+            if op.verified ! then
                 continue
             fi
-            if op.value common::OpValue::AssignVar(assigned) is then
+            if op.value occurrences::Value::AssignVar(assigned) is then
                 if assigned name == op.location location.matches && then
                     op.type_hint.clone return
                 fi
@@ -1511,12 +1438,9 @@ impl IndexBuilder {
     -> std::Option[common::Type] {
         function name self.find_variable_owner = owner
         if owner std::Option::Some(owner_name) is then
-            offset owner_name.as_str self
-                .lookup_function
-                .unwrap
-                .ops name self.find_assignment_type
+            offset owner_name.as_str self.get_function_occurrences name self.find_assignment_type
         else
-            offset self.ops name self.find_assignment_type
+            offset self.root_occurrences name self.find_assignment_type
         fi
     }
 
@@ -1524,34 +1448,10 @@ impl IndexBuilder {
         self:$IndexBuilder
         symbol:$DocumentElement
     -> std::Option[common::Type] {
-        if
-            symbol.op.value common::OpValue::PushVar is symbol.op.value common::OpValue::PushCapture is || symbol.op.value common::OpValue::AssignVar is ||
-        then
-            symbol
-                .op
-                .type_hint
-                .clone return
-        fi
-        symbol.op.value match
-            common::OpValue::PushInt(_) => {
-                if symbol.op.type_hint std::Option::Some(literal_type) is then
-                    literal_type.clone std::Option::Some
-                else
-                    common::make_i64_type.clone std::Option::Some
-                fi
-            }
-            common::OpValue::PushFloat(_) => {
-                if symbol.op.type_hint std::Option::Some(literal_type) is then
-                    literal_type.clone std::Option::Some
-                else
-                    common::make_f64_type.clone std::Option::Some
-                fi
-            }
-            common::OpValue::PushStr(_) => common::make_str_type.clone std::Option::Some
-            common::OpValue::PushBool(_) => common::make_bool_type.clone std::Option::Some
-            common::OpValue::PushChar(_) => common::make_char_type.clone std::Option::Some
-            _ => std::Option[common::Type]::None
-        end
+        symbol
+            .op
+            .type_hint
+            .clone
     }
 
     fn format_function_hover
@@ -1591,23 +1491,26 @@ impl IndexBuilder {
 
         if symbol.part SymbolPart::TypeName is then
             if
-                symbol.op.value common::OpValue::FnCall is
-                symbol.op.value common::OpValue::FnPush is ||
+                symbol.op.value occurrences::Value::FnCall is
+                symbol.op.value occurrences::Value::FnPush is ||
             then
-                symbol.op common::op_str_value.as_str "::" str::split = parts
+                symbol
+                    .op
+                    .get_symbol_name
+                    .as_str "::" str::split = parts
                 0 parts.get.as_str self.format_type_hover return
             fi
-            if symbol.op.value common::OpValue::PushEnumVariant(variant) is then
+            if symbol.op.value occurrences::Value::PushEnumVariant(variant) is then
                 variant.enum_name.as_str self.format_type_hover return
             fi
             std::Option[std::String]::None return
         fi
 
         if
-            symbol.op.value common::OpValue::FnCall is
-            symbol.op.value common::OpValue::FnPush is ||
+            symbol.op.value occurrences::Value::FnCall is
+            symbol.op.value occurrences::Value::FnPush is ||
         then
-            symbol.op common::op_str_value = name
+            symbol.op.get_symbol_name = name
             if name.as_str self.lookup_function std::Option::Some(function) is then
                 symbol
                     .location
@@ -1620,10 +1523,10 @@ impl IndexBuilder {
         fi
 
         if
-            symbol.op.value common::OpValue::PushVar is
-            symbol.op.value common::OpValue::PushCapture is ||
+            symbol.op.value occurrences::Value::PushVar is
+            symbol.op.value occurrences::Value::PushCapture is ||
         then
-            symbol.op common::op_str_value = name
+            symbol.op.get_symbol_name = name
             if symbol self.find_symbol_type std::Option::Some(variable_type) is then
                 f"{name}: {variable_type.format}" std::Option::Some
             else
@@ -1633,30 +1536,11 @@ impl IndexBuilder {
         fi
 
         symbol.op.value match
-            common::OpValue::StructNew(casa_struct) => casa_struct.format_hover std::Option::Some
-            common::OpValue::PushEnumVariant(variant) => {
+            occurrences::Value::StructNew(casa_struct) => casa_struct.hover.clone std::Option::Some
+            occurrences::Value::PushEnumVariant(variant) => {
                 f"{variant.enum_name}::{variant.variant_name}" std::Option::Some
             }
-            common::OpValue::PushInt(value) => {
-                if symbol.op.type_hint std::Option::Some(literal_type) is then
-                    f"{value.raw}: {literal_type.format}" std::Option::Some
-                else
-                    f"{value.raw}: i64" std::Option::Some
-                fi
-            }
-            common::OpValue::PushFloat(value) => {
-                if symbol.op.type_hint std::Option::Some(literal_type) is then
-                    f"{value}: {literal_type.format}" std::Option::Some
-                else
-                    f"{value}: f64" std::Option::Some
-                fi
-            }
-            common::OpValue::PushStr(value) => f"\"{value}\": str" std::Option::Some
-            common::OpValue::PushBool(value) => {
-                if value 0 != then "true: bool".to_str else "false: bool".to_str fi std::Option::Some
-            }
-            common::OpValue::PushChar(value) => f"'{value.to_str}': char" std::Option::Some
-            common::OpValue::AssignVar(name) => {
+            occurrences::Value::AssignVar(name) => {
                 if symbol self.find_symbol_type std::Option::Some(variable_type) is then
                     f"= {name}: {variable_type.format}" std::Option::Some
                 else
@@ -1665,8 +1549,8 @@ impl IndexBuilder {
             }
             _ => symbol
                 .op
-                .value
-                .format_hover
+                .hover
+                .clone
         end
     }
 
@@ -1745,7 +1629,7 @@ impl IndexBuilder {
         function name self.find_variable_owner = owner
         if owner std::Option::Some(function_name) is then
             function_name.as_str self.lookup_function.unwrap = containing_function
-            best usage_offset containing_function.ops name find_best_assignment = best
+            best usage_offset containing_function.name.as_str self.get_function_occurrences name find_best_assignment = best
             if best.clone std::Option::Some(location) is then
                 if location containing_function.location.matches then
                     name containing_function self.find_parameter_location return
@@ -1753,7 +1637,7 @@ impl IndexBuilder {
             fi
         fi
         if best.is_none then
-            best usage_offset self.ops name find_best_assignment = best
+            best usage_offset self.root_occurrences name find_best_assignment = best
         fi
         if best std::Option::Some(definition_op) is then
             definition_op.clone std::Option::Some
@@ -1777,10 +1661,18 @@ impl IndexBuilder {
         symbol:$DocumentElement
     -> std::Option[common::Location] {
         if symbol.part SymbolPart::TypeName is then
-            symbol.op common::op_str_value.as_str "::" str::split = parts
+            symbol
+                .op
+                .get_symbol_name
+                .as_str "::" str::split = parts
             0 parts.get.as_str self.find_type_definition return
         fi
-        if symbol.op common::op_str_value.as_str self.lookup_function std::Option::Some(function) is then
+        if
+            symbol
+                .op
+                .get_symbol_name
+                .as_str self.lookup_function std::Option::Some(function) is
+        then
             if "" function.location.file != then
                 function.location.clone std::Option::Some return
             fi
@@ -1791,7 +1683,7 @@ impl IndexBuilder {
     pub fn find_enum_definition
         self:$IndexBuilder
         symbol:$DocumentElement
-        variant:$common::EnumVariant
+        variant:$occurrences::Variant
     -> std::Option[common::Location] {
         variant.enum_name.as_str self.lookup_enum = enum_result
         if enum_result std::Option::Some(casa_enum) is then
@@ -1814,9 +1706,9 @@ impl IndexBuilder {
             std::Option[common::Location]::None return
         fi
         symbol.op.value match
-            common::OpValue::FnCall(_) => symbol self.find_callable_definition
-            common::OpValue::FnPush(_) => symbol self.find_callable_definition
-            common::OpValue::PushVar(name) => {
+            occurrences::Value::FnCall(_) => symbol self.find_callable_definition
+            occurrences::Value::FnPush(_) => symbol self.find_callable_definition
+            occurrences::Value::PushVar(name) => {
                 symbol
                     .op
                     .location
@@ -1826,7 +1718,7 @@ impl IndexBuilder {
                 name.as_str
                 self.find_variable_definition
             }
-            common::OpValue::PushCapture(name) => {
+            occurrences::Value::PushCapture(name) => {
                 symbol
                     .op
                     .location
@@ -1836,8 +1728,8 @@ impl IndexBuilder {
                 name.as_str
                 self.find_variable_definition
             }
-            common::OpValue::StructNew(casa_struct) => casa_struct.location.clone std::Option::Some
-            common::OpValue::PushEnumVariant(variant) => variant symbol self.find_enum_definition
+            occurrences::Value::StructNew(casa_struct) => casa_struct.location.clone std::Option::Some
+            occurrences::Value::PushEnumVariant(variant) => variant symbol self.find_enum_definition
             _ => std::Option[common::Location]::None
         end
     }
@@ -1981,7 +1873,7 @@ impl ProjectionSymbol {
 impl IndexBuilder {
     fn project_operation
         self:$IndexBuilder
-        op:$common::Op
+        op:$ProjectionOperation
         function:std::Option[std::String]
         part:SymbolPart
         index:mut$EditorIndex
@@ -2028,7 +1920,7 @@ impl IndexBuilder {
 
     fn project_operations
         self:$IndexBuilder
-        ops:$std::List[common::Op]
+        ops:$std::List[ProjectionOperation]
         function:std::Option[std::String]
         index:mut$EditorIndex
     {
@@ -2044,7 +1936,7 @@ impl IndexBuilder {
                     continue
                 fi
             fi
-            if op.id self.verified.has ! then
+            if op.verified ! then
                 QueryReason::MissingSemanticFact op.location self.locate CoverageRegion index.unavailable.push
                 continue
             fi
@@ -2094,7 +1986,7 @@ impl IndexBuilder {
             .location
             .span
             .length + = end_offset
-        for op in function.ops.iter do
+        for op in function.name.as_str self.get_function_occurrences.iter do
             op
                 .location
                 .span
@@ -2117,8 +2009,8 @@ impl IndexBuilder {
             .file
             .clone
         DocumentLocation index.bodies.push
-        for op in function.ops.iter do
-            if op.value common::OpValue::AssignVar(name) is then
+        for op in function.name.as_str self.get_function_occurrences.iter do
+            if op.value occurrences::Value::AssignVar(name) is then
                 index end_offset function op name.as_str self.project_binding_scope
             fi
         done
@@ -2142,18 +2034,18 @@ impl IndexBuilder {
     fn project_binding_scope
         self:$IndexBuilder
         name:$str
-        op:$common::Op
+        op:$ProjectionOperation
         function:$common::Function
         end_offset:u64
         index:mut$EditorIndex
     {
-        if op.id self.verified.has ! then
+        if op.verified ! then
             return
         fi
         op
             .location
             .span
-            .offset function.ops name self.find_scoped_assignment = first
+            .offset function.name.as_str self.get_function_occurrences name self.find_scoped_assignment = first
         if first.is_none then
             return
         fi
@@ -2171,7 +2063,7 @@ impl IndexBuilder {
         end_offset op
             .location
             .span
-            .offset function.ops self.find_binding_end = scope_end
+            .offset function.name.as_str self.get_function_occurrences self.find_binding_end = scope_end
         common::Type::Unknown op
             .type_hint
             .clone
@@ -2189,7 +2081,7 @@ impl IndexBuilder {
                 .variables
                 .iter
         do
-            self.ops variable.first.as_str self.find_verified_assignment = declared
+            self.root_occurrences variable.first.as_str self.find_verified_assignment = declared
             if declared.is_none then
                 continue
             fi
@@ -2208,7 +2100,7 @@ impl IndexBuilder {
 
     fn find_binding_end
         self:$IndexBuilder
-        ops:$std::List[common::Op]
+        ops:$std::List[ProjectionOperation]
         offset:u64
         end_offset:u64
     -> u64 {
@@ -2224,13 +2116,13 @@ impl IndexBuilder {
                 depth std::Option::Some = binding_depth
             fi
             if
-                op.value common::OpValue::IfStart is op.value common::OpValue::WhileStart is || op.value common::OpValue::MatchStart is ||
+                op.value occurrences::Value::IfStart is op.value occurrences::Value::WhileStart is || op.value occurrences::Value::MatchStart is ||
             then
                 1 += depth
                 continue
             fi
-            op.value common::OpValue::IfEnd is op.value common::OpValue::WhileEnd is || op.value common::OpValue::MatchEnd is || = closes
-            op.value common::OpValue::IfElse is op.value common::OpValue::IfElif is || op.value common::OpValue::MatchArm is || = changes_branch
+            op.value occurrences::Value::IfEnd is op.value occurrences::Value::WhileEnd is || op.value occurrences::Value::MatchEnd is || = closes
+            op.value occurrences::Value::IfElse is op.value occurrences::Value::IfElif is || op.value occurrences::Value::MatchArm is || = changes_branch
             if closes changes_branch || then
                 0 binding_depth.clone.unwrap_or = level
                 if 0 level != level depth == && then
@@ -2316,7 +2208,7 @@ impl IndexBuilder {
     }
 
     fn project_facts self:$IndexBuilder index:mut$EditorIndex {
-        index std::Option[std::String]::None self.ops self.project_operations
+        index std::Option[std::String]::None self.root_occurrences self.project_operations
         for
             name in self
                 .store
@@ -2335,7 +2227,7 @@ impl IndexBuilder {
                 .store
                 .get_function
                 .unwrap = function
-            index function.name.clone std::Option::Some function.ops self.project_operations
+            index function.name.clone std::Option::Some function.name.as_str self.get_function_occurrences self.project_operations
             if function self.has_source_declaration then
                 index std::Option[common::Location]::None function.location function.name.as_str
                 DocumentSymbolKind::Function ProjectionSymbol::new self.project_declaration
@@ -2833,13 +2725,13 @@ impl IndexBuilder {
     fn find_verified_assignment
         self:$IndexBuilder
         name:$str
-        ops:$std::List[common::Op]
+        ops:$std::List[ProjectionOperation]
     -> std::Option[common::Location] {
         for op in ops.iter do
-            if op.id self.verified.has ! then
+            if op.verified ! then
                 continue
             fi
-            if op.value common::OpValue::AssignVar(assigned) is then
+            if op.value occurrences::Value::AssignVar(assigned) is then
                 if assigned name == then
                     op.location.clone std::Option::Some return
                 fi
