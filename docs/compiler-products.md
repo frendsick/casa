@@ -82,6 +82,14 @@ storage actions, frame size, ownership flags, cleanup, and concrete call targets
 before instruction selection. Native calls share one request-owned ABI plan per
 concrete extern function. Recursive calls refer to reserved identities.
 
+Source checking validates extern declaration forms, `Copy` requirements, and
+unsafe calls without ABI classification. The checked program retains concrete
+extern signatures and declaration locations. Before lowering functions, the
+Linux x86-64 planner classifies these signatures and fixes native argument and
+result placement. Unsupported layouts return `Rejected` with diagnostics and
+retained source context. Internal failures remain `CompilerFailure`, and neither
+outcome publishes partial assembly. Analysis requires no native target.
+
 Selection validates local labels, storage slots, captures, calls, and literal
 references. It produces one completed native instruction buffer, renders it, and
 releases it before planning the next function. Bounded leaf templates, literal
