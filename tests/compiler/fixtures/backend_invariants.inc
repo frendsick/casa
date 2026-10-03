@@ -20,7 +20,7 @@ fn test_invalid_machine_references {
     "native".to_str InstValue::ExternCall assert_invalid_reference
 
     Emitter::new = selector
-    "missing" selector.functions.add_str
+    "missing" selector.register_function
     std::List[InstValue]::new = actions
     "missing".to_str InstValue::FnCall actions.push
     "forward call accepted" 0 actions FunctionPlan::new selector.select_root.is_ok test::assert_true
@@ -44,6 +44,19 @@ pub fn test_sanitize_name {
     "multiple" "A__B__C" "A::B::C" sanitize_name.as_str test::assert_str_eq
     "no colons" "hello_world" "hello_world" sanitize_name.as_str test::assert_str_eq
     "single colon preserved" "a:b" "a:b" sanitize_name.as_str test::assert_str_eq
+    Emitter::new = selector
+    "space" selector.register_function
+    "space " selector.register_function
+    "generic :_" selector.register_function
+    "generic _58__" selector.register_function
+    "space" selector.function_label = source
+    "space " selector.function_label = generated
+    "generated namespace is distinct" source generated != test::assert_true
+    "generic :_" selector.function_label.to_str = escaped
+    "generic _58__" selector.function_label = literal
+    "generated identities stay distinct" escaped literal != test::assert_true
+    "generic :_" selector.register_function
+    "registration is idempotent" escaped.as_str "generic :_" selector.function_label test::assert_str_eq
 }
 
 pub fn test_escape_string {
@@ -59,7 +72,6 @@ pub fn test_escape_string {
     "NUL before octal digit" "\\0001" nul_then_digit.as_str
     escape_string.as_str test::assert_str_eq
 }
-
 test_sanitize_name
 test_escape_string
 test_invalid_machine_references
