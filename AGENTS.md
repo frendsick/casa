@@ -57,12 +57,13 @@ from the release in `casa-release.env`.
 
 Always load the relevant doc when the matching workflow comes up:
 
-- **Testing and examples**: `docs/agents/testing.md`
+- **Testing**: `docs/agents/testing.md`
 - **Releases**: `docs/agents/testing.md#ci-bootstrap-compiler`
-- **Review** — `docs/agents/review.md`
-- **Issue tracker** — `docs/agents/issue-tracker.md`
-- **Triage labels** — `docs/agents/triage-labels.md`
-- **Domain docs** — `docs/agents/domain.md`
+- **Review**: `docs/agents/review.md`
+- **Examples**: `docs/agents/testing.md#when-examples-change`
+- **Issue tracker**: `docs/agents/issue-tracker.md`
+- **Triage labels**: `docs/agents/triage-labels.md`
+- **Domain docs**: `docs/agents/domain.md`
 - **Memory efficiency**: `docs/agents/memory.md`
 - **Functions**: load `function-design` once per task before adding, changing, or
   reviewing non-trivial functions. Reuse that analysis during review.
