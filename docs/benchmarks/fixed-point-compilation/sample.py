@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Linux x86-64 wall sampling for Casa's separate return stack.
 
-Use an executable assembled with `as -L`. Call-site labels distinguish return
-addresses from locals and function values stored on the same stack. The child
-runs unchanged instructions. Stops add overhead, so this is attribution only.
+Native call return addresses distinguish frames from locals and function values
+on the same stack. Legacy explicit return labels require `as -L`. The child runs
+unchanged instructions. Stops add overhead, so this is attribution only.
 """
 from bisect import bisect_right
 from collections import Counter
@@ -45,8 +45,14 @@ if __name__ == "__main__":
     code = Path(assembly).read_text()
     returns = set(re.findall(
         r"leaq (\.L\w+)\(%rip\), %(?:rax|rcx)\n\s*movq %(?:rax|rcx), -8\(%r14\)", code))
-    returns.update(re.findall(r"callq? [^\n]+\n(\.L\w+):", code))
     return_addresses = {names[name] for name in returns}
+    disassembly = subprocess.check_output(
+        ["objdump", "-d", "--no-show-raw-insn", command[0]], text=True)
+    instructions = re.findall(r"^\s*([0-9a-f]+):\s+([^\n]+)$", disassembly, re.MULTILINE)
+    return_addresses.update(
+        int(following[0], 16)
+        for current, following in zip(instructions, instructions[1:])
+        if re.match(r"callq?\s", current[1]))
     entries = sorted((address, name) for name, address in names.items()
                      if name.startswith("fn_") or name in {
                          "heap_alloc", "heap_free", "print_int", "print_uint", "print_str",
@@ -118,7 +124,7 @@ if __name__ == "__main__":
         leaves.update(sample["stack"][-1:])
     result = {"command": command, "interval_seconds": 0.01, "exit_code": exit_code,
               "elapsed_raw_seconds": (time.clock_gettime_ns(time.CLOCK_MONOTONIC_RAW) - started) / 1e9,
-              "return_labels": len(returns), "sample_count": len(samples),
+              "return_addresses": len(return_addresses), "sample_count": len(samples),
               "inclusive": inclusive.most_common(), "leaf": leaves.most_common(), "samples": samples}
     Path(result_file).write_text(json.dumps(result, separators=(",", ":")) + "\n")
     print(json.dumps({key: value for key, value in result.items() if key != "samples"}, indent=2))

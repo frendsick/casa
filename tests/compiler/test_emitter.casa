@@ -53,14 +53,16 @@ pub fn test_runtime_heap_growth {
 
 fn test_selected_target_contracts {
     "selected target contracts" test::test_start
-    "fn leaf value:u64 -> bool { value 0 != } unsafe { argc drop } 41 leaf drop &leaf drop" compile = assembly
+    "fn leaf value:u64 -> bool { value 0 != } fn wrapper value:u64 -> bool { value leaf } unsafe { argc drop } 41 leaf drop &leaf drop 42 wrapper drop" compile = assembly
     "native entry" assembly "_start:" assert_contains
     "root arguments" assembly "movq %rax, __argc(%rip)" assert_contains
     "leaf symbol" assembly "fn_leaf:" assert_contains
     "static closure" assembly "closure_leaf: .quad fn_leaf" assert_contains
-    "forwarding frame keeps capacity check" assembly "return_stack+1048568(%rip)" assert_contains
-    "expanded call keeps original frame check" assembly "return_stack+1048560(%rip)" assert_contains
+    "forwarding frame keeps capacity check" assembly "cmpq $return_stack+1048568, %r14" assert_contains
+    "expanded call keeps original frame check" assembly "cmpq $return_stack+1048560, %r14" assert_contains
     "direct leaf call is expanded" 0 assembly.as_str "call fn_leaf" str::find < test::assert_true
+    "wrapper call is expanded" 0 assembly.as_str "call fn_wrapper" str::find < test::assert_true
+    "wrapper expansion keeps nested capacity check" assembly "cmpq $return_stack+1048544, %r14" assert_contains
     "native return" assembly "pushq (%r14)\n    ret" assert_contains
 }
 
@@ -113,7 +115,67 @@ fn test_transparent_leaf_bodies {
     "grouped leaf expands" 0 assembly.as_str "call fn_grouped" str::find < test::assert_true
     "borrowed drop leaf expands" 0 assembly.as_str "call fn_ignore" str::find < test::assert_true
     "accessor leaf expands" 0 assembly.as_str "call fn_Value__number" str::find < test::assert_true
+    "accessor wrapper expands" 0 assembly.as_str "call fn_access" str::find < test::assert_true
 }
+
+struct OffsetPair {
+    first:  i64
+    second: i64
+}
+
+fn second_field pair:$OffsetPair -> i64 { pair.second }
+
+fn test_field_address_folding {
+    "field address folding" test::test_start
+    42 13 OffsetPair = pair
+    "nonzero field offset" 42 pair second_field test::assert_eq
+    "first field remains distinct" 13 pair.first test::assert_eq
+    "struct Pair { first:i64 second:i64 } 42 13 Pair = pair pair.second drop" compile = assembly
+    "field offset selected as displacement" assembly "movq 8(%r" assert_contains
+}
+
+fn test_comparison_branch_results {
+    "comparison branch results" test::test_start
+    [-1, 0, 9223372036854775807] = signed_values
+    for left in signed_values.iter do
+        for right in signed_values.iter do
+            "signed ==" right left == if right left == then true else false fi == test::assert_true
+            "signed !=" right left != if right left != then true else false fi == test::assert_true
+            "signed <" right left < if right left < then true else false fi == test::assert_true
+            "signed <=" right left <= if right left <= then true else false fi == test::assert_true
+            "signed >" right left > if right left > then true else false fi == test::assert_true
+            "signed >=" right left >= if right left >= then true else false fi == test::assert_true
+        done
+    done
+    [0, 1, 18446744073709551615] = unsigned_values: array[u64 3]
+    for left in unsigned_values.iter do
+        for right in unsigned_values.iter do
+            "unsigned <" right left < if right left < then true else false fi == test::assert_true
+            "unsigned <=" right left <= if right left <= then true else false fi == test::assert_true
+            "unsigned >" right left > if right left > then true else false fi == test::assert_true
+            "unsigned >=" right left >= if right left >= then true else false fi == test::assert_true
+        done
+    done
+}
+
+fn preserve_cached_value value:i64 -> i64 { value 0 + }
+
+fn test_cached_stack_permutations {
+    "cached stack permutations" test::test_start
+    # Refill a wrapped cache, permute it, then cross a call with older values live.
+    1 2 3 4 5 6 rot swap over preserve_cached_value
+    = seventh = sixth = fifth = fourth = third = second = first
+    "oldest spilled value" 1 first test::assert_eq
+    "second spilled value" 2 second test::assert_eq
+    "third spilled value" 3 third test::assert_eq
+    "rotated bottom" 5 fourth test::assert_eq
+    "swapped middle" 4 fifth test::assert_eq
+    "swapped top" 6 sixth test::assert_eq
+    "duplicated value" 4 seventh test::assert_eq
+}
+test_cached_stack_permutations
+test_field_address_folding
+test_comparison_branch_results
 test_emitted_nul_before_octal_digits
 test_runtime_heap_growth
 test_selected_target_contracts
