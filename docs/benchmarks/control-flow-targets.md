@@ -20,6 +20,23 @@ checkout of `0f4013b`, which retains the original bytecode-only workloads and
 private GDB probe. The current `.casa` workloads use complete assembly requests
 through `products` and cannot reproduce the figures below.
 
+The current timing driver uses 64, 128, 256, and 512 nested blocks. Complete
+requests traverse structured source and semantic bodies. The historical range
+overflows the compiler's fixed 1 MiB return stack at 1,000 blocks.
+The memory driver repeats a 500-block request 101 times. Both drivers fail if
+the source is rejected instead of producing assembly.
+
+Build and run the current drivers from this checkout:
+
+```sh
+./casac -L lib docs/benchmarks/control-flow-targets.casa -o /tmp/casa-control-flow
+/tmp/casa-control-flow
+./casac -L lib docs/benchmarks/control-flow-target-memory.casa -o /tmp/casa-control-flow-memory
+/tmp/casa-control-flow-memory
+```
+
+For the historical results, use the pinned checkout:
+
 ```sh
 git worktree add --detach /tmp/casa-control-flow-history 0f4013b
 cd /tmp/casa-control-flow-history

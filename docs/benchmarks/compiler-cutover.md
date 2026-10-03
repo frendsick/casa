@@ -137,9 +137,13 @@ assembly fixed points. The generated-binding regression test exposed a scope
 end before its declaration offset. Editor projection now skips that generated
 range before unsigned subtraction.
 
-Standards and Spec review found no remaining code defects or prerequisites.
-A stale ADR implementation note was corrected. The earlier non-blocking ST006
-about scalar assertions matching runtime text remains separate work.
+The follow-up Standards and Spec reviews reported no unresolved findings. Scalar
+instruction assertions now exclude embedded runtime text, resolving ST006.
+The migrated control-flow timing driver overflowed at 1,000 nested blocks.
+Its complete-request workload now uses 64, 128, 256, and 512 blocks, resolving
+SP001. Both control-flow drivers fail on rejected source. All four timing
+cases and 101 repeated 500-block requests passed. Seven focused compiler
+filters and all 14 shards in the follow-up full local suite also passed.
 
 [Raw evidence](compiler-cutover/final-evidence.json) records source revisions and
 hashes, bootstrap commands and hashes, every warm-up and timing sample, retained
