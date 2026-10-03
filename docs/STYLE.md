@@ -8,6 +8,10 @@ see [FORMAT.md](./FORMAT.md).
 
 ---
 
+Code fragments use declarations and bindings from their surrounding example.
+Names such as `std::List` assume `import "std"`. See
+[reference notation](notation.md#library-names-and-examples).
+
 ## Naming
 
 ### Functions
@@ -102,7 +106,7 @@ see [FORMAT.md](./FORMAT.md).
   ```casa
   fn id[T] T -> T { }
   fn swap_t[T1 T2] T1 T2 -> T1 T2 { swap }
-  fn get[K: Hashable, V] self:Map[K V] key:K -> Option[V] { ... }
+  fn get[K: std::Hashable, V] self:std::Map[K V] key:K -> std::Option[V] { ... }
   ```
 
 ---
@@ -164,7 +168,7 @@ without a type-name prefix is acceptable.
   the type checker can infer them. This documents intent for readers:
 
   ```casa
-  fn greet name:$str -> String {
+  fn greet name:$str -> std::String {
       f"Hello, {name}!"
   }
   ```
@@ -172,8 +176,8 @@ without a type-name prefix is acceptable.
 - In function bodies, annotate a variable **only** when inference would fail:
 
   ```casa
-  # Required: bare Option needs narrowing
-  Option::None = empty:Option[i64]
+  # Required: bare std::Option needs narrowing
+  std::Option::None = empty:std::Option[i64]
 
   # MUST NOT: inference works fine, annotation is noise
   42 = x:i64
@@ -194,7 +198,7 @@ without a type-name prefix is acceptable.
   ```casa
   # MUST — primary data first, flag last
   fn find_matching_label
-      ops:List[Op]
+      ops:std::List[Op]
       op_index:u64
       boundary:i64
       target:OpKind
@@ -204,7 +208,7 @@ without a type-name prefix is acceptable.
   # MUST NOT — flag in first position
   fn find_matching_label
       backward:bool
-      ops:List[Op]
+      ops:std::List[Op]
       ...
   -> i64 { ... }
   ```
@@ -234,7 +238,7 @@ without a type-name prefix is acceptable.
 
   ```casa
   # MUST
-  if value Option::Some(inner) is then
+  if value std::Option::Some(inner) is then
       inner process
   fi
 
@@ -370,7 +374,7 @@ without a type-name prefix is acceptable.
   location "Expected type name" ErrorKind::Syntax diagnostics.record_error
 
   # MUST NOT
-  String::new = msg
+  std::String::new = msg
   "Expected " msg.append ...
   location msg ErrorKind::Syntax diagnostics.record_error
   ```

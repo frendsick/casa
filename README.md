@@ -64,6 +64,8 @@ Use the topic references when you need exact behavior:
 | Topic | Reference |
 |---|---|
 | Values and types | [Types and Literals](docs/types-and-literals.md) |
+| Signature and stack-effect notation | [Reference Notation](docs/notation.md) |
+| Ownership and borrows | [Ownership and Borrows](docs/ownership.md) |
 | Stack evaluation and operators | [Operators](docs/operators.md) |
 | Bindings, functions, and lambdas | [Functions and Lambdas](docs/functions-and-lambdas.md) |
 | Branches, loops, and matching | [Control Flow](docs/control-flow.md) |
@@ -78,6 +80,7 @@ Library references:
 | Topic | Reference |
 |---|---|
 | Optional values and errors | [Optional Values and Errors](docs/optional-values-and-errors.md) |
+| Growable sequences | [List](docs/lists.md) |
 | Collections and iterators | [Collections](docs/collections.md) |
 | Text, characters, and output | [Text and Characters](docs/strings-and-io.md) |
 | Files, directories, environment, and processes | [Operating-System APIs](docs/os.md) |

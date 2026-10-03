@@ -13,6 +13,9 @@ fn subtract left:i64 right:i64 -> i64 {
 3 12 subtract print    # 9
 ```
 
+See [reference notation](notation.md) for signatures, stack effects, and
+function types.
+
 Parameters are listed in consumption order. The first parameter receives the
 topmost value, so `left` receives `12` and `right` receives `3` in this
 call.
@@ -155,11 +158,13 @@ check. Calls to an unsafe function also require an `unsafe` block. An unsafe
 function body does not become an implicit unsafe block:
 
 ```casa
+import "std"
+
 # SAFETY: the caller provides `count` readable source bytes and writable,
 # non-overlapping destination bytes.
 unsafe fn copy_bytes destination:ptr source:ptr count:u64 {
     # SAFETY: the caller contract proves both byte accesses are valid.
-    unsafe { count source destination memcpy }
+    unsafe { count source destination std::memcpy }
 }
 ```
 
@@ -187,7 +192,9 @@ An `extern struct` declaration gives an aggregate the C field layout for this
 ABI:
 
 ```casa
-extern struct Point derives Copy {
+import "std"
+
+extern struct Point derives std::Copy {
     x: f32
     y: f32
 }
@@ -314,84 +321,22 @@ produces a diagnostic that suggests `const` or a root binding.
 Use `= name:Type` when the value needs an explicit type:
 
 ```casa
-Option::None = result:Option[i64]
+import "std"
+
+std::Option::None = result:std::Option[i64]
 ```
 
 See [Operators](operators.md#assignment) for assignment forms.
 
 ## Ownership and borrows
 
-A plain `T` parameter consumes an owned value. Non-Copy owners can be consumed
-only once:
+A plain `T` parameter consumes a value. `$T` requests shared access and
+`mut$T` requests exclusive mutable access. Calls borrow available owners
+automatically when the parameter requires it.
 
-```casa
-fn consume text:String { text drop }
-
-"one owner".to_str = text
-text consume
-# text consume    # Error: text was already moved.
-```
-
-Use `$T` for shared access and `mut$T` for exclusive mutable access. Calls
-borrow an available owner automatically:
-
-```casa
-fn length text:$str -> u64 { text.length }
-fn clear text:mut$String { text.clear }
-
-"Casa".to_str = text
-text.as_str length print
-text clear
-text.as_str length print
-```
-
-Shared borrows can be duplicated with `dup` and `over`, but they do not satisfy
-`Copy` bounds. Exclusive borrows and non-Copy owners are affine. For owned
-values, `dup` and the copied value of `over` require `Copy`. `swap` and `rot`
-only move values, so they also work with non-Copy owners.
-
-An owner or exclusive borrow can be reborrowed for a call. When the call does
-not return a borrow, the reborrow ends when the call returns. One call cannot
-borrow the same binding exclusively more than once or combine shared and
-exclusive borrows of that binding:
-
-```casa
-fn replace_both left:mut$Person right:mut$Person { }
-
-# person person replace_both  # Error: the exclusive arguments alias.
-```
-
-A returned borrow keeps each compatible borrowed input loaned until its last
-use. The caller cannot know which input supplied an opaque result:
-
-```casa
-fn select first:$Person second:$Person choose_first:bool -> $Person {
-    if choose_first then first else second fi
-}
-
-true other person select = selected
-# person drop       # Error: selected can borrow person.
-selected.description print
-person drop
-other drop
-```
-
-A function cannot return a borrow of a local owner. The diagnostic identifies
-the local owner that would escape.
-
-A function can return multiple exclusive field borrows when their named paths
-do not overlap:
-
-```casa
-fn split pair:mut$Pair -> mut$Item mut$Item {
-    pair.left
-    pair.right
-}
-```
-
-The compiler rejects duplicate or nested overlapping outputs. After a call,
-the returned borrows keep the complete borrowed input loaned because field
-paths are not part of a public function type.
+See [Ownership and Borrows](ownership.md) for moves, reborrowing, returned
+borrows, and disjoint field borrows. [Closures](#lambdas-and-closures) below
+explain how captured values are owned.
 
 ## Lambdas and closures
 
@@ -409,7 +354,9 @@ When a call has an expected function type, the compiler uses its resolved input
 types for unannotated lambda parameters. The body determines the output types:
 
 ```casa
-[1, 2, 3] List::from_array = values
+import "std"
+
+[1, 2, 3] std::List::from_array = values
 0 = initial_total:i64
 { = total copy total + } initial_total values.iter.fold print
 ```
@@ -422,7 +369,9 @@ A lambda can capture bindings from its enclosing scope. Copy values are copied.
 An ordinary lambda borrows a non-Copy owner for the lifetime of the closure:
 
 ```casa
-[1, 2, 3] List::from_array = values
+import "std"
+
+[1, 2, 3] std::List::from_array = values
 { values.length } = count_values
 count_values exec print    # 3
 ```
@@ -431,7 +380,9 @@ Use `move` when the closure must own its captures and outlive their original
 scope:
 
 ```casa
-fn counter values:List[i64] -> fn[-> u64] {
+import "std"
+
+fn counter values:std::List[i64] -> fn[-> u64] {
     move { values.length }
 }
 ```

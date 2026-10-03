@@ -52,11 +52,13 @@ operand:
 0 1 > print
 ```
 
-This prints `true` because the expression means `1 > 0`.
+This prints `true` because the expression means `1 > 0`. A stack snapshot
+shows the top on the right, while effect inputs start at the top. See
+[Reference notation](notation.md) for signatures, effects, and function types.
 
 ## Define and call functions
 
-A function declaration names its parameters in the order they are consumed.
+A function signature names its parameters in the order they are consumed.
 The first parameter receives the topmost value.
 
 ```casa
@@ -108,7 +110,7 @@ text print
 ```
 
 A `mut$T` parameter can update an owner through an exclusive borrow. See
-[Ownership and borrows](functions-and-lambdas.md#ownership-and-borrows) for
+[Ownership and borrows](ownership.md) for
 mutable borrow examples and the complete rules. Casa destroys each remaining
 owner when its scope ends. See [Custom destruction](structs-and-methods.md#custom-destruction)
 for cleanup methods and destruction order.
@@ -197,3 +199,4 @@ Output:
 - [Optional Values and Errors](optional-values-and-errors.md) covers `Option`,
   `Result`, and `?`.
 - [Collections](collections.md) covers reusable data structures and iterators.
+- Use [README.md](../README.md#learn-casa) for the complete reference links.

@@ -4,11 +4,15 @@ Import the Linux operating-system module with a library path that contains
 `os.casa`:
 
 ```casa
-import "std" { Bytes List Result eprint run_command }
+import "std"
 import "os"
 ```
 
 For example, compile from this repository with `casac -L lib program.casa`.
+
+Reference tables abbreviate library type names and list inputs in consumption
+order. Source examples use qualified names. See [reference notation](notation.md)
+for signatures, fragments, and commands for running complete examples.
 
 ## Errors
 
@@ -44,23 +48,51 @@ Handle the operation result directly. A separate existence check can become
 stale before the next file operation:
 
 ```casa
-"notes.txt".as_cstr.unwrap file::read_all match
-    Result::Ok(bytes) => bytes.to_str.unwrap print
-    Result::Error(error) => f"read failed: {error}\n" eprint
+import "std"
+import "os"
+
+"notes.txt".as_cstr.unwrap os::file::read_all match
+    std::Result::Ok(bytes) => bytes.to_str.unwrap print
+    std::Result::Error(error) => f"read failed: {error}" std::eprintln_string
 end
 ```
 
 `FileStat` has `size`, `mode`, `mtime`, `atime`, and `ctime` fields. It also
 provides these checks:
 
-| Method | Meaning |
-|---|---|
-| `is_dir` | Directory |
-| `is_file` | Regular file |
-| `is_symlink` | Symbolic link |
-| `is_readable` | Owner-readable mode bit |
-| `is_writable` | Owner-writable mode bit |
-| `is_executable` | Owner-executable mode bit |
+| Method | Signature | Behavior |
+|---|---|---|
+| [FileStat::is_dir](#filestatis_dir) | `fn is_dir self:$FileStat -> bool` | Directory |
+| [FileStat::is_file](#filestatis_file) | `fn is_file self:$FileStat -> bool` | Regular file |
+| [FileStat::is_symlink](#filestatis_symlink) | `fn is_symlink self:$FileStat -> bool` | Symbolic link |
+| [FileStat::is_readable](#filestatis_readable) | `fn is_readable self:$FileStat -> bool` | Owner-readable mode bit |
+| [FileStat::is_writable](#filestatis_writable) | `fn is_writable self:$FileStat -> bool` | Owner-writable mode bit |
+| [FileStat::is_executable](#filestatis_executable) | `fn is_executable self:$FileStat -> bool` | Owner-executable mode bit |
+
+### FileStat::is_dir
+
+Returns whether the entry is a directory.
+
+### FileStat::is_file
+
+Returns whether the entry is a regular file.
+
+### FileStat::is_symlink
+
+Returns whether the entry is a symbolic link.
+
+### FileStat::is_readable
+
+Returns whether the owner-readable mode bit is set.
+
+### FileStat::is_writable
+
+Returns whether the owner-writable mode bit is set.
+
+### FileStat::is_executable
+
+Returns whether the owner-executable mode bit is set.
+
 
 The complete [OS example](../examples/os_interaction.casa) creates, inspects,
 and removes a file and directory.
@@ -94,9 +126,12 @@ Environment variable names and text path utilities remain `$str`.
 | `path::extension path:$str -> String` | Final extension without `.` |
 
 ```casa
-"HOME" env::get .unwrap.to_str.unwrap print
-"tmp" "report.txt" path::join print    # tmp/report.txt
-"src/main.casa" path::extension print  # casa
+import "std"
+import "os"
+
+"HOME" os::env::get .unwrap.to_str.unwrap print
+"tmp" "report.txt" os::path::join print    # tmp/report.txt
+"src/main.casa" os::path::extension print  # casa
 ```
 
 See the [OS example](../examples/os_interaction.casa) for files, directories,
@@ -112,6 +147,8 @@ is the program name. An invalid index terminates the program.
 does not unwind or run cleanup. Normal root completion exits with status zero.
 
 ```casa
+import "std"
+
 2 process::exit
 ```
 
@@ -119,10 +156,12 @@ does not unwind or run cleanup. Normal root completion exits with status zero.
 first list element is the executable path:
 
 ```casa
-List[Bytes]::new = command
+import "std"
+
+std::List[std::Bytes]::new = command
 "/bin/echo" command.push_str
 "hello" command.push_str
-command run_command = exit_code
+command std::run_command = exit_code
 ```
 
 See the [argument parser example](../examples/argparse.casa) for a command-line

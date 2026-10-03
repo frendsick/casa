@@ -10,6 +10,9 @@ operator:
 There is no operator precedence. Each operator immediately consumes its
 operands and pushes its result.
 
+Stack-effect inputs use consumption order. Outputs use push order. See
+[reference notation](notation.md) for examples and the meaning of `None`.
+
 ## Operand order
 
 Arithmetic reads from left to right:
@@ -48,13 +51,34 @@ deliberate modulo arithmetic.
 
 After `import "std"`, these `i64` helpers are available:
 
-| Method | Result |
-|---|---|
-| `abs self:i64 -> i64` | Absolute value |
-| `min self:i64 other:i64 -> i64` | Smaller value |
-| `max self:i64 other:i64 -> i64` | Larger value |
-| `clamp self:i64 low:i64 high:i64 -> i64` | Value limited to the inclusive range |
-| `pow self:i64 exponent:i64 -> i64` | Integer exponentiation |
+| Method | Signature | Behavior |
+|---|---|---|
+| [i64::abs](#i64abs) | `fn abs self:$i64 -> i64` | Absolute value |
+| [i64::min](#i64min) | `fn min self:$i64 other:i64 -> i64` | Smaller value |
+| [i64::max](#i64max) | `fn max self:$i64 other:i64 -> i64` | Larger value |
+| [i64::clamp](#i64clamp) | `fn clamp self:$i64 lo:i64 hi:i64 -> i64` | Value limited to the inclusive range |
+| [i64::pow](#i64pow) | `fn pow self:$i64 exp:i64 -> i64` | Integer exponentiation |
+
+### i64::abs
+
+Returns the absolute value.
+
+### i64::min
+
+Returns the smaller value.
+
+### i64::max
+
+Returns the larger value.
+
+### i64::clamp
+
+Returns the value limited to the inclusive range.
+
+### i64::pow
+
+Raises the integer to the given exponent.
+
 
 `f32` and `f64` also provide `abs`.
 

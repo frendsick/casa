@@ -53,12 +53,14 @@ person Person::name print
 An `impl` block adds methods to a type:
 
 ```casa
+import "std"
+
 impl Person {
     fn birthday self:mut$Person {
         1 += self.age
     }
 
-    fn description self:$Person -> String {
+    fn description self:$Person -> std::String {
         f"{self.name}, age {self.age}"
     }
 }
@@ -105,6 +107,8 @@ methods. Their allowed field types and native pointer use are documented under
 Ordinary `struct` declarations keep a compiler-owned layout that can change
 between compiler versions.
 
+## Receiver access and stored borrows
+
 The declared receiver controls which values can call a method:
 
 | Receiver | Owned `T` | Shared `$T` | Exclusive `mut$T` |
@@ -140,7 +144,9 @@ Ordinary struct values use heap-indirect storage, so they cannot implement
 `Copy`. Derive `Clone` when fieldwise independent duplication is suitable:
 
 ```casa
-struct Point derives Clone {
+import "std"
+
+struct Point derives std::Clone {
     x: i64
     y: i64
 }
@@ -149,12 +155,14 @@ struct Point derives Clone {
 For custom behavior, omit `derives Clone` and define the method:
 
 ```casa
+import "std"
+
 struct Point {
     x: i64
     y: i64
 }
 
-impl Point: Clone {
+impl Point: std::Clone {
     fn clone self:$Point -> Point {
         self.y self.x Point
     }

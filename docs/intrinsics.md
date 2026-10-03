@@ -2,21 +2,28 @@
 
 Intrinsics are compiler-provided operations. They need no import.
 
+Stack-effect inputs use consumption order. Outputs use push order. See
+[reference notation](notation.md) for examples and the meaning of `None`.
+
 ## Stack operations
 
 | Intrinsic | Stack effect | Action |
 |---|---|---|
 | `drop` | `T -> None` | Destroy the top owned value |
 | `dup` | `[T: Copy] T -> T T` | Duplicate the top value |
-| `copy` | `[T: Copy] T -> T` | Produce an owned Copy value |
-| `swap` | `T1 T2 -> T2 T1` | Swap the top two values |
+| `copy` | `[T: Copy] $T -> T` | Produce an owned Copy value |
+| `swap` | `T1 T2 -> T1 T2` | Swap the top two values |
 | `over` | `[T2: Copy] T1 T2 -> T2 T1 T2` | Copy the second value to the top |
-| `rot` | `T1 T2 T3 -> T3 T1 T2` | Rotate the top three values |
+| `rot` | `T1 T2 T3 -> T2 T1 T3` | Rotate the top three values |
 
 ```casa
 1 2 drop print       # 1
 3 dup + print        # 6
 ```
+
+`copy` reads a borrowed `Copy` value into an owned value. An owned argument
+is borrowed automatically. For `swap`, consuming `T1` then `T2` and pushing
+`T1` then `T2` exchanges their stack positions.
 
 `swap` and `rot` only move values. They accept non-Copy values. `dup` and `over`
 also duplicate shared borrows without making `$T` satisfy Copy. `dup`, `over`,

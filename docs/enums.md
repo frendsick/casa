@@ -73,7 +73,9 @@ Printing an enum writes its zero-based variant number. Using the enum name as a
 value produces its number of variants:
 
 ```casa
-enum Color derives Ord { Red Green Blue }
+import "std"
+
+enum Color derives std::Ord { Red Green Blue }
 
 Color::Red Color::Blue > print    # true, because Blue follows Red
 Color::Blue print                 # 2

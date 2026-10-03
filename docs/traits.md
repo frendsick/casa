@@ -1,7 +1,9 @@
 # Generics and Traits
 
 Generics let one declaration work with several types. Traits state which
-operations a generic type must provide.
+operations a generic type must provide. Examples using `Describe`, `Stored`,
+or `User` extend their earlier declarations on this page. Standard-library
+traits use qualified names after `import "std"`.
 
 ## A generic function
 
@@ -68,16 +70,16 @@ A trait declares methods that a type promises to provide. `self` stands for
 the implementing type:
 
 ```casa
-import "std" { String }
+import "std"
 
 trait Describe {
-    fn describe self:self -> String
+    fn describe self:self -> std::String
 }
 
 struct User { name: str }
 
 impl User: Describe {
-    fn describe self:User -> String { self.name.to_str }
+    fn describe self:User -> std::String { self.name.to_str }
 }
 ```
 
@@ -115,16 +117,16 @@ their relationships and language uses.
 
 | Trait | Requirement | Extends | Used by |
 |---|---|---|---|
-| `Clone` | `clone self:self -> self` | None | Explicit value duplication |
+| `Clone` | `clone self:$self -> self` | None | Explicit value duplication |
 | `Copy` | No methods | `Clone` | `dup`, `over`, and `copy` |
 | `PartialEq` | `eq self:$self other:$self -> bool` | None | `==` and `!=` |
 | `Eq` | No new methods | `PartialEq` | Total equality |
 | `PartialOrd` | `partial_cmp self:$self other:$self -> Option[Ordering]` | `PartialEq` | `<`, `<=`, `>`, and `>=` |
 | `Ord` | `cmp self:$self other:$self -> Ordering` | `PartialOrd + Eq` | Total ordering |
 | `Word` | No methods | None | Raw memory stores and system calls |
-| `Hashable` | `hash self:self -> i64` | `Eq + Word` | `Map` keys and `Set` elements |
+| `Hashable` | `hash self:$self -> i64` | `Eq + Word` | `Map` keys and `Set` elements |
 | `Display` | `to_str self:$self -> String` | `Word` | `print` and string interpolation |
-| `Iterable[T]` | `next self:self -> Option[T]` | None | `for` loops and iterator methods |
+| `Iterable[T]` | `next self:mut$self -> Option[T]` | None | `for` loops and iterator methods |
 
 `PartialEq` supplies `ne` from `eq`. The `!=` operator calls `ne`, so an
 implementation can replace that default. `PartialOrd` supplies the four
@@ -158,7 +160,9 @@ as persistent identifiers, checksums, or protocol values.
 Structs and enums can derive `Eq`, `Ord`, `Hashable`, `Clone`, and `Copy`:
 
 ```casa
-struct Point derives Eq Ord Hashable Clone {
+import "std"
+
+struct Point derives std::Eq std::Ord std::Hashable std::Clone {
     x: i64
     y: i64
 }
@@ -199,9 +203,9 @@ implement or satisfy `Copy`. An exclusive `mut$T` borrow cannot be duplicated.
 Payload-free enums can opt in with `derives Copy`:
 
 ```casa
-import "std" { Copy }
+import "std"
 
-enum Direction derives Copy {
+enum Direction derives std::Copy {
     North
     South
 }
@@ -223,19 +227,23 @@ Clone operations are always explicit and can allocate or run user code. A type
 can derive the implementation:
 
 ```casa
-struct Document derives Clone {
-    title: String
+import "std"
+
+struct Document derives std::Clone {
+    title: std::String
 }
 ```
 
 For custom behavior, omit `derives Clone` and write the implementation:
 
 ```casa
+import "std"
+
 struct Document {
-    title: String
+    title: std::String
 }
 
-impl Document: Clone {
+impl Document: std::Clone {
     fn clone self:$Document -> Document {
         self.title.clone Document
     }
@@ -253,10 +261,12 @@ An implementation must provide every required method with the declared stack
 effect. One block can implement several traits:
 
 ```casa
+import "std"
+
 struct Item { id: i64 name: str }
 
 impl Item: Describe + Stored {
-    fn describe self:Item -> String { self.name.to_str }
+    fn describe self:Item -> std::String { self.name.to_str }
 }
 ```
 
@@ -271,6 +281,8 @@ An `impl` block can declare type parameters and requirements that apply to all
 its methods:
 
 ```casa
+import "std"
+
 struct Box[T] { value: T }
 
 impl[T] Box[T] {
@@ -278,7 +290,7 @@ impl[T] Box[T] {
 }
 
 impl[T: Describe] Box[T]: Describe {
-    fn describe self:Box[T] -> String { self.value.describe }
+    fn describe self:Box[T] -> std::String { self.value.describe }
 }
 ```
 
@@ -290,13 +302,16 @@ requirements such as `T: Describe` on functions or `impl` blocks.
 A trait can extend other traits and provide method bodies:
 
 ```casa
+import "std"
+
 trait Labeled {
-    fn label self:self -> String
+    fn label self:self -> std::String
 }
 
 trait Greet: Labeled {
-    fn greeting self:self -> String {
-        f"Hello, {self.label}!"
+    fn greeting self:self -> std::String {
+        self.label = label
+        f"Hello, {label}!"
     }
 }
 ```
@@ -315,7 +330,9 @@ Inside generic code, dot syntax and the type-parameter namespace are
 equivalent:
 
 ```casa
-fn description[T: Describe] value:T -> String {
+import "std"
+
+fn description[T: Describe] value:T -> std::String {
     value T::describe
 }
 ```

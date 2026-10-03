@@ -62,7 +62,9 @@ A string literal is a copied `str` view of static read-only storage. Convert it
 with `.to_str` when you need an owned, growable `String`:
 
 ```casa
-"Casa".to_str = name:String
+import "std"
+
+"Casa".to_str = name:std::String
 '!' name.push
 name.as_str print
 ```
@@ -78,8 +80,10 @@ value when an operating-system or C interface needs a NUL-terminated byte
 string:
 
 ```casa
+import "std"
+
 "hello".as_cstr.unwrap = message:$cstr
-"raw" Bytes::from_str = raw_bytes
+"raw" std::Bytes::from_str = raw_bytes
 raw_bytes.as_cstr.unwrap = raw_message:$cstr
 ```
 

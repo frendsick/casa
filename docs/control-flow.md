@@ -124,12 +124,14 @@ matched path that returns does not affect the ownership join.
 `match` selects one pattern and can produce a value:
 
 ```casa
+import "std"
+
 enum Status { Ready Busy Failed(str) }
 
 Status::Ready = status
 status match
-    Status::Ready => "ready"
-    Status::Busy => "busy"
+    Status::Ready => "ready".to_str
+    Status::Busy => "busy".to_str
     Status::Failed(message) => f"failed: {message}"
 end
 print

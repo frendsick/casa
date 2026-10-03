@@ -44,6 +44,10 @@ See [STYLE.md](./STYLE.md) for naming conventions and idiomatic patterns.
 
 ---
 
+Code fragments use declarations and bindings from their surrounding example.
+Names such as `std::List` assume `import "std"`. See
+[reference notation](notation.md#library-names-and-examples).
+
 ## Indentation
 
 - Use **4 spaces** per indentation level.
@@ -64,7 +68,7 @@ fn fizzbuzz number:i64 {
 
 - Lines SHOULD NOT exceed **100 characters**.
 - String literals in examples and expected-output lines are exempt.
-- When a function declaration exceeds 100 characters, use the wrapping form (see below).
+- When a function signature exceeds 100 characters, use the wrapping form (see below).
 
 ---
 
@@ -96,7 +100,7 @@ impl Foo {
     }
 }
 
-Map[str i64]::new = MY_MAP
+std::Map[str i64]::new = MY_MAP
 1 "a" MY_MAP.set
 2 "b" MY_MAP.set
 
@@ -120,8 +124,8 @@ Trailing spaces or tabs at the end of a line are forbidden.
 Do not put whitespace around `::` in qualified calls or references:
 
 ```casa
-List[T]::new = values
-value List[T]::from_array
+std::List[T]::new = values
+value std::List[T]::from_array
 ```
 
 ---
@@ -162,12 +166,12 @@ value List[T]::from_array
 ```casa
 # Correct
 ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
-[1, 2, 3] List::from_array = nums
-"hello" [0, 5] str::slice
+[1, 2, 3] std::List::from_array = nums
+["hello", "Casa"] = greetings
 
 # Wrong
 ["0","1","2"]
-[1,2,3]List::from_array = nums
+[1,2,3]std::List::from_array = nums
 [1 2 3]              # missing commas: syntax error
 ```
 
@@ -207,12 +211,12 @@ No space between an enum variant name and its data parentheses:
 ```casa
 # Correct
 OpValue::FnCall(value)
-Option::Some(x)
+std::Option::Some(x)
 Type::Generic(generic)
 
 # Wrong
 OpValue::FnCall (value)
-Option::Some (x)
+std::Option::Some (x)
 Type::Generic (generic)
 ```
 
@@ -268,11 +272,11 @@ enum Color {
 
 ---
 
-## Function declarations
+## Function signatures
 
 ### Single-line form
 
-When the function declaration fits within the line-length limit, write everything on one line.
+When the function signature fits within the line-length limit, write everything on one line.
 Parameters use `name:type` (no space after colon):
 
 ```casa
@@ -311,7 +315,7 @@ not apply to lambdas or match-arm blocks.
 
 ### Wrapped form
 
-When the function declaration would exceed 100 characters, wrap as follows.
+When the function signature would exceed 100 characters, wrap as follows.
 Keep `pub`, `unsafe`, or `extern` before `fn` on the first line.
 
 - `fn name` alone on the first line
@@ -321,10 +325,10 @@ Keep `pub`, `unsafe`, or `extern` before `fn` on the first line.
 ```casa
 fn make_compiler_with_tables
     sources:SourceStore
-    ops:List[Op]
-    function:Option[Function]
-    string_table:List[str]
-    constants_table:List[str]
+    ops:std::List[Op]
+    function:std::Option[Function]
+    string_table:std::List[str]
+    constants_table:std::List[str]
 -> SourceReader {
     ...
 }
@@ -510,8 +514,8 @@ name " is " str::concat age i64::to_str str::concat print
 Use `String` for incremental or loop-based string construction:
 
 ```casa
-String::new = text
-items.length 0 == ! while
+std::String::new = text
+while items.is_empty ! do
     items.pop.as_str text.append
 done
 text

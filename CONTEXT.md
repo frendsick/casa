@@ -176,20 +176,20 @@ _Avoid_: Function signature, operator signature
 The `fn[...]` type form whose brackets contain a **Stack effect**.
 _Avoid_: Function signature
 
-**Function declaration**:
+**Function signature**:
 The written `fn` header that gives a function's name, type variables, parameter names and types, and return types without its body.
-_Avoid_: Function signature
+_Avoid_: Function declaration
 
-**Method declaration**:
+**Method signature**:
 The written `fn` header inside an `impl` or `trait` block that gives a method's name, type variables, parameter names and types, and return types without its body.
-_Avoid_: Method signature
+_Avoid_: Method declaration
 
 **Function definition**:
-A **Function declaration** together with its body.
+A **Function signature** together with its body.
 _Avoid_: Function signature
 
 **Method definition**:
-A **Method declaration** together with its body.
+A **Method signature** together with its body.
 _Avoid_: Method signature
 
 ### Traits
@@ -294,8 +294,8 @@ _Avoid_: Release lint, tag lint
 - A **Text view** never releases storage. An **Owned text** value releases its storage exactly once.
 - Converting **Owned text** to a **Text view** borrows without allocation. Converting a **Text view** to **Owned text** allocates and copies.
 - The **Documentation glossary** names project concepts that prevent drift; language keywords and ordinary programming concepts belong in reference docs.
-- Function, operator, intrinsic, and expression docs should use **Stack effect**; **Operand order** explains how stack values map to operands.
-- Public reference docs should use one **Stack effect** line for an operation instead of separate signature and stack-effect lines.
+- Function and method headers use **Function signature** and **Method signature**. **Stack effect** describes the type-only stack contract. **Operand order** explains how stack values map to operands.
+- Method references use a **Method signature** with named parameters and outputs. Operators and function values use **Stack effect** notation when names are not needed.
 - **Stack effect** contains types and optional type bounds only; semantic operand names belong in concise prose only when they add information not derivable from the types.
 - In **Stack effect** notation, input types are listed from topmost consumed value downward; output types are listed in push order, so the last output type becomes topmost after the operation.
 - `i64 str -> bool char` means `i64` is consumed from the top of the stack, `str` is consumed below it, `bool` is pushed first, and `char` is pushed last/topmost.
@@ -397,12 +397,12 @@ _Avoid_: Release lint, tag lint
 - In normal calls, the topmost stack value maps to the first argument; avoid describing this as "rightmost" because stack values may have existed before the immediate call expression.
 - Arithmetic operators use the same **Stack effect** notation as other operations, but their **Operand order** maps the topmost consumed value to the right operand instead of the first/left operand.
 - Comparison operators follow normal **Operand order**; for `a b <`, `b` is topmost and therefore the left operand, so the expression means `b < a`.
-- A **Function declaration** excludes the body; a **Function definition** includes the body.
-- A **Method declaration** excludes the body; a **Method definition** includes the body.
+- A **Function signature** excludes the body; a **Function definition** includes the body.
+- A **Method signature** excludes the body; a **Method definition** includes the body.
 - A **Trait method requirement** is satisfied by a matching method name and **Stack effect** on a type that explicitly implements the trait.
 - A **Default method definition** belongs to the trait and is available to types that implement trait while omitting their own **Method definition**.
 - A type implements a user-defined trait only through `impl Type: Trait`; matching methods alone do not declare an implementation.
-- A **Function declaration** describes written source only, not compiler-injected hidden parameters.
+- A **Function signature** describes written source only, not compiler-injected hidden parameters.
 - A **Stable Casa release** may provide the `casac` binary that serves as the **Bootstrap compiler**; the role does not define the release.
 - A **Bootstrap compiler** builds exactly one **Branch compiler** at the start of CI.
 - A **Branch compiler** must self-compile and reach a **Fixed point** before the branch is considered releasable.
