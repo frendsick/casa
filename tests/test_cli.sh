@@ -57,7 +57,7 @@ if matches_filter sealed_scalar "$@"; then
     "$COMPILER" tests/compiler/fixtures/sealed_scalar.casa -o "$scalar_binary" --keep-asm
     [ "$("$scalar_binary")" = "120:9:7:5:15:14:13:-1:true:true:0:true
 1:0:-128:41:0:-1:0" ]
-    grep -q 'call .Lscalar_fn_' "$scalar_binary.s"
+    grep -q 'call fn_factorial' "$scalar_binary.s"
     grep -q 'return_stack_overflow:' "$scalar_binary.s"
     grep -q 'popq -8(%r14)' "$scalar_binary.s"
 fi

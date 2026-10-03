@@ -21,10 +21,53 @@ pub struct CheckedProgram {
     store:  common::SymbolStore
     root:   semantic_body::Body
     bodies: std::Map[std::String semantic_body::Body]
+    types:  std::Map[std::String CheckedType]
 }
 
 impl CheckedProgram {
+    pub fn is_copy_aggregate self:$CheckedProgram typ:$common::Type -> bool {
+        typ.format = key
+        key self
+            .types
+            .get
+            .unwrap
+            .copy_aggregate
+    }
+    pub fn needs_destruction self:$CheckedProgram typ:$common::Type -> bool {
+        typ.format = key
+        key self
+            .types
+            .get
+            .unwrap
+            .needs_destruction
+    }
+    pub fn find_drop_function self:$CheckedProgram typ:$common::Type -> std::Option[std::String] {
+        typ.format = key
+        key self
+            .types
+            .get
+            .unwrap
+            .drop_function
+            .clone
+    }
+    pub fn get_shape self:$CheckedProgram typ:$common::Type -> CheckedShape {
+        typ.format = key
+        key self
+            .types
+            .get
+            .unwrap
+            .shape copy
+    }
+    pub fn get_value_kind self:$CheckedProgram typ:$common::Type -> CheckedValueKind {
+        typ.format = key
+        key self
+            .types
+            .get
+            .unwrap
+            .value_kind copy
+    }
     pub fn get_store self:$CheckedProgram -> $common::SymbolStore { self.store }
+    pub fn get_function_names self:$CheckedProgram -> std::List[std::String] { self.bodies.keys }
     pub fn get_root self:$CheckedProgram -> $semantic_body::Body { self.root }
 
     pub fn find_body self:$CheckedProgram name:$str -> std::Option[$semantic_body::Body] {
@@ -214,7 +257,22 @@ fn commit_checked_program
         name.as_str drop_types callees store body validate_concrete_body ? drop
         body name bodies.set
     done
-    bodies root store CheckedProgram std::Result::Ok
+    std::Map[std::String CheckedType]::new = types
+    types store root commit_body_type_facts
+    for variable in store.variables.iter do
+        types store variable.second.typ commit_type_facts
+    done
+    for body in bodies.iter do
+        types store body.second commit_body_type_facts
+        body.first.as_str store.get_function.unwrap = typed_declaration
+        for variable in typed_declaration.variables.iter do
+            types store variable.typ commit_type_facts
+        done
+        for capture in typed_declaration.captures.iter do
+            types store capture.typ commit_type_facts
+        done
+    done
+    types bodies root store CheckedProgram std::Result::Ok
 }
 
 pub fn type_check source:source_body::SourceProgram -> TypecheckResult {
@@ -288,4 +346,127 @@ pub fn function_receiver_bindings
     function:$common::Function
 -> std::Map[std::String common::Type] {
     function typ semantics::function_receiver_bindings
+}
+
+pub enum CheckedValueKind derives std::Copy {
+    Scalar
+    Enum
+    StringStr
+    StrString
+    Other
+}
+
+pub enum CheckedShape derives std::Copy {
+    Scalar
+    Borrow
+    Closure
+    Array
+    Struct
+    Enum
+}
+
+pub struct CheckedType {
+    pub shape:             CheckedShape
+    pub copy_aggregate:    bool
+    pub needs_destruction: bool
+    pub drop_function:     std::Option[std::String]
+    pub value_kind:        CheckedValueKind
+}
+
+fn commit_type_facts
+    typ:$common::Type
+    store:$common::SymbolStore
+    types:mut$std::Map[std::String CheckedType]
+{
+    typ.format = key
+    if key types.has then
+        return
+    fi
+    CheckedValueKind::Other = kind
+    if typ common::Type::Builtin(builtin) is then
+        CheckedValueKind::Scalar = kind
+    elif key.as_str "StringStrEq" == then
+        CheckedValueKind::StringStr = kind
+    elif key.as_str "StrStringEq" == then
+        CheckedValueKind::StrString = kind
+    elif key store.enums.has then
+        CheckedValueKind::Enum = kind
+    fi
+    false = copy_aggregate
+    if typ common::get_concrete_array_length.is_some store typ common::type_is_extern_struct || then
+        common::STD_COPY_TRAIT.to_str common::GenericType::new common::Type::Generic = copy_type
+        store copy_type typ semantics::type_has_satisfying_trait_impl = copy_aggregate
+    fi
+    std::Option[std::String]::None = drop_function
+    if store typ common::find_drop_function_name std::Option::Some(name) is then
+        name.as_str store.get_function.unwrap = declaration
+        if
+            declaration
+                .stack_effect
+                .type_vars
+                .is_empty ! declaration
+                .stack_effect
+                .const_params
+                .length 0 != ||
+        then
+            declaration typ semantics::function_receiver_bindings = substitutions
+            substitutions name.as_str semantics::monomorphized_function_name std::Option::Some = drop_function
+        else
+            name.clone std::Option::Some = drop_function
+        fi
+    fi
+    store typ common::type_needs_destruction_in_store = needs_destruction
+    CheckedShape::Scalar = shape_kind
+    if typ.is_borrow then
+        CheckedShape::Borrow = shape_kind
+    elif typ common::Type::Function(_) is then
+        CheckedShape::Closure = shape_kind
+    elif typ common::Type::Generic(generic) is then
+        if generic.base.as_str common::ARRAY_TYPE == then
+            CheckedShape::Array = shape_kind
+        elif generic.base store.structs.has then
+            CheckedShape::Struct = shape_kind
+        elif generic.base store.enums.has then
+            CheckedShape::Enum = shape_kind
+        fi
+    fi
+    kind drop_function needs_destruction copy_aggregate shape_kind CheckedType key types.set
+    if typ common::Type::Generic(generic) is then
+        types store typ generic commit_child_type_facts
+    fi
+}
+
+fn commit_child_type_facts
+    generic:$common::GenericType
+    typ:$common::Type
+    store:$common::SymbolStore
+    types:mut$std::Map[std::String CheckedType]
+{
+    for parameter in generic.params.iter do
+        types store parameter commit_type_facts
+    done
+    if generic.base store.structs.get std::Option::Some(shape) is then
+        shape.type_vars typ common::aggregate_type_bindings = substitutions
+        for member in shape.members.iter do
+            substitutions member.typ.substitute_t = child_type
+            types store child_type commit_type_facts
+        done
+    elif generic.base store.enums.get std::Option::Some(shape) is then
+        shape.type_vars typ common::aggregate_type_bindings = substitutions
+        for variant in shape.variant_types.iter do
+            for member in variant.second.iter do
+                substitutions member.substitute_t = child_type
+                types store child_type commit_type_facts
+            done
+        done
+    fi
+}
+
+fn commit_body_type_facts
+    body:$semantic_body::Body
+    store:$common::SymbolStore
+    types:mut$std::Map[std::String CheckedType]
+{
+    { = typ: $common::Type types store typ commit_type_facts } = visitor
+    visitor body.visit_types
 }
