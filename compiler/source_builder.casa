@@ -579,18 +579,16 @@ pub fn operator_to_op_value operator_kind:common::OperatorKind -> std::Option[co
 # ============================================================================
 
 pub struct TokenCursor {
-    pub tokens:           $std::List[common::Token]
-    pub pos:              u64
-    pub names:            std::Map[std::String common::SourceBinding]
-    pub constants:        std::Map[std::String common::Constant]
-    pub failed_constants: std::Set[std::String]
-    pub type_bindings:    std::List[std::String]
-    pub module_prefixes:  std::List[std::String]
+    pub tokens:          $std::List[common::Token]
+    pub pos:             u64
+    pub names:           std::Map[std::String common::SourceBinding]
+    pub type_bindings:   std::List[std::String]
+    pub module_prefixes: std::List[std::String]
 }
 
 impl TokenCursor {
     pub fn new tokens:$std::List[common::Token] -> TokenCursor {
-        std::List[std::String]::new std::List[std::String]::new std::Set[std::String]::new std::Map[std::String common::Constant]::new std::Map[std::String common::SourceBinding]::new 0 tokens TokenCursor
+        std::List[std::String]::new std::List[std::String]::new std::Map[std::String common::SourceBinding]::new 0 tokens TokenCursor
     }
 
     pub fn copy_module_prefixes self:mut$TokenCursor prefixes:$std::Map[std::String std::String] {
@@ -797,8 +795,48 @@ pub fn is_type_argument_literal value:$str -> bool {
     fi
     value char_literal_codepoint.is_some
 }
+# Named type arguments and constant annotations share lookup precedence and failures.
+fn read_constant_type_argument
+    name:$str
+    spelling:$str
+    location:$common::Location
+    store:$common::SymbolStore
+    state:mut$ParseState
+-> std::Option[common::Type] {
+    if name store.constants.get_str std::Option::Some(named_constant) is then
+        named_constant.value match
+            common::ConstantValue::Int(integer) => {
+                common::BuiltinType::U64 = integer_type
+                if integer.raw.as_str "-" str::starts_with 0 integer.value != && then
+                    common::BuiltinType::I64 = integer_type
+                fi
+                integer_type integer.value common::ConstType::concrete common::Type::Const std::Option::Some return
+            }
+            common::ConstantValue::Bool(value) => {
+                common::BuiltinType::Bool value common::ConstType::concrete common::Type::Const std::Option::Some return
+            }
+            common::ConstantValue::Char(value) => {
+                common::BuiltinType::Char value common::ConstType::concrete common::Type::Const std::Option::Some return
+            }
+            _ => {
+                location f"Constant `{spelling}` cannot be a type argument: only integer, bool, and char values are allowed" common::ErrorKind::TypeMismatch state.record_error_string
+                common::Type::Unknown std::Option::Some return
+            }
+        end
+    fi
 
-pub fn parse_type_ast cursor:mut$TokenCursor state:mut$ParseState -> common::Type {
+    if name store.failed_constants.has_str then
+        location f"Constant `{spelling}` is unavailable because its declaration failed" common::ErrorKind::UndefinedName state.record_error_string
+        common::Type::Unknown std::Option::Some return
+    fi
+    std::Option[common::Type]::None
+}
+
+pub fn parse_type_ast
+    cursor:mut$TokenCursor
+    state:mut$ParseState
+    store:$common::SymbolStore
+-> common::Type {
     cursor.peek = peek_opt
     if peek_opt.is_none then
         common::empty_location "Expected type" common::ErrorKind::UnexpectedToken state.record_error
@@ -869,31 +907,10 @@ pub fn parse_type_ast cursor:mut$TokenCursor state:mut$ParseState -> common::Typ
         common::BuiltinType::Char char_codepoint common::ConstType::concrete common::Type::Const return
     fi
 
-    if base.as_str cursor.constants.get_str std::Option::Some(named_constant) is then
-        named_constant.value match
-            common::ConstantValue::Int(integer) => {
-                common::BuiltinType::U64 = integer_type
-                if integer.raw.as_str "-" str::starts_with 0 integer.value != && then
-                    common::BuiltinType::I64 = integer_type
-                fi
-                integer_type integer.value common::ConstType::concrete common::Type::Const return
-            }
-            common::ConstantValue::Bool(value) => {
-                common::BuiltinType::Bool value common::ConstType::concrete common::Type::Const return
-            }
-            common::ConstantValue::Char(value) => {
-                common::BuiltinType::Char value common::ConstType::concrete common::Type::Const return
-            }
-            _ => {
-                peek.location f"Constant `{peek.value}` cannot be a type argument: only integer, bool, and char values are allowed" common::ErrorKind::TypeMismatch state.record_error_string
-                common::Type::Unknown return
-            }
-        end
-    fi
-
-    if base.as_str cursor.failed_constants.has_str then
-        peek.location f"Constant `{peek.value}` is unavailable because its declaration failed" common::ErrorKind::UndefinedName state.record_error_string
-        common::Type::Unknown return
+    if
+        state store peek.location peek.value.as_str base.as_str read_constant_type_argument std::Option::Some(constant_type) is
+    then
+        constant_type return
     fi
 
     cursor.peek = next_opt
@@ -926,7 +943,7 @@ pub fn parse_type_ast cursor:mut$TokenCursor state:mut$ParseState -> common::Typ
                 true = past_arrow
                 continue
             fi
-            state cursor parse_type_ast = inner_type
+            store state cursor parse_type_ast = inner_type
             if past_arrow then
                 inner_type fn_returns.push
             else
@@ -945,7 +962,7 @@ pub fn parse_type_ast cursor:mut$TokenCursor state:mut$ParseState -> common::Typ
                 break
             fi
         fi
-        state cursor parse_type_ast inner_types.push
+        store state cursor parse_type_ast inner_types.push
     done
     if 0 inner_types.length == then
         common::empty_location f"Expected type parameter inside `{base}[...]`" common::ErrorKind::UnexpectedToken state.record_error_string
@@ -1015,13 +1032,14 @@ pub fn get_op_intrinsic
     token:$common::Token
     cursor:mut$TokenCursor
     state:mut$ParseState
+    store:$common::SymbolStore
 -> common::Op {
     token common::Token::value.as_str common::intrinsic_from_str = kind_opt
     if kind_opt std::Option::Some(kind) is then
         kind copy = intrinsic_kind
         if intrinsic_kind common::IntrinsicKind::SizeOf == then
             fallback_token state "[" cursor expect_token_value.unwrap_or drop
-            state cursor parse_type_ast = target_type
+            store state cursor parse_type_ast = target_type
             fallback_token state "]" cursor expect_token_value.unwrap_or drop
             token common::Token::location target_type common::OpValue::SizeOf common::Op::new return
         fi
@@ -1060,6 +1078,7 @@ pub fn get_op_operator
     cursor:mut$TokenCursor
     function_name:$str
     state:mut$ParseState
+    store:$common::SymbolStore
 -> common::Op {
     token common::Token::value.as_str common::operator_from_str = kind_opt
     if kind_opt std::Option::Some(kind) is then
@@ -1075,7 +1094,7 @@ pub fn get_op_operator
             if colon_opt std::Option::Some(colon) is then
                 if ":" colon common::Token::value.as_str == then
                     cursor.advance
-                    state cursor parse_type_ast std::Option::Some = type_hint
+                    store state cursor parse_type_ast std::Option::Some = type_hint
                 fi
             fi
             target_location var_name common::OpValue::AssignVar common::Op::new = assign_op
@@ -1492,6 +1511,7 @@ pub fn parse_bound_type_args
     cursor:mut$TokenCursor
     trait_token:$common::Token
     state:mut$ParseState
+    store:$common::SymbolStore
 -> std::List[common::Type] {
     std::List[common::Type]::new = bound_args
     cursor.peek = bracket_opt
@@ -1520,7 +1540,7 @@ pub fn parse_bound_type_args
             cursor.pop drop
             continue
         fi
-        state cursor parse_type_ast bound_args.push
+        store state cursor parse_type_ast bound_args.push
     done
     bound_args
 }
@@ -1682,7 +1702,7 @@ pub fn parse_type_variables parser:mut$Parser cursor:mut$TokenCursor -> ParsedTy
                         if bound_trait_def_opt.is_none then
                             trait_token common::Token::location f"Trait `{bound_trait_name}` is not defined" common::ErrorKind::UndefinedName parser.state.record_error_string
                         fi
-                        parser.state trait_token cursor parse_bound_type_args = bound_args
+                        parser.store parser.state trait_token cursor parse_bound_type_args = bound_args
                         if bound_trait_def_opt std::Option::Some(bound_trait_def) is then
                             bound_trait_def common::CasaTrait::type_params = declared_params: $std::List[std::String]
                             if bound_args.length declared_params.length != then
@@ -1838,20 +1858,22 @@ pub fn parse_parameter_maybe_named
     cursor:mut$TokenCursor
     token:$common::Token
     state:mut$ParseState
+    store:$common::SymbolStore
 -> common::Parameter {
     cursor.peek = next_opt
     if { common::Token::value.as_str ":" == } next_opt.filter.is_some then
         cursor.advance # consume :
-        state cursor parse_type_ast = param_type
+        store state cursor parse_type_ast = param_type
         token common::Token::value.clone param_type common::Parameter::named return
     fi
     cursor.retreat
-    "".to_str state cursor parse_type_ast common::Parameter::named
+    "".to_str store state cursor parse_type_ast common::Parameter::named
 }
 
 pub fn parse_parameters
     cursor:mut$TokenCursor
     state:mut$ParseState
+    store:$common::SymbolStore
 -> std::List[common::Parameter] {
     std::List[common::Parameter]::new = params
     while true do
@@ -1872,7 +1894,7 @@ pub fn parse_parameters
         # Allow fn keyword as unnamed parameter type
         if "fn" token common::Token::value.as_str == then
             cursor.retreat
-            "".to_str state cursor parse_type_ast common::Parameter::named params.push
+            "".to_str store state cursor parse_type_ast common::Parameter::named params.push
             continue
         fi
 
@@ -1880,7 +1902,7 @@ pub fn parse_parameters
             token common::Token::location "Unexpected token in parameter list" common::ErrorKind::UnexpectedToken state.record_error
         fi
 
-        state token cursor parse_parameter_maybe_named params.push
+        store state token cursor parse_parameter_maybe_named params.push
     done
     params
 }
@@ -1889,7 +1911,11 @@ pub fn parse_parameters
 # parse_return_types - parse return types after ->
 # ============================================================================
 
-pub fn parse_return_types cursor:mut$TokenCursor state:mut$ParseState -> std::List[common::Type] {
+pub fn parse_return_types
+    cursor:mut$TokenCursor
+    state:mut$ParseState
+    store:$common::SymbolStore
+-> std::List[common::Type] {
     std::List[common::Type]::new = types
     while true do
         cursor.peek = peek_opt
@@ -1903,7 +1929,7 @@ pub fn parse_return_types cursor:mut$TokenCursor state:mut$ParseState -> std::Li
                 types return
             fi
         fi
-        state cursor parse_type_ast types.push
+        store state cursor parse_type_ast types.push
     done
     types
 }
@@ -1912,8 +1938,12 @@ pub fn parse_return_types cursor:mut$TokenCursor state:mut$ParseState -> std::Li
 # parse_stack_effect - parse function stack effect
 # ============================================================================
 
-pub fn parse_stack_effect cursor:mut$TokenCursor state:mut$ParseState -> common::StackEffect {
-    state cursor parse_parameters = params
+pub fn parse_stack_effect
+    cursor:mut$TokenCursor
+    state:mut$ParseState
+    store:$common::SymbolStore
+-> common::StackEffect {
+    store state cursor parse_parameters = params
     std::List[common::Type]::new = returns
 
     cursor.peek = next_opt
@@ -1925,7 +1955,7 @@ pub fn parse_stack_effect cursor:mut$TokenCursor state:mut$ParseState -> common:
     if next_opt std::Option::Some(next) is then
         if "->" next common::Token::value.as_str == then
             cursor.advance # consume ->
-            state cursor parse_return_types = returns
+            store state cursor parse_return_types = returns
         fi
     fi
     returns params common::StackEffect::new
@@ -1956,10 +1986,10 @@ pub fn parse_literal_to_constant_value raw:$str -> common::ConstantValue {
 
 fn read_constant_reference
     parser:mut$Parser
-    cursor:mut$TokenCursor
-    token:$common::Token
+    cursor:$TokenCursor
+    term:$grammar::ConstantTerm
 -> std::Option[constant_eval::EvalValue] {
-    token.value.as_str cursor.resolve_name = name
+    term.spelling.as_str cursor.resolve_name = name
     if
         name.as_str parser
             .store
@@ -1967,18 +1997,18 @@ fn read_constant_reference
             .get_str std::Option::Some(found) is
     then
         if
-            token
+            term
                 .location
                 .file
                 .as_str name.as_str parser.store.is_private_from
         then
-            token.location f"Constant `{token.value}` is private" common::ErrorKind::InvalidScope parser.state.record_error_string
+            term.location f"Constant `{term.spelling}` is private" common::ErrorKind::InvalidScope parser.state.record_error_string
             std::Option[constant_eval::EvalValue]::None return
         fi
-        token.location.clone found.typ.clone found.value.clone constant_eval::EvalValue::new std::Option::Some return
+        term.location.clone found.typ.clone found.value.clone constant_eval::EvalValue::new std::Option::Some return
     fi
     if
-        token.value.as_str parser
+        term.spelling.as_str parser
             .current_module
             .nonconstant_names
             .has_str
@@ -2003,164 +2033,142 @@ fn read_constant_reference
             .variables
             .has_str ||
     then
-        token.location f"`{token.value}` is not a constant" common::ErrorKind::TypeMismatch parser.state.record_error_string
+        term.location f"`{term.spelling}` is not a constant" common::ErrorKind::TypeMismatch parser.state.record_error_string
     elif
         name.as_str parser
             .store
             .failed_constants
             .has_str
-        token
+        term
             .location
             .file
             .as_str name.as_str parser.store.is_private_from &&
     then
-        token.location f"Constant `{token.value}` is private" common::ErrorKind::InvalidScope parser.state.record_error_string
+        term.location f"Constant `{term.spelling}` is private" common::ErrorKind::InvalidScope parser.state.record_error_string
     elif
         name.as_str parser
             .store
             .failed_constants
-            .has_str token.value.as_str cursor.names.has_str ||
+            .has_str term.spelling.as_str cursor.names.has_str ||
     then
-        token.location f"Constant `{token.value}` is unavailable" common::ErrorKind::UndefinedName parser.state.record_error_string
+        term.location f"Constant `{term.spelling}` is unavailable" common::ErrorKind::UndefinedName parser.state.record_error_string
     else
-        token.location f"Unknown constant `{token.value}`" common::ErrorKind::UndefinedName parser.state.record_error_string
+        term.location f"Unknown constant `{term.spelling}`" common::ErrorKind::UndefinedName parser.state.record_error_string
     fi
     std::Option[constant_eval::EvalValue]::None
 }
-
-fn evaluate_bounded_block
+# Evaluate only the closed terms produced by the shared grammar. The cursor supplies
+# source-name bindings, while the symbol store owns completed and failed constants.
+fn evaluate_constant_initializer
     parser:mut$Parser
-    cursor:mut$TokenCursor
+    cursor:$TokenCursor
+    initializer:$grammar::ConstantSyntax
     annotation:std::Option[common::BuiltinType]
-    location:$common::Location
 -> std::Option[constant_eval::EvalValue] {
-    fallback_token parser.state "{" cursor expect_token_value.unwrap_or drop
     std::List[constant_eval::EvalValue]::new = stack
-    while cursor.is_finished ! do
-        cursor.pop.unwrap = token
-        if "}" token.value.as_str == then
-            if 1 stack.length != then
-                token.location f"Constant block must leave exactly one value, got {stack.length}" common::ErrorKind::Syntax parser.state.record_error_string
-                std::Option[constant_eval::EvalValue]::None return
-            fi
-            stack.pop std::Option::Some return
-        fi
-        if common::TokenKind::Comment token.kind == common::TokenKind::Newline token.kind == || then
-            continue
-        fi
-        if token.kind common::TokenKind::Literal == then
-            token.location.clone std::Option[common::BuiltinType]::None token.value.as_str parse_literal_to_constant_value constant_eval::EvalValue::new stack.push
-            continue
-        fi
-        parser
-            .state
-            .diagnostics
-            .error_count = errors_before_intrinsic
-        if
-            parser.state.diagnostics token.location token.value.as_str stack constant_eval::apply_stack_intrinsic
-        then
-            if
-                parser
-                    .state
-                    .diagnostics
-                    .error_count errors_before_intrinsic <
-            then
-                std::Option[constant_eval::EvalValue]::None return
-            fi
-            continue
-        fi
-        if token.kind common::TokenKind::Operator == then
-            if token.value.as_str common::operator_from_str std::Option::Some(operator) is then
+    for term in initializer.terms.iter do
+        term.kind match
+            grammar::ConstantTermKind::Literal => {
+                term.spelling.as_str parse_literal_to_constant_value = value
+                term.location.clone std::Option[common::BuiltinType]::None value constant_eval::EvalValue::new stack.push
+            }
+            grammar::ConstantTermKind::Reference => {
+                if term cursor parser read_constant_reference std::Option::Some(value) is then
+                    value stack.push
+                else
+                    std::Option[constant_eval::EvalValue]::None return
+                fi
+            }
+            grammar::ConstantTermKind::Operator(operator) => {
                 if
-                    parser.state.diagnostics token.location annotation.clone operator stack constant_eval::apply_operator !
+                    parser.state.diagnostics term.location annotation.clone operator copy stack constant_eval::apply_operator !
                 then
                     std::Option[constant_eval::EvalValue]::None return
                 fi
-                continue
-            fi
-        fi
-        if token.kind common::TokenKind::Identifier == then
-            if token cursor parser read_constant_reference std::Option::Some(value) is then
-                value stack.push
-                continue
-            fi
-            std::Option[constant_eval::EvalValue]::None return
-        fi
-        token.location f"Unsupported token `{token.value}` in constant block" common::ErrorKind::Syntax parser.state.record_error_string
-        std::Option[constant_eval::EvalValue]::None return
+            }
+            grammar::ConstantTermKind::StackIntrinsic => {
+                parser
+                    .state
+                    .diagnostics
+                    .error_count = errors_before
+                parser.state.diagnostics term.location term.spelling.as_str stack constant_eval::apply_stack_intrinsic drop
+                if
+                    errors_before parser
+                        .state
+                        .diagnostics
+                        .error_count >
+                then
+                    std::Option[constant_eval::EvalValue]::None return
+                fi
+            }
+            grammar::ConstantTermKind::Unsupported => {
+                term.location f"Unsupported token `{term.spelling}` in constant block" common::ErrorKind::Syntax parser.state.record_error_string
+                std::Option[constant_eval::EvalValue]::None return
+            }
+        end
     done
-    location "Unclosed constant block" common::ErrorKind::Syntax parser.state.record_error
-    std::Option[constant_eval::EvalValue]::None
+    if 1 stack.length != then
+        stack.length = value_count
+        initializer.end_location f"Constant block must leave exactly one value, got {value_count}" common::ErrorKind::Syntax parser.state.record_error_string
+        std::Option[constant_eval::EvalValue]::None return
+    fi
+    stack.pop std::Option::Some
 }
 
 impl Parser {
     fn evaluate_constant_declaration
         self:mut$Parser
-        cursor:mut$TokenCursor
+        cursor:$TokenCursor
         declaration:$grammar::DeclarationSyntax
+        initializer:$grammar::ConstantSyntax
     {
-        declaration.first_token = cursor.pos
-        cursor.pop.unwrap = keyword
-        cursor.pop.unwrap = name_token
-        name_token.value.as_str cursor.resolve_name = name
+        declaration.name.as_str cursor.resolve_name = name
         std::Option[common::BuiltinType]::None = annotation
-        if cursor.peek std::Option::Some(next) is then
-            if ":" next.value.as_str == then
-                cursor.pop drop
-                self.state cursor parse_type_ast = annotation_type
-                if annotation_type common::Type::Builtin(builtin) is then
-                    if
-                        builtin.is_integer builtin.is_float ||
-                        builtin common::BuiltinType::Bool == ||
-                        builtin common::BuiltinType::Char == ||
-                        builtin common::BuiltinType::Str == ||
-                    then
-                        builtin std::Option::Some = annotation
-                    else
-                        name_token.location f"Unsupported constant type `{builtin.format}`" common::ErrorKind::TypeMismatch self.state.record_error_string
-                        return
-                    fi
+        if initializer.annotation std::Option::Some(written) is then
+            common::Type::Unknown = annotation_type
+            if written grammar::ConstantAnnotation::Name(type_name location) is then
+                type_name.as_str cursor.resolve_name = resolved_name
+                if
+                    self.state self.store location type_name.as_str resolved_name.as_str read_constant_type_argument std::Option::Some(constant_type) is
+                then
+                    constant_type = annotation_type
                 else
-                    name_token.location "Constant annotation must name a primitive value type" common::ErrorKind::TypeMismatch self.state.record_error
+                    resolved_name.as_str common::parse_type_str = annotation_type
+                fi
+            fi
+            if annotation_type common::Type::Builtin(builtin) is then
+                if
+                    builtin.is_integer builtin.is_float || builtin common::BuiltinType::Bool == || builtin common::BuiltinType::Char == || builtin common::BuiltinType::Str == ||
+                then
+                    builtin std::Option::Some = annotation
+                else
+                    builtin.format = type_name
+                    declaration.location f"Unsupported constant type `{type_name}`" common::ErrorKind::TypeMismatch self.state.record_error_string
                     return
                 fi
-            fi
-        fi
-        if cursor.pop std::Option::Some(value_token) is then
-            false = block
-            std::Option[constant_eval::EvalValue]::None = value
-            if "{" value_token.value.as_str == then
-                true = block
-                cursor.retreat
-                value_token.location annotation.clone cursor self evaluate_bounded_block = value
-            elif value_token.kind common::TokenKind::Literal == then
-                value_token.location.clone std::Option[common::BuiltinType]::None value_token.value.as_str parse_literal_to_constant_value constant_eval::EvalValue::new std::Option::Some = value
-            elif value_token.kind common::TokenKind::Identifier == then
-                value_token cursor self read_constant_reference = value
             else
-                value_token.location "Expected a literal, constant name, or bounded block" common::ErrorKind::Syntax self.state.record_error
+                declaration.location "Constant annotation must name a primitive value type" common::ErrorKind::TypeMismatch self.state.record_error
                 return
             fi
-            if value std::Option::Some(initializer) is then
+        fi
+        if
+            annotation.clone initializer cursor self evaluate_constant_initializer std::Option::Some(value) is
+        then
+            if
+                self.state.diagnostics declaration.location initializer.block annotation value constant_eval::constrain std::Option::Some(checked) is
+            then
                 if
-                    self.state.diagnostics name_token.location block annotation.clone initializer constant_eval::constrain std::Option::Some(checked) is
+                    name.as_str self
+                        .store
+                        .constants
+                        .has_str
                 then
-                    if
-                        name.as_str self
-                            .store
-                            .constants
-                            .has_str
-                    then
-                        name_token.location f"Constant `{name_token.value}` is already defined" common::ErrorKind::DuplicateName self.state.record_error_string
-                        return
-                    fi
-                    name_token.location.clone checked.typ.clone checked.value.clone name.clone common::Constant = constant
-                    constant.clone name.clone cursor.constants.set
-                    constant name.clone self.put_constant
+                    declaration.location f"Constant `{declaration.name}` is already defined" common::ErrorKind::DuplicateName self.state.record_error_string
+                    return
                 fi
+                declaration.location.clone checked.typ.clone checked.value.clone name.clone common::Constant = constant
+                constant name self.put_constant
             fi
-        else
-            keyword.location "Constant declaration requires an initializer" common::ErrorKind::Syntax self.state.record_error
         fi
     }
 }
@@ -2213,7 +2221,7 @@ pub fn parse_function_definition parser:mut$Parser cursor:mut$TokenCursor -> Fun
         fi
     fi
 
-    parser.state cursor parse_stack_effect = effect
+    parser.store parser.state cursor parse_stack_effect = effect
 
     # Rewrite signature const params to symbolic constants so unification treats
     # them as constants, not type variables (ADR-0152).
@@ -2314,7 +2322,7 @@ pub fn parse_extern_function parser:mut$Parser cursor:mut$TokenCursor -> Functio
                 token.location "Unexpected token in extern parameter list"
                 common::ErrorKind::UnexpectedToken parser.state.record_error
             fi
-            parser.state token cursor parse_parameter_maybe_named parameters.push
+            parser.store parser.state token cursor parse_parameter_maybe_named parameters.push
         else
             break
         fi
@@ -2337,7 +2345,7 @@ pub fn parse_extern_function parser:mut$Parser cursor:mut$TokenCursor -> Functio
                         if return_token parser does_extern_declaration_end_before then
                             break
                         fi
-                        parser.state cursor parse_type_ast return_types.push
+                        parser.store parser.state cursor parse_type_ast return_types.push
                     else
                         break
                     fi
@@ -2449,7 +2457,7 @@ pub fn parse_enum parser:mut$Parser cursor:mut$TokenCursor -> common::CasaEnum {
                             break
                         fi
                     fi
-                    parser.state cursor parse_type_ast inner_types.push
+                    parser.store parser.state cursor parse_type_ast inner_types.push
                 done
                 if 0 inner_types.length == then
                     variant_token common::Token::location "Variant inner types cannot be empty" common::ErrorKind::Syntax parser.state.record_error
@@ -3558,7 +3566,7 @@ pub fn parse_struct parser:mut$Parser cursor:mut$TokenCursor is_extern:bool -> c
             member_token common::Token::location "Expected member name" common::ErrorKind::UnexpectedToken parser.state.record_error
         fi
         fallback_token parser.state ":" cursor expect_token_value.unwrap_or drop
-        parser.state cursor parse_type_ast = member_type
+        parser.store parser.state cursor parse_type_ast = member_type
         struct_type_vars member_type common::canonicalize_type_var = member_type
 
         type_vars member_token common::Token::location members member_type
@@ -3599,6 +3607,7 @@ pub fn parse_struct parser:mut$Parser cursor:mut$TokenCursor is_extern:bool -> c
 pub fn parse_trait_method_stack_effect
     cursor:mut$TokenCursor
     state:mut$ParseState
+    store:$common::SymbolStore
 -> common::StackEffect {
     std::List[common::Parameter]::new = params
 
@@ -3626,7 +3635,7 @@ pub fn parse_trait_method_stack_effect
             peek common::Token::location "Unexpected token in trait method parameter list" common::ErrorKind::UnexpectedToken state.record_error
         fi
 
-        state peek cursor parse_parameter_maybe_named params.push
+        store state peek cursor parse_parameter_maybe_named params.push
     done
 
     std::List[common::Type]::new = returns
@@ -3647,7 +3656,7 @@ pub fn parse_trait_method_stack_effect
                 then
                     break
                 fi
-                state cursor parse_type_ast returns.push
+                store state cursor parse_type_ast returns.push
             done
         fi
     fi
@@ -3714,7 +3723,7 @@ pub fn parse_trait parser:mut$Parser cursor:mut$TokenCursor -> common::CasaTrait
                 .store
                 .traits
                 .get = super_def_opt
-            parser.state super_token cursor parse_bound_type_args = super_args
+            parser.store parser.state super_token cursor parse_bound_type_args = super_args
             if super_def_opt std::Option::Some(super_def) is then
                 super_def common::CasaTrait::type_params = super_params: $std::List[std::String]
                 if super_args.length super_params.length != then
@@ -3764,7 +3773,7 @@ pub fn parse_trait parser:mut$Parser cursor:mut$TokenCursor -> common::CasaTrait
                     fi
                 fi
 
-                parser.state cursor parse_trait_method_stack_effect = method_stack_effect
+                parser.store parser.state cursor parse_trait_method_stack_effect = method_stack_effect
 
                 type_params common::string_list_to_set = trait_tv_set
                 common::TRAIT_SELF_TYPE trait_tv_set.add_str
@@ -5205,7 +5214,7 @@ pub fn parse_impl_block parser:mut$Parser cursor:mut$TokenCursor {
         fi
     fi
 
-    parser.state cursor parse_type_ast = impl_type
+    parser.store parser.state cursor parse_type_ast = impl_type
     type_vars common::string_list_to_set = type_var_set
     type_var_set impl_type common::canonicalize_type_var = impl_type
     # Constant parameters in the implemented type are constants, not type
@@ -5227,7 +5236,7 @@ pub fn parse_impl_block parser:mut$Parser cursor:mut$TokenCursor {
             true = parse_implemented_traits
             while parse_implemented_traits do
                 fallback_token parser.state common::TokenKind::Identifier cursor expect_token_kind.unwrap_or = trait_token
-                parser.state trait_token cursor parse_bound_type_args = trait_args
+                parser.store parser.state trait_token cursor parse_bound_type_args = trait_args
                 trait_token.value.as_str cursor.resolve_name parser
                     .store
                     .traits
@@ -6655,6 +6664,7 @@ pub fn try_parse_pointer_operation
     cursor:mut$TokenCursor
     ops:mut$std::List[common::Op]
     state:mut$ParseState
+    store:$common::SymbolStore
 -> bool {
     if "ptr::into_raw" token.value.as_str == then
         token.location common::OpValue::PtrIntoRaw common::Op::new ops.push
@@ -6687,7 +6697,7 @@ pub fn try_parse_pointer_operation
         fi
     fi
     cursor.pop drop
-    state cursor parse_type_ast = target_type
+    store state cursor parse_type_ast = target_type
     fallback_token state "]" cursor expect_token_value.unwrap_or drop
     if "ptr::read" token.value.as_str == then
         token.location target_type common::OpValue::PtrRead common::Op::new ops.push
@@ -6708,6 +6718,7 @@ pub fn try_parse_explicit_associated_item
     cursor:mut$TokenCursor
     ops:mut$std::List[common::Op]
     state:mut$ParseState
+    store:$common::SymbolStore
 -> bool {
     cursor.save = saved_pos
     cursor.peek = open_opt
@@ -6739,7 +6750,7 @@ pub fn try_parse_explicit_associated_item
                 break
             fi
         fi
-        state cursor parse_type_ast type_args.push
+        store state cursor parse_type_ast type_args.push
     done
     if
         '&' 0 token common::Token::value.as_str cursor
@@ -6849,7 +6860,7 @@ pub fn token_to_op
     fi
 
     if common::TokenKind::Intrinsic kind == then
-        parser.state cursor token get_op_intrinsic ops.push
+        parser.store parser.state cursor token get_op_intrinsic ops.push
         return
     fi
 
@@ -6863,15 +6874,15 @@ pub fn token_to_op
             ops token handle_question_operator
             return
         fi
-        parser.state function_name cursor token get_op_operator ops.push
+        parser.store parser.state function_name cursor token get_op_operator ops.push
         return
     fi
 
     if common::TokenKind::Identifier kind == then
-        if parser.state ops cursor token try_parse_pointer_operation then
+        if parser.store parser.state ops cursor token try_parse_pointer_operation then
             return
         fi
-        if parser.state ops cursor token try_parse_explicit_associated_item then
+        if parser.store parser.state ops cursor token try_parse_explicit_associated_item then
             return
         fi
         # Check for struct literal: StructName { ... }
@@ -6930,14 +6941,6 @@ pub fn parse_ops parser:mut$Parser tokens:std::List[common::Token] -> std::List[
         std::List[common::Op]::new return
     fi
     tokens TokenCursor::new = cursor
-    parser
-        .store
-        .constants
-        .clone = cursor.constants
-    parser
-        .store
-        .failed_constants
-        .clone = cursor.failed_constants
     parser
         .current_module
         .names
@@ -8585,14 +8588,6 @@ impl Parser {
             fi
         done
         tokens TokenCursor::new = constant_cursor
-        self
-            .store
-            .constants
-            .clone = constant_cursor.constants
-        self
-            .store
-            .failed_constants
-            .clone = constant_cursor.failed_constants
         self.source_prefixes constant_cursor.copy_module_prefixes
         0 = import_index: u64
         for declaration in parsed.declarations.iter do
@@ -8623,47 +8618,49 @@ impl Parser {
             if declaration.name.as_str names.get_str std::Option::Some(binding) is then
                 binding.clone declaration.name.clone constant_cursor.names.set
             fi
-            if "const" declaration.kind.as_str == then
-                declaration.after_token declaration.first_token.to_str self
-                    .current_module_mut
-                    .header_ends
-                    .set
-                self
-                    .state
-                    .diagnostics
-                    .error_count = errors_before_constant
-                if
-                    declaration.first_token tokens
-                        .get
-                        .location
-                        .span
-                        .offset
-                        .to_str
-                        .as_str self
-                        .current_module
-                        .rejected_declarations
-                        .has_str !
-                then
-                    declaration constant_cursor self.evaluate_constant_declaration
+            if "const" declaration.kind.as_str != then
+                continue
+            fi
+            declaration.after_token declaration.first_token.to_str self
+                .current_module_mut
+                .header_ends
+                .set
+            self
+                .state
+                .diagnostics
+                .error_count = errors_before_constant
+            if
+                declaration.first_token tokens
+                    .get
+                    .location
+                    .span
+                    .offset
+                    .to_str
+                    .as_str self
+                    .current_module
+                    .rejected_declarations
+                    .has_str !
+            then
+                if declaration.constant std::Option::Some(initializer) is then
+                    initializer declaration constant_cursor self.evaluate_constant_declaration
                 fi
-                self
-                    .state
-                    .diagnostics
-                    .error_count errors_before_constant - self.state.constant_errors + = self.state.constant_errors
-                declaration.name.as_str constant_cursor.resolve_name = constant_name
-                if
-                    constant_name.as_str self
-                        .store
-                        .constants
-                        .has_str !
-                then
-                    constant_name.as_str self.register_private_declaration
-                    constant_name.clone self
-                        .store
-                        .failed_constants
-                        .add
-                    constant_name.clone constant_cursor.failed_constants.add
-                fi
+            fi
+            self
+                .state
+                .diagnostics
+                .error_count errors_before_constant - self.state.constant_errors + = self.state.constant_errors
+            declaration.name.as_str constant_cursor.resolve_name = constant_name
+            if
+                constant_name.as_str self
+                    .store
+                    .constants
+                    .has_str !
+            then
+                constant_name.as_str self.register_private_declaration
+                constant_name.clone self
+                    .store
+                    .failed_constants
+                    .add
             fi
         done
         tokens parsed.declarations self.collect_headers
@@ -8686,14 +8683,6 @@ impl Parser {
         tokens:$std::List[common::Token]
     {
         tokens TokenCursor::new = cursor
-        self
-            .store
-            .constants
-            .clone = cursor.constants
-        self
-            .store
-            .failed_constants
-            .clone = cursor.failed_constants
         self
             .current_module
             .names
