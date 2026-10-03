@@ -170,7 +170,13 @@ source facts only. Named parameters retain their written name ranges from parsin
 including method receivers. Type substitution preserves this attribution.
 Parameter queries use these retained ranges, and generated parameters have no
 source declaration. Established parameter declarations survive independent body
-errors. Local binding scopes still use source occurrence reconstruction.
+errors. Semantic checking retains each local binding's declaration range,
+verified type, and lexical visibility while its scope is open. Resolved uses and
+closure captures retain that declaration identity. The editor projects these
+facts into definition, reference, hover, and completion results without matching
+assignments or replaying scope markers. Root bindings, branches, loops, and
+patterns use the same facts. Rejected operations withhold dependent bindings,
+while independent verified declarations remain available.
 References cover this compilation's root and loaded imports,
 with sorted, deduplicated ranges and explicit declaration inclusion. Tokens are
 sorted, non-overlapping, and restricted to the requested file. Source failures

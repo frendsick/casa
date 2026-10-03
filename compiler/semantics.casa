@@ -4,6 +4,7 @@
 # are type-safe.
 import "std" as std
 import "common" as common
+import "binding_facts" as binding_facts
 import "error" as error
 import "block_scope" as block_scope
 import "semantic_rules" as rules
@@ -1232,6 +1233,7 @@ struct WhileContext {
     condition_present:       bool
     current_branch_location: common::Location
     scope_depth:             u64
+    body_start:              u64
 }
 
 struct MatchContext {
@@ -1326,7 +1328,7 @@ impl IfContext {
 
 impl WhileContext {
     pub fn new scope_depth:u64 -> WhileContext {
-        scope_depth
+        0 scope_depth
         common::empty_location
         false
         false
@@ -1522,6 +1524,8 @@ struct SemanticChecks {
     functions:           std::Map[std::String FunctionWork]
     verified_operations: std::Set[i64]
     return_summaries:    std::Map[std::String CallReturnSummary]
+    bindings:            binding_facts::Facts
+    capture_bindings:    std::Map[std::String std::Map[std::String u64]]
 }
 
 impl SemanticChecks {
@@ -1740,6 +1744,7 @@ impl SemanticChecks {
     }
 
     fn new -> SemanticChecks {
+        std::Map[std::String std::Map[std::String u64]]::new binding_facts::Facts::new
         std::Map[std::String CallReturnSummary]::new std::Set[i64]::new
         std::Map[std::String FunctionWork]::new SemanticChecks
     }
@@ -1861,7 +1866,7 @@ impl SemanticSession {
         self:SemanticSession
         operations:std::List[common::Op]
         diagnostics:mut$error::Diagnostics
-    -> common::SymbolStore AnalysisBody std::Map[std::String AnalysisBody] std::Set[i64] {
+    -> common::SymbolStore AnalysisBody std::Map[std::String AnalysisBody] std::Set[i64] binding_facts::Facts {
         self match
             SemanticSession { store: store checks: checks } => {
                 if diagnostics.has_errors operations checks.body_has_rejected_target || then
@@ -1890,12 +1895,26 @@ impl SemanticSession {
                         .into_analysis
                     name.clone bodies.set
                 done
+                0 = binding_index: u64
+                while
+                    binding_index checks
+                        .bindings
+                        .declarations
+                        .length >
+                do
+                    binding_index checks
+                        .bindings
+                        .declarations
+                        .get_mut = binding
+                    binding.operation checks.verified_operations.has = binding.verified
+                    1 += binding_index
+                done
                 checks match
                     SemanticChecks {
-                        verified_operations: verified
-                    } => verified
-                end = verified
-                store root bodies verified
+                        bindings: bindings verified_operations: verified
+                    } => verified bindings
+                end = bindings = verified
+                store root bodies verified bindings
             }
         end
     }
@@ -2365,6 +2384,10 @@ impl TypeChecker {
             before self.materialize_branch_results
         fi
         op self.attach_scope_cleanups
+        0 op
+            .location
+            .span
+            .offset self.close_source_bindings
         self.scope.exit
     }
 
@@ -2923,6 +2946,7 @@ impl TypeChecker {
         function_opt:mut$std::Option[common::Function]
         is_global:bool
     {
+        function_opt typ name op tc.record_source_binding
         if name tc.scope.find_binding std::Option::Some(binding) is then
             binding common::BindingFact::Definition op.add_binding_fact
         fi
@@ -7316,6 +7340,13 @@ impl TypeChecker {
                 .branched_stacks
                 .pop
                 .into_while = while_ctx
+            op
+                .location
+                .span
+                .offset op
+                .location
+                .span
+                .length + = while_ctx.body_start
             true while_ctx WhileContext::set_condition_present
             tc.stack.snapshot = body_stack
             tc.current_ownership_flow = body_flow
@@ -7376,6 +7407,10 @@ impl TypeChecker {
                 op names while_ctx.flow_before tc.report_loop_flow_difference
             fi
             op tc.attach_scope_cleanups
+            0 op
+                .location
+                .span
+                .offset tc.close_source_bindings
             tc.scope.exit
             if while_ctx.has_exit then
                 while_ctx.after tc.stack.restore
@@ -8643,10 +8678,16 @@ impl TypeChecker {
         lambda:mut$common::Function
         function_opt:mut$std::Option[common::Function]
     {
+        std::Map[std::String u64]::new = source_bindings
         0 = capture_index: u64
         while capture_index lambda.captures.length > do
             capture_index lambda.captures.get_mut = capture
             capture common::Variable::name.as_str = capture_name: $str
+            if capture_name tc.scope.find_scope_binding std::Option::Some(binding) is then
+                if binding.source_identity std::Option::Some(identity) is then
+                    identity copy capture.name.clone source_bindings.set
+                fi
+            fi
             if function_opt capture_name.as_str tc.local_var_type std::Option::Some(capture_type) is then
                 if capture_type.is_unknown ! then
                     capture_type.clone capture common::Variable::set_typ
@@ -8654,6 +8695,10 @@ impl TypeChecker {
             fi
             1 += capture_index
         done
+        source_bindings lambda.name.clone tc
+            .checks
+            .capture_bindings
+            .set
     }
 
     # Inferred bodies still need one compatible result on every returning path.
@@ -8720,7 +8765,18 @@ impl TypeChecker {
     # Owned captures keep their contained loans separate from their own storage.
     fn record_capture_origins self:mut$TypeChecker function:$common::Function {
         for capture in function.captures.iter do
-            capture.name.clone capture.typ.clone block_scope::ScopedBinding capture.name.clone self
+            std::Option[u64]::None = source_identity
+            if
+                function.name self
+                    .checks
+                    .capture_bindings
+                    .get std::Option::Some(bindings) is
+            then
+                if capture.name bindings.get std::Option::Some(identity) is then
+                    identity copy std::Option::Some = source_identity
+                fi
+            fi
+            source_identity capture.name.clone capture.typ.clone block_scope::ScopedBinding capture.name.clone self
                 .scope
                 .function_bindings
                 .set
@@ -10007,6 +10063,11 @@ impl TypeChecker {
             done
 
             if source_guard std::Option::Some(guard_body) is then
+                self
+                    .checks
+                    .bindings
+                    .declarations
+                    .length = first_guard_binding
                 self.scope.snapshot = guard_scope
                 self.current_ownership_flow = guard_flow
                 self.infer_parameters self.checks
@@ -10045,6 +10106,18 @@ impl TypeChecker {
                 fi
                 guard_checker.moved_operations guard_ops attach_checked_moves
                 if op.value common::OpValue::MatchArm(arm) is then
+                    guard_checker
+                        .current_location
+                        .span
+                        .offset guard_checker
+                        .current_location
+                        .span
+                        .length +
+                    arm
+                        .guard_end
+                        .clone
+                        .unwrap_or = guard_end
+                    first_guard_binding guard_end guard_checker.close_source_bindings
                     guard_ops = arm.guard_ops
                 fi
                 guard_checker.into_semantic_dependencies = guard_dependencies
@@ -12316,6 +12389,7 @@ impl TypeChecker {
                 false = self.facts_available
             fi
             if succeeded self.facts_available && then
+                current_op self.record_source_reference
                 current_op self.collect_operation_facts
                 current_op.id self
                     .checks
@@ -12400,13 +12474,13 @@ impl TypeChecker {
         function:mut$std::Option[common::Function]
     {
         arm match
-            source_body::SourceArm { origin: origin pattern: pattern guard: guard body: body } => {
+            source_body::SourceArm { origin: origin pattern: pattern guard: guard guard_end: guard_end body: body } => {
                 if guard.get_nodes.is_empty then
                     std::Option[SourceWork]::None
                 else
                     guard SourceWork::Guard std::Option::Some
                 fi = work
-                origin std::List[common::Op]::new pattern common::MatchArm common::OpValue::MatchArm common::Op::from_source = operation
+                origin guard_end std::List[common::Op]::new pattern common::MatchArm common::OpValue::MatchArm common::Op::from_source = operation
                 function emitted pending work operation self.check_work_operation
                 function emitted pending body self.check_source_sequence
             }
@@ -12837,6 +12911,7 @@ fn analyze_ops
         cleanup_op checker.attach_all_owner_cleanups
         cleanup_op ops.push
     fi
+    function_opt checker.close_source_function
     checker.resolve_return_literals
     checker.moved_operations ops attach_checked_moves
     checker.literal_resolutions ops apply_resolved_literal_hints
@@ -13692,5 +13767,197 @@ impl SemanticSession {
                 fi
             fi
         done
+    }
+}
+
+impl TypeChecker {
+    # Establish declaration identity once, while the binding's lexical frame is open.
+    fn record_source_binding
+        self:mut$TypeChecker
+        operation:$common::Op
+        name:$str
+        typ:$common::Type
+        function:$std::Option[common::Function]
+    {
+        if name common::is_internal_variable_name then
+            return
+        fi
+        if name self.scope.find_scope_binding std::Option::Some(binding) is then
+            if binding.source_identity.is_some then
+                return
+            fi
+        else
+            return
+        fi
+        operation.location.clone = declaration
+        std::Option[common::Location]::None = owner
+        if function std::Option::Some(enclosing) is then
+            enclosing.location.clone std::Option::Some = owner
+            if declaration enclosing.location.matches then
+                name enclosing.find_parameter_location = parameter
+                if parameter.is_none then
+                    return
+                fi
+                parameter.unwrap = declaration
+            fi
+        fi
+        operation.value match
+            common::OpValue::IsCheck(variant) => {
+                if name variant.binding_locations.get_str std::Option::Some(location) is then
+                    location.clone = declaration
+                else
+                    return
+                fi
+            }
+            common::OpValue::MatchArm(arm) => {
+                arm.pattern_value match
+                    common::PatternValue::EnumVariant(variant) => {
+                        if name variant.binding_locations.get_str std::Option::Some(location) is then
+                            location.clone = declaration
+                        else
+                            return
+                        fi
+                    }
+                    common::PatternValue::Struct(pattern) => {
+                        if name pattern.binding_locations.get_str std::Option::Some(location) is then
+                            location.clone = declaration
+                        else
+                            return
+                        fi
+                    }
+                    _ => return
+                end
+            }
+            _ => {
+            }
+        end
+        self
+            .checks
+            .bindings
+            .declarations
+            .length = identity
+        declaration self.get_binding_visibility = visibility
+        false typ resolve_numeric_literal_default visibility owner declaration name.to_str operation.id
+        binding_facts::Binding self
+            .checks
+            .bindings
+            .declarations
+            .push
+        identity name self.scope.set_source_identity
+    }
+
+    fn get_binding_visibility self:$TypeChecker declaration:$common::Location -> common::Location {
+        declaration.clone = visibility
+        if self.branched_stacks.is_empty then
+            visibility return
+        fi
+        self.branched_stacks.length 1 - self.branched_stacks.get = frame
+        if frame BranchFrame::BranchWhile(loop) is then
+            if visibility.span.offset loop.body_start > then
+                loop.body_start = visibility.span.offset
+            fi
+        fi
+        visibility
+    }
+
+    fn record_source_reference self:mut$TypeChecker operation:$common::Op {
+        operation.value match
+            common::OpValue::AssignVar(name) => name.as_str
+            common::OpValue::AssignInc(name) => name.as_str
+            common::OpValue::AssignDec(name) => name.as_str
+            common::OpValue::PushVar(name) => name.as_str
+            common::OpValue::PushCapture(name) => name.as_str
+            _ => return
+        end = name
+        if name self.scope.find_scope_binding std::Option::Some(binding) is then
+            if binding.source_identity std::Option::Some(identity) is then
+                identity copy operation.id self
+                    .checks
+                    .bindings
+                    .references
+                    .set
+            fi
+        fi
+    }
+
+    fn close_source_bindings self:mut$TypeChecker end_offset:u64 first_identity:u64 {
+        for
+            name in self
+                .scope
+                .current_names
+                .iter
+        do
+            name.as_str self
+                .scope
+                .find_scope_binding
+                .unwrap = scoped
+            if scoped.source_identity std::Option::Some(identity) is then
+                if first_identity identity copy < then
+                    continue
+                fi
+                end_offset identity copy self
+                    .checks
+                    .bindings
+                    .declarations
+                    .get_mut
+                    .close_visibility
+            fi
+        done
+    }
+
+    fn close_source_function self:mut$TypeChecker function:$std::Option[common::Function] {
+        for
+            scoped in self
+                .scope
+                .function_bindings
+                .values
+                .iter
+        do
+            if scoped.source_identity.is_none then
+                continue
+            fi
+            scoped
+                .source_identity
+                .clone
+                .unwrap self
+                .checks
+                .bindings
+                .declarations
+                .get_mut = binding
+            18446744073709551615 = end_offset: u64
+            if function std::Option::Some(enclosing) is then
+                if enclosing binding.belongs_to ! then
+                    continue
+                fi
+                self
+                    .current_location
+                    .span
+                    .offset self
+                    .current_location
+                    .span
+                    .length + 1 +
+                enclosing
+                    .body_end
+                    .clone
+                    .unwrap_or = end_offset
+            fi
+            end_offset binding.close_visibility
+        done
+    }
+}
+
+impl common::Function {
+    fn find_parameter_location self:$common::Function name:$str -> std::Option[common::Location] {
+        for
+            parameter in self
+                .stack_effect
+                .parameters
+                .iter
+        do
+            if parameter.name name == then
+                parameter.location.clone return
+            fi
+        done
+        std::Option[common::Location]::None
     }
 }
