@@ -12,7 +12,5 @@ A sufficiently deep structure may exhaust the process call stack; stack exhausti
 
 ## Consequences
 
-- Validation must include long linear and branching destruction tests plus a benchmark reporting the practical depth limit.
-- Stack depth and destruction time must be measured without conflating allocation or construction time.
 - A later iterative lowering must preserve custom cleanup method and reverse-field order.
 - Stack exhaustion is a process termination, not a catchable panic or cleanup path.

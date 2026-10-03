@@ -9,9 +9,8 @@ direct trait calls without hidden runtime type descriptors or dictionaries.
 Distinct bindings can increase compilation cost and emitted size.
 
 This record extends [ADR-0069](0069-generics-are-monomorphized-after-one-body-check.md)
-for Compiler Capsule. Checked recipes are implemented, while the full
-target-neutral boundary and consumer cutover remain incomplete. Algorithms follow
-[Choose the semantic-analysis and specialization seams](https://github.com/frendsick/casa/issues/648).
+for Compiler Capsule. Checking and specialization follow
+[ADR-0173](0173-semantic-checking-owns-source-obligations.md).
 
 ## Checking and inference
 
@@ -78,7 +77,7 @@ Conditional concrete behavior cannot justify an operation missing its symbolic
 bound.
 
 Complete all required reachable semantic instances and dispatch before
-constructing the target-neutral checked program. The backend owns physical
+constructing the checked program. The backend owns physical
 sizes, field offsets, storage, ABI placement, and machine operations under
 [ADR-0167](0167-compiler-products-own-independent-snapshots.md). It may reject a
 target-specific layout or ABI obligation. It must not rerun source-level
@@ -93,33 +92,3 @@ checking or weaken ownership rules.
 
 Diagnostics use source names and bindings. Generated hashes and operation IDs
 must not replace source attribution.
-
-## Cost, migration, and validation
-
-Make no exact binary-size guarantee. Measure generic-heavy compilation time,
-peak memory, and emitted size on common source workloads. Keep self-compilation
-and fixed-point validation separate from comparisons using a common workload.
-The [checked-generics benchmark](../benchmarks/checked-generics.md) is historical
-evidence of workload-dependent cost, not a prediction for the redesign.
-
-Preserve generic syntax, accepted behavior, and diagnostic phase except for
-separately accepted language changes and the validation gaps listed below.
-Update reference documentation, examples, and executable tests with production
-migration. Retain focused coverage for unused invalid bodies, missing bounds,
-input and trait-driven inference, explicit references, same-binding recursion,
-mutual and constant-changing recursion, symbolic constant forwarding and width
-checks, concrete copying and destruction, and specialization reuse.
-
-[ADR-0173](0173-semantic-checking-owns-source-obligations.md) owns cycle
-traversal, recipes, identities, cache lifetime, and concrete obligations.
-
-## Current implementation
-
-[Checked-recipe measurements](../benchmarks/checked-recipes/README.md) document
-the implemented recipe path. Cycle validation traverses non-generic callees and
-reports the source cycle and changed bindings. These requirements remain part
-of the accepted contract, not outstanding migration gaps.
-
-The full target-neutral semantic boundary remains incomplete, with consumer
-cutover in #715. The historical code-inspection findings remain in
-[the original decision](https://github.com/frendsick/casa/blob/e9a258837d40185376c97e4fd03fccb98d238d82/docs/adr/0170-generics-specialize-after-symbolic-checking.md#current-evidence-and-migration-gaps).

@@ -11,9 +11,9 @@ size_of[T] # None -> u64
 It returns the number of bytes occupied by one inline `T`, including tail padding required to keep consecutive values correctly aligned. The result is a compile-time constant after generic specialization.
 
 ADR-0171 excludes this query from named constant initializers and constant type
-arguments. Under ADR-0167, ordinary code retains a typed symbolic query until
-target planning supplies its value. This separates target-neutral checking
-from physical layout.
+arguments. Ordinary code retains a typed query. Semantic checking verifies
+that a concrete type has a known inline size using the current layout.
+The backend supplies the query value from its layout plan under ADR-0167.
 
 Generic raw-storage implementations use it to allocate and address dense elements:
 

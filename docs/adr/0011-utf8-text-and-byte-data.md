@@ -10,11 +10,8 @@ Casa distinguishes text from arbitrary bytes. `str` contains validated UTF-8 tex
 
 ## Consequences
 
-- `str.byte_length` returns the encoded byte length in constant time; `str.length` counts Unicode scalar values.
-- Strings do not provide ambiguous integer indexing. `.bytes` and `.chars` expose explicit iterators, and slicing APIs name whether their units are bytes or Unicode scalars.
+- `str.length` returns the encoded byte length in constant time. `str.iter` decodes Unicode scalar values as `char`.
+- `str.substr` uses byte ranges and validates UTF-8 boundaries.
 - Text literals accept direct Unicode and `\u{scalar}`. `\xHH` is restricted to ASCII values so it cannot inject invalid UTF-8 into `char` or `str`.
 - Binary storage uses the ordinary stdlib owner `Bytes`. Raw file, standard-input, and captured-process data enters safe code as `Bytes` and requires explicit UTF-8 validation before becoming `String`.
 - Foreign NUL-terminated bytes are exposed as `$cstr`; converting them to owned text validates UTF-8 and returns `Result[String Utf8Error]`.
-
-Implementation: `str.length` still counts bytes and `str.byte_length` is absent.
-The scalar-length and explicit iterator/slicing contracts remain accepted work.

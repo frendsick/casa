@@ -2,9 +2,9 @@
 
 related issue: [Choose the front-end and module-analysis seams](https://github.com/frendsick/casa/issues/647).
 
-Parse each source once into lossless tokens and structured constructs, preserving
-both meanings of `Name {}`.
-Collect declarations and discover modules from those constructs. Resolve source
+Shared syntax recognition preserves lossless tokens and structured constructs,
+including both meanings of `Name {}`.
+The source builder collects declaration headers and parses source bodies. Resolve source
 names through compilation-local identities without changing token spelling.
 This completes the front-end responsibilities of ADR-0167 under the
 import, constant, and tooling contracts in ADR-0168, ADR-0171, and ADR-0172.
@@ -13,13 +13,7 @@ The semantic construction consumes these facts under
 Shared syntax recognition feeds `source_builder.casa`. Production consumers
 use typed requests in `products.casa`.
 
-## Evidence and alternatives
-
-The [historical front-end trace](https://github.com/frendsick/casa/blob/e9a258837d40185376c97e4fd03fccb98d238d82/docs/adr/0174-front-end-parses-source-before-module-resolution.md#evidence-and-alternatives)
-records repeated import recognition, token rewriting, parser/store mutation,
-declaration-dependent struct grammar, and parser-driven constant/derive/default
-work. Those findings explain the separate source and semantic responsibilities.
-They are not current measurements.
+## Alternatives
 
 Keeping token rewriting would preserve the repeated grammar and reverse-name
 protocol. A complete parsed/resolved/typed product ladder would add ownership
@@ -36,7 +30,7 @@ function per row. All constructors and mutable builders remain private.
 | --- | --- | --- |
 | Source acquisition | Captured base directory, root bytes and identity, ordered library paths, overrides, and parsed import specifiers produce retained source entries. | The request source owner normalizes identities, reads a selected file once, and owns exact bytes before decoding. It records lookup, read, and input-conflict failures in the report. This is the front end's filesystem effect. |
 | Syntax recognition | One retained source produces lossless tokens, structured source constructs, original name-segment ranges, grammar relationships, and rejected regions. | A cursor skips trivia without copying a second token list. Construct-local builders own unfinished syntax. This work reads no files, resolves no names, and creates no semantic declarations. Source errors retain diagnostics and safely recognized regions. |
-| Module and declaration construction | Parsed imports, declarations, scopes, and bodies produce the private `SourceProgram` and module-local lookup tables. | A request-local builder owns discovery state, alias bindings, declaration identities, visibility, and duplicate diagnostics. It moves parsed constructs into the source program rather than cloning a second full tree. Failed prerequisites remain explicit. |
+| Module and declaration construction | Retained tokens and grammar facts produce the private `SourceProgram` and module-local lookup tables. | A request-local builder collects headers and parses declarations and bodies. It owns discovery state, alias bindings, declaration identities, visibility, and duplicate diagnostics. Failed prerequisites remain explicit. |
 | Constant elaboration | Complete parsed initializers, visible constant identities, and established dependency values produce typed or contextual constant values. | A private evaluator commits a value once or records failure. It uses shared primitive typing and numeric rules, with no function bodies, runtime state, or target layout. A failed declaration has no substitute value. |
 | Name and semantic construction | Source bodies and their scopes, declaration facts, and elaborated constants feed the shared semantic traversal. | The traversal establishes name targets, types, ownership, and generated behavior. It projects verified editor facts and builds private semantic bodies. Source errors never create a checked program. Detailed checking and specialization algorithms belong to the semantic-seam decision. |
 
@@ -59,16 +53,15 @@ navigation through qualified references.
 
 Import nodes contain the decoded specifier, optional written alias, and source
 ranges. Declaration nodes contain parsed headers, source-order positions,
-visibility, type syntax, and structured bodies. Collection never rescans tokens
-to recognize import clauses, declaration names, or enum variants. A type name
+visibility, type syntax, and structured bodies. The source builder collects
+headers before parsing declarations and bodies. A type name
 remains an unresolved source name until its owning lookup establishes identity.
 
 Preserve the existing valid name-plus-brace forms. For example, `N {}` can
 construct an empty struct or call a function and then create an empty closure,
 depending on the declaration of `N`. Record the name and braced contents in a
 neutral source form. Resolution selects the meaning from the established name
-target. It consumes the parsed children and does not tokenize or parse them
-again. If the target is unavailable, the dependent semantic fact is unavailable.
+target. Source construction parses the children according to that meaning. If the target is unavailable, the dependent semantic fact is unavailable.
 The formatter uses the neutral structure without imports or declaration lookup.
 
 Recognize field labels from their grammatical position and `name:` syntax,
@@ -118,7 +111,7 @@ dependencies. Apply public access checks to declarations, methods, and fields
 while retaining private implementation dependencies inside their defining module.
 
 Collect complete declaration headers before checking ordinary bodies so
-recursive references and later declarations need no token prepass. Keep lookup
+recursive references and later declarations resolve through the same module tables. Keep lookup
 tables scoped to modules and lexical scopes. A source occurrence retains its
 spelling and scope until shared resolution establishes its declaration or
 binding identity. Bind parameters and locals at their lexical positions.
@@ -236,30 +229,3 @@ Reparse formatter output through this operation and apply ADR-0172's token,
 comment, and structure equivalence guard. Missing imports, unresolved names,
 and semantic errors do not block syntax-only formatting. Delete the parser's
 `syntax_only` mode rather than reproducing it as flags across the new parser.
-
-## Migration and focused evidence
-
-| Current protocol to remove | Replacement and evidence required |
-| --- | --- |
-| Import/declaration token prepasses, namespace rewriting, and reverse source-name maps | Parsed import/declaration records and identities. Check aliases, qualified segments, source attribution, and recursive/later declarations through analysis. |
-| Executable import operations, selective closure/retention state, initializer selection and ordering | Request-local module discovery under ADR-0168 and ADR-0165. Check ordered lookup, self-match, cycles, repeated aliases, privacy, imported root validation, and import non-execution. |
-| Parser/store mutation flags, whole-result disposal, and generated source functions from failed parsing | Construct-local builders and explicit availability. Check independent and dependent facts before/after a damaged declaration, nested delimiters, failed imports, and unavailable scope. |
-| Formatter mode branches, temporary semantic store, copied trivia-free token list | One grammar and lossless tokens. Check unresolved imported structs, both empty-brace meanings, nested field expressions, unknown field labels, and token/comment/structure equivalence. |
-| Token-cursor constant execution, `const fn` frames/folding, and fallback values | ADR-0171's parsed bounded evaluator. Check ordering, qualified constants, failed dependencies, widths, exact final stack, symbolic forwarding, and target-layout exclusion. |
-| Derive/default/accessor source injection and public parser lifecycle tests | Semantic construction and tests through syntax/analysis products. Preserve observable callable access and accepted trait contracts. |
-
-Retain the useful cases in `test_parser.casa`, `test_analysis.casa`,
-`test_struct_literal.casa`, import tests, and formatter safety tests. Replace
-assertions that require an empty symbol store after local damage. No-crash probes alone do not establish correct rejection. Check observable
-rejection of unknown fields, empty literals, and missing field values.
-
-Check diagnostic ordering with an earlier parser error, an imported error, and
-a later lexical error in one root. Include a nested import, an unlocated
-diagnostic, and a repeated module to verify insertion and reuse without changing
-source attribution.
-
-Measure final maintained source and interface knowledge against the pinned
-audit. Moving source storage, elaboration, or generated behavior to another
-file is not deletion. The namespace, selective-import, constant, runtime-global,
-and tooling removals overlap earlier decisions and must not be added twice.
-This record establishes neither a line-saving estimate nor a performance gain.

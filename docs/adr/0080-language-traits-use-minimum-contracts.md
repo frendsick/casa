@@ -1,6 +1,6 @@
 # Language-integrated traits use minimum contracts
 
-Primitive operations have intrinsic semantics and remain available when no standard library is present. Traits connect the same syntax to user-defined types and generic bounds, but the compiler validates only the minimum method contract required by that language feature.
+Primitive arithmetic and comparison operators have intrinsic semantics and remain available when no standard library is present. Traits connect the same syntax to user-defined types and generic bounds, but the compiler validates only the minimum method contract required by that language feature.
 
 A declaration with a canonical standard-library language-trait identity must
 provide each required method with the expected stack effect. An unrelated trait
@@ -24,8 +24,6 @@ implicit and stack duplication use Copy.
 ## Consequences
 
 - Generic comparison and overloaded comparison for user types require active equality or ordering declarations with the complete effective operator-method stack effects.
-- Display-backed formatting requires its declared formatting method for user-defined and generic values; primitive formatting must have an intrinsic freestanding path.
+- Display-backed formatting requires its declared formatting method for user-defined and generic values.
 - A canonical Eq declaration such as `trait Eq { fn unrelated -> str }` is
   invalid because the equality operator method is missing.
-
-Implementation: primitive comparison bypasses trait dispatch. Freestanding primitive formatting remains pending, and the standard library still exposes `Word` despite [ADR-0022](0022-word-is-not-a-public-trait.md).

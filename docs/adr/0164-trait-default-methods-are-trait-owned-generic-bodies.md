@@ -35,6 +35,5 @@ context.
 
 - Standard traits keep their minimum required primitives and source-defined
   defaults for equality, ordering, iteration, and other adapters.
-- Valid source needs no migration. Tests move from generated names and cloned
-  declarations to direct, inherited, generic, overridden, qualified, diamond,
+- Tests cover direct, inherited, generic, overridden, qualified, diamond,
   and ambiguous behavior through production compiler entry points.

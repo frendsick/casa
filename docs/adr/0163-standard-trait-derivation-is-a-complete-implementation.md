@@ -65,15 +65,9 @@ effect is inferred may infer and display the bound as part of that type.
 
 ## Consequences
 
-- Existing partial overrides migrate to complete explicit implementations for
-  the affected traits. Structurally valid explicit Copy implementations migrate
-  to `derives Copy`. Types with custom Clone behavior lose Copy.
 - Diagnostics cover unknown and duplicate derive names, ineligible fields or
   payloads, overlapping family members, and explicit Copy implementations. They
   name source declarations, not compiler-generated names.
 - Tests cover observable behavior, conditional requirements, recursive owned
   values, borrow fields, enum payloads, Copy safety, explicit Copy and family
   rejection, and diagnostic locations through production compiler entry points.
-- The language reference, examples, and tests change with the compiler
-  migration. Until then, they continue to describe and test the implemented
-  behavior.

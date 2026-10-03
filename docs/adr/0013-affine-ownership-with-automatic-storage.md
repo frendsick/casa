@@ -21,9 +21,6 @@ Higher-order function contracts reuse the same qualifiers instead of introducing
 - Owned values move. `dup` and the copied operand of `over` require `Copy`. `swap` and `rot` only reorder ownership. Scalars and named function references implement `Copy`. Shared borrows duplicate without Copy conformance under ADR-0150. Eligible aggregates opt in only with `derives Copy` under ADR-0163. Mutable borrows, heap owners, owned resources, and types with custom cleanup are not `Copy`.
 - An escaping closure that borrows a local is rejected with a diagnostic suggesting `move { ... }`; captures are never silently moved or duplicated.
 - `Slice[T]` is a runtime-length view tied to a borrowed list. The list cannot be mutated in a way that could invalidate the view before its last use.
-- Collection observation preserves ownership: `get` returns `Option[$T]`, `get_mut` returns `Option[mut$T]`, and `remove` returns `Option[T]`. Generic wrappers such as `Option` may temporarily carry an inferred borrow without introducing named lifetime syntax.
-- Collection iteration has three explicit modes: `iter` borrows and yields `$T`, `iter_mut` exclusively borrows and yields `mut$T`, and `into_iter` consumes and yields `T`. No mode implicitly duplicates elements.
-- The stateful cursor trait is named `Iterator[T]`, not `Iterable[T]`; its required `next` method takes `mut$self` and returns `Option[T]`. A separate collection-to-iterator trait remains deferred.
 - Field access copies `Copy` fields and borrows non-`Copy` fields. Partial moves are initially forbidden: an owned `match` consumes the complete subject, moves selected non-`Copy` fields, and destroys fields omitted by a partial pattern. A successful `is` pattern conditionally consumes an owned subject when it binds a non-`Copy` payload. Borrowed subjects bind payload borrows with the same capability.
 - Observational trait methods borrow their receivers: comparison, hashing, and display take shared borrows. Operators and method calls borrow automatically, so observing an owned value does not consume it.
 - Scope exit, early return, and explicit `drop` destroy each owner exactly once through the same lowering. A custom `fn drop mut$self` runs first, followed by fields in reverse declaration order; its mutable borrow prevents moving fields out during cleanup. A terminating panic does not unwind or run cleanup.
@@ -31,8 +28,3 @@ Higher-order function contracts reuse the same qualifiers instead of introducing
 - Allocation is infallible at the Casa source level. A compiler-managed allocation either returns a valid owner or terminates the process immediately through an allocation-free fatal path; allocation does not return `Option` or `Result`, and Casa exposes no fallible allocation API.
 - Casa exposes no arena or allocator-selection API. That decision may be revisited if real workloads require explicit control.
 - Cyclic or multiply referenced structures use one owner plus stable IDs, indices, or checked non-owning references. Raw pointers remain the explicit unsafe escape hatch.
-
-Implementation: collection observation/traversal modes remain incomplete.
-The cursor trait is still `Iterable`, with the accepted `Iterator` rename pending.
-[ADR-0157](0157-collection-ownership-uses-two-explicit-mode-triads.md) refines the
-two collection mode triads.

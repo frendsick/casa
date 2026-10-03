@@ -3,8 +3,7 @@
 related issue: [Choose the compile-time evaluation surface](https://github.com/frendsick/casa/issues/657).
 
 Bounded constant expressions retain value relationships without executing user
-functions. `const fn` is removed. The expression surface below is implemented.
-The target-neutral `size_of` checking boundary remains pending.
+functions. User-defined function calls are excluded from constant expressions.
 
 ## Declarations and values
 
@@ -149,10 +148,8 @@ generic-dependent constants or symbolic type-level arithmetic.
 
 Exclude `size_of` and every other target-layout query from constant initializers
 and constant type arguments. There is no symbolic layout-dependent constant
-expression language. Ordinary code retains `size_of[T]` as a typed symbolic
-query until target planning supplies its value, as required by ADR-0167.
-Source checking and concrete semantic specialization therefore finish without
-physical target sizes. Target layout overflow remains a target-planning error.
+expression language. Ordinary code retains `size_of[T]`. Its semantic check
+consults the current layout, and the backend supplies its value.
 
 Keep constant checking and evaluation private to the compiler. It consumes
 parsed expressions and resolved constant references and either establishes a
@@ -161,7 +158,7 @@ It needs no function bodies, call frames, runtime state, recursion protocol, or
 backend layout. The front-end and semantic seam decisions assign its concrete
 interface and ownership within the accepted compilation snapshot.
 
-## Tradeoffs and migration
+## Tradeoffs
 
 Literal/reference-only constants would remove more evaluator behavior, but
 would replace `ELEMENT_COUNT ELEMENT_BYTES *` with a manually synchronized
@@ -170,29 +167,3 @@ would also preserve reusable computations, but retain function-body validation,
 parameter binding, calls, cycle tracking, and opportunistic call folding.
 The selected contract removes that machinery while accepting the additional
 cost of typed integer/float evaluation, stack operations, and named type arguments.
-
-Migrate runtime uses of former `const fn` declarations to ordinary `fn`.
-Replace their constant calls with supported expressions or precomputed values.
-Computed constants that relied on contextual retyping now need an appropriate
-declaration annotation or an explicit conversion at ordinary uses. No source
-generator is part of this migration, and runtime optimization of ordinary
-functions makes no promise of source-level constant eligibility.
-
-Update the language reference, formatter grammar and golden files, examples,
-and focused tests with the production migration. Test the five value kinds,
-typed and contextual constants, primitive operand order, float widths and IEEE
-edges, integer and shift boundaries, all five stack effects, exact final stack
-shape, imported visibility and ordering, failed declarations, named type
-arguments, complete integer ranges, symbolic forwarding, and layout exclusion.
-Remove tests that require `const fn` evaluation. Keep array-value behavior and
-static-data optimization coverage without requiring function execution or
-shared mutable array storage.
-[ADR-0156](0156-owned-values-have-independent-behavior-not-address-identity.md)
-continues to govern independent array ownership.
-
-Implementation: [bounded-constant evidence](../benchmarks/bounded-constants/README.md)
-records typed/contextual values, floats, stack intrinsics, imports, and named type
-arguments. Ordinary `check_size_of` still consults physical layout, so the
-accepted target-independent checking requirement remains incomplete. The
-historical evaluator trace and migration findings remain in
-[the original decision](https://github.com/frendsick/casa/blob/e9a258837d40185376c97e4fd03fccb98d238d82/docs/adr/0171-constants-use-bounded-target-independent-expressions.md#tradeoffs-and-migration).

@@ -5,18 +5,11 @@ related issue: [Choose the backend and runtime seams](https://github.com/frendsi
 Keep a private machine
 instruction buffer for one function at a time, with complete storage and native
 call plans before rendering. Embed the Linux runtime as assembly text in a
-separate Casa module. Linux x86-64 is the immediate blueprint acceptance target.
-Windows remains later work.
-
-This completes the backend choices left open by
-[ADR-0166](0166-compiler-capsule-owns-phase-state.md) and
-[ADR-0167](0167-compiler-products-own-independent-snapshots.md). The blueprint is complete. Runtime embedding and the standalone native driver
-are implemented. Final consumer cutover remains in #715. This decision
-establishes no source reduction or performance gain.
+separate Casa module. Linux x86-64 is the implemented target.
 
 ## Checked input and target planning
 
-Only the private, target-neutral `CheckedProgram` enters the backend. Name and
+Only the private `CheckedProgram` enters the backend. Name and
 type resolution, stack effects, ownership and borrowing, moves and copies,
 cleanup obligations, structured control flow, concrete specialization, and
 trait dispatch are complete. Bodies reference concrete declarations in the same
@@ -43,7 +36,7 @@ result storage. Include stack alignment, aggregate transfers, clobbers, return
 normalization, and temporary-storage obligations. Instruction selection consumes
 this plan. The renderer does not classify types or allocate argument registers.
 
-`size_of` remains symbolic until target planning. The subsequently accepted
+The backend lowers `size_of` using its layout plan. The
 [constant-expression contract](0171-constants-use-bounded-target-independent-expressions.md)
 excludes layout queries from constant initializers and constant type arguments.
 
@@ -132,47 +125,3 @@ and exit status.
 Temporary-file creation and cleanup belong to this adapter. The compiler no
 longer manages an intermediate object file. Preserve assembly retention and
 reconcile installation requirements with the actual driver used.
-
-Immediate acceptance covers Linux host tools, Linux x86-64 output, the Linux
-runtime, and the current Linux standard library. Windows is the only planned
-additional platform. Add its closed policy only when implemented. Windows ABI
-support alone would not establish native build, runtime, OS library, or
-self-hosting support. Those Windows capabilities are not required for this
-blueprint, and no unimplemented target variant is exposed.
-
-## Validation and reconsideration
-
-[Validate the compiler simplification blueprint](https://github.com/frendsick/casa/issues/651)
-must exercise the buffer and plans in the integrated slice. Include scalar
-operations, aggregate copies, branches, direct and generic calls, extern calls,
-early returns, and conditional cleanup. Show that rendering performs no semantic,
-layout, or ABI classification. Reject invalid private references through the
-actual constructing interfaces.
-
-Retain execution coverage for cleanup, integer and SSE register exhaustion,
-aggregate spills and returns, alignment, and return normalization. Keep focused
-storage-plan and call-plan tests and exact assembly checks where execution alone
-does not establish the target contract. Preserve runtime behavior tests when
-replacing tests that construct public bytecode fields.
-
-Validate an installed binary outside the source checkout, assembly retention,
-requested libraries, missing or failing native tools, and output-write failures.
-Exercise runtime inclusion without an external asset. The eventual migration
-must pass self-hosting and fixed-point checks, including deterministic assembly.
-The slice cannot substitute for those full-compiler gates.
-
-Measure request and function lifetimes, time, memory, and maintained source in
-the integrated blueprint. Count runtime relocation separately. Reconsider the
-buffer if the slice shows that direct emission handles frame finalization and
-validation more simply, or that another retained machine form is necessary.
-Any alternative must preserve the checked-input and failure contracts.
-
-## Evidence
-
-The [backend audit](../benchmarks/backend-runtime-complexity-audit.md) records
-the historical baseline. Its estimates are not measurements of this design.
-[Compiler products](../compiler-products.md) and
-[the native-build lifetime workload](../benchmarks/native-build-lifetime.casa)
-document the implemented runtime/native adapter and reclamation evidence.
-The original lowering, ABI, string, runtime, and distribution traces remain in
-[the pinned decision](https://github.com/frendsick/casa/blob/e9a258837d40185376c97e4fd03fccb98d238d82/docs/adr/0169-backend-plans-and-renders-one-function-at-a-time.md#evidence).

@@ -24,4 +24,3 @@ At a call, every possible source owner must remain alive and cannot be mutably a
 - Returning a borrow derived from a local owner remains a compile-time error.
 - Function values use the same type-based conservative relationship and need no additional lifetime metadata.
 - More precise source annotations remain deferred until real code demonstrates that the conservative loans are too restrictive.
-- The analysis is a small input-origin set propagated through existing borrow and control-flow checking; its compile-time effect must remain covered by the compiler self-compilation benchmark.

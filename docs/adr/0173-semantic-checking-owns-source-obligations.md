@@ -5,17 +5,11 @@ related issue: [Choose the semantic-analysis and specialization seams](https://g
 Compiler Capsule uses one
 request-owned semantic builder. It checks source bodies,
 proves ownership and control flow, and specializes reachable concrete bodies
-before it commits a target-neutral checked program. The target backend decides
+before it commits a checked program. The target backend decides
 physical layout and machine behavior. This places each source-level decision
 with the state that can prove it, while keeping temporary checking state out of
 compiler products. This refines [ADR-0167](0167-compiler-products-own-independent-snapshots.md)
-and [ADR-0170](0170-generics-specialize-after-symbolic-checking.md). Full
-source-once traversal and consumer cutover remain incomplete in #715.
-
-The [semantic audit](../benchmarks/semantic-analysis-complexity.md) is historical
-evidence. [Compiler products](../compiler-products.md) describe delivered scalar,
-ownership, and recipe work. The complete source-once summary and checked-commit
-contracts below remain accepted requirements.
+and [ADR-0170](0170-generics-specialize-after-symbolic-checking.md).
 
 ## Private semantic seam
 
@@ -198,11 +192,10 @@ coherence checking. The accepted target trait graph gives these contributions:
 | `Copy` | `Copy`, `Clone` | Raw-value Copy eligibility and the same structural `clone` |
 | `Eq` | `Eq`, `PartialEq` | Structural `eq` |
 | `Ord` | `Ord`, `PartialOrd`, `Eq`, `PartialEq` | Lexicographic `cmp` and the same structural `eq` |
-| `Hashable` | `Hashable`, `Eq`, `PartialEq` | Structural `hash` and the same structural `eq` |
+| `Hashable` | `Hashable`, `Eq`, `PartialEq`, `Word` | Structural `hash` and the same structural `eq` |
 
-Expand transitive supertraits from the resolved trait declarations, so a
-future standard trait hierarchy change updates the effective closure. The standard library still gives `Hashable` a `Word` supertrait, which
-[ADR-0022](0022-word-is-not-a-public-trait.md) removes in the target. Standard
+Expand transitive supertraits from the resolved trait declarations. The standard
+library gives `Hashable` a `Word` supertrait. Standard
 default methods, including `ne` and `partial_cmp`, remain trait-owned bodies.
 They do not need duplicate structural operations. Reject a repeated source
 derive name. For distinct requests on the same receiver pattern, merge an
@@ -234,7 +227,7 @@ instances. Each cleanup action names its selected drop behavior before
 commit. A structural derive operation names its semantic fields or payload
 and chosen member operations, while the backend later supplies their offsets
 and machine form. The backend cannot select a different drop hook or repeat
-trait resolution. `size_of` remains a typed query for target planning.
+trait resolution. The backend lowers typed `size_of` queries using its layout plan.
 
 The private checked-program constructor verifies that every reachable body
 and referenced declaration exists, every type and constant binding is
@@ -263,14 +256,4 @@ deduplication, conditional derive requirements, effective explicit overlap,
 defaults,
 concrete drop selection, and source attribution. Internal tests may exercise
 the private summary fixed point and checked-program constructor directly.
-They do not preserve wrappers solely to mirror handler dispatch. The
-blueprint's executable slice and performance measures remain with
-[Blueprint validation](https://github.com/frendsick/casa/issues/651).
-
-Migration removes `SemanticSession` clone/commit modes and their store copies,
-function phase flags, synthetic default and derive functions, cloned generic
-declarations, operation-ID ownership transfer, encoded origin strings and
-parallel metadata, per-handler duplicate operation interpretation, and
-typechecker forwarding wrappers whose only role is to expose those internals.
-The source-level checks, target planning, and any necessary private traversal
-remain. Relocated code is not counted as deleted code.
+They do not preserve wrappers solely to mirror handler dispatch.

@@ -19,7 +19,5 @@ Both representations preserve valid UTF-8 and a trailing NUL. Safe mutation appe
 - A literal must be converted to `String` before mutation. The conversion copies static bytes into owned storage.
 - Collections own `String` keys and values. Borrowed lookup helpers accept `$str` without allocating temporary owners.
 - Allocation failure follows Casa's process-termination policy.
-- The completed migration and its comparison requirements remain in
-  [#418](https://github.com/frendsick/casa/issues/418).
 
 The design adds no implicit coercion. Callers use `as_str` and `to_str` at the ownership boundary. `append` and other mutations use the general `mut$T` rules. Capacity growth and UTF-8 maintenance remain standard-library operations.
