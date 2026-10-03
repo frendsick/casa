@@ -245,6 +245,12 @@ fixed-width integer, `f32`, `f64`, `bool`, `ptr`, or an extern struct. Casa send
 Borrowed returns, `char`, `str`, owned `cstr`, variadic arguments, callbacks,
 generic type parameters, and symbol aliases are not supported.
 
+Source checking validates these forms without selecting a native target.
+Assembly also checks target ABI support. For example, an extern struct whose
+size overflows native layout arithmetic passes source checking but is rejected
+during target planning. Target rejection reports the extern declaration and
+produces no assembly.
+
 Casa keeps ownership of every argument. A by-value extern struct copies its C
 representation. A borrowed scalar, extern struct, or `$cstr` is passed as a
 native pointer. The pointer is valid only while the Casa borrow is live. The

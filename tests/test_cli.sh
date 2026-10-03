@@ -62,6 +62,27 @@ if matches_filter sealed_scalar "$@"; then
     grep -q 'popq -8(%r14)' "$scalar_binary.s"
 fi
 
+if matches_filter extern_target "$@"; then
+    matched=true
+    cat >"$CLI_TMP/unsupported.casa" <<'CASA'
+extern struct Huge { values:array[u64 2305843009213693952] }
+extern fn make -> Huge
+unsafe { make drop }
+CASA
+    if "$COMPILER" "$CLI_TMP/unsupported.casa" -o "$CLI_TMP/unsupported" --keep-asm >"$CLI_TMP/target.out" 2>&1; then
+        echo "assembly accepted an unsupported extern layout" >&2
+        exit 1
+    fi
+    grep -q 'Extern return type `Huge` has no supported Linux x86-64 ABI layout' "$CLI_TMP/target.out"
+    grep -q 'unsupported.casa:2:' "$CLI_TMP/target.out"
+    if grep -q 'internal compiler error' "$CLI_TMP/target.out"; then
+        echo "target rejection was reported as an internal failure" >&2
+        exit 1
+    fi
+    [ ! -e "$CLI_TMP/unsupported.s" ]
+    [ ! -e "$CLI_TMP/unsupported" ]
+fi
+
 if matches_filter installed_native "$@"; then
     matched=true
     cp "$COMPILER" "$CLI_TMP/casac"

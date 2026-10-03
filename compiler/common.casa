@@ -3536,10 +3536,22 @@ pub fn builtin_type_layout builtin:$BuiltinType -> TypeLayout {
         _ => WORD_SIZE WORD_SIZE TypeLayout
     end
 }
+# Physical sizes must fit the target's address-sized layout arithmetic.
+const MAX_LAYOUT_SIZE: u64 { 18446744073709551615 }
 
-fn make_field_storage_plan layout:$TypeLayout offset:u64 stores_inline:bool -> FieldStoragePlan {
+fn make_field_storage_plan
+    layout:$TypeLayout
+    offset:u64
+    stores_inline:bool
+-> std::Option[FieldStoragePlan] {
+    if MAX_LAYOUT_SIZE layout.alignment 1 - - offset > then
+        std::Option[FieldStoragePlan]::None return
+    fi
     layout.alignment offset align_up = aligned_offset
-    stores_inline aligned_offset layout.alignment layout.size FieldStoragePlan
+    if MAX_LAYOUT_SIZE aligned_offset - layout.size > then
+        std::Option[FieldStoragePlan]::None return
+    fi
+    stores_inline aligned_offset layout.alignment layout.size FieldStoragePlan std::Option::Some
 }
 # Fixed arrays use their complete direct layout in aggregate fields. Other
 # nested aggregates keep the language's one-word indirect representation.
@@ -3553,13 +3565,11 @@ fn plan_aggregate_field_storage
 -> std::Option[FieldStoragePlan] {
     if typ.has_unresolved_type_var then
         WORD_SIZE WORD_SIZE TypeLayout = layout
-        false offset layout make_field_storage_plan
-        std::Option::Some return
+        false offset layout make_field_storage_plan return
     fi
     if typ get_concrete_array_length.is_some then
         if visiting store typ type_layout std::Option::Some(layout) is then
             true offset layout make_field_storage_plan
-            std::Option::Some
         else
             std::Option[FieldStoragePlan]::None
         fi
@@ -3568,13 +3578,11 @@ fn plan_aggregate_field_storage
     if store typ type_value_representation std::Option::Some(representation) is then
         if VALUE_REPR_INDIRECT representation == then
             WORD_SIZE WORD_SIZE TypeLayout = layout
-            false offset layout make_field_storage_plan
-            std::Option::Some return
+            false offset layout make_field_storage_plan return
         fi
     fi
     if visiting store typ type_layout std::Option::Some(layout) is then
         true offset layout make_field_storage_plan
-        std::Option::Some
     else
         std::Option[FieldStoragePlan]::None
     fi
@@ -3591,6 +3599,28 @@ pub fn type_is_extern_struct typ:$Type store:$SymbolStore -> bool {
     fi
     false
 }
+# Source-level extern forms. No layout or target classification is needed here.
+pub fn type_is_extern_scalar typ:$Type -> bool {
+    if typ Type::Builtin(builtin) is then
+        builtin.is_integer builtin.is_float ||
+        builtin BuiltinType::Bool == || builtin BuiltinType::Ptr == || return
+    fi
+    false
+}
+
+pub fn type_is_extern_value typ:$Type store:$SymbolStore -> bool {
+    typ type_is_extern_scalar store typ type_is_extern_struct ||
+}
+
+pub fn type_is_extern_parameter typ:$Type store:$SymbolStore -> bool {
+    if typ.borrow_target std::Option::Some(target) is then
+        if typ.is_shared_borrow target Type::Builtin(BuiltinType::Cstr) is && then
+            true return
+        fi
+        store target type_is_extern_value return
+    fi
+    store typ type_is_extern_value
+}
 
 fn check_extern_struct_field
     typ:$Type
@@ -3602,10 +3632,7 @@ fn check_extern_struct_field
     fi
     typ match
         Type::Builtin(builtin) => {
-            builtin.is_integer
-            builtin.is_float ||
-            builtin BuiltinType::Bool == ||
-            builtin BuiltinType::Ptr == ||
+            typ type_is_extern_scalar
         }
         Type::Generic(generic) => {
             if ARRAY_TYPE generic.base.as_str == then
@@ -3660,7 +3687,6 @@ fn plan_struct_field_storage
     if casa_struct.is_extern then
         if visiting store typ type_layout std::Option::Some(layout) is then
             true offset layout make_field_storage_plan
-            std::Option::Some
         else
             std::Option[FieldStoragePlan]::None
         fi
@@ -3692,6 +3718,9 @@ pub fn struct_type_layout
     done
     if 0 size == then
         1 = size: u64
+    fi
+    if MAX_LAYOUT_SIZE alignment 1 - - size > then
+        std::Option[TypeLayout]::None return
     fi
     alignment size align_up = size
     alignment size TypeLayout std::Option::Some
@@ -3811,6 +3840,8 @@ pub fn array_type_layout
         if visiting store 0 generic.params.get type_layout std::Option::Some(element) is then
             if 0 length == then
                 1 1 TypeLayout std::Option::Some
+            elif MAX_LAYOUT_SIZE element.size / length > then
+                std::Option[TypeLayout]::None
             else
                 element.alignment length element.size * TypeLayout std::Option::Some
             fi

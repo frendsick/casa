@@ -22,6 +22,11 @@ impl BytecodeFailure {
     fn new message:std::String -> BytecodeFailure { message BytecodeFailure }
 }
 
+pub enum AssemblyError {
+    Rejected (error::Diagnostics)
+    Internal (BytecodeFailure)
+}
+
 enum FunctionWork {
     Checked (std::String)
     Destruction (std::String common::Type)
@@ -91,14 +96,14 @@ impl BackendPlanner {
         BackendPlanner
     }
 
-    fn into_result self:BackendPlanner -> std::Result[std::String BytecodeFailure] {
+    fn into_result self:BackendPlanner -> std::Result[std::String AssemblyError] {
         self match
             BackendPlanner { program: program failure: failure } => {
                 failure match
-                    std::Option::Some(problem) => problem std::Result::Error
+                    std::Option::Some(problem) => problem AssemblyError::Internal std::Result::Error
                     std::Option::None => program.finish match
                         std::Result::Ok(assembly) => assembly std::Result::Ok
-                        std::Result::Error(message) => message BytecodeFailure::new std::Result::Error
+                        std::Result::Error(message) => message BytecodeFailure::new AssemblyError::Internal std::Result::Error
                     end
                 end
             }
@@ -1763,69 +1768,6 @@ impl FunctionPlanner {
 # ============================================================================
 
 impl FunctionPlanner {
-    fn lower_extern_call
-        self:mut$FunctionPlanner
-        function:$common::Function
-        symbol:std::String
-    -> std::Option[std::String] {
-        if
-            function.name self
-                .state
-                .program
-                .native_calls
-                .has
-        then
-            function.name.clone std::Option::Some return
-        fi
-        std::List[common::ExternAbiType]::new = parameters
-        for
-            parameter in function
-                .stack_effect
-                .parameters
-                .iter
-        do
-            if
-                self.state.store parameter.typ abi::classify_extern_type
-                std::Option::Some(classification) is
-            then
-                classification.clone parameters.push
-            else
-                f"Extern parameter `{parameter.typ.format}` has no ABI classification"
-                self.record_failure_string
-                std::Option[std::String]::None return
-            fi
-        done
-        std::Option[common::ExternAbiType]::None = return_type
-        if
-            function
-                .stack_effect
-                .return_types
-                .is_empty !
-        then
-            0 function
-                .stack_effect
-                .return_types
-                .get = declared_return
-            if
-                self.state.store declared_return abi::classify_extern_type
-                std::Option::Some(classification) is
-            then
-                classification.clone std::Option::Some = return_type
-            else
-                f"Extern return `{declared_return.format}` has no ABI classification"
-                self.record_failure_string
-                std::Option[std::String]::None return
-            fi
-        fi
-        return_type parameters symbol.as_str abi::plan_native_call
-        function.name.clone self
-            .state
-            .program
-            .native_calls
-            .set
-        function.name.clone std::Option::Some
-    }
-
     fn compile_named_function compiler:mut$FunctionPlanner name:$str op:$common::Op -> bool {
         if
             name compiler
@@ -1902,15 +1844,7 @@ impl FunctionPlanner {
                 if op name.as_str compiler.compile_named_function then
                     name.as_str store.get_function.unwrap = called_function
                     called_function.extern_symbol match
-                        std::Option::Some(symbol) => {
-                            symbol.clone called_function compiler.lower_extern_call match
-                                std::Option::Some(call) => {
-                                    call InstValue::ExternCall bytecode.push
-                                }
-                                std::Option::None => {
-                                }
-                            end
-                        }
+                        std::Option::Some(_) => name InstValue::ExternCall bytecode.push
                         std::Option::None => name InstValue::FnCall bytecode.push
                     end
                 fi
@@ -3095,8 +3029,26 @@ fn is_leaf_candidate body:$semantic_body::Body checked:$typechecker::CheckedProg
 
 pub fn compile_checked
     checked:$typechecker::CheckedProgram
--> std::Result[std::String BytecodeFailure] {
+-> std::Result[std::String AssemblyError] {
     checked BackendPlanner::new = state
+    error::Diagnostics::new = diagnostics
+    checked.get_externs.keys = extern_names
+    &does_function_name_precede extern_names.sort_by
+    for name in extern_names.iter do
+        name checked
+            .get_externs
+            .get
+            .unwrap = signature
+        if diagnostics state.store signature abi::plan_checked_extern std::Option::Some(plan) is then
+            plan name.clone state
+                .program
+                .native_calls
+                .set
+        fi
+    done
+    if diagnostics.has_errors then
+        diagnostics AssemblyError::Rejected std::Result::Error return
+    fi
     checked.get_function_names = names
     &does_function_name_precede names.sort_by
     for name in names.iter do
@@ -3161,9 +3113,9 @@ pub fn compile_checked
 
 pub fn compile_assembly
     result:typechecker::TypecheckResult
--> std::Result[std::String BytecodeFailure] {
+-> std::Result[std::String AssemblyError] {
     result.into_checked_program match
-        std::Result::Error(message) => message BytecodeFailure::new std::Result::Error return
+        std::Result::Error(message) => message BytecodeFailure::new AssemblyError::Internal std::Result::Error return
         std::Result::Ok(program) => program
     end = checked
     checked compile_checked
