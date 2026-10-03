@@ -165,6 +165,8 @@ not represented. Rename must reject these answers. Snapshot release is measured
 by the [editor snapshot workload](benchmarks/editor-snapshots/README.md). The
 [cutover measurements](benchmarks/compiler-cutover.md) record the final consumer
 interfaces, compilation cost, and repeated-request lifetimes.
+The [final acceptance record](benchmarks/compiler-capsule-acceptance.md) measures
+the completed redesign and records the child-review decisions.
 
 `workspace.casa` aggregates owned answers across fresh snapshots, retains exact
 source revisions, and validates proposed rename bindings through reanalysis.
