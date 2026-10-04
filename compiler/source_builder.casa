@@ -545,32 +545,6 @@ pub fn keyword_to_op_value keyword_kind:$common::KeywordKind -> std::Option[comm
     end
 }
 
-pub fn operator_to_op_value operator_kind:common::OperatorKind -> std::Option[common::OpValue] {
-    operator_kind match
-        common::OperatorKind::Plus => common::OpValue::Add std::Option::Some
-        common::OperatorKind::Minus => common::OpValue::Sub std::Option::Some
-        common::OperatorKind::Mul => common::OpValue::Mul std::Option::Some
-        common::OperatorKind::Div => common::OpValue::Div std::Option::Some
-        common::OperatorKind::Mod => common::OpValue::Mod std::Option::Some
-        common::OperatorKind::Shl => common::OpValue::Shl std::Option::Some
-        common::OperatorKind::Shr => common::OpValue::Shr std::Option::Some
-        common::OperatorKind::BitAnd => common::OpValue::BitAnd std::Option::Some
-        common::OperatorKind::BitOr => common::OpValue::BitOr std::Option::Some
-        common::OperatorKind::BitXor => common::OpValue::BitXor std::Option::Some
-        common::OperatorKind::BitNot => common::OpValue::BitNot std::Option::Some
-        common::OperatorKind::And => common::OpValue::And std::Option::Some
-        common::OperatorKind::Or => common::OpValue::Or std::Option::Some
-        common::OperatorKind::Not => common::OpValue::Not std::Option::Some
-        common::OperatorKind::Eq => common::OpValue::Eq std::Option::Some
-        common::OperatorKind::Ge => common::OpValue::Ge std::Option::Some
-        common::OperatorKind::Gt => common::OpValue::Gt std::Option::Some
-        common::OperatorKind::Le => common::OpValue::Le std::Option::Some
-        common::OperatorKind::Lt => common::OpValue::Lt std::Option::Some
-        common::OperatorKind::Ne => common::OpValue::Ne std::Option::Some
-        _ => std::Option[common::OpValue]::None
-    end
-}
-
 pub struct TokenCursor {
     pub tokens:          $std::List[common::Token]
     pub pos:             u64
@@ -1188,7 +1162,7 @@ pub fn get_op_operator
         fi
 
         # Simple operator -> OpValue lookup
-        operator_kind operator_to_op_value match
+        operator_kind common::operator_to_op_value match
             std::Option::Some(op_value) => token common::Token::location op_value common::Op::new return
             std::Option::None => {
                 token common::Token::location f"No OpValue for operator `{token common::Token::value.as_str}`" common::ErrorKind::Syntax state.record_error_string
@@ -7158,16 +7132,11 @@ pub fn resolve_array_identifiers
     0 = item_index: u64
     while item_index items.length > do
         item_index items.get_mut = rai_item
-        rai_item.value.clone = rai_value
-        if rai_value common::OpValue::PushArray(inner_items) is then
-            inner_items.clone = owned_inner_items
-            bodies diagnostics errors allow_root_local_capture function owned_inner_items store resolve_array_identifiers
-            owned_inner_items common::OpValue::PushArray rai_item common::Op::set_value
-        elif rai_value common::OpValue::ExprGroup(group_inner) is then
-            group_inner.clone = owned_group_inner
-            bodies diagnostics allow_root_local_capture function owned_group_inner store resolve_identifiers
-            owned_group_inner common::OpValue::ExprGroup rai_item common::Op::set_value
-        elif rai_value common::OpValue::Identifier(rai_name_ref) is then
+        if rai_item.value common::OpValue::PushArray(inner_items) is then
+            bodies diagnostics errors allow_root_local_capture function inner_items store resolve_array_identifiers
+        elif rai_item.value common::OpValue::ExprGroup(group_inner) is then
+            bodies diagnostics allow_root_local_capture function group_inner store resolve_identifiers
+        elif rai_item.value common::OpValue::Identifier(rai_name_ref) is then
             rai_item
                 .location
                 .file
@@ -7201,27 +7170,7 @@ pub fn resolve_array_identifiers
             elif
                 rai_name.as_str store.constants.get_str = rai_const_opt rai_const_opt std::Option::Some(rai_const) is
             then
-                if rai_const.typ std::Option::Some(builtin) is then
-                    builtin common::Type::Builtin std::Option::Some = rai_item.type_hint
-                fi
-                rai_const common::Constant::value.clone = rai_const_value
-                rai_const_value match
-                    common::ConstantValue::Int(rai_const_int) => {
-                        rai_const_int common::OpValue::PushInt rai_item common::Op::set_value
-                    }
-                    common::ConstantValue::Float(rai_const_float) => {
-                        rai_const_float common::OpValue::PushFloat rai_item common::Op::set_value
-                    }
-                    common::ConstantValue::Str(rai_const_str) => {
-                        rai_const_str common::OpValue::PushStr rai_item common::Op::set_value
-                    }
-                    common::ConstantValue::Bool(rai_const_bool) => {
-                        rai_const_bool common::OpValue::PushBool rai_item common::Op::set_value
-                    }
-                    common::ConstantValue::Char(rai_const_char) => {
-                        rai_const_char common::OpValue::PushChar rai_item common::Op::set_value
-                    }
-                end
+                rai_const rai_item.resolve_constant
             elif errors rai_name.as_str rai_item store try_resolve_enum_variant_ident then
             elif rai_name.as_str store.has_function then
                 rai_name.clone common::OpValue::FnPush rai_item common::Op::set_value
@@ -7410,6 +7359,44 @@ pub fn resolve_identifiers_global
     expanded_ops
 }
 
+fn resolve_assignment
+    store:mut$common::SymbolStore
+    function:mut$common::Function
+    operation:mut$common::Op
+    errors:mut$std::List[error::CasaError]
+    allow_root_local_capture:bool
+{
+    operation common::op_str_value = name
+    name.as_str "." str::split = parts
+    0 parts.get = root
+    if root.as_str store.constants.has_str then
+        operation.location.clone f"Cannot assign to constant `{root}`"
+        common::ErrorKind::Syntax error::CasaError::new errors.push
+        common::OpValue::Rejected = operation.value
+        return
+    fi
+    if operation.value common::OpValue::AssignVar is ! parts.length 1 < || then
+        if
+            errors allow_root_local_capture operation.location store function root.as_str
+            reject_root_local_capture
+        then
+            common::OpValue::Rejected = operation.value
+        fi
+        return
+    fi
+    name.as_str common::Variable::new = variable
+    if common::GLOBAL_SCOPE_LABEL function.name.as_str == then
+        if name.as_str store.variables.has_str ! then
+            variable name.clone store.variables.set
+        fi
+    elif
+        name.as_str function.variables common::variable_list_contains !
+        name.as_str function.captures common::variable_list_contains ! &&
+    then
+        variable function.variables.push
+    fi
+}
+
 pub fn resolve_identifiers
     store:mut$common::SymbolStore
     ops:mut$std::List[common::Op]
@@ -7421,100 +7408,15 @@ pub fn resolve_identifiers
     0 = op_index: u64
     std::List[error::CasaError]::new = resolve_errors
     while op_index ops.length > do
-        common::empty_location common::OpValue::OwnerCleanup common::Op::new op_index ops.replace = current_op
+        op_index ops.get_mut = current_op
         1 += op_index
 
-        if current_op.value common::OpValue::AssignInc(inc_name_ref) is then
-            inc_name_ref.clone = inc_name
-            inc_name.as_str "." str::split = inc_parts
-            0 inc_parts.get = inc_root
-            if
-                inc_root.as_str store
-                    .constants
-                    .get_str
-                    .is_some
-            then
-                current_op common::Op::location.clone f"Cannot assign to constant `{inc_root}`" common::ErrorKind::Syntax error::CasaError::new resolve_errors.push
-                common::OpValue::Rejected current_op common::Op::set_value
-                current_op op_index 1 - ops.set
-                continue
-            fi
-            if
-                resolve_errors allow_root_local_capture current_op.location store function inc_root.as_str
-                reject_root_local_capture
-            then
-                common::OpValue::Rejected current_op common::Op::set_value
-                current_op op_index 1 - ops.set
-                continue
-            fi
-        fi
-
-        if current_op.value common::OpValue::AssignDec(dec_name_ref) is then
-            dec_name_ref.clone = dec_name
-            dec_name.as_str "." str::split = dec_parts
-            0 dec_parts.get = dec_root
-            if
-                dec_root.as_str store
-                    .constants
-                    .get_str
-                    .is_some
-            then
-                current_op common::Op::location.clone f"Cannot assign to constant `{dec_root}`" common::ErrorKind::Syntax error::CasaError::new resolve_errors.push
-                common::OpValue::Rejected current_op common::Op::set_value
-                current_op op_index 1 - ops.set
-                continue
-            fi
-            if
-                resolve_errors allow_root_local_capture current_op.location store function dec_root.as_str
-                reject_root_local_capture
-            then
-                common::OpValue::Rejected current_op common::Op::set_value
-                current_op op_index 1 - ops.set
-                continue
-            fi
-        fi
-
-        if current_op.value common::OpValue::AssignVar(var_name_ref) is then
-            var_name_ref.clone = var_name
-            var_name.as_str "." str::split = var_parts
-            0 var_parts.get = var_root
-            if
-                var_root.as_str store
-                    .constants
-                    .get_str
-                    .is_some
-            then
-                current_op common::Op::location.clone f"Cannot assign to constant `{var_root}`" common::ErrorKind::Syntax error::CasaError::new resolve_errors.push
-                common::OpValue::Rejected current_op common::Op::set_value
-                current_op op_index 1 - ops.set
-                continue
-            fi
-            if var_parts.length 1 < then
-                if
-                    resolve_errors allow_root_local_capture current_op.location store function var_root.as_str
-                    reject_root_local_capture
-                then
-                    common::OpValue::Rejected current_op common::Op::set_value
-                    current_op op_index 1 - ops.set
-                    continue
-                fi
-                current_op op_index 1 - ops.set
-                continue
-            fi
-            var_name.as_str common::Variable::new = variable
-            if common::GLOBAL_SCOPE_LABEL function common::Function::name.as_str == then
-                if var_name.as_str store.variables.has_str ! then
-                    variable var_name.clone store.variables.set
-                fi
-                current_op op_index 1 - ops.set
-                continue
-            fi
-            if var_name.as_str function common::Function::variables common::variable_list_contains ! then
-                if var_name.as_str function common::Function::captures common::variable_list_contains ! then
-                    variable function common::Function::variables.push
-                fi
-            fi
-            current_op op_index 1 - ops.set
+        if
+            current_op.value common::OpValue::AssignVar is
+            current_op.value common::OpValue::AssignInc is ||
+            current_op.value common::OpValue::AssignDec is ||
+        then
+            allow_root_local_capture resolve_errors current_op function store resolve_assignment
             continue
         fi
 
@@ -7531,23 +7433,16 @@ pub fn resolve_identifiers
                 std::Option::None => {
                 }
             end
-            current_op op_index 1 - ops.set
             continue
         fi
 
         if current_op.value common::OpValue::PushArray(items_inner) is then
-            items_inner.clone = owned_items_inner
-            bodies diagnostics resolve_errors allow_root_local_capture function owned_items_inner store resolve_array_identifiers
-            owned_items_inner common::OpValue::PushArray current_op common::Op::set_value
-            current_op op_index 1 - ops.set
+            bodies diagnostics resolve_errors allow_root_local_capture function items_inner store resolve_array_identifiers
             continue
         fi
 
         if current_op.value common::OpValue::ExprGroup(group_inner) is then
-            group_inner.clone = owned_group_inner
-            bodies diagnostics allow_root_local_capture function owned_group_inner store resolve_identifiers
-            owned_group_inner common::OpValue::ExprGroup current_op common::Op::set_value
-            current_op op_index 1 - ops.set
+            bodies diagnostics allow_root_local_capture function group_inner store resolve_identifiers
             continue
         fi
 
@@ -7574,31 +7469,24 @@ pub fn resolve_identifiers
             then
                 current_op.location.clone f"Declaration `{ident}` is private"
                 common::ErrorKind::InvalidScope error::CasaError::new resolve_errors.push
-                current_op op_index 1 - ops.set
                 continue
             fi
             if resolve_errors ident.as_str current_op function store try_resolve_fn_ref then
-                current_op op_index 1 - ops.set
                 continue
             fi
             if ident.as_str current_op try_resolve_numeric_call then
-                current_op op_index 1 - ops.set
                 continue
             fi
             if ident.as_str current_op function try_resolve_trait_method_call then
-                current_op op_index 1 - ops.set
                 continue
             fi
             if resolve_errors ident.as_str current_op store try_resolve_enum_variant_ident then
-                current_op op_index 1 - ops.set
                 continue
             fi
             if ident.as_str current_op store try_resolve_qualified_trait_method then
-                current_op op_index 1 - ops.set
                 continue
             fi
             if ident.as_str current_op store try_resolve_type_qualified_method then
-                current_op op_index 1 - ops.set
                 continue
             fi
             if
@@ -7609,17 +7497,14 @@ pub fn resolve_identifiers
             then
                 current_op.location.clone f"Declaration `{ident}` is private"
                 common::ErrorKind::InvalidScope error::CasaError::new resolve_errors.push
-                current_op op_index 1 - ops.set
                 continue
             fi
             resolve_errors allow_root_local_capture ident.as_str current_op function store resolve_plain_identifier
-            current_op op_index 1 - ops.set
             continue
         fi
 
         if current_op.value common::OpValue::MatchArm is then
             bodies diagnostics resolve_errors allow_root_local_capture current_op function store resolve_match_op
-            current_op op_index 1 - ops.set
             continue
         fi
 
@@ -7627,10 +7512,8 @@ pub fn resolve_identifiers
             is_enum_variant.clone = resolved_variant
             resolve_errors function current_op resolved_variant store resolve_enum_variant
             resolved_variant common::OpValue::IsCheck current_op common::Op::set_value
-            current_op op_index 1 - ops.set
             continue
         fi
-        current_op op_index 1 - ops.set
     done
 
     resolve_errors.reverse
@@ -8064,27 +7947,7 @@ pub fn resolve_plain_identifier
 
     ident store.constants.get_str = const_opt
     if const_opt std::Option::Some(casa_const) is then
-        if casa_const.typ std::Option::Some(builtin) is then
-            builtin common::Type::Builtin std::Option::Some = op.type_hint
-        fi
-        casa_const common::Constant::value.clone = const_value
-        const_value match
-            common::ConstantValue::Int(const_int) => {
-                const_int common::OpValue::PushInt op common::Op::set_value
-            }
-            common::ConstantValue::Float(const_float) => {
-                const_float common::OpValue::PushFloat op common::Op::set_value
-            }
-            common::ConstantValue::Str(const_str) => {
-                const_str common::OpValue::PushStr op common::Op::set_value
-            }
-            common::ConstantValue::Bool(const_bool) => {
-                const_bool common::OpValue::PushBool op common::Op::set_value
-            }
-            common::ConstantValue::Char(const_char) => {
-                const_char common::OpValue::PushChar op common::Op::set_value
-            }
-        end
+        casa_const op.resolve_constant
         return
     fi
 
