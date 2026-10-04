@@ -7,7 +7,7 @@ import "std"
 ```
 
 Source files and string literals contain valid UTF-8. `str` is an immutable
-view. `String` owns growable text and releases it during destruction. String
+view. `String` [owns](ownership.md#move-a-value) growable text and releases it during destruction. String
 indexes and lengths use bytes. Character iteration and reversal decode Unicode
 scalar values. Character classification and case conversion cover ASCII.
 
@@ -47,7 +47,7 @@ text.as_str print_length
 | [concat](#strconcat) | `fn concat b:$str a:$str -> String` | Concatenated owned text |
 | [contains](#strcontains) | `fn contains needle:$str s:$str -> bool` | Whether text contains a substring |
 | [ends_with](#strends_with) | `fn ends_with suffix:$str s:$str -> bool` | Whether text ends with a suffix |
-| [eq](#streq) | `fn eq b:$str a:$str -> bool` | Content equality. `==` is the usual form |
+| [eq](#streq) | `fn eq b:$str a:$str -> bool` | Content equality. [`==`](operators.md#comparisons) is the usual form |
 | [find](#strfind) | `fn find needle:$str s:$str -> i64` | First byte index, or `-1` |
 | [is_empty](#stris_empty) | `fn is_empty self:$str -> bool` | Whether the string has no bytes |
 | [iter](#striter) | `fn iter self:$str -> Iter[char]` | Iterator over Unicode scalar values |
@@ -284,8 +284,8 @@ import "std"
 
 ## Owned strings
 
-`String` is non-`Copy` and moves by default. Use `clone` when you need an
-independent owner. `as_str` returns a borrowed view without allocation.
+`String` is non-[`Copy`](traits.md#built-in-traits) and [moves](ownership.md#move-a-value) by default. Use `clone` when you need an
+independent owner. `as_str` returns a [borrowed view](ownership.md#return-a-borrow) without allocation.
 
 | Method | Signature | Behavior |
 |---|---|---|
@@ -648,7 +648,7 @@ that is not a Unicode scalar.
 
 ## Formatting and output
 
-`print` writes any value that implements `Display`. `println`, `eprint`, and
+`print` writes any value that implements [`Display`](traits.md#built-in-traits). `println`, `eprint`, and
 `eprintln` accept strings:
 
 | Function | Destination |
@@ -667,7 +667,7 @@ import "std"
 "warning" std::eprintln
 ```
 
-`Display.to_str` and string interpolation produce owned `String` values:
+`Display.to_str` and [string interpolation](types-and-literals.md#string-interpolation) produce owned `String` values:
 
 ```casa
 import "std"

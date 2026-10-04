@@ -9,10 +9,10 @@ operation or binding that uses them.
 |---|---|
 | `bool` | `true` or `false` |
 | `char` | One Unicode scalar value |
-| `$cstr` | A borrowed NUL-terminated foreign byte string |
+| [`$cstr`](strings-and-io.md#c-strings-and-mutable-buffers) | A borrowed NUL-terminated foreign byte string |
 | `f32`, `f64` | Floating-point numbers |
 | `i8`, `i16`, `i32`, `i64` | Signed integers |
-| `str` | An immutable UTF-8 text view |
+| [`str`](strings-and-io.md#text-views) | An immutable UTF-8 text view |
 | `u8`, `u16`, `u32`, `u64` | Unsigned integers |
 
 An unconstrained integer literal defaults to `i64`. An unconstrained
@@ -106,16 +106,16 @@ Use `\{` and `\}` for literal braces.
 
 | Type | Purpose |
 |---|---|
-| `array[T N]` | An owned sequence of exactly `N` elements |
-| `Bytes` | An owned growable byte buffer |
+| [`array[T N]`](collections.md#arrays) | An owned sequence of exactly `N` elements |
+| [`Bytes`](collections.md#bytes) | An owned growable byte buffer |
 | Enum name | A user-defined variant type |
-| `fn[inputs -> outputs]` | A function value |
-| `List[T]` | An owned growable sequence |
-| `Option[T]` | A value that can be absent |
-| `ptr` | A raw memory address |
-| `Result[T E]` | A success value or an error |
-| `Slice[T]` | A borrowed sequence with a runtime length |
-| `String` | Owned growable UTF-8 text |
+| [`fn[inputs -> outputs]`](functions-and-lambdas.md#function-values) | A function value |
+| [`List[T]`](lists.md) | An owned growable sequence |
+| [`Option[T]`](optional-values-and-errors.md#option) | A value that can be absent |
+| [`ptr`](intrinsics.md#advanced-memory-access) | A raw memory address |
+| [`Result[T E]`](optional-values-and-errors.md#result) | A success value or an error |
+| [`Slice[T]`](collections.md#slices) | A borrowed sequence with a runtime length |
+| [`String`](strings-and-io.md#owned-strings) | Owned growable UTF-8 text |
 | Struct name | A user-defined product type |
 
 Array literals infer one common element type, and their length is part of the

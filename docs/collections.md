@@ -24,7 +24,7 @@ Run complete examples from the repository root with
 
 ## Arrays
 
-`array[T N]` is a sequence of exactly `N` elements, created with bracket syntax.
+[`array[T N]`](types-and-literals.md#other-types) is a sequence of exactly `N` elements, created with bracket syntax.
 The length is part of the type, so `[10, 20, 30]` has type `array[i64 3]` and
 arrays of different lengths are different types:
 
@@ -102,7 +102,7 @@ Returns the number of elements, which is `N`.
 fn nth [T const N:u64] self:$array[T N] index:u64 -> $T
 ```
 
-Returns a shared borrow of the element at a zero-based index. An out-of-range index
+Returns a [shared borrow](ownership.md#borrow-for-a-call) of the element at a zero-based index. An out-of-range index
 terminates the program. The source keeps ownership of the element.
 
 ### Array storage and ownership
@@ -126,7 +126,7 @@ fn total [const N:u64] values:$array[i64 N] -> i64 {
 ```
 
 Each evaluation of an array literal produces an independent owned array. The
-literal takes ownership of its elements, so an element binding cannot be used
+literal takes [ownership](ownership.md#move-a-value) of its elements, so an element binding cannot be used
 again afterwards:
 
 The following invalid example uses an owning struct:
@@ -140,7 +140,7 @@ resource drop    # error: owner `resource` was already moved
 ```
 
 The array destroys its elements when it goes out of scope. `clone` produces an
-independent array when `T: Clone`. An array is `Copy` when `T: Copy`, including
+independent array when `T: Clone`. An array is [`Copy`](traits.md#built-in-traits) when `T: Copy`, including
 when `N` is zero. Arrays with non-`Copy` elements remain affine. Indexing with a
 constant past the last element is a compile-time error. Indexing past it with a
 runtime value terminates the program.
@@ -227,7 +227,7 @@ removed. The [List reference](lists.md) covers list operations, including
 ## Bytes
 
 `Bytes` is a non-`Copy` owned growable buffer for binary data. It stores one
-`u8` per byte. Mutation requires an exclusive borrow.
+`u8` per byte. Mutation requires an [exclusive borrow](ownership.md#borrow-for-a-call).
 
 | Method | Signature | Behavior |
 |---|---|---|
@@ -376,7 +376,7 @@ See [`examples/bytes.casa`](../examples/bytes.casa) for a runnable example.
 
 ## Maps
 
-`Map[K V]` associates unique keys with values. `K` must implement `Hashable`.
+`Map[K V]` associates unique keys with values. `K` must implement [`Hashable`](traits.md#hashable-contract).
 A new map allocates its buckets when the first entry is inserted:
 
 ```casa
@@ -655,7 +655,7 @@ example.
 
 ## Sets
 
-`Set[K]` stores unique `Hashable` values:
+`Set[K]` stores unique [`Hashable`](traits.md#hashable-contract) values:
 
 ```casa
 import "std"
@@ -831,7 +831,7 @@ and examples. Use [Bytes](#bytes) for binary data.
 | `Slice[T]` | `Iter[$T]` |
 | `str` | `Iter[char]` |
 
-A `for` loop consumes the iterator. Create another iterator to traverse the
+A [`for` loop](control-flow.md#for-loops) consumes the iterator. Create another iterator to traverse the
 source again.
 
 Arrays, lists, slices, maps, and sets yield borrows because the source keeps

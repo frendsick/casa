@@ -21,14 +21,14 @@ Stack-effect inputs use consumption order. Outputs use push order. See
 3 dup + print        # 6
 ```
 
-`copy` reads a borrowed `Copy` value into an owned value. An owned argument
+`copy` reads a borrowed [`Copy`](traits.md#built-in-traits) value into an owned value. An owned argument
 is borrowed automatically. For `swap`, consuming `T1` then `T2` and pushing
 `T1` then `T2` exchanges their stack positions.
 
 `swap` and `rot` only move values. They accept non-Copy values. `dup` and `over`
 also duplicate shared borrows without making `$T` satisfy Copy. `dup`, `over`,
-and `copy` never call Clone and never allocate. `drop` runs the same custom
-cleanup and recursive field destruction as a scope exit.
+and `copy` never call Clone and never allocate. `drop` runs the same [custom
+cleanup](structs-and-methods.md#custom-destruction) and recursive field destruction as a scope exit.
 
 ## Output and inspection
 
@@ -82,7 +82,7 @@ data is needed.
 
 These operations expose raw byte-addressed memory. Prefer standard-library
 collections and strings for application code. Raw allocation, access, owner
-conversion, and pointer arithmetic must be inside an `unsafe` block.
+conversion, and pointer arithmetic must be inside an [`unsafe` block](functions-and-lambdas.md#unsafe-boundaries).
 `ptr::null`, `ptr::from_ref`, and pointer comparison are safe.
 
 Comparing raw pointers is safe, but an address identifies storage rather than

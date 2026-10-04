@@ -26,7 +26,7 @@ import "std"
 std::Option::None = absent:std::Option[i64]
 ```
 
-Prefer pattern matching when both cases need behavior:
+Prefer [pattern matching](control-flow.md#match-a-value) when both cases need behavior:
 
 ```casa
 import "std"
@@ -169,7 +169,7 @@ Returns the present value, or `default` when the option is `None`.
 
 The observation methods `is_some`, `is_none`, and `is_ok` borrow the option.
 They leave its owner available. Every other method in the table consumes the
-option. A consuming call moves the owner. It returns the payload or a new
+option. A consuming call [moves](ownership.md#move-a-value) the owner. It returns the payload or a new
 option, or destroys a payload that it does not return.
 
 Callbacks are pushed before the option receiver:
@@ -320,7 +320,7 @@ Returns the success value, or `default` when the result is an error.
 
 The observation methods `is_ok` and `is_error` borrow the result. They leave
 its owner available. Every other method in the table consumes the result. A
-consuming call moves the owner and transfers or destroys each owned payload
+consuming call [moves](ownership.md#move-a-value) the owner and transfers or destroys each owned payload
 exactly once.
 
 ## Propagate with `?`

@@ -6,7 +6,7 @@ Import `parser` for cursor-based text scanning:
 import "parser"
 ```
 
-`Cursor` borrows the source string and contains a mutable `u64` position. `ParseError`
+`Cursor` [borrows](ownership.md#borrow-for-a-call) the source string and contains a mutable `u64` position. `ParseError`
 contains a message and the `u64` position at which parsing failed.
 
 Reference tables abbreviate library type names and list inputs in consumption

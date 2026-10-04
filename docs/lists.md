@@ -1,6 +1,6 @@
 # List
 
-`std::List[T]` owns a growable sequence of `T` values. Use it when elements must be
+`std::List[T]` [owns](ownership.md#move-a-value) a growable sequence of `T` values. Use it when elements must be
 added or removed. Import `std` and qualify its constructors.
 
 ## Create and use a list
@@ -100,7 +100,7 @@ Call: `numbers.as_slice`.
 fn clone self:$List[T] -> List[T]
 ```
 
-Returns an independent list when `T` implements `Clone`. Cloning each element can
+Returns an independent list when `T` implements [`Clone`](traits.md#built-in-traits). Cloning each element can
 allocate or run user code. The source list remains available.
 
 Call: `numbers.clone`.
@@ -135,7 +135,7 @@ Call: `[10, 20] std::List::from_array = numbers`.
 fn get [T] self:$List[T] n:u64 -> $T
 ```
 
-Returns a shared borrow of the element at zero-based index `n`. It does not remove or
+Returns a [shared borrow](ownership.md#borrow-for-a-call) of the element at zero-based index `n`. It does not remove or
 clone the element. The list keeps ownership and cannot be mutated until the returned
 borrow's last use.
 
@@ -152,7 +152,7 @@ Call: `index numbers.get`.
 fn get_mut [T] self:mut$List[T] n:u64 -> mut$T
 ```
 
-Returns an exclusive borrow of the indexed element. The exclusive borrow prevents other
+Returns an [exclusive borrow](ownership.md#borrow-for-a-call) of the indexed element. The exclusive borrow prevents other
 access to the list until its last use. An out-of-range index terminates the program.
 
 Call: `index numbers.get_mut`.
@@ -377,7 +377,7 @@ Call: `stop start numbers.slice`. See [Slices](collections.md#slices).
 fn sort self:mut$List[T]
 ```
 
-Sorts elements in place in ascending order when `T` implements `Ord`.
+Sorts elements in place in ascending order when `T` implements [`Ord`](traits.md#built-in-traits).
 
 Call: `numbers.sort`. See [the sorting example](../examples/sorting.casa).
 
@@ -389,7 +389,7 @@ Call: `numbers.sort`. See [the sorting example](../examples/sorting.casa).
 fn sort_by self:mut$List[T] f:fn[$T $T -> bool]
 ```
 
-Sorts elements in place with a comparison callback. The list is borrowed exclusively.
+Sorts elements in place with a [comparison callback](functions-and-lambdas.md#function-values). The list is borrowed exclusively.
 
 Call: `compare numbers.sort_by`. See [the sorting example](../examples/sorting.casa).
 

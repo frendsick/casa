@@ -13,8 +13,8 @@ fn subtract left:i64 right:i64 -> i64 {
 3 12 subtract print    # 9
 ```
 
-See [reference notation](notation.md) for signatures, stack effects, and
-function types.
+See the notation for [signatures](notation.md#signatures-and-calls),
+[stack effects](notation.md#stack-effects), and [function types](notation.md#function-types).
 
 Parameters are listed in consumption order. The first parameter receives the
 topmost value, so `left` receives `12` and `right` receives `3` in this
@@ -366,7 +366,7 @@ function type. A lambda that is bound before use has no expected function type,
 so its body alone determines its stack effect.
 
 A lambda can capture bindings from its enclosing scope. Copy values are copied.
-An ordinary lambda borrows a non-Copy owner for the lifetime of the closure:
+An ordinary lambda [borrows](ownership.md#cleanup-and-captured-values) a non-Copy owner for the lifetime of the closure:
 
 ```casa
 import "std"

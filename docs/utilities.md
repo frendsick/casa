@@ -174,7 +174,7 @@ cursor json::json_parse .unwrap = value
 | `json_set value:JsonValue key:String map:Map[String JsonValue] -> Map[String JsonValue]` | Add an object member |
 
 `json_get_value` and `json_get_object` borrow from the input value.
-The returned borrow keeps that value loaned until its last use.
+The [returned borrow](ownership.md#return-a-borrow) keeps that value loaned until its last use.
 `json_get_str` and `json_get_array` return independent cloned values.
 
 JSON numbers are integers. Unicode `\uXXXX` escapes currently decode as `?`.
@@ -189,7 +189,7 @@ log::LogLevel::Info logger.configure
 logger "server started" log::log_info
 ```
 
-The program owns a `Logger` and passes a shared borrow to each log operation.
+The program owns a `Logger` and passes a [shared borrow](ownership.md#borrow-for-a-call) to each log operation.
 A selected level includes less verbose levels.
 
 `LogLevel` provides `Error`, `Warning`, `Info`, and `Debug`.

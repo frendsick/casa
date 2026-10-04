@@ -118,7 +118,7 @@ The declared receiver controls which values can call a method:
 | `self:mut$T` | Yes | No | Yes |
 
 Method lookup checks the exact value type before it checks the borrowed type.
-Shared borrows do not implement Clone. When `Person` implements Clone, `.clone`
+[Shared borrows](ownership.md#borrow-for-a-call) do not implement Clone. When `Person` implements Clone, `.clone`
 on `$Person` or `mut$Person` calls that implementation and produces a new
 owner:
 
@@ -141,7 +141,7 @@ responsibility and preserves the loan.
 ## Copy and Clone
 
 Ordinary struct values use heap-indirect storage, so they cannot implement
-`Copy`. Derive `Clone` when fieldwise independent duplication is suitable:
+[`Copy`](traits.md#copy-and-clone). Derive `Clone` when fieldwise independent duplication is suitable:
 
 ```casa
 import "std"

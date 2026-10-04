@@ -45,7 +45,7 @@ text.as_str length print
 ## Reborrow without moving
 
 Shared borrows can be duplicated with `dup` and `over`, but they do not satisfy
-`Copy` bounds. Exclusive borrows and non-Copy owners are affine. For owned
+[`Copy`](traits.md#built-in-traits) bounds. Exclusive borrows and non-Copy owners are affine. For owned
 values, `dup` and the copied value of `over` require `Copy`. `swap` and `rot`
 only move values, so they also work with non-Copy owners.
 
@@ -107,7 +107,7 @@ fn split pair:mut$Pair -> mut$Item mut$Item {
 
 The compiler rejects duplicate or nested overlapping outputs. After a call,
 the returned borrows keep the complete borrowed input loaned because field
-paths are not part of a public function type.
+paths are not part of a public [function type](notation.md#function-types).
 
 ## Cleanup and captured values
 

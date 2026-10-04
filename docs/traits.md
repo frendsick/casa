@@ -197,7 +197,7 @@ or user code. Scalars, `str` views, raw pointers, C string pointers, named
 function references, and `array[T N]` when `T: Copy` are Copy. `String` and
 dynamic collections are not.
 
-Shared borrows can be duplicated with `dup` and `over`, but `$T` does not
+[Shared borrows](ownership.md#reborrow-without-moving) can be duplicated with `dup` and `over`, but `$T` does not
 implement or satisfy `Copy`. An exclusive `mut$T` borrow cannot be duplicated.
 
 Payload-free enums can opt in with `derives Copy`:

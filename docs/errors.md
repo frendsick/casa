@@ -25,7 +25,7 @@ message and type details usually give the fix.
 
 ## Fix stack and type errors
 
-A stack effect lists consumed values from the top of the stack downward:
+A [stack effect](notation.md#stack-effects) lists consumed values from the top of the stack downward:
 
 ```text
 consume_number: i64 -> None
