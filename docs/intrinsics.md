@@ -9,12 +9,12 @@ Stack-effect inputs use consumption order. Outputs use push order. See
 
 | Intrinsic | Stack effect | Action |
 |---|---|---|
+| `copy` | `[T: Copy] $T -> T` | Produce an owned Copy value |
 | `drop` | `T -> None` | Destroy the top owned value |
 | `dup` | `[T: Copy] T -> T T` | Duplicate the top value |
-| `copy` | `[T: Copy] $T -> T` | Produce an owned Copy value |
-| `swap` | `T1 T2 -> T1 T2` | Swap the top two values |
 | `over` | `[T2: Copy] T1 T2 -> T2 T1 T2` | Copy the second value to the top |
 | `rot` | `T1 T2 T3 -> T2 T1 T3` | Rotate the top three values |
+| `swap` | `T1 T2 -> T1 T2` | Swap the top two values |
 
 ```casa
 1 2 drop print       # 1
@@ -34,10 +34,10 @@ cleanup and recursive field destruction as a scope exit.
 
 | Intrinsic | Stack effect | Action |
 |---|---|---|
-| `print` | `[T: Display] T -> None` | Write a value to standard output |
-| `typeof` | `T -> str` | Return the compile-time type name |
-| `size_of[T]` | `None -> u64` | Return the current compiler's inline size for `T` |
 | `exec` | `fn[...] -> ...` | Call a function value on the top of the stack |
+| `print` | `[T: Display] T -> None` | Write a value to standard output |
+| `size_of[T]` | `None -> u64` | Return the current compiler's inline size for `T` |
+| `typeof` | `T -> str` | Return the compile-time type name |
 
 ```casa
 42 print
@@ -98,18 +98,18 @@ either result as owner identity.
 | `load16` | `ptr -> u16` | Load an unsigned 16-bit value |
 | `load32` | `ptr -> u32` | Load an unsigned 32-bit value |
 | `load64` | `ptr -> u64` | Load an unsigned 64-bit value |
-| `ptr::null` | `None -> ptr` | Produce the canonical null pointer |
-| `ptr::from_ref` | `$T -> ptr` | Get the raw address of a live borrow |
-| `ptr::as_ref[T]` | `ptr -> $T` | Form a shared borrow of typed storage |
 | `ptr::as_mut[T]` | `ptr -> mut$T` | Form an exclusive borrow of typed storage |
-| `ptr::into_raw` | `T -> ptr` | Transfer a heap-indirect owner without destruction |
+| `ptr::as_ref[T]` | `ptr -> $T` | Form a shared borrow of typed storage |
 | `ptr::from_raw[T]` | `ptr -> T` | Reconstruct a heap-indirect owner from its allocation address |
+| `ptr::from_ref` | `$T -> ptr` | Get the raw address of a live borrow |
+| `ptr::into_raw` | `T -> ptr` | Transfer a heap-indirect owner without destruction |
+| `ptr::null` | `None -> ptr` | Produce the canonical null pointer |
 | `ptr::read[T]` | `ptr -> T` | Move an initialized `T` out of typed storage |
+| `ptr::write[T]` | `ptr T -> None` | Move a `T` into uninitialized typed storage |
 | `store8` | `ptr u8 -> None` | Store an 8-bit value |
 | `store16` | `ptr u16 -> None` | Store a 16-bit value |
 | `store32` | `ptr u32 -> None` | Store a 32-bit value |
 | `store64` | `ptr u64 -> None` | Store a 64-bit value |
-| `ptr::write[T]` | `ptr T -> None` | Move a `T` into uninitialized typed storage |
 
 Inputs in a stack effect are listed from the top downward. The value is pushed
 before the destination pointer at a store call:

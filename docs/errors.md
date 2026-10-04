@@ -86,19 +86,19 @@ remaining error in your code.
 
 | Code | Meaning |
 |---|---|
-| `SYNTAX` | Invalid source form or unsupported construct |
-| `UNEXPECTED_TOKEN` | A different token was required |
-| `UNDEFINED_NAME` | A name cannot be resolved |
 | `DUPLICATE_NAME` | A name or declaration is repeated |
 | `INVALID_SCOPE` | A construct appears in a scope where it is not allowed |
-| `TYPE_MISMATCH` | A value has the wrong type |
-| `STACK_UNDERFLOW` | An operation does not have enough input values |
-| `STACK_MISMATCH` | Control-flow paths leave incompatible stacks |
-| `SIGNATURE_MISMATCH` | A function body does not match its declared stack effect |
 | `INVALID_VARIABLE` | A binding or assignment is invalid |
-| `UNMATCHED_BLOCK` | A block is missing its matching keyword |
 | `MISSING_TRAIT_METHOD` | A type does not satisfy a required trait |
+| `SIGNATURE_MISMATCH` | A function body does not match its declared stack effect |
+| `STACK_MISMATCH` | Control-flow paths leave incompatible stacks |
+| `STACK_UNDERFLOW` | An operation does not have enough input values |
+| `SYNTAX` | Invalid source form or unsupported construct |
 | `TRAIT_SIGNATURE_MISMATCH` | A trait declaration or implementation is incompatible |
+| `TYPE_MISMATCH` | A value has the wrong type |
+| `UNDEFINED_NAME` | A name cannot be resolved |
+| `UNEXPECTED_TOKEN` | A different token was required |
+| `UNMATCHED_BLOCK` | A block is missing its matching keyword |
 
 The CLI recognizes `UNUSED_PARAMETER` and `LOSSY_TYPE_ANNOTATION` warning codes.
 Warnings do not stop compilation.

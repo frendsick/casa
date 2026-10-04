@@ -119,14 +119,14 @@ their relationships and language uses.
 |---|---|---|---|
 | `Clone` | `clone self:$self -> self` | None | Explicit value duplication |
 | `Copy` | No methods | `Clone` | `dup`, `over`, and `copy` |
-| `PartialEq` | `eq self:$self other:$self -> bool` | None | `==` and `!=` |
-| `Eq` | No new methods | `PartialEq` | Total equality |
-| `PartialOrd` | `partial_cmp self:$self other:$self -> Option[Ordering]` | `PartialEq` | `<`, `<=`, `>`, and `>=` |
-| `Ord` | `cmp self:$self other:$self -> Ordering` | `PartialOrd + Eq` | Total ordering |
-| `Word` | No methods | None | Raw memory stores and system calls |
-| `Hashable` | `hash self:$self -> i64` | `Eq + Word` | `Map` keys and `Set` elements |
 | `Display` | `to_str self:$self -> String` | `Word` | `print` and string interpolation |
+| `Eq` | No new methods | `PartialEq` | Total equality |
+| `Hashable` | `hash self:$self -> i64` | `Eq + Word` | `Map` keys and `Set` elements |
 | `Iterable[T]` | `next self:mut$self -> Option[T]` | None | `for` loops and iterator methods |
+| `Ord` | `cmp self:$self other:$self -> Ordering` | `PartialOrd + Eq` | Total ordering |
+| `PartialEq` | `eq self:$self other:$self -> bool` | None | `==` and `!=` |
+| `PartialOrd` | `partial_cmp self:$self other:$self -> Option[Ordering]` | `PartialEq` | `<`, `<=`, `>`, and `>=` |
+| `Word` | No methods | None | Raw memory stores and system calls |
 
 `PartialEq` supplies `ne` from `eq`. The `!=` operator calls `ne`, so an
 implementation can replace that default. `PartialOrd` supplies the four

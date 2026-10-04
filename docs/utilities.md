@@ -4,86 +4,16 @@ Compile module-style imports with a library path such as `casac -L lib`.
 
 | Module | Purpose | Runnable example |
 |---|---|---|
-| `log` | Leveled messages to standard error | [`examples/log.casa`](../examples/log.casa) |
-| `timer` | Monotonic elapsed time | [`examples/timer.casa`](../examples/timer.casa) |
 | `argparse` | Command-line definitions and help | [`examples/argparse.casa`](../examples/argparse.casa) |
-| `parser` | Cursor-based text parsers | [`examples/parser.casa`](../examples/parser.casa) |
 | `json` | JSON values, parsing, and serialization | See [JSON](#json) |
+| `log` | Leveled messages to standard error | [`examples/log.casa`](../examples/log.casa) |
 | `os` | Files, directories, environment, paths, and processes | [OS reference](os.md) |
+| `parser` | Cursor-based text parsers | [`examples/parser.casa`](../examples/parser.casa) |
+| `timer` | Monotonic elapsed time | [`examples/timer.casa`](../examples/timer.casa) |
 
 Reference tables abbreviate library type names and list inputs in consumption
 order. Source examples use qualified names. See [reference notation](notation.md)
 for signatures, fragments, and commands for running complete examples.
-
-## Logging
-
-```casa
-import "log"
-
-log::Logger::new = logger
-log::LogLevel::Info logger.configure
-logger "server started" log::log_info
-```
-
-The program owns a `Logger` and passes a shared borrow to each log operation.
-A selected level includes less verbose levels.
-
-`LogLevel` provides `Error`, `Warning`, `Info`, and `Debug`.
-
-| Method | Signature | Behavior |
-|---|---|---|
-| [Logger::new](#loggernew) | `fn new -> Logger` | Create logger state at `Warning` |
-| [Logger::configure](#loggerconfigure) | `fn configure self:mut$Logger level:LogLevel` | Change the owned level |
-
-### Logger::new
-
-Creates logger state with level `Warning`.
-
-### Logger::configure
-
-Changes the logger level through an exclusive borrow.
-
-| Function | Action |
-|---|---|
-| `log_error message:str logger:$Logger` | Log an error |
-| `log_warning message:str logger:$Logger` | Log a warning |
-| `log_info message:str logger:$Logger` | Log information |
-| `log_debug message:str logger:$Logger` | Log debugging detail |
-
-## Timing
-
-```casa
-import "timer"
-
-timer::Timer::new = timer
-f"elapsed: {timer}\n" print
-```
-
-| Method | Signature | Behavior |
-|---|---|---|
-| [Timer::new](#timernew) | `fn new -> Timer` | Start a timer |
-| [Timer::elapsed_ns](#timerelapsed_ns) | `fn elapsed_ns self:$Timer -> i64` | Elapsed nanoseconds |
-| [Timer::elapsed_ms](#timerelapsed_ms) | `fn elapsed_ms self:$Timer -> i64` | Elapsed milliseconds |
-| [Timer::to_str](#timerto_str) | `fn to_str self:$Timer -> std::String` | Fractional seconds, such as `1.042s` |
-
-### Timer::new
-
-Creates a timer using the monotonic clock.
-
-### Timer::elapsed_ns
-
-Returns elapsed nanoseconds without consuming the timer.
-
-### Timer::elapsed_ms
-
-Returns elapsed milliseconds without consuming the timer.
-
-### Timer::to_str
-
-Returns elapsed seconds as owned text, such as `1.042s`.
-
-Create a `Timer` value and keep it for later elapsed-time queries. The timer
-module has no global convenience state.
 
 ## Argument parsing
 
@@ -99,66 +29,120 @@ parser.parse_args = arguments
 `parse_args` handles `-h` and `--help`. Invalid arguments print usage and
 terminate with exit code `2`.
 
+Use `""` when an option has no short or long spelling.
+
 | Method | Signature | Behavior |
 |---|---|---|
-| [ArgParser::new](#argparsernew) | `fn new -> ArgParser` | Parser named from argument `0` |
-| [ArgParser::add_positional](#argparseradd_positional) | `fn add_positional self:mut$ArgParser name:str help_text:str` | Required positional value |
-| [ArgParser::add_flag](#argparseradd_flag) | `fn add_flag self:mut$ArgParser name:str short_flag:str long_flag:str help_text:str` | Boolean flag |
-| [ArgParser::add_terminal_flag](#argparseradd_terminal_flag) | `fn add_terminal_flag self:mut$ArgParser name:str short_flag:str long_flag:str help_text:str` | Flag that permits missing positional values |
-| [ArgParser::add_option](#argparseradd_option) | `fn add_option self:mut$ArgParser name:str short_flag:str long_flag:str help_text:str` | Option with one string value |
-| [ArgParser::add_multi_option](#argparseradd_multi_option) | `fn add_multi_option self:mut$ArgParser name:str short_flag:str long_flag:str help_text:str` | Repeatable string option |
-| [ArgParser::parse_args](#argparserparse_args) | `fn parse_args self:$ArgParser -> ParsedArgs` | Parse process arguments without changing definitions |
-| [ParsedArgs::get](#parsedargsget) | `fn get self:$ParsedArgs name:$str -> std::Option[std::String]` | Positional or option value |
-| [ParsedArgs::get_flag](#parsedargsget_flag) | `fn get_flag self:$ParsedArgs name:$str -> bool` | Flag state |
-| [ParsedArgs::get_multi](#parsedargsget_multi) | `fn get_multi self:$ParsedArgs name:$str -> std::Option[std::List[std::String]]` | Repeatable values |
+| [add_flag](#argparseradd_flag) | `fn add_flag self:mut$ArgParser name:str short_flag:str long_flag:str help_text:str` | Boolean flag |
+| [add_multi_option](#argparseradd_multi_option) | `fn add_multi_option self:mut$ArgParser name:str short_flag:str long_flag:str help_text:str` | Repeatable string option |
+| [add_option](#argparseradd_option) | `fn add_option self:mut$ArgParser name:str short_flag:str long_flag:str help_text:str` | Option with one string value |
+| [add_positional](#argparseradd_positional) | `fn add_positional self:mut$ArgParser name:str help_text:str` | Required positional value |
+| [add_terminal_flag](#argparseradd_terminal_flag) | `fn add_terminal_flag self:mut$ArgParser name:str short_flag:str long_flag:str help_text:str` | Flag that permits missing positional values |
+| [get](#parsedargsget) | `fn get self:$ParsedArgs name:$str -> std::Option[std::String]` | Positional or option value |
+| [get_flag](#parsedargsget_flag) | `fn get_flag self:$ParsedArgs name:$str -> bool` | Flag state |
+| [get_multi](#parsedargsget_multi) | `fn get_multi self:$ParsedArgs name:$str -> std::Option[std::List[std::String]]` | Repeatable values |
+| [new](#argparsernew) | `fn new -> ArgParser` | Parser named from argument `0` |
+| [parse_args](#argparserparse_args) | `fn parse_args self:$ArgParser -> ParsedArgs` | Parse process arguments without changing definitions |
 
-### ArgParser::new
+<a id="argparseradd_flag"></a>
 
-Creates a parser named from process argument `0`.
+### add_flag
 
-### ArgParser::add_positional
-
-Adds a required positional value.
-
-### ArgParser::add_flag
+```text
+fn add_flag self:mut$ArgParser name:str short_flag:str long_flag:str help_text:str
+```
 
 Adds a Boolean flag.
 
-### ArgParser::add_terminal_flag
+<a id="argparseradd_multi_option"></a>
 
-Adds a flag that permits missing positional values.
+### add_multi_option
 
-### ArgParser::add_option
-
-Adds an option that accepts one string value.
-
-### ArgParser::add_multi_option
+```text
+fn add_multi_option self:mut$ArgParser name:str short_flag:str long_flag:str help_text:str
+```
 
 Adds a repeatable string option.
 
-### ArgParser::parse_args
+<a id="argparseradd_option"></a>
 
-Parses process arguments without changing the parser definitions. `-h` and `--help` print help. Invalid arguments print usage and terminate with exit code `2`.
+### add_option
 
-### ParsedArgs::get
+```text
+fn add_option self:mut$ArgParser name:str short_flag:str long_flag:str help_text:str
+```
+
+Adds an option that accepts one string value.
+
+<a id="argparseradd_positional"></a>
+
+### add_positional
+
+```text
+fn add_positional self:mut$ArgParser name:str help_text:str
+```
+
+Adds a required positional value.
+
+<a id="argparseradd_terminal_flag"></a>
+
+### add_terminal_flag
+
+```text
+fn add_terminal_flag self:mut$ArgParser name:str short_flag:str long_flag:str help_text:str
+```
+
+Adds a flag that permits missing positional values.
+
+<a id="parsedargsget"></a>
+
+### get
+
+```text
+fn get self:$ParsedArgs name:$str -> std::Option[std::String]
+```
 
 Returns an independent cloned positional or option value, if present.
 
-### ParsedArgs::get_flag
+<a id="parsedargsget_flag"></a>
+
+### get_flag
+
+```text
+fn get_flag self:$ParsedArgs name:$str -> bool
+```
 
 Returns the state of a defined flag. An unknown name terminates the program.
 
-### ParsedArgs::get_multi
+<a id="parsedargsget_multi"></a>
+
+### get_multi
+
+```text
+fn get_multi self:$ParsedArgs name:$str -> std::Option[std::List[std::String]]
+```
 
 Returns an independent cloned list of repeatable values, if present.
 
-Use `""` when an option has no short or long spelling.
+<a id="argparsernew"></a>
 
-## Parser building blocks
+### new
 
-Import `parser` for a mutable `Cursor`, `ParseError`, and parsers for integers,
-identifiers, strings, characters, and escapes. See the compact
-[Parser Library](parser.md) reference.
+```text
+fn new -> ArgParser
+```
+
+Creates a parser named from process argument `0`.
+
+<a id="argparserparse_args"></a>
+
+### parse_args
+
+```text
+fn parse_args self:$ArgParser -> ParsedArgs
+```
+
+Parses process arguments without changing the parser definitions. `-h` and `--help` print help. Invalid arguments print usage and terminate with exit code `2`.
 
 ## JSON
 
@@ -177,16 +161,16 @@ cursor json::json_parse .unwrap = value
 
 | Function | Result |
 |---|---|
+| `json_escape_string text:$str -> String` | Escape string contents |
+| `json_get_array value:$JsonValue key:$str -> Option[List[JsonValue]]` | Array member |
+| `json_get_bool value:$JsonValue key:$str -> Option[bool]` | Boolean member |
+| `json_get_int value:$JsonValue key:$str -> Option[i64]` | Integer member |
+| `json_get_object value:$JsonValue key:$str -> Option[$JsonValue]` | Object member |
+| `json_get_str value:$JsonValue key:$str -> Option[String]` | Cloned string member |
+| `json_get_value value:$JsonValue key:$str -> Option[$JsonValue]` | Object member |
+| `json_object -> Map[String JsonValue]` | Empty object map |
 | `json_parse cursor:mut$Cursor -> Result[JsonValue ParseError]` | Parse one value |
 | `json_serialize value:$JsonValue -> String` | Serialize a value |
-| `json_escape_string text:$str -> String` | Escape string contents |
-| `json_get_value value:$JsonValue key:$str -> Option[$JsonValue]` | Object member |
-| `json_get_str value:$JsonValue key:$str -> Option[String]` | Cloned string member |
-| `json_get_int value:$JsonValue key:$str -> Option[i64]` | Integer member |
-| `json_get_bool value:$JsonValue key:$str -> Option[bool]` | Boolean member |
-| `json_get_object value:$JsonValue key:$str -> Option[$JsonValue]` | Object member |
-| `json_get_array value:$JsonValue key:$str -> Option[List[JsonValue]]` | Array member |
-| `json_object -> Map[String JsonValue]` | Empty object map |
 | `json_set value:JsonValue key:String map:Map[String JsonValue] -> Map[String JsonValue]` | Add an object member |
 
 `json_get_value` and `json_get_object` borrow from the input value.
@@ -195,7 +179,123 @@ The returned borrow keeps that value loaned until its last use.
 
 JSON numbers are integers. Unicode `\uXXXX` escapes currently decode as `?`.
 
+## Logging
+
+```casa
+import "log"
+
+log::Logger::new = logger
+log::LogLevel::Info logger.configure
+logger "server started" log::log_info
+```
+
+The program owns a `Logger` and passes a shared borrow to each log operation.
+A selected level includes less verbose levels.
+
+`LogLevel` provides `Error`, `Warning`, `Info`, and `Debug`.
+
+| Method | Signature | Behavior |
+|---|---|---|
+| [configure](#loggerconfigure) | `fn configure self:mut$Logger level:LogLevel` | Change the owned level |
+| [new](#loggernew) | `fn new -> Logger` | Create logger state at `Warning` |
+
+<a id="loggerconfigure"></a>
+
+### configure
+
+```text
+fn configure self:mut$Logger level:LogLevel
+```
+
+Changes the logger level through an exclusive borrow.
+
+<a id="loggernew"></a>
+
+### new
+
+```text
+fn new -> Logger
+```
+
+Creates logger state with level `Warning`.
+
+### Logging functions
+
+| Function | Action |
+|---|---|
+| `log_debug message:str logger:$Logger` | Log debugging detail |
+| `log_error message:str logger:$Logger` | Log an error |
+| `log_info message:str logger:$Logger` | Log information |
+| `log_warning message:str logger:$Logger` | Log a warning |
+
+## Parser building blocks
+
+Import `parser` for a mutable `Cursor`, `ParseError`, and parsers for integers,
+identifiers, strings, characters, and escapes. See the compact
+[Parser Library](parser.md) reference.
+
 ## Processes
 
 Process arguments and `run_command` are documented with the other
 [operating-system APIs](os.md#arguments-and-processes).
+
+## Timing
+
+```casa
+import "timer"
+
+timer::Timer::new = timer
+f"elapsed: {timer}\n" print
+```
+
+| Method | Signature | Behavior |
+|---|---|---|
+| [elapsed_ms](#timerelapsed_ms) | `fn elapsed_ms self:$Timer -> i64` | Elapsed milliseconds |
+| [elapsed_ns](#timerelapsed_ns) | `fn elapsed_ns self:$Timer -> i64` | Elapsed nanoseconds |
+| [new](#timernew) | `fn new -> Timer` | Start a timer |
+| [to_str](#timerto_str) | `fn to_str self:$Timer -> std::String` | Fractional seconds, such as `1.042s` |
+
+<a id="timerelapsed_ms"></a>
+
+### elapsed_ms
+
+```text
+fn elapsed_ms self:$Timer -> i64
+```
+
+Returns elapsed milliseconds without consuming the timer.
+
+<a id="timerelapsed_ns"></a>
+
+### elapsed_ns
+
+```text
+fn elapsed_ns self:$Timer -> i64
+```
+
+Returns elapsed nanoseconds without consuming the timer.
+
+<a id="timernew"></a>
+
+### new
+
+```text
+fn new -> Timer
+```
+
+Creates a timer using the monotonic clock.
+
+<a id="timerto_str"></a>
+
+### to_str
+
+```text
+fn to_str self:$Timer -> std::String
+```
+
+Returns elapsed seconds as owned text, such as `1.042s`.
+
+### Timer reuse
+
+Create a `Timer` value and keep it for later elapsed-time queries. The timer
+module has no global convenience state.

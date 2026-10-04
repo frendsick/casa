@@ -53,32 +53,63 @@ After `import "std"`, these `i64` helpers are available:
 
 | Method | Signature | Behavior |
 |---|---|---|
-| [i64::abs](#i64abs) | `fn abs self:$i64 -> i64` | Absolute value |
-| [i64::min](#i64min) | `fn min self:$i64 other:i64 -> i64` | Smaller value |
-| [i64::max](#i64max) | `fn max self:$i64 other:i64 -> i64` | Larger value |
-| [i64::clamp](#i64clamp) | `fn clamp self:$i64 lo:i64 hi:i64 -> i64` | Value limited to the inclusive range |
-| [i64::pow](#i64pow) | `fn pow self:$i64 exp:i64 -> i64` | Integer exponentiation |
+| [abs](#i64abs) | `fn abs self:$i64 -> i64` | Absolute value |
+| [clamp](#i64clamp) | `fn clamp self:$i64 lo:i64 hi:i64 -> i64` | Value limited to the inclusive range |
+| [max](#i64max) | `fn max self:$i64 other:i64 -> i64` | Larger value |
+| [min](#i64min) | `fn min self:$i64 other:i64 -> i64` | Smaller value |
+| [pow](#i64pow) | `fn pow self:$i64 exp:i64 -> i64` | Integer exponentiation |
 
-### i64::abs
+<a id="i64abs"></a>
+
+### abs
+
+```text
+fn abs self:$i64 -> i64
+```
 
 Returns the absolute value.
 
-### i64::min
+<a id="i64clamp"></a>
 
-Returns the smaller value.
+### clamp
 
-### i64::max
-
-Returns the larger value.
-
-### i64::clamp
+```text
+fn clamp self:$i64 lo:i64 hi:i64 -> i64
+```
 
 Returns the value limited to the inclusive range.
 
-### i64::pow
+<a id="i64max"></a>
+
+### max
+
+```text
+fn max self:$i64 other:i64 -> i64
+```
+
+Returns the larger value.
+
+<a id="i64min"></a>
+
+### min
+
+```text
+fn min self:$i64 other:i64 -> i64
+```
+
+Returns the smaller value.
+
+<a id="i64pow"></a>
+
+### pow
+
+```text
+fn pow self:$i64 exp:i64 -> i64
+```
 
 Raises the integer to the given exponent.
 
+### Arithmetic examples
 
 `f32` and `f64` also provide `abs`.
 

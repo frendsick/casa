@@ -37,57 +37,103 @@ names. Call forms below assume a list binding named `numbers`.
 
 | Method | Signature | Behavior |
 |---|---|---|
-| [List[T]::new](#listtnew) | `fn new [T] -> List[T]` | Empty list |
-| [List[T]::from_array](#listtfrom_array) | `fn from_array[T const N:u64] array:array[T N] -> List[T]` | List containing the array values |
-| [List[T]::length](#listtlength) | `fn length self:$List -> u64` | Number of elements |
-| [List[T]::is_empty](#listtis_empty) | `fn is_empty self:$List -> bool` | Whether the list has no elements |
-| [List[T]::get](#listtget) | `fn get [T] self:$List[T] n:u64 -> $T` | Borrow of the element at a zero-based index |
-| [List[T]::get_ref](#listtget_ref) | `fn get_ref [T] self:$List[T] n:u64 -> $T` | Borrow of the element at a zero-based index |
-| [List[T]::get_mut](#listtget_mut) | `fn get_mut [T] self:mut$List[T] n:u64 -> mut$T` | Exclusive borrow of an element |
-| [List[T]::slice](#listtslice) | `fn slice [T] self:$List[T] start:u64 stop:u64 -> Slice[T]` | Borrowed half-open range `[start, stop)` |
-| [List[T]::as_slice](#listtas_slice) | `fn as_slice [T] self:$List[T] -> Slice[T]` | Borrowed view of the complete list |
-| [List[T]::set](#listtset) | `fn set [T] self:mut$List[T] n:u64 item:T` | Replace and destroy an element |
-| [List[T]::replace](#listtreplace) | `fn replace [T] self:mut$List[T] n:u64 item:T -> T` | Replace and return an element |
-| [List[T]::push](#listtpush) | `fn push [T] self:mut$List[T] item:T` | Add at the end |
-| [List[T]::pop](#listtpop) | `fn pop [T] self:mut$List[T] -> T` | Remove and return the last element |
-| [List[T]::insert](#listtinsert) | `fn insert [T] self:mut$List[T] item:T index:u64` | Insert before `index` |
-| [List[T]::remove](#listtremove) | `fn remove [T] self:mut$List[T] index:u64 -> Option[T]` | Remove and return an element if present |
-| [List[T]::swap_at](#listtswap_at) | `fn swap_at [T] self:mut$List[T] i:u64 j:u64` | Exchange two elements |
-| [List[T]::reverse](#listtreverse) | `fn reverse [T] self:mut$List[T]` | Reverse in place |
-| [List[T]::append](#listtappend) | `fn append [T] self:mut$List[T] other:List[T]` | Move every element of `other` onto the end |
-| [List[T]::clone](#listtclone) | `fn clone self:$List[T] -> List[T]` | Independent list when `T: Clone` |
-| [List[T]::iter](#listtiter) | `fn iter self:$List[T] -> Iter[$T]` | Iterator over borrows of the elements |
-| [List[T]::sort](#listtsort) | `fn sort self:mut$List[T]` | Sort in place when `T` implements `Ord` |
-| [List[T]::sort_by](#listtsort_by) | `fn sort_by self:mut$List[T] f:fn[$T $T -> bool]` | Sort in place with a callback |
-| [List[T]::sort_by_range](#listtsort_by_range) | `fn sort_by_range self:mut$List[T] low:u64 high:u64 f:$fn[$T $T -> bool]` | Sort an inclusive index range |
-| [List[str]::join](#liststrjoin) | `fn join self:$List[str] separator:$str -> String` | Join a string-view list |
-| [List[str]::contains](#liststrcontains) | `fn contains self:$List[str] needle:$str -> bool` | Whether a string list contains `needle` |
-| [List[String]::join_strings](#liststringjoin_strings) | `fn join_strings self:$List[String] separator:$str -> String` | Join owned strings |
-| [List[String]::push_str](#liststringpush_str) | `fn push_str self:mut$List[String] value:$str` | Copy and append one text view |
-| [List[Bytes]::push_str](#listbytespush_str) | `fn push_str self:mut$List[Bytes] value:$str` | Copy text bytes and append one buffer |
+| [append](#listtappend) | `fn append [T] self:mut$List[T] other:List[T]` | Move every element of `other` onto the end |
+| [as_slice](#listtas_slice) | `fn as_slice [T] self:$List[T] -> Slice[T]` | Borrowed view of the complete list |
+| [clone](#listtclone) | `fn clone self:$List[T] -> List[T]` | Independent list when `T: Clone` |
+| [contains](#liststrcontains) | `fn contains self:$List[str] needle:$str -> bool` | Whether a string list contains `needle` |
+| [from_array](#listtfrom_array) | `fn from_array[T const N:u64] array:array[T N] -> List[T]` | List containing the array values |
+| [get](#listtget) | `fn get [T] self:$List[T] n:u64 -> $T` | Borrow of the element at a zero-based index |
+| [get_mut](#listtget_mut) | `fn get_mut [T] self:mut$List[T] n:u64 -> mut$T` | Exclusive borrow of an element |
+| [get_ref](#listtget_ref) | `fn get_ref [T] self:$List[T] n:u64 -> $T` | Borrow of the element at a zero-based index |
+| [insert](#listtinsert) | `fn insert [T] self:mut$List[T] item:T index:u64` | Insert before `index` |
+| [is_empty](#listtis_empty) | `fn is_empty self:$List -> bool` | Whether the list has no elements |
+| [iter](#listtiter) | `fn iter self:$List[T] -> Iter[$T]` | Iterator over borrows of the elements |
+| [join](#liststrjoin) | `fn join self:$List[str] separator:$str -> String` | Join a string-view list |
+| [join_strings](#liststringjoin_strings) | `fn join_strings self:$List[String] separator:$str -> String` | Join owned strings |
+| [length](#listtlength) | `fn length self:$List -> u64` | Number of elements |
+| [new](#listtnew) | `fn new [T] -> List[T]` | Empty list |
+| [pop](#listtpop) | `fn pop [T] self:mut$List[T] -> T` | Remove and return the last element |
+| [push](#listtpush) | `fn push [T] self:mut$List[T] item:T` | Add at the end |
+| [push_str](#listbytespush_str) | `fn push_str self:mut$List[Bytes] value:$str` | Copy text bytes and append one buffer |
+| [push_str](#liststringpush_str) | `fn push_str self:mut$List[String] value:$str` | Copy and append one text view |
+| [remove](#listtremove) | `fn remove [T] self:mut$List[T] index:u64 -> Option[T]` | Remove and return an element if present |
+| [replace](#listtreplace) | `fn replace [T] self:mut$List[T] n:u64 item:T -> T` | Replace and return an element |
+| [reverse](#listtreverse) | `fn reverse [T] self:mut$List[T]` | Reverse in place |
+| [set](#listtset) | `fn set [T] self:mut$List[T] n:u64 item:T` | Replace and destroy an element |
+| [slice](#listtslice) | `fn slice [T] self:$List[T] start:u64 stop:u64 -> Slice[T]` | Borrowed half-open range `[start, stop)` |
+| [sort](#listtsort) | `fn sort self:mut$List[T]` | Sort in place when `T` implements `Ord` |
+| [sort_by](#listtsort_by) | `fn sort_by self:mut$List[T] f:fn[$T $T -> bool]` | Sort in place with a callback |
+| [sort_by_range](#listtsort_by_range) | `fn sort_by_range self:mut$List[T] low:u64 high:u64 f:$fn[$T $T -> bool]` | Sort an inclusive index range |
+| [swap_at](#listtswap_at) | `fn swap_at [T] self:mut$List[T] i:u64 j:u64` | Exchange two elements |
 
-### List[T]::new
+<a id="listtappend"></a>
 
-Creates an empty list without element storage. The first `push`, `insert`, or nonempty
-`append` allocates that storage.
+### append
 
-Call: `std::List[i64]::new = numbers`.
+```text
+fn append [T] self:mut$List[T] other:List[T]
+```
 
-### List[T]::from_array
+Borrows the receiver exclusively and consumes the other list, moving all its elements
+onto the receiver's end.
+
+Call: `other numbers.append`.
+
+<a id="listtas_slice"></a>
+
+### as_slice
+
+```text
+fn as_slice [T] self:$List[T] -> Slice[T]
+```
+
+Borrows the complete list as a slice. The slice keeps the list loaned until its last
+use.
+
+Call: `numbers.as_slice`.
+
+<a id="listtclone"></a>
+
+### clone
+
+```text
+fn clone self:$List[T] -> List[T]
+```
+
+Returns an independent list when `T` implements `Clone`. Cloning each element can
+allocate or run user code. The source list remains available.
+
+Call: `numbers.clone`.
+
+<a id="liststrcontains"></a>
+
+### contains
+
+```text
+fn contains self:$List[str] needle:$str -> bool
+```
+
+Returns whether a string list contains `needle`.
+
+<a id="listtfrom_array"></a>
+
+### from_array
+
+```text
+fn from_array[T const N:u64] array:array[T N] -> List[T]
+```
 
 Takes ownership of the array and its elements and returns a growable list.
 
 Call: `[10, 20] std::List::from_array = numbers`.
 
-### List[T]::length
+<a id="listtget"></a>
 
-Returns the number of elements.
+### get
 
-### List[T]::is_empty
-
-Returns whether the list has no elements.
-
-### List[T]::get
+```text
+fn get [T] self:$List[T] n:u64 -> $T
+```
 
 Returns a shared borrow of the element at zero-based index `n`. It does not remove or
 clone the element. The list keeps ownership and cannot be mutated until the returned
@@ -98,60 +144,119 @@ program. This method does not return an `Option`.
 
 Call: `index numbers.get`.
 
-### List[T]::get_ref
+<a id="listtget_mut"></a>
 
-Returns the same shared element borrow as [get](#listtget), with the same bounds and
-ownership rules. An out-of-range index terminates the program.
+### get_mut
 
-Call: `index numbers.get_ref`.
-
-### List[T]::get_mut
+```text
+fn get_mut [T] self:mut$List[T] n:u64 -> mut$T
+```
 
 Returns an exclusive borrow of the indexed element. The exclusive borrow prevents other
 access to the list until its last use. An out-of-range index terminates the program.
 
 Call: `index numbers.get_mut`.
 
-### List[T]::slice
+<a id="listtget_ref"></a>
 
-Borrows the half-open range `[start, stop)`. It requires `start <= stop <= length`. An
-invalid range terminates the program. The slice keeps the list loaned until its last
-use.
+### get_ref
 
-Call: `stop start numbers.slice`. See [Slices](collections.md#slices).
+```text
+fn get_ref [T] self:$List[T] n:u64 -> $T
+```
 
-### List[T]::as_slice
+Returns the same shared element borrow as [get](#listtget), with the same bounds and
+ownership rules. An out-of-range index terminates the program.
 
-Borrows the complete list as a slice. The slice keeps the list loaned until its last
-use.
+Call: `index numbers.get_ref`.
 
-Call: `numbers.as_slice`.
+<a id="listtinsert"></a>
 
-### List[T]::set
+### insert
 
-Borrows the list exclusively, destroys the previous element, and moves a non-`Copy` item
-into its place. An out-of-range index terminates the program. Use
-[replace](#listtreplace) when the previous value must be returned.
+```text
+fn insert [T] self:mut$List[T] item:T index:u64
+```
 
-Call: `item index numbers.set`.
+Inserts before `index`. Insertion at the list's length appends. A greater index
+terminates the program. The list is borrowed exclusively, and a non-`Copy` item moves
+into it. The item is consumed before the index, unlike [set](#listtset).
 
-### List[T]::replace
+Call: `index item numbers.insert`.
 
-Borrows the list exclusively, moves a non-`Copy` item into the indexed position, and
-returns the previous element to the caller. An out-of-range index terminates the
-program.
+<a id="listtis_empty"></a>
 
-Call: `item index numbers.replace`.
+### is_empty
 
-### List[T]::push
+```text
+fn is_empty self:$List -> bool
+```
 
-Appends `item` and produces no output. The list is borrowed exclusively and remains
-owned by the caller. A non-`Copy` item moves into the list. No element borrow may remain
-in use across the call.
+Returns whether the list has no elements.
 
-Call: `item numbers.push`.
+<a id="listtiter"></a>
 
-### List[T]::pop
+### iter
+
+```text
+fn iter self:$List[T] -> Iter[$T]
+```
+
+Returns an iterator over shared element borrows. The list keeps ownership and remains
+loaned while those borrows are in use.
+
+Call: `numbers.iter`.
+
+<a id="liststrjoin"></a>
+
+### join
+
+```text
+fn join self:$List[str] separator:$str -> String
+```
+
+Joins a string-view list.
+
+<a id="liststringjoin_strings"></a>
+
+### join_strings
+
+```text
+fn join_strings self:$List[String] separator:$str -> String
+```
+
+Joins owned strings.
+
+<a id="listtlength"></a>
+
+### length
+
+```text
+fn length self:$List -> u64
+```
+
+Returns the number of elements.
+
+<a id="listtnew"></a>
+
+### new
+
+```text
+fn new [T] -> List[T]
+```
+
+Creates an empty list without element storage. The first `push`, `insert`, or nonempty
+`append` allocates that storage.
+
+Call: `std::List[i64]::new = numbers`.
+
+<a id="listtpop"></a>
+
+### pop
+
+```text
+fn pop [T] self:mut$List[T] -> T
+```
 
 Borrows the list exclusively, removes its final element, and returns that element by
 value. The caller receives ownership when `T` is an owning type. The list binding
@@ -161,15 +266,47 @@ The list must be nonempty. Popping an empty list terminates the program.
 
 Call: `numbers.pop`.
 
-### List[T]::insert
+<a id="listtpush"></a>
 
-Inserts before `index`. Insertion at the list's length appends. A greater index
-terminates the program. The list is borrowed exclusively, and a non-`Copy` item moves
-into it. The item is consumed before the index, unlike [set](#listtset).
+### push
 
-Call: `index item numbers.insert`.
+```text
+fn push [T] self:mut$List[T] item:T
+```
 
-### List[T]::remove
+Appends `item` and produces no output. The list is borrowed exclusively and remains
+owned by the caller. A non-`Copy` item moves into the list. No element borrow may remain
+in use across the call.
+
+Call: `item numbers.push`.
+
+<a id="listbytespush_str"></a>
+
+### push_str (List[Bytes])
+
+```text
+fn push_str self:mut$List[Bytes] value:$str
+```
+
+Copies text bytes and appends one buffer.
+
+<a id="liststringpush_str"></a>
+
+### push_str (List[String])
+
+```text
+fn push_str self:mut$List[String] value:$str
+```
+
+Copies and appends one text view.
+
+<a id="listtremove"></a>
+
+### remove
+
+```text
+fn remove [T] self:mut$List[T] index:u64 -> Option[T]
+```
 
 Borrows the list exclusively, removes the indexed element, and shifts later elements
 toward the start. It returns `Option::Some` containing the removed value, transferring
@@ -178,79 +315,110 @@ the list.
 
 Call: `index numbers.remove`.
 
-### List[T]::swap_at
+<a id="listtreplace"></a>
 
-Exchanges two elements through an exclusive list borrow. When the two indices differ,
-either index outside the list terminates the program. Equal indices leave the list
-unchanged.
+### replace
 
-Call: `second first numbers.swap_at`.
+```text
+fn replace [T] self:mut$List[T] n:u64 item:T -> T
+```
 
-### List[T]::reverse
+Borrows the list exclusively, moves a non-`Copy` item into the indexed position, and
+returns the previous element to the caller. An out-of-range index terminates the
+program.
+
+Call: `item index numbers.replace`.
+
+<a id="listtreverse"></a>
+
+### reverse
+
+```text
+fn reverse [T] self:mut$List[T]
+```
 
 Reverses elements in place through an exclusive list borrow.
 
 Call: `numbers.reverse`.
 
-### List[T]::append
+<a id="listtset"></a>
 
-Borrows the receiver exclusively and consumes the other list, moving all its elements
-onto the receiver's end.
+### set
 
-Call: `other numbers.append`.
+```text
+fn set [T] self:mut$List[T] n:u64 item:T
+```
 
-### List[T]::clone
+Borrows the list exclusively, destroys the previous element, and moves a non-`Copy` item
+into its place. An out-of-range index terminates the program. Use
+[replace](#listtreplace) when the previous value must be returned.
 
-Returns an independent list when `T` implements `Clone`. Cloning each element can
-allocate or run user code. The source list remains available.
+Call: `item index numbers.set`.
 
-Call: `numbers.clone`.
+<a id="listtslice"></a>
 
-### List[T]::iter
+### slice
 
-Returns an iterator over shared element borrows. The list keeps ownership and remains
-loaned while those borrows are in use.
+```text
+fn slice [T] self:$List[T] start:u64 stop:u64 -> Slice[T]
+```
 
-Call: `numbers.iter`.
+Borrows the half-open range `[start, stop)`. It requires `start <= stop <= length`. An
+invalid range terminates the program. The slice keeps the list loaned until its last
+use.
 
-### List[T]::sort
+Call: `stop start numbers.slice`. See [Slices](collections.md#slices).
+
+<a id="listtsort"></a>
+
+### sort
+
+```text
+fn sort self:mut$List[T]
+```
 
 Sorts elements in place in ascending order when `T` implements `Ord`.
 
 Call: `numbers.sort`. See [the sorting example](../examples/sorting.casa).
 
-### List[T]::sort_by
+<a id="listtsort_by"></a>
+
+### sort_by
+
+```text
+fn sort_by self:mut$List[T] f:fn[$T $T -> bool]
+```
 
 Sorts elements in place with a comparison callback. The list is borrowed exclusively.
 
 Call: `compare numbers.sort_by`. See [the sorting example](../examples/sorting.casa).
 
-### List[T]::sort_by_range
+<a id="listtsort_by_range"></a>
+
+### sort_by_range
+
+```text
+fn sort_by_range self:mut$List[T] low:u64 high:u64 f:$fn[$T $T -> bool]
+```
 
 Sorts the inclusive index range with a borrowed comparison callback. The list is
 borrowed exclusively.
 
 Call: `compare high low numbers.sort_by_range`.
 
-### List[str]::join
+<a id="listtswap_at"></a>
 
-Joins a string-view list.
+### swap_at
 
-### List[str]::contains
+```text
+fn swap_at [T] self:mut$List[T] i:u64 j:u64
+```
 
-Returns whether a string list contains `needle`.
+Exchanges two elements through an exclusive list borrow. When the two indices differ,
+either index outside the list terminates the program. Equal indices leave the list
+unchanged.
 
-### List[String]::join_strings
-
-Joins owned strings.
-
-### List[String]::push_str
-
-Copies and appends one text view.
-
-### List[Bytes]::push_str
-
-Copies text bytes and appends one buffer.
+Call: `second first numbers.swap_at`.
 
  ## Element ownership
 

@@ -47,13 +47,13 @@ Common compiler options:
 
 | Option | Purpose |
 |---|---|
-| `-o`, `--output` | Set the output binary name |
+| `--keep-asm` | Keep the generated assembly file |
 | `-L`, `--library-path` | Add a module search directory |
 | `-l`, `--link-library` | Link a native library |
+| `-o`, `--output` | Set the output binary name |
 | `-r`, `--run` | Run the program after compilation |
-| `--keep-asm` | Keep the generated assembly file |
-| `-v`, `--version` | Print the compiler version |
 | `--verbose` | Print compiler progress |
+| `-v`, `--version` | Print the compiler version |
 
 ## Learn Casa
 
@@ -63,37 +63,37 @@ Use the topic references when you need exact behavior:
 
 | Topic | Reference |
 |---|---|
-| Values and types | [Types and Literals](docs/types-and-literals.md) |
-| Signature and stack-effect notation | [Reference Notation](docs/notation.md) |
-| Ownership and borrows | [Ownership and Borrows](docs/ownership.md) |
-| Stack evaluation and operators | [Operators](docs/operators.md) |
 | Bindings, functions, and lambdas | [Functions and Lambdas](docs/functions-and-lambdas.md) |
 | Branches, loops, and matching | [Control Flow](docs/control-flow.md) |
-| Structs and methods | [Structs and Methods](docs/structs-and-methods.md) |
+| Compiler operations | [Built-in Intrinsics](docs/intrinsics.md) |
 | Enums and patterns | [Enums](docs/enums.md) |
 | Generics and traits | [Traits](docs/traits.md) |
 | Imports | [Modules](docs/modules.md) |
-| Compiler operations | [Built-in Intrinsics](docs/intrinsics.md) |
+| Ownership and borrows | [Ownership and Borrows](docs/ownership.md) |
+| Signature and stack-effect notation | [Reference Notation](docs/notation.md) |
+| Stack evaluation and operators | [Operators](docs/operators.md) |
+| Structs and methods | [Structs and Methods](docs/structs-and-methods.md) |
+| Values and types | [Types and Literals](docs/types-and-literals.md) |
 
 Library references:
 
 | Topic | Reference |
 |---|---|
-| Optional values and errors | [Optional Values and Errors](docs/optional-values-and-errors.md) |
-| Growable sequences | [List](docs/lists.md) |
 | Collections and iterators | [Collections](docs/collections.md) |
-| Text, characters, and output | [Text and Characters](docs/strings-and-io.md) |
 | Files, directories, environment, and processes | [Operating-System APIs](docs/os.md) |
+| Growable sequences | [List](docs/lists.md) |
 | Logging, timing, arguments, JSON, and parsing | [Specialist Libraries](docs/utilities.md) |
+| Optional values and errors | [Optional Values and Errors](docs/optional-values-and-errors.md) |
 | Parser building blocks | [Parser Library](docs/parser.md) |
+| Text, characters, and output | [Text and Characters](docs/strings-and-io.md) |
 
 Tooling:
 
+- [Casa style](docs/STYLE.md)
 - [Compiler diagnostics](docs/errors.md)
 - [Compiler request products](docs/compiler-products.md)
-- [Language server](docs/language-server.md)
 - [Formatter usage and rules](docs/FORMAT.md)
-- [Casa style](docs/STYLE.md)
+- [Language server](docs/language-server.md)
 
 See the [curated examples](examples/README.md) for runnable programs ordered
 from introductory to advanced.

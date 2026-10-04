@@ -54,57 +54,118 @@ end
 
 | Method | Signature | Behavior |
 |---|---|---|
-| [Option[T]::is_some](#optiontis_some) | `fn is_some [T] self:$Option[T] -> bool` | Whether a value is present |
-| [Option[T]::is_none](#optiontis_none) | `fn is_none [T] self:$Option[T] -> bool` | Whether no value is present |
-| [Option[T]::is_ok](#optiontis_ok) | `fn is_ok [T] self:$Option[T] -> bool` | Alias used by `?` |
-| [Option[T]::unwrap](#optiontunwrap) | `fn unwrap [T] self:Option[T] -> T` | Present value, or terminate on `None` |
-| [Option[T]::propagate](#optiontpropagate) | `fn propagate [T U] self:Option[T] -> Option[U]` | Convert `None` for an enclosing `?` return |
-| [Option[T]::unwrap_or](#optiontunwrap_or) | `fn unwrap_or [T] self:Option[T] default:T -> T` | Present value or `default` |
-| [Option[T]::map](#optiontmap) | `fn map [T U] self:Option[T] f:fn[T -> U] -> Option[U]` | Transform a present value |
-| [Option[T]::and_then](#optiontand_then) | `fn and_then [T U] self:Option[T] f:fn[T -> Option[U]] -> Option[U]` | Chain an optional operation |
-| [Option[T]::or_else](#optiontor_else) | `fn or_else [T] self:Option[T] f:fn[-> Option[T]] -> Option[T]` | Compute a fallback for `None` |
-| [Option[T]::filter](#optiontfilter) | `fn filter [T] self:Option[T] f:fn[$T -> bool] -> Option[T]` | Keep a present value only if it matches |
+| [and_then](#optiontand_then) | `fn and_then [T U] self:Option[T] f:fn[T -> Option[U]] -> Option[U]` | Chain an optional operation |
+| [filter](#optiontfilter) | `fn filter [T] self:Option[T] f:fn[$T -> bool] -> Option[T]` | Keep a present value only if it matches |
+| [is_none](#optiontis_none) | `fn is_none [T] self:$Option[T] -> bool` | Whether no value is present |
+| [is_ok](#optiontis_ok) | `fn is_ok [T] self:$Option[T] -> bool` | Alias used by `?` |
+| [is_some](#optiontis_some) | `fn is_some [T] self:$Option[T] -> bool` | Whether a value is present |
+| [map](#optiontmap) | `fn map [T U] self:Option[T] f:fn[T -> U] -> Option[U]` | Transform a present value |
+| [or_else](#optiontor_else) | `fn or_else [T] self:Option[T] f:fn[-> Option[T]] -> Option[T]` | Compute a fallback for `None` |
+| [propagate](#optiontpropagate) | `fn propagate [T U] self:Option[T] -> Option[U]` | Convert `None` for an enclosing `?` return |
+| [unwrap](#optiontunwrap) | `fn unwrap [T] self:Option[T] -> T` | Present value, or terminate on `None` |
+| [unwrap_or](#optiontunwrap_or) | `fn unwrap_or [T] self:Option[T] default:T -> T` | Present value or `default` |
 
-### Option[T]::is_some
+<a id="optiontand_then"></a>
 
-Returns whether a value is present.
+### and_then
 
-### Option[T]::is_none
-
-Returns whether no value is present.
-
-### Option[T]::is_ok
-
-Returns whether a value is present. The `?` operator uses this alias of `is_some`.
-
-### Option[T]::unwrap
-
-Returns the present value. `None` terminates the program.
-
-### Option[T]::propagate
-
-Converts `None` for an enclosing `?` return.
-
-### Option[T]::unwrap_or
-
-Returns the present value, or `default` when the option is `None`.
-
-### Option[T]::map
-
-Transforms a present value.
-
-### Option[T]::and_then
+```text
+fn and_then [T U] self:Option[T] f:fn[T -> Option[U]] -> Option[U]
+```
 
 Chains an optional operation.
 
-### Option[T]::or_else
+<a id="optiontfilter"></a>
 
-Computes a fallback for `None`.
+### filter
 
-### Option[T]::filter
+```text
+fn filter [T] self:Option[T] f:fn[$T -> bool] -> Option[T]
+```
 
 Keeps a present value only if it matches.
 
+<a id="optiontis_none"></a>
+
+### is_none
+
+```text
+fn is_none [T] self:$Option[T] -> bool
+```
+
+Returns whether no value is present.
+
+<a id="optiontis_ok"></a>
+
+### is_ok
+
+```text
+fn is_ok [T] self:$Option[T] -> bool
+```
+
+Returns whether a value is present. The `?` operator uses this alias of `is_some`.
+
+<a id="optiontis_some"></a>
+
+### is_some
+
+```text
+fn is_some [T] self:$Option[T] -> bool
+```
+
+Returns whether a value is present.
+
+<a id="optiontmap"></a>
+
+### map
+
+```text
+fn map [T U] self:Option[T] f:fn[T -> U] -> Option[U]
+```
+
+Transforms a present value.
+
+<a id="optiontor_else"></a>
+
+### or_else
+
+```text
+fn or_else [T] self:Option[T] f:fn[-> Option[T]] -> Option[T]
+```
+
+Computes a fallback for `None`.
+
+<a id="optiontpropagate"></a>
+
+### propagate
+
+```text
+fn propagate [T U] self:Option[T] -> Option[U]
+```
+
+Converts `None` for an enclosing `?` return.
+
+<a id="optiontunwrap"></a>
+
+### unwrap
+
+```text
+fn unwrap [T] self:Option[T] -> T
+```
+
+Returns the present value. `None` terminates the program.
+
+<a id="optiontunwrap_or"></a>
+
+### unwrap_or
+
+```text
+fn unwrap_or [T] self:Option[T] default:T -> T
+```
+
+Returns the present value, or `default` when the option is `None`.
+
+### Option ownership and calls
 
 The observation methods `is_some`, `is_none`, and `is_ok` borrow the option.
 They leave its owner available. Every other method in the table consumes the
@@ -144,57 +205,118 @@ end
 
 | Method | Signature | Behavior |
 |---|---|---|
-| [Result[T E]::is_ok](#resultt-eis_ok) | `fn is_ok [T E] self:$Result[T E] -> bool` | Whether the result is successful |
-| [Result[T E]::is_error](#resultt-eis_error) | `fn is_error [T E] self:$Result[T E] -> bool` | Whether the result is an error |
-| [Result[T E]::unwrap](#resultt-eunwrap) | `fn unwrap [T E] self:Result[T E] -> T` | Success value, or terminate on `Error` |
-| [Result[T E]::unwrap_error](#resultt-eunwrap_error) | `fn unwrap_error [T E] self:Result[T E] -> E` | Error value, or terminate on `Ok` |
-| [Result[T E]::propagate](#resultt-epropagate) | `fn propagate [T U E] self:Result[T E] -> Result[U E]` | Preserve `Error` for an enclosing `?` return |
-| [Result[T E]::unwrap_or](#resultt-eunwrap_or) | `fn unwrap_or [T E] self:Result[T E] default:T -> T` | Success value or `default` |
-| [Result[T E]::map](#resultt-emap) | `fn map [T U E] self:Result[T E] f:fn[T -> U] -> Result[U E]` | Transform a success value |
-| [Result[T E]::map_error](#resultt-emap_error) | `fn map_error [T E F] self:Result[T E] f:fn[E -> F] -> Result[T F]` | Transform an error value |
-| [Result[T E]::and_then](#resultt-eand_then) | `fn and_then [T U E] self:Result[T E] f:fn[T -> Result[U E]] -> Result[U E]` | Chain a fallible operation |
-| [Result[T E]::or_else](#resultt-eor_else) | `fn or_else [T E F] self:Result[T E] f:fn[E -> Result[T F]] -> Result[T F]` | Recover from an error |
+| [and_then](#resultt-eand_then) | `fn and_then [T U E] self:Result[T E] f:fn[T -> Result[U E]] -> Result[U E]` | Chain a fallible operation |
+| [is_error](#resultt-eis_error) | `fn is_error [T E] self:$Result[T E] -> bool` | Whether the result is an error |
+| [is_ok](#resultt-eis_ok) | `fn is_ok [T E] self:$Result[T E] -> bool` | Whether the result is successful |
+| [map](#resultt-emap) | `fn map [T U E] self:Result[T E] f:fn[T -> U] -> Result[U E]` | Transform a success value |
+| [map_error](#resultt-emap_error) | `fn map_error [T E F] self:Result[T E] f:fn[E -> F] -> Result[T F]` | Transform an error value |
+| [or_else](#resultt-eor_else) | `fn or_else [T E F] self:Result[T E] f:fn[E -> Result[T F]] -> Result[T F]` | Recover from an error |
+| [propagate](#resultt-epropagate) | `fn propagate [T U E] self:Result[T E] -> Result[U E]` | Preserve `Error` for an enclosing `?` return |
+| [unwrap](#resultt-eunwrap) | `fn unwrap [T E] self:Result[T E] -> T` | Success value, or terminate on `Error` |
+| [unwrap_error](#resultt-eunwrap_error) | `fn unwrap_error [T E] self:Result[T E] -> E` | Error value, or terminate on `Ok` |
+| [unwrap_or](#resultt-eunwrap_or) | `fn unwrap_or [T E] self:Result[T E] default:T -> T` | Success value or `default` |
 
-### Result[T E]::is_ok
+<a id="resultt-eand_then"></a>
 
-Returns whether the result is successful.
+### and_then
 
-### Result[T E]::is_error
-
-Returns whether the result is an error.
-
-### Result[T E]::unwrap
-
-Returns the success value. An `Error` result terminates the program.
-
-### Result[T E]::unwrap_error
-
-Returns the error value. An `Ok` result terminates the program.
-
-### Result[T E]::propagate
-
-Preserves `Error` for an enclosing `?` return.
-
-### Result[T E]::unwrap_or
-
-Returns the success value, or `default` when the result is an error.
-
-### Result[T E]::map
-
-Transforms a success value.
-
-### Result[T E]::map_error
-
-Transforms an error value.
-
-### Result[T E]::and_then
+```text
+fn and_then [T U E] self:Result[T E] f:fn[T -> Result[U E]] -> Result[U E]
+```
 
 Chains a fallible operation.
 
-### Result[T E]::or_else
+<a id="resultt-eis_error"></a>
+
+### is_error
+
+```text
+fn is_error [T E] self:$Result[T E] -> bool
+```
+
+Returns whether the result is an error.
+
+<a id="resultt-eis_ok"></a>
+
+### is_ok
+
+```text
+fn is_ok [T E] self:$Result[T E] -> bool
+```
+
+Returns whether the result is successful.
+
+<a id="resultt-emap"></a>
+
+### map
+
+```text
+fn map [T U E] self:Result[T E] f:fn[T -> U] -> Result[U E]
+```
+
+Transforms a success value.
+
+<a id="resultt-emap_error"></a>
+
+### map_error
+
+```text
+fn map_error [T E F] self:Result[T E] f:fn[E -> F] -> Result[T F]
+```
+
+Transforms an error value.
+
+<a id="resultt-eor_else"></a>
+
+### or_else
+
+```text
+fn or_else [T E F] self:Result[T E] f:fn[E -> Result[T F]] -> Result[T F]
+```
 
 Recovers from an error.
 
+<a id="resultt-epropagate"></a>
+
+### propagate
+
+```text
+fn propagate [T U E] self:Result[T E] -> Result[U E]
+```
+
+Preserves `Error` for an enclosing `?` return.
+
+<a id="resultt-eunwrap"></a>
+
+### unwrap
+
+```text
+fn unwrap [T E] self:Result[T E] -> T
+```
+
+Returns the success value. An `Error` result terminates the program.
+
+<a id="resultt-eunwrap_error"></a>
+
+### unwrap_error
+
+```text
+fn unwrap_error [T E] self:Result[T E] -> E
+```
+
+Returns the error value. An `Ok` result terminates the program.
+
+<a id="resultt-eunwrap_or"></a>
+
+### unwrap_or
+
+```text
+fn unwrap_or [T E] self:Result[T E] default:T -> T
+```
+
+Returns the success value, or `default` when the result is an error.
+
+### Result ownership
 
 The observation methods `is_ok` and `is_error` borrow the result. They leave
 its owner available. Every other method in the table consumes the result. A

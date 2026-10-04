@@ -93,6 +93,12 @@ Method tables list the method name, its signature, and its behavior. Signatures 
 library names, such as `List` for `std::List`. Bounds inherited from an `impl`
 block are stated in the behavior notes.
 The Signature column omits the body and visibility modifiers such as `pub`.
+Each method heading repeats that signature before describing the behavior.
+Method names omit the type when the surrounding section identifies it.
+Headings distinguish methods with the same name when they share a section.
+Method tables and their entries use alphabetical order. Independent lookup
+lists also use alphabetical order. Examples keep execution order, and numeric
+families keep increasing width or argument count.
 Call forms are fragments and name any bindings they assume.
 
 Complete programs include their imports. Save a library example as

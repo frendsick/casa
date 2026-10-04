@@ -7,13 +7,13 @@ operation or binding that uses them.
 
 | Type | Values |
 |---|---|
-| `i8`, `i16`, `i32`, `i64` | Signed integers |
-| `u8`, `u16`, `u32`, `u64` | Unsigned integers |
-| `f32`, `f64` | Floating-point numbers |
 | `bool` | `true` or `false` |
 | `char` | One Unicode scalar value |
-| `str` | An immutable UTF-8 text view |
 | `$cstr` | A borrowed NUL-terminated foreign byte string |
+| `f32`, `f64` | Floating-point numbers |
+| `i8`, `i16`, `i32`, `i64` | Signed integers |
+| `str` | An immutable UTF-8 text view |
+| `u8`, `u16`, `u32`, `u64` | Unsigned integers |
 
 An unconstrained integer literal defaults to `i64`. An unconstrained
 floating-point literal defaults to `f64`. A nearby annotation or parameter can
@@ -45,13 +45,13 @@ Both forms support these escapes:
 
 | Escape | Value |
 |---|---|
-| `\n` | Newline |
-| `\t` | Tab |
-| `\r` | Carriage return |
 | `\0` | Null byte |
 | `\\` | Backslash |
-| `\xHH` | One ASCII scalar from `00` through `7F` |
+| `\n` | Newline |
+| `\r` | Carriage return |
+| `\t` | Tab |
 | `\u{H...}` | One Unicode scalar written with 1 through 6 hexadecimal digits |
+| `\xHH` | One ASCII scalar from `00` through `7F` |
 
 Use `\'` for a quote in a character and `\"` for a quote in a string.
 Source files and text literals must be valid UTF-8. A character literal must
@@ -106,17 +106,17 @@ Use `\{` and `\}` for literal braces.
 
 | Type | Purpose |
 |---|---|
-| `ptr` | A raw memory address |
 | `array[T N]` | An owned sequence of exactly `N` elements |
-| `Slice[T]` | A borrowed sequence with a runtime length |
-| `List[T]` | An owned growable sequence |
 | `Bytes` | An owned growable byte buffer |
-| `String` | Owned growable UTF-8 text |
-| `fn[inputs -> outputs]` | A function value |
-| `Option[T]` | A value that can be absent |
-| `Result[T E]` | A success value or an error |
-| Struct name | A user-defined product type |
 | Enum name | A user-defined variant type |
+| `fn[inputs -> outputs]` | A function value |
+| `List[T]` | An owned growable sequence |
+| `Option[T]` | A value that can be absent |
+| `ptr` | A raw memory address |
+| `Result[T E]` | A success value or an error |
+| `Slice[T]` | A borrowed sequence with a runtime length |
+| `String` | Owned growable UTF-8 text |
+| Struct name | A user-defined product type |
 
 Array literals infer one common element type, and their length is part of the
 type:

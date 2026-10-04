@@ -17,72 +17,151 @@ for signatures, fragments, and commands for running complete examples.
 
 | Method | Signature | Behavior |
 |---|---|---|
-| [Cursor::new](#cursornew) | `fn new source:$str -> Cursor` | Cursor at position `0` |
-| [Cursor::is_eof](#cursoris_eof) | `fn is_eof self:$Cursor -> bool` | Whether the position reached the end |
-| [Cursor::peek](#cursorpeek) | `fn peek self:$Cursor -> std::Option[char]` | Current character without advancing |
-| [Cursor::peek_at](#cursorpeek_at) | `fn peek_at self:$Cursor offset:u64 -> std::Option[char]` | Character at a relative offset |
-| [Cursor::advance](#cursoradvance) | `fn advance self:mut$Cursor -> std::Option[char]` | Current character, then advance |
-| [Cursor::starts_with](#cursorstarts_with) | `fn starts_with self:$Cursor prefix:$str -> bool` | Match remaining text without advancing |
-| [Cursor::expect_char](#cursorexpect_char) | `fn expect_char self:mut$Cursor expected:char -> std::Result[char ParseError]` | Consume one expected character |
-| [Cursor::skip](#cursorskip) | `fn skip self:mut$Cursor count:u64` | Advance by a count |
-| [Cursor::take_string](#cursortake_string) | `fn take_string self:mut$Cursor target:$str -> std::Result[str ParseError]` | Consume exact text |
-| [Cursor::skip_while](#cursorskip_while) | `fn skip_while self:mut$Cursor pred:fn[char -> bool]` | Advance while matching |
-| [Cursor::take_while](#cursortake_while) | `fn take_while self:mut$Cursor pred:fn[char -> bool] -> std::String` | Consume and copy matching text |
-| [Cursor::save](#cursorsave) | `fn save self:$Cursor -> u64` | Current position |
-| [Cursor::restore](#cursorrestore) | `fn restore self:mut$Cursor saved:u64` | Return to a saved position |
+| [advance](#cursoradvance) | `fn advance self:mut$Cursor -> std::Option[char]` | Current character, then advance |
+| [expect_char](#cursorexpect_char) | `fn expect_char self:mut$Cursor expected:char -> std::Result[char ParseError]` | Consume one expected character |
+| [is_eof](#cursoris_eof) | `fn is_eof self:$Cursor -> bool` | Whether the position reached the end |
+| [new](#cursornew) | `fn new source:$str -> Cursor` | Cursor at position `0` |
+| [peek](#cursorpeek) | `fn peek self:$Cursor -> std::Option[char]` | Current character without advancing |
+| [peek_at](#cursorpeek_at) | `fn peek_at self:$Cursor offset:u64 -> std::Option[char]` | Character at a relative offset |
+| [restore](#cursorrestore) | `fn restore self:mut$Cursor saved:u64` | Return to a saved position |
+| [save](#cursorsave) | `fn save self:$Cursor -> u64` | Current position |
+| [skip](#cursorskip) | `fn skip self:mut$Cursor count:u64` | Advance by a count |
+| [skip_while](#cursorskip_while) | `fn skip_while self:mut$Cursor pred:fn[char -> bool]` | Advance while matching |
+| [starts_with](#cursorstarts_with) | `fn starts_with self:$Cursor prefix:$str -> bool` | Match remaining text without advancing |
+| [take_string](#cursortake_string) | `fn take_string self:mut$Cursor target:$str -> std::Result[str ParseError]` | Consume exact text |
+| [take_while](#cursortake_while) | `fn take_while self:mut$Cursor pred:fn[char -> bool] -> std::String` | Consume and copy matching text |
 
-### Cursor::new
+<a id="cursoradvance"></a>
 
-Creates a cursor at position `0` over the borrowed source.
+### advance
 
-### Cursor::is_eof
-
-Returns whether the position reached the end.
-
-### Cursor::peek
-
-Returns the current character without advancing the cursor.
-
-### Cursor::peek_at
-
-Returns the character at a relative offset without advancing the cursor.
-
-### Cursor::advance
+```text
+fn advance self:mut$Cursor -> std::Option[char]
+```
 
 Returns the current character and advances the cursor.
 
-### Cursor::starts_with
+<a id="cursorexpect_char"></a>
 
-Matches remaining text without advancing.
+### expect_char
 
-### Cursor::expect_char
+```text
+fn expect_char self:mut$Cursor expected:char -> std::Result[char ParseError]
+```
 
 Consumes one expected character.
 
-### Cursor::skip
+<a id="cursoris_eof"></a>
 
-Advances by a count.
+### is_eof
 
-### Cursor::take_string
+```text
+fn is_eof self:$Cursor -> bool
+```
 
-Consumes exact text.
+Returns whether the position reached the end.
 
-### Cursor::skip_while
+<a id="cursornew"></a>
 
-Advances while matching.
+### new
 
-### Cursor::take_while
+```text
+fn new source:$str -> Cursor
+```
 
-Consumes and copies matching text.
+Creates a cursor at position `0` over the borrowed source.
 
-### Cursor::save
+<a id="cursorpeek"></a>
 
-Returns the current cursor position.
+### peek
 
-### Cursor::restore
+```text
+fn peek self:$Cursor -> std::Option[char]
+```
+
+Returns the current character without advancing the cursor.
+
+<a id="cursorpeek_at"></a>
+
+### peek_at
+
+```text
+fn peek_at self:$Cursor offset:u64 -> std::Option[char]
+```
+
+Returns the character at a relative offset without advancing the cursor.
+
+<a id="cursorrestore"></a>
+
+### restore
+
+```text
+fn restore self:mut$Cursor saved:u64
+```
 
 Returns to a saved position.
 
+<a id="cursorsave"></a>
+
+### save
+
+```text
+fn save self:$Cursor -> u64
+```
+
+Returns the current cursor position.
+
+<a id="cursorskip"></a>
+
+### skip
+
+```text
+fn skip self:mut$Cursor count:u64
+```
+
+Advances by a count.
+
+<a id="cursorskip_while"></a>
+
+### skip_while
+
+```text
+fn skip_while self:mut$Cursor pred:fn[char -> bool]
+```
+
+Advances while matching.
+
+<a id="cursorstarts_with"></a>
+
+### starts_with
+
+```text
+fn starts_with self:$Cursor prefix:$str -> bool
+```
+
+Matches remaining text without advancing.
+
+<a id="cursortake_string"></a>
+
+### take_string
+
+```text
+fn take_string self:mut$Cursor target:$str -> std::Result[str ParseError]
+```
+
+Consumes exact text.
+
+<a id="cursortake_while"></a>
+
+### take_while
+
+```text
+fn take_while self:mut$Cursor pred:fn[char -> bool] -> std::String
+```
+
+Consumes and copies matching text.
+
+### Cursor example
 
 ```casa
 import "std"
@@ -98,12 +177,12 @@ cursor parser::parse_int .unwrap print           # 42
 
 | Function | Result |
 |---|---|
-| `skip_whitespace cursor:mut$Cursor` | Skip ASCII whitespace |
-| `parse_int cursor:mut$Cursor -> Result[i64 ParseError]` | Signed decimal integer |
-| `parse_identifier cursor:mut$Cursor -> Result[String ParseError]` | Casa-style identifier |
-| `parse_escape cursor:mut$Cursor -> Result[char ParseError]` | Character after a backslash |
-| `parse_quoted_string cursor:mut$Cursor -> Result[String ParseError]` | Double-quoted text |
 | `parse_char_literal cursor:mut$Cursor -> Result[char ParseError]` | Single-quoted character |
+| `parse_escape cursor:mut$Cursor -> Result[char ParseError]` | Character after a backslash |
+| `parse_identifier cursor:mut$Cursor -> Result[String ParseError]` | Casa-style identifier |
+| `parse_int cursor:mut$Cursor -> Result[i64 ParseError]` | Signed decimal integer |
+| `parse_quoted_string cursor:mut$Cursor -> Result[String ParseError]` | Double-quoted text |
+| `skip_whitespace cursor:mut$Cursor` | Skip ASCII whitespace |
 
 The library also exports `str_to_int`, `is_ident_start`, and `is_ident_char` for
 custom parsers.

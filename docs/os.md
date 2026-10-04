@@ -20,14 +20,14 @@ High-level file and directory operations return `Result[T IoError]`.
 
 | Variant | Meaning |
 |---|---|
-| `IoError::NotFound` | Path does not exist |
-| `IoError::PermissionDenied` | Operation is not permitted |
 | `IoError::AlreadyExists` | Target already exists |
+| `IoError::BadFd` | Invalid file descriptor |
 | `IoError::IsDirectory` | A file operation received a directory |
 | `IoError::NotDirectory` | A directory operation received another type |
 | `IoError::NotEmpty` | Directory is not empty |
-| `IoError::BadFd` | Invalid file descriptor |
+| `IoError::NotFound` | Path does not exist |
 | `IoError::Other(errno)` | Other Linux error number |
+| `IoError::PermissionDenied` | Operation is not permitted |
 
 `IoError` implements `Display`. Its `to_str` and `format` methods return a short
 message.
@@ -38,11 +38,11 @@ Prefer the high-level functions:
 
 | Function | Result |
 |---|---|
-| `file::read_all path:$cstr -> Result[Bytes IoError]` | Entire file contents |
-| `file::write_all path:$cstr content:$Bytes -> Result[bool IoError]` | Create or replace a file |
-| `file::remove path:$cstr -> Result[bool IoError]` | Remove a file |
 | `file::exists path:$cstr -> bool` | Whether `stat` can find the path |
+| `file::read_all path:$cstr -> Result[Bytes IoError]` | Entire file contents |
+| `file::remove path:$cstr -> Result[bool IoError]` | Remove a file |
 | `file::stat path:$cstr -> Result[FileStat IoError]` | File metadata |
+| `file::write_all path:$cstr content:$Bytes -> Result[bool IoError]` | Create or replace a file |
 
 Handle the operation result directly. A separate existence check can become
 stale before the next file operation:
@@ -62,36 +62,72 @@ provides these checks:
 
 | Method | Signature | Behavior |
 |---|---|---|
-| [FileStat::is_dir](#filestatis_dir) | `fn is_dir self:$FileStat -> bool` | Directory |
-| [FileStat::is_file](#filestatis_file) | `fn is_file self:$FileStat -> bool` | Regular file |
-| [FileStat::is_symlink](#filestatis_symlink) | `fn is_symlink self:$FileStat -> bool` | Symbolic link |
-| [FileStat::is_readable](#filestatis_readable) | `fn is_readable self:$FileStat -> bool` | Owner-readable mode bit |
-| [FileStat::is_writable](#filestatis_writable) | `fn is_writable self:$FileStat -> bool` | Owner-writable mode bit |
-| [FileStat::is_executable](#filestatis_executable) | `fn is_executable self:$FileStat -> bool` | Owner-executable mode bit |
+| [is_dir](#filestatis_dir) | `fn is_dir self:$FileStat -> bool` | Directory |
+| [is_executable](#filestatis_executable) | `fn is_executable self:$FileStat -> bool` | Owner-executable mode bit |
+| [is_file](#filestatis_file) | `fn is_file self:$FileStat -> bool` | Regular file |
+| [is_readable](#filestatis_readable) | `fn is_readable self:$FileStat -> bool` | Owner-readable mode bit |
+| [is_symlink](#filestatis_symlink) | `fn is_symlink self:$FileStat -> bool` | Symbolic link |
+| [is_writable](#filestatis_writable) | `fn is_writable self:$FileStat -> bool` | Owner-writable mode bit |
 
-### FileStat::is_dir
+<a id="filestatis_dir"></a>
+
+### is_dir
+
+```text
+fn is_dir self:$FileStat -> bool
+```
 
 Returns whether the entry is a directory.
 
-### FileStat::is_file
+<a id="filestatis_executable"></a>
+
+### is_executable
+
+```text
+fn is_executable self:$FileStat -> bool
+```
+
+Returns whether the owner-executable mode bit is set.
+
+<a id="filestatis_file"></a>
+
+### is_file
+
+```text
+fn is_file self:$FileStat -> bool
+```
 
 Returns whether the entry is a regular file.
 
-### FileStat::is_symlink
+<a id="filestatis_readable"></a>
 
-Returns whether the entry is a symbolic link.
+### is_readable
 
-### FileStat::is_readable
+```text
+fn is_readable self:$FileStat -> bool
+```
 
 Returns whether the owner-readable mode bit is set.
 
-### FileStat::is_writable
+<a id="filestatis_symlink"></a>
+
+### is_symlink
+
+```text
+fn is_symlink self:$FileStat -> bool
+```
+
+Returns whether the entry is a symbolic link.
+
+<a id="filestatis_writable"></a>
+
+### is_writable
+
+```text
+fn is_writable self:$FileStat -> bool
+```
 
 Returns whether the owner-writable mode bit is set.
-
-### FileStat::is_executable
-
-Returns whether the owner-executable mode bit is set.
 
 
 The complete [OS example](../examples/os_interaction.casa) creates, inspects,
@@ -101,12 +137,12 @@ and removes a file and directory.
 
 | Function | Result |
 |---|---|
-| `dir::list path:$cstr -> Result[List[Bytes] IoError]` | Entry names without `.` or `..` |
-| `dir::create path:$cstr mode:i64 -> Result[bool IoError]` | Create a directory |
-| `dir::remove path:$cstr -> Result[bool IoError]` | Remove an empty directory |
-| `dir::exists path:$cstr -> bool` | Whether the path is a directory |
-| `dir::current -> Result[Bytes IoError]` | Current working directory |
 | `dir::change path:$cstr -> Result[bool IoError]` | Change working directory |
+| `dir::create path:$cstr mode:i64 -> Result[bool IoError]` | Create a directory |
+| `dir::current -> Result[Bytes IoError]` | Current working directory |
+| `dir::exists path:$cstr -> bool` | Whether the path is a directory |
+| `dir::list path:$cstr -> Result[List[Bytes] IoError]` | Entry names without `.` or `..` |
+| `dir::remove path:$cstr -> Result[bool IoError]` | Remove an empty directory |
 
 The mode is a Linux permission value. For example, `493` is octal `0755`.
 
@@ -120,10 +156,10 @@ Environment variable names and text path utilities remain `$str`.
 
 | Path function | Result |
 |---|---|
-| `path::join child:$str parent:$str -> String` | Join with one `/` |
-| `path::dirname path:$str -> String` | Parent portion |
 | `path::basename path:$str -> String` | Final component |
+| `path::dirname path:$str -> String` | Parent portion |
 | `path::extension path:$str -> String` | Final extension without `.` |
+| `path::join child:$str parent:$str -> String` | Join with one `/` |
 
 ```casa
 import "std"
@@ -174,11 +210,11 @@ The module also exposes direct Linux file-descriptor operations:
 
 | Function | Result |
 |---|---|
+| `errno_to_io_error result:i64 -> IoError` | Convert a negative result |
+| `file::close fd:i64 -> i64` | Zero or negative error |
 | `file::open path:$cstr flags:i64 mode:i64 -> i64` | File descriptor or negative error |
 | `file::read fd:i64 buffer:ptr size:u64 -> i64` | Bytes read or negative error |
 | `file::write fd:i64 data:$Bytes -> i64` | Bytes written or negative error |
-| `file::close fd:i64 -> i64` | Zero or negative error |
-| `errno_to_io_error result:i64 -> IoError` | Convert a negative result |
 
 Open flags are `O_RDONLY`, `O_WRONLY`, `O_CREAT`, and `O_TRUNC`. Combine flags
 with `|`. Prefer the high-level `Result` functions unless direct descriptors
