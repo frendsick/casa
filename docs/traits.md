@@ -60,7 +60,7 @@ struct Box[T] {
 
 enum Maybe[T] {
     None
-    Some (T)
+    Some(T)
 }
 
 42 Box = box: Box[i64]

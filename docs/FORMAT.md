@@ -200,12 +200,12 @@ value std::List[T]::from_array
 
 ## Enum variant data parentheses
 
-An enum declaration puts one space before a variant's payload type list:
+Put no space between an enum variant's name and its payload type list:
 
 ```casa
 enum Shape {
-    Circle (i64)
-    Rectangle (i64 i64)
+    Circle(i64)
+    Rectangle(i64 i64)
     Point
 }
 ```
