@@ -246,7 +246,7 @@ import "std"
 
 ## Owned strings
 
-`String` is non-[`Copy`](traits.md#built-in-traits) and [moves](ownership.md#move-a-value) by default. Use `clone` when you need an
+`String` is non-`Copy` and [moves](ownership.md#move-a-value) by default. Use `clone` when you need an
 independent owner. `as_str` returns a [borrowed view](ownership.md#return-a-borrow) without allocation.
 
 | Method | Signature | Behavior |
@@ -560,7 +560,7 @@ that is not a Unicode scalar.
 
 ## Formatting and output
 
-`print` writes any value that implements [`Display`](traits.md#built-in-traits). `println`, `eprint`, and
+`print` writes any value that implements `Display`. `println`, `eprint`, and
 `eprintln` accept strings:
 
 | Function | Destination |

@@ -21,7 +21,7 @@ Stack-effect inputs use consumption order. Outputs use push order. See
 3 dup + print        # 6
 ```
 
-`copy` reads a borrowed [`Copy`](traits.md#built-in-traits) value into an owned value. An owned argument
+`copy` reads a borrowed `Copy` value into an owned value. An owned argument
 is borrowed automatically. For `swap`, consuming `T1` then `T2` and pushing
 `T1` then `T2` exchanges their stack positions.
 
@@ -45,7 +45,7 @@ cleanup](structs-and-methods.md#custom-destruction) and recursive field destruct
 ```
 
 Primitive display types print directly. User-defined types must implement
-[`Display`](traits.md#built-in-traits). See
+`Display`. See
 [Functions and Lambdas](functions-and-lambdas.md#function-values) for `exec`.
 
 `size_of[T]` includes aggregate padding and the tail padding needed to place

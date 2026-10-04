@@ -99,7 +99,7 @@ Prefix a string with `f` and put expressions inside braces:
 f"{name} has {count} tasks\n" print
 ```
 
-Each expression must implement [`Display`](traits.md#built-in-traits).
+Each expression must implement `Display`.
 Use `\{` and `\}` for literal braces.
 
 ## Other types

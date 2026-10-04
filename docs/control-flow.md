@@ -77,8 +77,8 @@ done
 ```
 
 The iterable expression is evaluated once. `break` and `continue` work as they
-do in a `while` loop. See [Collections](collections.md) for standard iterators
-and the [`Iterable` trait](traits.md#built-in-traits) for custom iterators.
+do in a `while` loop. Custom iterators implement `Iterable`. See
+[Collections](collections.md) for standard iterators.
 
 ## Test and bind an enum variant
 

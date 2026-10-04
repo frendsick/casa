@@ -45,7 +45,7 @@ text.as_str length print
 ## Reborrow without moving
 
 Shared borrows can be duplicated with `dup` and `over`, but they do not satisfy
-[`Copy`](traits.md#built-in-traits) bounds. Exclusive borrows and non-Copy owners are affine. For owned
+`Copy` bounds. Exclusive borrows and non-Copy owners are affine. For owned
 values, `dup` and the copied value of `over` require `Copy`. `swap` and `rot`
 only move values, so they also work with non-Copy owners.
 

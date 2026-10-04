@@ -94,7 +94,7 @@ Call: `numbers.as_slice`.
 fn clone self:$List[T] -> List[T]
 ```
 
-Returns an independent list when `T` implements [`Clone`](traits.md#built-in-traits). Cloning each element can
+Returns an independent list when `T` implements `Clone`. Cloning each element can
 allocate or run user code. The source list remains available.
 
 Call: `numbers.clone`.
@@ -327,7 +327,7 @@ Call: `stop start numbers.slice`. See [Slices](collections.md#slices).
 fn sort self:mut$List[T]
 ```
 
-Sorts elements in place in ascending order when `T` implements [`Ord`](traits.md#built-in-traits).
+Sorts elements in place in ascending order when `T` implements `Ord`.
 
 Call: `numbers.sort`. See [the sorting example](../examples/sorting.casa).
 
