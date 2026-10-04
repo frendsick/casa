@@ -156,7 +156,7 @@ without a type-name prefix is acceptable.
 - Use the explicit form (`person Person::age`) only when passing an accessor as a
   function reference (`&Person::age`) or when the shorthand creates an ambiguous
   RPN expression.
-- For method pipeline formatting see [FORMAT.md — Getter chaining and method pipelines](./FORMAT.md#getter-chaining-and-method-pipelines).
+- See the [method pipeline formatting rules](./FORMAT.md#getter-chaining-and-method-pipelines).
 
 ---
 
@@ -185,10 +185,10 @@ without a type-name prefix is acceptable.
 ### Order: primary data first, config flags last
 
 - **MUST** put primary data parameters first and config/flag/mode parameters last.
-- Casa's RPN means param 1 is the topmost stack slot — the first argument pushed last.
-  That position belongs to the primary data being operated on. A config flag in param 1
-  forces every call site to push the flag immediately before the function name, burying
-  the important argument under a trailing literal.
+- The first parameter receives the topmost stack value. Push that argument last.
+  Use that position for the primary data. A flag in the first parameter position
+  makes every caller push it immediately before the function name, after the primary
+  data.
 
   ```casa
   # MUST — primary data first, flag last
@@ -212,9 +212,9 @@ without a type-name prefix is acceptable.
 
 - **MUST** pick the parameter type matching the actual value set. Two states = `bool`.
   Arbitrary integer = `i64`. Don't use `i64` as a stand-in for "one of two values".
-- `i64` tells the reader "any integer" and invites misuse. If only `1` and `-1` are
-  ever valid, the type lies about the domain. Use `bool` and derive the integer
-  internally (`if backward then -1 else 1 fi = step`).
+- `i64` accepts values across its full range. If only `1` and `-1` are valid,
+  it does not express that restriction. Use `bool` and derive the integer internally
+  (`if backward then -1 else 1 fi = step`).
 
 ---
 
@@ -290,8 +290,8 @@ without a type-name prefix is acceptable.
 
 - **SHOULD** prefer `for x in <iter> do … done` over the equivalent `while`
   loop whenever the loop walks every element of a collection or iterator. The
-  `for` form is shorter, makes the intent obvious, and removes the off-by-one
-  trap of manual index bookkeeping.
+  `for` form is shorter and states the traversal directly. It avoids manual
+  index updates that can cause off-by-one errors.
 
   ```casa
   # SHOULD
@@ -306,7 +306,7 @@ without a type-name prefix is acceptable.
   done
   ```
 
-- Reach for `while` only when `for` cannot express the loop: condition-driven
+- Use `while` only when `for` cannot express the loop: condition-driven
   iteration, parallel iteration over multiple sources, mid-loop mutation of the
   collection being iterated, or early termination that depends on state outside
   the iterator.
@@ -355,7 +355,7 @@ without a type-name prefix is acceptable.
 
 - **MUST** return `Result` for meaningful failures and `Option` for absence.
 - Compiler phases **MUST** record recoverable diagnostics in their phase-owned
-  `Diagnostics`; callers decide whether to continue, report, or exit.
+  `Diagnostics`. Callers decide whether to continue, report, or exit.
 - Application adapters may print an unrecoverable internal error and exit when their
   public interface cannot represent failure.
 - **MUST** write fixed error messages as plain string literals, not constructed

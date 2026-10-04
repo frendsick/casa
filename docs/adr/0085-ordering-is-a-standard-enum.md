@@ -20,4 +20,4 @@ Option remains entirely ordinary. PartialOrd's `Option[Ordering]` return and Ord
 - Ordering may receive ordinary methods and trait implementations without changing its three language-relevant variants.
 - Programs using only primitive boolean comparison need neither Ordering nor Option declarations.
 - A malformed or differently ordered enum cannot serve as the Ordering contract used by `derives Ord`.
-- ADR-0089 makes the standard enum implement Eq and Copy initially; Ord and Hashable remain deferred.
+- ADR-0089 makes the standard enum implement Eq and Copy initially. Ord and Hashable remain deferred.

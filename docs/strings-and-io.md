@@ -334,7 +334,7 @@ Returns the length in bytes.
 fn new -> String
 ```
 
-Creates an empty owned text.
+Creates empty owned text.
 
 ### String::push
 
@@ -358,7 +358,7 @@ Reserves space after the current text.
 fn with_capacity capacity:u64 -> String
 ```
 
-Creates an empty text with reserved byte capacity.
+Creates empty text with reserved byte capacity.
 
 ### String example
 

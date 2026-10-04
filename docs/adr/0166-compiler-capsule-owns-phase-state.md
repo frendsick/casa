@@ -37,8 +37,6 @@ allowed when they consume established facts and hide their protocols.
 
 ## Alternatives and costs
 
-The following alternatives explain the selected ownership model.
-
 | Design | Useful property | Cost compared with the selected direction |
 | --- | --- | --- |
 | Compiler Capsule | Callers obtain compiler products without managing phase transitions | A large private module can still hide shared-state coupling. Internal ownership and validation need concrete evidence. |

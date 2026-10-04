@@ -20,9 +20,9 @@ fn id [T] value:T -> T { value }
 
 ## Consequences
 
-- Free generic functions use `&function[Arguments]`; every declared type argument is supplied.
+- Free generic functions use `&function[Arguments]`. Every declared type argument is supplied.
 - Trait and `Copy` bounds are checked when the reference is formed.
-- A generic body may specialize using its own in-scope type variables, such as `&id[T]`; the resulting function type is monomorphic for each instantiation of the enclosing function.
+- A generic body may specialize using its own in-scope type variables, such as `&id[T]`. The resulting function type is monomorphic for each instantiation of the enclosing function.
 - `FunctionType` need not represent universally quantified variables or delayed bounds.
 - Casa initially performs no expected-type specialization for omitted reference arguments. It may be added later as local syntactic inference without changing function-value semantics.
-- Named function references remain `Copy`; captured closures are repeatable and follow the ordinary ownership and borrowing rules.
+- Named function references remain `Copy`. Captured closures are repeatable and follow the ordinary ownership and borrowing rules.

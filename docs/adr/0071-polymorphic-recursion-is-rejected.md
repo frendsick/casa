@@ -1,6 +1,6 @@
 # Polymorphic recursion is rejected
 
-Recursive calls within one function-call cycle must preserve their generic type arguments. Ordinary recursion at the same concrete specialization is allowed; a recursive call that changes a participating type argument is a compile-time error.
+Recursive calls within one function-call cycle must preserve their generic type arguments. Ordinary recursion at the same concrete specialization is allowed. A recursive call that changes a participating type argument is a compile-time error.
 
 ```casa
 fn recurse [T] value:T {

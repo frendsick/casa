@@ -14,5 +14,5 @@ Both operators require an unsafe context. The caller must ensure the result rema
 - Subtraction by `u64` provides backward movement without a signed offset type.
 - Checked integer arithmetic used to calculate an offset occurs before the unsafe pointer operation.
 - Pointer arithmetic on null, arithmetic overflow, or producing any other out-of-allocation address is undefined behavior.
-- Casa initially provides no pointer-pointer subtraction or address-distance operation; containers retain indexes and lengths explicitly.
+- Casa initially provides no pointer-pointer subtraction or address-distance operation. Containers retain indexes and lengths explicitly.
 - Pointer arithmetic remains byte-based. Generic element addressing multiplies an index by `size_of[T]` first.

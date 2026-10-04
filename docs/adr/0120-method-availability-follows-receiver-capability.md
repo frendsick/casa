@@ -8,7 +8,7 @@ Method availability is determined by the declared receiver and the capability av
 |---|---|---|---|
 | `self` | allowed, consumes | rejected | rejected |
 | `$self` | allowed, shared borrow | allowed | allowed, shared reborrow |
-| `mut$self` | allowed; exclusive borrow | rejected | allowed |
+| `mut$self` | allowed, exclusive borrow | rejected | allowed |
 
 These rules apply uniformly to inherent methods, trait methods, operators lowered to methods, and generic calls. They do not inspect the method name or recognize Clone, equality, hashing, ordering, or display specially.
 
@@ -16,6 +16,6 @@ Method lookup first considers the exact value type. If that type has no applicab
 
 ## Consequences
 
-- If `T: Clone`, `mut$T.clone` may resolve to `T.clone` and return an owned `T`; this is ordinary `$self` receiver lookup.
+- If `T: Clone`, `mut$T.clone` may resolve to `T.clone` and return an owned `T`. This is ordinary `$self` receiver lookup.
 - Shared-borrow duplication does not confer Copy or Clone under ADR-0150. When `T: Clone`, `$T.clone` can use `T`'s `$self` method and return owned `T`. `T::clone` selects it explicitly.
 - Expected return types never choose a method implementation.

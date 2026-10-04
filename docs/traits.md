@@ -117,8 +117,7 @@ fn save_description [T:Describe + Stored] value:T { value.describe print }
 
 ## Built-in traits
 
-The standard library defines these traits. This table is the public catalog for
-their relationships and language uses.
+The standard library defines these traits:
 
 | Trait | Requirement | Extends | Used by |
 |---|---|---|---|

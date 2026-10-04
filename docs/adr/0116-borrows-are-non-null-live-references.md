@@ -14,6 +14,6 @@ The compiler does not recognize `Option` specially. Any library or application e
 
 - Safe use of a borrow requires no null check.
 - `ptr` remains the nullable, non-owning raw-address type.
-- `ptr::as_ref[T]` and `ptr::as_mut[T]` require a non-null address; violating that unsafe precondition is undefined behavior.
+- `ptr::as_ref[T]` and `ptr::as_mut[T]` require a non-null address. Violating that unsafe precondition is undefined behavior.
 - Borrow fields and returned borrows retain the same non-null guarantee.
 - Casa has no `null` literal or null coercion for borrowed types.

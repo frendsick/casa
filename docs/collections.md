@@ -135,7 +135,7 @@ when `N` is zero. Arrays with non-`Copy` elements remain affine. Indexing with a
 constant past the last element is a compile-time error. Indexing past it with a
 runtime value terminates the program.
 
-`nth` and `iter` read through a borrowed array, so they hand back `$T` rather
+`nth` and `iter` read through a borrowed array, so they return `$T` rather
 than an owned element. The array stays the only owner: an element type with a
 reserved `drop` method runs its hook once, when the array is destroyed. Use
 `.clone` on the result when an owned value is needed.
@@ -705,7 +705,7 @@ Removes and destroys the matching key, if present. Removal does not allocate.
 ## Owned strings
 
 `std::String` owns growable UTF-8 text. Use it to assemble text in steps.
-The [text reference](strings-and-io.md#owned-strings) owns its method contracts
+The [text reference](strings-and-io.md#owned-strings) documents its methods
 and examples. Use [Bytes](#bytes) for binary data.
 
 ## Iterator sources

@@ -1,6 +1,6 @@
 # x86-64 Casa uses fixed-width size types
 
-Casa's only compilation target is x86-64. It therefore uses `u64` for in-memory byte counts, collection lengths, capacities, indexes, allocation sizes, and shift counts. Genuinely signed offsets use `i64`.
+Casa's only compilation target is x86-64. It therefore uses `u64` for in-memory byte counts, collection lengths, capacities, indexes, allocation sizes, and shift counts. Signed offsets use `i64`.
 
 Casa does not provide `usize` or `isize`. On the only target they would duplicate `u64` and `i64` while forcing explicit conversions between values with identical representation and range.
 

@@ -156,7 +156,7 @@ value std::List[T]::from_array
 - Items MUST be comma-separated, with a space after each comma. A missing comma
   between items is a syntax error (see
   [ADR-0154](adr/0154-array-literals-require-commas-between-items.md)).
-- A single trailing comma before `]` is allowed. The compact form omits it; the
+- A single trailing comma before `]` is allowed. The compact form omits it. The
   expanded form adds it.
 - One space before the opening `[` when it follows another token:
 

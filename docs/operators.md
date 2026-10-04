@@ -27,7 +27,7 @@ Functions and comparisons use the topmost value as the first operand:
 0 1 > print # true, because this means 1 > 0
 ```
 
-This comparison rule can be surprising. For example, `90 score >=` means
+For example, `90 score >=` means
 `score >= 90`.
 
 ## Arithmetic

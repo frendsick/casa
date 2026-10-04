@@ -20,7 +20,7 @@ The ordinary rule preventing movement of a borrowed owner rejects construction. 
 
 ## Consequences
 
-- A struct may still contain an owner and a borrow of some external owner; only an internal self-reference is forbidden.
+- A struct may still contain an owner and a borrow of some external owner. Only an internal self-reference is forbidden.
 - Moving an aggregate containing a borrow moves the borrow handle, not the external borrowed value, and remains subject to the borrowed value's origin lifetime.
 - Parsers, cursors, and views over owned buffers store offsets or indices and derive temporary borrows when needed.
 - Recursive ownership indirection does not imply stable user-observable addresses or permit self-reference.

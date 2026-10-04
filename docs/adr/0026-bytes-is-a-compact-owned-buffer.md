@@ -1,7 +1,7 @@
 # Bytes is a compact owned buffer
 status: amended by [ADR-0160](0160-os-byte-round-trips-use-bytes-and-cstr.md)
 
-`Bytes` is a distinct standard-library type for arbitrary binary data. It owns a compact growable buffer with one `u8` per byte, is non-`Copy`, moves by default, and is observed through `$Bytes`. Safe mutation requires `mut$Bytes`; ADR-0076 later gives it an explicit allocating `Clone` implementation.
+`Bytes` is a distinct standard-library type for arbitrary binary data. It owns a compact growable buffer with one `u8` per byte, is non-`Copy`, moves by default, and is observed through `$Bytes`. Safe mutation requires `mut$Bytes`. ADR-0076 later gives it an explicit allocating `Clone` implementation.
 
 `Bytes` is implemented as an ordinary stdlib type with private representation and unsafe allocation internals. It does not require new syntax or another compiler-owned collection. Its initial safe surface includes empty construction, length and capacity queries, `push`, buffer append, copied indexed access returning `Option[u8]`, and iteration yielding copied `u8` values. Raw-input wrappers may reserve and initialize storage through private unsafe operations before publishing the initialized length.
 
@@ -14,9 +14,9 @@ status: amended by [ADR-0160](0160-os-byte-round-trips-use-bytes-and-cstr.md)
 
 ## Consequences
 
-- Every initialized element is a valid `u8`; unlike `str`, `Bytes` imposes no UTF-8 or interior-NUL invariant.
+- Every initialized element is a valid `u8`. Unlike `str`, `Bytes` imposes no UTF-8 or interior-NUL invariant.
 - Indexed reads copy `u8`. Any mutable indexed access must remain bounded and require an exclusive borrow.
-- Moving `Bytes` transfers its buffer handle; deterministic destruction frees dynamic storage exactly once.
+- Moving `Bytes` transfers its buffer handle. Deterministic destruction frees dynamic storage exactly once.
 - `Bytes.to_str $self -> Result[String Utf8Error]` validates and copies without consuming the source.
 - A consuming `into_str` conversion remains deferred until measured copying justifies its failure-ownership and representation complexity.
 - Conversion to `$cstr` is not implicit: arbitrary bytes may lack a trailing NUL or contain interior NUL.

@@ -10,9 +10,9 @@ Casa separates exact, checked, deliberately rounded, and wrapping numeric conver
 ## Consequences
 
 - `f64::from` accepts `f32`, while `f32::from` does not accept `f64`.
-- `f64::round_from` may round a large integer; `f32::round_from` may round an `f64` and produces signed infinity when a finite source overflows the destination width.
+- `f64::round_from` may round a large integer. `f32::round_from` may round an `f64` and produces signed infinity when a finite source overflows the destination width.
 - A float-to-integer `try_from` rejects NaN, infinity, fractional values, and out-of-range values.
 - A narrowing float-to-float `try_from` rejects values that are not represented exactly at the destination width.
 - Casa initially adds no saturating numeric conversion.
 - Numeric values never change type implicitly.
-- `Option` remains ordinary standard-library code; this decision does not give it compiler-defined behavior.
+- `Option` remains ordinary standard-library code. This decision does not give it compiler-defined behavior.

@@ -142,7 +142,7 @@ not only describe the operation. State the facts that prove its safety, such as
 live allocation bounds, initialization, alignment, ownership, aliasing, a
 preceding check, or a syscall or FFI contract.
 
-Keep the proof brief and information-dense. One comment can cover a complete
+Keep the proof brief and state the relevant facts. One comment can cover a complete
 block only when it proves every `unsafe` operation in that block. Split a block
 when separate proofs would otherwise be vague or long.
 

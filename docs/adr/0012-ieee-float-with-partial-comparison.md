@@ -6,11 +6,11 @@ Casa's `f32` and `f64` types are IEEE-754 values and may contain NaN or infinity
 
 - Prohibiting NaN would require checking every float-producing operation and foreign-function result, then either trapping or making ordinary arithmetic fallible.
 - Giving NaN a language-specific total equality and ordering would permit `Eq` and `Ord`, but would make familiar floating-point operators behave unexpectedly.
-- IEEE behavior with partial traits preserves hardware semantics while keeping total-order requirements honest.
+- IEEE behavior with partial traits preserves hardware semantics and keeps total-order traits restricted to types with total ordering.
 
 ## Consequences
 
-- PartialEq provides the shared `eq` and `ne` operator methods, while Eq is the explicit total-equality refinement. PartialOrd provides `partial_cmp` plus the four boolean ordering methods; Ord adds `cmp` and total-order semantics.
+- PartialEq provides the shared `eq` and `ne` operator methods, while Eq is the explicit total-equality refinement. PartialOrd provides `partial_cmp` plus the four boolean ordering methods. Ord adds `cmp` and total-order semantics.
 - `f32` and `f64` cannot be `Map` or `Set` keys directly.
 - A validated finite-number wrapper may provide lawful `Eq`, `Ord`, and `Hashable` as a library type.
 - Integer-to-float and float-to-integer conversions remain explicit.

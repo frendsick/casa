@@ -9,5 +9,5 @@ The round trip covers every finite value, both infinities, and both signed zeros
 - Formatting uses `.` as the decimal separator regardless of process locale.
 - Negative zero formats as `-0.0` and therefore retains its sign through text round trips.
 - Special values use the canonical spellings `NaN`, `inf`, and `-inf`.
-- NaN payloads do not survive text conversion; exact representation transport uses `to_bits` and `from_bits`.
+- NaN payloads do not survive text conversion. Exact representation transport uses `to_bits` and `from_bits`.
 - Parsing is standard-library behavior, and `Option` receives no compiler special case.

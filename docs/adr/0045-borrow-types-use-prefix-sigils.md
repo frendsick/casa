@@ -31,5 +31,5 @@ mut$self # exclusive mutable borrow
 - Prefix binding distinguishes `$Option[T]`, a borrow of an option, from `Option[$T]`, an owned option containing a borrow.
 - Borrow qualifiers may appear in parameters, return types, generic arguments, and function types. ADR-0052 later permits user-defined structs and enums to contain borrowed fields under ordinary origin analysis.
 - Nested borrow qualifiers such as `$$T` and `mut$mut$T` are rejected initially.
-- The existing `&name` syntax for named function references is unchanged; `$` is borrow-type syntax, not a function-reference prefix or variable sigil.
+- The existing `&name` syntax for named function references is unchanged. `$` is borrow-type syntax, not a function-reference prefix or variable sigil.
 - The formatter emits `$T` and `mut$T` without internal whitespace.

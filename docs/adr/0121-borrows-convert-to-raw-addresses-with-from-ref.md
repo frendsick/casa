@@ -13,7 +13,7 @@ Creating and copying an address does not access memory and is therefore safe. Po
 ## Consequences
 
 - The result is a non-owning raw pointer and does not keep its source alive, borrowed, or immovable.
-- Moving or destroying the source may leave the raw pointer dangling; merely storing or comparing that pointer remains safe, while later memory access must re-establish validity in unsafe code.
+- Moving or destroying the source may leave the raw pointer dangling. Merely storing or comparing that pointer remains safe, while later memory access must re-establish validity in unsafe code.
 - Safe wrappers accepting `mut$T` may pass its address to an unsafe foreign operation that writes, with the wrapper's exclusive input providing the aliasing contract.
 - `ptr::from_ref` performs no allocation, metadata construction, or runtime check.
 - General casts and implicit borrow-to-pointer conversions remain absent.

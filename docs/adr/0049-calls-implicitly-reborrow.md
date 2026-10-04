@@ -10,6 +10,6 @@ fn process items:mut$List[i64] {
 }
 ```
 
-The original owner or borrow becomes usable again after the reborrow's last use. If the callee returns a borrow derived from the parameter, that returned value extends the reborrow according to the ordinary borrow-origin rules. Assignments and returns still move an exclusive borrow when their destination expects `mut$T`; automatic reborrowing is a call-boundary rule.
+The original owner or borrow becomes usable again after the reborrow's last use. If the callee returns a borrow derived from the parameter, that returned value extends the reborrow according to the ordinary borrow-origin rules. Assignments and returns still move an exclusive borrow when their destination expects `mut$T`. Automatic reborrowing is a call-boundary rule.
 
 This keeps common mutation and observation composable without explicit reborrow syntax. The compiler records a child loan in the existing function-local ownership state and performs no whole-program analysis.

@@ -89,9 +89,9 @@ after `import "std"`. Receiver calls such as `numbers.push` use the receiver's
 type to find the method. Primitive namespaces such as `str::substring` retain
 their spelling. See [Modules](modules.md#qualified-names-and-module-identity).
 
-Method tables list the method name, its signature, and its behavior. Signatures use local
-library names, such as `List` for `std::List`. Bounds inherited from an `impl`
-block are stated in the behavior notes.
+Method tables list the method name, signature, and description. Signatures use
+local library names, such as `List` for `std::List`. The description states
+bounds inherited from an `impl` block.
 The Signature column omits the body and visibility modifiers such as `pub`.
 Each method heading uses the qualified name, such as `array[T N]::clone`.
 The signature follows the heading, before the behavior description. The Method

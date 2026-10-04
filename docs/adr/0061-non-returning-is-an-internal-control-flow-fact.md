@@ -1,6 +1,6 @@
 # Non-returning is an internal control-flow fact
 
-Casa represents termination as compiler control-flow metadata rather than a source `Never` type or `noreturn` annotation. `panic`, `exit`, and direct calls whose implementations are proven not to return end their path; that path does not participate in subsequent stack or ownership joins.
+Casa represents termination as compiler control-flow metadata rather than a source `Never` type or `noreturn` annotation. `panic`, `exit`, and direct calls whose implementations are proven not to return end their path. That path does not participate in subsequent stack or ownership joins.
 
 ```casa
 fn require_value [T] item:Option[T] -> T {

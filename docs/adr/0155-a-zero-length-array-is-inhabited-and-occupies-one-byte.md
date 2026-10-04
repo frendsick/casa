@@ -22,9 +22,8 @@ representation detail under ADR-0156.
   also reintroduces the zero-sized value that ADR-0132 rejected: element stride
   becomes zero, consecutive elements share an address, and every generic
   container needs the branch ADR-0132 exists to avoid.
-- Treat `array[T 0]` as uninhabited, so the question does not arise. It is
-  false: `[]` is a value of the type, and code that constructs and destroys it
-  must work.
+- Treat `array[T 0]` as uninhabited, so the question does not arise. However, `[]` is a value of the type, and code that constructs and destroys
+  it must work.
 - One byte, from ADR-0132's general rule, with no array-specific exception
   (chosen). The only cost is that `N size_of[T] *` describes the element
   storage rather than the whole value when `N` is zero.

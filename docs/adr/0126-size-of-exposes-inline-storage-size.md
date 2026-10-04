@@ -31,4 +31,4 @@ index size_of[T] * data + = element_address
 - `size_of[T]` is the only initial layout query. Casa exposes no `align_of[T]`, field-offset query, or packed-layout control. `alloc` provides sufficient base alignment and `size_of[T]` is a valid aligned array stride.
 - Unsafe code obtains a field's actual address through typed field access followed by `ptr::from_ref`, rather than reconstructing its offset. Ordinary field access uses compiler-generated offsets.
 - A future alignment, offset, or explicit-layout feature requires a concrete FFI, arena, or hardware-layout need and its own stability contract.
-- Ordinary owned code does not need `size_of`; it is primarily a low-level implementation tool.
+- Ordinary owned code does not need `size_of`. It is primarily a low-level implementation tool.

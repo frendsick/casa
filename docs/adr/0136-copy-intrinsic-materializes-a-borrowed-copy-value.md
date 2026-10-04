@@ -17,7 +17,7 @@ fn copied [T:Copy] value:$T -> T { value copy }
 ## Consequences
 
 - `copy` is a compiler intrinsic, not a trait method or standard-library function. A generic Casa function could not implement it without already having an operation that materializes `T` from `$T`.
-- `dup` retains `[T: Copy] T -> T T`; applying it to `$T` duplicates the borrow because the stack value itself is a shared reference.
+- `dup` retains `[T: Copy] T -> T T`. Applying it to `$T` duplicates the borrow because the stack value itself is a shared reference.
 - `copy` invokes no Clone implementation, user code, allocator, or destructor.
 - Compiler lowering uses `T`'s layout and does not require aggregate padding to contain initialized user-observable bytes.
 - Concrete built-in copyable values remain usable without importing the standard library. Generic code names the active compiler-validated Copy trait in its bound.
