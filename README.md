@@ -101,8 +101,3 @@ Casa is self-hosted. Build the compiler with an existing `casac`:
 ```sh
 ./casac casa.casa -o casac -L lib
 ```
-
-Keep committed documentation aligned with the current implementation. Plans
-belong in issues. Never commit benchmark results, raw samples, logs, profiles,
-or historical performance reports. See the [measurement tools](tests/benchmarks/README.md)
-for reusable checks and temporary output paths.
