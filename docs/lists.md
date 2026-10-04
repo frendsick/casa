@@ -35,7 +35,7 @@ local type names. Bounds inherited from an `impl` block are stated with the rele
 behavior. See [reference notation](notation.md) for consumption order and qualified
 names. Call forms below assume a list binding named `numbers`.
 
-| Method | Signature | Behavior |
+| Method | Signature | Description |
 |---|---|---|
 | [append](#listtappend) | `fn append [T] self:mut$List[T] other:List[T]` | Move every element of `other` onto the end |
 | [as_slice](#listtas_slice) | `fn as_slice [T] self:$List[T] -> Slice[T]` | Borrowed view of the complete list |

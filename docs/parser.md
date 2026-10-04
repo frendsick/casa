@@ -15,7 +15,7 @@ for signatures, fragments, and commands for running complete examples.
 
 ## Cursor API
 
-| Method | Signature | Behavior |
+| Method | Signature | Description |
 |---|---|---|
 | [advance](#cursoradvance) | `fn advance self:mut$Cursor -> std::Option[char]` | Current character, then advance |
 | [expect_char](#cursorexpect_char) | `fn expect_char self:mut$Cursor expected:char -> std::Result[char ParseError]` | Consume one expected character |

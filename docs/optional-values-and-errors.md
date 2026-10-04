@@ -50,7 +50,7 @@ fn divide dividend:i64 divisor:i64 -> std::Option[i64] { divisor dividend.try_di
 end
 ```
 
-| Method | Signature | Behavior |
+| Method | Signature | Description |
 |---|---|---|
 | [and_then](#optiontand_then) | `fn and_then [T U] self:Option[T] f:fn[T -> Option[U]] -> Option[U]` | Chain an optional operation |
 | [filter](#optiontfilter) | `fn filter [T] self:Option[T] f:fn[$T -> bool] -> Option[T]` | Keep a present value only if it matches |
@@ -182,7 +182,7 @@ failure match
 end
 ```
 
-| Method | Signature | Behavior |
+| Method | Signature | Description |
 |---|---|---|
 | [and_then](#resultt-eand_then) | `fn and_then [T U E] self:Result[T E] f:fn[T -> Result[U E]] -> Result[U E]` | Chain a fallible operation |
 | [is_error](#resultt-eis_error) | `fn is_error [T E] self:$Result[T E] -> bool` | Whether the result is an error |

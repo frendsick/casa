@@ -35,7 +35,7 @@ import "std"
 1 numbers.nth print # 20
 ```
 
-| Method | Signature | Behavior |
+| Method | Signature | Description |
 |---|---|---|
 | [clone](#arrayt-nclone) | `fn clone self:$array[T N] -> array[T N]` | Independent array when `T: Clone` |
 | [contains](#arraystr-ncontains) | `fn contains [const N:u64] self:$array[str N] needle:$str -> bool` | Whether a string array contains `needle` |
@@ -152,7 +152,7 @@ import "std"
 0 middle.nth print # 20
 ```
 
-| Method | Signature | Behavior |
+| Method | Signature | Description |
 |---|---|---|
 | [is_empty](#slicetis_empty) | `fn is_empty self:$Slice[T] -> bool` | Whether the view has no elements |
 | [iter](#slicetiter) | `fn iter self:$Slice[T] -> Iter[$T]` | Iterator over borrows of the elements |
@@ -211,7 +211,7 @@ removed. The [List reference](lists.md) covers list operations, including
 `Bytes` is a non-`Copy` owned growable buffer for binary data. It stores one
 `u8` per byte. Mutation requires an [exclusive borrow](ownership.md#borrow-for-a-call).
 
-| Method | Signature | Behavior |
+| Method | Signature | Description |
 |---|---|---|
 | [append](#bytesappend) | `fn append self:mut$Bytes source:$Bytes` | Copy the source bytes onto the end |
 | [as_cstr](#bytesas_cstr) | `fn as_cstr self:$Bytes -> Option[$cstr]` | Borrow a NUL-terminated view if no byte is NUL |
@@ -348,7 +348,7 @@ std::Map[str i64]::new = scores
 end
 ```
 
-| Method | Signature | Behavior |
+| Method | Signature | Description |
 |---|---|---|
 | [clone](#mapk-vclone) | `fn clone self:$Map[K V] -> Map[K V]` | Independent map when `K: Clone` and `V: Clone` |
 | [delete](#mapk-vdelete) | `fn delete self:mut$Map[K V] key:$K` | Remove and destroy a value, if present |
@@ -506,7 +506,7 @@ collection.
 `Map[String V]` also accepts borrowed text keys without allocating a temporary
 owner:
 
-| Method | Signature | Behavior |
+| Method | Signature | Description |
 |---|---|---|
 | [delete_str](#mapstring-vdelete_str) | `fn delete_str self:mut$Map[String V] key:$str` | Remove and destroy a value |
 | [get_mut_str](#mapstring-vget_mut_str) | `fn get_mut_str self:mut$Map[String V] key:$str -> Option[mut$V]` | Exclusively borrow a value |
@@ -581,7 +581,7 @@ std::Set[str]::new = names
 "Ada" names.has print # true
 ```
 
-| Method | Signature | Behavior |
+| Method | Signature | Description |
 |---|---|---|
 | [add](#setkadd) | `fn add self:mut$Set[K] key:K` | Add a value |
 | [clone](#setkclone) | `fn clone self:$Set[K] -> Set[K]` | Independent set when `K: Clone` |
@@ -672,7 +672,7 @@ Collisions, traversal order, and untrusted-key behavior match `Map`.
 
 `Set[String]` accepts borrowed text keys:
 
-| Method | Signature | Behavior |
+| Method | Signature | Description |
 |---|---|---|
 | [add_str](#setstringadd_str) | `fn add_str self:mut$Set[String] key:$str` | Copy and add a text key |
 | [has_str](#setstringhas_str) | `fn has_str self:$Set[String] key:$str -> bool` | Whether the text key exists |
@@ -734,7 +734,7 @@ Lazy operations return `Iter` and do no work until the result is consumed.
 
 In trait signatures, the type `self` means the type that implements `Iterable[T]`.
 
-| Method | Signature | Behavior |
+| Method | Signature | Description |
 |---|---|---|
 | [chain](#iterabletchain) | `fn chain self:self other:Iter[T] -> Iter[T]` | Yield from `self`, then `other` |
 | [enumerate](#iterabletenumerate) | `fn enumerate self:self -> Iter[Pair[i64 T]]` | Pair each value with its zero-based index |
@@ -834,7 +834,7 @@ Terminal operations borrow the iterator exclusively, advance its state, and
 return a non-iterator value. A named iterator remains available after the call.
 Operations such as `any` and `find` can stop before it is exhausted.
 
-| Method | Signature | Behavior |
+| Method | Signature | Description |
 |---|---|---|
 | [all](#iterabletall) | `fn all self:mut$self f:fn[$T -> bool] -> bool` | Whether every value matches |
 | [any](#iterabletany) | `fn any self:mut$self f:fn[$T -> bool] -> bool` | Whether any value matches |

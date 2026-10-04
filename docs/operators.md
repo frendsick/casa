@@ -51,7 +51,7 @@ deliberate modulo arithmetic.
 
 After `import "std"`, these `i64` helpers are available:
 
-| Method | Signature | Behavior |
+| Method | Signature | Description |
 |---|---|---|
 | [abs](#i64abs) | `fn abs self:$i64 -> i64` | Absolute value |
 | [clamp](#i64clamp) | `fn clamp self:$i64 lo:i64 hi:i64 -> i64` | Value limited to the inclusive range |

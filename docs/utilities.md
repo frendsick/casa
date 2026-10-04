@@ -31,7 +31,7 @@ terminate with exit code `2`.
 
 Use `""` when an option has no short or long spelling.
 
-| Method | Signature | Behavior |
+| Method | Signature | Description |
 |---|---|---|
 | [add_flag](#argparseradd_flag) | `fn add_flag self:mut$ArgParser name:str short_flag:str long_flag:str help_text:str` | Boolean flag |
 | [add_multi_option](#argparseradd_multi_option) | `fn add_multi_option self:mut$ArgParser name:str short_flag:str long_flag:str help_text:str` | Repeatable string option |
@@ -174,7 +174,7 @@ A selected level includes less verbose levels.
 
 `LogLevel` provides `Error`, `Warning`, `Info`, and `Debug`.
 
-| Method | Signature | Behavior |
+| Method | Signature | Description |
 |---|---|---|
 | [configure](#loggerconfigure) | `fn configure self:mut$Logger level:LogLevel` | Change the owned level |
 | [new](#loggernew) | `fn new -> Logger` | Create logger state at `Warning` |
@@ -224,7 +224,7 @@ timer::Timer::new = timer
 f"elapsed: {timer}\n" print
 ```
 
-| Method | Signature | Behavior |
+| Method | Signature | Description |
 |---|---|---|
 | [elapsed_ms](#timerelapsed_ms) | `fn elapsed_ms self:$Timer -> i64` | Elapsed milliseconds |
 | [elapsed_ns](#timerelapsed_ns) | `fn elapsed_ns self:$Timer -> i64` | Elapsed nanoseconds |

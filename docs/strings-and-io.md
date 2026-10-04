@@ -41,7 +41,7 @@ text.as_str print_length
 
 ## Text views
 
-| Method | Signature | Behavior |
+| Method | Signature | Description |
 |---|---|---|
 | [at](#strat) | `fn at s:$str index:u64 -> char` | Byte at `index`, represented as `char` |
 | [concat](#strconcat) | `fn concat b:$str a:$str -> String` | Concatenated owned text |
@@ -249,7 +249,7 @@ import "std"
 `String` is non-`Copy` and [moves](ownership.md#move-a-value) by default. Use `clone` when you need an
 independent owner. `as_str` returns a [borrowed view](ownership.md#return-a-borrow) without allocation.
 
-| Method | Signature | Behavior |
+| Method | Signature | Description |
 |---|---|---|
 | [append](#stringappend) | `fn append self:mut$String text:$str` | Append a borrowed view |
 | [append_string](#stringappend_string) | `fn append_string self:mut$String text:String` | Append and consume owned text |
@@ -374,7 +374,7 @@ message.as_str print
 
 ## Parse text
 
-| Method | Signature | Behavior |
+| Method | Signature | Description |
 |---|---|---|
 | [to_f32](#strto_f32) | `fn to_f32 self:$str -> Option[f32]` | 32-bit decimal floating-point value |
 | [to_f64](#strto_f64) | `fn to_f64 self:$str -> Option[f64]` | 64-bit decimal floating-point value |
@@ -447,7 +447,7 @@ data loss.
 
 ## Characters
 
-| Method | Signature | Behavior |
+| Method | Signature | Description |
 |---|---|---|
 | [codepoint](#charcodepoint) | `fn codepoint self:char -> u32` | Unicode scalar value |
 | [eq](#chareq) | `fn eq self:$char other:$char -> bool` | Equality |
@@ -598,7 +598,7 @@ f-strings.
 not own or free its storage. [Bytes::as_cstr](collections.md#bytesas_cstr)
 provides this view for a byte buffer.
 
-| Method | Signature | Behavior |
+| Method | Signature | Description |
 |---|---|---|
 | [as_cstr](#stras_cstr) | `fn as_cstr s:$str -> Option[$cstr]` | Borrow a NUL-terminated view if no byte is NUL |
 | [to_bytes](#cstrto_bytes) | `fn to_bytes self:$cstr -> Bytes` | Copy bytes before the NUL terminator |

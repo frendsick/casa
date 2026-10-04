@@ -61,7 +61,7 @@ end
 `FileStat` has `size`, `mode`, `mtime`, `atime`, and `ctime` fields. It also
 provides these checks:
 
-| Method | Signature | Behavior |
+| Method | Signature | Description |
 |---|---|---|
 | [is_dir](#filestatis_dir) | `fn is_dir self:$FileStat -> bool` | Directory |
 | [is_executable](#filestatis_executable) | `fn is_executable self:$FileStat -> bool` | Owner-executable mode bit |
