@@ -108,9 +108,10 @@ outcome publishes partial assembly. Analysis requires no native target.
 Each completed function plan contains finalized frame and storage actions.
 Selection validates local labels, storage slots, captures, calls, and literal
 references, then renders the plan directly into private assembly text. It does
-not retain a second buffer of rendered lines. Bounded leaf templates, literal
-pools, native-call plans, and symbol identities live until the request ends.
-Publication also checks completed function definitions and static pool references.
+not retain a second buffer of rendered lines. Bounded leaf templates, native-call
+plans, and symbol identities live until the request ends. Publication also checks
+completed function definitions and static pool references. Final rendering consumes
+static array and struct payloads after reference validation.
 An invariant failure discards the private output. It never retries another backend.
 
 Operation handlers record dependencies from the selected target and receiver
