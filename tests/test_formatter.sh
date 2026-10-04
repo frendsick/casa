@@ -26,9 +26,7 @@ if [ $# -gt 0 ]; then
     has_filter=true
 fi
 
-# ============================================================================
 # Golden file tests
-# ============================================================================
 
 for input_file in "$TESTS_DIR"/*.input.casa; do
     [ -f "$input_file" ] || continue
@@ -258,9 +256,7 @@ fi
 
 if [ "$has_filter" = false ]; then
 
-# ============================================================================
 # Idempotency tests (full suite only)
-# ============================================================================
 
 printf "\nRunning idempotency tests...\n"
 idem_pass=0
@@ -291,9 +287,7 @@ printf "${GREEN}[OK]${RESET} Idempotency: %d passed, %d failed\n" "$idem_pass" "
 pass=$((pass + idem_pass))
 fail=$((fail + idem_fail))
 
-# ============================================================================
 # Safety tests (full suite only)
-# ============================================================================
 
 printf "\nRunning safety tests...\n"
 safety_dir=$(mktemp -d /tmp/casa_formatter_safety.XXXXXX)
@@ -382,13 +376,11 @@ check_formatter_case final_newline 0 $'1\n\n\n' $'1\n'
 check_formatter_case crlf 0 $'1\r\n2 +\r\n' $'1\n2 +\n'
 check_formatter_case bare_cr 0 $'1\r2 +\r' $'1\n2 +\n'
 
-# ============================================================================
 # Paired-input convergence tests (full suite only)
 #
 # Each directory under tests/formatter/paired holds structurally-equivalent
 # inputs (same tokens, different layout). All variants must format to the same
 # output and to a stable fixpoint.
-# ============================================================================
 
 printf "\nRunning paired-input tests...\n"
 paired_pass=0
@@ -433,9 +425,7 @@ fail=$((fail + paired_fail))
 
 fi # has_filter
 
-# ============================================================================
 # Summary
-# ============================================================================
 
 report_no_matches "$matched" "$@"
 printf "\nSummary: %d passed, %d failed\n" "$pass" "$fail"
