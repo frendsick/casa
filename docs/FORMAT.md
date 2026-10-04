@@ -80,7 +80,6 @@ fn fizzbuzz number:i64 {
 - Consecutive plain top-level statements (root bindings, assignments, map `.set` chains)
   are grouped **without** blank lines.
 - Consecutive `import` statements are grouped **without** blank lines.
-- **1 blank line** immediately before a section separator comment.
 - Inside a freeform composition, preserve at most **1 author-supplied blank
   line**.
 
@@ -135,18 +134,17 @@ value std::List[T]::from_array
 - Keep a trailing comment on the line of the structural unit it follows.
 - Keep a standalone comment on its own line at the indentation of the unit it
   describes.
+- Keep standalone comments directly above the code they describe, with no blank
+  line between them. Separate a top-level comment block from preceding code
+  with one blank line.
+- Omit comments that only repeat a nearby name or operation.
 - Put a `# SAFETY:` comment immediately before the [unsafe](functions-and-lambdas.md#unsafe-boundaries) block or `unsafe fn`
   that it justifies. Do not add `# SAFETY:` comments in test files.
-- Section separator comments may use either `=` or `-` repeated characters.
-  Choose one style and do not mix styles within a file.
+- Use a plain comment for a section label. Do not surround it with decorative
+  separator lines.
 
 ```casa
-# ============================================================================
-# Section using = style
-# ============================================================================
-# ---------------------------------------------------------------------------
-# Section using - style
-# ---------------------------------------------------------------------------
+# Escape sequence map
 ```
 
 ---
