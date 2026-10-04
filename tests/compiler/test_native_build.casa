@@ -76,5 +76,142 @@ fn test_native_failures {
     "recovery binary runs" 0 arguments std::run_command test::assert_eq
     output.as_cstr.unwrap file::remove.unwrap drop
 }
+
+fn make_parallel_source -> products::AssemblySource {
+    ".ifndef CASA_PART\n.equ CASA_PART, -1\n.endif\n.section .text\n.if CASA_PART < 0 || CASA_PART == 0\n.globl _start\n_start:\n call worker\n movq %rax, %rdi\n movq $60, %rax\n syscall\n.endif\n.if CASA_PART < 0 || CASA_PART == 1\n.globl worker\nworker:\n subq $8, %rsp\n movl $-7, %edi\n call abs\n addq $8, %rsp\n cmpl $7, %eax\n setne %al\n movzbl %al, %eax\n ret\n.endif\n#".to_str = text
+    1048576 "#".repeat text.append_string
+    "\n" text.append
+    products::Target::LinuxX86_64 text products::AssemblySource::new
+}
+
+fn assert_children_reaped {
+    8 std::RawBuffer::new = status
+    unsafe { ptr::null 1 status.data -1 61 syscall4 = result }
+    "all native children reaped" -10 result test::assert_eq
+}
+
+fn test_parallel_native_build {
+    "parallel native build" test::test_start
+    unsafe { 39 syscall0 = pid }
+    f"/tmp/casa_native_parallel_{pid}" = directory
+    448 directory
+        .as_str
+        .as_cstr
+        .unwrap dir::create.unwrap drop
+    f"{directory}/compiler with spaces" = output
+    f"{output}.s" = assembly_path
+    f"{output}.parts.{pid}.0" = occupied
+    448 occupied
+        .as_str
+        .as_cstr
+        .unwrap dir::create.unwrap drop
+    make_parallel_source = source
+    std::List[std::String]::new = libraries
+    "c".to_str libraries.push
+    "/does/not/exist/native-cc".to_str build::NativeDriver = missing
+    "parallel launch failure" false libraries output.as_str source missing.compile_binary.is_error test::assert_true
+    "launch failure removes temporary files" 1 directory
+        .as_str
+        .as_cstr
+        .unwrap dir::list.unwrap.length test::assert_eq
+    assert_children_reaped
+    "/bin/false".to_str build::NativeDriver = failing
+    "parallel assembler exit failure" false libraries output.as_str source failing.compile_binary.is_error test::assert_true
+    "exit failure removes temporary files" 1 directory
+        .as_str
+        .as_cstr
+        .unwrap dir::list.unwrap.length test::assert_eq
+    assert_children_reaped
+    "parallel failure keeps assembly when requested" true libraries output.as_str source failing.compile_binary.is_error test::assert_true
+    "failure retains complete source" source.get_text.as_str assembly_path
+        .as_str
+        .as_cstr
+        .unwrap file::read_all
+        .unwrap
+        .to_str
+        .unwrap
+        .as_str test::assert_str_eq
+    assembly_path
+        .as_str
+        .as_cstr
+        .unwrap file::remove.unwrap drop
+    assert_children_reaped
+    true libraries output.as_str source build::NativeDriver::new.compile_binary.unwrap drop
+    "success removes temporary objects" 3 directory
+        .as_str
+        .as_cstr
+        .unwrap dir::list.unwrap.length test::assert_eq
+    "existing directory remains empty" 0 occupied
+        .as_str
+        .as_cstr
+        .unwrap dir::list.unwrap.length test::assert_eq
+    assert_children_reaped
+    std::List[std::Bytes]::new = arguments
+    output.as_str arguments.push_str
+    "parallel binary links native library and runs" 0 arguments.clone std::run_command test::assert_eq
+    std::List[std::Bytes]::new = serial_arguments
+    "/usr/bin/cc" serial_arguments.push_str
+    "-nostdlib" serial_arguments.push_str
+    "-no-pie" serial_arguments.push_str
+    "-Wl,-e,_start" serial_arguments.push_str
+    "-Wl,-z,noexecstack" serial_arguments.push_str
+    assembly_path.as_str serial_arguments.push_str
+    "-lc" serial_arguments.push_str
+    "-o" serial_arguments.push_str
+    output.as_str serial_arguments.push_str
+    "kept assembly builds serially" 0 serial_arguments std::run_command test::assert_eq
+    "serial binary runs" 0 arguments std::run_command test::assert_eq
+    assembly_path
+        .as_str
+        .as_cstr
+        .unwrap file::remove.unwrap drop
+    output
+        .as_str
+        .as_cstr
+        .unwrap file::remove.unwrap drop
+    occupied
+        .as_str
+        .as_cstr
+        .unwrap dir::remove.unwrap drop
+    directory
+        .as_str
+        .as_cstr
+        .unwrap dir::remove.unwrap drop
+}
+
+fn test_partitioned_source {
+    "partitioned assembly source" test::test_start
+    1048576 "x".repeat = padding
+    f"fn answer -> i64 \{ 42 \}\nif 42 answer != then \"partition result\" panic fi\n\"{padding}\" drop" = code
+    "/tmp/casa_partitioned_source".to_str code "main.casa".to_str products::SourceUnit
+    products::CompilationInput::new = input
+    products::Target::LinuxX86_64 input products::assembly.unwrap match
+        products::AssemblyResult::Produced(_ source) => source
+        products::AssemblyResult::Rejected(_) => "Expected partitioned assembly" panic
+    end = source
+    "emitter supplies partition ranges" 1 source.get_parts.length > test::assert_true
+    std::List[std::String]::new = libraries
+    build::NativeDriver::new = driver
+    "invalid output path returns a write error"
+    false libraries "/tmp/casa\0invalid" source driver.compile_binary.is_error test::assert_true
+    "/tmp/casa_partitioned_native" = output
+    "/bin/false".to_str build::NativeDriver = failing
+    "partitioned assembler failure returns" false libraries output source failing.compile_binary.is_error test::assert_true
+    assert_children_reaped
+    true libraries output source driver.compile_binary.unwrap drop
+    assert_children_reaped
+    "/tmp/casa_partitioned_native.s".as_cstr.unwrap file::read_all
+        .unwrap
+        .to_str
+        .unwrap = retained
+    "partitioned build keeps complete assembly" source.get_text.as_str retained.as_str test::assert_str_eq
+    std::List[std::Bytes]::new = arguments
+    output arguments.push_str
+    "partitioned binary runs" 0 arguments std::run_command test::assert_eq
+    "/tmp/casa_partitioned_native.s".as_cstr.unwrap file::remove.unwrap drop
+    output.as_cstr.unwrap file::remove.unwrap drop
+}
 test_native_failures
+test_parallel_native_build
+test_partitioned_source
 test::test_summary

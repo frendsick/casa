@@ -116,12 +116,19 @@ not net repository source deletion.
 
 Native process execution remains outside Compiler Capsule. The build adapter
 consumes target-tagged `AssemblySource`, an output path, `keep_asm`, and ordered
-native libraries. Linux uses one invocation of the existing C compiler driver
-to assemble and link. Preserve `-nostdlib`, `-no-pie`, `-Wl,-e,_start`,
+native libraries. Small Linux builds use one invocation of the existing C
+compiler driver to assemble and link. Large builds assemble eight parts in
+parallel, then link their objects. The emitter records byte ranges for each
+part in the complete assembly buffer. The adapter writes these ranges without
+copying the buffer, so each assembler reads only its assigned functions. Groups
+of 32 consecutive functions stay together to preserve code locality.
+Preserve `-nostdlib`, `-no-pie`, `-Wl,-e,_start`,
 `-Wl,-z,noexecstack`, and library order. Return write, launch, or nonzero build
 failures to the CLI with available tool diagnostics. The CLI owns reporting
 and exit status.
 
-Temporary-file creation and cleanup belong to this adapter. The compiler no
-longer manages an intermediate object file. Preserve assembly retention and
-reconcile installation requirements with the actual driver used.
+Temporary-file creation and cleanup belong to this adapter. Parallel builds
+use a private directory for source parts and object files. Join every started
+assembler before removing that directory, including on launch and write
+failures. `--keep-asm` retains complete source that can also be assembled in one
+invocation. Installed compilers need only the existing C compiler driver.

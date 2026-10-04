@@ -22,6 +22,11 @@ pub enum AssemblyError {
     Internal (BytecodeFailure)
 }
 
+pub struct AssemblyText {
+    pub text:  std::String
+    pub parts: std::List[std::List[common::Span]]
+}
+
 const ENUM_DISPATCH_MIN_ARMS 4
 const DIRECT_MOVE_SCAN_LIMIT 12
 const SHORT_COPY_LIMIT 64
@@ -102,7 +107,7 @@ impl BackendPlanner {
         BackendPlanner
     }
 
-    fn into_result self:BackendPlanner -> std::Result[std::String AssemblyError] {
+    fn into_result self:BackendPlanner -> std::Result[AssemblyText AssemblyError] {
         self match
             BackendPlanner { program: program failure: failure } => {
                 failure match
@@ -3364,6 +3369,14 @@ fn is_leaf_candidate
 pub fn compile_checked
     checked:$typechecker::CheckedProgram
 -> std::Result[std::String AssemblyError] {
+    checked compile_partitioned ? match
+        AssemblyText { text: text } => text std::Result::Ok
+    end
+}
+
+pub fn compile_partitioned
+    checked:$typechecker::CheckedProgram
+-> std::Result[AssemblyText AssemblyError] {
     checked BackendPlanner::new = state
     error::Diagnostics::new = diagnostics
     checked.get_externs.keys = extern_names
@@ -3737,6 +3750,7 @@ const ASSEMBLY_FUNCTION_GROUP_SIZE 32
 const INITIAL_SCALAR_REGISTER_ORDER 228
 
 struct Emitter {
+    parts:           std::List[std::List[common::Span]]
     local_operands:  std::List[std::String]
     call_prefix:     std::String
     native_calls:    std::Map[std::String common::NativeCallPlan]
@@ -3758,6 +3772,15 @@ struct Emitter {
 
 impl Emitter {
     fn new -> Emitter {
+        ".ifndef CASA_PART\n.equ CASA_PART, -1\n.endif\n.section .text\n".to_str = header
+        std::List[std::List[common::Span]]::new = parts
+        0 = part: u64
+        while part runtime::ASSEMBLY_PARTS > do
+            std::List[common::Span]::new = spans
+            header.length 0 common::Span spans.push
+            spans parts.push
+            1 += part
+        done
         RETURN_STACK_SIZE common::WORD_SIZE - = call_limit
         common::WORD_SIZE = word_size
         f"    cmpq $return_stack+{call_limit}, %r14\n    ja return_stack_overflow\n    addq ${word_size}, %r14\n" = call_prefix
@@ -3766,7 +3789,7 @@ impl Emitter {
         std::List[StaticStruct]::new std::List[StaticArray]::new
         std::List[std::String]::new std::Set[std::String]::new std::Map[std::String LeafTemplate]::new
         std::Map[std::String std::String]::new
-        0 ".ifndef CASA_PART\n.equ CASA_PART, -1\n.endif\n.section .text\n".to_str std::Map[std::String common::NativeCallPlan]::new call_prefix std::List[std::String]::new Emitter
+        0 header std::Map[std::String common::NativeCallPlan]::new call_prefix std::List[std::String]::new parts Emitter
     }
 
     # Registration order is deterministic. Semantic identities remain the map keys.
@@ -3785,9 +3808,9 @@ impl Emitter {
 
     fn function_label self:$Emitter name:$str -> $str { name self.functions.get_str.unwrap.as_str }
 
-    fn into_asm self:Emitter -> std::String {
+    fn into_asm self:Emitter -> AssemblyText {
         self match
-            Emitter { asm: asm } => asm
+            Emitter { asm: asm parts: parts } => parts asm AssemblyText
         end
     }
 
@@ -4304,6 +4327,7 @@ impl Emitter {
         end = bytecode
         # Keep nearby functions together when the parallel objects are linked.
         self.completed.length ASSEMBLY_FUNCTION_GROUP_SIZE / runtime::ASSEMBLY_PARTS % = part
+        self.asm.length = start
         f".if CASA_PART < 0 || CASA_PART == {part}" self.line_string
         ".p2align 6\n" self.asm.append
         f".globl fn_{label}" self.line_string
@@ -4312,6 +4336,10 @@ impl Emitter {
         false bytecode self.emit_bytecode
         ".endif\n" self.asm.append
         "\n" self.asm.append
+        self.asm.length start - start common::Span part self
+            .parts
+            .get_mut
+            .push
         self.templates bytecode find_leaf_range match
             std::Option::Some(range) => {
                 range.expanded_count range.end_index range.start range.local_bytes bytecode LeafTemplate
@@ -4334,7 +4362,7 @@ impl Emitter {
         true std::Result::Ok
     }
 
-    fn finish self:Emitter -> std::Result[std::String std::String] {
+    fn finish self:Emitter -> std::Result[AssemblyText std::String] {
         if self.failure std::Option::Some(message) is then
             message.clone std::Result::Error return
         fi
@@ -4345,15 +4373,21 @@ impl Emitter {
         if self.functions.length self.completed.length != then
             "Missing completed machine function".to_str std::Result::Error return
         fi
+        self.asm.length = start
         ".if CASA_PART < 0 || CASA_PART == 0\n" self.asm.append
         self.emit_bss
         self.emit_data
         runtime::ASSEMBLY self.asm.append
         ".endif\n" self.asm.append
+        self.asm.length start - start common::Span 0 self
+            .parts
+            .get_mut
+            .push
         self.into_asm std::Result::Ok
     }
 
     fn emit_start self:mut$Emitter bytecode:$std::List[InstValue] {
+        self.asm.length = start
         ".if CASA_PART < 0 || CASA_PART == 0\n" self.asm.append
         ".globl _start\n" self.asm.append
         "_start:\n" self.asm.append
@@ -4372,6 +4406,10 @@ impl Emitter {
         "    syscall\n" self.asm.append
         ".endif\n" self.asm.append
         "\n" self.asm.append
+        self.asm.length start - start common::Span 0 self
+            .parts
+            .get_mut
+            .push
     }
 
     fn emit_bytecode self:mut$Emitter bytecode:$std::List[InstValue] is_global:bool {
