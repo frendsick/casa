@@ -17,7 +17,7 @@ for signatures, fragments, and commands for running complete examples.
 ## Errors
 
 High-level file and directory operations return
-[`Result[T IoError]`](optional-values-and-errors.md#result).
+[Result[T IoError]](optional-values-and-errors.md#result).
 
 | Variant | Meaning |
 |---|---|

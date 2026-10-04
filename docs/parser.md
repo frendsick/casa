@@ -164,4 +164,4 @@ custom parsers.
 Use `save` and `restore` when alternatives need backtracking. The ready-made
 integer and quoted-literal parsers restore their starting position on failure.
 
-See [`examples/parser.casa`](../examples/parser.casa) for a runnable parser.
+See [examples/parser.casa](../examples/parser.casa) for a runnable parser.

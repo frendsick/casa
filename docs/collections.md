@@ -330,11 +330,11 @@ Validates and copies UTF-8 text.
 `Eq` and `Hashable`, but not `Display`. Its storage keeps a trailing NUL outside
 the logical length so `as_cstr` does not allocate.
 
-See [`examples/bytes.casa`](../examples/bytes.casa) for a runnable example.
+See [examples/bytes.casa](../examples/bytes.casa) for a runnable example.
 
 ## Maps
 
-`Map[K V]` associates unique keys with values. `K` must implement [`Hashable`](traits.md#hashable-contract).
+`Map[K V]` associates unique keys with values. `K` must implement [Hashable](traits.md#hashable-contract).
 A new map allocates its buckets when the first entry is inserted:
 
 ```casa
@@ -565,12 +565,12 @@ Copies and inserts a text key.
 
 ### Map example
 
-See [`examples/hash_map.casa`](../examples/hash_map.casa) for a runnable map
+See [examples/hash_map.casa](../examples/hash_map.casa) for a runnable map
 example.
 
 ## Sets
 
-`Set[K]` stores unique [`Hashable`](traits.md#hashable-contract) values:
+`Set[K]` stores unique [Hashable](traits.md#hashable-contract) values:
 
 ```casa
 import "std"
@@ -722,7 +722,7 @@ and examples. Use [Bytes](#bytes) for binary data.
 | `Slice[T]` | `Iter[$T]` |
 | `str` | `Iter[char]` |
 
-A [`for` loop](control-flow.md#for-loops) consumes the iterator. Create another iterator to traverse the
+A [for loop](control-flow.md#for-loops) consumes the iterator. Create another iterator to traverse the
 source again.
 
 Arrays, lists, slices, maps, and sets yield borrows because the source keeps
@@ -978,5 +978,5 @@ import "std"
 { copy 2 * } even.map.collect = doubled
 ```
 
-See [`examples/iterator_combinators.casa`](../examples/iterator_combinators.casa)
+See [examples/iterator_combinators.casa](../examples/iterator_combinators.casa)
 for every lazy and terminal operation.

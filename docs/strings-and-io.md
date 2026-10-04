@@ -47,7 +47,7 @@ text.as_str print_length
 | [concat](#strconcat) | `fn concat b:$str a:$str -> String` | Concatenated owned text |
 | [contains](#strcontains) | `fn contains needle:$str s:$str -> bool` | Whether text contains a substring |
 | [ends_with](#strends_with) | `fn ends_with suffix:$str s:$str -> bool` | Whether text ends with a suffix |
-| [eq](#streq) | `fn eq b:$str a:$str -> bool` | Content equality. [`==`](operators.md#comparisons) is the usual form |
+| [eq](#streq) | `fn eq b:$str a:$str -> bool` | Content equality. [==](operators.md#comparisons) is the usual form |
 | [find](#strfind) | `fn find needle:$str s:$str -> i64` | First byte index, or `-1` |
 | [is_empty](#stris_empty) | `fn is_empty self:$str -> bool` | Whether the string has no bytes |
 | [iter](#striter) | `fn iter self:$str -> Iter[char]` | Iterator over Unicode scalar values |
@@ -555,7 +555,7 @@ value char::from_codepoint.unwrap print
 ```
 
 `char::from_codepoint` rejects surrogate values and values above `U+10FFFF`.
-The unchecked form requires `unsafe` and has undefined behavior for a value
+The unchecked form requires [unsafe](functions-and-lambdas.md#unsafe-boundaries) and has undefined behavior for a value
 that is not a Unicode scalar.
 
 ## Formatting and output
@@ -645,6 +645,6 @@ raw
 byte_path.as_cstr.unwrap = byte_raw: $cstr
 ```
 
-Constructing `$cstr` from a raw pointer requires `unsafe` code to guarantee an
+Constructing `$cstr` from a raw pointer requires [unsafe](functions-and-lambdas.md#unsafe-boundaries) code to guarantee an
 accessible NUL terminator and a live origin. `$cstr` has no direct comparison,
 formatting, or printing operations.

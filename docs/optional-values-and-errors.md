@@ -311,5 +311,5 @@ On failure, `propagate` produces the enclosing function's one declared return
 value. The source is consumed on either path. Any enum with compatible methods
 uses the same behavior.
 
-See [`examples/propagate_result.casa`](../examples/propagate_result.casa) for a
+See [examples/propagate_result.casa](../examples/propagate_result.casa) for a
 runnable file operation and a custom enum that use `?`.

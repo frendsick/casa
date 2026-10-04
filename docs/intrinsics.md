@@ -82,7 +82,7 @@ data is needed.
 
 These operations expose raw byte-addressed memory. Prefer standard-library
 collections and strings for application code. Raw allocation, access, owner
-conversion, and pointer arithmetic must be inside an [`unsafe` block](functions-and-lambdas.md#unsafe-boundaries).
+conversion, and pointer arithmetic must be inside an [unsafe](functions-and-lambdas.md#unsafe-boundaries) block.
 `ptr::null`, `ptr::from_ref`, and pointer comparison are safe.
 
 Comparing raw pointers is safe, but an address identifies storage rather than
@@ -143,7 +143,7 @@ foreign pointer are undefined behavior.
 
 ### Forming a borrow from a raw address
 
-`ptr::as_ref[T]` and `ptr::as_mut[T]` form a typed borrow inside `unsafe`. A raw
+`ptr::as_ref[T]` and `ptr::as_mut[T]` form a typed borrow inside [unsafe](functions-and-lambdas.md#unsafe-boundaries). A raw
 address carries no lifetime, so the result is anchored conservatively to every
 compatible borrowed input of the enclosing function. A `$T` accepts any
 borrowed input. A `mut$T` only accepts exclusive ones. A function with no
@@ -156,7 +156,7 @@ fn nth [T const N:u64] array:$array[T N] index:u64 -> $T {
 }
 ```
 
-The unsafe body promises that the address stays valid for as long as the
+The `unsafe` body promises that the address stays valid for as long as the
 anchored input. See ADR-0112 and ADR-0113.
 
 `unsafe fn memcpy destination:ptr source:ptr count:u64` is a `std` function,
@@ -169,7 +169,7 @@ and text operations unless raw memory is required.
 `syscall0` through `syscall6` invoke Linux x86-64 system calls directly. Push
 the arguments in reverse register order, then push the syscall number. The
 number is the topmost value when the intrinsic runs. Each call must be inside
-an `unsafe` block.
+an [unsafe](functions-and-lambdas.md#unsafe-boundaries) block.
 
 | Intrinsic | Stack effect |
 |---|---|

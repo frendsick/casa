@@ -222,10 +222,10 @@ _Avoid_: Synthetic derive function, partial derived fallback
 The live `T` accessed through a shared `$T` or exclusive `mut$T` borrow.
 
 **Safety comment**:
-A `# SAFETY:` comment immediately before an `unsafe` block or `unsafe fn`. A
+A `# SAFETY:` comment immediately before an [unsafe](docs/functions-and-lambdas.md#unsafe-boundaries) block or `unsafe fn`. A
 block comment states the concrete invariants that make its unchecked operations
 valid. A function comment states the caller contract.
-_Avoid_: Operation description, generic unsafe warning
+_Avoid_: Operation description, generic `unsafe` warning
 
 **Compiler-called cleanup method**:
 The reserved inherent `drop` method that the compiler calls during destruction and source code cannot call directly.
@@ -305,7 +305,7 @@ _Avoid_: Release lint, tag lint
 - Multiple bounds on one type variable use `+`, such as `[T: Copy + Display]`; every listed bound is required and their order has no semantic meaning.
 - An owned binding is definitely available at a control-flow join only when every continuing incoming path owns or reinitialized it; terminating paths do not participate.
 - Pattern payload bindings follow the subject capability. A successful `if … is` conditionally moves non-`Copy` payloads from an owned subject, while shared and exclusive subjects produce matching borrows. Failed checks retain the complete subject, and `Copy` payload bindings do not consume it.
-- `ptr` is a nullable, non-owning, `Copy` raw address. Existing load/store intrinsics and pointer arithmetic require `unsafe`; only explicit `ptr::as_ref[T]` and `ptr::as_mut[T]` form typed borrows.
+- `ptr` is a nullable, non-owning, `Copy` raw address. Existing load/store intrinsics and pointer arithmetic require [unsafe](docs/functions-and-lambdas.md#unsafe-boundaries); only explicit `ptr::as_ref[T]` and `ptr::as_mut[T]` form typed borrows.
 - An inherent method wins over defaults from explicitly implemented traits. Without one, more than one applicable default-method declaration is a compile-time ambiguity rather than a declaration-order choice.
 - A trait implementation may be declared only by the module defining the type or the trait; duplicate and overlapping implementations are rejected without specialization.
 - First-class function values are monomorphic. A generic named function reference supplies all type arguments explicitly, such as `&id[i64]`; direct generic calls still infer them.
@@ -346,9 +346,9 @@ _Avoid_: Release lint, tag lint
 - Borrows returned through an opaque function keep each complete source input loaned until all derived outputs expire; body-derived field paths are not part of public function types.
 - An available `mut$T` implicitly reborrows as `$T` in any shared typed context, suspending exclusive use until the shared reborrow expires; the reverse conversion is forbidden.
 - A shared `$T` borrow permits no safe mutation of its reachable owned storage; Casa initially has no interior-mutability container or exception.
-- Unsafe raw access must preserve all live borrow invariants; violating lifetime, validity, or aliasing requirements is undefined behavior and receives no runtime check.
+- `unsafe` raw access must preserve all live borrow invariants; violating lifetime, validity, or aliasing requirements is undefined behavior and receives no runtime check.
 - A typed borrow formed from `ptr` may escape only when tied conservatively to existing borrowed inputs; raw pointers never invent an originless returned lifetime.
-- An escaping `mut$T` formed from `ptr` requires an exclusive `mut$` input origin; unsafe code cannot upgrade a shared input into mutable access.
+- An escaping `mut$T` formed from `ptr` requires an exclusive `mut$` input origin; `unsafe` code cannot upgrade a shared input into mutable access.
 - An owner cannot move, be replaced, or be destroyed while any derived borrow remains live; Casa does not automatically pin owners or transfer loans across moves.
 - Safe code cannot construct an owner containing a borrow into itself; use offsets or on-demand views instead of pinning and staged initialization.
 - `$T` and `mut$T` are always non-null live references; absence uses ordinary enums such as stdlib `Option`, without compiler special-casing.
@@ -357,9 +357,9 @@ _Avoid_: Release lint, tag lint
 - Method availability follows receiver capability uniformly: `self` requires ownership, `$self` accepts owned/shared/exclusive access, and `mut$self` accepts owned/exclusive access.
 - `mut$T` is affine and not Copy. When `T: Clone`, `mut$T.clone` calls the **Borrowed value** implementation through a temporary shared reborrow and returns an owned `T`.
 - `ptr::from_ref` safely obtains `ptr` from `$T`; owned and exclusive values may reborrow, and no separate `from_mut` exists because raw pointers have no mutability.
-- Unsafe `ptr::into_raw` transfers a heap-indirect owner to its allocation address, and `ptr::from_raw[T]` reconstructs that owner when the caller proves the address is the complete live allocation and has no other owner.
-- Unsafe `ptr::read[T]` and `ptr::write[T]` move ownership out of and into initialized generic storage; their caller maintains validity and initialization state.
-- Unsafe raw storage uses `u64 alloc -> ptr` and `ptr free -> None`; `free` releases bytes only and never replaces typed destruction.
+- `unsafe` `ptr::into_raw` transfers a heap-indirect owner to its allocation address, and `ptr::from_raw[T]` reconstructs that owner when the caller proves the address is the complete live allocation and has no other owner.
+- `unsafe` `ptr::read[T]` and `ptr::write[T]` move ownership out of and into initialized generic storage; their caller maintains validity and initialization state.
+- `unsafe` raw storage uses `u64 alloc -> ptr` and `ptr free -> None`; `free` releases bytes only and never replaces typed destruction.
 - `0 alloc` returns `ptr::null`, `ptr::null free` is a no-op, and every positive allocation returns non-null or terminates.
 - Casa targets only x86-64 and has no `usize` or `isize`; in-memory sizes and indexes use `u64`, while signed offsets use `i64`.
 - `size_of[T] -> u64` is a safe compile-time query for padded inline storage size, enabling dense generic containers without compiler-known collection layouts.
@@ -367,15 +367,15 @@ _Avoid_: Release lint, tag lint
 - `size_of[T]` is the only initial layout query; Casa has no `align_of`, `offset_of`, packed-layout, or explicit-alignment surface without a concrete need.
 - Every inhabited concrete type has `size_of[T] >= 1`; empty structs occupy one byte so generic storage has no zero-sized-value exceptions.
 - Enum declarations require at least one variant; empty enums are rejected rather than acting as an implicit `Never` type.
-- Unsafe raw pointer `+` and `-` use `u64` byte offsets within one live allocation or its one-past address; Casa has no pointer-pointer subtraction.
-- Raw `load8` through `load64` and matching stores use their exact unsigned integer widths; other typed values use unsafe `ptr::read[T]` and `ptr::write[T]`.
+- `unsafe` raw pointer `+` and `-` use `u64` byte offsets within one live allocation or its one-past address; Casa has no pointer-pointer subtraction.
+- Raw `load8` through `load64` and matching stores use their exact unsigned integer widths; other typed values use `unsafe` `ptr::read[T]` and `ptr::write[T]`.
 - Fixed-width raw integer loads and stores allow unaligned addresses on x86-64 but still require every accessed byte to be valid; typed raw operations retain natural alignment.
 - Multibyte raw integer loads and stores use explicit x86-64 little-endian byte order; other protocol orders require library conversion.
-- `memcpy` remains an ordinary unsafe stdlib function for non-overlapping initialized byte regions; typed ownership moves do not use raw byte copying.
+- `memcpy` remains an ordinary `unsafe` stdlib function for non-overlapping initialized byte regions; typed ownership moves do not use raw byte copying.
 - The compiler intrinsic `copy` has `[T: Copy] $T -> T`, materializing an owned allocation-free copy of the **Borrowed value** without invoking Clone.
 - Aggregate padding is unspecified and may be uninitialized; safe operations use fields, and `size_of[T]` does not make padding readable byte data.
-- Unsafe `ptr::read[T]` requires an already valid initialized `T`; invalid booleans, Unicode scalars, enum tags, borrows, or owners cause undefined behavior rather than runtime validation.
-- Character conversion uses safe `character.codepoint` and stdlib `char::from_codepoint -> Option[char]`; only the validating wrapper knows `Option`, while the compiler supplies narrow lossless and unsafe unchecked code-point primitives.
+- `unsafe` `ptr::read[T]` requires an already valid initialized `T`; invalid booleans, Unicode scalars, enum tags, borrows, or owners cause undefined behavior rather than runtime validation.
+- Character conversion uses safe `character.codepoint` and stdlib `char::from_codepoint -> Option[char]`; only the validating wrapper knows `Option`, while the compiler supplies narrow lossless and `unsafe` unchecked code-point primitives.
 - Floating-point types use the canonical names `f32` and `f64`; `float` is removed without an alias, and both widths retain IEEE NaN, infinity, and partial-comparison semantics.
 - Floating-point literals are context-typed as `f32` or `f64`, default to `f64`, round directly to their target width, and have no suffix syntax initially.
 - `f32` and `f64` expose safe, allocation-free `from_bits` and `to_bits` primitives using width-matched unsigned integers; these preserve representation and are not numeric casts.

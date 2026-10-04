@@ -136,7 +136,7 @@ responsibility and preserves the loan.
 ## Copy and Clone
 
 Ordinary struct values use heap-indirect storage, so they cannot implement
-[`Copy`](traits.md#copy-and-clone). Derive `Clone` when fieldwise independent duplication is suitable:
+[Copy](traits.md#copy-and-clone). Derive `Clone` when fieldwise independent duplication is suitable:
 
 ```casa
 import "std"
@@ -221,6 +221,6 @@ Partial patterns are allowed. See
 [Control Flow and Patterns](control-flow.md#match-a-value) for binding scope,
 stack consistency, and exhaustiveness.
 
-See [`examples/struct.casa`](../examples/struct.casa) and
-[`examples/destruction.casa`](../examples/destruction.casa) for runnable
+See [examples/struct.casa](../examples/struct.casa) and
+[examples/destruction.casa](../examples/destruction.casa) for runnable
 examples.

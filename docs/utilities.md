@@ -4,12 +4,12 @@ Compile module-style imports with a library path such as `casac -L lib`.
 
 | Module | Purpose | Runnable example |
 |---|---|---|
-| `argparse` | Command-line definitions and help | [`examples/argparse.casa`](../examples/argparse.casa) |
+| `argparse` | Command-line definitions and help | [examples/argparse.casa](../examples/argparse.casa) |
 | `json` | JSON values, parsing, and serialization | See [JSON](#json) |
-| `log` | Leveled messages to standard error | [`examples/log.casa`](../examples/log.casa) |
+| `log` | Leveled messages to standard error | [examples/log.casa](../examples/log.casa) |
 | `os` | Files, directories, environment, paths, and processes | [OS reference](os.md) |
-| `parser` | Cursor-based text parsers | [`examples/parser.casa`](../examples/parser.casa) |
-| `timer` | Monotonic elapsed time | [`examples/timer.casa`](../examples/timer.casa) |
+| `parser` | Cursor-based text parsers | [examples/parser.casa](../examples/parser.casa) |
+| `timer` | Monotonic elapsed time | [examples/timer.casa](../examples/timer.casa) |
 
 Reference tables abbreviate library type names and list inputs in consumption
 order. Source examples use qualified names. See [reference notation](notation.md)

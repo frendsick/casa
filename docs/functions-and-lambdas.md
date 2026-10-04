@@ -130,12 +130,12 @@ The x86-64 target permits unaligned access. Multibyte operations use
 little-endian byte order. Every accessed byte must still belong to valid live
 storage.
 
-The block permits only designated unsafe operations. Type, ownership, borrow,
+The block permits only designated `unsafe` operations. Type, ownership, borrow,
 control-flow, and stack-effect checks still apply.
 
 ### Safety comments
 
-Every `unsafe` block and `unsafe fn` in maintained non-test source must have a
+Every [unsafe](#unsafe-boundaries) block and `unsafe fn` in maintained non-test source must have a
 `# SAFETY:` comment immediately before it. The comment for a block states the
 concrete invariants that make every unchecked operation in the block valid. Do
 not only describe the operation. State the facts that prove its safety, such as
@@ -143,12 +143,12 @@ live allocation bounds, initialization, alignment, ownership, aliasing, a
 preceding check, or a syscall or FFI contract.
 
 Keep the proof brief and information-dense. One comment can cover a complete
-block only when it proves every unsafe operation in that block. Split a block
+block only when it proves every `unsafe` operation in that block. Split a block
 when separate proofs would otherwise be vague or long.
 
 Use `unsafe fn` when callers must uphold a contract that the function cannot
-check. Calls to an unsafe function also require an `unsafe` block. An unsafe
-function body does not become an implicit unsafe block:
+check. Calls to an `unsafe` function also require an `unsafe` block. An `unsafe`
+function body does not become an implicit `unsafe` block:
 
 ```casa
 import "std"
@@ -162,10 +162,10 @@ unsafe fn copy_bytes destination:ptr source:ptr count:u64 {
 ```
 
 The comment before an `unsafe fn` states the caller contract. Comments inside
-its body prove the implementation's individual unsafe operations. A safe
+its body prove the implementation's individual `unsafe` operations. A safe
 function must establish its own proof and cannot rely on its caller to do so.
 
-Unsafe functions cannot be used as function values. Put the unsafe call in a
+`unsafe` functions cannot be used as function values. Put the `unsafe` call in a
 safe wrapper when the wrapper can validate and preserve a safe contract.
 
 ## Extern functions
@@ -223,9 +223,9 @@ memory-class return uses caller-owned hidden return storage and consumes the
 first integer argument register. Every extern struct return becomes an owned
 Casa value.
 
-An extern call is always unsafe. The caller must meet the native function's
+An extern call is always [unsafe](#unsafe-boundaries). The caller must meet the native function's
 contract. An extern function cannot be used as a function value. A safe Casa
-wrapper can check the inputs and contain the unsafe call.
+wrapper can check the inputs and contain the `unsafe` call.
 
 Extern parameters can use these C ABI types:
 

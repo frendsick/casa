@@ -135,7 +135,7 @@ value std::List[T]::from_array
 - Keep a trailing comment on the line of the structural unit it follows.
 - Keep a standalone comment on its own line at the indentation of the unit it
   describes.
-- Put a `# SAFETY:` comment immediately before the `unsafe` block or `unsafe fn`
+- Put a `# SAFETY:` comment immediately before the [unsafe](functions-and-lambdas.md#unsafe-boundaries) block or `unsafe fn`
   that it justifies. Do not add `# SAFETY:` comments in test files.
 - Section separator comments may use either `=` or `-` repeated characters.
   Choose one style and do not mix styles within a file.
@@ -340,7 +340,7 @@ not apply to lambdas or match-arm blocks.
 ### Wrapped form
 
 When the function signature would exceed 100 characters, wrap as follows.
-Keep `pub`, `unsafe`, or `extern` before `fn` on the first line.
+Keep `pub`, [unsafe](functions-and-lambdas.md#unsafe-boundaries), or `extern` before `fn` on the first line.
 
 - `fn name` alone on the first line
 - Each parameter on its own line, indented 4 spaces, `name:type` compact
@@ -372,7 +372,7 @@ fn split_pair
 }
 ```
 
-An unsafe function prefixes the declaration with `unsafe`. The same rule
+An `unsafe` function prefixes the declaration with `unsafe`. The same rule
 applies to the wrapped form, whose first line is `unsafe fn name`:
 
 ```casa

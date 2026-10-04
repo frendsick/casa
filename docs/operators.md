@@ -112,7 +112,7 @@ unsafe {
 }
 ```
 
-Pointer arithmetic requires an `unsafe` block.
+Pointer arithmetic requires an [unsafe](functions-and-lambdas.md#unsafe-boundaries) block.
 
 ## Bit operations
 

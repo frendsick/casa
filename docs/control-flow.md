@@ -206,4 +206,4 @@ A guard cannot move an owner because a false guard must leave the subject and
 outer bindings available to later arms. A guarded arm does not count toward
 exhaustiveness because its condition can be false.
 
-See [`examples/enum.casa`](../examples/enum.casa) for guards on enum payloads.
+See [examples/enum.casa](../examples/enum.casa) for guards on enum payloads.

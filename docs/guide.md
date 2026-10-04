@@ -143,7 +143,7 @@ Remember that comparison uses the topmost value as its left operand. Therefore,
 ## Try a complete program
 
 This program adds an [array iterator](collections.md#arrays), a
-[`for` loop](control-flow.md#for-loops),
+[for loop](control-flow.md#for-loops),
 [string interpolation](types-and-literals.md#string-interpolation), and
 `println` from the standard library.
 
